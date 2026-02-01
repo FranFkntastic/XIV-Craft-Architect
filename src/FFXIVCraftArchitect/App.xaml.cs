@@ -32,6 +32,7 @@ public partial class App : Application
         services.AddSingleton<GarlandService>();
         services.AddSingleton<UniversalisService>();
         services.AddSingleton<SettingsService>();
+        services.AddSingleton<ItemCacheService>();
 
         // Windows
         services.AddTransient<MainWindow>();

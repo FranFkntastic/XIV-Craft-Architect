@@ -15,13 +15,14 @@ public class GarlandSearchResult
     [JsonPropertyName("type")]
     public string Type { get; set; } = string.Empty;
     
+    // Store raw JSON element to handle both string and int IDs
     [JsonPropertyName("id")]
-    public JsonElement IdElement { get; set; }
+    private JsonElement _idElement { get; set; }
     
-    // Helper to get ID as int (handles both string and int JSON values)
-    public int Id => IdElement.ValueKind == JsonValueKind.String 
-        ? int.Parse(IdElement.GetString()!) 
-        : IdElement.GetInt32();
+    // Computed property - not serialized
+    public int Id => _idElement.ValueKind == JsonValueKind.String 
+        ? int.Parse(_idElement.GetString()!) 
+        : _idElement.GetInt32();
     
     [JsonPropertyName("obj")]
     public GarlandSearchObject Object { get; set; } = new();

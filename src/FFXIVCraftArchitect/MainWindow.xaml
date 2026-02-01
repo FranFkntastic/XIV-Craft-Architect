@@ -6,9 +6,19 @@
         Width="1400"
         Height="900"
         WindowStartupLocation="CenterScreen"
-        Background="#1e1e1e"
-        BorderBrush="Transparent"
-        BorderThickness="0">
+        Background="#1e1e1e">
+    <Window.Style>
+        <Style TargetType="Window">
+            <Setter Property="WindowChrome.WindowChrome">
+                <Setter.Value>
+                    <WindowChrome CaptionHeight="0" 
+                                  CornerRadius="0"
+                                  GlassFrameThickness="0"
+                                  ResizeBorderThickness="8"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Style>
 
     <Grid>
         <Grid.RowDefinitions>
@@ -191,9 +201,13 @@
         <Border Grid.Row="2" 
                 Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
                 Padding="16,8">
-            <TextBlock x:Name="StatusLabel" 
-                       Text="Ready"
-                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <TextBox x:Name="StatusLabel" 
+                     Text="Ready"
+                     Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                     Background="Transparent"
+                     BorderThickness="0"
+                     IsReadOnly="True"
+                     IsReadOnlyCaretVisible="True"/>
         </Border>
     </Grid>
 </Window>

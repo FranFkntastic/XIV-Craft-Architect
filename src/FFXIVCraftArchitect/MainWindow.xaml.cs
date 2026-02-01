@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     private readonly GarlandService _garlandService;
     private readonly UniversalisService _universalisService;
     private readonly SettingsService _settingsService;
+    private readonly ItemCacheService _itemCache;
 
     // Search state
     private List<GarlandSearchResult> _currentSearchResults = new();
@@ -45,6 +46,7 @@ public partial class MainWindow : Window
         _garlandService = App.Services.GetRequiredService<GarlandService>();
         _universalisService = App.Services.GetRequiredService<UniversalisService>();
         _settingsService = App.Services.GetRequiredService<SettingsService>();
+        _itemCache = App.Services.GetRequiredService<ItemCacheService>();
 
         Loaded += OnLoaded;
     }
@@ -130,7 +132,10 @@ public partial class MainWindow : Window
             _currentSearchResults = await _garlandService.SearchAsync(query);
             SearchResults.ItemsSource = _currentSearchResults.Select(r => r.Object.Name).ToList();
             
-            StatusLabel.Text = $"Found {_currentSearchResults.Count} results";
+            // Cache the search results for later use
+            _itemCache.StoreItems(_currentSearchResults.Select(r => (r.Id, r.Object.Name, r.Object.IconId)));
+            
+            StatusLabel.Text = $"Found {_currentSearchResults.Count} results (cached)";
         }
         catch (Exception ex)
         {
@@ -216,6 +221,9 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(CancelEventArgs e)
     {
+        // Save item cache
+        _itemCache.SaveCache();
+        
         // Cleanup logic here (stop live mode, etc.)
         base.OnClosing(e);
     }
