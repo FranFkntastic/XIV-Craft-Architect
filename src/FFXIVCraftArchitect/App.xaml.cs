@@ -52,6 +52,7 @@ public partial class App : Application
         services.AddSingleton<ItemCacheService>();
         services.AddSingleton<RecipeCalculationService>();
         services.AddSingleton<PlanPersistenceService>();
+        services.AddSingleton<TeamcraftService>();
 
         // Windows
         services.AddTransient<MainWindow>();
