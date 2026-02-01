@@ -1,0 +1,171 @@
+<ui:FluentWindow x:Class="FFXIVCraftArchitect.MainWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Title="FFXIV Craft Architect v0.1.0"
+                 Width="1400"
+                 Height="900"
+                 WindowStartupLocation="CenterScreen"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Title Bar -->
+        <ui:TitleBar Title="FFXIV Craft Architect">
+            <ui:TitleBar.Tray>
+                <ui:NotifyIcon Icon="pack://application:,,,/Assets/icon.ico" 
+                               ToolTip="FFXIV Craft Architect" />
+            </ui:TitleBar.Tray>
+        </ui:TitleBar>
+
+        <!-- Main Content -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="320" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Left Sidebar -->
+            <Border Grid.Column="0" 
+                    Background="Transparent" 
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="0,0,1,0"
+                    Padding="16">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <!-- Header -->
+                        <TextBlock Text="Craft Architect" 
+                                   FontSize="24" 
+                                   FontWeight="Bold"
+                                   Margin="0,0,0,20"/>
+
+                        <!-- Sync Section -->
+                        <ui:Button x:Name="SyncButton"
+                                   Content="Sync Teamcraft Inventory"
+                                   Appearance="Primary"
+                                   Icon="{ui:SymbolIcon ArrowSyncCircle24}"
+                                   HorizontalAlignment="Stretch"
+                                   Margin="0,0,0,8"
+                                   Click="OnSyncInventory"/>
+
+                        <!-- Live Mode Toggle -->
+                        <ui:ToggleSwitch x:Name="LiveSwitch"
+                                         Content="Live Mode (Packet Capture)"
+                                         Margin="0,8"
+                                         Toggled="OnLiveModeToggled"/>
+
+                        <TextBlock x:Name="SyncStatus"
+                                   Text="Inventory: Not Synced"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Margin="0,0,0,20"/>
+
+                        <!-- Data Center -->
+                        <TextBlock Text="Data Center:" 
+                                   Margin="0,10,0,4"/>
+                        <ComboBox x:Name="DcCombo"
+                                  IsEditable="False"
+                                  SelectionChanged="OnDataCenterSelected"/>
+
+                        <TextBlock Text="World:" 
+                                   Margin="0,10,0,4"/>
+                        <ComboBox x:Name="WorldCombo"
+                                  IsEditable="False"/>
+
+                        <!-- Item Search -->
+                        <TextBlock Text="Item Name:" 
+                                   Margin="0,20,0,4"/>
+                        <ui:TextBox x:Name="ItemSearch"
+                                    PlaceholderText="Enter item..."
+                                    KeyDown="OnItemSearchKeyDown"/>
+
+                        <ui:Button Content="Search"
+                                   Icon="{ui:SymbolIcon Search24}"
+                                   Margin="0,8"
+                                   HorizontalAlignment="Stretch"
+                                   Click="OnSearchItem"/>
+
+                        <!-- Action Buttons -->
+                        <ui:Button Content="View Logs"
+                                   Appearance="Secondary"
+                                   Margin="0,20,0,4"
+                                   HorizontalAlignment="Stretch"
+                                   Click="OnViewLogs"/>
+
+                        <ui:Button Content="View Inventory"
+                                   Appearance="Secondary"
+                                   Margin="0,4"
+                                   HorizontalAlignment="Stretch"
+                                   Click="OnViewInventory"/>
+
+                        <ui:Button Content="Reload App"
+                                   Appearance="Danger"
+                                   Margin="0,20,0,4"
+                                   HorizontalAlignment="Stretch"
+                                   Click="OnReloadApp"/>
+
+                        <!-- Search Results -->
+                        <Border Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
+                                CornerRadius="4"
+                                Margin="0,16,0,0"
+                                Padding="8"
+                                Height="200">
+                            <ListBox x:Name="SearchResults"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     SelectionChanged="OnItemSelected"/>
+                        </Border>
+
+                        <ui:Button x:Name="BuildPlanButton"
+                                   Content="Build Project Plan"
+                                   Appearance="Success"
+                                   Margin="0,16"
+                                   HorizontalAlignment="Stretch"
+                                   IsEnabled="False"
+                                   Click="OnBuildProjectPlan"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+
+            <!-- Main Content Area -->
+            <Border Grid.Column="1" Padding="16">
+                <ui:TabView>
+                    <ui:TabViewItem Header="Hierarchical Recipe Plan">
+                        <Grid>
+                            <TreeView x:Name="RecipeTree">
+                                <TreeView.Resources>
+                                    <Style TargetType="TreeViewItem">
+                                        <Setter Property="IsExpanded" Value="True" />
+                                    </Style>
+                                </TreeView.Resources>
+                            </TreeView>
+                        </Grid>
+                    </ui:TabViewItem>
+                    
+                    <ui:TabViewItem Header="Market Logistics">
+                        <ScrollViewer>
+                            <StackPanel x:Name="MarketCards">
+                                <!-- Market cards will be added dynamically -->
+                            </StackPanel>
+                        </ScrollViewer>
+                    </ui:TabViewItem>
+                </ui:TabView>
+            </Border>
+        </Grid>
+
+        <!-- Status Bar -->
+        <Border Grid.Row="2" 
+                Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
+                Padding="16,8">
+            <TextBlock x:Name="StatusLabel" 
+                       Text="Ready"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+        </Border>
+    </Grid>
+</ui:FluentWindow>

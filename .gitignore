@@ -1,0 +1,48 @@
+# .NET build artifacts
+bin/
+obj/
+out/
+publish/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userprefs
+
+# Rider
+.idea/
+*.sln.iml
+
+# VS Code
+.vscode/
+
+# NuGet
+*.nupkg
+packages/
+
+# Build results
+*.dll
+*.exe
+!deucalion.dll  # Keep the injected DLL
+*.pdb
+*.cache
+
+# Test results
+TestResults/
+*.trx
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+debug.log
+
+# Settings (user-specific, but keep template)
+settings.json
+!settings.template.json
+
+# Cache files
+inventory_cache.json
