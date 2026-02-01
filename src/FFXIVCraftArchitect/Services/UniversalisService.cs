@@ -64,17 +64,13 @@ public class UniversalisService
         var response = await _httpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
 
-        // Bulk responses are keyed by item ID
-        var result = await response.Content.ReadFromJsonAsync<Dictionary<string, UniversalisResponse>>(ct);
+        // Bulk responses have a different structure with "items" property
+        var bulkResult = await response.Content.ReadFromJsonAsync<UniversalisBulkResponse>(ct);
         
-        if (result == null)
+        if (bulkResult?.Items == null)
             return new Dictionary<int, UniversalisResponse>();
 
-        // Convert string keys to int keys
-        return result.ToDictionary(
-            kvp => int.Parse(kvp.Key),
-            kvp => kvp.Value
-        );
+        return bulkResult.Items;
     }
 
     /// <summary>

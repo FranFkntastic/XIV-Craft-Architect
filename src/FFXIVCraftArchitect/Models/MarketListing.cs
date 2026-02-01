@@ -43,6 +43,21 @@ public class UniversalisResponse
 }
 
 /// <summary>
+/// Universalis bulk API response format.
+/// </summary>
+public class UniversalisBulkResponse
+{
+    [JsonPropertyName("itemIDs")]
+    public List<int> ItemIds { get; set; } = new();
+    
+    /// <summary>
+    /// Items keyed by item ID string
+    /// </summary>
+    [JsonPropertyName("items")]
+    public Dictionary<int, UniversalisResponse> Items { get; set; } = new();
+}
+
+/// <summary>
 /// Shopping plan for a single material.
 /// </summary>
 public class ShoppingPlan

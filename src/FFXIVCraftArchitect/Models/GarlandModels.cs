@@ -175,10 +175,22 @@ public class GarlandItem
     public List<GarlandVendor>? Vendors { get; set; }
     
     /// <summary>
-    /// Whether this item can be traded on the market board
+    /// Whether this item can be traded on the market board (1 = true, 0 = false in JSON)
     /// </summary>
     [JsonPropertyName("tradeable")]
-    public bool Tradeable { get; set; } = true;
+    public object? TradeableRaw { get; set; }
+    
+    [JsonIgnore]
+    public bool Tradeable => TradeableRaw switch
+    {
+        bool b => b,
+        int i => i != 0,
+        long l => l != 0,
+        double d => d != 0,
+        string s => int.TryParse(s, out var val) && val != 0,
+        JsonElement e => e.ValueKind == JsonValueKind.True || (e.TryGetInt32(out var i) && i != 0),
+        _ => true // Default to tradeable if unknown
+    };
 }
 
 public class GarlandCraft

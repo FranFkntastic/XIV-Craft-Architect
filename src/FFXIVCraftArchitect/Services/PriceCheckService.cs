@@ -42,7 +42,7 @@ public class PriceCheckService
     
     // Cache for prices to avoid repeated API calls
     private readonly Dictionary<int, PriceInfo> _priceCache = new();
-    private readonly TimeSpan _cacheDuration = TimeSpan.FromMinutes(5);
+    private readonly TimeSpan _cacheDuration = TimeSpan.FromHours(1);
 
     public PriceCheckService(
         GarlandService garlandService,
