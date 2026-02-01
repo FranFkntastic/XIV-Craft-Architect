@@ -297,12 +297,13 @@ public partial class MainWindow : Window
             panel.Children.Add(infoText);
         }
         
-        // Price info (placeholder - would fetch from Universalis)
-        if (node.MarketPrice > 0)
+        // Price/cost info
+        var costText = GetNodeCostText(node);
+        if (!string.IsNullOrEmpty(costText))
         {
             var priceText = new TextBlock
             {
-                Text = $"  ~{node.MarketPrice * node.Quantity:N0}g",
+                Text = $"  {costText}",
                 Foreground = System.Windows.Media.Brushes.Gold,
                 VerticalAlignment = VerticalAlignment.Center,
                 FontSize = 11,
@@ -435,6 +436,27 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Try to set clipboard text with retry logic (clipboard may be locked by another app).
+    /// </summary>
+    private bool TrySetClipboard(string text, int maxRetries = 5)
+    {
+        for (int i = 0; i < maxRetries; i++)
+        {
+            try
+            {
+                Clipboard.SetText(text);
+                return true;
+            }
+            catch
+            {
+                if (i == maxRetries - 1) return false;
+                Thread.Sleep(100); // Wait a bit before retry
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Export current plan to Teamcraft URL (copies to clipboard).
     /// </summary>
     private void OnExportTeamcraft(object sender, RoutedEventArgs e)
@@ -448,14 +470,14 @@ public partial class MainWindow : Window
         var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
         var url = teamcraft.ExportToTeamcraft(_currentPlan);
         
-        try
+        if (TrySetClipboard(url))
         {
-            Clipboard.SetText(url);
             StatusLabel.Text = "Teamcraft URL copied to clipboard!";
         }
-        catch (Exception ex)
+        else
         {
-            StatusLabel.Text = $"Failed to copy: {ex.Message}";
+            StatusLabel.Text = "Failed to copy - clipboard may be in use. URL shown in logs.";
+            // Could also show a dialog with the text
         }
     }
 
@@ -473,14 +495,13 @@ public partial class MainWindow : Window
         var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
         var text = teamcraft.ExportToPlainText(_currentPlan);
         
-        try
+        if (TrySetClipboard(text))
         {
-            Clipboard.SetText(text);
             StatusLabel.Text = "Plan text copied to clipboard!";
         }
-        catch (Exception ex)
+        else
         {
-            StatusLabel.Text = $"Failed to copy: {ex.Message}";
+            StatusLabel.Text = "Failed to copy - clipboard may be in use.";
         }
     }
 
@@ -498,14 +519,13 @@ public partial class MainWindow : Window
         var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
         var csv = teamcraft.ExportToCsv(_currentPlan);
         
-        try
+        if (TrySetClipboard(csv))
         {
-            Clipboard.SetText(csv);
             StatusLabel.Text = "CSV copied to clipboard!";
         }
-        catch (Exception ex)
+        else
         {
-            StatusLabel.Text = $"Failed to copy: {ex.Message}";
+            StatusLabel.Text = "Failed to copy - clipboard may be in use.";
         }
     }
 
@@ -592,6 +612,57 @@ public partial class MainWindow : Window
             // Disable build button if no items left
             BuildPlanButton.IsEnabled = _projectItems.Count > 0;
         }
+    }
+
+    /// <summary>
+    /// Get cost text for a node - either market price or estimated craft cost.
+    /// </summary>
+    private string GetNodeCostText(PlanNode node)
+    {
+        if (node.IsBuy || node.IsUncraftable)
+        {
+            // Item is marked to be bought - show market price if available
+            if (node.MarketPrice > 0)
+            {
+                return $"~{node.MarketPrice * node.Quantity:N0}g";
+            }
+            else
+            {
+                return "(market price needed)";
+            }
+        }
+        else if (node.Children.Any())
+        {
+            // Item will be crafted - show sum of child costs
+            var childCost = CalculateChildCost(node);
+            if (childCost > 0)
+            {
+                return $"~{childCost:N0}g (craft)";
+            }
+        }
+        
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// Calculate total cost of all children (ingredients).
+    /// </summary>
+    private decimal CalculateChildCost(PlanNode node)
+    {
+        decimal total = 0;
+        foreach (var child in node.Children)
+        {
+            if (child.MarketPrice > 0)
+            {
+                total += child.MarketPrice * child.Quantity;
+            }
+            else if (child.Children.Any())
+            {
+                // Recursively calculate sub-ingredients
+                total += CalculateChildCost(child);
+            }
+        }
+        return total;
     }
 
     /// <summary>
