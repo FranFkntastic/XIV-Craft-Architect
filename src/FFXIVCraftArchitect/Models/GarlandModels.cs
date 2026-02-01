@@ -44,11 +44,27 @@ public class GarlandSearchObject
         _ => 0
     };
     
+    // ClassJob can be int, string, or missing
     [JsonPropertyName("c")]
-    public int? ClassJob { get; set; }
+    private JsonElement _classJobElement { get; set; }
     
+    public int? ClassJob => _classJobElement.ValueKind switch
+    {
+        JsonValueKind.Number => _classJobElement.GetInt32(),
+        JsonValueKind.String => int.TryParse(_classJobElement.GetString(), out var cj) ? cj : null,
+        _ => null
+    };
+    
+    // Level can be int, string, or missing
     [JsonPropertyName("l")]
-    public int? Level { get; set; }
+    private JsonElement _levelElement { get; set; }
+    
+    public int? Level => _levelElement.ValueKind switch
+    {
+        JsonValueKind.Number => _levelElement.GetInt32(),
+        JsonValueKind.String => int.TryParse(_levelElement.GetString(), out var lvl) ? lvl : null,
+        _ => null
+    };
 }
 
 /// <summary>
