@@ -4,17 +4,6 @@ using Microsoft.Extensions.Logging;
 namespace FFXIVCraftArchitect.Services;
 
 /// <summary>
-/// Price source type - where the price came from
-/// </summary>
-public enum PriceSource
-{
-    Unknown,
-    Vendor,
-    Market,
-    Untradeable
-}
-
-/// <summary>
 /// Price information for an item
 /// </summary>
 public class PriceInfo

@@ -492,20 +492,22 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Try to set clipboard text with retry logic (clipboard may be locked by another app).
+    /// Uses async delay to avoid blocking UI thread.
     /// </summary>
-    private bool TrySetClipboard(string text, int maxRetries = 5)
+    private async Task<bool> TrySetClipboardAsync(string text, int maxRetries = 5)
     {
         for (int i = 0; i < maxRetries; i++)
         {
             try
             {
-                Clipboard.SetText(text);
+                // Use STA-safe clipboard operation
+                await Dispatcher.InvokeAsync(() => Clipboard.SetText(text));
                 return true;
             }
             catch
             {
                 if (i == maxRetries - 1) return false;
-                Thread.Sleep(100); // Wait a bit before retry
+                await Task.Delay(100); // Non-blocking delay
             }
         }
         return false;
@@ -514,7 +516,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Export current plan to Teamcraft URL (copies to clipboard).
     /// </summary>
-    private void OnExportTeamcraft(object sender, RoutedEventArgs e)
+    private async void OnExportTeamcraft(object sender, RoutedEventArgs e)
     {
         if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
         {
@@ -525,21 +527,20 @@ public partial class MainWindow : Window
         var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
         var url = teamcraft.ExportToTeamcraft(_currentPlan);
         
-        if (TrySetClipboard(url))
+        if (await TrySetClipboardAsync(url))
         {
             StatusLabel.Text = "Teamcraft URL copied to clipboard!";
         }
         else
         {
-            StatusLabel.Text = "Failed to copy - clipboard may be in use. URL shown in logs.";
-            // Could also show a dialog with the text
+            StatusLabel.Text = "Failed to copy - clipboard may be in use.";
         }
     }
 
     /// <summary>
     /// Export plan as plain text to clipboard.
     /// </summary>
-    private void OnExportPlainText(object sender, RoutedEventArgs e)
+    private async void OnExportPlainText(object sender, RoutedEventArgs e)
     {
         if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
         {
@@ -550,7 +551,7 @@ public partial class MainWindow : Window
         var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
         var text = teamcraft.ExportToPlainText(_currentPlan);
         
-        if (TrySetClipboard(text))
+        if (await TrySetClipboardAsync(text))
         {
             StatusLabel.Text = "Plan text copied to clipboard!";
         }
@@ -563,7 +564,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Export shopping list as CSV.
     /// </summary>
-    private void OnExportCsv(object sender, RoutedEventArgs e)
+    private async void OnExportCsv(object sender, RoutedEventArgs e)
     {
         if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
         {
@@ -574,7 +575,7 @@ public partial class MainWindow : Window
         var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
         var csv = teamcraft.ExportToCsv(_currentPlan);
         
-        if (TrySetClipboard(csv))
+        if (await TrySetClipboardAsync(csv))
         {
             StatusLabel.Text = "CSV copied to clipboard!";
         }
@@ -625,6 +626,13 @@ public partial class MainWindow : Window
 
             // Refresh display
             DisplayPlanInTreeView(_currentPlan);
+            
+            // Refresh shopping list with updated prices
+            ShoppingList.ItemsSource = null;
+            ShoppingList.ItemsSource = _currentPlan.AggregatedMaterials;
+
+            // Update market logistics tab
+            UpdateMarketLogistics(prices);
 
             // Calculate total cost
             var totalCost = _currentPlan.AggregatedMaterials.Sum(m => m.TotalCost);
@@ -673,6 +681,9 @@ public partial class MainWindow : Window
             if (prices.TryGetValue(node.ItemId, out var priceInfo))
             {
                 node.MarketPrice = priceInfo.UnitPrice;
+                // Also track the source for market logistics
+                node.PriceSource = priceInfo.Source;
+                node.PriceSourceDetails = priceInfo.SourceDetails;
             }
 
             if (node.Children?.Any() == true)
@@ -680,6 +691,140 @@ public partial class MainWindow : Window
                 UpdatePlanWithPrices(node.Children, prices);
             }
         }
+    }
+
+    /// <summary>
+    /// Populate the Market Logistics tab with purchase planning information.
+    /// </summary>
+    private void UpdateMarketLogistics(Dictionary<int, PriceInfo> prices)
+    {
+        MarketCards.Children.Clear();
+
+        // Group materials by price source
+        var vendorItems = new List<MaterialAggregate>();
+        var marketItems = new List<MaterialAggregate>();
+        var untradeableItems = new List<MaterialAggregate>();
+
+        foreach (var material in _currentPlan?.AggregatedMaterials ?? new List<MaterialAggregate>())
+        {
+            if (prices.TryGetValue(material.ItemId, out var priceInfo))
+            {
+                switch (priceInfo.Source)
+                {
+                    case PriceSource.Vendor:
+                        vendorItems.Add(material);
+                        break;
+                    case PriceSource.Market:
+                        marketItems.Add(material);
+                        break;
+                    case PriceSource.Untradeable:
+                        untradeableItems.Add(material);
+                        break;
+                }
+            }
+            else
+            {
+                // No price info - treat as market item
+                marketItems.Add(material);
+            }
+        }
+
+        // Summary card
+        var summaryCard = CreateMarketCard("Purchase Summary", $"""
+            Total Items: {vendorItems.Count + marketItems.Count + untradeableItems.Count}
+            
+            Vendor Purchases: {vendorItems.Count} items
+            - Guaranteed prices, no market fluctuations
+            - Total: {vendorItems.Sum(i => i.TotalCost):N0}g
+            
+            Market Board Purchases: {marketItems.Count} items
+            - Prices may vary based on availability
+            - Total: {marketItems.Sum(i => i.TotalCost):N0}g
+            
+            Grand Total: {vendorItems.Sum(i => i.TotalCost) + marketItems.Sum(i => i.TotalCost):N0}g
+            """, "#2d4a3e");
+        MarketCards.Children.Add(summaryCard);
+
+        // Vendor items card
+        if (vendorItems.Any())
+        {
+            var vendorText = new System.Text.StringBuilder();
+            vendorText.AppendLine("Buy these from vendors (cheapest option):");
+            vendorText.AppendLine();
+            foreach (var item in vendorItems.OrderByDescending(i => i.TotalCost))
+            {
+                var source = prices[item.ItemId].SourceDetails;
+                vendorText.AppendLine($"• {item.Name} x{item.TotalQuantity} = {item.TotalCost:N0}g ({source})");
+            }
+            var vendorCard = CreateMarketCard($"Vendor Items ({vendorItems.Count})", vendorText.ToString(), "#3e4a2d");
+            MarketCards.Children.Add(vendorCard);
+        }
+
+        // Market items card
+        if (marketItems.Any())
+        {
+            var marketText = new System.Text.StringBuilder();
+            marketText.AppendLine("Purchase from Market Board:");
+            marketText.AppendLine();
+            foreach (var item in marketItems.OrderByDescending(i => i.TotalCost))
+            {
+                var avgPrice = item.UnitPrice;
+                marketText.AppendLine($"• {item.Name} x{item.TotalQuantity} = {item.TotalCost:N0}g (~{avgPrice:N0}g each)");
+            }
+            var marketCard = CreateMarketCard($"Market Board Items ({marketItems.Count})", marketText.ToString(), "#3d3e2d");
+            MarketCards.Children.Add(marketCard);
+        }
+
+        // Untradeable items card
+        if (untradeableItems.Any())
+        {
+            var untradeText = new System.Text.StringBuilder();
+            untradeText.AppendLine("These items must be gathered or crafted:");
+            untradeText.AppendLine();
+            foreach (var item in untradeableItems)
+            {
+                untradeText.AppendLine($"• {item.Name} x{item.TotalQuantity}");
+            }
+            var untradeCard = CreateMarketCard($"Untradeable Items ({untradeableItems.Count})", untradeText.ToString(), "#4a3d2d");
+            MarketCards.Children.Add(untradeCard);
+        }
+    }
+
+    /// <summary>
+    /// Create a card for the Market Logistics tab.
+    /// </summary>
+    private Border CreateMarketCard(string title, string content, string backgroundColor)
+    {
+        var border = new Border
+        {
+            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(backgroundColor)),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(12),
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+
+        var stack = new StackPanel();
+        
+        var titleBlock = new TextBlock
+        {
+            Text = title,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 14,
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        
+        var contentBlock = new TextBlock
+        {
+            Text = content,
+            TextWrapping = TextWrapping.Wrap,
+            FontFamily = new FontFamily("Consolas")
+        };
+        
+        stack.Children.Add(titleBlock);
+        stack.Children.Add(contentBlock);
+        border.Child = stack;
+        
+        return border;
     }
 
     private void OnViewLogs(object sender, RoutedEventArgs e)

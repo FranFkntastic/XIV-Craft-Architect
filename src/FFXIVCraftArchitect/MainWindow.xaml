@@ -324,15 +324,28 @@
                                         CornerRadius="4"
                                         Padding="8"
                                         Margin="0,0,0,8">
-                                    <TreeView x:Name="RecipeTree"
-                                              Background="Transparent"
-                                              BorderThickness="0">
-                                        <TreeView.Resources>
-                                            <Style TargetType="TreeViewItem">
-                                                <Setter Property="IsExpanded" Value="True" />
-                                            </Style>
-                                        </TreeView.Resources>
-                                    </TreeView>
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="*" />
+                                        </Grid.RowDefinitions>
+                                        
+                                        <TextBlock Grid.Row="0"
+                                                   Text="Recipe Tree (Crafting Steps)"
+                                                   FontWeight="SemiBold"
+                                                   Margin="0,0,0,8"/>
+                                        
+                                        <TreeView Grid.Row="1"
+                                                  x:Name="RecipeTree"
+                                                  Background="Transparent"
+                                                  BorderThickness="0">
+                                            <TreeView.Resources>
+                                                <Style TargetType="TreeViewItem">
+                                                    <Setter Property="IsExpanded" Value="True" />
+                                                </Style>
+                                            </TreeView.Resources>
+                                        </TreeView>
+                                    </Grid>
                                 </Border>
                                 
                                 <!-- Shopping List -->

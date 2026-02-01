@@ -3,6 +3,17 @@ using System.Text.Json.Serialization;
 namespace FFXIVCraftArchitect.Models;
 
 /// <summary>
+/// Price source type - where the price came from
+/// </summary>
+public enum PriceSource
+{
+    Unknown,
+    Vendor,
+    Market,
+    Untradeable
+}
+
+/// <summary>
 /// Represents the root of a crafting plan containing all items to be crafted.
 /// Serializable for save/load functionality.
 /// </summary>
@@ -105,11 +116,14 @@ public class CraftingPlan
                 {
                     ItemId = node.ItemId,
                     Name = node.Name,
-                    IconId = node.IconId
+                    IconId = node.IconId,
+                    UnitPrice = node.MarketPrice  // Copy price from node
                 };
                 aggregates[node.ItemId] = aggregate;
             }
             aggregate.TotalQuantity += node.Quantity;
+            // Update price in case it changed (should be same for all nodes of same item)
+            aggregate.UnitPrice = node.MarketPrice;
             aggregate.Sources.Add(new MaterialSource
             {
                 ParentItemName = node.Parent?.Name ?? "Direct",
@@ -202,6 +216,18 @@ public class PlanNode
     public decimal MarketPrice { get; set; }
     
     /// <summary>
+    /// Source of the price (Vendor, Market, Untradeable)
+    /// </summary>
+    [JsonIgnore]
+    public PriceSource PriceSource { get; set; }
+    
+    /// <summary>
+    /// Details about the price source (vendor name, market location, etc.)
+    /// </summary>
+    [JsonIgnore]
+    public string PriceSourceDetails { get; set; } = string.Empty;
+    
+    /// <summary>
     /// Parent node in the tree (null for root items)
     /// </summary>
     [JsonIgnore]
@@ -244,6 +270,8 @@ public class PlanNode
             Job = Job,
             Yield = Yield,
             MarketPrice = MarketPrice,
+            PriceSource = PriceSource,
+            PriceSourceDetails = PriceSourceDetails,
             NodeId = NodeId,
             ParentNodeId = ParentNodeId,
             Notes = Notes
