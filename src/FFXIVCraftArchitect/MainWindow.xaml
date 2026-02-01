@@ -7,18 +7,6 @@
         Height="900"
         WindowStartupLocation="CenterScreen"
         Background="#1e1e1e">
-    <Window.Style>
-        <Style TargetType="Window">
-            <Setter Property="WindowChrome.WindowChrome">
-                <Setter.Value>
-                    <WindowChrome CaptionHeight="0" 
-                                  CornerRadius="0"
-                                  GlassFrameThickness="0"
-                                  ResizeBorderThickness="8"/>
-                </Setter.Value>
-            </Setter>
-        </Style>
-    </Window.Style>
 
     <Grid>
         <Grid.RowDefinitions>
