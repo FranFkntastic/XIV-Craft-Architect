@@ -4,10 +4,11 @@
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         Title="Rename Plan"
         Width="400"
-        Height="150"
+        Height="200"
+        MinWidth="350"
+        MinHeight="180"
         WindowStartupLocation="CenterOwner"
-        Background="#1e1e1e"
-        ResizeMode="NoResize">
+        Background="#1e1e1e">
 
     <Grid Margin="16">
         <Grid.RowDefinitions>

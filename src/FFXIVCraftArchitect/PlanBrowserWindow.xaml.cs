@@ -4,11 +4,22 @@ using FFXIVCraftArchitect.Services;
 namespace FFXIVCraftArchitect;
 
 /// <summary>
-/// Window for browsing and selecting saved crafting plans.
+/// Actions that can be performed from the plan browser.
+/// </summary>
+public enum PlanBrowserAction
+{
+    None,
+    Load,
+    RenameCurrent
+}
+
+/// <summary>
+/// Window for browsing and managing saved crafting plans.
 /// </summary>
 public partial class PlanBrowserWindow : Window
 {
     private readonly PlanPersistenceService _planPersistence;
+    private readonly MainWindow? _mainWindow;
     private List<PlanInfo> _plans = new();
 
     /// <summary>
@@ -16,10 +27,16 @@ public partial class PlanBrowserWindow : Window
     /// </summary>
     public string? SelectedPlanPath { get; private set; }
 
-    public PlanBrowserWindow(PlanPersistenceService planPersistence)
+    /// <summary>
+    /// The action selected by the user.
+    /// </summary>
+    public PlanBrowserAction SelectedAction { get; private set; } = PlanBrowserAction.None;
+
+    public PlanBrowserWindow(PlanPersistenceService planPersistence, MainWindow? mainWindow = null)
     {
         InitializeComponent();
         _planPersistence = planPersistence;
+        _mainWindow = mainWindow;
         
         // Load plans when window opens
         Loaded += OnLoaded;
@@ -50,6 +67,7 @@ public partial class PlanBrowserWindow : Window
             };
             LoadButton.IsEnabled = false;
             DeleteButton.IsEnabled = false;
+            RenameButton.IsEnabled = false;
         }
     }
 
@@ -60,6 +78,7 @@ public partial class PlanBrowserWindow : Window
         
         LoadButton.IsEnabled = hasSelection;
         DeleteButton.IsEnabled = hasSelection;
+        RenameButton.IsEnabled = hasSelection;
     }
 
     private void OnLoadPlan(object sender, RoutedEventArgs e)
@@ -68,8 +87,38 @@ public partial class PlanBrowserWindow : Window
         if (selected != null && !string.IsNullOrEmpty(selected.FilePath))
         {
             SelectedPlanPath = selected.FilePath;
+            SelectedAction = PlanBrowserAction.Load;
             DialogResult = true;
             Close();
+        }
+    }
+
+    private void OnRenamePlan(object sender, RoutedEventArgs e)
+    {
+        var selected = PlansListBox.SelectedItem as PlanInfo;
+        if (selected == null || string.IsNullOrEmpty(selected.FilePath))
+            return;
+
+        // Load the plan to rename it
+        var plan = _planPersistence.LoadPlanAsync(selected.FilePath).Result;
+        if (plan == null) return;
+
+        var renameDialog = new RenamePlanDialog(plan.Name)
+        {
+            Owner = this
+        };
+
+        if (renameDialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(renameDialog.NewName))
+        {
+            var oldName = plan.Name;
+            plan.Name = renameDialog.NewName;
+            plan.MarkModified();
+            
+            // Delete old file and save with new name
+            _planPersistence.DeletePlan(selected.FilePath);
+            _planPersistence.SavePlanAsync(plan).Wait();
+            
+            RefreshPlanList();
         }
     }
 

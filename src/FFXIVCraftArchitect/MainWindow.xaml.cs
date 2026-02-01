@@ -375,16 +375,17 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Load a saved plan from disk.
+    /// Open plan browser to view, load, rename, or delete saved plans.
     /// </summary>
-    private async void OnLoadPlan(object sender, RoutedEventArgs e)
+    private async void OnViewPlans(object sender, RoutedEventArgs e)
     {
-        var browser = new PlanBrowserWindow(_planPersistence)
+        var browser = new PlanBrowserWindow(_planPersistence, this)
         {
             Owner = this
         };
 
-        if (browser.ShowDialog() == true && !string.IsNullOrEmpty(browser.SelectedPlanPath))
+        if (browser.ShowDialog() == true && browser.SelectedAction == PlanBrowserAction.Load && 
+            !string.IsNullOrEmpty(browser.SelectedPlanPath))
         {
             _currentPlan = await _planPersistence.LoadPlanAsync(browser.SelectedPlanPath);
             
@@ -411,6 +412,11 @@ public partial class MainWindow : Window
                 StatusLabel.Text = "Failed to load plan";
             }
         }
+        else if (browser.SelectedAction == PlanBrowserAction.RenameCurrent && _currentPlan != null)
+        {
+            // Rename was requested for current plan
+            OnRenamePlan(sender, e);
+        }
     }
 
     /// <summary>
@@ -424,7 +430,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Create a simple input dialog
         var inputDialog = new RenamePlanDialog(_currentPlan.Name)
         {
             Owner = this
@@ -436,7 +441,16 @@ public partial class MainWindow : Window
             _currentPlan.Name = inputDialog.NewName;
             _currentPlan.MarkModified();
             
-            StatusLabel.Text = $"Renamed plan from '{oldName}' to '{_currentPlan.Name}'";
+            // Auto-save after rename
+            var success = await _planPersistence.SavePlanAsync(_currentPlan);
+            if (success)
+            {
+                StatusLabel.Text = $"Renamed plan from '{oldName}' to '{_currentPlan.Name}'";
+            }
+            else
+            {
+                StatusLabel.Text = "Renamed in memory but failed to save";
+            }
         }
     }
 

@@ -2,11 +2,13 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-        Title="Load Plan"
+        Title="Saved Plans"
         Width="600"
-        Height="500"
+        Height="550"
         WindowStartupLocation="CenterOwner"
-        Background="#1e1e1e">
+        Background="#1e1e1e"
+        MinWidth="500"
+        MinHeight="400">
 
     <Grid Margin="16">
         <Grid.RowDefinitions>
@@ -72,6 +74,8 @@
         <Grid Grid.Row="2" Margin="0,16,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="4" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="8" />
@@ -79,18 +83,25 @@
             </Grid.ColumnDefinitions>
 
             <ui:Button Grid.Column="0"
+                       Content="Rename"
+                       Appearance="Secondary"
+                       Click="OnRenamePlan"
+                       x:Name="RenameButton"
+                       IsEnabled="False"/>
+
+            <ui:Button Grid.Column="2"
                        Content="Delete"
                        Appearance="Danger"
                        Click="OnDeletePlan"
                        x:Name="DeleteButton"
                        IsEnabled="False"/>
 
-            <ui:Button Grid.Column="2"
+            <ui:Button Grid.Column="4"
                        Content="Cancel"
                        Appearance="Secondary"
                        Click="OnCancel"/>
 
-            <ui:Button Grid.Column="4"
+            <ui:Button Grid.Column="6"
                        Content="Load"
                        Appearance="Primary"
                        Click="OnLoadPlan"

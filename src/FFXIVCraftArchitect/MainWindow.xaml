@@ -226,33 +226,25 @@
                                        IsEnabled="False"
                                        Click="OnBuildProjectPlan"/>
                             
-                            <!-- Save/Load/Delete buttons -->
+                            <!-- Save/View Plans buttons -->
                             <Grid Grid.Row="3" Margin="0,8,0,0">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="4" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="4" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 
                                 <ui:Button Grid.Column="0"
-                                           Content="Save"
+                                           Content="Save Plan"
                                            Appearance="Secondary"
                                            HorizontalAlignment="Stretch"
                                            Click="OnSavePlan"/>
                                 
                                 <ui:Button Grid.Column="2"
-                                           Content="Load"
+                                           Content="View Plans"
                                            Appearance="Secondary"
                                            HorizontalAlignment="Stretch"
-                                           Click="OnLoadPlan"/>
-                                
-                                <ui:Button Grid.Column="4"
-                                           Content="Rename"
-                                           Appearance="Secondary"
-                                           HorizontalAlignment="Stretch"
-                                           Click="OnRenamePlan"/>
+                                           Click="OnViewPlans"/>
                             </Grid>
                             
                             <!-- Teamcraft Import/Export -->
