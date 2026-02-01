@@ -226,7 +226,7 @@
                                        IsEnabled="False"
                                        Click="OnBuildProjectPlan"/>
                             
-                            <!-- Save/View Plans buttons -->
+                            <!-- Save/Load Plans buttons -->
                             <Grid Grid.Row="3" Margin="0,8,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -241,7 +241,7 @@
                                            Click="OnSavePlan"/>
                                 
                                 <ui:Button Grid.Column="2"
-                                           Content="View Plans"
+                                           Content="Load Plans"
                                            Appearance="Secondary"
                                            HorizontalAlignment="Stretch"
                                            Click="OnViewPlans"/>

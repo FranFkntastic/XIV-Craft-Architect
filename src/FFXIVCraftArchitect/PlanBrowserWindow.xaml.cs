@@ -93,14 +93,14 @@ public partial class PlanBrowserWindow : Window
         }
     }
 
-    private void OnRenamePlan(object sender, RoutedEventArgs e)
+    private async void OnRenamePlan(object sender, RoutedEventArgs e)
     {
         var selected = PlansListBox.SelectedItem as PlanInfo;
         if (selected == null || string.IsNullOrEmpty(selected.FilePath))
             return;
 
         // Load the plan to rename it
-        var plan = _planPersistence.LoadPlanAsync(selected.FilePath).Result;
+        var plan = await _planPersistence.LoadPlanAsync(selected.FilePath);
         if (plan == null) return;
 
         var renameDialog = new RenamePlanDialog(plan.Name)
@@ -116,7 +116,7 @@ public partial class PlanBrowserWindow : Window
             
             // Delete old file and save with new name
             _planPersistence.DeletePlan(selected.FilePath);
-            _planPersistence.SavePlanAsync(plan).Wait();
+            await _planPersistence.SavePlanAsync(plan);
             
             RefreshPlanList();
         }
