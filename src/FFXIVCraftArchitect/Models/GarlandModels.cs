@@ -33,8 +33,16 @@ public class GarlandSearchObject
     [JsonPropertyName("n")]
     public string Name { get; set; } = string.Empty;
     
+    // Icon ID can be int, string, or missing
     [JsonPropertyName("i")]
-    public int IconId { get; set; }
+    private JsonElement _iconElement { get; set; }
+    
+    public int IconId => _iconElement.ValueKind switch
+    {
+        JsonValueKind.Number => _iconElement.GetInt32(),
+        JsonValueKind.String => int.TryParse(_iconElement.GetString(), out var id) ? id : 0,
+        _ => 0
+    };
     
     [JsonPropertyName("c")]
     public int? ClassJob { get; set; }

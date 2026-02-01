@@ -204,7 +204,11 @@ public partial class MainWindow : Window
 
     private void OnViewLogs(object sender, RoutedEventArgs e)
     {
-        StatusLabel.Text = "View logs clicked - not implemented yet";
+        var logWindow = new LogViewerWindow
+        {
+            Owner = this
+        };
+        logWindow.Show();
     }
 
     private void OnViewInventory(object sender, RoutedEventArgs e)
