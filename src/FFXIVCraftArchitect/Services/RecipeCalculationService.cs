@@ -147,8 +147,11 @@ public class RecipeCalculationService
             Parent = parent
         };
 
-        // If no recipe data, mark as uncraftable
-        if (itemData?.Crafts == null || !itemData.Crafts.Any())
+        // Check for both traditional crafts and company crafts
+        var hasCraft = itemData?.Crafts?.Any() == true;
+        var hasCompanyCraft = itemData?.CompanyCrafts?.Any() == true;
+        
+        if (!hasCraft && !hasCompanyCraft)
         {
             node.IsUncraftable = true;
             node.IsBuy = true;
@@ -156,14 +159,20 @@ public class RecipeCalculationService
             return node;
         }
 
-        // Use the first available recipe (usually the lowest level/main recipe)
-        var recipe = itemData.Crafts.OrderBy(r => r.RecipeLevel).First();
+        // Mark as visited for circular detection
+        _visitedItems.Add(itemId);
+
+        // Handle company workshop recipes (airships, submarines, etc.)
+        if (hasCompanyCraft)
+        {
+            return await BuildCompanyCraftNodeAsync(node, itemData!.CompanyCrafts!.First(), quantity, ct);
+        }
+
+        // Use the first available traditional recipe (usually the lowest level/main recipe)
+        var recipe = itemData!.Crafts!.OrderBy(r => r.RecipeLevel).First();
         node.RecipeLevel = recipe.RecipeLevel;
         node.Job = GetJobName(recipe.JobId);
         node.Yield = Math.Max(1, recipe.Yield);
-
-        // Mark as visited for circular detection
-        _visitedItems.Add(itemId);
 
         // Calculate how many times we need to craft
         var craftCount = (int)Math.Ceiling((double)quantity / node.Yield);
@@ -282,6 +291,65 @@ public class RecipeCalculationService
         {
             ZeroOutChildren(child);
         }
+    }
+
+    /// <summary>
+    /// Build a node for company workshop recipes (airships, submarines).
+    /// These have phases instead of simple ingredients.
+    /// </summary>
+    private async Task<PlanNode> BuildCompanyCraftNodeAsync(
+        PlanNode node, 
+        GarlandCompanyCraft companyCraft, 
+        int quantity, 
+        CancellationToken ct)
+    {
+        node.Job = "Company Workshop";
+        node.RecipeLevel = 1; // Company crafts don't have traditional levels
+        node.Yield = 1; // Always yields 1
+        
+        _logger.LogDebug("[RecipeCalc] Building company craft node for {Name} with {PhaseCount} phases", 
+            node.Name, companyCraft.PhaseCount);
+
+        // Flatten all phase ingredients into children
+        // Group by phase for display purposes
+        foreach (var phase in companyCraft.Phases)
+        {
+            // Create a phase node (not a real item, just for organization)
+            var phaseNode = new PlanNode
+            {
+                ItemId = 0, // No real item ID
+                Name = $"Phase {phase.PhaseNumber + 1}",
+                Quantity = 1,
+                IsUncraftable = true,
+                IsBuy = false,
+                Parent = node,
+                Job = "Phase"
+            };
+            
+            foreach (var item in phase.Items)
+            {
+                var childNode = await BuildNodeRecursiveAsync(
+                    item.Id,
+                    item.Name ?? $"Item_{item.Id}",
+                    item.Amount * quantity, // Scale by parent quantity
+                    phaseNode,
+                    0, // Reset depth for ingredients
+                    ct);
+                
+                if (childNode != null)
+                {
+                    phaseNode.Children.Add(childNode);
+                }
+            }
+            
+            // Only add phase node if it has children
+            if (phaseNode.Children.Any())
+            {
+                node.Children.Add(phaseNode);
+            }
+        }
+
+        return node;
     }
 
     private static string GetJobName(int jobId)

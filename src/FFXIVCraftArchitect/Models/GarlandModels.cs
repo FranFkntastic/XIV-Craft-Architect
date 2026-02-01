@@ -151,10 +151,16 @@ public class GarlandItem
     public string? Description { get; set; }
     
     /// <summary>
-    /// Crafting recipes this item is used in
+    /// Crafting recipes this item is used in (traditional crafting)
     /// </summary>
     [JsonPropertyName("craft")]
     public List<GarlandCraft>? Crafts { get; set; }
+    
+    /// <summary>
+    /// Company workshop recipes (airships, submarines, etc.)
+    /// </summary>
+    [JsonPropertyName("companyCraft")]
+    public List<GarlandCompanyCraft>? CompanyCrafts { get; set; }
     
     /// <summary>
     /// Recipes that produce this item
@@ -179,6 +185,61 @@ public class GarlandCraft
     
     [JsonPropertyName("ingredients")]
     public List<GarlandIngredient> Ingredients { get; set; } = new();
+}
+
+/// <summary>
+/// Company workshop craft recipe (airship/submarine parts, etc.)
+/// These have phases instead of simple ingredients
+/// </summary>
+public class GarlandCompanyCraft
+{
+    [JsonPropertyName("id")]
+    public int Id { get; set; }
+    
+    /// <summary>
+    /// Company crafting has multiple phases (up to 4)
+    /// </summary>
+    [JsonPropertyName("phases")]
+    public List<GarlandCompanyPhase> Phases { get; set; } = new();
+    
+    /// <summary>
+    /// Total number of phases
+    /// </summary>
+    [JsonPropertyName("phaseCount")]
+    public int PhaseCount { get; set; }
+}
+
+public class GarlandCompanyPhase
+{
+    /// <summary>
+    /// Phase number (0-indexed)
+    /// </summary>
+    [JsonPropertyName("phase")]
+    public int PhaseNumber { get; set; }
+    
+    /// <summary>
+    /// List of items required for this phase
+    /// </summary>
+    [JsonPropertyName("items")]
+    public List<GarlandCompanyIngredient> Items { get; set; } = new();
+}
+
+public class GarlandCompanyIngredient
+{
+    [JsonPropertyName("id")]
+    public int Id { get; set; }
+    
+    [JsonPropertyName("amount")]
+    public int Amount { get; set; }
+    
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+    
+    /// <summary>
+    /// Phase number this ingredient belongs to
+    /// </summary>
+    [JsonPropertyName("phase")]
+    public int Phase { get; set; }
 }
 
 public class GarlandIngredient

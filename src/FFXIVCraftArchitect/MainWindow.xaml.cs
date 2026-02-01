@@ -365,36 +365,36 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnLoadPlan(object sender, RoutedEventArgs e)
     {
-        var plans = _planPersistence.ListSavedPlans();
-        if (plans.Count == 0)
+        var browser = new PlanBrowserWindow(_planPersistence)
         {
-            StatusLabel.Text = "No saved plans found";
-            return;
-        }
+            Owner = this
+        };
 
-        // For now, load the most recent plan
-        // TODO: Show a dialog to select which plan to load
-        var mostRecent = plans.First();
-        _currentPlan = await _planPersistence.LoadPlanAsync(mostRecent.FilePath);
-        
-        if (_currentPlan != null)
+        if (browser.ShowDialog() == true && !string.IsNullOrEmpty(browser.SelectedPlanPath))
         {
-            DisplayPlanInTreeView(_currentPlan);
+            _currentPlan = await _planPersistence.LoadPlanAsync(browser.SelectedPlanPath);
             
-            // Sync to project items
-            _projectItems = _currentPlan.RootItems.Select(r => new ProjectItem 
-            { 
-                Id = r.ItemId, 
-                Name = r.Name, 
-                Quantity = r.Quantity 
-            }).ToList();
-            ProjectList.ItemsSource = _projectItems;
-            
-            StatusLabel.Text = $"Loaded plan: {_currentPlan.Name}";
-        }
-        else
-        {
-            StatusLabel.Text = "Failed to load plan";
+            if (_currentPlan != null)
+            {
+                DisplayPlanInTreeView(_currentPlan);
+                
+                // Sync to project items
+                _projectItems = _currentPlan.RootItems.Select(r => new ProjectItem 
+                { 
+                    Id = r.ItemId, 
+                    Name = r.Name, 
+                    Quantity = r.Quantity 
+                }).ToList();
+                ProjectList.ItemsSource = null;
+                ProjectList.ItemsSource = _projectItems;
+                
+                BuildPlanButton.IsEnabled = _projectItems.Count > 0;
+                StatusLabel.Text = $"Loaded plan: {_currentPlan.Name}";
+            }
+            else
+            {
+                StatusLabel.Text = "Failed to load plan";
+            }
         }
     }
 
