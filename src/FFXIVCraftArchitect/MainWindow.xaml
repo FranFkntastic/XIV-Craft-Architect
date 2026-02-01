@@ -392,10 +392,21 @@
                                                                    VerticalAlignment="Center"/>
                                                         
                                                         <TextBlock Grid.Column="3"
-                                                                   Text="{Binding TotalCost, StringFormat={}{0:N0}g}"
                                                                    HorizontalAlignment="Right"
                                                                    VerticalAlignment="Center"
-                                                                   Foreground="Gold"/>
+                                                                   Foreground="Gold">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Text" Value="{Binding TotalCost, StringFormat='{}{0:N0}g'}"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding TotalCost}" Value="0">
+                                                                            <Setter Property="Text" Value="--"/>
+                                                                            <Setter Property="Foreground" Value="Gray"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
                                                     </Grid>
                                                 </DataTemplate>
                                             </ListBox.ItemTemplate>
