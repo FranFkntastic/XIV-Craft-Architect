@@ -670,7 +670,8 @@ public partial class MainWindow : Window
                 allItems, 
                 worldOrDc, 
                 default, 
-                progress);
+                progress,
+                forceRefresh: true);
 
             // Update plan nodes with prices
             UpdatePlanWithPrices(_currentPlan.RootItems, prices);

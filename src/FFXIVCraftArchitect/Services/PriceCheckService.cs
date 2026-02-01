@@ -132,19 +132,22 @@ public class PriceCheckService
     /// <summary>
     /// Get prices for multiple items in bulk (more efficient).
     /// </summary>
+    /// <param name="forceRefresh">If true, bypass cache and fetch fresh prices for all items.</param>
     public async Task<Dictionary<int, PriceInfo>> GetBestPricesBulkAsync(
         List<(int itemId, string name)> items, 
         string worldOrDc, 
         CancellationToken ct = default,
-        IProgress<(int current, int total, string itemName)>? progress = null)
+        IProgress<(int current, int total, string itemName)>? progress = null,
+        bool forceRefresh = false)
     {
         var results = new Dictionary<int, PriceInfo>();
         var itemsToFetch = new List<(int itemId, string name)>();
 
-        // Check cache first
+        // Check cache first (unless forcing refresh)
         foreach (var (itemId, name) in items)
         {
-            if (_priceCache.TryGetValue(itemId, out var cached) && 
+            if (!forceRefresh && 
+                _priceCache.TryGetValue(itemId, out var cached) && 
                 DateTime.UtcNow - cached.LastUpdated < _cacheDuration)
             {
                 results[itemId] = cached;
