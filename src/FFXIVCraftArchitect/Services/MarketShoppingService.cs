@@ -115,6 +115,7 @@ public class MarketShoppingService
     /// <summary>
     /// Calculate a summary for purchasing from a specific world.
     /// Applies the filtering logic for small listings.
+    /// IMPORTANT: FFXIV requires buying FULL LISTINGS, not partial stacks.
     /// </summary>
     private WorldShoppingSummary? CalculateWorldSummary(
         string worldName,
@@ -149,17 +150,21 @@ public class MarketShoppingService
             if (!shouldInclude)
                 continue;
 
-            var toBuy = Math.Min(listing.Quantity, remaining);
-            totalCost += toBuy * listing.PricePerUnit;
-            remaining -= toBuy;
+            // IMPORTANT: FFXIV requires buying the FULL LISTING, not just what you need
+            // Calculate cost for entire stack
+            var fullStackCost = listing.Quantity * listing.PricePerUnit;
+            totalCost += fullStackCost;
+            remaining -= listing.Quantity;
             listingsUsed++;
 
             summary.Listings.Add(new ShoppingListingEntry
             {
-                Quantity = toBuy,
+                Quantity = listing.Quantity,  // Full stack quantity
                 PricePerUnit = listing.PricePerUnit,
                 RetainerName = listing.RetainerName,
-                IsUnderAverage = isUnderAverage
+                IsUnderAverage = isUnderAverage,
+                NeededFromStack = Math.Min(listing.Quantity, quantityNeeded),  // What we actually need
+                ExcessQuantity = Math.Max(0, listing.Quantity - quantityNeeded)  // Excess we'll have
             });
         }
 
@@ -171,6 +176,8 @@ public class MarketShoppingService
         summary.AveragePricePerUnit = (decimal)totalCost / quantityNeeded;
         summary.ListingsUsed = listingsUsed;
         summary.IsFullyUnderAverage = summary.Listings.All(l => l.IsUnderAverage);
+        summary.TotalQuantityPurchased = summary.Listings.Sum(l => l.Quantity);
+        summary.ExcessQuantity = summary.TotalQuantityPurchased - quantityNeeded;
 
         return summary;
     }
@@ -312,9 +319,12 @@ public class WorldShoppingSummary
     public int ListingsUsed { get; set; }
     public List<ShoppingListingEntry> Listings { get; set; } = new();
     public bool IsFullyUnderAverage { get; set; }
+    public int TotalQuantityPurchased { get; set; }
+    public int ExcessQuantity { get; set; }
 
     public string CostDisplay => $"{TotalCost:N0}g";
     public string PricePerUnitDisplay => $"{AveragePricePerUnit:N0}g";
+    public bool HasExcess => ExcessQuantity > 0;
 }
 
 /// <summary>
@@ -322,10 +332,15 @@ public class WorldShoppingSummary
 /// </summary>
 public class ShoppingListingEntry
 {
-    public int Quantity { get; set; }
+    public int Quantity { get; set; }  // Full stack quantity available
     public long PricePerUnit { get; set; }
     public string RetainerName { get; set; } = string.Empty;
     public bool IsUnderAverage { get; set; }
+    public int NeededFromStack { get; set; }  // How many we actually need from this stack
+    public int ExcessQuantity { get; set; }  // How many extra we'll have
 
     public string SubtotalDisplay => $"{(Quantity * PricePerUnit):N0}g";
+    public string QuantityDisplay => ExcessQuantity > 0 
+        ? $"x{Quantity} (need {NeededFromStack}, +{ExcessQuantity} extra)"
+        : $"x{Quantity}";
 }

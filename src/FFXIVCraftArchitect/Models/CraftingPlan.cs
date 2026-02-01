@@ -107,36 +107,48 @@ public class CraftingPlan
     
     private void AggregateNode(PlanNode node, Dictionary<int, MaterialAggregate> aggregates)
     {
-        // Only count materials marked as "buy" or leaf nodes (can't be crafted)
-        if (node.IsBuy || !node.Children.Any())
+        // If marked as "buy", this item goes to shopping list (not its children)
+        if (node.IsBuy)
         {
-            if (!aggregates.TryGetValue(node.ItemId, out var aggregate))
-            {
-                aggregate = new MaterialAggregate
-                {
-                    ItemId = node.ItemId,
-                    Name = node.Name,
-                    IconId = node.IconId,
-                    UnitPrice = node.MarketPrice  // Copy price from node
-                };
-                aggregates[node.ItemId] = aggregate;
-            }
-            aggregate.TotalQuantity += node.Quantity;
-            // Update price in case it changed (should be same for all nodes of same item)
-            aggregate.UnitPrice = node.MarketPrice;
-            aggregate.Sources.Add(new MaterialSource
-            {
-                ParentItemName = node.Parent?.Name ?? "Direct",
-                Quantity = node.Quantity,
-                IsCrafted = !node.IsBuy && node.Children.Any()
-            });
+            AddToAggregation(node, aggregates, isCrafted: false);
+            // Don't recurse into children - we're buying the finished item
+            return;
         }
         
-        // Recurse into children (sub-materials that need to be crafted)
+        // If leaf node (can't be crafted), add to aggregation
+        if (!node.Children.Any())
+        {
+            AddToAggregation(node, aggregates, isCrafted: false);
+        }
+        
+        // Recurse into children (sub-materials needed for crafting)
         foreach (var child in node.Children)
         {
             AggregateNode(child, aggregates);
         }
+    }
+    
+    private void AddToAggregation(PlanNode node, Dictionary<int, MaterialAggregate> aggregates, bool isCrafted)
+    {
+        if (!aggregates.TryGetValue(node.ItemId, out var aggregate))
+        {
+            aggregate = new MaterialAggregate
+            {
+                ItemId = node.ItemId,
+                Name = node.Name,
+                IconId = node.IconId,
+                UnitPrice = node.MarketPrice
+            };
+            aggregates[node.ItemId] = aggregate;
+        }
+        aggregate.TotalQuantity += node.Quantity;
+        aggregate.UnitPrice = node.MarketPrice;
+        aggregate.Sources.Add(new MaterialSource
+        {
+            ParentItemName = node.Parent?.Name ?? "Direct",
+            Quantity = node.Quantity,
+            IsCrafted = isCrafted
+        });
     }
     
     private decimal CalculateTotalCost()

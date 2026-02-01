@@ -1196,13 +1196,21 @@ public partial class MainWindow : Window
 
         stack.Children.Add(headerPanel);
 
-        // Total cost and average price
+        // Total cost with excess info
         var costText = new TextBlock
         {
-            Text = $"Total: {world.CostDisplay} (~{world.PricePerUnitDisplay} each)",
             FontSize = 11,
             Margin = new Thickness(0, 2, 0, 4)
         };
+        if (world.HasExcess)
+        {
+            costText.Text = $"Total: {world.CostDisplay} (buy {world.TotalQuantityPurchased}, use {world.Listings.Sum(l => l.NeededFromStack)}, +{world.ExcessQuantity} extra)";
+            costText.ToolTip = "FFXIV requires buying full stacks. You'll have excess items.";
+        }
+        else
+        {
+            costText.Text = $"Total: {world.CostDisplay} (~{world.PricePerUnitDisplay} each)";
+        }
         if (world.IsFullyUnderAverage)
         {
             costText.Foreground = Brushes.LightGreen;
@@ -1212,7 +1220,7 @@ public partial class MainWindow : Window
         // Individual listings
         var listingsText = new TextBlock
         {
-            Text = "Listings:",
+            Text = "Listings (full stacks required):",
             FontSize = 10,
             Foreground = Brushes.Gray,
             Margin = new Thickness(0, 0, 0, 2)
@@ -1223,13 +1231,22 @@ public partial class MainWindow : Window
         {
             var listingPanel = new StackPanel { Orientation = Orientation.Horizontal };
             
+            // Show full stack info with what we need vs excess
             var qtyText = new TextBlock
             {
-                Text = $"x{listing.Quantity}",
                 FontSize = 10,
-                Width = 35,
-                Foreground = Brushes.LightGray
+                Width = 140,
+                Foreground = listing.ExcessQuantity > 0 ? Brushes.Orange : Brushes.LightGray
             };
+            if (listing.ExcessQuantity > 0)
+            {
+                qtyText.Text = $"x{listing.Quantity} (use {listing.NeededFromStack})";
+                qtyText.ToolTip = $"Must buy full stack of {listing.Quantity}, only need {listing.NeededFromStack}";
+            }
+            else
+            {
+                qtyText.Text = $"x{listing.Quantity}";
+            }
             listingPanel.Children.Add(qtyText);
 
             var priceText = new TextBlock

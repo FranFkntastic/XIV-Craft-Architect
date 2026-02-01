@@ -264,32 +264,18 @@ public class RecipeCalculationService
     /// </summary>
     public void ToggleBuyMode(PlanNode node, bool buy)
     {
+        // Simply toggle the flag - don't modify quantities
+        // Quantities are needed for market logistics analysis
         node.IsBuy = buy;
         
-        if (buy)
+        if (!buy)
         {
-            // Buying this item - children are not needed anymore
-            // Keep them for reference but zero out quantities
-            foreach (var child in node.Children)
-            {
-                child.Quantity = 0;
-                ZeroOutChildren(child);
-            }
+            // Switching back to craft - log that we'll use the original recipe
+            _logger.LogInformation("[RecipeCalc] {ItemName} switched to craft mode", node.Name);
         }
         else
         {
-            // Switching back to craft - need to restore children
-            // This requires rebuilding the tree for this branch
-            _logger.LogWarning("[RecipeCalc] Switching from buy to craft requires tree rebuild for {ItemId}", node.ItemId);
-        }
-    }
-
-    private void ZeroOutChildren(PlanNode node)
-    {
-        node.Quantity = 0;
-        foreach (var child in node.Children)
-        {
-            ZeroOutChildren(child);
+            _logger.LogInformation("[RecipeCalc] {ItemName} switched to buy mode", node.Name);
         }
     }
 
