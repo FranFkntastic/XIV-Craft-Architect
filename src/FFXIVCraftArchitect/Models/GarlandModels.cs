@@ -167,6 +167,18 @@ public class GarlandItem
     /// </summary>
     [JsonPropertyName("usedInCraft")]
     public List<GarlandUsedInCraft>? UsedInCrafts { get; set; }
+    
+    /// <summary>
+    /// Vendors that sell this item
+    /// </summary>
+    [JsonPropertyName("vendors")]
+    public List<GarlandVendor>? Vendors { get; set; }
+    
+    /// <summary>
+    /// Whether this item can be traded on the market board
+    /// </summary>
+    [JsonPropertyName("tradeable")]
+    public bool Tradeable { get; set; } = true;
 }
 
 public class GarlandCraft
@@ -258,4 +270,28 @@ public class GarlandUsedInCraft
 {
     [JsonPropertyName("id")]
     public int Id { get; set; }
+}
+
+/// <summary>
+/// Vendor that sells an item
+/// </summary>
+public class GarlandVendor
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+    
+    [JsonPropertyName("location")]
+    public string Location { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Price in gil
+    /// </summary>
+    [JsonPropertyName("price")]
+    public int Price { get; set; }
+    
+    /// <summary>
+    /// Currency type (usually "gil" but can be tomestones, etc.)
+    /// </summary>
+    [JsonPropertyName("currency")]
+    public string Currency { get; set; } = "gil";
 }

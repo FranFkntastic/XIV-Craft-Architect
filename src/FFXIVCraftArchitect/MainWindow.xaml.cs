@@ -33,6 +33,7 @@ public partial class MainWindow : Window
     private readonly ItemCacheService _itemCache;
     private readonly RecipeCalculationService _recipeCalcService;
     private readonly PlanPersistenceService _planPersistence;
+    private readonly PriceCheckService _priceCheckService;
 
     // Search state
     private List<GarlandSearchResult> _currentSearchResults = new();
@@ -55,6 +56,7 @@ public partial class MainWindow : Window
         _itemCache = App.Services.GetRequiredService<ItemCacheService>();
         _recipeCalcService = App.Services.GetRequiredService<RecipeCalculationService>();
         _planPersistence = App.Services.GetRequiredService<PlanPersistenceService>();
+        _priceCheckService = App.Services.GetRequiredService<PriceCheckService>();
 
         Loaded += OnLoaded;
     }
@@ -242,9 +244,9 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdateBuildPlanButtonText()
     {
-        BuildPlanButton.Content = (_currentPlan != null && _currentPlan.RootItems.Count > 0) 
-            ? "Rebuild Project Plan" 
-            : "Build Project Plan";
+        var hasPlan = _currentPlan != null && _currentPlan.RootItems.Count > 0;
+        BuildPlanButton.Content = hasPlan ? "Rebuild Project Plan" : "Build Project Plan";
+        FetchPricesButton.IsEnabled = hasPlan;
     }
 
     /// <summary>
@@ -538,6 +540,104 @@ public partial class MainWindow : Window
         else
         {
             StatusLabel.Text = "Failed to copy - clipboard may be in use.";
+        }
+    }
+
+    /// <summary>
+    /// Fetch prices for all items in the current plan from Universalis and Garland.
+    /// </summary>
+    private async void OnFetchPrices(object sender, RoutedEventArgs e)
+    {
+        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        {
+            StatusLabel.Text = "No plan - build a plan first";
+            return;
+        }
+
+        var dc = DcCombo.SelectedItem as string ?? "Aether";
+        var world = WorldCombo.SelectedItem as string ?? "";
+        var worldOrDc = string.IsNullOrEmpty(world) || world == "Entire Data Center" ? dc : world;
+
+        StatusLabel.Text = "Fetching prices...";
+        FetchPricesButton.IsEnabled = false;
+
+        try
+        {
+            // Collect all unique items from the plan
+            var allItems = new List<(int itemId, string name)>();
+            CollectAllItems(_currentPlan.RootItems, allItems);
+
+            // Fetch prices in bulk
+            var progress = new Progress<(int current, int total, string itemName)>(p =>
+            {
+                StatusLabel.Text = $"Fetching prices... {p.current}/{p.total} ({p.itemName})";
+            });
+
+            var prices = await _priceCheckService.GetBestPricesBulkAsync(
+                allItems, 
+                worldOrDc, 
+                default, 
+                progress);
+
+            // Update plan nodes with prices
+            UpdatePlanWithPrices(_currentPlan.RootItems, prices);
+
+            // Refresh display
+            DisplayPlanInTreeView(_currentPlan);
+
+            // Calculate total cost
+            var totalCost = _currentPlan.AggregatedMaterials.Sum(m => m.TotalCost);
+            var vendorItems = prices.Count(p => p.Value.Source == PriceSource.Vendor);
+            var marketItems = prices.Count(p => p.Value.Source == PriceSource.Market);
+
+            StatusLabel.Text = $"Prices fetched! Total: {totalCost:N0}g ({vendorItems} vendor, {marketItems} market)";
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Failed to fetch prices: {ex.Message}";
+        }
+        finally
+        {
+            FetchPricesButton.IsEnabled = _currentPlan != null && _currentPlan.RootItems.Count > 0;
+        }
+    }
+
+    /// <summary>
+    /// Recursively collect all items from the plan.
+    /// </summary>
+    private void CollectAllItems(List<PlanNode> nodes, List<(int itemId, string name)> items)
+    {
+        foreach (var node in nodes)
+        {
+            // Avoid duplicates
+            if (!items.Any(i => i.itemId == node.ItemId))
+            {
+                items.Add((node.ItemId, node.Name));
+            }
+
+            if (node.Children?.Any() == true)
+            {
+                CollectAllItems(node.Children, items);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Update plan nodes with fetched prices.
+    /// </summary>
+    private void UpdatePlanWithPrices(List<PlanNode> nodes, Dictionary<int, PriceInfo> prices)
+    {
+        foreach (var node in nodes)
+        {
+            if (prices.TryGetValue(node.ItemId, out var priceInfo))
+            {
+                node.MarketPrice = priceInfo.UnitPrice;
+            }
+
+            if (node.Children?.Any() == true)
+            {
+                UpdatePlanWithPrices(node.Children, prices);
+            }
         }
     }
 

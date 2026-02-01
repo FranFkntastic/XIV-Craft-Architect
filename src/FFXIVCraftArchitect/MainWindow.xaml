@@ -169,6 +169,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             
                             <TextBlock Text="Project Items" 
@@ -290,6 +291,22 @@
                                            HorizontalAlignment="Stretch"
                                            ToolTip="Export shopping list as CSV"
                                            Click="OnExportCsv"/>
+                            </Grid>
+                            
+                            <!-- Price Fetching -->
+                            <Grid Grid.Row="6" Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                
+                                <ui:Button Grid.Column="0"
+                                           x:Name="FetchPricesButton"
+                                           Content="Fetch Prices"
+                                           Appearance="Primary"
+                                           HorizontalAlignment="Stretch"
+                                           ToolTip="Fetch market prices from Universalis and vendor prices from Garland"
+                                           Click="OnFetchPrices"
+                                           IsEnabled="False"/>
                             </Grid>
                         </Grid>
                     </Border>
