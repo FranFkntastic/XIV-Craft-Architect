@@ -5,14 +5,14 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using FFXIVCraftArchitect.Services;
 using Microsoft.Extensions.DependencyInjection;
-using Wpf.Ui.Controls;
+using Window = System.Windows.Window;
 
 namespace FFXIVCraftArchitect;
 
 /// <summary>
 /// Interaction logic for MainWindow.xaml
 /// </summary>
-public partial class MainWindow : FluentWindow
+public partial class MainWindow : Window
 {
     private readonly GarlandService _garlandService;
     private readonly UniversalisService _universalisService;
