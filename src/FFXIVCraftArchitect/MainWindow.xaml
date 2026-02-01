@@ -102,12 +102,6 @@
                                    Margin="0,4"
                                    HorizontalAlignment="Stretch"
                                    Click="OnViewInventory"/>
-
-                        <ui:Button Content="Reload App"
-                                   Appearance="Danger"
-                                   Margin="0,20,0,4"
-                                   HorizontalAlignment="Stretch"
-                                   Click="OnReloadApp"/>
                     </StackPanel>
                 </ScrollViewer>
             </Border>

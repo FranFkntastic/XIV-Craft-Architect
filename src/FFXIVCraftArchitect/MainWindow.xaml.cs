@@ -222,6 +222,7 @@ public partial class MainWindow : Window
             
             // Display in TreeView
             DisplayPlanInTreeView(_currentPlan);
+            UpdateBuildPlanButtonText();
             
             StatusLabel.Text = $"Plan built: {_currentPlan.RootItems.Count} root items, " +
                                $"{_currentPlan.AggregatedMaterials.Count} unique materials";
@@ -234,6 +235,16 @@ public partial class MainWindow : Window
         {
             BuildPlanButton.IsEnabled = _projectItems.Count > 0;
         }
+    }
+
+    /// <summary>
+    /// Update the Build Plan button text based on whether a plan exists.
+    /// </summary>
+    private void UpdateBuildPlanButtonText()
+    {
+        BuildPlanButton.Content = (_currentPlan != null && _currentPlan.RootItems.Count > 0) 
+            ? "Rebuild Project Plan" 
+            : "Build Project Plan";
     }
 
     /// <summary>
@@ -378,6 +389,7 @@ public partial class MainWindow : Window
             if (_currentPlan != null)
             {
                 DisplayPlanInTreeView(_currentPlan);
+                UpdateBuildPlanButtonText();
                 
                 // Sync to project items
                 _projectItems = _currentPlan.RootItems.Select(r => new ProjectItem 
@@ -541,13 +553,6 @@ public partial class MainWindow : Window
     private void OnViewInventory(object sender, RoutedEventArgs e)
     {
         StatusLabel.Text = "View inventory clicked - not implemented yet";
-    }
-
-    private void OnReloadApp(object sender, RoutedEventArgs e)
-    {
-        // Restart the application
-        Process.Start(Process.GetCurrentProcess().MainModule?.FileName ?? "");
-        Application.Current.Shutdown();
     }
 
     protected override void OnClosing(CancelEventArgs e)
