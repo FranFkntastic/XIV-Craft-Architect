@@ -173,6 +173,8 @@
                                 <RowDefinition Height="*" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             
                             <TextBlock Text="Project Items" 
@@ -246,6 +248,52 @@
                                            Appearance="Secondary"
                                            HorizontalAlignment="Stretch"
                                            Click="OnLoadPlan"/>
+                            </Grid>
+                            
+                            <!-- Teamcraft Import/Export -->
+                            <Grid Grid.Row="4" Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="4" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                
+                                <ui:Button Grid.Column="0"
+                                           Content="Import TC"
+                                           Appearance="Secondary"
+                                           HorizontalAlignment="Stretch"
+                                           ToolTip="Import from Teamcraft Copy as Text"
+                                           Click="OnImportTeamcraft"/>
+                                
+                                <ui:Button Grid.Column="2"
+                                           Content="Export TC"
+                                           Appearance="Secondary"
+                                           HorizontalAlignment="Stretch"
+                                           ToolTip="Export to Teamcraft URL (copies to clipboard)"
+                                           Click="OnExportTeamcraft"/>
+                            </Grid>
+                            
+                            <!-- Additional Export Options -->
+                            <Grid Grid.Row="5" Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="4" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                
+                                <ui:Button Grid.Column="0"
+                                           Content="Copy Text"
+                                           Appearance="Secondary"
+                                           HorizontalAlignment="Stretch"
+                                           ToolTip="Copy plan as plain text to clipboard"
+                                           Click="OnExportPlainText"/>
+                                
+                                <ui:Button Grid.Column="2"
+                                           Content="Export CSV"
+                                           Appearance="Secondary"
+                                           HorizontalAlignment="Stretch"
+                                           ToolTip="Export shopping list as CSV"
+                                           Click="OnExportCsv"/>
                             </Grid>
                         </Grid>
                     </Border>

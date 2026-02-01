@@ -398,6 +398,94 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Import from Teamcraft "Copy as Text" format.
+    /// </summary>
+    private async void OnImportTeamcraft(object sender, RoutedEventArgs e)
+    {
+        // TODO: Open dialog to input Teamcraft text
+        // For now, placeholder - would need a dialog with text boxes for:
+        // - List name
+        // - Pre-craft items
+        // - Final items
+        StatusLabel.Text = "Teamcraft import dialog - not yet implemented";
+    }
+
+    /// <summary>
+    /// Export current plan to Teamcraft URL (copies to clipboard).
+    /// </summary>
+    private void OnExportTeamcraft(object sender, RoutedEventArgs e)
+    {
+        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        {
+            StatusLabel.Text = "No plan to export - build a plan first";
+            return;
+        }
+
+        var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
+        var url = teamcraft.ExportToTeamcraft(_currentPlan);
+        
+        try
+        {
+            Clipboard.SetText(url);
+            StatusLabel.Text = "Teamcraft URL copied to clipboard!";
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Failed to copy: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Export plan as plain text to clipboard.
+    /// </summary>
+    private void OnExportPlainText(object sender, RoutedEventArgs e)
+    {
+        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        {
+            StatusLabel.Text = "No plan to export - build a plan first";
+            return;
+        }
+
+        var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
+        var text = teamcraft.ExportToPlainText(_currentPlan);
+        
+        try
+        {
+            Clipboard.SetText(text);
+            StatusLabel.Text = "Plan text copied to clipboard!";
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Failed to copy: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Export shopping list as CSV.
+    /// </summary>
+    private void OnExportCsv(object sender, RoutedEventArgs e)
+    {
+        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        {
+            StatusLabel.Text = "No plan to export - build a plan first";
+            return;
+        }
+
+        var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
+        var csv = teamcraft.ExportToCsv(_currentPlan);
+        
+        try
+        {
+            Clipboard.SetText(csv);
+            StatusLabel.Text = "CSV copied to clipboard!";
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Failed to copy: {ex.Message}";
+        }
+    }
+
     private void OnViewLogs(object sender, RoutedEventArgs e)
     {
         var logWindow = new LogViewerWindow
