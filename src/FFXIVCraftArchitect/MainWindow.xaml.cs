@@ -419,10 +419,27 @@ public partial class MainWindow : Window
             return;
         }
 
-        var success = await _planPersistence.SavePlanAsync(_currentPlan);
-        StatusLabel.Text = success 
-            ? $"Plan saved: {_currentPlan.Name}" 
-            : "Failed to save plan";
+        var saveDialog = new SavePlanDialog(_planPersistence, _currentPlan.Name)
+        {
+            Owner = this
+        };
+
+        if (saveDialog.ShowDialog() == true)
+        {
+            // Update plan name if changed
+            _currentPlan.Name = saveDialog.PlanName;
+            
+            var success = await _planPersistence.SavePlanAsync(
+                _currentPlan, 
+                customName: saveDialog.PlanName,
+                overwritePath: saveDialog.OverwritePath);
+            
+            StatusLabel.Text = success 
+                ? saveDialog.IsOverwrite 
+                    ? $"Plan overwritten: {_currentPlan.Name}" 
+                    : $"Plan saved: {_currentPlan.Name}" 
+                : "Failed to save plan";
+        }
     }
 
     /// <summary>

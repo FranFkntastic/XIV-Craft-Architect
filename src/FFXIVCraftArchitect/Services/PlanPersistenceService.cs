@@ -51,7 +51,10 @@ public class PlanPersistenceService
     /// <summary>
     /// Save a plan to disk.
     /// </summary>
-    public async Task<bool> SavePlanAsync(CraftingPlan plan, string? customName = null)
+    /// <param name="plan">The plan to save.</param>
+    /// <param name="customName">Optional custom name for the plan.</param>
+    /// <param name="overwritePath">Optional path to an existing plan file to overwrite.</param>
+    public async Task<bool> SavePlanAsync(CraftingPlan plan, string? customName = null, string? overwritePath = null)
     {
         try
         {
@@ -59,26 +62,42 @@ public class PlanPersistenceService
             
             plan.MarkModified();
             
-            // Generate filename from plan name or custom name
-            var baseName = !string.IsNullOrWhiteSpace(customName) 
-                ? customName 
-                : plan.Name;
+            string filePath;
+            string fileName;
             
-            // Sanitize filename
-            var safeName = string.Concat(baseName.Split(Path.GetInvalidFileNameChars()))
-                .Replace(" ", "_")
-                .Replace(".", "_");
-            
-            // Add timestamp to avoid collisions
-            var fileName = $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}.json";
-            var filePath = Path.Combine(_plansDirectory, fileName);
+            if (!string.IsNullOrEmpty(overwritePath) && File.Exists(overwritePath))
+            {
+                // Overwrite existing file
+                filePath = overwritePath;
+                fileName = Path.GetFileName(filePath);
+                _logger.LogInformation("[PlanPersistence] Overwriting plan at {FilePath}", filePath);
+            }
+            else
+            {
+                // Generate filename from plan name or custom name
+                var baseName = !string.IsNullOrWhiteSpace(customName) 
+                    ? customName 
+                    : plan.Name;
+                
+                // Sanitize filename
+                var safeName = string.Concat(baseName.Split(Path.GetInvalidFileNameChars()))
+                    .Replace(" ", "_")
+                    .Replace(".", "_");
+                
+                // Use name only (no timestamp) to allow natural overwriting
+                fileName = $"{safeName}.json";
+                filePath = Path.Combine(_plansDirectory, fileName);
+                
+                // If file exists, we'll overwrite it (user has already confirmed)
+                _logger.LogInformation("[PlanPersistence] Saving new plan '{PlanName}' ({FileName})", plan.Name, fileName);
+            }
 
             // Create serializable data
             var data = new PlanFileData
             {
                 Version = 1,
                 Id = plan.Id,
-                Name = plan.Name,
+                Name = !string.IsNullOrWhiteSpace(customName) ? customName : plan.Name,
                 CreatedAt = plan.CreatedAt,
                 ModifiedAt = plan.ModifiedAt,
                 DataCenter = plan.DataCenter,
@@ -89,7 +108,7 @@ public class PlanPersistenceService
             var json = JsonSerializer.Serialize(data, _jsonOptions);
             await File.WriteAllTextAsync(filePath, json);
             
-            _logger.LogInformation("[PlanPersistence] Saved plan '{PlanName}' ({FileName})", plan.Name, fileName);
+            _logger.LogInformation("[PlanPersistence] Saved plan '{PlanName}' ({FileName})", data.Name, fileName);
             return true;
         }
         catch (Exception ex)
