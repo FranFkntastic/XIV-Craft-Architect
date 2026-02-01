@@ -262,8 +262,59 @@ public partial class MainWindow : Window
             RecipeTree.Items.Add(rootNode);
         }
         
-        // Show placeholder in Market Logistics tab
-        ShowMarketLogisticsPlaceholder();
+        // Check if plan has saved prices and update Market Logistics
+        var savedPrices = ExtractPricesFromPlan(plan);
+        if (savedPrices.Count > 0)
+        {
+            UpdateMarketLogistics(savedPrices);
+            StatusLabel.Text = $"Loaded plan with {savedPrices.Count} cached prices";
+        }
+        else
+        {
+            ShowMarketLogisticsPlaceholder();
+        }
+    }
+    
+    /// <summary>
+    /// Extract price information from a loaded plan's nodes.
+    /// </summary>
+    private Dictionary<int, PriceInfo> ExtractPricesFromPlan(CraftingPlan plan)
+    {
+        var prices = new Dictionary<int, PriceInfo>();
+        
+        foreach (var root in plan.RootItems)
+        {
+            ExtractPricesFromNode(root, prices);
+        }
+        
+        return prices;
+    }
+    
+    /// <summary>
+    /// Recursively extract prices from plan nodes.
+    /// </summary>
+    private void ExtractPricesFromNode(PlanNode node, Dictionary<int, PriceInfo> prices)
+    {
+        // Only include nodes with actual price data
+        if (node.MarketPrice > 0 || node.PriceSource != PriceSource.Unknown)
+        {
+            if (!prices.ContainsKey(node.ItemId))
+            {
+                prices[node.ItemId] = new PriceInfo
+                {
+                    ItemId = node.ItemId,
+                    ItemName = node.Name,
+                    UnitPrice = node.MarketPrice,
+                    Source = node.PriceSource,
+                    SourceDetails = node.PriceSourceDetails
+                };
+            }
+        }
+        
+        foreach (var child in node.Children)
+        {
+            ExtractPricesFromNode(child, prices);
+        }
     }
 
     /// <summary>

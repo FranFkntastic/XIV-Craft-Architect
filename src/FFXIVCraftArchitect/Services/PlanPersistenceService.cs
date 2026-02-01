@@ -310,6 +310,8 @@ public class PlanPersistenceService
             Job = node.Job,
             Yield = node.Yield,
             MarketPrice = node.MarketPrice,
+            PriceSource = node.PriceSource,
+            PriceSourceDetails = node.PriceSourceDetails,
             Notes = node.Notes,
             Children = node.Children.Select(ConvertToFileNode).ToList()
         };
@@ -329,6 +331,8 @@ public class PlanPersistenceService
             Job = fileNode.Job ?? string.Empty,
             Yield = fileNode.Yield,
             MarketPrice = fileNode.MarketPrice,
+            PriceSource = fileNode.PriceSource,
+            PriceSourceDetails = fileNode.PriceSourceDetails ?? string.Empty,
             Notes = fileNode.Notes,
             Children = fileNode.Children?.Select(ConvertFromFileNode).ToList() ?? new List<PlanNode>()
         };
@@ -380,6 +384,8 @@ public class PlanFileNode
     public string? Job { get; set; }
     public int Yield { get; set; } = 1;
     public decimal MarketPrice { get; set; }
+    public PriceSource PriceSource { get; set; }
+    public string? PriceSourceDetails { get; set; }
     public string? Notes { get; set; }
     public List<PlanFileNode> Children { get; set; } = new();
 }
