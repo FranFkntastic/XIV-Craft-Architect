@@ -17,12 +17,7 @@
         </Grid.RowDefinitions>
 
         <!-- Title Bar -->
-        <ui:TitleBar Title="FFXIV Craft Architect">
-            <ui:TitleBar.Tray>
-                <ui:NotifyIcon Icon="pack://application:,,,/Assets/icon.ico" 
-                               ToolTip="FFXIV Craft Architect" />
-            </ui:TitleBar.Tray>
-        </ui:TitleBar>
+        <ui:TitleBar Title="FFXIV Craft Architect" />
 
         <!-- Main Content -->
         <Grid Grid.Row="1">
@@ -58,7 +53,7 @@
                         <ui:ToggleSwitch x:Name="LiveSwitch"
                                          Content="Live Mode (Packet Capture)"
                                          Margin="0,8"
-                                         Toggled="OnLiveModeToggled"/>
+                                         Checked="OnLiveModeToggled"/>
 
                         <TextBlock x:Name="SyncStatus"
                                    Text="Inventory: Not Synced"

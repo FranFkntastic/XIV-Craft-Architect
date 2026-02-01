@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
@@ -142,7 +143,7 @@ public partial class MainWindow : FluentWindow
     private void OnReloadApp(object sender, RoutedEventArgs e)
     {
         // Restart the application
-        Process.Start(Process.GetCurrentProcess().MainFileName);
+        Process.Start(Process.GetCurrentProcess().MainModule?.FileName ?? "");
         Application.Current.Shutdown();
     }
 
