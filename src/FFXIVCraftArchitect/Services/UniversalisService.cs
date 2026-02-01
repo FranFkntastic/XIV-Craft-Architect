@@ -21,6 +21,11 @@ public class UniversalisService
 
     // Cache for world data
     private WorldData? _worldDataCache;
+    
+    /// <summary>
+    /// Get cached world data (returns null if not loaded yet).
+    /// </summary>
+    public WorldData? GetCachedWorldData() => _worldDataCache;
 
     public UniversalisService(HttpClient httpClient, ILogger<UniversalisService> logger)
     {

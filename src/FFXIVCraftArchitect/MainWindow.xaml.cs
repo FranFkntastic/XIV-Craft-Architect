@@ -65,7 +65,19 @@ public partial class MainWindow : Window
 
     private void OnDataCenterSelected(object? sender, SelectionChangedEventArgs? e)
     {
-        // This will be implemented with proper ViewModel later
+        var dc = DcCombo.SelectedItem as string;
+        if (dc != null && _universalisService != null)
+        {
+            // Get cached world data (loaded on startup)
+            var worldData = _universalisService.GetCachedWorldData();
+            if (worldData?.DataCenterToWorlds.TryGetValue(dc, out var worlds) == true)
+            {
+                var worldList = new List<string> { "Entire Data Center" };
+                worldList.AddRange(worlds);
+                WorldCombo.ItemsSource = worldList;
+                WorldCombo.SelectedItem = "Entire Data Center";
+            }
+        }
     }
 
     private void OnSyncInventory(object sender, RoutedEventArgs e)
