@@ -262,8 +262,8 @@ public partial class MainWindow : Window
             RecipeTree.Items.Add(rootNode);
         }
         
-        // Update shopping list with aggregated materials
-        ShoppingList.ItemsSource = plan.AggregatedMaterials;
+        // Show placeholder in Market Logistics tab
+        ShowMarketLogisticsPlaceholder();
     }
 
     /// <summary>
@@ -627,11 +627,7 @@ public partial class MainWindow : Window
             // Refresh display
             DisplayPlanInTreeView(_currentPlan);
             
-            // Refresh shopping list with updated prices
-            ShoppingList.ItemsSource = null;
-            ShoppingList.ItemsSource = _currentPlan.AggregatedMaterials;
-
-            // Update market logistics tab
+            // Update market logistics tab with purchase plan
             UpdateMarketLogistics(prices);
 
             // Calculate total cost
@@ -691,6 +687,23 @@ public partial class MainWindow : Window
                 UpdatePlanWithPrices(node.Children, prices);
             }
         }
+    }
+
+    /// <summary>
+    /// Show placeholder in Market Logistics when no prices fetched yet.
+    /// </summary>
+    private void ShowMarketLogisticsPlaceholder()
+    {
+        MarketCards.Children.Clear();
+        
+        var placeholderCard = CreateMarketCard("Market Logistics", 
+            "Click 'Fetch Prices' to see your purchase plan.\n\n" +
+            "This tab will show:\n" +
+            "• Items to buy from vendors (cheapest option)\n" +
+            "• Items to buy from market board\n" +
+            "• Untradeable items you need to gather/craft\n" +
+            "• Total estimated cost", "#2d3d4a");
+        MarketCards.Children.Add(placeholderCard);
     }
 
     /// <summary>
