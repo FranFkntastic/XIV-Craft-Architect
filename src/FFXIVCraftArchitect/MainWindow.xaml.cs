@@ -573,6 +573,17 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Select all text when quantity field gets focus.
+    /// </summary>
+    private void OnQuantityGotFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox textBox)
+        {
+            textBox.SelectAll();
+        }
+    }
+
+    /// <summary>
     /// Handle quantity change - validate and update
     /// </summary>
     private void OnQuantityChanged(object sender, RoutedEventArgs e)
@@ -604,13 +615,21 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnRemoveProjectItem(object sender, RoutedEventArgs e)
     {
-        if (sender is Button button && button.DataContext is ProjectItem projectItem)
+        if (sender is Button button)
         {
-            _projectItems.Remove(projectItem);
-            StatusLabel.Text = $"Removed {projectItem.Name} from project";
-            
-            // Disable build button if no items left
-            BuildPlanButton.IsEnabled = _projectItems.Count > 0;
+            // Find the parent ListBoxItem to get the DataContext
+            var listBoxItem = FindParentListBoxItem(button);
+            if (listBoxItem?.DataContext is ProjectItem projectItem)
+            {
+                _projectItems.Remove(projectItem);
+                StatusLabel.Text = $"Removed {projectItem.Name} from project";
+                
+                // Disable build button if no items left
+                BuildPlanButton.IsEnabled = _projectItems.Count > 0;
+                
+                // Refresh the list
+                ProjectList.Items.Refresh();
+            }
         }
     }
 
