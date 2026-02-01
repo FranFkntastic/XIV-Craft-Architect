@@ -401,14 +401,37 @@ public partial class MainWindow : Window
     /// <summary>
     /// Import from Teamcraft "Copy as Text" format.
     /// </summary>
-    private async void OnImportTeamcraft(object sender, RoutedEventArgs e)
+    private void OnImportTeamcraft(object sender, RoutedEventArgs e)
     {
-        // TODO: Open dialog to input Teamcraft text
-        // For now, placeholder - would need a dialog with text boxes for:
-        // - List name
-        // - Pre-craft items
-        // - Final items
-        StatusLabel.Text = "Teamcraft import dialog - not yet implemented";
+        var dc = DcCombo.SelectedItem as string ?? "Aether";
+        var world = WorldCombo.SelectedItem as string ?? "";
+        
+        var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
+        var importDialog = new TeamcraftImportWindow(teamcraft, dc, world)
+        {
+            Owner = this
+        };
+
+        if (importDialog.ShowDialog() == true && importDialog.ImportedPlan != null)
+        {
+            _currentPlan = importDialog.ImportedPlan;
+            
+            // Sync to project items
+            _projectItems = _currentPlan.RootItems.Select(r => new ProjectItem 
+            { 
+                Id = r.ItemId, 
+                Name = r.Name, 
+                Quantity = r.Quantity 
+            }).ToList();
+            ProjectList.ItemsSource = null;
+            ProjectList.ItemsSource = _projectItems;
+            
+            // Display the plan
+            DisplayPlanInTreeView(_currentPlan);
+            
+            BuildPlanButton.IsEnabled = _projectItems.Count > 0;
+            StatusLabel.Text = $"Imported plan with {_currentPlan.RootItems.Count} items from Teamcraft";
+        }
     }
 
     /// <summary>
