@@ -6,7 +6,9 @@
         Width="1400"
         Height="900"
         WindowStartupLocation="CenterScreen"
-        Background="{DynamicResource ApplicationBackgroundBrush}">
+        Background="#1e1e1e"
+        BorderBrush="Transparent"
+        BorderThickness="0">
 
     <Grid>
         <Grid.RowDefinitions>
@@ -114,15 +116,38 @@
                                    Click="OnReloadApp"/>
 
                         <!-- Search Results -->
+                        <TextBlock Text="Search Results:" 
+                                   Margin="0,16,0,4"
+                                   FontWeight="SemiBold"/>
                         <Border Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
                                 CornerRadius="4"
-                                Margin="0,16,0,0"
                                 Padding="8"
-                                Height="200">
+                                Height="150">
                             <ListBox x:Name="SearchResults"
                                      Background="Transparent"
                                      BorderThickness="0"
                                      SelectionChanged="OnItemSelected"/>
+                        </Border>
+
+                        <ui:Button x:Name="AddToProjectButton"
+                                   Content="Add to Project"
+                                   Appearance="Primary"
+                                   Margin="0,8"
+                                   HorizontalAlignment="Stretch"
+                                   IsEnabled="False"
+                                   Click="OnAddToProject"/>
+
+                        <!-- Project List -->
+                        <TextBlock Text="Project Items:" 
+                                   Margin="0,16,0,4"
+                                   FontWeight="SemiBold"/>
+                        <Border Background="{DynamicResource CardBackgroundFillColorSecondaryBrush}"
+                                CornerRadius="4"
+                                Padding="8"
+                                Height="120">
+                            <ListBox x:Name="ProjectList"
+                                     Background="Transparent"
+                                     BorderThickness="0"/>
                         </Border>
 
                         <ui:Button x:Name="BuildPlanButton"

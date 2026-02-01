@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace FFXIVCraftArchitect.Models;
@@ -15,7 +16,12 @@ public class GarlandSearchResult
     public string Type { get; set; } = string.Empty;
     
     [JsonPropertyName("id")]
-    public int Id { get; set; }
+    public JsonElement IdElement { get; set; }
+    
+    // Helper to get ID as int (handles both string and int JSON values)
+    public int Id => IdElement.ValueKind == JsonValueKind.String 
+        ? int.Parse(IdElement.GetString()!) 
+        : IdElement.GetInt32();
     
     [JsonPropertyName("obj")]
     public GarlandSearchObject Object { get; set; } = new();

@@ -3,11 +3,23 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Window = System.Windows.Window;
 
 namespace FFXIVCraftArchitect;
+
+/// <summary>
+/// Represents an item in the project list
+/// </summary>
+public class ProjectItem
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public int Quantity { get; set; } = 1;
+    public override string ToString() => $"{Name} x{Quantity}";
+}
 
 /// <summary>
 /// Interaction logic for MainWindow.xaml
@@ -19,8 +31,11 @@ public partial class MainWindow : Window
     private readonly SettingsService _settingsService;
 
     // Search state
-    private List<Models.GarlandSearchResult> _currentSearchResults = new();
-    private int? _selectedItemId;
+    private List<GarlandSearchResult> _currentSearchResults = new();
+    private GarlandSearchResult? _selectedSearchResult;
+    
+    // Project state
+    private List<ProjectItem> _projectItems = new();
 
     public MainWindow()
     {
@@ -107,6 +122,8 @@ public partial class MainWindow : Window
 
         StatusLabel.Text = $"Searching for '{query}'...";
         SearchResults.ItemsSource = null;
+        _selectedSearchResult = null;
+        AddToProjectButton.IsEnabled = false;
         
         try
         {
@@ -126,20 +143,58 @@ public partial class MainWindow : Window
         var index = SearchResults.SelectedIndex;
         if (index >= 0 && index < _currentSearchResults.Count)
         {
-            _selectedItemId = _currentSearchResults[index].Id;
-            BuildPlanButton.IsEnabled = true;
-            StatusLabel.Text = $"Selected: {_currentSearchResults[index].Object.Name} (ID: {_selectedItemId})";
+            _selectedSearchResult = _currentSearchResults[index];
+            AddToProjectButton.IsEnabled = true;
+            StatusLabel.Text = $"Selected: {_selectedSearchResult.Object.Name} (ID: {_selectedSearchResult.Id})";
         }
         else
         {
-            _selectedItemId = null;
-            BuildPlanButton.IsEnabled = false;
+            _selectedSearchResult = null;
+            AddToProjectButton.IsEnabled = false;
         }
+    }
+
+    private void OnAddToProject(object sender, RoutedEventArgs e)
+    {
+        if (_selectedSearchResult == null)
+            return;
+
+        // Check if already in project
+        var existing = _projectItems.FirstOrDefault(p => p.Id == _selectedSearchResult.Id);
+        if (existing != null)
+        {
+            existing.Quantity++;
+            StatusLabel.Text = $"Increased quantity of {existing.Name} to {existing.Quantity}";
+        }
+        else
+        {
+            _projectItems.Add(new ProjectItem
+            {
+                Id = _selectedSearchResult.Id,
+                Name = _selectedSearchResult.Object.Name,
+                Quantity = 1
+            });
+            StatusLabel.Text = $"Added {_selectedSearchResult.Object.Name} to project";
+        }
+
+        // Refresh project list
+        ProjectList.ItemsSource = null;
+        ProjectList.ItemsSource = _projectItems;
+        
+        // Enable build button if we have items
+        BuildPlanButton.IsEnabled = _projectItems.Count > 0;
     }
 
     private void OnBuildProjectPlan(object sender, RoutedEventArgs e)
     {
-        StatusLabel.Text = "Build project plan clicked - not implemented yet";
+        if (_projectItems.Count == 0)
+        {
+            StatusLabel.Text = "Add items to project first";
+            return;
+        }
+
+        StatusLabel.Text = $"Building plan for {_projectItems.Count} items...";
+        // TODO: Calculate recipe trees and costs for all project items
     }
 
     private void OnViewLogs(object sender, RoutedEventArgs e)
