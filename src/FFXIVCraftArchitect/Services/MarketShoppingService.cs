@@ -174,6 +174,115 @@ public class MarketShoppingService
 
         return summary;
     }
+
+    // North American Data Centers for cross-DC travel searches
+    private static readonly string[] NorthAmericanDCs = { "Aether", "Primal", "Crystal", "Dynamis" };
+
+    /// <summary>
+    /// Calculate shopping plans searching across all NA Data Centers for potential savings.
+    /// </summary>
+    public async Task<List<DetailedShoppingPlan>> CalculateDetailedShoppingPlansMultiDCAsync(
+        List<MaterialAggregate> marketItems,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        var plans = new List<DetailedShoppingPlan>();
+
+        foreach (var item in marketItems)
+        {
+            progress?.Report($"Analyzing {item.Name} across all NA DCs...");
+            
+            try
+            {
+                // Fetch from all NA DCs
+                var allListings = new List<MarketListing>();
+                decimal globalAverage = 0;
+                int dcCount = 0;
+
+                foreach (var dc in NorthAmericanDCs)
+                {
+                    try
+                    {
+                        var marketData = await _universalisService.GetMarketDataAsync(dc, item.ItemId, ct);
+                        
+                        // Add DC name to each listing's world name for identification
+                        foreach (var listing in marketData.Listings)
+                        {
+                            // If world name is empty, use DC name
+                            if (string.IsNullOrEmpty(listing.WorldName))
+                            {
+                                listing.WorldName = $"{dc}";
+                            }
+                            // Prefix with DC if not already there
+                            else if (!listing.WorldName.Contains("("))
+                            {
+                                listing.WorldName = $"{listing.WorldName} ({dc})";
+                            }
+                        }
+                        
+                        allListings.AddRange(marketData.Listings);
+                        
+                        if (marketData.AveragePrice > 0)
+                        {
+                            globalAverage += (decimal)marketData.AveragePrice;
+                            dcCount++;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to fetch data from {DC} for {Item}", dc, item.Name);
+                    }
+                }
+
+                if (allListings.Count == 0)
+                {
+                    plans.Add(new DetailedShoppingPlan
+                    {
+                        ItemId = item.ItemId,
+                        Name = item.Name,
+                        QuantityNeeded = item.TotalQuantity,
+                        Error = "No listings found on any NA Data Center"
+                    });
+                    continue;
+                }
+
+                // Calculate average across all DCs
+                if (dcCount > 0)
+                {
+                    globalAverage /= dcCount;
+                }
+
+                // Create combined market data
+                var combinedData = new UniversalisResponse
+                {
+                    ItemId = item.ItemId,
+                    Listings = allListings,
+                    AveragePrice = (double)globalAverage
+                };
+
+                var plan = CalculateItemShoppingPlan(
+                    item.Name,
+                    item.ItemId,
+                    item.TotalQuantity,
+                    combinedData);
+                
+                plans.Add(plan);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to calculate multi-DC shopping plan for {ItemName}", item.Name);
+                plans.Add(new DetailedShoppingPlan
+                {
+                    ItemId = item.ItemId,
+                    Name = item.Name,
+                    QuantityNeeded = item.TotalQuantity,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        return plans;
+    }
 }
 
 /// <summary>

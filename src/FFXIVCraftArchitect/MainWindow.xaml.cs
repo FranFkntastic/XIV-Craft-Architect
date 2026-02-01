@@ -45,6 +45,9 @@ public partial class MainWindow : Window
     
     // Current crafting plan
     private CraftingPlan? _currentPlan;
+    
+    // Current market shopping plans for filtering/sorting
+    private List<DetailedShoppingPlan> _currentMarketPlans = new();
 
     public MainWindow()
     {
@@ -766,14 +769,16 @@ public partial class MainWindow : Window
     private void ShowMarketLogisticsPlaceholder()
     {
         MarketCards.Children.Clear();
+        MarketSummaryCard.Visibility = System.Windows.Visibility.Collapsed;
+        RefreshMarketButton.IsEnabled = false;
         
         var placeholderCard = CreateMarketCard("Market Logistics", 
             "Click 'Fetch Prices' to see your purchase plan.\n\n" +
             "This tab will show:\n" +
             "• Items to buy from vendors (cheapest option)\n" +
-            "• Items to buy from market board\n" +
-            "• Untradeable items you need to gather/craft\n" +
-            "• Total estimated cost", "#2d3d4a");
+            "• Items to buy from market board (with world listings)\n" +
+            "• Cross-DC travel options (NA only)\n" +
+            "• Untradeable items you need to gather/craft", "#2d3d4a");
         MarketCards.Children.Add(placeholderCard);
     }
 
@@ -782,6 +787,7 @@ public partial class MainWindow : Window
     /// </summary>
     private async Task UpdateMarketLogisticsAsync(Dictionary<int, PriceInfo> prices)
     {
+        _currentMarketPlans.Clear();
         MarketCards.Children.Clear();
 
         // Group materials by price source
@@ -812,21 +818,8 @@ public partial class MainWindow : Window
             }
         }
 
-        // Summary card
-        var summaryCard = CreateMarketCard("Purchase Summary", $"""
-            Total Items: {vendorItems.Count + marketItems.Count + untradeableItems.Count}
-            
-            Vendor Purchases: {vendorItems.Count} items
-            - Guaranteed prices, no market fluctuations
-            - Total: {vendorItems.Sum(i => i.TotalCost):N0}g
-            
-            Market Board Purchases: {marketItems.Count} items
-            - See detailed listings below
-            - Total: {marketItems.Sum(i => i.TotalCost):N0}g
-            
-            Grand Total: {vendorItems.Sum(i => i.TotalCost) + marketItems.Sum(i => i.TotalCost):N0}g
-            """, "#2d4a3e");
-        MarketCards.Children.Add(summaryCard);
+        // Update summary card
+        UpdateMarketSummaryCard(vendorItems, marketItems, untradeableItems, prices);
 
         // Vendor items card
         if (vendorItems.Any())
@@ -847,11 +840,13 @@ public partial class MainWindow : Window
         if (marketItems.Any())
         {
             var dc = DcCombo.SelectedItem as string ?? "Aether";
+            var searchAllNA = SearchAllNACheck?.IsChecked ?? false;
             
             // Show loading message
             var loadingCard = CreateMarketCard("Market Board Items", 
-                $"Fetching detailed listings for {marketItems.Count} items from {dc}...", "#3d3e2d");
+                $"Fetching detailed listings for {marketItems.Count} items from {(searchAllNA ? "all NA DCs" : dc)}...", "#3d3e2d");
             MarketCards.Children.Add(loadingCard);
+            RefreshMarketButton.IsEnabled = false;
             
             try
             {
@@ -860,18 +855,26 @@ public partial class MainWindow : Window
                     StatusLabel.Text = $"Analyzing market: {msg}";
                 });
                 
-                var shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
-                    marketItems, dc, progress);
+                List<DetailedShoppingPlan> shoppingPlans;
+                
+                if (searchAllNA)
+                {
+                    shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
+                        marketItems, progress);
+                }
+                else
+                {
+                    shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
+                        marketItems, dc, progress);
+                }
+                
+                _currentMarketPlans = shoppingPlans;
                 
                 // Remove loading card
                 MarketCards.Children.Remove(loadingCard);
                 
-                // Add detailed cards for each item
-                foreach (var plan in shoppingPlans.OrderByDescending(p => p.QuantityNeeded * p.DCAveragePrice))
-                {
-                    var itemCard = CreateDetailedMarketCard(plan);
-                    MarketCards.Children.Add(itemCard);
-                }
+                // Apply current sort and display
+                ApplyMarketSortAndDisplay();
             }
             catch (Exception ex)
             {
@@ -879,6 +882,10 @@ public partial class MainWindow : Window
                 var errorCard = CreateMarketCard("Market Board Items", 
                     $"Error fetching listings: {ex.Message}", "#4a2d2d");
                 MarketCards.Children.Add(errorCard);
+            }
+            finally
+            {
+                RefreshMarketButton.IsEnabled = true;
             }
         }
 
@@ -898,84 +905,250 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Create a detailed market card showing world-by-world listings for an item.
+    /// Update the summary card with purchase totals.
     /// </summary>
-    private Border CreateDetailedMarketCard(DetailedShoppingPlan plan)
+    private void UpdateMarketSummaryCard(List<MaterialAggregate> vendorItems, List<MaterialAggregate> marketItems, 
+        List<MaterialAggregate> untradeableItems, Dictionary<int, PriceInfo> prices)
+    {
+        MarketSummaryContent.Children.Clear();
+        MarketSummaryCard.Visibility = System.Windows.Visibility.Visible;
+        
+        var header = new TextBlock
+        {
+            Text = "Purchase Summary",
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 14,
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        MarketSummaryContent.Children.Add(header);
+        
+        var summaryText = new TextBlock
+        {
+            Text = $"Total Items: {vendorItems.Count + marketItems.Count + untradeableItems.Count}\n\n" +
+                   $"Vendor Purchases: {vendorItems.Count} items\n" +
+                   $"- Guaranteed prices, no market fluctuations\n" +
+                   $"- Total: {vendorItems.Sum(i => i.TotalCost):N0}g\n\n" +
+                   $"Market Board Purchases: {marketItems.Count} items\n" +
+                   $"- Click items below for detailed listings\n" +
+                   $"- Total: {marketItems.Sum(i => i.TotalCost):N0}g\n\n" +
+                   $"Grand Total: {vendorItems.Sum(i => i.TotalCost) + marketItems.Sum(i => i.TotalCost):N0}g",
+            FontSize = 12
+        };
+        MarketSummaryContent.Children.Add(summaryText);
+    }
+
+    /// <summary>
+    /// Apply current sort selection and display market plans.
+    /// </summary>
+    private void ApplyMarketSortAndDisplay()
+    {
+        if (_currentMarketPlans.Count == 0) return;
+        
+        // Remove existing market item cards (keep vendor/untradeable)
+        var cardsToRemove = MarketCards.Children.OfType<Border>()
+            .Where(b => b.Tag is DetailedShoppingPlan)
+            .ToList();
+        foreach (var card in cardsToRemove)
+        {
+            MarketCards.Children.Remove(card);
+        }
+        
+        // Get the index to insert before (before untradeable items if present)
+        var insertIndex = MarketCards.Children.Count;
+        
+        IEnumerable<DetailedShoppingPlan> sortedPlans = _currentMarketPlans;
+        var sortIndex = MarketSortCombo?.SelectedIndex ?? 0;
+        
+        switch (sortIndex)
+        {
+            case 0: // Alphabetical
+                sortedPlans = _currentMarketPlans.OrderBy(p => p.Name);
+                break;
+            case 1: // By Recommended World
+                sortedPlans = _currentMarketPlans
+                    .OrderBy(p => p.RecommendedWorld?.WorldName ?? "ZZZ")
+                    .ThenBy(p => p.Name);
+                break;
+            case 2: // By Total Cost
+                sortedPlans = _currentMarketPlans.OrderByDescending(p => 
+                    p.RecommendedWorld?.TotalCost ?? 0);
+                break;
+        }
+        
+        foreach (var plan in sortedPlans)
+        {
+            var itemCard = CreateExpandableMarketCard(plan);
+            itemCard.Tag = plan; // Mark as market item card for filtering
+            MarketCards.Children.Insert(insertIndex++, itemCard);
+        }
+    }
+
+    /// <summary>
+    /// Create an expandable market card with header showing recommended option.
+    /// </summary>
+    private Border CreateExpandableMarketCard(DetailedShoppingPlan plan)
     {
         var border = new Border
         {
             Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3d3e2d")),
             CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(12),
-            Margin = new Thickness(0, 0, 0, 8)
+            Padding = new Thickness(0),
+            Margin = new Thickness(0, 0, 0, 8),
+            Tag = plan
         };
 
-        var stack = new StackPanel();
+        var mainStack = new StackPanel();
         
-        // Header with item name and quantity
-        var headerText = new TextBlock
+        // Clickable header
+        var headerBorder = new Border
+        {
+            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4a4a3a")),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(12),
+            Cursor = Cursors.Hand
+        };
+        
+        var headerGrid = new Grid();
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        
+        // Left side: Item name, quantity, DC average
+        var leftStack = new StackPanel();
+        
+        var nameText = new TextBlock
         {
             Text = $"{plan.Name} x{plan.QuantityNeeded}",
             FontWeight = FontWeights.SemiBold,
-            FontSize = 14,
-            Margin = new Thickness(0, 0, 0, 4)
+            FontSize = 13
         };
-        stack.Children.Add(headerText);
-
+        leftStack.Children.Add(nameText);
+        
         if (!string.IsNullOrEmpty(plan.Error))
         {
             var errorText = new TextBlock
             {
                 Text = $"Error: {plan.Error}",
                 Foreground = Brushes.Red,
-                FontSize = 12
+                FontSize = 11
             };
-            stack.Children.Add(errorText);
-            border.Child = stack;
-            return border;
+            leftStack.Children.Add(errorText);
         }
-
-        // DC Average price
-        var avgText = new TextBlock
+        else
         {
-            Text = $"DC Average: {plan.DCAveragePrice:N0}g each",
-            Foreground = Brushes.Gray,
-            FontSize = 11,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-        stack.Children.Add(avgText);
-
-        if (!plan.HasOptions)
-        {
-            var noListingsText = new TextBlock
+            var avgText = new TextBlock
             {
-                Text = "No viable listings found on market board.",
-                Foreground = Brushes.Orange,
-                FontSize = 12
+                Text = $"DC Avg: {plan.DCAveragePrice:N0}g",
+                Foreground = Brushes.Gray,
+                FontSize = 10,
+                Margin = new Thickness(0, 2, 0, 0)
             };
-            stack.Children.Add(noListingsText);
-            border.Child = stack;
-            return border;
+            leftStack.Children.Add(avgText);
         }
-
-        // World options
-        var worldsHeader = new TextBlock
+        
+        Grid.SetColumn(leftStack, 0);
+        headerGrid.Children.Add(leftStack);
+        
+        // Right side: Recommended world info
+        var rightStack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right };
+        
+        if (plan.HasOptions && plan.RecommendedWorld != null)
         {
-            Text = "Purchase Options by World:",
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 12,
-            Margin = new Thickness(0, 4, 0, 4)
+            var recWorld = plan.RecommendedWorld;
+            
+            var worldText = new TextBlock
+            {
+                Text = recWorld.WorldName,
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 12,
+                Foreground = Brushes.Gold,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            rightStack.Children.Add(worldText);
+            
+            var costText = new TextBlock
+            {
+                Text = $"{recWorld.CostDisplay} total",
+                FontSize = 11,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            if (recWorld.IsFullyUnderAverage)
+            {
+                costText.Foreground = Brushes.LightGreen;
+            }
+            rightStack.Children.Add(costText);
+            
+            var clickHint = new TextBlock
+            {
+                Text = "Click to expand ▼",
+                FontSize = 9,
+                Foreground = Brushes.Gray,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 4, 0, 0)
+            };
+            rightStack.Children.Add(clickHint);
+        }
+        else if (string.IsNullOrEmpty(plan.Error))
+        {
+            var noDataText = new TextBlock
+            {
+                Text = "No viable listings",
+                Foreground = Brushes.Orange,
+                FontSize = 11,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            rightStack.Children.Add(noDataText);
+        }
+        
+        Grid.SetColumn(rightStack, 1);
+        headerGrid.Children.Add(rightStack);
+        
+        headerBorder.Child = headerGrid;
+        mainStack.Children.Add(headerBorder);
+        
+        // Expandable content (all world options)
+        var contentStack = new StackPanel
+        {
+            Visibility = System.Windows.Visibility.Collapsed,
+            Margin = new Thickness(12, 8, 12, 12)
         };
-        stack.Children.Add(worldsHeader);
-
-        foreach (var world in plan.WorldOptions)
+        
+        if (plan.HasOptions)
         {
-            var isRecommended = world == plan.RecommendedWorld;
-            var worldBorder = CreateWorldOptionPanel(world, isRecommended);
-            stack.Children.Add(worldBorder);
+            var optionsHeader = new TextBlock
+            {
+                Text = "All World Options:",
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 11,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            contentStack.Children.Add(optionsHeader);
+            
+            foreach (var world in plan.WorldOptions)
+            {
+                var isRecommended = world == plan.RecommendedWorld;
+                var worldPanel = CreateWorldOptionPanel(world, isRecommended);
+                contentStack.Children.Add(worldPanel);
+            }
         }
-
-        border.Child = stack;
+        
+        mainStack.Children.Add(contentStack);
+        border.Child = mainStack;
+        
+        // Click handler to expand/collapse
+        headerBorder.MouseLeftButtonDown += (s, e) =>
+        {
+            if (contentStack.Visibility == System.Windows.Visibility.Collapsed)
+            {
+                contentStack.Visibility = System.Windows.Visibility.Visible;
+                headerBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#5a5a4a"));
+            }
+            else
+            {
+                contentStack.Visibility = System.Windows.Visibility.Collapsed;
+                headerBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4a4a3a"));
+            }
+        };
+        
         return border;
     }
 
@@ -1128,6 +1301,29 @@ public partial class MainWindow : Window
         border.Child = stack;
         
         return border;
+    }
+
+    /// <summary>
+    /// Handle sort selection change in Market Logistics.
+    /// </summary>
+    private void OnMarketSortChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        ApplyMarketSortAndDisplay();
+    }
+
+    /// <summary>
+    /// Refresh market data with current settings.
+    /// </summary>
+    private async void OnRefreshMarketData(object sender, RoutedEventArgs e)
+    {
+        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        {
+            StatusLabel.Text = "No plan - build a plan first";
+            return;
+        }
+
+        // Re-fetch prices which will update market logistics
+        OnFetchPrices(sender, e);
     }
 
     private void OnViewLogs(object sender, RoutedEventArgs e)
