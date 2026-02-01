@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -130,10 +131,10 @@ public partial class MainWindow : Window
         try
         {
             _currentSearchResults = await _garlandService.SearchAsync(query);
-            SearchResults.ItemsSource = _currentSearchResults.Select(r => r.Object.Name).ToList();
+            SearchResults.ItemsSource = _currentSearchResults.Select(r => r.Object?.Name ?? $"Item_{r.Id}").ToList();
             
             // Cache the search results for later use
-            _itemCache.StoreItems(_currentSearchResults.Select(r => (r.Id, r.Object.Name, r.Object.IconId)));
+            _itemCache.StoreItems(_currentSearchResults.Select(r => (r.Id, r.Object?.Name ?? $"Item_{r.Id}", r.Object?.IconId ?? 0)));
             
             StatusLabel.Text = $"Found {_currentSearchResults.Count} results (cached)";
         }
@@ -150,7 +151,8 @@ public partial class MainWindow : Window
         {
             _selectedSearchResult = _currentSearchResults[index];
             AddToProjectButton.IsEnabled = true;
-            StatusLabel.Text = $"Selected: {_selectedSearchResult.Object.Name} (ID: {_selectedSearchResult.Id})";
+            var name = _selectedSearchResult.Object?.Name ?? $"Item_{_selectedSearchResult.Id}";
+            StatusLabel.Text = $"Selected: {name} (ID: {_selectedSearchResult.Id})";
         }
         else
         {
@@ -164,6 +166,8 @@ public partial class MainWindow : Window
         if (_selectedSearchResult == null)
             return;
 
+        var itemName = _selectedSearchResult.Object?.Name ?? $"Item_{_selectedSearchResult.Id}";
+
         // Check if already in project
         var existing = _projectItems.FirstOrDefault(p => p.Id == _selectedSearchResult.Id);
         if (existing != null)
@@ -176,10 +180,10 @@ public partial class MainWindow : Window
             _projectItems.Add(new ProjectItem
             {
                 Id = _selectedSearchResult.Id,
-                Name = _selectedSearchResult.Object.Name,
+                Name = itemName,
                 Quantity = 1
             });
-            StatusLabel.Text = $"Added {_selectedSearchResult.Object.Name} to project";
+            StatusLabel.Text = $"Added {itemName} to project";
         }
 
         // Refresh project list
@@ -230,5 +234,75 @@ public partial class MainWindow : Window
         
         // Cleanup logic here (stop live mode, etc.)
         base.OnClosing(e);
+    }
+
+    // =========================================================================
+    // Quantity Editing
+    // =========================================================================
+
+    /// <summary>
+    /// Prevent non-numeric input in quantity field
+    /// </summary>
+    private void OnQuantityPreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        // Only allow digits
+        e.Handled = !e.Text.All(char.IsDigit);
+    }
+
+    /// <summary>
+    /// Handle quantity change - validate and update
+    /// </summary>
+    private void OnQuantityChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox textBox)
+        {
+            // Get the parent ListBoxItem to find the ProjectItem
+            var item = FindParentListBoxItem(textBox);
+            if (item?.DataContext is ProjectItem projectItem)
+            {
+                // Parse and validate quantity
+                if (!int.TryParse(textBox.Text, out var quantity) || quantity < 1)
+                {
+                    quantity = 1;
+                    textBox.Text = "1";
+                }
+                
+                projectItem.Quantity = quantity;
+                StatusLabel.Text = $"Updated {projectItem.Name} quantity to {quantity}";
+                
+                // Refresh the list to show updated ToString() if needed
+                ProjectList.Items.Refresh();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Remove an item from the project
+    /// </summary>
+    private void OnRemoveProjectItem(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button && button.DataContext is ProjectItem projectItem)
+        {
+            _projectItems.Remove(projectItem);
+            StatusLabel.Text = $"Removed {projectItem.Name} from project";
+            
+            // Disable build button if no items left
+            BuildPlanButton.IsEnabled = _projectItems.Count > 0;
+        }
+    }
+
+    /// <summary>
+    /// Helper to find the parent ListBoxItem from a child element
+    /// </summary>
+    private ListBoxItem? FindParentListBoxItem(DependencyObject child)
+    {
+        DependencyObject? parent = VisualTreeHelper.GetParent(child);
+        
+        while (parent != null && parent is not ListBoxItem)
+        {
+            parent = VisualTreeHelper.GetParent(parent);
+        }
+        
+        return parent as ListBoxItem;
     }
 }

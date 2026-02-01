@@ -142,6 +142,43 @@ FFXIV Craft Architect C# Edition/
 ### File Operations
 - Prefer filesystem MCP tools over shell commands
 
+### Thorough Analysis Requirement (CRITICAL)
+
+**Before submitting ANY code change, agents MUST perform intense and thorough analysis of all possible failure cases.**
+
+This project involves:
+- Multiple external APIs with inconsistent schemas (int/string polymorphism in Garland Tools)
+- WPF UI threading and data binding edge cases
+- File I/O with concurrent access potential
+- Complex JSON deserialization with null/missing fields
+
+**Required Analysis Checklist:**
+1. **Null/Reference Safety** - Can any property or parameter be null? Add null checks or null-conditional operators (`?.`, `??`)
+2. **Type Safety** - Handle polymorphic JSON fields (object type with int/string/null possibilities)
+3. **Exception Handling** - Wrap file I/O, network calls, and parsing in try-catch with graceful degradation
+4. **Overflow/Bounds** - Check numeric conversions, collection indexing, and string length limits
+5. **Concurrency** - Thread-safe access to shared resources (use locks, ConcurrentDictionary, etc.)
+6. **UI Thread Safety** - Dispatch UI updates to the main thread using `Dispatcher.Invoke()`
+7. **Resource Disposal** - Ensure `IDisposable` objects are properly disposed (using statements)
+8. **Edge Cases in Loops** - Empty collections, single items, very large collections
+
+**Example - Bad (causes crashes):**
+```csharp
+public int Id => int.Parse(_idElement.GetString()!);  // Crashes on null or non-string
+```
+
+**Example - Good (defensive):**
+```csharp
+public int Id => _idElement.ValueKind switch
+{
+    JsonValueKind.Number => _idElement.TryGetInt32(out var i) ? i : 0,
+    JsonValueKind.String => int.TryParse(_idElement.GetString(), out var s) ? s : 0,
+    _ => 0
+};
+```
+
+**Consequence of Non-Compliance:** Debug cycles waste user time. Prefer burning tokens on analysis over iterative debugging.
+
 ---
 
 ## API Endpoints to Port

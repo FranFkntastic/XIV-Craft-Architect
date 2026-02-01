@@ -9,23 +9,47 @@ namespace FFXIVCraftArchitect.Models;
 
 /// <summary>
 /// Search result from Garland Tools search API.
+/// Uses object for polymorphic fields (int/string) - converted via properties.
 /// </summary>
 public class GarlandSearchResult
 {
     [JsonPropertyName("type")]
     public string Type { get; set; } = string.Empty;
     
-    // Store raw JSON element to handle both string and int IDs
+    // Store as object to handle int/string polymorphism
     [JsonPropertyName("id")]
-    private JsonElement _idElement { get; set; }
+    public object? IdRaw { get; set; }
     
-    // Computed property - not serialized
-    public int Id => _idElement.ValueKind == JsonValueKind.String 
-        ? int.Parse(_idElement.GetString()!) 
-        : _idElement.GetInt32();
+    // Computed property converts to int
+    [JsonIgnore]
+    public int Id => ConvertToInt(IdRaw);
     
     [JsonPropertyName("obj")]
     public GarlandSearchObject Object { get; set; } = new();
+    
+    private static int ConvertToInt(object? value)
+    {
+        return value switch
+        {
+            null => 0,
+            int i => i,
+            long l => (int)l,
+            double d => (int)d,
+            string s => int.TryParse(s, out var parsed) ? parsed : 0,
+            JsonElement e => ConvertJsonElementToInt(e),
+            _ => 0
+        };
+    }
+    
+    private static int ConvertJsonElementToInt(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Number => element.TryGetInt32(out var i) ? i : 0,
+            JsonValueKind.String => int.TryParse(element.GetString(), out var s) ? s : 0,
+            _ => 0
+        };
+    }
 }
 
 public class GarlandSearchObject
@@ -35,36 +59,72 @@ public class GarlandSearchObject
     
     // Icon ID can be int, string, or missing
     [JsonPropertyName("i")]
-    private JsonElement _iconElement { get; set; }
+    public object? IconIdRaw { get; set; }
     
-    public int IconId => _iconElement.ValueKind switch
-    {
-        JsonValueKind.Number => _iconElement.GetInt32(),
-        JsonValueKind.String => int.TryParse(_iconElement.GetString(), out var id) ? id : 0,
-        _ => 0
-    };
+    [JsonIgnore]
+    public int IconId => ConvertToInt(IconIdRaw);
     
     // ClassJob can be int, string, or missing
     [JsonPropertyName("c")]
-    private JsonElement _classJobElement { get; set; }
+    public object? ClassJobRaw { get; set; }
     
-    public int? ClassJob => _classJobElement.ValueKind switch
-    {
-        JsonValueKind.Number => _classJobElement.GetInt32(),
-        JsonValueKind.String => int.TryParse(_classJobElement.GetString(), out var cj) ? cj : null,
-        _ => null
-    };
+    [JsonIgnore]
+    public int? ClassJob => ConvertToNullableInt(ClassJobRaw);
     
     // Level can be int, string, or missing
     [JsonPropertyName("l")]
-    private JsonElement _levelElement { get; set; }
+    public object? LevelRaw { get; set; }
     
-    public int? Level => _levelElement.ValueKind switch
+    [JsonIgnore]
+    public int? Level => ConvertToNullableInt(LevelRaw);
+    
+    private static int ConvertToInt(object? value)
     {
-        JsonValueKind.Number => _levelElement.GetInt32(),
-        JsonValueKind.String => int.TryParse(_levelElement.GetString(), out var lvl) ? lvl : null,
-        _ => null
-    };
+        return value switch
+        {
+            null => 0,
+            int i => i,
+            long l => (int)l,
+            double d => (int)d,
+            string s => int.TryParse(s, out var parsed) ? parsed : 0,
+            JsonElement e => ConvertJsonElementToInt(e),
+            _ => 0
+        };
+    }
+    
+    private static int? ConvertToNullableInt(object? value)
+    {
+        return value switch
+        {
+            null => null,
+            int i => i,
+            long l => (int)l,
+            double d => (int)d,
+            string s => int.TryParse(s, out var parsed) ? parsed : null,
+            JsonElement e => ConvertJsonElementToNullableInt(e),
+            _ => null
+        };
+    }
+    
+    private static int ConvertJsonElementToInt(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Number => element.TryGetInt32(out var i) ? i : 0,
+            JsonValueKind.String => int.TryParse(element.GetString(), out var s) ? s : 0,
+            _ => 0
+        };
+    }
+    
+    private static int? ConvertJsonElementToNullableInt(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Number => element.TryGetInt32(out var i) ? i : null,
+            JsonValueKind.String => int.TryParse(element.GetString(), out var s) ? s : null,
+            _ => null
+        };
+    }
 }
 
 /// <summary>

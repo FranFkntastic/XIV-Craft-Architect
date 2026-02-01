@@ -71,7 +71,7 @@ public class GarlandService
                 // Try to extract problematic section
                 if (ex.Path?.StartsWith("$[") == true)
                 {
-                    var match = Regex.Match(ex.Path, @"\$(\d+)");
+                    var match = Regex.Match(ex.Path, @"\[(\d+)\]");
                     if (match.Success && int.TryParse(match.Groups[1].Value, out var index))
                     {
                         _logger.LogError("[GarlandService] Problematic array index: {Index}", index);
@@ -92,7 +92,10 @@ public class GarlandService
             }
             
             // Filter to only items (not recipes, quests, etc.)
-            var filteredResults = results?.Where(r => r.Type == "item").ToList() ?? new List<GarlandSearchResult>();
+            // Defensive: filter out null results and results with null Type or Object
+            var filteredResults = results
+                ?.Where(r => r != null && r.Type == "item" && r.Object != null)
+                .ToList() ?? new List<GarlandSearchResult>();
             _logger.LogInformation("[GarlandService] Filtered to {Count} items (type='item')", filteredResults.Count);
             
             // Log first few results
@@ -100,7 +103,7 @@ public class GarlandService
             {
                 var r = filteredResults[i];
                 _logger.LogDebug("[GarlandService] Result[{Index}]: ID={Id}, Name='{Name}', Icon={Icon}", 
-                    i, r.Id, r.Object.Name, r.Object.IconId);
+                    i, r.Id, r.Object?.Name ?? "null", r.Object?.IconId ?? 0);
             }
             
             _logger.LogInformation("[GarlandService] ===== Search Complete =====");
