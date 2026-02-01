@@ -260,7 +260,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Display the crafting plan in the TreeView with craft/buy toggles.
     /// </summary>
-    private async void DisplayPlanInTreeView(CraftingPlan plan)
+    private void DisplayPlanInTreeView(CraftingPlan plan)
     {
         RecipeTree.Items.Clear();
         
@@ -269,13 +269,22 @@ public partial class MainWindow : Window
             var rootNode = CreateTreeViewItem(rootItem);
             RecipeTree.Items.Add(rootNode);
         }
+    }
+    
+    /// <summary>
+    /// Display plan and update market logistics using saved prices (for plan loading).
+    /// </summary>
+    private async Task DisplayPlanWithCachedPrices(CraftingPlan plan)
+    {
+        DisplayPlanInTreeView(plan);
         
         // Check if plan has saved prices and update Market Logistics
         var savedPrices = ExtractPricesFromPlan(plan);
         if (savedPrices.Count > 0)
         {
-            await UpdateMarketLogisticsAsync(savedPrices);
-            StatusLabel.Text = $"Loaded plan with {savedPrices.Count} cached prices";
+            // Use cached prices without re-fetching (user can click Refresh if they want fresh data)
+            await UpdateMarketLogisticsAsync(savedPrices, useCachedData: true);
+            StatusLabel.Text = $"Loaded plan with {savedPrices.Count} cached prices. Click 'Refresh Market Data' for current listings.";
         }
         else
         {
@@ -467,7 +476,7 @@ public partial class MainWindow : Window
             
             if (_currentPlan != null)
             {
-                DisplayPlanInTreeView(_currentPlan);
+                await DisplayPlanWithCachedPrices(_currentPlan);
                 UpdateBuildPlanButtonText();
                 
                 // Sync to project items
@@ -701,11 +710,11 @@ public partial class MainWindow : Window
             // Update plan nodes with prices
             UpdatePlanWithPrices(_currentPlan.RootItems, prices);
 
-            // Refresh display
+            // Refresh tree view (market logistics updated below)
             DisplayPlanInTreeView(_currentPlan);
             
-            // Update market logistics tab with detailed purchase plan
-            await UpdateMarketLogisticsAsync(prices);
+            // Update market logistics tab with fresh market data
+            await UpdateMarketLogisticsAsync(prices, useCachedData: false);
 
             // Calculate total cost
             var totalCost = _currentPlan.AggregatedMaterials.Sum(m => m.TotalCost);
@@ -788,7 +797,9 @@ public partial class MainWindow : Window
     /// <summary>
     /// Populate the Market Logistics tab with detailed purchase planning information.
     /// </summary>
-    private async Task UpdateMarketLogisticsAsync(Dictionary<int, PriceInfo> prices)
+    /// <param name="prices">Price dictionary from cache or saved plan.</param>
+    /// <param name="useCachedData">If true, use saved prices without re-fetching market listings.</param>
+    private async Task UpdateMarketLogisticsAsync(Dictionary<int, PriceInfo> prices, bool useCachedData = false)
     {
         _currentMarketPlans.Clear();
         MarketCards.Children.Clear();
@@ -839,56 +850,72 @@ public partial class MainWindow : Window
             MarketCards.Children.Add(vendorCard);
         }
 
-        // Market items with detailed listings
+        // Market items - use cached data or fetch fresh
         if (marketItems.Any())
         {
-            var dc = DcCombo.SelectedItem as string ?? "Aether";
-            var searchAllNA = SearchAllNACheck?.IsChecked ?? false;
-            
-            // Show loading message
-            var loadingCard = CreateMarketCard("Market Board Items", 
-                $"Fetching detailed listings for {marketItems.Count} items from {(searchAllNA ? "all NA DCs" : dc)}...", "#3d3e2d");
-            MarketCards.Children.Add(loadingCard);
-            RefreshMarketButton.IsEnabled = false;
-            
-            try
+            if (useCachedData)
             {
-                var progress = new Progress<string>(msg => 
-                {
-                    StatusLabel.Text = $"Analyzing market: {msg}";
-                });
-                
-                List<DetailedShoppingPlan> shoppingPlans;
-                
-                if (searchAllNA)
-                {
-                    shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
-                        marketItems, progress);
-                }
-                else
-                {
-                    shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
-                        marketItems, dc, progress);
-                }
-                
-                _currentMarketPlans = shoppingPlans;
-                
-                // Remove loading card
-                MarketCards.Children.Remove(loadingCard);
-                
-                // Apply current sort and display
-                ApplyMarketSortAndDisplay();
-            }
-            catch (Exception ex)
-            {
-                MarketCards.Children.Remove(loadingCard);
-                var errorCard = CreateMarketCard("Market Board Items", 
-                    $"Error fetching listings: {ex.Message}", "#4a2d2d");
-                MarketCards.Children.Add(errorCard);
-            }
-            finally
-            {
+                // Use saved prices without re-fetching detailed listings
+                var cachedCard = CreateMarketCard($"Market Board Items ({marketItems.Count})",
+                    "Using saved prices. Click 'Refresh Market Data' to fetch current listings.\n\n" +
+                    "Items to purchase:\n" +
+                    string.Join("\n", marketItems.Select(m => 
+                        $"• {m.Name} x{m.TotalQuantity} = {m.TotalCost:N0}g ({prices[m.ItemId].SourceDetails})")),
+                    "#3d3e2d");
+                MarketCards.Children.Add(cachedCard);
                 RefreshMarketButton.IsEnabled = true;
+            }
+            else
+            {
+                // Fetch fresh market data
+                var dc = DcCombo.SelectedItem as string ?? "Aether";
+                var searchAllNA = SearchAllNACheck?.IsChecked ?? false;
+                
+                // Show loading message
+                var loadingCard = CreateMarketCard("Market Board Items", 
+                    $"Fetching detailed listings for {marketItems.Count} items from {(searchAllNA ? "all NA DCs" : dc)}...", "#3d3e2d");
+                MarketCards.Children.Add(loadingCard);
+                RefreshMarketButton.IsEnabled = false;
+                
+                try
+                {
+                    var progress = new Progress<string>(msg => 
+                    {
+                        StatusLabel.Text = $"Analyzing market: {msg}";
+                    });
+                    
+                    List<DetailedShoppingPlan> shoppingPlans;
+                    
+                    if (searchAllNA)
+                    {
+                        shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
+                            marketItems, progress);
+                    }
+                    else
+                    {
+                        shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
+                            marketItems, dc, progress);
+                    }
+                    
+                    _currentMarketPlans = shoppingPlans;
+                    
+                    // Remove loading card
+                    MarketCards.Children.Remove(loadingCard);
+                    
+                    // Apply current sort and display
+                    ApplyMarketSortAndDisplay();
+                }
+                catch (Exception ex)
+                {
+                    MarketCards.Children.Remove(loadingCard);
+                    var errorCard = CreateMarketCard("Market Board Items", 
+                        $"Error fetching listings: {ex.Message}", "#4a2d2d");
+                    MarketCards.Children.Add(errorCard);
+                }
+                finally
+                {
+                    RefreshMarketButton.IsEnabled = true;
+                }
             }
         }
 
