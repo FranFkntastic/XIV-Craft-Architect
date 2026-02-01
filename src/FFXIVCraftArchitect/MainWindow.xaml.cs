@@ -31,6 +31,8 @@ public partial class MainWindow : Window
     private readonly UniversalisService _universalisService;
     private readonly SettingsService _settingsService;
     private readonly ItemCacheService _itemCache;
+    private readonly RecipeCalculationService _recipeCalcService;
+    private readonly PlanPersistenceService _planPersistence;
 
     // Search state
     private List<GarlandSearchResult> _currentSearchResults = new();
@@ -38,6 +40,9 @@ public partial class MainWindow : Window
     
     // Project state
     private List<ProjectItem> _projectItems = new();
+    
+    // Current crafting plan
+    private CraftingPlan? _currentPlan;
 
     public MainWindow()
     {
@@ -48,6 +53,8 @@ public partial class MainWindow : Window
         _universalisService = App.Services.GetRequiredService<UniversalisService>();
         _settingsService = App.Services.GetRequiredService<SettingsService>();
         _itemCache = App.Services.GetRequiredService<ItemCacheService>();
+        _recipeCalcService = App.Services.GetRequiredService<RecipeCalculationService>();
+        _planPersistence = App.Services.GetRequiredService<PlanPersistenceService>();
 
         Loaded += OnLoaded;
     }
@@ -194,7 +201,7 @@ public partial class MainWindow : Window
         BuildPlanButton.IsEnabled = _projectItems.Count > 0;
     }
 
-    private void OnBuildProjectPlan(object sender, RoutedEventArgs e)
+    private async void OnBuildProjectPlan(object sender, RoutedEventArgs e)
     {
         if (_projectItems.Count == 0)
         {
@@ -202,8 +209,193 @@ public partial class MainWindow : Window
             return;
         }
 
+        var dc = DcCombo.SelectedItem as string ?? "Aether";
+        var world = WorldCombo.SelectedItem as string ?? "";
+
         StatusLabel.Text = $"Building plan for {_projectItems.Count} items...";
-        // TODO: Calculate recipe trees and costs for all project items
+        BuildPlanButton.IsEnabled = false;
+        
+        try
+        {
+            var targets = _projectItems.Select(p => (p.Id, p.Name, p.Quantity)).ToList();
+            _currentPlan = await _recipeCalcService.BuildPlanAsync(targets, dc, world);
+            
+            // Display in TreeView
+            DisplayPlanInTreeView(_currentPlan);
+            
+            StatusLabel.Text = $"Plan built: {_currentPlan.RootItems.Count} root items, " +
+                               $"{_currentPlan.AggregatedMaterials.Count} unique materials";
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Failed to build plan: {ex.Message}";
+        }
+        finally
+        {
+            BuildPlanButton.IsEnabled = _projectItems.Count > 0;
+        }
+    }
+
+    /// <summary>
+    /// Display the crafting plan in the TreeView with craft/buy toggles.
+    /// </summary>
+    private void DisplayPlanInTreeView(CraftingPlan plan)
+    {
+        RecipeTree.Items.Clear();
+        
+        foreach (var rootItem in plan.RootItems)
+        {
+            var rootNode = CreateTreeViewItem(rootItem);
+            RecipeTree.Items.Add(rootNode);
+        }
+        
+        // Update shopping list with aggregated materials
+        ShoppingList.ItemsSource = plan.AggregatedMaterials;
+    }
+
+    /// <summary>
+    /// Recursively create a TreeViewItem from a PlanNode with editing capabilities.
+    /// </summary>
+    private TreeViewItem CreateTreeViewItem(PlanNode node)
+    {
+        // Header panel with name, quantity, and buy/craft toggle
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        
+        // Buy/Craft checkbox
+        var buyCheck = new CheckBox 
+        { 
+            Content = "Buy",
+            IsChecked = node.IsBuy,
+            ToolTip = node.IsUncraftable ? "Must be bought (no recipe)" : "Check to buy from market",
+            IsEnabled = !node.IsUncraftable,
+            Margin = new Thickness(0, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        buyCheck.Checked += (s, e) => ToggleNodeBuyMode(node, true);
+        buyCheck.Unchecked += (s, e) => ToggleNodeBuyMode(node, false);
+        panel.Children.Add(buyCheck);
+        
+        // Item name and details
+        var nameText = new TextBlock 
+        { 
+            Text = $"{node.Name} x{node.Quantity}",
+            VerticalAlignment = VerticalAlignment.Center,
+            FontWeight = node.Parent == null ? FontWeights.Bold : FontWeights.Normal
+        };
+        panel.Children.Add(nameText);
+        
+        // Add recipe info if craftable
+        if (!node.IsUncraftable && !string.IsNullOrEmpty(node.Job))
+        {
+            var infoText = new TextBlock
+            {
+                Text = $"  ({node.Job} Lv.{node.RecipeLevel}, Yield: {node.Yield})",
+                Foreground = System.Windows.Media.Brushes.Gray,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 11
+            };
+            panel.Children.Add(infoText);
+        }
+        
+        // Price info (placeholder - would fetch from Universalis)
+        if (node.MarketPrice > 0)
+        {
+            var priceText = new TextBlock
+            {
+                Text = $"  ~{node.MarketPrice * node.Quantity:N0}g",
+                Foreground = System.Windows.Media.Brushes.Gold,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 11,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+            panel.Children.Add(priceText);
+        }
+        
+        var treeItem = new TreeViewItem
+        {
+            Header = panel,
+            IsExpanded = true,
+            Tag = node // Store reference to the PlanNode for editing
+        };
+        
+        // Recursively add children
+        foreach (var child in node.Children)
+        {
+            treeItem.Items.Add(CreateTreeViewItem(child));
+        }
+        
+        return treeItem;
+    }
+
+    /// <summary>
+    /// Toggle an item between buy and craft mode.
+    /// </summary>
+    private void ToggleNodeBuyMode(PlanNode node, bool buy)
+    {
+        _recipeCalcService.ToggleBuyMode(node, buy);
+        
+        // Refresh the display
+        if (_currentPlan != null)
+        {
+            DisplayPlanInTreeView(_currentPlan);
+        }
+        
+        StatusLabel.Text = $"{node.Name} set to {(buy ? "buy" : "craft")}";
+    }
+
+    /// <summary>
+    /// Save the current plan to disk.
+    /// </summary>
+    private async void OnSavePlan(object sender, RoutedEventArgs e)
+    {
+        if (_currentPlan == null)
+        {
+            StatusLabel.Text = "No plan to save - build a plan first";
+            return;
+        }
+
+        var success = await _planPersistence.SavePlanAsync(_currentPlan);
+        StatusLabel.Text = success 
+            ? $"Plan saved: {_currentPlan.Name}" 
+            : "Failed to save plan";
+    }
+
+    /// <summary>
+    /// Load a saved plan from disk.
+    /// </summary>
+    private async void OnLoadPlan(object sender, RoutedEventArgs e)
+    {
+        var plans = _planPersistence.ListSavedPlans();
+        if (plans.Count == 0)
+        {
+            StatusLabel.Text = "No saved plans found";
+            return;
+        }
+
+        // For now, load the most recent plan
+        // TODO: Show a dialog to select which plan to load
+        var mostRecent = plans.First();
+        _currentPlan = await _planPersistence.LoadPlanAsync(mostRecent.FilePath);
+        
+        if (_currentPlan != null)
+        {
+            DisplayPlanInTreeView(_currentPlan);
+            
+            // Sync to project items
+            _projectItems = _currentPlan.RootItems.Select(r => new ProjectItem 
+            { 
+                Id = r.ItemId, 
+                Name = r.Name, 
+                Quantity = r.Quantity 
+            }).ToList();
+            ProjectList.ItemsSource = _projectItems;
+            
+            StatusLabel.Text = $"Loaded plan: {_currentPlan.Name}";
+        }
+        else
+        {
+            StatusLabel.Text = "Failed to load plan";
+        }
     }
 
     private void OnViewLogs(object sender, RoutedEventArgs e)

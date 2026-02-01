@@ -50,6 +50,8 @@ public partial class App : Application
         services.AddSingleton<GarlandService>();
         services.AddSingleton<UniversalisService>();
         services.AddSingleton<ItemCacheService>();
+        services.AddSingleton<RecipeCalculationService>();
+        services.AddSingleton<PlanPersistenceService>();
 
         // Windows
         services.AddTransient<MainWindow>();

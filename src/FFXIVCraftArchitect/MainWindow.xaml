@@ -123,6 +123,7 @@
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <!-- Search Results -->
@@ -224,6 +225,27 @@
                                        HorizontalAlignment="Stretch"
                                        IsEnabled="False"
                                        Click="OnBuildProjectPlan"/>
+                            
+                            <!-- Save/Load buttons -->
+                            <Grid Grid.Row="3" Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="4" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                
+                                <ui:Button Grid.Column="0"
+                                           Content="Save Plan"
+                                           Appearance="Secondary"
+                                           HorizontalAlignment="Stretch"
+                                           Click="OnSavePlan"/>
+                                
+                                <ui:Button Grid.Column="2"
+                                           Content="Load Plan"
+                                           Appearance="Secondary"
+                                           HorizontalAlignment="Stretch"
+                                           Click="OnLoadPlan"/>
+                            </Grid>
                         </Grid>
                     </Border>
                 </Grid>
@@ -245,6 +267,62 @@
                                     </Style>
                                 </TreeView.Resources>
                             </TreeView>
+                        </Border>
+                    </ui:TabViewItem>
+                    
+                    <ui:TabViewItem Header="Shopping List">
+                        <Border Background="#2d2d2d"
+                                CornerRadius="4"
+                                Padding="8">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                
+                                <TextBlock Grid.Row="0"
+                                           Text="Materials to Acquire"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,8"/>
+                                
+                                <ListBox Grid.Row="1"
+                                         x:Name="ShoppingList"
+                                         Background="Transparent"
+                                         BorderThickness="0">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="30" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="60" />
+                                                    <ColumnDefinition Width="80" />
+                                                </Grid.ColumnDefinitions>
+                                                
+                                                <TextBlock Grid.Column="0"
+                                                           Text="{Binding IconId, StringFormat={}{0:D6}}"
+                                                           FontSize="10"
+                                                           Foreground="Gray"/>
+                                                
+                                                <TextBlock Grid.Column="1"
+                                                           Text="{Binding Name}"
+                                                           VerticalAlignment="Center"/>
+                                                
+                                                <TextBlock Grid.Column="2"
+                                                           Text="{Binding TotalQuantity, StringFormat=x{0}}"
+                                                           HorizontalAlignment="Right"
+                                                           VerticalAlignment="Center"/>
+                                                
+                                                <TextBlock Grid.Column="3"
+                                                           Text="{Binding TotalCost, StringFormat={}{0:N0}g}"
+                                                           HorizontalAlignment="Right"
+                                                           VerticalAlignment="Center"
+                                                           Foreground="Gold"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
                         </Border>
                     </ui:TabViewItem>
                     
