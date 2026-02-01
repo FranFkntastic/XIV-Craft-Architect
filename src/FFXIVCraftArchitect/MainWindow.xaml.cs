@@ -414,6 +414,33 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Rename the current plan.
+    /// </summary>
+    private async void OnRenamePlan(object sender, RoutedEventArgs e)
+    {
+        if (_currentPlan == null)
+        {
+            StatusLabel.Text = "No plan to rename - build or load a plan first";
+            return;
+        }
+
+        // Create a simple input dialog
+        var inputDialog = new RenamePlanDialog(_currentPlan.Name)
+        {
+            Owner = this
+        };
+
+        if (inputDialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(inputDialog.NewName))
+        {
+            var oldName = _currentPlan.Name;
+            _currentPlan.Name = inputDialog.NewName;
+            _currentPlan.MarkModified();
+            
+            StatusLabel.Text = $"Renamed plan from '{oldName}' to '{_currentPlan.Name}'";
+        }
+    }
+
+    /// <summary>
     /// Import from Teamcraft "Copy as Text" format.
     /// </summary>
     private void OnImportTeamcraft(object sender, RoutedEventArgs e)
