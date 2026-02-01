@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     private readonly RecipeCalculationService _recipeCalcService;
     private readonly PlanPersistenceService _planPersistence;
     private readonly PriceCheckService _priceCheckService;
+    private readonly MarketShoppingService _marketShoppingService;
 
     // Search state
     private List<GarlandSearchResult> _currentSearchResults = new();
@@ -57,6 +58,7 @@ public partial class MainWindow : Window
         _recipeCalcService = App.Services.GetRequiredService<RecipeCalculationService>();
         _planPersistence = App.Services.GetRequiredService<PlanPersistenceService>();
         _priceCheckService = App.Services.GetRequiredService<PriceCheckService>();
+        _marketShoppingService = App.Services.GetRequiredService<MarketShoppingService>();
 
         Loaded += OnLoaded;
     }
@@ -252,7 +254,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Display the crafting plan in the TreeView with craft/buy toggles.
     /// </summary>
-    private void DisplayPlanInTreeView(CraftingPlan plan)
+    private async void DisplayPlanInTreeView(CraftingPlan plan)
     {
         RecipeTree.Items.Clear();
         
@@ -266,7 +268,7 @@ public partial class MainWindow : Window
         var savedPrices = ExtractPricesFromPlan(plan);
         if (savedPrices.Count > 0)
         {
-            UpdateMarketLogistics(savedPrices);
+            await UpdateMarketLogisticsAsync(savedPrices);
             StatusLabel.Text = $"Loaded plan with {savedPrices.Count} cached prices";
         }
         else
@@ -696,8 +698,8 @@ public partial class MainWindow : Window
             // Refresh display
             DisplayPlanInTreeView(_currentPlan);
             
-            // Update market logistics tab with purchase plan
-            UpdateMarketLogistics(prices);
+            // Update market logistics tab with detailed purchase plan
+            await UpdateMarketLogisticsAsync(prices);
 
             // Calculate total cost
             var totalCost = _currentPlan.AggregatedMaterials.Sum(m => m.TotalCost);
@@ -776,9 +778,9 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Populate the Market Logistics tab with purchase planning information.
+    /// Populate the Market Logistics tab with detailed purchase planning information.
     /// </summary>
-    private void UpdateMarketLogistics(Dictionary<int, PriceInfo> prices)
+    private async Task UpdateMarketLogisticsAsync(Dictionary<int, PriceInfo> prices)
     {
         MarketCards.Children.Clear();
 
@@ -806,7 +808,6 @@ public partial class MainWindow : Window
             }
             else
             {
-                // No price info - treat as market item
                 marketItems.Add(material);
             }
         }
@@ -820,7 +821,7 @@ public partial class MainWindow : Window
             - Total: {vendorItems.Sum(i => i.TotalCost):N0}g
             
             Market Board Purchases: {marketItems.Count} items
-            - Prices may vary based on availability
+            - See detailed listings below
             - Total: {marketItems.Sum(i => i.TotalCost):N0}g
             
             Grand Total: {vendorItems.Sum(i => i.TotalCost) + marketItems.Sum(i => i.TotalCost):N0}g
@@ -842,19 +843,43 @@ public partial class MainWindow : Window
             MarketCards.Children.Add(vendorCard);
         }
 
-        // Market items card
+        // Market items with detailed listings
         if (marketItems.Any())
         {
-            var marketText = new System.Text.StringBuilder();
-            marketText.AppendLine("Purchase from Market Board:");
-            marketText.AppendLine();
-            foreach (var item in marketItems.OrderByDescending(i => i.TotalCost))
+            var dc = DcCombo.SelectedItem as string ?? "Aether";
+            
+            // Show loading message
+            var loadingCard = CreateMarketCard("Market Board Items", 
+                $"Fetching detailed listings for {marketItems.Count} items from {dc}...", "#3d3e2d");
+            MarketCards.Children.Add(loadingCard);
+            
+            try
             {
-                var avgPrice = item.UnitPrice;
-                marketText.AppendLine($"• {item.Name} x{item.TotalQuantity} = {item.TotalCost:N0}g (~{avgPrice:N0}g each)");
+                var progress = new Progress<string>(msg => 
+                {
+                    StatusLabel.Text = $"Analyzing market: {msg}";
+                });
+                
+                var shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
+                    marketItems, dc, progress);
+                
+                // Remove loading card
+                MarketCards.Children.Remove(loadingCard);
+                
+                // Add detailed cards for each item
+                foreach (var plan in shoppingPlans.OrderByDescending(p => p.QuantityNeeded * p.DCAveragePrice))
+                {
+                    var itemCard = CreateDetailedMarketCard(plan);
+                    MarketCards.Children.Add(itemCard);
+                }
             }
-            var marketCard = CreateMarketCard($"Market Board Items ({marketItems.Count})", marketText.ToString(), "#3d3e2d");
-            MarketCards.Children.Add(marketCard);
+            catch (Exception ex)
+            {
+                MarketCards.Children.Remove(loadingCard);
+                var errorCard = CreateMarketCard("Market Board Items", 
+                    $"Error fetching listings: {ex.Message}", "#4a2d2d");
+                MarketCards.Children.Add(errorCard);
+            }
         }
 
         // Untradeable items card
@@ -870,6 +895,202 @@ public partial class MainWindow : Window
             var untradeCard = CreateMarketCard($"Untradeable Items ({untradeableItems.Count})", untradeText.ToString(), "#4a3d2d");
             MarketCards.Children.Add(untradeCard);
         }
+    }
+
+    /// <summary>
+    /// Create a detailed market card showing world-by-world listings for an item.
+    /// </summary>
+    private Border CreateDetailedMarketCard(DetailedShoppingPlan plan)
+    {
+        var border = new Border
+        {
+            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3d3e2d")),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(12),
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+
+        var stack = new StackPanel();
+        
+        // Header with item name and quantity
+        var headerText = new TextBlock
+        {
+            Text = $"{plan.Name} x{plan.QuantityNeeded}",
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 14,
+            Margin = new Thickness(0, 0, 0, 4)
+        };
+        stack.Children.Add(headerText);
+
+        if (!string.IsNullOrEmpty(plan.Error))
+        {
+            var errorText = new TextBlock
+            {
+                Text = $"Error: {plan.Error}",
+                Foreground = Brushes.Red,
+                FontSize = 12
+            };
+            stack.Children.Add(errorText);
+            border.Child = stack;
+            return border;
+        }
+
+        // DC Average price
+        var avgText = new TextBlock
+        {
+            Text = $"DC Average: {plan.DCAveragePrice:N0}g each",
+            Foreground = Brushes.Gray,
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        stack.Children.Add(avgText);
+
+        if (!plan.HasOptions)
+        {
+            var noListingsText = new TextBlock
+            {
+                Text = "No viable listings found on market board.",
+                Foreground = Brushes.Orange,
+                FontSize = 12
+            };
+            stack.Children.Add(noListingsText);
+            border.Child = stack;
+            return border;
+        }
+
+        // World options
+        var worldsHeader = new TextBlock
+        {
+            Text = "Purchase Options by World:",
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 12,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+        stack.Children.Add(worldsHeader);
+
+        foreach (var world in plan.WorldOptions)
+        {
+            var isRecommended = world == plan.RecommendedWorld;
+            var worldBorder = CreateWorldOptionPanel(world, isRecommended);
+            stack.Children.Add(worldBorder);
+        }
+
+        border.Child = stack;
+        return border;
+    }
+
+    /// <summary>
+    /// Create a panel showing purchase options for a specific world.
+    /// </summary>
+    private Border CreateWorldOptionPanel(WorldShoppingSummary world, bool isRecommended)
+    {
+        var backgroundColor = isRecommended ? "#2d4a3e" : "#2d2d2d";
+        var border = new Border
+        {
+            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(backgroundColor)),
+            CornerRadius = new CornerRadius(3),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 2, 0, 4),
+            BorderBrush = isRecommended ? Brushes.Gold : null,
+            BorderThickness = isRecommended ? new Thickness(1) : new Thickness(0)
+        };
+
+        var stack = new StackPanel();
+
+        // World name and total
+        var headerPanel = new StackPanel { Orientation = Orientation.Horizontal };
+        
+        var worldText = new TextBlock
+        {
+            Text = world.WorldName,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        headerPanel.Children.Add(worldText);
+
+        if (isRecommended)
+        {
+            var recText = new TextBlock
+            {
+                Text = "[RECOMMENDED]",
+                Foreground = Brushes.Gold,
+                FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            headerPanel.Children.Add(recText);
+        }
+
+        stack.Children.Add(headerPanel);
+
+        // Total cost and average price
+        var costText = new TextBlock
+        {
+            Text = $"Total: {world.CostDisplay} (~{world.PricePerUnitDisplay} each)",
+            FontSize = 11,
+            Margin = new Thickness(0, 2, 0, 4)
+        };
+        if (world.IsFullyUnderAverage)
+        {
+            costText.Foreground = Brushes.LightGreen;
+        }
+        stack.Children.Add(costText);
+
+        // Individual listings
+        var listingsText = new TextBlock
+        {
+            Text = "Listings:",
+            FontSize = 10,
+            Foreground = Brushes.Gray,
+            Margin = new Thickness(0, 0, 0, 2)
+        };
+        stack.Children.Add(listingsText);
+
+        foreach (var listing in world.Listings)
+        {
+            var listingPanel = new StackPanel { Orientation = Orientation.Horizontal };
+            
+            var qtyText = new TextBlock
+            {
+                Text = $"x{listing.Quantity}",
+                FontSize = 10,
+                Width = 35,
+                Foreground = Brushes.LightGray
+            };
+            listingPanel.Children.Add(qtyText);
+
+            var priceText = new TextBlock
+            {
+                Text = $"@{listing.PricePerUnit:N0}g",
+                FontSize = 10,
+                Width = 70,
+                Foreground = listing.IsUnderAverage ? Brushes.LightGreen : Brushes.White
+            };
+            listingPanel.Children.Add(priceText);
+
+            var subtotalText = new TextBlock
+            {
+                Text = $"= {listing.SubtotalDisplay}",
+                FontSize = 10,
+                Foreground = Brushes.Gray,
+                Width = 80
+            };
+            listingPanel.Children.Add(subtotalText);
+
+            var retainerText = new TextBlock
+            {
+                Text = $"({listing.RetainerName})",
+                FontSize = 10,
+                Foreground = Brushes.Gray,
+                FontStyle = FontStyles.Italic
+            };
+            listingPanel.Children.Add(retainerText);
+
+            stack.Children.Add(listingPanel);
+        }
+
+        border.Child = stack;
+        return border;
     }
 
     /// <summary>
