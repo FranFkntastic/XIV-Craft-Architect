@@ -7,6 +7,7 @@ using System.Windows.Media;
 using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Window = System.Windows.Window;
 
 namespace FFXIVCraftArchitect;
@@ -35,6 +36,7 @@ public partial class MainWindow : Window
     private readonly PlanPersistenceService _planPersistence;
     private readonly PriceCheckService _priceCheckService;
     private readonly MarketShoppingService _marketShoppingService;
+    private readonly ILogger<MainWindow> _logger;
 
     // Search state
     private List<GarlandSearchResult> _currentSearchResults = new();
@@ -62,6 +64,7 @@ public partial class MainWindow : Window
         _planPersistence = App.Services.GetRequiredService<PlanPersistenceService>();
         _priceCheckService = App.Services.GetRequiredService<PriceCheckService>();
         _marketShoppingService = App.Services.GetRequiredService<MarketShoppingService>();
+        _logger = App.Services.GetRequiredService<ILogger<MainWindow>>();
 
         Loaded += OnLoaded;
     }
@@ -901,6 +904,55 @@ public partial class MainWindow : Window
             }
             var untradeCard = CreateMarketCard($"Untradeable Items ({untradeableItems.Count})", untradeText.ToString(), "#4a3d2d");
             MarketCards.Children.Add(untradeCard);
+        }
+        
+        // Craft vs Buy Analysis
+        AddCraftVsBuyAnalysisCard(prices);
+    }
+    
+    /// <summary>
+    /// Add craft-vs-buy analysis card showing potential savings.
+    /// </summary>
+    private void AddCraftVsBuyAnalysisCard(Dictionary<int, PriceInfo> prices)
+    {
+        if (_currentPlan == null) return;
+        
+        try
+        {
+            var analyses = _marketShoppingService.AnalyzeCraftVsBuy(_currentPlan, prices);
+            var significantAnalyses = analyses.Where(a => a.IsSignificantSavings).ToList();
+            
+            if (significantAnalyses.Count == 0) return;
+            
+            var analysisText = new System.Text.StringBuilder();
+            analysisText.AppendLine("Compare Buy vs Craft costs:");
+            analysisText.AppendLine();
+            
+            foreach (var analysis in significantAnalyses.Take(10))  // Show top 10
+            {
+                var action = analysis.Recommendation == CraftRecommendation.Craft ? "CRAFT" : "BUY";
+                var color = analysis.PotentialSavings > 0 ? "🟢" : "🔴";
+                
+                analysisText.AppendLine($"{color} {analysis.ItemName} x{analysis.Quantity}");
+                analysisText.AppendLine($"   {action} to save {Math.Abs(analysis.PotentialSavings):N0}g ({Math.Abs(analysis.SavingsPercent):F0}%)");
+                analysisText.AppendLine($"   Buy: {analysis.BuyCost:N0}g | Craft: {analysis.CraftCost:N0}g");
+                analysisText.AppendLine();
+            }
+            
+            if (significantAnalyses.Count > 10)
+            {
+                analysisText.AppendLine($"... and {significantAnalyses.Count - 10} more items");
+            }
+            
+            var analysisCard = CreateMarketCard(
+                $"💡 Craft vs Buy Analysis ({significantAnalyses.Count} opportunities)", 
+                analysisText.ToString(), 
+                "#3d4a2d");
+            MarketCards.Children.Insert(1, analysisCard);  // Insert after summary
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to generate craft-vs-buy analysis");
         }
     }
 

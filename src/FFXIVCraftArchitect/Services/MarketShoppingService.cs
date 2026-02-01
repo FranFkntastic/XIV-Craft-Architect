@@ -290,6 +290,111 @@ public class MarketShoppingService
 
         return plans;
     }
+
+    /// <summary>
+    /// Calculate craft-vs-buy analysis for all craftable items in a plan.
+    /// Compares cost of buying finished product vs crafting from components.
+    /// </summary>
+    public List<CraftVsBuyAnalysis> AnalyzeCraftVsBuy(CraftingPlan plan, Dictionary<int, PriceInfo> marketPrices)
+    {
+        var analyses = new List<CraftVsBuyAnalysis>();
+        
+        foreach (var rootItem in plan.RootItems)
+        {
+            AnalyzeNodeCraftVsBuy(rootItem, marketPrices, analyses);
+        }
+        
+        return analyses.OrderByDescending(a => a.PotentialSavings).ToList();
+    }
+    
+    private void AnalyzeNodeCraftVsBuy(PlanNode node, Dictionary<int, PriceInfo> marketPrices, List<CraftVsBuyAnalysis> analyses)
+    {
+        // Only analyze craftable items (have children)
+        if (node.Children.Any())
+        {
+            // Calculate cost to buy finished product
+            var buyPrice = marketPrices.TryGetValue(node.ItemId, out var priceInfo) 
+                ? priceInfo.UnitPrice * node.Quantity 
+                : 0;
+            
+            // Calculate cost of all components
+            var componentCost = CalculateComponentCost(node, marketPrices);
+            
+            // Calculate potential savings
+            var savings = buyPrice - componentCost;
+            var savingsPercent = buyPrice > 0 ? (savings / buyPrice) * 100 : 0;
+            
+            analyses.Add(new CraftVsBuyAnalysis
+            {
+                ItemId = node.ItemId,
+                ItemName = node.Name,
+                Quantity = node.Quantity,
+                BuyCost = buyPrice,
+                CraftCost = componentCost,
+                PotentialSavings = savings,
+                SavingsPercent = savingsPercent,
+                IsCurrentlySetToCraft = !node.IsBuy,
+                Recommendation = savings > 0 
+                    ? CraftRecommendation.Craft 
+                    : CraftRecommendation.Buy
+            });
+            
+            // Recurse into children
+            foreach (var child in node.Children)
+            {
+                AnalyzeNodeCraftVsBuy(child, marketPrices, analyses);
+            }
+        }
+    }
+    
+    private decimal CalculateComponentCost(PlanNode node, Dictionary<int, PriceInfo> marketPrices)
+    {
+        decimal total = 0;
+        
+        foreach (var child in node.Children)
+        {
+            if (child.IsBuy || !child.Children.Any())
+            {
+                // Leaf or marked as buy - use market price
+                if (marketPrices.TryGetValue(child.ItemId, out var priceInfo))
+                {
+                    total += priceInfo.UnitPrice * child.Quantity;
+                }
+            }
+            else
+            {
+                // Craft this component - recurse
+                total += CalculateComponentCost(child, marketPrices);
+            }
+        }
+        
+        return total;
+    }
+}
+
+/// <summary>
+/// Analysis comparing cost to buy vs craft an item.
+/// </summary>
+public class CraftVsBuyAnalysis
+{
+    public int ItemId { get; set; }
+    public string ItemName { get; set; } = string.Empty;
+    public int Quantity { get; set; }
+    public decimal BuyCost { get; set; }
+    public decimal CraftCost { get; set; }
+    public decimal PotentialSavings { get; set; }
+    public decimal SavingsPercent { get; set; }
+    public bool IsCurrentlySetToCraft { get; set; }
+    public CraftRecommendation Recommendation { get; set; }
+    
+    public string Summary => $"{ItemName} x{Quantity}: Buy {BuyCost:N0}g vs Craft {CraftCost:N0}g ({PotentialSavings:+0;-0;0}g)";
+    public bool IsSignificantSavings => Math.Abs(PotentialSavings) > 1000 || Math.Abs(SavingsPercent) > 10;
+}
+
+public enum CraftRecommendation
+{
+    Buy,    // Cheaper to buy finished product
+    Craft   // Cheaper to craft from components
 }
 
 /// <summary>
