@@ -273,16 +273,13 @@ public partial class MainWindow : Window
     /// </summary>
     private void DisplayPlanInTreeView(CraftingPlan plan)
     {
-        RecipePlanContent.Children.Clear();
+        RecipeTree.Items.Clear();
         
-        // TODO: Replace TreeView with alternative layout
-        // For now, add a placeholder message
-        RecipePlanContent.Children.Add(new TextBlock 
-        { 
-            Text = "Recipe plan display being redesigned...",
-            Foreground = Brushes.Gray,
-            Margin = new Thickness(8)
-        });
+        foreach (var rootItem in plan.RootItems)
+        {
+            var rootNode = CreateTreeViewItem(rootItem);
+            RecipeTree.Items.Add(rootNode);
+        }
     }
     
     /// <summary>
@@ -1825,7 +1822,7 @@ public partial class MainWindow : Window
         _currentPlan = null;
         _projectItems.Clear();
         ProjectList.ItemsSource = null;
-        RecipePlanContent?.Children.Clear();
+        RecipeTree?.Items.Clear();
         
         // Reset UI state
         BuildPlanButton.IsEnabled = false;
