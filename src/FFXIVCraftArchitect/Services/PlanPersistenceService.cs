@@ -102,7 +102,8 @@ public class PlanPersistenceService
                 ModifiedAt = plan.ModifiedAt,
                 DataCenter = plan.DataCenter,
                 World = plan.World,
-                RootItems = plan.RootItems.Select(ConvertToFileNode).ToList()
+                RootItems = plan.RootItems.Select(ConvertToFileNode).ToList(),
+                MarketPlans = plan.SavedMarketPlans?.Select(ConvertToMarketPlanData).ToList() ?? new List<MarketShoppingPlanData>()
             };
 
             var json = JsonSerializer.Serialize(data, _jsonOptions);
@@ -149,7 +150,8 @@ public class PlanPersistenceService
                 ModifiedAt = data.ModifiedAt,
                 DataCenter = data.DataCenter,
                 World = data.World,
-                RootItems = data.RootItems?.Select(ConvertFromFileNode).ToList() ?? new List<PlanNode>()
+                RootItems = data.RootItems?.Select(ConvertFromFileNode).ToList() ?? new List<PlanNode>(),
+                SavedMarketPlans = data.MarketPlans?.Select(ConvertFromMarketPlanData).ToList() ?? new List<DetailedShoppingPlan>()
             };
 
             // Re-link parent references
@@ -270,7 +272,8 @@ public class PlanPersistenceService
                 ModifiedAt = plan.ModifiedAt,
                 DataCenter = plan.DataCenter,
                 World = plan.World,
-                RootItems = plan.RootItems.Select(ConvertToFileNode).ToList()
+                RootItems = plan.RootItems.Select(ConvertToFileNode).ToList(),
+                MarketPlans = plan.SavedMarketPlans?.Select(ConvertToMarketPlanData).ToList() ?? new List<MarketShoppingPlanData>()
             };
 
             var json = JsonSerializer.Serialize(data, _jsonOptions);
@@ -323,7 +326,9 @@ public class PlanPersistenceService
             Name = node.Name,
             IconId = node.IconId,
             Quantity = node.Quantity,
-            IsBuy = node.IsBuy,
+            IsBuy = node.IsBuy,  // For backward compatibility
+            Source = node.Source,
+            RequiresHq = node.RequiresHq,
             IsUncraftable = node.IsUncraftable,
             RecipeLevel = node.RecipeLevel,
             Job = node.Job,
@@ -344,7 +349,6 @@ public class PlanPersistenceService
             Name = fileNode.Name ?? string.Empty,
             IconId = fileNode.IconId,
             Quantity = fileNode.Quantity,
-            IsBuy = fileNode.IsBuy,
             IsUncraftable = fileNode.IsUncraftable,
             RecipeLevel = fileNode.RecipeLevel,
             Job = fileNode.Job ?? string.Empty,
@@ -355,6 +359,24 @@ public class PlanPersistenceService
             Notes = fileNode.Notes,
             Children = fileNode.Children?.Select(ConvertFromFileNode).ToList() ?? new List<PlanNode>()
         };
+        
+        // Handle backward compatibility: old plans used IsBuy, new plans use Source
+        if (fileNode.Source.HasValue)
+        {
+            node.Source = fileNode.Source.Value;
+        }
+        else if (fileNode.IsBuy)
+        {
+            // Legacy: IsBuy=true meant market purchase (default to NQ)
+            node.Source = AcquisitionSource.MarketBuyNq;
+        }
+        else
+        {
+            node.Source = AcquisitionSource.Craft;
+        }
+        
+        node.RequiresHq = fileNode.RequiresHq;
+        
         return node;
     }
 
@@ -366,6 +388,115 @@ public class PlanPersistenceService
             LinkParents(child, node);
         }
     }
+
+    #region Market Plan Conversion
+
+    private MarketShoppingPlanData ConvertToMarketPlanData(DetailedShoppingPlan plan)
+    {
+        return new MarketShoppingPlanData
+        {
+            ItemId = plan.ItemId,
+            Name = plan.Name,
+            QuantityNeeded = plan.QuantityNeeded,
+            DCAveragePrice = plan.DCAveragePrice,
+            HQAveragePrice = plan.HQAveragePrice,
+            Error = plan.Error,
+            WorldOptions = plan.WorldOptions.Select(ConvertToWorldSummaryData).ToList(),
+            RecommendedWorld = plan.RecommendedWorld != null ? ConvertToWorldSummaryData(plan.RecommendedWorld) : null
+        };
+    }
+
+    private WorldShoppingSummaryData ConvertToWorldSummaryData(WorldShoppingSummary world)
+    {
+        return new WorldShoppingSummaryData
+        {
+            WorldName = world.WorldName,
+            TotalCost = world.TotalCost,
+            AveragePricePerUnit = world.AveragePricePerUnit,
+            ListingsUsed = world.ListingsUsed,
+            IsFullyUnderAverage = world.IsFullyUnderAverage,
+            TotalQuantityPurchased = world.TotalQuantityPurchased,
+            ExcessQuantity = world.ExcessQuantity,
+            Listings = world.Listings.Select(ConvertToListingEntryData).ToList(),
+            BestSingleListing = world.BestSingleListing != null ? ConvertToListingEntryData(world.BestSingleListing) : null
+        };
+    }
+
+    private ShoppingListingEntryData ConvertToListingEntryData(ShoppingListingEntry entry)
+    {
+        return new ShoppingListingEntryData
+        {
+            Quantity = entry.Quantity,
+            PricePerUnit = entry.PricePerUnit,
+            RetainerName = entry.RetainerName,
+            IsUnderAverage = entry.IsUnderAverage,
+            IsHq = entry.IsHq,
+            NeededFromStack = entry.NeededFromStack,
+            ExcessQuantity = entry.ExcessQuantity,
+            IsAdditionalOption = entry.IsAdditionalOption
+        };
+    }
+
+    private DetailedShoppingPlan ConvertFromMarketPlanData(MarketShoppingPlanData data)
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = data.ItemId,
+            Name = data.Name,
+            QuantityNeeded = data.QuantityNeeded,
+            DCAveragePrice = data.DCAveragePrice,
+            HQAveragePrice = data.HQAveragePrice,
+            Error = data.Error,
+            WorldOptions = data.WorldOptions?.Select(ConvertFromWorldSummaryData).ToList() ?? new List<WorldShoppingSummary>()
+        };
+        
+        if (data.RecommendedWorld != null)
+        {
+            plan.RecommendedWorld = plan.WorldOptions.FirstOrDefault(w => w.WorldName == data.RecommendedWorld.WorldName)
+                ?? ConvertFromWorldSummaryData(data.RecommendedWorld);
+        }
+        
+        return plan;
+    }
+
+    private WorldShoppingSummary ConvertFromWorldSummaryData(WorldShoppingSummaryData data)
+    {
+        var summary = new WorldShoppingSummary
+        {
+            WorldName = data.WorldName,
+            TotalCost = data.TotalCost,
+            AveragePricePerUnit = data.AveragePricePerUnit,
+            ListingsUsed = data.ListingsUsed,
+            IsFullyUnderAverage = data.IsFullyUnderAverage,
+            TotalQuantityPurchased = data.TotalQuantityPurchased,
+            ExcessQuantity = data.ExcessQuantity,
+            Listings = data.Listings?.Select(ConvertFromListingEntryData).ToList() ?? new List<ShoppingListingEntry>()
+        };
+        
+        if (data.BestSingleListing != null)
+        {
+            summary.BestSingleListing = ConvertFromListingEntryData(data.BestSingleListing);
+        }
+        
+        return summary;
+    }
+
+    private ShoppingListingEntry ConvertFromListingEntryData(ShoppingListingEntryData data)
+    {
+        return new ShoppingListingEntry
+        {
+            Quantity = data.Quantity,
+            PricePerUnit = data.PricePerUnit,
+            RetainerName = data.RetainerName,
+            IsUnderAverage = data.IsUnderAverage,
+            IsHq = data.IsHq,
+            NeededFromStack = data.NeededFromStack,
+            ExcessQuantity = data.ExcessQuantity,
+            IsAdditionalOption = data.IsAdditionalOption
+        };
+    }
+
+    #endregion
 
     #endregion
 }
@@ -386,6 +517,11 @@ public class PlanFileData
     public string DataCenter { get; set; } = string.Empty;
     public string World { get; set; } = string.Empty;
     public List<PlanFileNode> RootItems { get; set; } = new();
+    
+    /// <summary>
+    /// Saved market shopping plans with recommended worlds and listings.
+    /// </summary>
+    public List<MarketShoppingPlanData> MarketPlans { get; set; } = new();
 }
 
 /// <summary>
@@ -397,7 +533,22 @@ public class PlanFileNode
     public string? Name { get; set; }
     public int IconId { get; set; }
     public int Quantity { get; set; }
+    
+    /// <summary>
+    /// Legacy property for backward compatibility. Use Source instead.
+    /// </summary>
     public bool IsBuy { get; set; }
+    
+    /// <summary>
+    /// Acquisition source - new preferred property.
+    /// </summary>
+    public AcquisitionSource? Source { get; set; }
+    
+    /// <summary>
+    /// If true, HQ version is required (for market purchases).
+    /// </summary>
+    public bool RequiresHq { get; set; }
+    
     public bool IsUncraftable { get; set; }
     public int RecipeLevel { get; set; }
     public string? Job { get; set; }
@@ -407,6 +558,52 @@ public class PlanFileNode
     public string? PriceSourceDetails { get; set; }
     public string? Notes { get; set; }
     public List<PlanFileNode> Children { get; set; } = new();
+}
+
+/// <summary>
+/// Saved market shopping plan data with recommended worlds and listings.
+/// </summary>
+public class MarketShoppingPlanData
+{
+    public int ItemId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public int QuantityNeeded { get; set; }
+    public decimal DCAveragePrice { get; set; }
+    public decimal? HQAveragePrice { get; set; }
+    public string? Error { get; set; }
+    public List<WorldShoppingSummaryData> WorldOptions { get; set; } = new();
+    public WorldShoppingSummaryData? RecommendedWorld { get; set; }
+}
+
+/// <summary>
+/// Saved world shopping summary data.
+/// </summary>
+public class WorldShoppingSummaryData
+{
+    public string WorldName { get; set; } = string.Empty;
+    public long TotalCost { get; set; }
+    public decimal AveragePricePerUnit { get; set; }
+    public int ListingsUsed { get; set; }
+    public bool IsFullyUnderAverage { get; set; }
+    public int TotalQuantityPurchased { get; set; }
+    public int ExcessQuantity { get; set; }
+    public List<ShoppingListingEntryData> Listings { get; set; } = new();
+    public ShoppingListingEntryData? BestSingleListing { get; set; }
+}
+
+/// <summary>
+/// Saved shopping listing entry data.
+/// </summary>
+public class ShoppingListingEntryData
+{
+    public int Quantity { get; set; }
+    public long PricePerUnit { get; set; }
+    public string RetainerName { get; set; } = string.Empty;
+    public bool IsUnderAverage { get; set; }
+    public bool IsHq { get; set; }
+    public int NeededFromStack { get; set; }
+    public int ExcessQuantity { get; set; }
+    public bool IsAdditionalOption { get; set; }
 }
 
 #endregion

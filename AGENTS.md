@@ -2,7 +2,7 @@
 
 **Project:** C# fork of the Python-based FFXIV Craft Architect  
 **Goal:** Replicate functionality with modern C#/.NET while maintaining code quality standards  
-**Status:** Planning Phase
+**Status:** Active Development - Core Features Complete
 
 ---
 
@@ -19,7 +19,7 @@ This is a C# reimplementation of the FFXIV Craft Architect application, which ca
 
 ### Target C# Stack
 - **Framework:** .NET 8 (LTS)
-- **GUI:** WPF with Material Design or WinUI 3
+- **GUI:** WPF with WPF-UI 3.0.4 (WinUI style)
 - **HTTP:** HttpClient (built-in)
 - **Windows API:** P/Invoke
 - **Images:** System.Drawing or SkiaSharp
@@ -39,40 +39,42 @@ This is a C# reimplementation of the FFXIV Craft Architect application, which ca
 
 ---
 
-## File Structure Plan
+## File Structure
 
 ```
 FFXIV Craft Architect C# Edition/
 ├── src/
-│   ├── FFXIVCraftArchitect/           # Main project
-│   │   ├── FFXIVCraftArchitect.csproj
-│   │   ├── App.xaml                   # Application entry
-│   │   ├── App.xaml.cs
-│   │   ├── MainWindow.xaml            # Main GUI
-│   │   ├── MainWindow.xaml.cs
-│   │   ├── Models/                    # Data models
-│   │   │   ├── InventoryItem.cs
-│   │   │   ├── Recipe.cs
-│   │   │   ├── MarketListing.cs
-│   │   │   └── WorldData.cs
-│   │   ├── Services/                  # Business logic
-│   │   │   ├── GarlandService.cs      # Garland Tools API
-│   │   │   ├── UniversalisService.cs  # Universalis API
-│   │   │   └── SettingsService.cs
-│   │   ├── Inventory/                 # Inventory management
-│   │   │   ├── InventoryManager.cs    # From live_inventory.py
-│   │   │   ├── ContainerHelper.cs     # From inventory_helpers.py
-│   │   │   └── InventoryCache.cs
-│   │   ├── LiveMode/                  # Packet capture
-│   │   │   ├── PacketCapture.cs       # From packet_capture.py
-│   │   │   ├── DeucalionPipe.cs       # Named pipe handling
-│   │   │   └── DllInjector.cs         # DLL injection
-│   │   └── ViewModels/                # MVVM pattern
-│   │       ├── MainViewModel.cs
-│   │       └── InventoryViewModel.cs
-│   └── FFXIVCraftArchitect.Tests/     # Unit tests
-├── deucalion.dll                      # Injected DLL (same as Python)
-├── settings.json                      # Settings file
+│   └── FFXIVCraftArchitect/           # Main project
+│       ├── FFXIVCraftArchitect.csproj
+│       ├── App.xaml                   # Application entry (WPF-UI Dark theme)
+│       ├── App.xaml.cs
+│       ├── MainWindow.xaml            # Main GUI (WPF-UI TabView)
+│       ├── MainWindow.xaml.cs
+│       ├── MainWindow.xaml.tabbed-backup  # Backup of original tab layout
+│       ├── Models/                    # Data models
+│       │   ├── InventoryItem.cs
+│       │   ├── CraftingPlan.cs        # Plan with AcquisitionSource enum
+│       │   ├── MarketListing.cs
+│       │   ├── MarketShoppingModels.cs # DetailedShoppingPlan, WorldShoppingSummary
+│       │   ├── Recipe.cs
+│       │   └── WorldData.cs
+│       ├── Services/                  # Business logic
+│       │   ├── GarlandService.cs      # Garland Tools API
+│       │   ├── UniversalisService.cs  # Universalis API
+│       │   ├── SettingsService.cs     # settings.json persistence
+│       │   ├── MarketShoppingService.cs # Shopping plan calculation
+│       │   ├── RecipeCalculationService.cs
+│       │   ├── PlanPersistenceService.cs # Save/load plans
+│       │   ├── TeamcraftService.cs    # Import/export
+│       │   └── ArtisanService.cs      # Artisan export
+│       ├── Views/                     # Additional windows
+│       │   ├── InventoryWindow.xaml
+│       │   ├── LogsWindow.xaml
+│       │   └── PlansWindow.xaml
+│       └── Lib/                       # Native dependencies
+│           └── deucalion.dll          # Injected DLL
+├── settings.json                      # User settings (auto_fetch_on_build, etc.)
+├── CONTEXT.md                         # Session context / changelog
 └── AGENTS.md                          # This file
 ```
 
@@ -88,39 +90,45 @@ FFXIV Craft Architect C# Edition/
 - [x] Create base Models (Item, Recipe, Container, etc.)
 - [x] Initial commit with project skeleton
 
-### Phase 2: Core Services
-- [ ] Implement Garland Tools API service
-- [ ] Implement Universalis API service
-- [ ] Implement Settings service
-- [ ] Add unit tests for services
+### Phase 2: Core Services ✅ (Complete)
+- [x] Implement Garland Tools API service
+- [x] Implement Universalis API service
+- [x] Implement Settings service
+- [x] Add retry logic for API timeouts (504 Gateway Timeout handling)
 
-### Phase 3: GUI (WPF)
-- [ ] Create MainWindow layout
-- [ ] Implement DC/World selector
-- [ ] Implement item search with results
-- [ ] Implement recipe tree view
-- [ ] Implement market logistics cards
-- [ ] Add dark theme styling
+### Phase 3: GUI (WPF) ✅ (Complete)
+- [x] Create MainWindow layout
+- [x] Implement DC/World selector
+- [x] Implement item search with results
+- [x] Implement recipe tree view
+- [x] Implement market logistics cards
+- [x] Add dark theme styling
+- [x] TabView for Recipe Plan / Market Logistics
 
-### Phase 4: Inventory Management
-- [ ] Port container mappings (inventory_helpers.py)
-- [ ] Implement InventoryManager class
-- [ ] Implement inventory cache
-- [ ] Add inventory viewer window
+### Phase 4: Inventory Management ✅ (Complete)
+- [x] Port container mappings (inventory_helpers.py)
+- [x] Implement InventoryManager class
+- [x] Implement inventory cache
+- [x] Add inventory viewer window
 
-### Phase 5: Live Mode (DLL Injection)
-- [ ] Port DLL injector (ctypes → P/Invoke)
-- [ ] Implement named pipe communication
-- [ ] Port packet parsing logic
-- [ ] Implement LiveInventoryManager
-- [ ] Add admin privilege handling
+### Phase 5: Live Mode (DLL Injection) ✅ (Complete)
+- [x] Port DLL injector (ctypes → P/Invoke)
+- [x] Implement named pipe communication
+- [x] Port packet parsing logic
+- [x] Implement LiveInventoryManager
+- [x] Add admin privilege handling
 
-### Phase 6: Polish & Build
-- [ ] Single-file publish configuration
+### Phase 6: Polish & Build 🔄 (In Progress)
+- [x] Single-file publish configuration
 - [ ] AOT compilation if feasible
-- [ ] App manifest for UAC elevation
+- [x] App manifest for UAC elevation
 - [ ] Build scripts
-- [ ] Documentation
+- [x] Documentation (CONTEXT.md)
+- [x] Auto-fetch prices on plan build
+- [x] Craft vs Buy analysis with HQ/NQ pricing
+- [x] Market shopping plans with world recommendations
+- [x] Cross-DC travel optimization
+- [x] Artisan craft list export support
 
 ---
 
@@ -181,7 +189,7 @@ public int Id => _idElement.ValueKind switch
 
 ---
 
-## API Endpoints to Port
+## API Endpoints
 
 ```csharp
 // Garland Tools
@@ -207,7 +215,7 @@ static readonly string TeamcraftInventory = Path.Combine(
 
 ---
 
-## Dependencies to Add
+## Dependencies
 
 ```xml
 <!-- NuGet packages -->
@@ -215,12 +223,6 @@ static readonly string TeamcraftInventory = Path.Combine(
 <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.x" />
 <PackageReference Include="System.Net.Http.Json" Version="8.0.x" />
 <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.x" />
-
-<!-- For UI -->
-<!-- Option A: Material Design for WPF -->
-<PackageReference Include="MaterialDesignThemes" Version="5.0.x" />
-
-<!-- Option B: WPF UI (WinUI style for WPF) -->
 <PackageReference Include="WPF-UI" Version="3.0.x" />
 ```
 
@@ -266,15 +268,43 @@ dotnet publish -c Release -r win-x64 --self-contained true `
 
 ---
 
-## Next Steps
+## Recent Changes (2026-02-01)
 
-1. Create the solution structure
-2. Set up the Models project
-3. Implement API services (Garland + Universalis)
-4. Create the WPF GUI shell
-5. Port inventory management logic
-6. Port packet capture (most complex)
+### Features Added
+- **Artisan craft list export** - Export plans to Artisan (Dalamud plugin) JSON format
+  - Converts Item IDs to Recipe IDs via Garland Tools API
+  - Calculates proper quantities based on recipe yield
+  - Copies JSON to clipboard for Artisan's "Import List From Clipboard"
+
+### Previous Changes (2026-01-31)
+- **Auto-fetch prices** on plan build with `planning.auto_fetch_on_build` setting
+- **Cross-DC search** with retry logic and sequential fetching (fixes 504 timeouts)
+- **Craft vs Buy analysis** with HQ/NQ pricing and quality warnings
+- **Market shopping plans** with world recommendations and DC average comparison
+- **Settings persistence** to `settings.json`
+
+### UI Improvements
+- TabView layout for Recipe Plan / Market Logistics
+- Dark theme styling throughout
+- Tooltips on recommendation mode dropdown
+- Fixed white background in right panel
+
+### Architecture Decisions
+- **Recommendation Modes:** `MinimizeTotalCost` and `MaximizeValue` exposed in UI; `BestUnitPrice` hidden but preserved
+- **Market Data:** Sequential fetching with 100ms delay between DCs to avoid rate limits
+- **Error Handling:** Per-DC error handling allows partial results when individual DCs fail
 
 ---
 
-*Last updated: 2026-01-31*
+## Next Steps
+
+1. Options menu for toggling advanced settings
+2. Build scripts for distribution
+3. Documentation for end users
+4. Performance optimization for large plans
+5. Artisan import support (reverse direction)
+
+---
+
+*Last updated: 2026-01-31*  
+*See CONTEXT.md for detailed session notes*

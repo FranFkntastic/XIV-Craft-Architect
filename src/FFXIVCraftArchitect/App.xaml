@@ -9,6 +9,13 @@
                 <ui:ThemesDictionary Theme="Dark" />
                 <ui:ControlsDictionary />
             </ResourceDictionary.MergedDictionaries>
+            
+            <!-- Default accent color resources - updated dynamically by ThemeService -->
+            <Color x:Key="AccentColor">#d4af37</Color>
+            <SolidColorBrush x:Key="AccentBrush" Color="#d4af37"/>
+            <Color x:Key="AccentColorFaded">#1ed4af37</Color>
+            <SolidColorBrush x:Key="AccentBrushFaded" Color="#1ed4af37"/>
+            <SolidColorBrush x:Key="AccentBorderBrush" Color="#d4af37"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

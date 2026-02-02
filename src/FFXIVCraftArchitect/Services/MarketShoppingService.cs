@@ -1,3 +1,5 @@
+using System.Net.Http;
+using System.IO;
 using FFXIVCraftArchitect.Models;
 using Microsoft.Extensions.Logging;
 
@@ -25,7 +27,8 @@ public class MarketShoppingService
         List<MaterialAggregate> marketItems,
         string dataCenter,
         IProgress<string>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        RecommendationMode mode = RecommendationMode.MinimizeTotalCost)
     {
         var plans = new List<DetailedShoppingPlan>();
 
@@ -36,13 +39,14 @@ public class MarketShoppingService
             try
             {
                 // Fetch detailed listings from the entire DC
-                var marketData = await _universalisService.GetMarketDataAsync(dataCenter, item.ItemId, ct);
+                var marketData = await _universalisService.GetMarketDataAsync(dataCenter, item.ItemId, ct: ct);
                 
                 var plan = CalculateItemShoppingPlan(
                     item.Name,
                     item.ItemId,
                     item.TotalQuantity,
-                    marketData);
+                    marketData,
+                    mode);
                 
                 plans.Add(plan);
             }
@@ -69,7 +73,8 @@ public class MarketShoppingService
         string itemName,
         int itemId,
         int quantityNeeded,
-        UniversalisResponse marketData)
+        UniversalisResponse marketData,
+        RecommendationMode mode = RecommendationMode.MinimizeTotalCost)
     {
         var plan = new DetailedShoppingPlan
         {
@@ -100,22 +105,82 @@ public class MarketShoppingService
             }
         }
 
-        // Sort world options by total cost
-        plan.WorldOptions = plan.WorldOptions
-            .OrderBy(w => w.TotalCost)
-            .ThenBy(w => w.WorldName)
-            .ToList();
+        // Filter out "all around worse" worlds (those where even the best listing is bad)
+        plan.WorldOptions = FilterWorldOptions(plan.WorldOptions, mode, plan.DCAveragePrice);
 
-        // Set recommended option (cheapest viable)
+        // Sort based on recommendation mode
+        plan.WorldOptions = mode switch
+        {
+            RecommendationMode.BestUnitPrice => plan.WorldOptions
+                .OrderBy(w => w.ValueScore)
+                .ThenBy(w => w.WorldName)
+                .ToList(),
+            RecommendationMode.MaximizeValue => plan.WorldOptions
+                .OrderBy(w => w.ValueScore)
+                .ThenBy(w => w.TotalCost)
+                .ToList(),
+            _ => plan.WorldOptions
+                .OrderBy(w => w.TotalCost)
+                .ThenBy(w => w.WorldName)
+                .ToList()
+        };
+
+        // Set recommended option
         plan.RecommendedWorld = plan.WorldOptions.FirstOrDefault();
 
         return plan;
+    }
+    
+    /// <summary>
+    /// Filter out worlds that are "all around worse" - where even the best listing is not competitive.
+    /// </summary>
+    private List<WorldShoppingSummary> FilterWorldOptions(
+        List<WorldShoppingSummary> options, 
+        RecommendationMode mode,
+        decimal dcAveragePrice)
+    {
+        if (options.Count <= 3)
+            return options; // Keep all if few options
+        
+        // Find the best value score across all worlds
+        var bestValueScore = options.Min(w => w.ValueScore);
+        
+        // Filter worlds where best listing is >20% worse than the best available
+        // OR worlds with no competitive listings at all
+        var filtered = options.Where(w => 
+        {
+            // Always keep worlds with good unit prices
+            if (w.ValueScore <= bestValueScore * 1.2m)
+                return true;
+            
+            // Keep worlds with reasonable total cost
+            var minTotalCost = options.Min(o => o.TotalCost);
+            if (w.TotalCost <= minTotalCost * 1.5m)
+                return true;
+            
+            // Keep worlds with listings under DC average
+            if (w.IsFullyUnderAverage)
+                return true;
+            
+            return false;
+        }).ToList();
+        
+        // Ensure we keep at least 3 options if available
+        if (filtered.Count < 3 && options.Count >= 3)
+        {
+            // Add back the next best options
+            var remaining = options.Except(filtered);
+            filtered.AddRange(remaining.Take(3 - filtered.Count));
+        }
+        
+        return filtered;
     }
 
     /// <summary>
     /// Calculate a summary for purchasing from a specific world.
     /// Applies the filtering logic for small listings.
     /// IMPORTANT: FFXIV requires buying FULL LISTINGS, not partial stacks.
+    /// Shows top listings for value comparison.
     /// </summary>
     private WorldShoppingSummary? CalculateWorldSummary(
         string worldName,
@@ -129,11 +194,25 @@ public class MarketShoppingService
             Listings = new List<ShoppingListingEntry>()
         };
 
+        // Track the best single listing for value comparison
+        var bestListing = listings.FirstOrDefault();
+        if (bestListing != null)
+        {
+            summary.BestSingleListing = new ShoppingListingEntry
+            {
+                Quantity = bestListing.Quantity,
+                PricePerUnit = bestListing.PricePerUnit,
+                RetainerName = bestListing.RetainerName,
+                IsUnderAverage = bestListing.PricePerUnit <= dcAveragePrice,
+                IsHq = bestListing.IsHq
+            };
+        }
+
         var remaining = quantityNeeded;
         long totalCost = 0;
         int listingsUsed = 0;
 
-        // First pass: identify which listings we can use
+        // First pass: identify which listings we can use to fulfill quantity
         foreach (var listing in listings)
         {
             if (remaining <= 0)
@@ -163,8 +242,29 @@ public class MarketShoppingService
                 PricePerUnit = listing.PricePerUnit,
                 RetainerName = listing.RetainerName,
                 IsUnderAverage = isUnderAverage,
+                IsHq = listing.IsHq,
                 NeededFromStack = Math.Min(listing.Quantity, quantityNeeded),  // What we actually need
                 ExcessQuantity = Math.Max(0, listing.Quantity - quantityNeeded)  // Excess we'll have
+            });
+        }
+
+        // Second pass: add top 2 additional listings for value comparison (even if not needed for quantity)
+        var additionalListings = listings
+            .Where(l => !summary.Listings.Any(sl => sl.RetainerName == l.RetainerName && sl.Quantity == l.Quantity))
+            .Take(2);
+            
+        foreach (var listing in additionalListings)
+        {
+            summary.Listings.Add(new ShoppingListingEntry
+            {
+                Quantity = listing.Quantity,
+                PricePerUnit = listing.PricePerUnit,
+                RetainerName = listing.RetainerName,
+                IsUnderAverage = listing.PricePerUnit <= dcAveragePrice,
+                IsHq = listing.IsHq,
+                IsAdditionalOption = true,  // Not needed for quantity, shown for value
+                NeededFromStack = 0,
+                ExcessQuantity = listing.Quantity
             });
         }
 
@@ -175,8 +275,8 @@ public class MarketShoppingService
         summary.TotalCost = totalCost;
         summary.AveragePricePerUnit = (decimal)totalCost / quantityNeeded;
         summary.ListingsUsed = listingsUsed;
-        summary.IsFullyUnderAverage = summary.Listings.All(l => l.IsUnderAverage);
-        summary.TotalQuantityPurchased = summary.Listings.Sum(l => l.Quantity);
+        summary.IsFullyUnderAverage = summary.Listings.Where(l => !l.IsAdditionalOption).All(l => l.IsUnderAverage);
+        summary.TotalQuantityPurchased = summary.Listings.Where(l => !l.IsAdditionalOption).Sum(l => l.Quantity);
         summary.ExcessQuantity = summary.TotalQuantityPurchased - quantityNeeded;
 
         return summary;
@@ -187,11 +287,13 @@ public class MarketShoppingService
 
     /// <summary>
     /// Calculate shopping plans searching across all NA Data Centers for potential savings.
+    /// Uses sequential fetching with retry logic to avoid timeouts.
     /// </summary>
     public async Task<List<DetailedShoppingPlan>> CalculateDetailedShoppingPlansMultiDCAsync(
         List<MaterialAggregate> marketItems,
         IProgress<string>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        RecommendationMode mode = RecommendationMode.MinimizeTotalCost)
     {
         var plans = new List<DetailedShoppingPlan>();
 
@@ -201,7 +303,7 @@ public class MarketShoppingService
             
             try
             {
-                // Fetch from all NA DCs
+                // Fetch from all NA DCs sequentially to avoid overwhelming the API
                 var allListings = new List<MarketListing>();
                 decimal globalAverage = 0;
                 int dcCount = 0;
@@ -210,7 +312,14 @@ public class MarketShoppingService
                 {
                     try
                     {
-                        var marketData = await _universalisService.GetMarketDataAsync(dc, item.ItemId, ct);
+                        // Use retry logic for each DC
+                        var marketData = await FetchWithRetryAsync(dc, item.ItemId, ct);
+                        
+                        if (marketData == null)
+                        {
+                            _logger.LogWarning("[MarketShopping] No data returned from {DC} for {Item}", dc, item.Name);
+                            continue;
+                        }
                         
                         // Add DC name to each listing's world name for identification
                         foreach (var listing in marketData.Listings)
@@ -234,10 +343,13 @@ public class MarketShoppingService
                             globalAverage += (decimal)marketData.AveragePrice;
                             dcCount++;
                         }
+                        
+                        // Small delay between DCs to be nice to the API
+                        await Task.Delay(100, ct);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Failed to fetch data from {DC} for {Item}", dc, item.Name);
+                        _logger.LogWarning(ex, "Failed to fetch data from {DC} for {Item} after retries", dc, item.Name);
                     }
                 }
 
@@ -271,7 +383,8 @@ public class MarketShoppingService
                     item.Name,
                     item.ItemId,
                     item.TotalQuantity,
-                    combinedData);
+                    combinedData,
+                    mode);
                 
                 plans.Add(plan);
             }
@@ -290,10 +403,61 @@ public class MarketShoppingService
 
         return plans;
     }
+    
+    /// <summary>
+    /// Fetch market data with retry logic for transient failures.
+    /// </summary>
+    private async Task<UniversalisResponse?> FetchWithRetryAsync(string dc, int itemId, CancellationToken ct, int maxRetries = 3)
+    {
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        {
+            try
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(10)); // 10 second timeout per attempt
+                
+                return await _universalisService.GetMarketDataAsync(dc, itemId, ct: timeoutCts.Token);
+            }
+            catch (Exception ex) when (attempt < maxRetries && IsTransientError(ex))
+            {
+                _logger.LogWarning(ex, "[MarketShopping] Attempt {Attempt} failed for {DC}/{Item}, retrying...", attempt, dc, itemId);
+                await Task.Delay(TimeSpan.FromMilliseconds(200 * attempt), ct); // Exponential backoff
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MarketShopping] All retries exhausted for {DC}/{Item}", dc, itemId);
+                throw;
+            }
+        }
+        
+        return null;
+    }
+    
+    /// <summary>
+    /// Check if an error is transient (can be retried).
+    /// </summary>
+    private bool IsTransientError(Exception ex)
+    {
+        // Timeout, gateway errors, and rate limiting are transient
+        if (ex is HttpRequestException hre)
+        {
+            var statusCode = (int?)hre.StatusCode;
+            return statusCode is 408 or 429 or 502 or 503 or 504;
+        }
+        
+        if (ex is TaskCanceledException || ex is OperationCanceledException)
+            return true;
+            
+        if (ex is IOException)
+            return true;
+            
+        return false;
+    }
 
     /// <summary>
     /// Calculate craft-vs-buy analysis for all craftable items in a plan.
     /// Compares cost of buying finished product vs crafting from components.
+    /// Includes HQ/NQ analysis for endgame crafting considerations.
     /// </summary>
     public List<CraftVsBuyAnalysis> AnalyzeCraftVsBuy(CraftingPlan plan, Dictionary<int, PriceInfo> marketPrices)
     {
@@ -304,7 +468,7 @@ public class MarketShoppingService
             AnalyzeNodeCraftVsBuy(rootItem, marketPrices, analyses);
         }
         
-        return analyses.OrderByDescending(a => a.PotentialSavings).ToList();
+        return analyses.OrderByDescending(a => a.PotentialSavingsNq).ToList();
     }
     
     private void AnalyzeNodeCraftVsBuy(PlanNode node, Dictionary<int, PriceInfo> marketPrices, List<CraftVsBuyAnalysis> analyses)
@@ -312,30 +476,45 @@ public class MarketShoppingService
         // Only analyze craftable items (have children)
         if (node.Children.Any())
         {
-            // Calculate cost to buy finished product
-            var buyPrice = marketPrices.TryGetValue(node.ItemId, out var priceInfo) 
-                ? priceInfo.UnitPrice * node.Quantity 
-                : 0;
+            marketPrices.TryGetValue(node.ItemId, out var priceInfo);
+            
+            // NQ Price (default for most analysis)
+            var buyPriceNq = priceInfo?.UnitPrice * node.Quantity ?? 0;
+            
+            // HQ Price (important for endgame)
+            var buyPriceHq = priceInfo?.HqUnitPrice * node.Quantity ?? 0;
+            var hasHqData = priceInfo?.HasHqData ?? false;
             
             // Calculate cost of all components
             var componentCost = CalculateComponentCost(node, marketPrices);
             
-            // Calculate potential savings
-            var savings = buyPrice - componentCost;
-            var savingsPercent = buyPrice > 0 ? (savings / buyPrice) * 100 : 0;
+            // NQ Analysis: Positive = buy is more expensive (craft saves money)
+            var savingsNq = buyPriceNq - componentCost;
+            var savingsPercentNq = buyPriceNq > 0 ? (savingsNq / buyPriceNq) * 100 : 0;
+            
+            // HQ Analysis
+            var savingsHq = hasHqData ? buyPriceHq - componentCost : 0;
+            var savingsPercentHq = (hasHqData && buyPriceHq > 0) ? (savingsHq / buyPriceHq) * 100 : 0;
             
             analyses.Add(new CraftVsBuyAnalysis
             {
                 ItemId = node.ItemId,
                 ItemName = node.Name,
                 Quantity = node.Quantity,
-                BuyCost = buyPrice,
+                BuyCostNq = buyPriceNq,
                 CraftCost = componentCost,
-                PotentialSavings = savings,
-                SavingsPercent = savingsPercent,
+                PotentialSavingsNq = savingsNq,
+                SavingsPercentNq = savingsPercentNq,
+                BuyCostHq = buyPriceHq,
+                PotentialSavingsHq = savingsHq,
+                SavingsPercentHq = savingsPercentHq,
+                HasHqData = hasHqData,
                 IsCurrentlySetToCraft = !node.IsBuy,
-                Recommendation = savings > 0 
+                RecommendationNq = savingsNq > 0 
                     ? CraftRecommendation.Craft 
+                    : CraftRecommendation.Buy,
+                RecommendationHq = hasHqData && savingsHq > 0
+                    ? CraftRecommendation.Craft
                     : CraftRecommendation.Buy
             });
             
@@ -370,82 +549,4 @@ public class MarketShoppingService
         
         return total;
     }
-}
-
-/// <summary>
-/// Analysis comparing cost to buy vs craft an item.
-/// </summary>
-public class CraftVsBuyAnalysis
-{
-    public int ItemId { get; set; }
-    public string ItemName { get; set; } = string.Empty;
-    public int Quantity { get; set; }
-    public decimal BuyCost { get; set; }
-    public decimal CraftCost { get; set; }
-    public decimal PotentialSavings { get; set; }
-    public decimal SavingsPercent { get; set; }
-    public bool IsCurrentlySetToCraft { get; set; }
-    public CraftRecommendation Recommendation { get; set; }
-    
-    public string Summary => $"{ItemName} x{Quantity}: Buy {BuyCost:N0}g vs Craft {CraftCost:N0}g ({PotentialSavings:+0;-0;0}g)";
-    public bool IsSignificantSavings => Math.Abs(PotentialSavings) > 1000 || Math.Abs(SavingsPercent) > 10;
-}
-
-public enum CraftRecommendation
-{
-    Buy,    // Cheaper to buy finished product
-    Craft   // Cheaper to craft from components
-}
-
-/// <summary>
-/// Detailed shopping plan for a single item with world-specific options.
-/// </summary>
-public class DetailedShoppingPlan
-{
-    public int ItemId { get; set; }
-    public string Name { get; set; } = string.Empty;
-    public int QuantityNeeded { get; set; }
-    public decimal DCAveragePrice { get; set; }
-    public List<WorldShoppingSummary> WorldOptions { get; set; } = new();
-    public WorldShoppingSummary? RecommendedWorld { get; set; }
-    public string? Error { get; set; }
-
-    public bool HasOptions => WorldOptions.Count > 0;
-}
-
-/// <summary>
-/// Shopping summary for a specific world.
-/// </summary>
-public class WorldShoppingSummary
-{
-    public string WorldName { get; set; } = string.Empty;
-    public long TotalCost { get; set; }
-    public decimal AveragePricePerUnit { get; set; }
-    public int ListingsUsed { get; set; }
-    public List<ShoppingListingEntry> Listings { get; set; } = new();
-    public bool IsFullyUnderAverage { get; set; }
-    public int TotalQuantityPurchased { get; set; }
-    public int ExcessQuantity { get; set; }
-
-    public string CostDisplay => $"{TotalCost:N0}g";
-    public string PricePerUnitDisplay => $"{AveragePricePerUnit:N0}g";
-    public bool HasExcess => ExcessQuantity > 0;
-}
-
-/// <summary>
-/// Individual listing entry in a shopping plan.
-/// </summary>
-public class ShoppingListingEntry
-{
-    public int Quantity { get; set; }  // Full stack quantity available
-    public long PricePerUnit { get; set; }
-    public string RetainerName { get; set; } = string.Empty;
-    public bool IsUnderAverage { get; set; }
-    public int NeededFromStack { get; set; }  // How many we actually need from this stack
-    public int ExcessQuantity { get; set; }  // How many extra we'll have
-
-    public string SubtotalDisplay => $"{(Quantity * PricePerUnit):N0}g";
-    public string QuantityDisplay => ExcessQuantity > 0 
-        ? $"x{Quantity} (need {NeededFromStack}, +{ExcessQuantity} extra)"
-        : $"x{Quantity}";
 }

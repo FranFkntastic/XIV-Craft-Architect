@@ -28,6 +28,10 @@ public partial class App : Application
         ConfigureServices(serviceCollection);
         Services = serviceCollection.BuildServiceProvider();
 
+        // Initialize theme first (before showing window) so accent colors are available
+        var themeService = Services.GetRequiredService<ThemeService>();
+        themeService.RefreshFromSettings();
+        
         var mainWindow = Services.GetRequiredService<MainWindow>();
         mainWindow.Show();
     }
@@ -44,20 +48,24 @@ public partial class App : Application
         // HTTP clients for API services
         services.AddHttpClient<GarlandService>();
         services.AddHttpClient<UniversalisService>();
+        services.AddHttpClient<ArtisanService>();
         
         // Services
         services.AddSingleton<SettingsService>();
+        services.AddSingleton<ThemeService>();
         services.AddSingleton<GarlandService>();
         services.AddSingleton<UniversalisService>();
         services.AddSingleton<ItemCacheService>();
         services.AddSingleton<RecipeCalculationService>();
         services.AddSingleton<PlanPersistenceService>();
         services.AddSingleton<TeamcraftService>();
+        services.AddSingleton<ArtisanService>();
         services.AddSingleton<PriceCheckService>();
         services.AddSingleton<MarketShoppingService>();
 
         // Windows
         services.AddTransient<MainWindow>();
+        services.AddTransient<OptionsWindow>();
     }
 }
 

@@ -55,6 +55,13 @@ public class CraftingPlan
     public List<PlanNode> RootItems { get; set; } = new();
     
     /// <summary>
+    /// Saved market shopping plans with recommended worlds and listings.
+    /// Populated when prices are fetched and saved with the plan.
+    /// </summary>
+    [JsonIgnore]
+    public List<DetailedShoppingPlan> SavedMarketPlans { get; set; } = new();
+    
+    /// <summary>
     /// Flattened list of all materials needed (aggregated)
     /// </summary>
     [JsonIgnore]
@@ -107,18 +114,25 @@ public class CraftingPlan
     
     private void AggregateNode(PlanNode node, Dictionary<int, MaterialAggregate> aggregates)
     {
-        // If marked as "buy", this item goes to shopping list (not its children)
-        if (node.IsBuy)
+        // If buying from market (NQ or HQ), this item goes to shopping list (not its children)
+        if (node.Source == AcquisitionSource.MarketBuyNq || node.Source == AcquisitionSource.MarketBuyHq)
         {
-            AddToAggregation(node, aggregates, isCrafted: false);
+            AddToAggregation(node, aggregates, isCrafted: false, requiresHq: node.Source == AcquisitionSource.MarketBuyHq);
             // Don't recurse into children - we're buying the finished item
+            return;
+        }
+        
+        // If buying from vendor, add to aggregation
+        if (node.Source == AcquisitionSource.VendorBuy)
+        {
+            AddToAggregation(node, aggregates, isCrafted: false, requiresHq: false);
             return;
         }
         
         // If leaf node (can't be crafted), add to aggregation
         if (!node.Children.Any())
         {
-            AddToAggregation(node, aggregates, isCrafted: false);
+            AddToAggregation(node, aggregates, isCrafted: false, requiresHq: false);
         }
         
         // Recurse into children (sub-materials needed for crafting)
@@ -128,7 +142,7 @@ public class CraftingPlan
         }
     }
     
-    private void AddToAggregation(PlanNode node, Dictionary<int, MaterialAggregate> aggregates, bool isCrafted)
+    private void AddToAggregation(PlanNode node, Dictionary<int, MaterialAggregate> aggregates, bool isCrafted, bool requiresHq = false)
     {
         if (!aggregates.TryGetValue(node.ItemId, out var aggregate))
         {
@@ -137,12 +151,14 @@ public class CraftingPlan
                 ItemId = node.ItemId,
                 Name = node.Name,
                 IconId = node.IconId,
-                UnitPrice = node.MarketPrice
+                UnitPrice = node.MarketPrice,
+                RequiresHq = requiresHq
             };
             aggregates[node.ItemId] = aggregate;
         }
         aggregate.TotalQuantity += node.Quantity;
         aggregate.UnitPrice = node.MarketPrice;
+        aggregate.RequiresHq = aggregate.RequiresHq || requiresHq; // If any source requires HQ, mark it
         aggregate.Sources.Add(new MaterialSource
         {
             ParentItemName = node.Parent?.Name ?? "Direct",
@@ -192,14 +208,26 @@ public class PlanNode
     public int Quantity { get; set; } = 1;
     
     /// <summary>
-    /// If true, buy this item from market. If false, craft it.
+    /// How to acquire this item (craft, buy, vendor, etc.)
     /// </summary>
-    public bool IsBuy { get; set; }
+    public AcquisitionSource Source { get; set; } = AcquisitionSource.Craft;
+    
+    /// <summary>
+    /// If true, HQ version is required (for buying from market)
+    /// </summary>
+    public bool RequiresHq { get; set; }
     
     /// <summary>
     /// If true, this item cannot be crafted (gathered, dropped, etc.)
     /// </summary>
+    [Obsolete("Use Source instead")]
     public bool IsUncraftable { get; set; }
+    
+    /// <summary>
+    /// Legacy property: true if buying from market (NQ or HQ)
+    /// </summary>
+    [JsonIgnore]
+    public bool IsBuy => Source == AcquisitionSource.MarketBuyNq || Source == AcquisitionSource.MarketBuyHq;
     
     /// <summary>
     /// Recipe level required to craft this item
@@ -276,7 +304,8 @@ public class PlanNode
             Name = Name,
             IconId = IconId,
             Quantity = Quantity,
-            IsBuy = IsBuy,
+            Source = Source,
+            RequiresHq = RequiresHq,
             IsUncraftable = IsUncraftable,
             RecipeLevel = RecipeLevel,
             Job = Job,
@@ -319,7 +348,7 @@ public class PlanNode
     /// </summary>
     public void SetBuyMode(bool buy)
     {
-        IsBuy = buy;
+        Source = buy ? AcquisitionSource.MarketBuyNq : AcquisitionSource.Craft;
         
         if (buy)
         {
@@ -346,6 +375,12 @@ public class MaterialAggregate
     public int TotalQuantity { get; set; }
     public decimal UnitPrice { get; set; }
     public decimal TotalCost => TotalQuantity * UnitPrice;
+    
+    /// <summary>
+    /// If true, HQ version is required (for market purchases).
+    /// </summary>
+    public bool RequiresHq { get; set; }
+    
     public List<MaterialSource> Sources { get; set; } = new();
 }
 
@@ -368,7 +403,16 @@ public class SerializablePlanNode
     public string Name { get; set; } = string.Empty;
     public int IconId { get; set; }
     public int Quantity { get; set; }
+    
+    /// <summary>Legacy property for backward compatibility. Use Source instead.</summary>
     public bool IsBuy { get; set; }
+    
+    /// <summary>Acquisition source (new preferred property).</summary>
+    public AcquisitionSource? Source { get; set; }
+    
+    /// <summary>If true, HQ version is required (for market purchases).</summary>
+    public bool RequiresHq { get; set; }
+    
     public bool IsUncraftable { get; set; }
     public int RecipeLevel { get; set; }
     public string Job { get; set; } = string.Empty;

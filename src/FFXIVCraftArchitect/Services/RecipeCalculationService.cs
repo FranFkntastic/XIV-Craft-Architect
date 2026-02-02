@@ -70,7 +70,7 @@ public class RecipeCalculationService
                     Name = $"{name} (Error: {ex.Message})",
                     Quantity = quantity,
                     IsUncraftable = true,
-                    IsBuy = true
+                    Source = AcquisitionSource.MarketBuyNq
                 });
             }
         }
@@ -100,7 +100,7 @@ public class RecipeCalculationService
                 Name = name,
                 Quantity = quantity,
                 IsUncraftable = true,
-                IsBuy = true,
+                Source = AcquisitionSource.MarketBuyNq,
                 Parent = parent
             };
         }
@@ -115,7 +115,7 @@ public class RecipeCalculationService
                 Name = $"{name} (Circular)",
                 Quantity = quantity,
                 IsUncraftable = true,
-                IsBuy = true,
+                Source = AcquisitionSource.MarketBuyNq,
                 Parent = parent
             };
         }
@@ -154,7 +154,7 @@ public class RecipeCalculationService
         if (!hasCraft && !hasCompanyCraft)
         {
             node.IsUncraftable = true;
-            node.IsBuy = true;
+            node.Source = AcquisitionSource.MarketBuyNq;
             _logger.LogDebug("[RecipeCalc] Item {Name} has no recipe, marked as buy", node.Name);
             return node;
         }
@@ -199,7 +199,7 @@ public class RecipeCalculationService
         // This can be overridden by user later
         if (ShouldDefaultToBuy(node))
         {
-            node.IsBuy = true;
+            node.Source = AcquisitionSource.MarketBuyNq;
         }
 
         return node;
@@ -260,23 +260,14 @@ public class RecipeCalculationService
     }
 
     /// <summary>
-    /// Toggle an item between craft and buy mode, propagating changes to children.
+    /// Set the acquisition source for an item.
     /// </summary>
-    public void ToggleBuyMode(PlanNode node, bool buy)
+    public void SetAcquisitionSource(PlanNode node, AcquisitionSource source)
     {
-        // Simply toggle the flag - don't modify quantities
-        // Quantities are needed for market logistics analysis
-        node.IsBuy = buy;
+        node.Source = source;
+        node.RequiresHq = source == AcquisitionSource.MarketBuyHq;
         
-        if (!buy)
-        {
-            // Switching back to craft - log that we'll use the original recipe
-            _logger.LogInformation("[RecipeCalc] {ItemName} switched to craft mode", node.Name);
-        }
-        else
-        {
-            _logger.LogInformation("[RecipeCalc] {ItemName} switched to buy mode", node.Name);
-        }
+        _logger.LogInformation("[RecipeCalc] {ItemName} set to {Source}", node.Name, source);
     }
 
     /// <summary>
@@ -306,8 +297,7 @@ public class RecipeCalculationService
                 ItemId = 0, // No real item ID
                 Name = $"Phase {phase.PhaseNumber + 1}",
                 Quantity = 1,
-                IsUncraftable = true,
-                IsBuy = false,
+                Source = AcquisitionSource.Craft,
                 Parent = node,
                 Job = "Phase"
             };
@@ -392,7 +382,9 @@ public class RecipeCalculationService
             Name = node.Name,
             IconId = node.IconId,
             Quantity = node.Quantity,
-            IsBuy = node.IsBuy,
+            IsBuy = node.IsBuy, // Backward compatibility
+            Source = node.Source,
+            RequiresHq = node.RequiresHq,
             IsUncraftable = node.IsUncraftable,
             RecipeLevel = node.RecipeLevel,
             Job = node.Job,
@@ -426,13 +418,12 @@ public class RecipeCalculationService
             var nodeLookup = new Dictionary<string, PlanNode>();
             foreach (var sNode in wrapper.Nodes)
             {
-                nodeLookup[sNode.NodeId] = new PlanNode
+                var node = new PlanNode
                 {
                     ItemId = sNode.ItemId,
                     Name = sNode.Name,
                     IconId = sNode.IconId,
                     Quantity = sNode.Quantity,
-                    IsBuy = sNode.IsBuy,
                     IsUncraftable = sNode.IsUncraftable,
                     RecipeLevel = sNode.RecipeLevel,
                     Job = sNode.Job,
@@ -442,6 +433,24 @@ public class RecipeCalculationService
                     ParentNodeId = sNode.ParentNodeId,
                     Notes = sNode.Notes
                 };
+                
+                // Handle backward compatibility
+                if (sNode.Source.HasValue)
+                {
+                    node.Source = sNode.Source.Value;
+                }
+                else if (sNode.IsBuy)
+                {
+                    node.Source = AcquisitionSource.MarketBuyNq;
+                }
+                else
+                {
+                    node.Source = AcquisitionSource.Craft;
+                }
+                
+                node.RequiresHq = sNode.RequiresHq;
+                
+                nodeLookup[sNode.NodeId] = node;
             }
 
             // Link parents and children

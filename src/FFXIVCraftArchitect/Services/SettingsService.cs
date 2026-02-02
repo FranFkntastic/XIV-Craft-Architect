@@ -37,7 +37,12 @@ public class SettingsService
         ["market"] = new Dictionary<string, object>
         {
             ["default_datacenter"] = "Aether",
-            ["include_cross_world"] = true
+            ["include_cross_world"] = true,
+            ["auto_fetch_prices"] = true
+        },
+        ["ui"] = new Dictionary<string, object>
+        {
+            ["accent_color"] = "#d4af37"  // Gold default
         }
     };
 

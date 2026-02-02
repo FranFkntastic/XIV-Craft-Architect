@@ -1,0 +1,167 @@
+<!-- TABBED VERSION BACKUP - Right Panel with TabView -->
+<!-- To restore: Replace the Right Panel section in MainWindow.xaml with this content -->
+
+            <!-- Right Panel: Recipe Plan with Shopping List -->
+            <Border Grid.Column="2" Padding="16,0,16,16">
+                <ui:TabView>
+                    <ui:TabViewItem Header="Recipe Plan">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel>
+                                <!-- Recipe Tree -->
+                                <Border Background="#2d2d2d"
+                                        CornerRadius="4"
+                                        Padding="8"
+                                        Margin="0,0,0,8">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="*" />
+                                        </Grid.RowDefinitions>
+                                        
+                                        <TextBlock Grid.Row="0"
+                                                   Text="Recipe Tree (Crafting Steps)"
+                                                   FontWeight="SemiBold"
+                                                   Margin="0,0,0,8"/>
+                                        
+                                        <TreeView Grid.Row="1"
+                                                  x:Name="RecipeTree"
+                                                  Background="Transparent"
+                                                  BorderThickness="0">
+                                            <TreeView.Resources>
+                                                <Style TargetType="TreeViewItem">
+                                                    <Setter Property="IsExpanded" Value="True" />
+                                                </Style>
+                                            </TreeView.Resources>
+                                        </TreeView>
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </ui:TabViewItem>
+                    
+                    <ui:TabViewItem Header="Market Logistics">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            
+                            <!-- Filter Controls -->
+                            <Border Grid.Row="0" 
+                                    Background="#252525"
+                                    CornerRadius="4"
+                                    Padding="8"
+                                    Margin="0,0,0,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="6" />
+                                        <ColumnDefinition Width="120" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="6" />
+                                        <ColumnDefinition Width="110" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    
+                                    <TextBlock Grid.Column="0"
+                                               Text="Sort:"
+                                               VerticalAlignment="Center"
+                                               Foreground="Gray"/>
+                                    
+                                    <ComboBox Grid.Column="2"
+                                              x:Name="MarketSortCombo"
+                                              SelectedIndex="0"
+                                              SelectionChanged="OnMarketSortChanged">
+                                        <ComboBoxItem Content="By Recommended" />
+                                        <ComboBoxItem Content="Alphabetical" />
+                                    </ComboBox>
+                                    
+                                    <TextBlock Grid.Column="4"
+                                               Text="Mode:"
+                                               VerticalAlignment="Center"
+                                               Foreground="Gray"/>
+                                    
+                                    <ComboBox Grid.Column="6"
+                                              x:Name="MarketModeCombo"
+                                              SelectedIndex="0"
+                                              SelectionChanged="OnMarketModeChanged"
+                                              ToolTip="Minimize Total Cost: Only buy what is needed. Maximize Value: Best price per unit, good for frequent crafts.">
+                                        <ComboBoxItem Content="Minimize Total Cost" ToolTip="Only buy what is needed to complete a craft." />
+                                        <ComboBoxItem Content="Maximize Value" ToolTip="Best price per unit. Good for frequent crafts." />
+                                    </ComboBox>
+                                    
+                                    <CheckBox Grid.Column="8"
+                                              x:Name="SearchAllNACheck"
+                                              Content="Search all NA DCs"
+                                              VerticalAlignment="Center"
+                                              Foreground="LightGray"
+                                              ToolTip="Search all North American Data Centers for potential savings via DC Travel."/>
+                                    
+                                    <ui:Button Grid.Column="10"
+                                               x:Name="RefreshMarketButton"
+                                               Content="Refresh Market Data"
+                                               Appearance="Secondary"
+                                               Click="OnRefreshMarketData"
+                                               IsEnabled="False"/>
+                                </Grid>
+                            </Border>
+                            
+                            <!-- Craft vs Buy Analysis (Collapsible) -->
+                            <Expander Grid.Row="1"
+                                      x:Name="CraftVsBuyExpander"
+                                      Background="#2d3a2d"
+                                      Margin="0,0,0,8"
+                                      IsExpanded="False"
+                                      Visibility="Collapsed">
+                                <Expander.Header>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="📊 Craft vs Buy Analysis" 
+                                                   FontWeight="SemiBold"
+                                                   Foreground="#90EE90"/>
+                                        <TextBlock x:Name="CraftVsBuySummaryText"
+                                                   Text="" 
+                                                   Margin="12,0,0,0"
+                                                   Foreground="LightGray"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Expander.Header>
+                                <Border Background="#252525"
+                                        Padding="12">
+                                    <StackPanel x:Name="CraftVsBuyContent">
+                                        <!-- Analysis content added dynamically -->
+                                    </StackPanel>
+                                </Border>
+                            </Expander>
+                            
+                            <!-- Summary Card (always visible) -->
+                            <Border Grid.Row="2"
+                                    x:Name="MarketSummaryCard"
+                                    Background="#2d4a3e"
+                                    CornerRadius="4"
+                                    Padding="12"
+                                    Margin="0,0,0,8"
+                                    Visibility="Collapsed">
+                                <StackPanel x:Name="MarketSummaryContent" />
+                            </Border>
+                            
+                            <!-- Market Cards -->
+                            <Border Grid.Row="3"
+                                    Background="#2d2d2d"
+                                    CornerRadius="4"
+                                    Padding="8">
+                                <ScrollViewer>
+                                    <StackPanel x:Name="MarketCards">
+                                        <!-- Market cards will be added dynamically -->
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Border>
+                        </Grid>
+                    </ui:TabViewItem>
+                </ui:TabView>
+            </Border>

@@ -36,10 +36,31 @@ public class UniversalisService
     /// <summary>
     /// Get market board listings for an item.
     /// </summary>
-    public async Task<UniversalisResponse> GetMarketDataAsync(string worldOrDc, int itemId, CancellationToken ct = default)
+    /// <param name="worldOrDc">World or data center name</param>
+    /// <param name="itemId">Item ID</param>
+    /// <param name="hqOnly">If true, only return HQ listings</param>
+    /// <param name="entries">Number of listings to return (default 10)</param>
+    /// <param name="ct">Cancellation token</param>
+    public async Task<UniversalisResponse> GetMarketDataAsync(
+        string worldOrDc, 
+        int itemId, 
+        bool hqOnly = false,
+        int entries = 10,
+        CancellationToken ct = default)
     {
-        var url = string.Format(UniversalisApiUrl, Uri.EscapeDataString(worldOrDc), itemId);
-        _logger.LogDebug("Fetching market data for {ItemId} on {WorldOrDc}", itemId, worldOrDc);
+        var baseUrl = string.Format(UniversalisApiUrl, Uri.EscapeDataString(worldOrDc), itemId);
+        var queryParams = new List<string>();
+        
+        if (hqOnly)
+            queryParams.Add("hq=true");
+        if (entries != 10)
+            queryParams.Add($"entries={entries}");
+        
+        var url = queryParams.Count > 0 
+            ? $"{baseUrl}?{string.Join("&", queryParams)}"
+            : baseUrl;
+        
+        _logger.LogDebug("Fetching market data for {ItemId} on {WorldOrDc} (HQ={HqOnly})", itemId, worldOrDc, hqOnly);
 
         var response = await _httpClient.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();

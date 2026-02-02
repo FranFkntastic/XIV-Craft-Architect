@@ -15,6 +15,13 @@ public class PriceInfo
     public PriceSource Source { get; set; }
     public string SourceDetails { get; set; } = string.Empty; // Vendor name, "Market (DC Average)", etc.
     public DateTime LastUpdated { get; set; }
+    
+    /// <summary>
+    /// HQ price if available (for endgame crafting considerations).
+    /// </summary>
+    public decimal? HqUnitPrice { get; set; }
+    public int? HqQuantityAvailable { get; set; }
+    public bool HasHqData => HqUnitPrice.HasValue;
 }
 
 /// <summary>
@@ -85,11 +92,13 @@ public class PriceCheckService
             // Check vendor prices first (usually cheapest and most reliable)
             var vendorPrice = GetVendorPrice(garlandItem);
             
-            // Fetch market price from Universalis
-            var marketPrice = await GetMarketPriceAsync(itemId, worldOrDc, ct);
+            // Fetch market prices from Universalis (NQ and HQ)
+            var marketData = await _universalisService.GetMarketDataAsync(worldOrDc, itemId, ct: ct);
+            var marketPriceNq = GetAverageMarketPrice(marketData, hqOnly: false);
+            var marketPriceHq = GetAverageMarketPrice(marketData, hqOnly: true);
 
-            // Pick the best price (vendors prioritized if equal)
-            if (vendorPrice > 0 && (marketPrice <= 0 || vendorPrice <= marketPrice))
+            // Pick the best NQ price (vendors prioritized if equal)
+            if (vendorPrice > 0 && (marketPriceNq <= 0 || vendorPrice <= marketPriceNq))
             {
                 priceInfo.UnitPrice = vendorPrice;
                 priceInfo.Source = PriceSource.Vendor;
@@ -97,16 +106,16 @@ public class PriceCheckService
                 priceInfo.SourceDetails = vendor != null 
                     ? $"Vendor: {vendor.Name} ({vendor.Location})"
                     : "Vendor";
-                _logger.LogInformation("[PriceCheck] {ItemName}: Vendor price {Price}g (market: {Market}g)",
-                    itemName, vendorPrice, marketPrice);
+                _logger.LogInformation("[PriceCheck] {ItemName}: Vendor price {Price}g (market NQ: {MarketNq}g, HQ: {MarketHq}g)",
+                    itemName, vendorPrice, marketPriceNq, marketPriceHq);
             }
-            else if (marketPrice > 0)
+            else if (marketPriceNq > 0)
             {
-                priceInfo.UnitPrice = marketPrice;
+                priceInfo.UnitPrice = marketPriceNq;
                 priceInfo.Source = PriceSource.Market;
                 priceInfo.SourceDetails = $"Market ({worldOrDc})";
-                _logger.LogInformation("[PriceCheck] {ItemName}: Market price {Price}g (vendor: {Vendor}g)",
-                    itemName, marketPrice, vendorPrice);
+                _logger.LogInformation("[PriceCheck] {ItemName}: Market NQ price {Price}g (vendor: {Vendor}g, HQ: {MarketHq}g)",
+                    itemName, marketPriceNq, vendorPrice, marketPriceHq);
             }
             else
             {
@@ -115,6 +124,12 @@ public class PriceCheckService
                 priceInfo.Source = PriceSource.Unknown;
                 priceInfo.SourceDetails = "No price data";
                 _logger.LogWarning("[PriceCheck] No price found for {ItemName}", itemName);
+            }
+            
+            // Store HQ price if available
+            if (marketPriceHq > 0)
+            {
+                priceInfo.HqUnitPrice = marketPriceHq;
             }
 
             _priceCache[itemId] = priceInfo;
@@ -228,15 +243,17 @@ public class PriceCheckService
             // Get vendor price
             var vendorPrice = GetVendorPrice(garlandItem);
 
-            // Get market price
-            decimal marketPrice = 0;
+            // Get market prices (NQ and HQ)
+            decimal marketPriceNq = 0;
+            decimal marketPriceHq = 0;
             if (marketPrices.TryGetValue(itemId, out var marketData))
             {
-                marketPrice = GetAverageMarketPrice(marketData);
+                marketPriceNq = GetAverageMarketPrice(marketData, hqOnly: false);
+                marketPriceHq = GetAverageMarketPrice(marketData, hqOnly: true);
             }
 
-            // Pick best price
-            if (vendorPrice > 0 && (marketPrice <= 0 || vendorPrice <= marketPrice))
+            // Pick best price (prefer NQ for default, but track HQ separately)
+            if (vendorPrice > 0 && (marketPriceNq <= 0 || vendorPrice <= marketPriceNq))
             {
                 priceInfo.UnitPrice = vendorPrice;
                 priceInfo.Source = PriceSource.Vendor;
@@ -245,9 +262,9 @@ public class PriceCheckService
                     ? $"Vendor: {vendor.Name}"
                     : "Vendor";
             }
-            else if (marketPrice > 0)
+            else if (marketPriceNq > 0)
             {
-                priceInfo.UnitPrice = marketPrice;
+                priceInfo.UnitPrice = marketPriceNq;
                 priceInfo.Source = PriceSource.Market;
                 priceInfo.SourceDetails = $"Market ({worldOrDc})";
             }
@@ -255,6 +272,12 @@ public class PriceCheckService
             {
                 priceInfo.Source = PriceSource.Unknown;
                 priceInfo.SourceDetails = "No price data";
+            }
+            
+            // Store HQ price if available (separate from main price logic)
+            if (marketPriceHq > 0)
+            {
+                priceInfo.HqUnitPrice = marketPriceHq;
             }
 
             results[itemId] = priceInfo;
@@ -300,7 +323,7 @@ public class PriceCheckService
     {
         try
         {
-            var marketData = await _universalisService.GetMarketDataAsync(worldOrDc, itemId, ct);
+            var marketData = await _universalisService.GetMarketDataAsync(worldOrDc, itemId, ct: ct);
             return GetAverageMarketPrice(marketData);
         }
         catch (Exception ex)
@@ -314,12 +337,22 @@ public class PriceCheckService
     /// Calculate average price from market listings.
     /// Uses average of lowest 5 listings or recent history.
     /// </summary>
-    private decimal GetAverageMarketPrice(UniversalisResponse marketData)
+    /// <param name="marketData">Market data response</param>
+    /// <param name="hqOnly">If true, only consider HQ listings</param>
+    private decimal GetAverageMarketPrice(UniversalisResponse marketData, bool hqOnly = false)
     {
         if (marketData.Listings?.Any() == true)
         {
+            // Filter by HQ if requested
+            var filteredListings = hqOnly 
+                ? marketData.Listings.Where(l => l.IsHq).ToList()
+                : marketData.Listings;
+            
+            if (!filteredListings.Any())
+                return 0;
+            
             // Use average of lowest 5 current listings
-            var lowestListings = marketData.Listings
+            var lowestListings = filteredListings
                 .OrderBy(l => l.PricePerUnit)
                 .Take(5)
                 .ToList();

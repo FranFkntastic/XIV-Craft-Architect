@@ -151,8 +151,7 @@ public class TeamcraftService
                         Name = match.Object?.Name ?? itemName,
                         IconId = match.Object?.IconId ?? 0,
                         Quantity = quantity,
-                        IsBuy = false,
-                        IsUncraftable = false
+                        Source = AcquisitionSource.Craft
                     });
                 }
                 else
@@ -164,7 +163,7 @@ public class TeamcraftService
                         ItemId = 0,
                         Name = $"{itemName} (Not Found)",
                         Quantity = quantity,
-                        IsBuy = true,
+                        Source = AcquisitionSource.MarketBuyNq,
                         IsUncraftable = true
                     });
                 }
