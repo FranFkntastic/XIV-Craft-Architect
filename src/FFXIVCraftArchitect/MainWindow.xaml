@@ -352,35 +352,8 @@
                 <ui:TabView Background="#2d2d2d">
                     <ui:TabViewItem Header="Recipe Plan">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <StackPanel>
-                                <!-- Recipe Tree -->
-                                <Border Background="#2d2d2d"
-                                        CornerRadius="4"
-                                        Padding="8"
-                                        Margin="0,0,0,8">
-                                    <Grid>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="*" />
-                                        </Grid.RowDefinitions>
-                                        
-                                        <TextBlock Grid.Row="0"
-                                                   Text="Recipe Tree (Crafting Steps)"
-                                                   FontWeight="SemiBold"
-                                                   Margin="0,0,0,8"/>
-                                        
-                                        <TreeView Grid.Row="1"
-                                                  x:Name="RecipeTree"
-                                                  Background="Transparent"
-                                                  BorderThickness="0">
-                                            <TreeView.Resources>
-                                                <Style TargetType="TreeViewItem">
-                                                    <Setter Property="IsExpanded" Value="True" />
-                                                </Style>
-                                            </TreeView.Resources>
-                                        </TreeView>
-                                    </Grid>
-                                </Border>
+                            <StackPanel x:Name="RecipePlanPanel" Margin="0,0,0,8">
+                                <!-- Recipe cards populated dynamically -->
                             </StackPanel>
                         </ScrollViewer>
                     </ui:TabViewItem>

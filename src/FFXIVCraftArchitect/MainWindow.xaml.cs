@@ -273,13 +273,167 @@ public partial class MainWindow : Window
     /// </summary>
     private void DisplayPlanInTreeView(CraftingPlan plan)
     {
-        RecipeTree.Items.Clear();
+        RecipePlanPanel.Children.Clear();
         
         foreach (var rootItem in plan.RootItems)
         {
-            var rootNode = CreateTreeViewItem(rootItem);
-            RecipeTree.Items.Add(rootNode);
+            var rootExpander = CreateRecipeExpander(rootItem, 0);
+            RecipePlanPanel.Children.Add(rootExpander);
         }
+    }
+    
+    /// <summary>
+    /// Creates an Expander-based recipe card with proper styling.
+    /// </summary>
+    private Expander CreateRecipeExpander(PlanNode node, int depth)
+    {
+        var headerPanel = CreateNodeHeaderPanel(node);
+        
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#252525"));
+        
+        var expander = new Expander
+        {
+            Header = headerPanel,
+            IsExpanded = true,
+            Background = depth == 0 ? brush : Brushes.Transparent,
+            Padding = new Thickness(depth == 0 ? 8 : 0),
+            Margin = depth == 0 ? new Thickness(0, 0, 0, 8) : new Thickness(0),
+            Tag = node
+        };
+        
+        // Style the Expander header
+        expander.Resources["ExpanderHeaderStyle"] = CreateExpanderHeaderStyle();
+        
+        // Add children if any
+        if (node.Children.Count > 0)
+        {
+            var childrenPanel = new StackPanel { Margin = new Thickness(16, 4, 0, 0) };
+            foreach (var child in node.Children)
+            {
+                childrenPanel.Children.Add(CreateRecipeExpander(child, depth + 1));
+            }
+            expander.Content = childrenPanel;
+        }
+        
+        return expander;
+    }
+    
+    /// <summary>
+    /// Creates the header panel for a recipe node.
+    /// </summary>
+    private StackPanel CreateNodeHeaderPanel(PlanNode node)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        
+        // Icon
+        var iconBlock = new TextBlock
+        {
+            Text = GetNodeIcon(node),
+            FontSize = 14,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0)
+        };
+        panel.Children.Add(iconBlock);
+        
+        // Name
+        var nameBlock = new TextBlock
+        {
+            Text = node.Name,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = GetNodeForeground(node)
+        };
+        panel.Children.Add(nameBlock);
+        
+        // Quantity
+        var qtyBlock = new TextBlock
+        {
+            Text = $" ×{node.Quantity}",
+            Foreground = Brushes.LightGray,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        panel.Children.Add(qtyBlock);
+        
+        // HQ indicator
+        if (node.RequiresHq)
+        {
+            var hqBlock = new TextBlock
+            {
+                Text = " [HQ]",
+                Foreground = Brushes.Gold,
+                FontWeight = FontWeights.Bold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0, 0, 0)
+            };
+            panel.Children.Add(hqBlock);
+        }
+        
+        // Recipe info (job, level, yield)
+        if (!node.IsUncraftable && !string.IsNullOrEmpty(node.Job) && node.Source == AcquisitionSource.Craft)
+        {
+            var infoBlock = new TextBlock
+            {
+                Text = $"  ({node.Job} Lv.{node.RecipeLevel}, Yield: {node.Yield})",
+                Foreground = Brushes.Gray,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 11,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+            panel.Children.Add(infoBlock);
+        }
+        
+        // Cost info
+        var costText = GetNodeCostText(node);
+        if (!string.IsNullOrEmpty(costText))
+        {
+            var costBlock = new TextBlock
+            {
+                Text = $"  {costText}",
+                Foreground = Brushes.Gold,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 11,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+            panel.Children.Add(costBlock);
+        }
+        
+        return panel;
+    }
+    
+    /// <summary>
+    /// Gets the appropriate icon for a node's acquisition source.
+    /// </summary>
+    private string GetNodeIcon(PlanNode node) => node.Source switch
+    {
+        AcquisitionSource.Craft => "⚒",
+        AcquisitionSource.MarketBuyNq => "🛒",
+        AcquisitionSource.MarketBuyHq => "🛒",
+        AcquisitionSource.VendorBuy => "🏪",
+        _ => "•"
+    };
+    
+    /// <summary>
+    /// Gets the foreground color based on acquisition source.
+    /// </summary>
+    private Brush GetNodeForeground(PlanNode node) => node.Source switch
+    {
+        AcquisitionSource.Craft => Brushes.White,
+        AcquisitionSource.MarketBuyNq => Brushes.LightSkyBlue,
+        AcquisitionSource.MarketBuyHq => Brushes.LightGreen,
+        AcquisitionSource.VendorBuy => Brushes.LightYellow,
+        _ => Brushes.LightGray
+    };
+    
+    /// <summary>
+    /// Creates the style for Expander headers.
+    /// </summary>
+    private Style CreateExpanderHeaderStyle()
+    {
+        var style = new Style(typeof(System.Windows.Controls.Primitives.ToggleButton));
+        style.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+        style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+        style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(4)));
+        return style;
     }
     
     /// <summary>
@@ -1822,7 +1976,7 @@ public partial class MainWindow : Window
         _currentPlan = null;
         _projectItems.Clear();
         ProjectList.ItemsSource = null;
-        RecipeTree?.Items.Clear();
+        RecipePlanPanel?.Children.Clear();
         
         // Reset UI state
         BuildPlanButton.IsEnabled = false;
