@@ -45,9 +45,9 @@ public partial class OptionsWindow : Window
             AutoFetchPricesToggle.IsChecked = _settingsService.Get<bool>("market.auto_fetch_prices", true);
             IncludeCrossWorldToggle.IsChecked = _settingsService.Get<bool>("market.include_cross_world", true);
 
-            // Live Mode Settings
-            AutoElevateToggle.IsChecked = _settingsService.Get<bool>("live_mode.auto_elevate", true);
-            ShowAdminWarningToggle.IsChecked = _settingsService.Get<bool>("live_mode.show_admin_warning", true);
+            // Planning Settings
+            var defaultMode = _settingsService.Get<string>("planning.default_recommendation_mode", "MinimizeTotalCost");
+            DefaultRecommendationModeCombo.SelectedIndex = defaultMode == "MaximizeValue" ? 1 : 0;
         }
         catch (Exception ex)
         {
@@ -157,19 +157,13 @@ public partial class OptionsWindow : Window
             _settingsService.Set("market.auto_fetch_prices", AutoFetchPricesToggle.IsChecked == true);
             _settingsService.Set("market.include_cross_world", IncludeCrossWorldToggle.IsChecked == true);
 
-            // Save Live Mode Settings
-            _settingsService.Set("live_mode.auto_elevate", AutoElevateToggle.IsChecked == true);
-            _settingsService.Set("live_mode.show_admin_warning", ShowAdminWarningToggle.IsChecked == true);
+            // Save Planning Settings
+            var selectedMode = DefaultRecommendationModeCombo.SelectedIndex == 1 ? "MaximizeValue" : "MinimizeTotalCost";
+            _settingsService.Set("planning.default_recommendation_mode", selectedMode);
             
             _logger.LogInformation("Settings saved successfully");
             
-            // Notify user and close
-            MessageBox.Show(
-                "Settings saved successfully. Accent color changes are applied immediately.",
-                "Settings Saved",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-            
+            // Close silently on success - only show dialogs for errors
             DialogResult = true;
             Close();
         }

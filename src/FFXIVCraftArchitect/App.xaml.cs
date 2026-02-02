@@ -36,6 +36,25 @@ public partial class App : Application
         mainWindow.Show();
     }
 
+    private void OnExit(object sender, ExitEventArgs e)
+    {
+        // Save market cache to disk before exiting
+        try
+        {
+            var cacheService = Services.GetRequiredService<MarketCacheService>();
+            cacheService.SaveCacheToDiskAsync().Wait(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex)
+        {
+            // Log to debug log if possible
+            try
+            {
+                File.AppendAllText(LogFilePath, $"[{DateTime.Now:HH:mm:ss}] [Error] Failed to save market cache: {ex}\n");
+            }
+            catch { }
+        }
+    }
+
     private void ConfigureServices(IServiceCollection services)
     {
         // Logging - writes to debug.log
@@ -56,6 +75,8 @@ public partial class App : Application
         services.AddSingleton<GarlandService>();
         services.AddSingleton<UniversalisService>();
         services.AddSingleton<ItemCacheService>();
+        services.AddSingleton<MarketCacheService>();        // Global market data cache
+        services.AddSingleton<RecommendationCsvService>(); // Plan-specific recommendations
         services.AddSingleton<RecipeCalculationService>();
         services.AddSingleton<PlanPersistenceService>();
         services.AddSingleton<TeamcraftService>();

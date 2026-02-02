@@ -130,6 +130,27 @@ public class CraftVsBuyAnalysis
     public CraftRecommendation RecommendationHq { get; set; }
     
     /// <summary>
+    /// Whether HQ is required for this item (based on project settings or user preference).
+    /// </summary>
+    public bool IsHqRequired { get; set; }
+    
+    /// <summary>
+    /// The effective recommendation based on HQ requirement.
+    /// If HQ is required, uses HQ recommendation; otherwise uses NQ.
+    /// </summary>
+    public CraftRecommendation EffectiveRecommendation => IsHqRequired ? RecommendationHq : RecommendationNq;
+    
+    /// <summary>
+    /// Effective potential savings based on HQ requirement.
+    /// </summary>
+    public decimal EffectivePotentialSavings => IsHqRequired ? PotentialSavingsHq : PotentialSavingsNq;
+    
+    /// <summary>
+    /// Effective savings percent based on HQ requirement.
+    /// </summary>
+    public decimal EffectiveSavingsPercent => IsHqRequired ? SavingsPercentHq : SavingsPercentNq;
+    
+    /// <summary>
     /// Quality warning: NQ components may compromise HQ crafts for endgame items.
     /// </summary>
     public bool HasQualityWarning => HasHqData && BuyCostHq > BuyCostNq * 1.5m;
@@ -141,7 +162,7 @@ public class CraftVsBuyAnalysis
     public bool IsEndgameRelevant => HasHqData && (SavingsPercentHq < 0 || BuyCostHq > CraftCost * 2);
     
     public string Summary => $"{ItemName} x{Quantity}: Buy {BuyCostNq:N0}g vs Craft {CraftCost:N0}g ({Math.Abs(PotentialSavingsNq):N0}g difference)";
-    public bool IsSignificantSavings => Math.Abs(PotentialSavingsNq) > 1000 || Math.Abs(SavingsPercentNq) > 10;
+    public bool IsSignificantSavings => Math.Abs(EffectivePotentialSavings) > 1000 || Math.Abs(EffectiveSavingsPercent) > 10;
     
     /// <summary>
     /// Get the appropriate recommendation based on whether HQ is required.

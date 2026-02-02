@@ -8,17 +8,24 @@ namespace FFXIVCraftArchitect.Services;
 
 /// <summary>
 /// Service for saving and loading crafting plans to/from disk.
-/// Uses simple JSON serialization for maximum compatibility.
+/// Uses a three-tier architecture:
+/// 1. plan.json - Minimal recipe tree
+/// 2. plan.recommendations.csv - Plan-specific shopping strategy
+/// 3. market_cache.json - Global raw market data (shared across plans)
 /// </summary>
 public class PlanPersistenceService
 {
     private readonly ILogger<PlanPersistenceService> _logger;
+    private readonly RecommendationCsvService _recommendationService;
     private readonly string _plansDirectory;
     private readonly JsonSerializerOptions _jsonOptions;
 
-    public PlanPersistenceService(ILogger<PlanPersistenceService> logger)
+    public PlanPersistenceService(
+        ILogger<PlanPersistenceService> logger,
+        RecommendationCsvService recommendationService)
     {
         _logger = logger;
+        _recommendationService = recommendationService;
         _plansDirectory = Path.Combine(AppContext.BaseDirectory, "Plans");
         
         _jsonOptions = new JsonSerializerOptions
@@ -92,22 +99,28 @@ public class PlanPersistenceService
                 _logger.LogInformation("[PlanPersistence] Saving new plan '{PlanName}' ({FileName})", plan.Name, fileName);
             }
 
-            // Create serializable data
+            // Create serializable data (minimal - just recipe tree)
             var data = new PlanFileData
             {
-                Version = 1,
+                Version = 2, // Version 2 = new minimal format
                 Id = plan.Id,
                 Name = !string.IsNullOrWhiteSpace(customName) ? customName : plan.Name,
                 CreatedAt = plan.CreatedAt,
                 ModifiedAt = plan.ModifiedAt,
                 DataCenter = plan.DataCenter,
                 World = plan.World,
-                RootItems = plan.RootItems.Select(ConvertToFileNode).ToList(),
-                MarketPlans = plan.SavedMarketPlans?.Select(ConvertToMarketPlanData).ToList() ?? new List<MarketShoppingPlanData>()
+                RootItems = plan.RootItems.Select(ConvertToFileNode).ToList()
+                // Note: MarketPlans no longer stored in JSON
             };
 
             var json = JsonSerializer.Serialize(data, _jsonOptions);
             await File.WriteAllTextAsync(filePath, json);
+            
+            // Save recommendations to CSV companion file
+            if (plan.SavedMarketPlans?.Count > 0)
+            {
+                await _recommendationService.SaveRecommendationsAsync(fileName, plan.SavedMarketPlans);
+            }
             
             _logger.LogInformation("[PlanPersistence] Saved plan '{PlanName}' ({FileName})", data.Name, fileName);
             return true;
@@ -150,8 +163,8 @@ public class PlanPersistenceService
                 ModifiedAt = data.ModifiedAt,
                 DataCenter = data.DataCenter,
                 World = data.World,
-                RootItems = data.RootItems?.Select(ConvertFromFileNode).ToList() ?? new List<PlanNode>(),
-                SavedMarketPlans = data.MarketPlans?.Select(ConvertFromMarketPlanData).ToList() ?? new List<DetailedShoppingPlan>()
+                RootItems = data.RootItems?.Select(ConvertFromFileNode).ToList() ?? new List<PlanNode>()
+                // Note: SavedMarketPlans loaded from CSV below
             };
 
             // Re-link parent references
@@ -160,7 +173,12 @@ public class PlanPersistenceService
                 LinkParents(root, null);
             }
 
-            _logger.LogInformation("[PlanPersistence] Loaded plan '{PlanName}' from {Path}", plan.Name, filePath);
+            // Load recommendations from CSV companion file (if exists)
+            var fileName = Path.GetFileName(filePath);
+            plan.SavedMarketPlans = await _recommendationService.LoadRecommendationsAsync(fileName);
+
+            _logger.LogInformation("[PlanPersistence] Loaded plan '{PlanName}' from {Path} ({MarketPlans} recommendations)", 
+                plan.Name, filePath, plan.SavedMarketPlans.Count);
             return plan;
         }
         catch (Exception ex)
@@ -258,26 +276,34 @@ public class PlanPersistenceService
 
     /// <summary>
     /// Export a plan to a specific location (for sharing).
+    /// Includes both JSON and CSV files.
     /// </summary>
     public async Task<bool> ExportPlanAsync(CraftingPlan plan, string filePath)
     {
         try
         {
+            // Save JSON (minimal - just recipe tree)
             var data = new PlanFileData
             {
-                Version = 1,
+                Version = 2,
                 Id = plan.Id,
                 Name = plan.Name,
                 CreatedAt = plan.CreatedAt,
                 ModifiedAt = plan.ModifiedAt,
                 DataCenter = plan.DataCenter,
                 World = plan.World,
-                RootItems = plan.RootItems.Select(ConvertToFileNode).ToList(),
-                MarketPlans = plan.SavedMarketPlans?.Select(ConvertToMarketPlanData).ToList() ?? new List<MarketShoppingPlanData>()
+                RootItems = plan.RootItems.Select(ConvertToFileNode).ToList()
             };
 
             var json = JsonSerializer.Serialize(data, _jsonOptions);
             await File.WriteAllTextAsync(filePath, json);
+            
+            // Save recommendations CSV alongside
+            if (plan.SavedMarketPlans?.Count > 0)
+            {
+                var csvPath = Path.ChangeExtension(filePath, ".recommendations.csv");
+                await _recommendationService.SaveRecommendationsAsync(Path.GetFileName(filePath), plan.SavedMarketPlans);
+            }
             
             _logger.LogInformation("[PlanPersistence] Exported plan '{PlanName}' to {Path}", plan.Name, filePath);
             return true;
@@ -329,11 +355,14 @@ public class PlanPersistenceService
             IsBuy = node.IsBuy,  // For backward compatibility
             Source = node.Source,
             RequiresHq = node.RequiresHq,
+            MustBeHq = node.MustBeHq,
+            CanBeHq = node.CanBeHq,
             IsUncraftable = node.IsUncraftable,
             RecipeLevel = node.RecipeLevel,
             Job = node.Job,
             Yield = node.Yield,
             MarketPrice = node.MarketPrice,
+            HqMarketPrice = node.HqMarketPrice,
             PriceSource = node.PriceSource,
             PriceSourceDetails = node.PriceSourceDetails,
             Notes = node.Notes,
@@ -354,6 +383,7 @@ public class PlanPersistenceService
             Job = fileNode.Job ?? string.Empty,
             Yield = fileNode.Yield,
             MarketPrice = fileNode.MarketPrice,
+            HqMarketPrice = fileNode.HqMarketPrice,
             PriceSource = fileNode.PriceSource,
             PriceSourceDetails = fileNode.PriceSourceDetails ?? string.Empty,
             Notes = fileNode.Notes,
@@ -376,6 +406,8 @@ public class PlanPersistenceService
         }
         
         node.RequiresHq = fileNode.RequiresHq;
+        node.MustBeHq = fileNode.MustBeHq;
+        node.CanBeHq = fileNode.CanBeHq;
         
         return node;
     }
@@ -389,115 +421,6 @@ public class PlanPersistenceService
         }
     }
 
-    #region Market Plan Conversion
-
-    private MarketShoppingPlanData ConvertToMarketPlanData(DetailedShoppingPlan plan)
-    {
-        return new MarketShoppingPlanData
-        {
-            ItemId = plan.ItemId,
-            Name = plan.Name,
-            QuantityNeeded = plan.QuantityNeeded,
-            DCAveragePrice = plan.DCAveragePrice,
-            HQAveragePrice = plan.HQAveragePrice,
-            Error = plan.Error,
-            WorldOptions = plan.WorldOptions.Select(ConvertToWorldSummaryData).ToList(),
-            RecommendedWorld = plan.RecommendedWorld != null ? ConvertToWorldSummaryData(plan.RecommendedWorld) : null
-        };
-    }
-
-    private WorldShoppingSummaryData ConvertToWorldSummaryData(WorldShoppingSummary world)
-    {
-        return new WorldShoppingSummaryData
-        {
-            WorldName = world.WorldName,
-            TotalCost = world.TotalCost,
-            AveragePricePerUnit = world.AveragePricePerUnit,
-            ListingsUsed = world.ListingsUsed,
-            IsFullyUnderAverage = world.IsFullyUnderAverage,
-            TotalQuantityPurchased = world.TotalQuantityPurchased,
-            ExcessQuantity = world.ExcessQuantity,
-            Listings = world.Listings.Select(ConvertToListingEntryData).ToList(),
-            BestSingleListing = world.BestSingleListing != null ? ConvertToListingEntryData(world.BestSingleListing) : null
-        };
-    }
-
-    private ShoppingListingEntryData ConvertToListingEntryData(ShoppingListingEntry entry)
-    {
-        return new ShoppingListingEntryData
-        {
-            Quantity = entry.Quantity,
-            PricePerUnit = entry.PricePerUnit,
-            RetainerName = entry.RetainerName,
-            IsUnderAverage = entry.IsUnderAverage,
-            IsHq = entry.IsHq,
-            NeededFromStack = entry.NeededFromStack,
-            ExcessQuantity = entry.ExcessQuantity,
-            IsAdditionalOption = entry.IsAdditionalOption
-        };
-    }
-
-    private DetailedShoppingPlan ConvertFromMarketPlanData(MarketShoppingPlanData data)
-    {
-        var plan = new DetailedShoppingPlan
-        {
-            ItemId = data.ItemId,
-            Name = data.Name,
-            QuantityNeeded = data.QuantityNeeded,
-            DCAveragePrice = data.DCAveragePrice,
-            HQAveragePrice = data.HQAveragePrice,
-            Error = data.Error,
-            WorldOptions = data.WorldOptions?.Select(ConvertFromWorldSummaryData).ToList() ?? new List<WorldShoppingSummary>()
-        };
-        
-        if (data.RecommendedWorld != null)
-        {
-            plan.RecommendedWorld = plan.WorldOptions.FirstOrDefault(w => w.WorldName == data.RecommendedWorld.WorldName)
-                ?? ConvertFromWorldSummaryData(data.RecommendedWorld);
-        }
-        
-        return plan;
-    }
-
-    private WorldShoppingSummary ConvertFromWorldSummaryData(WorldShoppingSummaryData data)
-    {
-        var summary = new WorldShoppingSummary
-        {
-            WorldName = data.WorldName,
-            TotalCost = data.TotalCost,
-            AveragePricePerUnit = data.AveragePricePerUnit,
-            ListingsUsed = data.ListingsUsed,
-            IsFullyUnderAverage = data.IsFullyUnderAverage,
-            TotalQuantityPurchased = data.TotalQuantityPurchased,
-            ExcessQuantity = data.ExcessQuantity,
-            Listings = data.Listings?.Select(ConvertFromListingEntryData).ToList() ?? new List<ShoppingListingEntry>()
-        };
-        
-        if (data.BestSingleListing != null)
-        {
-            summary.BestSingleListing = ConvertFromListingEntryData(data.BestSingleListing);
-        }
-        
-        return summary;
-    }
-
-    private ShoppingListingEntry ConvertFromListingEntryData(ShoppingListingEntryData data)
-    {
-        return new ShoppingListingEntry
-        {
-            Quantity = data.Quantity,
-            PricePerUnit = data.PricePerUnit,
-            RetainerName = data.RetainerName,
-            IsUnderAverage = data.IsUnderAverage,
-            IsHq = data.IsHq,
-            NeededFromStack = data.NeededFromStack,
-            ExcessQuantity = data.ExcessQuantity,
-            IsAdditionalOption = data.IsAdditionalOption
-        };
-    }
-
-    #endregion
-
     #endregion
 }
 
@@ -506,10 +429,11 @@ public class PlanPersistenceService
 /// <summary>
 /// Simple DTO for plan file serialization.
 /// Flat structure without circular references.
+/// Version 2 = minimal format (no market plans in JSON).
 /// </summary>
 public class PlanFileData
 {
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = 2;
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
@@ -519,9 +443,11 @@ public class PlanFileData
     public List<PlanFileNode> RootItems { get; set; } = new();
     
     /// <summary>
-    /// Saved market shopping plans with recommended worlds and listings.
+    /// DEPRECATED: Market plans are now stored in separate .recommendations.csv files.
+    /// Kept for backward compatibility with Version 1 files.
     /// </summary>
-    public List<MarketShoppingPlanData> MarketPlans { get; set; } = new();
+    [Obsolete("Market plans are now stored in .recommendations.csv companion files")]
+    public List<MarketShoppingPlanData>? MarketPlans { get; set; }
 }
 
 /// <summary>
@@ -544,16 +470,26 @@ public class PlanFileNode
     /// </summary>
     public AcquisitionSource? Source { get; set; }
     
-    /// <summary>
-    /// If true, HQ version is required (for market purchases).
-    /// </summary>
+    /// <summary>Legacy: Use MustBeHq instead.</summary>
     public bool RequiresHq { get; set; }
+    
+    /// <summary>If true, this item must be HQ quality (for plan sharing).</summary>
+    public bool MustBeHq { get; set; }
+    
+    /// <summary>If true, this item can be HQ (crafted/gathered items can, crystals/aethersands cannot).</summary>
+    public bool CanBeHq { get; set; }
     
     public bool IsUncraftable { get; set; }
     public int RecipeLevel { get; set; }
     public string? Job { get; set; }
     public int Yield { get; set; } = 1;
     public decimal MarketPrice { get; set; }
+    
+    /// <summary>
+    /// HQ market price per unit.
+    /// </summary>
+    public decimal HqMarketPrice { get; set; }
+    
     public PriceSource PriceSource { get; set; }
     public string? PriceSourceDetails { get; set; }
     public string? Notes { get; set; }

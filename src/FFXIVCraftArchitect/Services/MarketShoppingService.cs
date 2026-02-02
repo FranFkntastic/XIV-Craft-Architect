@@ -8,20 +8,27 @@ namespace FFXIVCraftArchitect.Services;
 /// <summary>
 /// Service for calculating optimal market board shopping plans.
 /// Groups listings by world and applies intelligent filtering.
+/// Uses MarketCacheService to avoid redundant API calls.
 /// </summary>
 public class MarketShoppingService
 {
     private readonly UniversalisService _universalisService;
+    private readonly MarketCacheService _cacheService;
     private readonly ILogger<MarketShoppingService> _logger;
 
-    public MarketShoppingService(UniversalisService universalisService, ILogger<MarketShoppingService> logger)
+    public MarketShoppingService(
+        UniversalisService universalisService, 
+        MarketCacheService cacheService,
+        ILogger<MarketShoppingService> logger)
     {
         _universalisService = universalisService;
+        _cacheService = cacheService;
         _logger = logger;
     }
 
     /// <summary>
     /// Calculate detailed shopping plans for market board items.
+    /// Uses cache to avoid redundant API calls.
     /// </summary>
     public async Task<List<DetailedShoppingPlan>> CalculateDetailedShoppingPlansAsync(
         List<MaterialAggregate> marketItems,
@@ -38,8 +45,20 @@ public class MarketShoppingService
             
             try
             {
-                // Fetch detailed listings from the entire DC
-                var marketData = await _universalisService.GetMarketDataAsync(dataCenter, item.ItemId, ct: ct);
+                // Try to get from cache first
+                var marketData = await GetMarketDataWithCacheAsync(dataCenter, item.ItemId, ct);
+                
+                if (marketData == null)
+                {
+                    plans.Add(new DetailedShoppingPlan
+                    {
+                        ItemId = item.ItemId,
+                        Name = item.Name,
+                        QuantityNeeded = item.TotalQuantity,
+                        Error = "Failed to fetch market data"
+                    });
+                    continue;
+                }
                 
                 var plan = CalculateItemShoppingPlan(
                     item.Name,
@@ -64,6 +83,93 @@ public class MarketShoppingService
         }
 
         return plans;
+    }
+
+    /// <summary>
+    /// Get market data from cache or fetch from API if not cached/stale.
+    /// </summary>
+    private async Task<UniversalisResponse?> GetMarketDataWithCacheAsync(string dataCenter, int itemId, CancellationToken ct)
+    {
+        // Check cache first
+        var cached = _cacheService.Get(itemId, dataCenter);
+        if (cached != null)
+        {
+            _logger.LogDebug("[MarketShopping] Using cached data for {ItemId}@{DC}", itemId, dataCenter);
+            return ConvertFromCachedData(cached);
+        }
+
+        // Fetch from API
+        _logger.LogDebug("[MarketShopping] Fetching fresh data for {ItemId}@{DC}", itemId, dataCenter);
+        var freshData = await _universalisService.GetMarketDataAsync(dataCenter, itemId, ct: ct);
+        
+        if (freshData != null)
+        {
+            // Store in cache
+            var cachedData = ConvertToCachedData(itemId, dataCenter, freshData);
+            _cacheService.Set(itemId, dataCenter, cachedData);
+        }
+        
+        return freshData;
+    }
+
+    /// <summary>
+    /// Convert cached data back to UniversalisResponse format.
+    /// </summary>
+    private UniversalisResponse ConvertFromCachedData(CachedMarketData cached)
+    {
+        var listings = new List<MarketListing>();
+        
+        foreach (var world in cached.Worlds)
+        {
+            foreach (var listing in world.Listings)
+            {
+                listings.Add(new MarketListing
+                {
+                    WorldName = world.WorldName,
+                    Quantity = listing.Quantity,
+                    PricePerUnit = listing.PricePerUnit,
+                    RetainerName = listing.RetainerName,
+                    IsHq = listing.IsHq
+                });
+            }
+        }
+        
+        return new UniversalisResponse
+        {
+            ItemId = cached.ItemId,
+            Listings = listings,
+            AveragePrice = (double)cached.DCAveragePrice
+        };
+    }
+
+    /// <summary>
+    /// Convert UniversalisResponse to cached format.
+    /// </summary>
+    private CachedMarketData ConvertToCachedData(int itemId, string dataCenter, UniversalisResponse response)
+    {
+        var worlds = response.Listings
+            .GroupBy(l => l.WorldName)
+            .Select(g => new CachedWorldData
+            {
+                WorldName = g.Key,
+                Listings = g.Select(l => new CachedListing
+                {
+                    Quantity = l.Quantity,
+                    PricePerUnit = l.PricePerUnit,
+                    RetainerName = l.RetainerName,
+                    IsHq = l.IsHq
+                }).ToList()
+            })
+            .ToList();
+        
+        return new CachedMarketData
+        {
+            ItemId = itemId,
+            DataCenter = dataCenter,
+            FetchedAt = DateTime.UtcNow,
+            DCAveragePrice = (decimal)response.AveragePrice,
+            Worlds = worlds
+        };
     }
 
     /// <summary>
@@ -509,6 +615,7 @@ public class MarketShoppingService
                 PotentialSavingsHq = savingsHq,
                 SavingsPercentHq = savingsPercentHq,
                 HasHqData = hasHqData,
+                IsHqRequired = node.MustBeHq,
                 IsCurrentlySetToCraft = !node.IsBuy,
                 RecommendationNq = savingsNq > 0 
                     ? CraftRecommendation.Craft 

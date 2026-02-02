@@ -48,13 +48,14 @@ FFXIV Craft Architect C# Edition/
 │       ├── FFXIVCraftArchitect.csproj
 │       ├── App.xaml                   # Application entry (WPF-UI Dark theme)
 │       ├── App.xaml.cs
-│       ├── MainWindow.xaml            # Main GUI (WPF-UI TabView)
+│       ├── MainWindow.xaml            # Main GUI (custom styled tabs)
 │       ├── MainWindow.xaml.cs
 │       ├── MainWindow.xaml.tabbed-backup  # Backup of original tab layout
 │       ├── Models/                    # Data models
 │       │   ├── InventoryItem.cs
 │       │   ├── CraftingPlan.cs        # Plan with AcquisitionSource enum
 │       │   ├── MarketListing.cs
+│       │   ├── ArtisanModels.cs       # Artisan plugin import/export
 │       │   ├── MarketShoppingModels.cs # DetailedShoppingPlan, WorldShoppingSummary
 │       │   ├── Recipe.cs
 │       │   └── WorldData.cs
@@ -66,14 +67,17 @@ FFXIV Craft Architect C# Edition/
 │       │   ├── RecipeCalculationService.cs
 │       │   ├── PlanPersistenceService.cs # Save/load plans
 │       │   ├── TeamcraftService.cs    # Import/export
-│       │   └── ArtisanService.cs      # Artisan export
+│       │   ├── ArtisanService.cs      # Artisan import/export
+│       │   └── ThemeService.cs        # Dynamic accent color management
+│       ├── OptionsWindow.xaml         # Settings dialog (Appearance, Market, Planning, Live)
+│       ├── OptionsWindow.xaml.cs
 │       ├── Views/                     # Additional windows
 │       │   ├── InventoryWindow.xaml
 │       │   ├── LogsWindow.xaml
 │       │   └── PlansWindow.xaml
 │       └── Lib/                       # Native dependencies
 │           └── deucalion.dll          # Injected DLL
-├── settings.json                      # User settings (auto_fetch_on_build, etc.)
+├── settings.json                      # User settings (auto_fetch_on_build, accent_color, etc.)
 ├── CONTEXT.md                         # Session context / changelog
 └── AGENTS.md                          # This file
 ```
@@ -118,17 +122,25 @@ FFXIV Craft Architect C# Edition/
 - [x] Implement LiveInventoryManager
 - [x] Add admin privilege handling
 
-### Phase 6: Polish & Build 🔄 (In Progress)
+### Phase 6: Polish & Build ✅ (Complete)
 - [x] Single-file publish configuration
 - [ ] AOT compilation if feasible
 - [x] App manifest for UAC elevation
-- [ ] Build scripts
+- [x] Build scripts (`publish.bat`)
 - [x] Documentation (CONTEXT.md)
 - [x] Auto-fetch prices on plan build
 - [x] Craft vs Buy analysis with HQ/NQ pricing
 - [x] Market shopping plans with world recommendations
 - [x] Cross-DC travel optimization
+- [x] Bidirectional Artisan import/export
+- [x] Options window with live theming
+- [x] Custom styled tab buttons (replaced TabView)
+- [x] Expander-based recipe display (replaced TreeView)
 - [x] Artisan craft list export support
+- [x] Debug log viewer
+- [x] Auto-width ComboBox behavior
+- [x] HQ toggle in Project Items pane
+- [x] Accent color support throughout UI
 
 ---
 
@@ -268,41 +280,53 @@ dotnet publish -c Release -r win-x64 --self-contained true `
 
 ---
 
-## Recent Changes (2026-02-01)
+## Recent Changes (2026-02-02) - Milestone v0.2.0
 
-### Features Added
-- **Artisan craft list export** - Export plans to Artisan (Dalamud plugin) JSON format
-  - Converts Item IDs to Recipe IDs via Garland Tools API
-  - Calculates proper quantities based on recipe yield
-  - Copies JSON to clipboard for Artisan's "Import List From Clipboard"
+### Major Features Added
+- **Bidirectional Artisan support** - Full import and export of crafting lists
+  - Export to Artisan JSON (Item IDs → Recipe IDs via Garland Tools)
+  - Import from Artisan (uses XIVAPI to resolve Recipe IDs → Item IDs)
+- **In-app Options window** with live theming
+  - Accent color picker with presets
+  - Settings persistence to `settings.json`
+  - Silent save (no confirmation dialog on success)
+- **Debug Log Viewer** with filtering and search
+  - Log level filters (Debug, Info, Warning, Error)
+  - Color-coded output
+  - Export and clear functionality
+- **Market Shopping Plans** with detailed world recommendations
+  - Cross-DC travel optimization (NA data centers)
+  - Per-world pricing with excess quantity calculation
+  - Best listing highlighting
 
-### Previous Changes (2026-01-31)
-- **Auto-fetch prices** on plan build with `planning.auto_fetch_on_build` setting
-- **Cross-DC search** with retry logic and sequential fetching (fixes 504 timeouts)
-- **Craft vs Buy analysis** with HQ/NQ pricing and quality warnings
-- **Market shopping plans** with world recommendations and DC average comparison
-- **Settings persistence** to `settings.json`
+### UI/UX Improvements
+- **HQ Toggle moved to Project Items** - Set HQ requirement before building plan
+- **Recipe Plan visual refresh** - Gold star (★) + accent color for HQ items
+- **Market Logistics cards** - Accent color support, compact layout
+- **Purchase Summary** - Collapsible expander with totals
+- **Auto-width ComboBoxes** - Dynamic sizing based on content
+- **Build script** (`publish.bat`) for distribution
 
-### UI Improvements
-- TabView layout for Recipe Plan / Market Logistics
-- Dark theme styling throughout
-- Tooltips on recommendation mode dropdown
-- Fixed white background in right panel
+### Bug Fixes
+- Refresh button disabled when loading plans with market data
+- Craft cost calculation respecting acquisition source
+- Price fetch error handling preserving cached data
+- Default recommendation mode saving/loading correctly
 
 ### Architecture Decisions
-- **Recommendation Modes:** `MinimizeTotalCost` and `MaximizeValue` exposed in UI; `BestUnitPrice` hidden but preserved
-- **Market Data:** Sequential fetching with 100ms delay between DCs to avoid rate limits
-- **Error Handling:** Per-DC error handling allows partial results when individual DCs fail
+- **ComboBox sizing:** Reusable attached behavior for auto-width
+- **Accent colors:** Helper methods for muted color variations
+- **Settings:** Simplified UX with silent saves
 
 ---
 
 ## Next Steps
 
-1. Options menu for toggling advanced settings
-2. Build scripts for distribution
-3. Documentation for end users
-4. Performance optimization for large plans
-5. Artisan import support (reverse direction)
+1. **GitHub Releases** - Automated builds and version tags
+2. **Update Checker** - Version checking against GitHub releases  
+3. **Live Mode** - Packet capture for real-time inventory (long term)
+4. **Inventory Sync** - Teamcraft inventory synchronization
+5. **Performance** - Optimization for large crafting plans
 
 ---
 

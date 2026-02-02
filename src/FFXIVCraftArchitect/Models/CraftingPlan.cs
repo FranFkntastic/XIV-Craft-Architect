@@ -117,7 +117,8 @@ public class CraftingPlan
         // If buying from market (NQ or HQ), this item goes to shopping list (not its children)
         if (node.Source == AcquisitionSource.MarketBuyNq || node.Source == AcquisitionSource.MarketBuyHq)
         {
-            AddToAggregation(node, aggregates, isCrafted: false, requiresHq: node.Source == AcquisitionSource.MarketBuyHq);
+            // Use MustBeHq property for HQ requirement (persisted with plan)
+            AddToAggregation(node, aggregates, isCrafted: false, requiresHq: node.MustBeHq);
             // Don't recurse into children - we're buying the finished item
             return;
         }
@@ -125,14 +126,14 @@ public class CraftingPlan
         // If buying from vendor, add to aggregation
         if (node.Source == AcquisitionSource.VendorBuy)
         {
-            AddToAggregation(node, aggregates, isCrafted: false, requiresHq: false);
+            AddToAggregation(node, aggregates, isCrafted: false, requiresHq: node.MustBeHq);
             return;
         }
         
         // If leaf node (can't be crafted), add to aggregation
         if (!node.Children.Any())
         {
-            AddToAggregation(node, aggregates, isCrafted: false, requiresHq: false);
+            AddToAggregation(node, aggregates, isCrafted: false, requiresHq: node.MustBeHq);
         }
         
         // Recurse into children (sub-materials needed for crafting)
@@ -215,7 +216,14 @@ public class PlanNode
     /// <summary>
     /// If true, HQ version is required (for buying from market)
     /// </summary>
+    [Obsolete("Use MustBeHq instead - this was conflated with acquisition source")]
     public bool RequiresHq { get; set; }
+    
+    /// <summary>
+    /// If true, this item must be HQ quality (regardless of acquisition method).
+    /// Applies to both crafted items (need to HQ the craft) and bought items (buy HQ listing).
+    /// </summary>
+    public bool MustBeHq { get; set; }
     
     /// <summary>
     /// If true, this item cannot be crafted (gathered, dropped, etc.)
@@ -251,9 +259,19 @@ public class PlanNode
     public int CraftCount => (int)Math.Ceiling((double)Quantity / Yield);
     
     /// <summary>
-    /// Current market price per unit (fetched from Universalis)
+    /// Current market price per unit (NQ) (fetched from Universalis)
     /// </summary>
     public decimal MarketPrice { get; set; }
+    
+    /// <summary>
+    /// HQ market price per unit (fetched from Universalis)
+    /// </summary>
+    public decimal HqMarketPrice { get; set; }
+    
+    /// <summary>
+    /// Whether this item can be HQ (crafted items and gathered materials can, crystals/clusters/aethersands cannot)
+    /// </summary>
+    public bool CanBeHq { get; set; }
     
     /// <summary>
     /// Source of the price (Vendor, Market, Untradeable)
@@ -306,7 +324,10 @@ public class PlanNode
             Quantity = Quantity,
             Source = Source,
             RequiresHq = RequiresHq,
+            MustBeHq = MustBeHq,
+            CanBeHq = CanBeHq,
             IsUncraftable = IsUncraftable,
+            HqMarketPrice = HqMarketPrice,
             RecipeLevel = RecipeLevel,
             Job = Job,
             Yield = Yield,
@@ -410,14 +431,24 @@ public class SerializablePlanNode
     /// <summary>Acquisition source (new preferred property).</summary>
     public AcquisitionSource? Source { get; set; }
     
-    /// <summary>If true, HQ version is required (for market purchases).</summary>
+    /// <summary>Legacy: Use MustBeHq instead.</summary>
     public bool RequiresHq { get; set; }
+    
+    /// <summary>If true, this item must be HQ quality (for plan sharing).</summary>
+    public bool MustBeHq { get; set; }
+    
+    /// <summary>If true, this item can be HQ (crafted/gathered items can, crystals/aethersands cannot).</summary>
+    public bool CanBeHq { get; set; }
     
     public bool IsUncraftable { get; set; }
     public int RecipeLevel { get; set; }
     public string Job { get; set; } = string.Empty;
     public int Yield { get; set; } = 1;
     public decimal MarketPrice { get; set; }
+    
+    /// <summary>HQ market price per unit.</summary>
+    public decimal HqMarketPrice { get; set; }
+    
     public string NodeId { get; set; } = string.Empty;
     public string? ParentNodeId { get; set; }
     public string? Notes { get; set; }

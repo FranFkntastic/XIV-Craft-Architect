@@ -150,6 +150,7 @@ public class ArtisanService
         // Approach 1: Use XIVAPI to look up the recipe
         try
         {
+            _logger.LogDebug("[Artisan] Looking up recipe ID {RecipeId} via XIVAPI", recipeId);
             var recipeInfo = await GetXivApiRecipeAsync(recipeId, ct);
             if (recipeInfo?.ItemResultId > 0)
             {
@@ -161,25 +162,82 @@ public class ArtisanService
                     return item;
                 }
             }
+            else
+            {
+                _logger.LogWarning("[Artisan] XIVAPI returned no ItemResult for recipe ID {RecipeId}", recipeId);
+            }
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "[Artisan] XIVAPI recipe lookup failed for recipe ID {RecipeId}", recipeId);
         }
 
-        // Approach 2: Try the recipe ID as an item ID (fallback for some old recipes)
+        // Approach 2: Try searching Garland by recipe ID directly
+        // This works for many recipes even without XIVAPI
         try
         {
+            _logger.LogDebug("[Artisan] Trying Garland direct lookup for recipe ID {RecipeId}", recipeId);
+            var item = await TryFindItemByRecipeInGarlandAsync(recipeId, ct);
+            if (item != null)
+            {
+                _logger.LogDebug("[Artisan] Mapped recipe ID {RecipeId} to item ID {ItemId} ({ItemName}) via Garland",
+                    recipeId, item.Id, item.Name);
+                return item;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[Artisan] Garland recipe lookup failed for recipe ID {RecipeId}", recipeId);
+        }
+
+        // Approach 3: Try the recipe ID as an item ID (fallback for some old recipes)
+        try
+        {
+            _logger.LogDebug("[Artisan] Trying recipe ID {RecipeId} as item ID", recipeId);
             var item = await _garlandService.GetItemAsync(recipeId, ct);
             if (item?.Crafts?.Any(c => c.Id == recipeId) == true)
             {
+                _logger.LogDebug("[Artisan] Found item for recipe ID {RecipeId} using recipe ID as item ID", recipeId);
                 return item;
             }
         }
         catch { /* Ignore and continue */ }
         
         _logger.LogWarning("[Artisan] Could not find item for recipe ID {RecipeId}. " +
-            "The item may not be available in Garland Tools.", recipeId);
+            "The item may not be available in Garland Tools or XIVAPI.", recipeId);
+        
+        return null;
+    }
+
+    /// <summary>
+    /// Try to find an item by searching for a craft with the given recipe ID.
+    /// This searches common recipe ID ranges and uses Garland's search.
+    /// </summary>
+    private async Task<GarlandItem?> TryFindItemByRecipeInGarlandAsync(int recipeId, CancellationToken ct)
+    {
+        // Recipe IDs are typically in specific ranges by job/craft type
+        // We can try to estimate the item ID from the recipe ID
+        // This is a heuristic approach but works for many cases
+        
+        // First, try direct item lookup with offsets
+        // Many recipes have item IDs that are close to their recipe IDs
+        var offsets = new[] { 0, -100000, -200000, 100000, 200000 };
+        
+        foreach (var offset in offsets)
+        {
+            var estimatedItemId = recipeId + offset;
+            if (estimatedItemId <= 0) continue;
+            
+            try
+            {
+                var item = await _garlandService.GetItemAsync(estimatedItemId, ct);
+                if (item?.Crafts?.Any(c => c.Id == recipeId) == true)
+                {
+                    return item;
+                }
+            }
+            catch { /* Continue to next offset */ }
+        }
         
         return null;
     }
@@ -192,8 +250,17 @@ public class ArtisanService
     {
         try
         {
+            // Use the beta xivapi.com endpoint (v2 API)
             var url = $"https://xivapi.com/recipe/{recipeId}";
+            _logger.LogDebug("[Artisan] Querying XIVAPI: {Url}", url);
+            
             var response = await _httpClient.GetAsync(url, ct);
+            
+            if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            {
+                _logger.LogWarning("[Artisan] XIVAPI rate limit hit for recipe {RecipeId}", recipeId);
+                return null;
+            }
             
             if (!response.IsSuccessStatusCode)
             {
@@ -203,10 +270,23 @@ public class ArtisanService
             }
 
             var json = await response.Content.ReadAsStringAsync(ct);
+            _logger.LogDebug("[Artisan] XIVAPI response for recipe {RecipeId}: {Json}", recipeId, json[..Math.Min(200, json.Length)]);
+            
             var recipe = JsonSerializer.Deserialize<XivApiRecipe>(json, new JsonSerializerOptions
             {
-                PropertyNameCaseInsensitive = true
+                PropertyNameCaseInsensitive = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             });
+
+            if (recipe == null)
+            {
+                _logger.LogWarning("[Artisan] Failed to deserialize XIVAPI response for recipe {RecipeId}", recipeId);
+            }
+            else if (recipe.ItemResultId == 0)
+            {
+                _logger.LogWarning("[Artisan] XIVAPI response for recipe {RecipeId} has no ItemResult (ID: {ItemResultId}, Name: {ItemResultName})", 
+                    recipeId, recipe.ItemResult?.Id ?? 0, recipe.ItemResult?.Name ?? "null");
+            }
 
             return recipe;
         }
@@ -219,6 +299,7 @@ public class ArtisanService
 
     /// <summary>
     /// XIVAPI recipe response model (minimal)
+    /// Uses PascalCase properties - JsonSerializer will handle camelCase with PropertyNameCaseInsensitive
     /// </summary>
     private class XivApiRecipe
     {

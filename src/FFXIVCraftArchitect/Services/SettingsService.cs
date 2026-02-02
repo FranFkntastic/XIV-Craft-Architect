@@ -43,6 +43,10 @@ public class SettingsService
         ["ui"] = new Dictionary<string, object>
         {
             ["accent_color"] = "#d4af37"  // Gold default
+        },
+        ["planning"] = new Dictionary<string, object>
+        {
+            ["default_recommendation_mode"] = "MinimizeTotalCost"  // or "MaximizeValue"
         }
     };
 

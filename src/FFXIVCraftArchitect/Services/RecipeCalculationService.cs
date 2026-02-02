@@ -16,9 +16,6 @@ public class RecipeCalculationService
     // Cache to avoid fetching the same item multiple times during calculation
     private readonly ConcurrentDictionary<int, GarlandItem> _itemCache = new();
     
-    // Track visited items to prevent infinite recursion (circular recipes)
-    private readonly HashSet<int> _visitedItems = new();
-    
     // Maximum recursion depth to prevent stack overflow
     private const int MaxDepth = 20;
 
@@ -32,7 +29,7 @@ public class RecipeCalculationService
     /// Build a complete crafting plan from a list of target items.
     /// </summary>
     public async Task<CraftingPlan> BuildPlanAsync(
-        List<(int itemId, string name, int quantity)> targetItems,
+        List<(int itemId, string name, int quantity, bool isHqRequired)> targetItems,
         string dataCenter,
         string world,
         CancellationToken ct = default)
@@ -46,18 +43,22 @@ public class RecipeCalculationService
             World = world
         };
 
-        _visitedItems.Clear();
         _itemCache.Clear();
 
-        foreach (var (itemId, name, quantity) in targetItems)
+        foreach (var (itemId, name, quantity, isHqRequired) in targetItems)
         {
             try
             {
-                var node = await BuildNodeRecursiveAsync(itemId, name, quantity, null, 0, ct);
+                // Create a fresh visited set for each root item to detect circular dependencies
+                // within that item's tree only (not across different root items)
+                var visitedItems = new HashSet<int>();
+                var node = await BuildNodeRecursiveAsync(itemId, name, quantity, null, 0, visitedItems, ct);
                 if (node != null)
                 {
+                    // Apply HQ requirement from project item settings
+                    node.MustBeHq = isHqRequired;
                     plan.RootItems.Add(node);
-                    _logger.LogDebug("[RecipeCalc] Added root item: {Name} x{Qty}", node.Name, node.Quantity);
+                    _logger.LogDebug("[RecipeCalc] Added root item: {Name} x{Qty} (HQ: {Hq})", node.Name, node.Quantity, isHqRequired);
                 }
             }
             catch (Exception ex)
@@ -70,7 +71,8 @@ public class RecipeCalculationService
                     Name = $"{name} (Error: {ex.Message})",
                     Quantity = quantity,
                     IsUncraftable = true,
-                    Source = AcquisitionSource.MarketBuyNq
+                    Source = AcquisitionSource.MarketBuyNq,
+                    MustBeHq = isHqRequired
                 });
             }
         }
@@ -88,6 +90,7 @@ public class RecipeCalculationService
         int quantity, 
         PlanNode? parent, 
         int depth, 
+        HashSet<int> visitedItems,
         CancellationToken ct)
     {
         // Prevent infinite recursion
@@ -105,8 +108,8 @@ public class RecipeCalculationService
             };
         }
 
-        // Check for circular dependency
-        if (_visitedItems.Contains(itemId) && parent != null)
+        // Check for circular dependency within this item's tree
+        if (visitedItems.Contains(itemId) && parent != null)
         {
             _logger.LogWarning("[RecipeCalc] Circular dependency detected for item {ItemId}", itemId);
             return new PlanNode
@@ -137,6 +140,9 @@ public class RecipeCalculationService
             }
         }
 
+        // Determine if item can be HQ
+        var canBeHq = DetermineCanBeHq(itemData, itemId);
+        
         // Create the node
         var node = new PlanNode
         {
@@ -144,7 +150,8 @@ public class RecipeCalculationService
             Name = itemData?.Name ?? name,
             IconId = itemData?.IconId ?? 0,
             Quantity = quantity,
-            Parent = parent
+            Parent = parent,
+            CanBeHq = canBeHq
         };
 
         // Check for both traditional crafts and company crafts
@@ -159,13 +166,13 @@ public class RecipeCalculationService
             return node;
         }
 
-        // Mark as visited for circular detection
-        _visitedItems.Add(itemId);
+        // Mark as visited for circular detection within this tree
+        visitedItems.Add(itemId);
 
         // Handle company workshop recipes (airships, submarines, etc.)
         if (hasCompanyCraft)
         {
-            return await BuildCompanyCraftNodeAsync(node, itemData!.CompanyCrafts!.First(), quantity, ct);
+            return await BuildCompanyCraftNodeAsync(node, itemData!.CompanyCrafts!.First(), quantity, visitedItems, ct);
         }
 
         // Use the first available traditional recipe (usually the lowest level/main recipe)
@@ -187,6 +194,7 @@ public class RecipeCalculationService
                 ingredientQuantity, 
                 node, 
                 depth + 1, 
+                visitedItems,
                 ct);
             
             if (childNode != null)
@@ -265,9 +273,18 @@ public class RecipeCalculationService
     public void SetAcquisitionSource(PlanNode node, AcquisitionSource source)
     {
         node.Source = source;
+        
+        // Legacy property - kept for backward compatibility
         node.RequiresHq = source == AcquisitionSource.MarketBuyHq;
         
-        _logger.LogInformation("[RecipeCalc] {ItemName} set to {Source}", node.Name, source);
+        // If buying HQ, also set MustBeHq (the persistent property)
+        if (source == AcquisitionSource.MarketBuyHq)
+        {
+            node.MustBeHq = true;
+        }
+        // Note: We don't clear MustBeHq when switching to NQ - user must explicitly uncheck HQ Required
+        
+        _logger.LogInformation("[RecipeCalc] {ItemName} set to {Source} (MustBeHq={MustBeHq})", node.Name, source, node.MustBeHq);
     }
 
     /// <summary>
@@ -277,7 +294,8 @@ public class RecipeCalculationService
     private async Task<PlanNode> BuildCompanyCraftNodeAsync(
         PlanNode node, 
         GarlandCompanyCraft companyCraft, 
-        int quantity, 
+        int quantity,
+        HashSet<int> visitedItems,
         CancellationToken ct)
     {
         node.Job = "Company Workshop";
@@ -310,6 +328,7 @@ public class RecipeCalculationService
                     item.Amount * quantity, // Scale by parent quantity
                     phaseNode,
                     0, // Reset depth for ingredients
+                    visitedItems,
                     ct);
                 
                 if (childNode != null)
@@ -342,6 +361,43 @@ public class RecipeCalculationService
             8 => "Culinarian",
             _ => "Unknown"
         };
+    }
+
+    /// <summary>
+    /// Determine if an item can be HQ based on its properties.
+    /// ONLY crafted items can be HQ in modern FFXIV.
+    /// Most gathered items, crystals, shards, clusters, and aethersands cannot be HQ.
+    /// </summary>
+    private static bool DetermineCanBeHq(GarlandItem? itemData, int itemId)
+    {
+        // List of item IDs that cannot be HQ (crystals, shards, clusters)
+        // These are typically item IDs 1-19 for shards/crystals/clusters
+        if (itemId >= 1 && itemId <= 19)
+            return false;
+        
+        // Check if item name suggests it's a crystal/shard/cluster/aethersand
+        if (itemData?.Name != null)
+        {
+            var lowerName = itemData.Name.ToLowerInvariant();
+            
+            // Crystals, shards, clusters cannot be HQ
+            if (lowerName.Contains("crystal") || 
+                lowerName.Contains("shard") || 
+                lowerName.Contains("cluster"))
+                return false;
+            
+            // Aethersands cannot be HQ
+            if (lowerName.Contains("aethersand"))
+                return false;
+        }
+        
+        // ONLY items with craft recipes can be HQ in modern FFXIV
+        // Most gathered items (logs, ores, etc.) are NQ-only
+        if (itemData?.Crafts?.Any() == true)
+            return true;
+        
+        // Default: cannot be HQ (gathered items, drops, etc. are NQ-only)
+        return false;
     }
 
     /// <summary>
@@ -385,11 +441,14 @@ public class RecipeCalculationService
             IsBuy = node.IsBuy, // Backward compatibility
             Source = node.Source,
             RequiresHq = node.RequiresHq,
+            MustBeHq = node.MustBeHq,
+            CanBeHq = node.CanBeHq,
             IsUncraftable = node.IsUncraftable,
             RecipeLevel = node.RecipeLevel,
             Job = node.Job,
             Yield = node.Yield,
             MarketPrice = node.MarketPrice,
+            HqMarketPrice = node.HqMarketPrice,
             NodeId = node.NodeId,
             ParentNodeId = parentId,
             Notes = node.Notes,
@@ -449,6 +508,9 @@ public class RecipeCalculationService
                 }
                 
                 node.RequiresHq = sNode.RequiresHq;
+                node.MustBeHq = sNode.MustBeHq;
+                node.CanBeHq = sNode.CanBeHq;
+                node.HqMarketPrice = sNode.HqMarketPrice;
                 
                 nodeLookup[sNode.NodeId] = node;
             }

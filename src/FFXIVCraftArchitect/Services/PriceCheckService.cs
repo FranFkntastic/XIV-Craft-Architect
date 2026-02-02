@@ -126,8 +126,8 @@ public class PriceCheckService
                 _logger.LogWarning("[PriceCheck] No price found for {ItemName}", itemName);
             }
             
-            // Store HQ price if available
-            if (marketPriceHq > 0)
+            // Store HQ price if available (only if there are actual HQ listings)
+            if (marketPriceHq > 0 && HasHqListings(marketData))
             {
                 priceInfo.HqUnitPrice = marketPriceHq;
             }
@@ -204,6 +204,7 @@ public class PriceCheckService
 
         // Fetch market prices in bulk
         Dictionary<int, UniversalisResponse> marketPrices = new();
+        bool marketFetchFailed = false;
         if (marketIds.Count > 0)
         {
             try
@@ -212,7 +213,9 @@ public class PriceCheckService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[PriceCheck] Failed to fetch market prices");
+                _logger.LogError(ex, "[PriceCheck] Failed to fetch market prices - preserving cached prices");
+                marketFetchFailed = true;
+                // Don't overwrite existing cache entries on failure
             }
         }
 
@@ -222,6 +225,13 @@ public class PriceCheckService
         {
             current++;
             progress?.Report((current, itemsToFetch.Count, name));
+
+            // If market fetch failed, try to use cached price
+            if (marketFetchFailed && _priceCache.TryGetValue(itemId, out var cachedPrice))
+            {
+                results[itemId] = cachedPrice;
+                continue;
+            }
 
             var garlandItem = garlandItems.GetValueOrDefault(itemId);
             var priceInfo = new PriceInfo
@@ -237,6 +247,7 @@ public class PriceCheckService
                 priceInfo.Source = PriceSource.Untradeable;
                 priceInfo.SourceDetails = "Untradeable";
                 results[itemId] = priceInfo;
+                _priceCache[itemId] = priceInfo;
                 continue;
             }
 
@@ -274,8 +285,8 @@ public class PriceCheckService
                 priceInfo.SourceDetails = "No price data";
             }
             
-            // Store HQ price if available (separate from main price logic)
-            if (marketPriceHq > 0)
+            // Store HQ price if available (only if there are actual HQ listings)
+            if (marketPriceHq > 0 && marketPrices.TryGetValue(itemId, out var marketDataForHq) && HasHqListings(marketDataForHq))
             {
                 priceInfo.HqUnitPrice = marketPriceHq;
             }
@@ -336,6 +347,7 @@ public class PriceCheckService
     /// <summary>
     /// Calculate average price from market listings.
     /// Uses average of lowest 5 listings or recent history.
+    /// For HQ, returns 0 if no HQ listings exist (doesn't fall back to NQ).
     /// </summary>
     /// <param name="marketData">Market data response</param>
     /// <param name="hqOnly">If true, only consider HQ listings</param>
@@ -364,11 +376,20 @@ public class PriceCheckService
             }
         }
 
-        if (marketData.AveragePrice > 0)
+        // Only fall back to AveragePrice for NQ, not HQ
+        if (!hqOnly && marketData.AveragePrice > 0)
         {
             return (decimal)marketData.AveragePrice;
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Check if an item has any HQ listings on the market.
+    /// </summary>
+    private bool HasHqListings(UniversalisResponse marketData)
+    {
+        return marketData.Listings?.Any(l => l.IsHq) == true;
     }
 }

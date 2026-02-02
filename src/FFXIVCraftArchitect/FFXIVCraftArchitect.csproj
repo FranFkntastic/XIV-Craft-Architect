@@ -33,6 +33,9 @@
     
     <!-- WPF UI Library for modern styling -->
     <PackageReference Include="WPF-UI" Version="3.0.4" />
+    
+    <!-- CSV handling -->
+    <PackageReference Include="CsvHelper" Version="33.0.1" />
   </ItemGroup>
 
   <ItemGroup>

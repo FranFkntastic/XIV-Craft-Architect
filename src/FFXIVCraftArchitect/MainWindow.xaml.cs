@@ -20,6 +20,7 @@ public class ProjectItem
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public int Quantity { get; set; } = 1;
+    public bool IsHqRequired { get; set; } = false;
     public override string ToString() => $"{Name} x{Quantity}";
 }
 
@@ -73,6 +74,10 @@ public partial class MainWindow : Window
     {
         // Load world data
         await LoadWorldDataAsync();
+        
+        // Apply default recommendation mode setting
+        var defaultMode = _settingsService.Get<string>("planning.default_recommendation_mode", "MinimizeTotalCost");
+        MarketModeCombo.SelectedIndex = defaultMode == "MaximizeValue" ? 1 : 0;
     }
 
     private async Task LoadWorldDataAsync()
@@ -227,7 +232,7 @@ public partial class MainWindow : Window
         
         try
         {
-            var targets = _projectItems.Select(p => (p.Id, p.Name, p.Quantity)).ToList();
+            var targets = _projectItems.Select(p => (p.Id, p.Name, p.Quantity, p.IsHqRequired)).ToList();
             _currentPlan = await _recipeCalcService.BuildPlanAsync(targets, dc, world);
             
             // Display in TreeView
@@ -265,7 +270,6 @@ public partial class MainWindow : Window
     {
         var hasPlan = _currentPlan != null && _currentPlan.RootItems.Count > 0;
         BuildPlanButton.Content = hasPlan ? "Rebuild Project Plan" : "Build Project Plan";
-        FetchPricesButton.IsEnabled = hasPlan;
     }
 
     /// <summary>
@@ -273,6 +277,10 @@ public partial class MainWindow : Window
     /// </summary>
     private void DisplayPlanInTreeView(CraftingPlan plan)
     {
+        // Preserve scroll position to prevent jarring jumps when toggling HQ
+        var scrollViewer = FindParentScrollViewer(RecipePlanPanel);
+        var scrollOffset = scrollViewer?.VerticalOffset ?? 0;
+        
         RecipePlanPanel.Children.Clear();
         
         foreach (var rootItem in plan.RootItems)
@@ -280,14 +288,48 @@ public partial class MainWindow : Window
             var rootExpander = CreateRecipeExpander(rootItem, 0);
             RecipePlanPanel.Children.Add(rootExpander);
         }
+        
+        // Restore scroll position after layout is updated
+        if (scrollViewer != null)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                scrollViewer.ScrollToVerticalOffset(scrollOffset);
+            }, System.Windows.Threading.DispatcherPriority.Render);
+        }
+    }
+    
+    /// <summary>
+    /// Find the parent ScrollViewer of a dependency object.
+    /// </summary>
+    private ScrollViewer? FindParentScrollViewer(DependencyObject child)
+    {
+        DependencyObject? parent = VisualTreeHelper.GetParent(child);
+        
+        while (parent != null && parent is not ScrollViewer)
+        {
+            parent = VisualTreeHelper.GetParent(parent);
+        }
+        
+        return parent as ScrollViewer;
     }
     
     /// <summary>
     /// Creates an Expander-based recipe card with proper styling.
+    /// Parent nodes (with children) get an expand arrow to show/hide subcrafts.
+    /// Leaf nodes (no children) show an acquisition source dropdown instead.
     /// </summary>
-    private Expander CreateRecipeExpander(PlanNode node, int depth)
+    private UIElement CreateRecipeExpander(PlanNode node, int depth)
     {
-        var headerPanel = CreateNodeHeaderPanel(node);
+        // Leaf node: Show simple panel with acquisition dropdown on the right
+        if (node.Children.Count == 0)
+        {
+            return CreateLeafNodePanel(node, depth);
+        }
+        
+        // Parent node: Create Expander with arrow for subcrafts AND dropdown on the right
+        // This allows buying complex crafted items (like submarine parts) instead of crafting
+        var headerPanel = CreateNodeHeaderPanel(node, showDropdown: true);
         
         var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#252525"));
         
@@ -304,44 +346,49 @@ public partial class MainWindow : Window
         // Style the Expander header
         expander.Resources["ExpanderHeaderStyle"] = CreateExpanderHeaderStyle();
         
-        // Add children if any
-        if (node.Children.Count > 0)
+        // Add children
+        var childrenPanel = new StackPanel { Margin = new Thickness(16, 4, 0, 0) };
+        foreach (var child in node.Children)
         {
-            var childrenPanel = new StackPanel { Margin = new Thickness(16, 4, 0, 0) };
-            foreach (var child in node.Children)
-            {
-                childrenPanel.Children.Add(CreateRecipeExpander(child, depth + 1));
-            }
-            expander.Content = childrenPanel;
+            childrenPanel.Children.Add(CreateRecipeExpander(child, depth + 1));
         }
+        expander.Content = childrenPanel;
         
         return expander;
     }
     
     /// <summary>
-    /// Creates the header panel for a recipe node.
+    /// Creates a simple panel for leaf nodes (no children) with acquisition dropdown on the right.
+    /// HQ items show a star and use accent color.
     /// </summary>
-    private StackPanel CreateNodeHeaderPanel(PlanNode node)
+    private StackPanel CreateLeafNodePanel(PlanNode node, int depth)
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
         
-        // Icon
-        var iconBlock = new TextBlock
-        {
-            Text = GetNodeIcon(node),
-            FontSize = 14,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 6, 0)
-        };
-        panel.Children.Add(iconBlock);
+        // Add spacing for alignment (where expand arrow would be on parent nodes)
+        panel.Margin = new Thickness(20, 0, 0, 0);
         
-        // Name
+        // HQ Star indicator (shown if MustBeHq is set)
+        if (node.MustBeHq)
+        {
+            var starBlock = new TextBlock
+            {
+                Text = "★ ",
+                Foreground = Brushes.Gold,
+                FontWeight = FontWeights.Bold,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 12
+            };
+            panel.Children.Add(starBlock);
+        }
+        
+        // Name - use accent color if HQ, otherwise use source-based color
         var nameBlock = new TextBlock
         {
             Text = node.Name,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = GetNodeForeground(node)
+            Foreground = node.MustBeHq ? GetAccentBrush() : GetNodeForeground(node)
         };
         panel.Children.Add(nameBlock);
         
@@ -354,21 +401,88 @@ public partial class MainWindow : Window
         };
         panel.Children.Add(qtyBlock);
         
-        // HQ indicator
-        if (node.RequiresHq)
+        // Price estimate display
+        var priceText = GetNodePriceDisplay(node);
+        if (!string.IsNullOrEmpty(priceText))
         {
-            var hqBlock = new TextBlock
+            var priceBlock = new TextBlock
             {
-                Text = " [HQ]",
+                Text = priceText,
+                Foreground = Brushes.Gray,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 8, 0),
+                FontSize = 11
+            };
+            panel.Children.Add(priceBlock);
+        }
+        
+        // Acquisition source dropdown (MOVED TO RIGHT SIDE)
+        var sourceCombo = CreateAcquisitionSourceDropdown(node);
+        if (sourceCombo != null)
+        {
+            panel.Children.Add(sourceCombo);
+        }
+        
+        return panel;
+    }
+    
+    /// <summary>
+    /// Creates the header panel for a parent recipe node (with children).
+    /// Parent nodes use an expand arrow. HQ items show a star and use accent color.
+    /// </summary>
+    private StackPanel CreateNodeHeaderPanel(PlanNode node, bool showDropdown)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        
+        // HQ Star indicator (shown if MustBeHq is set)
+        if (node.MustBeHq)
+        {
+            var starBlock = new TextBlock
+            {
+                Text = "★ ",
                 Foreground = Brushes.Gold,
                 FontWeight = FontWeights.Bold,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(4, 0, 0, 0)
+                FontSize = 12
             };
-            panel.Children.Add(hqBlock);
+            panel.Children.Add(starBlock);
         }
         
-        // Recipe info (job, level, yield)
+        // Name - use accent color if HQ, otherwise use source-based color
+        var nameBlock = new TextBlock
+        {
+            Text = node.Name,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = node.MustBeHq ? GetAccentBrush() : GetNodeForeground(node)
+        };
+        panel.Children.Add(nameBlock);
+        
+        // Quantity
+        var qtyBlock = new TextBlock
+        {
+            Text = $" ×{node.Quantity}",
+            Foreground = Brushes.LightGray,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        panel.Children.Add(qtyBlock);
+        
+        // Price estimate display
+        var priceText = GetNodePriceDisplay(node);
+        if (!string.IsNullOrEmpty(priceText))
+        {
+            var priceBlock = new TextBlock
+            {
+                Text = priceText,
+                Foreground = Brushes.Gray,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 8, 0),
+                FontSize = 11
+            };
+            panel.Children.Add(priceBlock);
+        }
+        
+        // Recipe info (job, level, yield) - only when crafting
         if (!node.IsUncraftable && !string.IsNullOrEmpty(node.Job) && node.Source == AcquisitionSource.Craft)
         {
             var infoBlock = new TextBlock
@@ -377,27 +491,130 @@ public partial class MainWindow : Window
                 Foreground = Brushes.Gray,
                 VerticalAlignment = VerticalAlignment.Center,
                 FontSize = 11,
-                Margin = new Thickness(8, 0, 0, 0)
+                Margin = new Thickness(8, 0, 8, 0)
             };
             panel.Children.Add(infoBlock);
         }
         
-        // Cost info
-        var costText = GetNodeCostText(node);
-        if (!string.IsNullOrEmpty(costText))
+        // Acquisition source dropdown (on the right for all nodes, including branch nodes)
+        // This allows buying complex crafted items like submarine parts instead of crafting them
+        if (showDropdown)
         {
-            var costBlock = new TextBlock
+            var sourceCombo = CreateAcquisitionSourceDropdown(node);
+            if (sourceCombo != null)
             {
-                Text = $"  {costText}",
-                Foreground = Brushes.Gold,
-                VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 11,
-                Margin = new Thickness(8, 0, 0, 0)
-            };
-            panel.Children.Add(costBlock);
+                panel.Children.Add(sourceCombo);
+            }
         }
         
         return panel;
+    }
+    
+    /// <summary>
+    /// Creates a dropdown for selecting acquisition source with cost info.
+    /// Filters options based on item type (craftable, gathered, vendor, etc.)
+    /// Shows NQ/HQ prices with real market data.
+    /// </summary>
+    private ComboBox? CreateAcquisitionSourceDropdown(PlanNode node)
+    {
+        var combo = new ComboBox
+        {
+            Width = 160,
+            Margin = new Thickness(0, 0, 4, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 11
+        };
+        
+        // Determine what options to show based on item characteristics
+        var hasRecipe = !node.IsUncraftable && node.Children.Count > 0;
+        var hasMarketNqPrice = node.MarketPrice > 0;
+        // Only show Buy HQ if there's an actual HQ price (not just estimated)
+        var hasMarketHqPrice = node.HqMarketPrice > 0 && node.CanBeHq;
+        var isVendorItem = node.PriceSource == PriceSource.Vendor;
+        
+        // Calculate costs
+        var craftCost = hasRecipe ? CalculateNodeCraftCost(node) : 0;
+        var nqCost = hasMarketNqPrice ? node.MarketPrice * node.Quantity : 0;
+        // Use actual HQ price only (no more estimation)
+        var hqCost = hasMarketHqPrice ? node.HqMarketPrice * node.Quantity : 0;
+        
+        // Add Craft option (only for craftable items)
+        if (hasRecipe)
+        {
+            combo.Items.Add(new ComboBoxItem
+            {
+                Content = $"Craft (~{craftCost:N0}g)",
+                Tag = AcquisitionSource.Craft,
+                Foreground = Brushes.White,
+                ToolTip = $"Craft: {craftCost:N0}g"
+            });
+        }
+        
+        // Add Vendor option (for vendor items)
+        if (isVendorItem)
+        {
+            combo.Items.Add(new ComboBoxItem
+            {
+                Content = $"Vendor ({node.MarketPrice * node.Quantity:N0}g)",
+                Tag = AcquisitionSource.VendorBuy,
+                Foreground = Brushes.LightYellow,
+                ToolTip = $"Vendor: {node.MarketPrice * node.Quantity:N0}g"
+            });
+        }
+        
+        // Add Buy NQ option (if market price available)
+        if (hasMarketNqPrice)
+        {
+            combo.Items.Add(new ComboBoxItem
+            {
+                Content = $"Buy NQ ({nqCost:N0}g)",
+                Tag = AcquisitionSource.MarketBuyNq,
+                Foreground = Brushes.LightSkyBlue,
+                ToolTip = $"Market NQ: {nqCost:N0}g"
+            });
+        }
+        
+        // Add Buy HQ option (if item can be HQ and market price available)
+        if (node.CanBeHq && hasMarketHqPrice)
+        {
+            combo.Items.Add(new ComboBoxItem
+            {
+                Content = $"Buy HQ ({hqCost:N0}g)",
+                Tag = AcquisitionSource.MarketBuyHq,
+                Foreground = Brushes.LightGreen,
+                ToolTip = $"Market HQ: {hqCost:N0}g"
+            });
+        }
+        
+        // If no options available, don't show dropdown
+        if (combo.Items.Count == 0)
+            return null;
+        
+        // Select current value
+        foreach (ComboBoxItem item in combo.Items)
+        {
+            if ((AcquisitionSource)item.Tag == node.Source)
+            {
+                combo.SelectedItem = item;
+                break;
+            }
+        }
+        
+        // Default to first if not found
+        if (combo.SelectedItem == null && combo.Items.Count > 0)
+            combo.SelectedIndex = 0;
+        
+        // Handle selection change
+        combo.SelectionChanged += (s, e) =>
+        {
+            if (combo.SelectedItem is ComboBoxItem selected)
+            {
+                var newSource = (AcquisitionSource)selected.Tag;
+                SetNodeAcquisitionSource(node, newSource);
+            }
+        };
+        
+        return combo;
     }
     
     /// <summary>
@@ -425,6 +642,82 @@ public partial class MainWindow : Window
     };
     
     /// <summary>
+    /// Gets the current accent color brush from resources.
+    /// </summary>
+    private Brush GetAccentBrush()
+    {
+        return TryFindResource("AccentBrush") as Brush ?? Brushes.Gold;
+    }
+    
+    /// <summary>
+    /// Gets the accent color as a Color for manipulation.
+    /// </summary>
+    private Color GetAccentColor()
+    {
+        if (TryFindResource("AccentBrush") is SolidColorBrush brush)
+            return brush.Color;
+        return Colors.Gold;
+    }
+    
+    /// <summary>
+    /// Gets a muted/darker version of the accent color for card backgrounds.
+    /// </summary>
+    private Brush GetMutedAccentBrush()
+    {
+        var color = GetAccentColor();
+        // Mix with dark background color (#2d2d2d) to get a muted version
+        var muted = Color.FromRgb(
+            (byte)((color.R * 0.25) + (45 * 0.75)),
+            (byte)((color.G * 0.25) + (45 * 0.75)),
+            (byte)((color.B * 0.25) + (45 * 0.75)));
+        return new SolidColorBrush(muted);
+    }
+    
+    /// <summary>
+    /// Gets a slightly lighter muted accent for card headers.
+    /// </summary>
+    private Brush GetMutedAccentBrushLight()
+    {
+        var color = GetAccentColor();
+        // Mix with a lighter dark color (#4a4a4a) 
+        var muted = Color.FromRgb(
+            (byte)((color.R * 0.3) + (74 * 0.7)),
+            (byte)((color.G * 0.3) + (74 * 0.7)),
+            (byte)((color.B * 0.3) + (74 * 0.7)));
+        return new SolidColorBrush(muted);
+    }
+    
+    /// <summary>
+    /// Gets a lighter accent for expanded card headers.
+    /// </summary>
+    private Brush GetMutedAccentBrushExpanded()
+    {
+        var color = GetAccentColor();
+        // Mix with an even lighter dark color (#5a5a5a) 
+        var muted = Color.FromRgb(
+            (byte)((color.R * 0.35) + (90 * 0.65)),
+            (byte)((color.G * 0.35) + (90 * 0.65)),
+            (byte)((color.B * 0.35) + (90 * 0.65)));
+        return new SolidColorBrush(muted);
+    }
+    
+    /// <summary>
+    /// Gets a price display string for a node based on its acquisition source.
+    /// Shows actual prices only (no estimates).
+    /// </summary>
+    private string GetNodePriceDisplay(PlanNode node)
+    {
+        return node.Source switch
+        {
+            AcquisitionSource.Craft => "",
+            AcquisitionSource.VendorBuy when node.MarketPrice > 0 => $"~{node.MarketPrice * node.Quantity:N0}g",
+            AcquisitionSource.MarketBuyNq when node.MarketPrice > 0 => $"~{node.MarketPrice * node.Quantity:N0}g",
+            AcquisitionSource.MarketBuyHq when node.HqMarketPrice > 0 => $"~{node.HqMarketPrice * node.Quantity:N0}g",
+            _ => ""
+        };
+    }
+
+    /// <summary>
     /// Creates the style for Expander headers.
     /// </summary>
     private Style CreateExpanderHeaderStyle()
@@ -448,6 +741,9 @@ public partial class MainWindow : Window
         {
             _currentMarketPlans = plan.SavedMarketPlans;
             ApplyMarketSortAndDisplay();
+            
+            // Enable refresh button since we have market data to refresh
+            RefreshMarketButton.IsEnabled = true;
             
             // Also restore prices from plan nodes
             var savedPrices = ExtractPricesFromPlan(plan);
@@ -575,28 +871,29 @@ public partial class MainWindow : Window
         
         panel.Children.Add(sourceCombo);
         
-        // Item name and details
+        // HQ Star indicator (shown if MustBeHq is set) - before name
+        if (node.MustBeHq)
+        {
+            var starBlock = new TextBlock
+            {
+                Text = "★ ",
+                Foreground = System.Windows.Media.Brushes.Gold,
+                FontWeight = FontWeights.Bold,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 12
+            };
+            panel.Children.Add(starBlock);
+        }
+        
+        // Item name and details - use accent color if HQ
         var nameText = new TextBlock 
         { 
             Text = $"{node.Name} x{node.Quantity}",
             VerticalAlignment = VerticalAlignment.Center,
-            FontWeight = node.Parent == null ? FontWeights.Bold : FontWeights.Normal
+            FontWeight = node.Parent == null ? FontWeights.Bold : FontWeights.Normal,
+            Foreground = node.MustBeHq ? (GetAccentBrush() as System.Windows.Media.Brush) : System.Windows.Media.Brushes.White
         };
         panel.Children.Add(nameText);
-        
-        // Add HQ indicator if buying HQ
-        if (node.Source == AcquisitionSource.MarketBuyHq)
-        {
-            var hqIndicator = new TextBlock
-            {
-                Text = " [HQ]",
-                Foreground = System.Windows.Media.Brushes.Gold,
-                FontWeight = FontWeights.Bold,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(4, 0, 0, 0)
-            };
-            panel.Children.Add(hqIndicator);
-        }
         
         // Add recipe info if craftable
         if (!node.IsUncraftable && !string.IsNullOrEmpty(node.Job) && node.Source == AcquisitionSource.Craft)
@@ -664,6 +961,37 @@ public partial class MainWindow : Window
         };
         
         StatusLabel.Text = $"{node.Name} set to {sourceText}";
+    }
+
+    /// <summary>
+    /// Set whether an item must be HQ quality. This is saved with the plan.
+    /// If setting to HQ and currently buying NQ, switches to buy HQ.
+    /// </summary>
+    private void SetNodeMustBeHq(PlanNode node, bool mustBeHq)
+    {
+        node.MustBeHq = mustBeHq;
+        
+        // If setting HQ requirement and currently buying NQ, switch to buy HQ
+        if (mustBeHq && node.Source == AcquisitionSource.MarketBuyNq)
+        {
+            _recipeCalcService.SetAcquisitionSource(node, AcquisitionSource.MarketBuyHq);
+        }
+        // If clearing HQ requirement and currently buying HQ, switch to buy NQ
+        else if (!mustBeHq && node.Source == AcquisitionSource.MarketBuyHq)
+        {
+            _recipeCalcService.SetAcquisitionSource(node, AcquisitionSource.MarketBuyNq);
+        }
+        
+        // Mark plan as modified
+        _currentPlan?.MarkModified();
+        
+        // Refresh the display
+        if (_currentPlan != null)
+        {
+            DisplayPlanInTreeView(_currentPlan);
+        }
+        
+        StatusLabel.Text = $"{node.Name} {(mustBeHq ? "must be" : "can be")} HQ";
     }
 
     /// <summary>
@@ -803,7 +1131,8 @@ public partial class MainWindow : Window
             { 
                 Id = r.ItemId, 
                 Name = r.Name, 
-                Quantity = r.Quantity 
+                Quantity = r.Quantity,
+                IsHqRequired = r.MustBeHq
             }).ToList();
             ProjectList.ItemsSource = null;
             ProjectList.ItemsSource = _projectItems;
@@ -953,7 +1282,8 @@ public partial class MainWindow : Window
                     { 
                         Id = item.ItemId, 
                         Name = item.Name, 
-                        Quantity = item.Quantity 
+                        Quantity = item.Quantity,
+                        IsHqRequired = item.MustBeHq
                     });
                 }
                 
@@ -964,7 +1294,6 @@ public partial class MainWindow : Window
                 DisplayPlanInTreeView(_currentPlan);
                 
                 // Enable buttons
-                FetchPricesButton.IsEnabled = true;
                 BuildPlanButton.IsEnabled = _projectItems.Count > 0;
                 
                 StatusLabel.Text = $"Imported plan with {_currentPlan.RootItems.Count} items from Artisan";
@@ -1045,7 +1374,6 @@ public partial class MainWindow : Window
         var worldOrDc = string.IsNullOrEmpty(world) || world == "Entire Data Center" ? dc : world;
 
         StatusLabel.Text = "Fetching prices...";
-        FetchPricesButton.IsEnabled = false;
 
         try
         {
@@ -1066,7 +1394,11 @@ public partial class MainWindow : Window
                 progress,
                 forceRefresh: true);
 
-            // Update plan nodes with prices
+            // Check if we got any valid prices
+            var validPrices = prices.Where(p => p.Value.Source != PriceSource.Unknown).ToList();
+            var failedCount = allItems.Count - validPrices.Count;
+
+            // Update plan nodes with prices (preserves cached on failure)
             UpdatePlanWithPrices(_currentPlan.RootItems, prices);
 
             // Refresh tree view (market logistics updated below)
@@ -1080,15 +1412,29 @@ public partial class MainWindow : Window
             var vendorItems = prices.Count(p => p.Value.Source == PriceSource.Vendor);
             var marketItems = prices.Count(p => p.Value.Source == PriceSource.Market);
 
-            StatusLabel.Text = $"Prices fetched! Total: {totalCost:N0}g ({vendorItems} vendor, {marketItems} market)";
+            if (failedCount > 0 && validPrices.Count == 0)
+            {
+                // Complete failure - all cached prices preserved
+                StatusLabel.Text = $"Price fetch failed! Using cached prices. Total: {totalCost:N0}g";
+            }
+            else if (failedCount > 0)
+            {
+                // Partial failure
+                StatusLabel.Text = $"Prices updated! Total: {totalCost:N0}g ({vendorItems} vendor, {marketItems} market) - {failedCount} items failed";
+            }
+            else
+            {
+                // Success
+                StatusLabel.Text = $"Prices fetched! Total: {totalCost:N0}g ({vendorItems} vendor, {marketItems} market)";
+            }
         }
         catch (Exception ex)
         {
-            StatusLabel.Text = $"Failed to fetch prices: {ex.Message}";
+            _logger.LogError(ex, "[OnFetchPrices] Failed to fetch prices");
+            StatusLabel.Text = $"Failed to fetch prices: {ex.Message}. Cached prices preserved.";
         }
         finally
         {
-            FetchPricesButton.IsEnabled = _currentPlan != null && _currentPlan.RootItems.Count > 0;
         }
     }
 
@@ -1122,6 +1468,11 @@ public partial class MainWindow : Window
             if (prices.TryGetValue(node.ItemId, out var priceInfo))
             {
                 node.MarketPrice = priceInfo.UnitPrice;
+                // Only set HQ price if item is known to be HQ-capable (crafted items)
+                if (node.CanBeHq)
+                {
+                    node.HqMarketPrice = priceInfo.HqUnitPrice ?? 0;
+                }
                 // Also track the source for market logistics
                 node.PriceSource = priceInfo.Source;
                 node.PriceSourceDetails = priceInfo.SourceDetails;
@@ -1140,7 +1491,7 @@ public partial class MainWindow : Window
     private void ShowMarketLogisticsPlaceholder()
     {
         MarketCards.Children.Clear();
-        MarketSummaryCard.Visibility = System.Windows.Visibility.Collapsed;
+        MarketSummaryExpander.Visibility = System.Windows.Visibility.Collapsed;
         RefreshMarketButton.IsEnabled = false;
         
         var placeholderCard = CreateMarketCard("Market Logistics", 
@@ -1333,87 +1684,135 @@ public partial class MainWindow : Window
             
             CraftVsBuyExpander.Visibility = Visibility.Visible;
             
-            // Update header summary
-            var craftCount = significantAnalyses.Count(a => a.RecommendationNq == CraftRecommendation.Craft);
-            var buyCount = significantAnalyses.Count(a => a.RecommendationNq == CraftRecommendation.Buy);
-            CraftVsBuySummaryText.Text = $"{significantAnalyses.Count} items: {craftCount} craft, {buyCount} buy";
+            // Count based on effective recommendation (considers HQ requirement)
+            var craftCount = significantAnalyses.Count(a => a.EffectiveRecommendation == CraftRecommendation.Craft);
+            var buyCount = significantAnalyses.Count(a => a.EffectiveRecommendation == CraftRecommendation.Buy);
+            var hqRequiredCount = significantAnalyses.Count(a => a.IsHqRequired);
             
-            // Add warning about HQ for endgame crafting
+            var headerText = $"{significantAnalyses.Count} items: {craftCount} craft, {buyCount} buy";
+            if (hqRequiredCount > 0)
+                headerText += $" ({hqRequiredCount} HQ required)";
+            CraftVsBuySummaryText.Text = headerText;
+            
+            // Show appropriate warning based on whether any items require HQ
+            var warningText = hqRequiredCount > 0
+                ? "⚠️ Some items require HQ. HQ prices are used for recommendations. NQ may compromise craft quality."
+                : "⚠️ For endgame HQ crafts, NQ components may compromise quality. Check HQ prices below.";
+            
             var hqWarning = new TextBlock
             {
-                Text = "⚠️ For endgame HQ crafts, NQ components may compromise quality. Check HQ prices below.",
-                Foreground = Brushes.Orange,
+                Text = warningText,
+                Foreground = hqRequiredCount > 0 ? Brushes.Gold : Brushes.Orange,
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 12)
             };
             CraftVsBuyContent.Children.Add(hqWarning);
             
-            // Show top analyses - simple format: "Crafting saves Xg" or "Crafting costs Xg more"
+            // Show top analyses - use effective recommendation (considers HQ requirement)
             foreach (var analysis in significantAnalyses.Take(8))
             {
                 var itemPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
                 
-                // Item name and quantity
+                // Item name and quantity - show HQ indicator if required
+                var itemName = analysis.IsHqRequired 
+                    ? $"{analysis.ItemName} x{analysis.Quantity} [HQ Required]"
+                    : $"{analysis.ItemName} x{analysis.Quantity}";
                 var nameBlock = new TextBlock
                 {
-                    Text = $"{analysis.ItemName} x{analysis.Quantity}",
+                    Text = itemName,
                     FontWeight = FontWeights.SemiBold,
-                    Foreground = analysis.HasQualityWarning ? Brushes.Orange : Brushes.White
+                    Foreground = analysis.IsHqRequired ? Brushes.Gold : (analysis.HasQualityWarning ? Brushes.Orange : Brushes.White)
                 };
                 itemPanel.Children.Add(nameBlock);
                 
-                // NQ Analysis: simple "Crafting saves Xg" or "Crafting costs Xg more"
-                string nqText;
-                Brush nqColor;
-                if (analysis.PotentialSavingsNq > 0)
-                {
-                    // Buy price > Craft cost = crafting saves money (green = good to craft)
-                    nqText = $"  Crafting saves {analysis.PotentialSavingsNq:N0}g ({analysis.SavingsPercentNq:F0}%) - Buy: {analysis.BuyCostNq:N0}g | Craft: {analysis.CraftCost:N0}g";
-                    nqColor = Brushes.LightGreen;
-                }
-                else
-                {
-                    // Buy price < Craft cost = crafting costs more (red = better to buy)
-                    nqText = $"  Crafting costs {Math.Abs(analysis.PotentialSavingsNq):N0}g more ({Math.Abs(analysis.SavingsPercentNq):F0}%) - Buy: {analysis.BuyCostNq:N0}g | Craft: {analysis.CraftCost:N0}g";
-                    nqColor = Brushes.LightCoral;
-                }
+                // Primary analysis line: NQ or HQ based on requirement
+                string primaryText;
+                Brush primaryColor;
                 
-                var nqBlock = new TextBlock
+                if (analysis.IsHqRequired && analysis.HasHqData)
                 {
-                    Text = nqText,
-                    Foreground = nqColor,
-                    FontSize = 11
-                };
-                itemPanel.Children.Add(nqBlock);
-                
-                // HQ Analysis (if available)
-                if (analysis.HasHqData)
-                {
-                    string hqText;
-                    Brush hqColor;
+                    // Show HQ analysis as primary
                     if (analysis.PotentialSavingsHq > 0)
                     {
-                        hqText = $"  HQ: Crafting saves {analysis.PotentialSavingsHq:N0}g ({analysis.SavingsPercentHq:F0}%) - Buy: {analysis.BuyCostHq:N0}g | Craft: {analysis.CraftCost:N0}g";
-                        hqColor = Brushes.LightGreen;
+                        primaryText = $"  Crafting saves {analysis.PotentialSavingsHq:N0}g ({analysis.SavingsPercentHq:F0}%) - Buy HQ: {analysis.BuyCostHq:N0}g | Craft: {analysis.CraftCost:N0}g";
+                        primaryColor = Brushes.LightGreen;
                     }
                     else
                     {
-                        hqText = $"  HQ: Crafting costs {Math.Abs(analysis.PotentialSavingsHq):N0}g more ({Math.Abs(analysis.SavingsPercentHq):F0}%) - Buy: {analysis.BuyCostHq:N0}g | Craft: {analysis.CraftCost:N0}g";
-                        hqColor = Brushes.LightCoral;
+                        primaryText = $"  Crafting costs {Math.Abs(analysis.PotentialSavingsHq):N0}g more ({Math.Abs(analysis.SavingsPercentHq):F0}%) - Buy HQ: {analysis.BuyCostHq:N0}g | Craft: {analysis.CraftCost:N0}g";
+                        primaryColor = Brushes.LightCoral;
+                    }
+                }
+                else
+                {
+                    // Show NQ analysis as primary
+                    if (analysis.PotentialSavingsNq > 0)
+                    {
+                        primaryText = $"  Crafting saves {analysis.PotentialSavingsNq:N0}g ({analysis.SavingsPercentNq:F0}%) - Buy: {analysis.BuyCostNq:N0}g | Craft: {analysis.CraftCost:N0}g";
+                        primaryColor = Brushes.LightGreen;
+                    }
+                    else
+                    {
+                        primaryText = $"  Crafting costs {Math.Abs(analysis.PotentialSavingsNq):N0}g more ({Math.Abs(analysis.SavingsPercentNq):F0}%) - Buy: {analysis.BuyCostNq:N0}g | Craft: {analysis.CraftCost:N0}g";
+                        primaryColor = Brushes.LightCoral;
+                    }
+                }
+                
+                var primaryBlock = new TextBlock
+                {
+                    Text = primaryText,
+                    Foreground = primaryColor,
+                    FontSize = 11
+                };
+                itemPanel.Children.Add(primaryBlock);
+                
+                // Show alternate pricing (HQ if NQ is primary, NQ if HQ is primary)
+                if (analysis.HasHqData)
+                {
+                    string altText;
+                    Brush altColor;
+                    
+                    if (analysis.IsHqRequired)
+                    {
+                        // Show NQ as alternate when HQ is required
+                        if (analysis.PotentialSavingsNq > 0)
+                        {
+                            altText = $"  NQ alternative: Save {analysis.PotentialSavingsNq:N0}g ({analysis.SavingsPercentNq:F0}%) - Buy: {analysis.BuyCostNq:N0}g";
+                            altColor = Brushes.Gray;
+                        }
+                        else
+                        {
+                            altText = $"  NQ alternative: Cost {Math.Abs(analysis.PotentialSavingsNq):N0}g more ({Math.Abs(analysis.SavingsPercentNq):F0}%) - Buy: {analysis.BuyCostNq:N0}g";
+                            altColor = Brushes.Gray;
+                        }
+                    }
+                    else
+                    {
+                        // Show HQ as alternate when NQ is primary
+                        if (analysis.PotentialSavingsHq > 0)
+                        {
+                            altText = $"  HQ: Crafting saves {analysis.PotentialSavingsHq:N0}g ({analysis.SavingsPercentHq:F0}%) - Buy: {analysis.BuyCostHq:N0}g";
+                            altColor = Brushes.LightGreen;
+                        }
+                        else
+                        {
+                            altText = $"  HQ: Crafting costs {Math.Abs(analysis.PotentialSavingsHq):N0}g more ({Math.Abs(analysis.SavingsPercentHq):F0}%) - Buy: {analysis.BuyCostHq:N0}g";
+                            altColor = Brushes.LightCoral;
+                        }
                     }
                     
-                    var hqBlock = new TextBlock
+                    var altBlock = new TextBlock
                     {
-                        Text = hqText,
-                        Foreground = hqColor,
+                        Text = altText,
+                        Foreground = altColor,
                         FontSize = 11,
                         FontStyle = FontStyles.Italic
                     };
-                    itemPanel.Children.Add(hqBlock);
+                    itemPanel.Children.Add(altBlock);
                     
                     // Warning if NQ looks good but HQ is expensive (endgame relevant)
-                    if (analysis.IsEndgameRelevant)
+                    if (analysis.IsEndgameRelevant && !analysis.IsHqRequired)
                     {
                         var warningBlock = new TextBlock
                         {
@@ -1455,28 +1854,18 @@ public partial class MainWindow : Window
         List<MaterialAggregate> untradeableItems, Dictionary<int, PriceInfo> prices)
     {
         MarketSummaryContent.Children.Clear();
-        MarketSummaryCard.Visibility = System.Windows.Visibility.Visible;
+        MarketSummaryExpander.Visibility = System.Windows.Visibility.Visible;
         
-        var header = new TextBlock
-        {
-            Text = "Purchase Summary",
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 14,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-        MarketSummaryContent.Children.Add(header);
+        // Update header with totals
+        var grandTotal = vendorItems.Sum(i => i.TotalCost) + marketItems.Sum(i => i.TotalCost);
+        MarketSummaryHeaderText.Text = $"{vendorItems.Count + marketItems.Count} items • {grandTotal:N0}g total";
         
         var summaryText = new TextBlock
         {
-            Text = $"Total Items: {vendorItems.Count + marketItems.Count + untradeableItems.Count}\n\n" +
-                   $"Vendor Purchases: {vendorItems.Count} items\n" +
-                   $"- Guaranteed prices, no market fluctuations\n" +
-                   $"- Total: {vendorItems.Sum(i => i.TotalCost):N0}g\n\n" +
-                   $"Market Board Purchases: {marketItems.Count} items\n" +
-                   $"- Click items below for detailed listings\n" +
-                   $"- Total: {marketItems.Sum(i => i.TotalCost):N0}g\n\n" +
-                   $"Grand Total: {vendorItems.Sum(i => i.TotalCost) + marketItems.Sum(i => i.TotalCost):N0}g",
-            FontSize = 12
+            Text = $"Vendor: {vendorItems.Count} items ({vendorItems.Sum(i => i.TotalCost):N0}g)  •  " +
+                   $"Market: {marketItems.Count} items ({marketItems.Sum(i => i.TotalCost):N0}g)",
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap
         };
         MarketSummaryContent.Children.Add(summaryText);
     }
@@ -1530,21 +1919,21 @@ public partial class MainWindow : Window
     {
         var border = new Border
         {
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3d3e2d")),
-            CornerRadius = new CornerRadius(4),
+            Background = GetMutedAccentBrush(),
+            CornerRadius = new CornerRadius(3),
             Padding = new Thickness(0),
-            Margin = new Thickness(0, 0, 0, 8),
+            Margin = new Thickness(0, 0, 0, 4),
             Tag = plan
         };
 
         var mainStack = new StackPanel();
         
-        // Clickable header
+        // Clickable header - compact layout
         var headerBorder = new Border
         {
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4a4a3a")),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(12),
+            Background = GetMutedAccentBrushLight(),
+            CornerRadius = new CornerRadius(3),
+            Padding = new Thickness(8, 6, 8, 6),
             Cursor = Cursors.Hand
         };
         
@@ -1552,24 +1941,37 @@ public partial class MainWindow : Window
         headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         
-        // Left side: Item name, quantity, DC average
-        var leftStack = new StackPanel();
+        // Left side: Item name, quantity, DC average - single line compact
+        var leftStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         
         var nameText = new TextBlock
         {
-            Text = $"{plan.Name} x{plan.QuantityNeeded}",
+            Text = plan.Name,
             FontWeight = FontWeights.SemiBold,
-            FontSize = 13
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center
         };
         leftStack.Children.Add(nameText);
+        
+        var qtyText = new TextBlock
+        {
+            Text = $" ×{plan.QuantityNeeded}",
+            FontSize = 12,
+            Foreground = Brushes.LightGray,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0, 0, 0)
+        };
+        leftStack.Children.Add(qtyText);
         
         if (!string.IsNullOrEmpty(plan.Error))
         {
             var errorText = new TextBlock
             {
-                Text = $"Error: {plan.Error}",
+                Text = $"  •  Error: {plan.Error}",
                 Foreground = Brushes.Red,
-                FontSize = 11
+                FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 0, 0)
             };
             leftStack.Children.Add(errorText);
         }
@@ -1577,10 +1979,11 @@ public partial class MainWindow : Window
         {
             var avgText = new TextBlock
             {
-                Text = $"DC Avg: {plan.DCAveragePrice:N0}g",
+                Text = $"  •  Avg: {plan.DCAveragePrice:N0}g",
                 Foreground = Brushes.Gray,
                 FontSize = 10,
-                Margin = new Thickness(0, 2, 0, 0)
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 0, 0)
             };
             leftStack.Children.Add(avgText);
         }
@@ -1588,8 +1991,8 @@ public partial class MainWindow : Window
         Grid.SetColumn(leftStack, 0);
         headerGrid.Children.Add(leftStack);
         
-        // Right side: Recommended world info
-        var rightStack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right };
+        // Right side: Recommended world info - compact single line
+        var rightStack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right, Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         
         if (plan.HasOptions && plan.RecommendedWorld != null)
         {
@@ -1599,33 +2002,23 @@ public partial class MainWindow : Window
             {
                 Text = recWorld.WorldName,
                 FontWeight = FontWeights.SemiBold,
-                FontSize = 12,
-                Foreground = Brushes.Gold,
-                HorizontalAlignment = HorizontalAlignment.Right
+                FontSize = 11,
+                Foreground = GetAccentBrush(),
+                VerticalAlignment = VerticalAlignment.Center
             };
             rightStack.Children.Add(worldText);
             
             var costText = new TextBlock
             {
-                Text = $"{recWorld.CostDisplay} total",
+                Text = $"  {recWorld.CostDisplay}",
                 FontSize = 11,
-                HorizontalAlignment = HorizontalAlignment.Right
+                VerticalAlignment = VerticalAlignment.Center
             };
             if (recWorld.IsFullyUnderAverage)
             {
                 costText.Foreground = Brushes.LightGreen;
             }
             rightStack.Children.Add(costText);
-            
-            var clickHint = new TextBlock
-            {
-                Text = "Click to expand ▼",
-                FontSize = 9,
-                Foreground = Brushes.Gray,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(0, 4, 0, 0)
-            };
-            rightStack.Children.Add(clickHint);
         }
         else if (string.IsNullOrEmpty(plan.Error))
         {
@@ -1633,7 +2026,7 @@ public partial class MainWindow : Window
             {
                 Text = "No viable listings",
                 Foreground = Brushes.Orange,
-                FontSize = 11,
+                FontSize = 10,
                 HorizontalAlignment = HorizontalAlignment.Right
             };
             rightStack.Children.Add(noDataText);
@@ -1649,17 +2042,18 @@ public partial class MainWindow : Window
         var contentStack = new StackPanel
         {
             Visibility = System.Windows.Visibility.Collapsed,
-            Margin = new Thickness(12, 8, 12, 12)
+            Margin = new Thickness(8, 6, 8, 8)
         };
         
         if (plan.HasOptions)
         {
             var optionsHeader = new TextBlock
             {
-                Text = "All World Options:",
+                Text = "All Worlds:",
                 FontWeight = FontWeights.SemiBold,
-                FontSize = 11,
-                Margin = new Thickness(0, 0, 0, 8)
+                FontSize = 10,
+                Margin = new Thickness(0, 0, 0, 4),
+                Foreground = Brushes.Gray
             };
             contentStack.Children.Add(optionsHeader);
             
@@ -1680,12 +2074,12 @@ public partial class MainWindow : Window
             if (contentStack.Visibility == System.Windows.Visibility.Collapsed)
             {
                 contentStack.Visibility = System.Windows.Visibility.Visible;
-                headerBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#5a5a4a"));
+                headerBorder.Background = GetMutedAccentBrushExpanded();
             }
             else
             {
                 contentStack.Visibility = System.Windows.Visibility.Collapsed;
-                headerBorder.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4a4a3a"));
+                headerBorder.Background = GetMutedAccentBrushLight();
             }
         };
         
@@ -1702,24 +2096,25 @@ public partial class MainWindow : Window
         var border = new Border
         {
             Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(backgroundColor)),
-            CornerRadius = new CornerRadius(3),
-            Padding = new Thickness(8),
-            Margin = new Thickness(0, 2, 0, 4),
+            CornerRadius = new CornerRadius(2),
+            Padding = new Thickness(6, 4, 6, 4),
+            Margin = new Thickness(0, 1, 0, 2),
             BorderBrush = isRecommended ? Brushes.Gold : null,
             BorderThickness = isRecommended ? new Thickness(1) : new Thickness(0)
         };
 
         var stack = new StackPanel();
 
-        // World name and total
-        var headerPanel = new StackPanel { Orientation = Orientation.Horizontal };
+        // World name and badges - single line compact
+        var headerPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         
         var worldText = new TextBlock
         {
             Text = world.WorldName,
             FontWeight = FontWeights.SemiBold,
-            FontSize = 12,
-            Margin = new Thickness(0, 0, 8, 0)
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 6, 0),
+            VerticalAlignment = VerticalAlignment.Center
         };
         headerPanel.Children.Add(worldText);
 
@@ -1727,10 +2122,11 @@ public partial class MainWindow : Window
         {
             var recText = new TextBlock
             {
-                Text = "[RECOMMENDED]",
-                Foreground = Brushes.Gold,
+                Text = "★",
+                Foreground = GetAccentBrush(),
                 FontSize = 10,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 4, 0)
             };
             headerPanel.Children.Add(recText);
         }
@@ -1738,30 +2134,31 @@ public partial class MainWindow : Window
         {
             var valueText = new TextBlock
             {
-                Text = "[GOOD VALUE]",
+                Text = "✓",
                 Foreground = Brushes.LightGreen,
                 FontSize = 10,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 4, 0)
             };
             headerPanel.Children.Add(valueText);
         }
 
         stack.Children.Add(headerPanel);
 
-        // Total cost with excess info and value score
+        // Total cost - compact single line
         var costText = new TextBlock
         {
-            FontSize = 11,
-            Margin = new Thickness(0, 2, 0, 4)
+            FontSize = 10,
+            Margin = new Thickness(0, 1, 0, 2)
         };
         if (world.HasExcess)
         {
-            costText.Text = $"Total: {world.CostDisplay} (buy {world.TotalQuantityPurchased}, use {world.Listings.Where(l => !l.IsAdditionalOption).Sum(l => l.NeededFromStack)}, +{world.ExcessQuantity} extra)";
+            costText.Text = $"{world.CostDisplay} total  •  {world.ExcessQuantity} excess";
             costText.ToolTip = "FFXIV requires buying full stacks. You'll have excess items.";
         }
         else
         {
-            costText.Text = $"Total: {world.CostDisplay} (~{world.PricePerUnitDisplay} each)";
+            costText.Text = $"{world.CostDisplay} total  •  ~{world.PricePerUnitDisplay}/ea";
         }
         if (world.IsFullyUnderAverage)
         {
@@ -1769,38 +2166,38 @@ public partial class MainWindow : Window
         }
         stack.Children.Add(costText);
         
-        // Show best unit price if competitive
+        // Show best unit price if competitive - inline
         if (world.IsCompetitive && world.BestSingleListing != null)
         {
             var valueText = new TextBlock
             {
-                Text = $"Best listing: {world.BestSingleListing.PricePerUnit:N0}g each (x{world.BestSingleListing.Quantity}){(world.BestSingleListing.IsHq ? " [HQ]" : "")}",
-                FontSize = 10,
-                Foreground = Brushes.Gold,
-                Margin = new Thickness(0, -2, 0, 4)
+                Text = $"Best: {world.BestSingleListing.PricePerUnit:N0}g/ea x{world.BestSingleListing.Quantity}{(world.BestSingleListing.IsHq ? " HQ" : "")}",
+                FontSize = 9,
+                Foreground = GetAccentBrush(),
+                Margin = new Thickness(0, 0, 0, 2)
             };
             stack.Children.Add(valueText);
         }
 
-        // Individual listings
+        // Individual listings header - compact
         var listingsText = new TextBlock
         {
-            Text = "Listings (full stacks required):",
-            FontSize = 10,
+            Text = "Listings:",
+            FontSize = 9,
             Foreground = Brushes.Gray,
-            Margin = new Thickness(0, 0, 0, 2)
+            Margin = new Thickness(0, 2, 0, 1)
         };
         stack.Children.Add(listingsText);
 
         foreach (var listing in world.Listings)
         {
-            var listingPanel = new StackPanel { Orientation = Orientation.Horizontal };
+            var listingPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 1) };
             
-            // Show full stack info with what we need vs excess
+            // Compact quantity display
             var qtyText = new TextBlock
             {
-                FontSize = 10,
-                Width = 140,
+                FontSize = 9,
+                Width = 100,
                 Foreground = listing.IsAdditionalOption 
                     ? Brushes.DarkGray 
                     : (listing.ExcessQuantity > 0 ? Brushes.Orange : Brushes.LightGray),
@@ -1808,12 +2205,12 @@ public partial class MainWindow : Window
             };
             if (listing.IsAdditionalOption)
             {
-                qtyText.Text = $"x{listing.Quantity} (extra)";
+                qtyText.Text = $"x{listing.Quantity} extra";
                 qtyText.ToolTip = "Additional option - not needed for quantity, but good value";
             }
             else if (listing.ExcessQuantity > 0)
             {
-                qtyText.Text = $"x{listing.Quantity} (use {listing.NeededFromStack})";
+                qtyText.Text = $"x{listing.Quantity} (need {listing.NeededFromStack})";
                 qtyText.ToolTip = $"Must buy full stack of {listing.Quantity}, only need {listing.NeededFromStack}";
             }
             else
@@ -1825,8 +2222,8 @@ public partial class MainWindow : Window
             var priceText = new TextBlock
             {
                 Text = $"@{listing.PricePerUnit:N0}g",
-                FontSize = 10,
-                Width = 70,
+                FontSize = 9,
+                Width = 60,
                 Foreground = listing.IsUnderAverage ? Brushes.LightGreen : Brushes.White,
                 FontWeight = listing.IsHq ? FontWeights.Bold : FontWeights.Normal
             };
@@ -1835,27 +2232,27 @@ public partial class MainWindow : Window
             var subtotalText = new TextBlock
             {
                 Text = $"= {listing.SubtotalDisplay}",
-                FontSize = 10,
+                FontSize = 9,
                 Foreground = listing.IsAdditionalOption ? Brushes.DarkGray : Brushes.Gray,
-                Width = 80
+                Width = 70
             };
             listingPanel.Children.Add(subtotalText);
 
-            // HQ indicator and retainer name
+            // HQ indicator and retainer name - compact
             var retainerText = new TextBlock
             {
-                FontSize = 10,
+                FontSize = 9,
                 Foreground = listing.IsAdditionalOption ? Brushes.DarkGray : Brushes.Gray,
                 FontStyle = FontStyles.Italic
             };
             if (listing.IsHq)
             {
-                retainerText.Text = $"[HQ] {listing.RetainerName}";
+                retainerText.Text = $"HQ {listing.RetainerName}";
                 retainerText.Foreground = Brushes.Gold;
             }
             else
             {
-                retainerText.Text = $"({listing.RetainerName})";
+                retainerText.Text = listing.RetainerName;
             }
             listingPanel.Children.Add(retainerText);
 
@@ -2010,7 +2407,6 @@ public partial class MainWindow : Window
         
         // Reset UI state
         BuildPlanButton.IsEnabled = false;
-        FetchPricesButton.IsEnabled = false;
         
         StatusLabel.Text = "New plan created. Add items to get started.";
     }
@@ -2159,7 +2555,9 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// <summary>
     /// Calculate the cost to craft this node (sum of all component costs).
+    /// Respects acquisition source - if a child is set to craft, recursively calculate.
     /// </summary>
     private decimal CalculateNodeCraftCost(PlanNode node)
     {
@@ -2169,10 +2567,30 @@ public partial class MainWindow : Window
         decimal total = 0;
         foreach (var child in node.Children)
         {
-            if (child.MarketPrice > 0)
+            // If child is set to buy from market, use market price
+            if (child.Source == AcquisitionSource.MarketBuyNq && child.MarketPrice > 0)
             {
                 total += child.MarketPrice * child.Quantity;
             }
+            else if (child.Source == AcquisitionSource.MarketBuyHq && child.HqMarketPrice > 0)
+            {
+                total += child.HqMarketPrice * child.Quantity;
+            }
+            else if (child.Source == AcquisitionSource.VendorBuy && child.MarketPrice > 0)
+            {
+                total += child.MarketPrice * child.Quantity;
+            }
+            // If child is set to craft and has children, recursively calculate
+            else if (child.Source == AcquisitionSource.Craft && child.Children.Any())
+            {
+                total += CalculateNodeCraftCost(child);
+            }
+            // Fallback: if child has market price, use it
+            else if (child.MarketPrice > 0)
+            {
+                total += child.MarketPrice * child.Quantity;
+            }
+            // Fallback: if child has children, recursively calculate
             else if (child.Children.Any())
             {
                 total += CalculateNodeCraftCost(child);

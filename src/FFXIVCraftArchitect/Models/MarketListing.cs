@@ -43,6 +43,21 @@ public class UniversalisResponse
     
     [JsonPropertyName("averagePrice")]
     public double AveragePrice { get; set; }
+    
+    [JsonPropertyName("minPrice")]
+    public long MinPrice { get; set; }
+    
+    [JsonPropertyName("minPriceHQ")]
+    public long MinPriceHq { get; set; }
+    
+    [JsonPropertyName("minPriceNQ")]
+    public long MinPriceNq { get; set; }
+    
+    [JsonPropertyName("averagePriceHQ")]
+    public double AveragePriceHq { get; set; }
+    
+    [JsonPropertyName("averagePriceNQ")]
+    public double AveragePriceNq { get; set; }
 }
 
 /// <summary>
