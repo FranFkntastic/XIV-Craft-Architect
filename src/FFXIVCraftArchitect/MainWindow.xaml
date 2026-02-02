@@ -349,18 +349,56 @@
             <!-- Right Panel: Recipe Plan with Shopping List -->
             <Border Grid.Column="2" 
                     Padding="16,0,16,16">
-                <ui:TabView Background="#2d2d2d">
-                    <ui:TabViewItem Header="Recipe Plan">
+                <Grid Background="#2d2d2d">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    
+                    <!-- Tab Buttons -->
+                    <StackPanel Grid.Row="0" 
+                                Orientation="Horizontal" 
+                                Margin="0,0,0,8">
+                        <Border x:Name="RecipePlanTab"
+                                Background="{DynamicResource AccentBrush}"
+                                Padding="16,6"
+                                Cursor="Hand"
+                                MouseLeftButtonDown="OnRecipePlanTabClick">
+                            <TextBlock Text="Recipe Plan" 
+                                       FontWeight="SemiBold"
+                                       Foreground="#1a1a1a"/>
+                        </Border>
+                        <Border x:Name="MarketLogisticsTab"
+                                Background="Transparent"
+                                Padding="16,6"
+                                Cursor="Hand"
+                                MouseLeftButtonDown="OnMarketLogisticsTabClick">
+                            <TextBlock Text="Market Logistics" 
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource AccentBrush}"/>
+                        </Border>
+                    </StackPanel>
+                    
+                    <!-- Recipe Plan Content -->
+                    <Border Grid.Row="1"
+                            x:Name="RecipePlanContent"
+                            Background="#252525"
+                            BorderBrush="{DynamicResource AccentBrush}"
+                            BorderThickness="0,1,0,0">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <StackPanel x:Name="RecipePlanPanel" Margin="0,0,0,8">
                                 <!-- Recipe cards populated dynamically -->
                             </StackPanel>
                         </ScrollViewer>
-                    </ui:TabViewItem>
+                    </Border>
                     
-                    <ui:TabViewItem Header="Market Logistics"
-                                    BorderBrush="{DynamicResource AccentBrush}"
-                                    BorderThickness="0,0,0,2">
+                    <!-- Market Logistics Content (initially hidden) -->
+                    <Border Grid.Row="1"
+                            x:Name="MarketLogisticsContent"
+                            Background="#252525"
+                            BorderBrush="{DynamicResource AccentBrush}"
+                            BorderThickness="0,1,0,0"
+                            Visibility="Collapsed">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -483,8 +521,8 @@
                                 </ScrollViewer>
                             </Border>
                         </Grid>
-                    </ui:TabViewItem>
-                </ui:TabView>
+                    </Border>
+                </Grid>
             </Border>
         </Grid>
 

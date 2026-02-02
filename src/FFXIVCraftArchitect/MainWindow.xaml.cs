@@ -1969,6 +1969,36 @@ public partial class MainWindow : Window
         optionsWindow.Owner = this;
         optionsWindow.ShowDialog();
     }
+    
+    /// <summary>
+    /// Switch to Recipe Plan tab
+    /// </summary>
+    private void OnRecipePlanTabClick(object sender, MouseButtonEventArgs e)
+    {
+        RecipePlanTab.Background = (SolidColorBrush)Application.Current.Resources["AccentBrush"];
+        ((TextBlock)RecipePlanTab.Child).Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1a1a1a"));
+        
+        MarketLogisticsTab.Background = Brushes.Transparent;
+        ((TextBlock)((Border)MarketLogisticsTab).Child).Foreground = (SolidColorBrush)Application.Current.Resources["AccentBrush"];
+        
+        RecipePlanContent.Visibility = Visibility.Visible;
+        MarketLogisticsContent.Visibility = Visibility.Collapsed;
+    }
+    
+    /// <summary>
+    /// Switch to Market Logistics tab
+    /// </summary>
+    private void OnMarketLogisticsTabClick(object sender, MouseButtonEventArgs e)
+    {
+        RecipePlanTab.Background = Brushes.Transparent;
+        ((TextBlock)RecipePlanTab.Child).Foreground = (SolidColorBrush)Application.Current.Resources["AccentBrush"];
+        
+        MarketLogisticsTab.Background = (SolidColorBrush)Application.Current.Resources["AccentBrush"];
+        ((TextBlock)((Border)MarketLogisticsTab).Child).Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1a1a1a"));
+        
+        RecipePlanContent.Visibility = Visibility.Collapsed;
+        MarketLogisticsContent.Visibility = Visibility.Visible;
+    }
 
     private void OnNewPlan(object sender, RoutedEventArgs e)
     {
