@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Net.Http.Json;
 using Microsoft.Extensions.Logging;
@@ -71,27 +72,252 @@ public class UniversalisService
 
     /// <summary>
     /// Get market data for multiple items at once.
+    /// Universalis API has a limit of 100 items per request, so we chunk large requests.
+    /// Includes rate limiting (100ms delay between chunks) to avoid API throttling.
     /// </summary>
     public async Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkAsync(
         string worldOrDc, 
         IEnumerable<int> itemIds, 
         CancellationToken ct = default)
     {
-        var ids = string.Join(",", itemIds);
-        var url = string.Format(UniversalisApiUrl, Uri.EscapeDataString(worldOrDc), ids);
+        const int chunkSize = 100; // Universalis API limit
+        const int delayBetweenChunksMs = 100; // Rate limiting delay
+        const int maxRetries = 3;
         
-        _logger.LogDebug("Fetching bulk market data for {Count} items", itemIds.Count());
-
-        var response = await _httpClient.GetAsync(url, ct);
-        response.EnsureSuccessStatusCode();
-
-        // Bulk responses have a different structure with "items" property
-        var bulkResult = await response.Content.ReadFromJsonAsync<UniversalisBulkResponse>(ct);
+        var itemIdList = itemIds.ToList();
+        var allResults = new Dictionary<int, UniversalisResponse>();
         
-        if (bulkResult?.Items == null)
-            return new Dictionary<int, UniversalisResponse>();
+        _logger.LogDebug("Fetching bulk market data for {Count} items (chunked by {ChunkSize})", 
+            itemIdList.Count, chunkSize);
 
-        return bulkResult.Items;
+        // Process in chunks to respect API limits
+        for (int i = 0; i < itemIdList.Count; i += chunkSize)
+        {
+            var chunk = itemIdList.Skip(i).Take(chunkSize).ToList();
+            var ids = string.Join(",", chunk);
+            var url = string.Format(UniversalisApiUrl, Uri.EscapeDataString(worldOrDc), ids);
+            
+            _logger.LogDebug("Fetching chunk {ChunkIndex} ({Start}-{End} of {Total})", 
+                (i / chunkSize) + 1, i + 1, Math.Min(i + chunkSize, itemIdList.Count), itemIdList.Count);
+
+            // Retry logic with exponential backoff
+            bool success = false;
+            for (int retry = 0; retry < maxRetries && !success; retry++)
+            {
+                try
+                {
+                    if (retry > 0)
+                    {
+                        var delayMs = (int)Math.Pow(2, retry) * 500; // 1s, 2s, 4s
+                        _logger.LogWarning("Retry {Retry}/{MaxRetries} for chunk {ChunkIndex} after {DelayMs}ms delay", 
+                            retry, maxRetries, (i / chunkSize) + 1, delayMs);
+                        await Task.Delay(delayMs, ct);
+                    }
+
+                    var response = await _httpClient.GetAsync(url, ct);
+                    
+                    // Handle rate limiting (429)
+                    if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                    {
+                        _logger.LogWarning("Rate limited (429) on chunk {ChunkIndex}, will retry", (i / chunkSize) + 1);
+                        if (retry < maxRetries - 1) continue;
+                        throw new HttpRequestException("Rate limited by Universalis API");
+                    }
+                    
+                    response.EnsureSuccessStatusCode();
+
+                    // Single-item and multi-item responses have different structures
+                    if (chunk.Count == 1)
+                    {
+                        // Single item: response is direct UniversalisResponse
+                        var singleResult = await response.Content.ReadFromJsonAsync<UniversalisResponse>(ct);
+                        if (singleResult != null)
+                        {
+                            allResults[chunk[0]] = singleResult;
+                            _logger.LogDebug("Single item response: ItemId={ItemId}, Listings={Listings}",
+                                singleResult.ItemId, singleResult.Listings?.Count ?? 0);
+                        }
+                    }
+                    else
+                    {
+                        // Multiple items: response is UniversalisBulkResponse with "items" dictionary
+                        var bulkResult = await response.Content.ReadFromJsonAsync<UniversalisBulkResponse>(ct);
+                        
+                        _logger.LogDebug("Chunk {ChunkIndex} response: Items={ItemCount}, Expected={ExpectedCount}",
+                            (i / chunkSize) + 1, bulkResult?.Items?.Count ?? 0, chunk.Count);
+                        
+                        if (bulkResult?.Items != null)
+                        {
+                            foreach (var kvp in bulkResult.Items)
+                            {
+                                _logger.LogDebug("  - Item ID {ItemId}: Listings={Listings}", 
+                                    kvp.Key, kvp.Value.Listings?.Count ?? 0);
+                                allResults[kvp.Key] = kvp.Value;
+                            }
+                            
+                            // Check for missing items
+                            var missing = chunk.Where(id => !bulkResult.Items.ContainsKey(id)).ToList();
+                            if (missing.Any())
+                            {
+                                _logger.LogWarning("Missing from response: {MissingIds}", string.Join(", ", missing));
+                            }
+                        }
+                    }
+                    
+                    success = true;
+                }
+                catch (Exception ex) when (retry < maxRetries - 1)
+                {
+                    _logger.LogWarning(ex, "Chunk {ChunkIndex} failed, will retry", (i / chunkSize) + 1);
+                }
+            }
+
+            // Rate limiting delay between chunks (except for the last one)
+            if (i + chunkSize < itemIdList.Count)
+            {
+                await Task.Delay(delayBetweenChunksMs, ct);
+            }
+        }
+        
+        _logger.LogInformation("Fetched market data for {FetchedCount}/{RequestedCount} items",
+            allResults.Count, itemIdList.Count);
+
+        return allResults;
+    }
+
+    /// <summary>
+    /// Get market data for multiple items at once using parallel requests for faster fetching.
+    /// Uses a semaphore to limit concurrent requests and avoid rate limiting.
+    /// </summary>
+    /// <param name="worldOrDc">World or data center name</param>
+    /// <param name="itemIds">Item IDs to fetch</param>
+    /// <param name="maxConcurrency">Maximum concurrent requests (default: 3)</param>
+    /// <param name="ct">Cancellation token</param>
+    public async Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkParallelAsync(
+        string worldOrDc, 
+        IEnumerable<int> itemIds, 
+        int maxConcurrency = 3,
+        CancellationToken ct = default)
+    {
+        const int chunkSize = 100; // Universalis API limit
+        const int delayBetweenChunksMs = 50; // Small delay even in parallel mode
+        const int maxRetries = 3;
+        
+        var itemIdList = itemIds.ToList();
+        var chunks = new List<List<int>>();
+        
+        // Split into chunks
+        for (int i = 0; i < itemIdList.Count; i += chunkSize)
+        {
+            chunks.Add(itemIdList.Skip(i).Take(chunkSize).ToList());
+        }
+        
+        _logger.LogInformation("Fetching bulk market data for {Count} items in {ChunkCount} parallel chunks (max concurrency: {Concurrency})", 
+            itemIdList.Count, chunks.Count, maxConcurrency);
+
+        var allResults = new ConcurrentDictionary<int, UniversalisResponse>();
+        var semaphore = new SemaphoreSlim(maxConcurrency);
+        var completedChunks = 0;
+
+        // Process all chunks in parallel with limited concurrency
+        var tasks = chunks.Select(async (chunk, index) =>
+        {
+            await semaphore.WaitAsync(ct);
+            try
+            {
+                var chunkNum = index + 1;
+                var ids = string.Join(",", chunk);
+                var url = string.Format(UniversalisApiUrl, Uri.EscapeDataString(worldOrDc), ids);
+                
+                _logger.LogDebug("[Parallel] Fetching chunk {ChunkNum}/{TotalChunks} ({ItemCount} items)", 
+                    chunkNum, chunks.Count, chunk.Count);
+
+                // Retry logic with exponential backoff
+                bool success = false;
+                Exception? lastException = null;
+                
+                for (int retry = 0; retry < maxRetries && !success; retry++)
+                {
+                    try
+                    {
+                        if (retry > 0)
+                        {
+                            var delayMs = (int)Math.Pow(2, retry) * 500; // 1s, 2s, 4s
+                            _logger.LogWarning("[Parallel] Retry {Retry}/{MaxRetries} for chunk {ChunkNum} after {DelayMs}ms delay", 
+                                retry, maxRetries, chunkNum, delayMs);
+                            await Task.Delay(delayMs, ct);
+                        }
+
+                        var response = await _httpClient.GetAsync(url, ct);
+                        
+                        // Handle rate limiting (429)
+                        if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                        {
+                            _logger.LogWarning("[Parallel] Rate limited (429) on chunk {ChunkNum}, will retry", chunkNum);
+                            if (retry < maxRetries - 1) continue;
+                            throw new HttpRequestException("Rate limited by Universalis API");
+                        }
+                        
+                        response.EnsureSuccessStatusCode();
+
+                        // Single-item and multi-item responses have different structures
+                        if (chunk.Count == 1)
+                        {
+                            var singleResult = await response.Content.ReadFromJsonAsync<UniversalisResponse>(ct);
+                            if (singleResult != null)
+                            {
+                                allResults[chunk[0]] = singleResult;
+                            }
+                        }
+                        else
+                        {
+                            var bulkResult = await response.Content.ReadFromJsonAsync<UniversalisBulkResponse>(ct);
+                            
+                            if (bulkResult?.Items != null)
+                            {
+                                foreach (var kvp in bulkResult.Items)
+                                {
+                                    allResults[kvp.Key] = kvp.Value;
+                                }
+                            }
+                        }
+                        
+                        success = true;
+                        var completed = Interlocked.Increment(ref completedChunks);
+                        _logger.LogDebug("[Parallel] Chunk {ChunkNum} completed ({Completed}/{Total})", 
+                            chunkNum, completed, chunks.Count);
+                    }
+                    catch (Exception ex) when (retry < maxRetries - 1)
+                    {
+                        lastException = ex;
+                        _logger.LogWarning(ex, "[Parallel] Chunk {ChunkNum} failed, will retry", chunkNum);
+                    }
+                }
+
+                if (!success && lastException != null)
+                {
+                    _logger.LogError(lastException, "[Parallel] Chunk {ChunkNum} failed after {MaxRetries} retries", chunkNum, maxRetries);
+                }
+
+                // Small delay even in parallel mode to be nice to the API
+                if (delayBetweenChunksMs > 0)
+                {
+                    await Task.Delay(delayBetweenChunksMs, ct);
+                }
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        }).ToList();
+
+        // Wait for all chunks to complete
+        await Task.WhenAll(tasks);
+        
+        _logger.LogInformation("[Parallel] Fetched market data for {FetchedCount}/{RequestedCount} items in {CompletedChunks}/{TotalChunks} chunks",
+            allResults.Count, itemIdList.Count, completedChunks, chunks.Count);
+
+        return new Dictionary<int, UniversalisResponse>(allResults);
     }
 
     /// <summary>

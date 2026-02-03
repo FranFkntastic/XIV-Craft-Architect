@@ -2,8 +2,9 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Microsoft.Extensions.Logging;
+using FFXIVCraftArchitect.Helpers;
 using FFXIVCraftArchitect.Models;
+using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Services;
 
@@ -166,14 +167,14 @@ public class GarlandService
 
         var craft = item.Crafts[0];
         _logger.LogInformation("[GarlandService] Recipe found: Job={Job}, Level={Level}, Yield={Yield}, Ingredients={Ingredients}",
-            GetJobName(craft.JobId), craft.RecipeLevel, craft.Yield, craft.Ingredients.Count);
+            JobHelper.GetJobName(craft.JobId), craft.RecipeLevel, craft.Yield, craft.Ingredients.Count);
 
         return new Recipe
         {
             ItemId = item.Id,
             Name = item.Name,
             IconId = item.IconId,
-            Job = GetJobName(craft.JobId),
+            Job = JobHelper.GetJobName(craft.JobId),
             Level = craft.RecipeLevel,
             Yield = craft.Yield,
             Ingredients = craft.Ingredients.Select(i => new Ingredient
@@ -185,20 +186,5 @@ public class GarlandService
         };
     }
 
-    private static string GetJobName(int jobId)
-    {
-        // Job IDs from FFXIV
-        return jobId switch
-        {
-            1 => "Carpenter",
-            2 => "Blacksmith",
-            3 => "Armorer",
-            4 => "Goldsmith",
-            5 => "Leatherworker",
-            6 => "Weaver",
-            7 => "Alchemist",
-            8 => "Culinarian",
-            _ => "Unknown"
-        };
-    }
+
 }

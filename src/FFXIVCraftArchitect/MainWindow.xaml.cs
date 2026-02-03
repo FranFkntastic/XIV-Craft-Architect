@@ -1,13 +1,15 @@
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using FFXIVCraftArchitect.Helpers;
 using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Services;
+using FFXIVCraftArchitect.Views;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using static FFXIVCraftArchitect.Services.PriceCheckService;
 using Window = System.Windows.Window;
 
 namespace FFXIVCraftArchitect;
@@ -51,6 +53,9 @@ public partial class MainWindow : Window
     
     // Current market shopping plans for filtering/sorting
     private List<DetailedShoppingPlan> _currentMarketPlans = new();
+    
+    // Market data status window for real-time fetch visualization
+    private MarketDataStatusWindow? _marketDataStatusWindow;
 
     public MainWindow()
     {
@@ -118,17 +123,6 @@ public partial class MainWindow : Window
                 WorldCombo.SelectedItem = "Entire Data Center";
             }
         }
-    }
-
-    private void OnSyncInventory(object sender, RoutedEventArgs e)
-    {
-        StatusLabel.Text = "Sync inventory clicked - not implemented yet";
-    }
-
-    private void OnLiveModeToggled(object sender, RoutedEventArgs e)
-    {
-        var isOn = LiveSwitch.IsChecked == true;
-        StatusLabel.Text = isOn ? "Live mode toggled ON - not implemented yet" : "Live mode toggled OFF";
     }
 
     private void OnItemSearchKeyDown(object sender, KeyEventArgs e)
@@ -208,9 +202,10 @@ public partial class MainWindow : Window
             StatusLabel.Text = $"Added {itemName} to project";
         }
 
-        // Refresh project list
+        // Refresh project list (limited to first 5 for quick view)
         ProjectList.ItemsSource = null;
-        ProjectList.ItemsSource = _projectItems;
+        ProjectList.ItemsSource = _projectItems.Take(5).ToList();
+        UpdateQuickViewCount();
         
         // Enable build button if we have items
         BuildPlanButton.IsEnabled = _projectItems.Count > 0;
@@ -278,7 +273,7 @@ public partial class MainWindow : Window
     private void DisplayPlanInTreeView(CraftingPlan plan)
     {
         // Preserve scroll position to prevent jarring jumps when toggling HQ
-        var scrollViewer = FindParentScrollViewer(RecipePlanPanel);
+        var scrollViewer = RecipePlanPanel.FindParent<ScrollViewer>();
         var scrollOffset = scrollViewer?.VerticalOffset ?? 0;
         
         RecipePlanPanel.Children.Clear();
@@ -299,20 +294,7 @@ public partial class MainWindow : Window
         }
     }
     
-    /// <summary>
-    /// Find the parent ScrollViewer of a dependency object.
-    /// </summary>
-    private ScrollViewer? FindParentScrollViewer(DependencyObject child)
-    {
-        DependencyObject? parent = VisualTreeHelper.GetParent(child);
-        
-        while (parent != null && parent is not ScrollViewer)
-        {
-            parent = VisualTreeHelper.GetParent(parent);
-        }
-        
-        return parent as ScrollViewer;
-    }
+
     
     /// <summary>
     /// Creates an Expander-based recipe card with proper styling.
@@ -388,7 +370,7 @@ public partial class MainWindow : Window
             Text = node.Name,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = node.MustBeHq ? GetAccentBrush() : GetNodeForeground(node)
+            Foreground = node.MustBeHq ? ColorHelper.GetAccentBrush() : GetNodeForeground(node)
         };
         panel.Children.Add(nameBlock);
         
@@ -454,7 +436,7 @@ public partial class MainWindow : Window
             Text = node.Name,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = node.MustBeHq ? GetAccentBrush() : GetNodeForeground(node)
+            Foreground = node.MustBeHq ? ColorHelper.GetAccentBrush() : GetNodeForeground(node)
         };
         panel.Children.Add(nameBlock);
         
@@ -618,18 +600,6 @@ public partial class MainWindow : Window
     }
     
     /// <summary>
-    /// Gets the appropriate icon for a node's acquisition source.
-    /// </summary>
-    private string GetNodeIcon(PlanNode node) => node.Source switch
-    {
-        AcquisitionSource.Craft => "⚒",
-        AcquisitionSource.MarketBuyNq => "🛒",
-        AcquisitionSource.MarketBuyHq => "🛒",
-        AcquisitionSource.VendorBuy => "🏪",
-        _ => "•"
-    };
-    
-    /// <summary>
     /// Gets the foreground color based on acquisition source.
     /// </summary>
     private Brush GetNodeForeground(PlanNode node) => node.Source switch
@@ -642,77 +612,21 @@ public partial class MainWindow : Window
     };
     
     /// <summary>
-    /// Gets the current accent color brush from resources.
-    /// </summary>
-    private Brush GetAccentBrush()
-    {
-        return TryFindResource("AccentBrush") as Brush ?? Brushes.Gold;
-    }
-    
-    /// <summary>
-    /// Gets the accent color as a Color for manipulation.
-    /// </summary>
-    private Color GetAccentColor()
-    {
-        if (TryFindResource("AccentBrush") is SolidColorBrush brush)
-            return brush.Color;
-        return Colors.Gold;
-    }
-    
-    /// <summary>
-    /// Gets a muted/darker version of the accent color for card backgrounds.
-    /// </summary>
-    private Brush GetMutedAccentBrush()
-    {
-        var color = GetAccentColor();
-        // Mix with dark background color (#2d2d2d) to get a muted version
-        var muted = Color.FromRgb(
-            (byte)((color.R * 0.25) + (45 * 0.75)),
-            (byte)((color.G * 0.25) + (45 * 0.75)),
-            (byte)((color.B * 0.25) + (45 * 0.75)));
-        return new SolidColorBrush(muted);
-    }
-    
-    /// <summary>
-    /// Gets a slightly lighter muted accent for card headers.
-    /// </summary>
-    private Brush GetMutedAccentBrushLight()
-    {
-        var color = GetAccentColor();
-        // Mix with a lighter dark color (#4a4a4a) 
-        var muted = Color.FromRgb(
-            (byte)((color.R * 0.3) + (74 * 0.7)),
-            (byte)((color.G * 0.3) + (74 * 0.7)),
-            (byte)((color.B * 0.3) + (74 * 0.7)));
-        return new SolidColorBrush(muted);
-    }
-    
-    /// <summary>
-    /// Gets a lighter accent for expanded card headers.
-    /// </summary>
-    private Brush GetMutedAccentBrushExpanded()
-    {
-        var color = GetAccentColor();
-        // Mix with an even lighter dark color (#5a5a5a) 
-        var muted = Color.FromRgb(
-            (byte)((color.R * 0.35) + (90 * 0.65)),
-            (byte)((color.G * 0.35) + (90 * 0.65)),
-            (byte)((color.B * 0.35) + (90 * 0.65)));
-        return new SolidColorBrush(muted);
-    }
-    
-    /// <summary>
     /// Gets a price display string for a node based on its acquisition source.
-    /// Shows actual prices only (no estimates).
+    /// Shows craft cost for crafted items and market price for bought items.
     /// </summary>
     private string GetNodePriceDisplay(PlanNode node)
     {
         return node.Source switch
         {
-            AcquisitionSource.Craft => "",
-            AcquisitionSource.VendorBuy when node.MarketPrice > 0 => $"~{node.MarketPrice * node.Quantity:N0}g",
-            AcquisitionSource.MarketBuyNq when node.MarketPrice > 0 => $"~{node.MarketPrice * node.Quantity:N0}g",
-            AcquisitionSource.MarketBuyHq when node.HqMarketPrice > 0 => $"~{node.HqMarketPrice * node.Quantity:N0}g",
+            AcquisitionSource.Craft when node.Children.Any() => 
+                $"(~{CalculateNodeCraftCost(node):N0}g)",
+            AcquisitionSource.VendorBuy when node.MarketPrice > 0 => 
+                $"(~{node.MarketPrice * node.Quantity:N0}g)",
+            AcquisitionSource.MarketBuyNq when node.MarketPrice > 0 => 
+                $"(~{node.MarketPrice * node.Quantity:N0}g)",
+            AcquisitionSource.MarketBuyHq when node.HqMarketPrice > 0 => 
+                $"(~{node.HqMarketPrice * node.Quantity:N0}g)",
             _ => ""
         };
     }
@@ -744,6 +658,8 @@ public partial class MainWindow : Window
             
             // Enable refresh button since we have market data to refresh
             RefreshMarketButton.IsEnabled = true;
+            ViewMarketStatusButton.IsEnabled = true;
+            MenuViewMarketStatus.IsEnabled = true;
             
             // Also restore prices from plan nodes
             var savedPrices = ExtractPricesFromPlan(plan);
@@ -811,133 +727,7 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// Recursively create a TreeViewItem from a PlanNode with editing capabilities.
-    /// </summary>
-    private TreeViewItem CreateTreeViewItem(PlanNode node)
-    {
-        // Header panel with name, quantity, and source dropdown
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        
-        // Acquisition source dropdown with costs
-        var sourceCombo = new ComboBox
-        {
-            Width = 180,
-            Margin = new Thickness(0, 0, 8, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        
-        // Calculate costs for each option
-        var craftCost = CalculateNodeCraftCost(node);
-        var nqCost = node.MarketPrice * node.Quantity;
-        var hqCost = node.MarketPrice * 1.5m * node.Quantity; // Estimate HQ at 1.5x NQ if no HQ price
-        
-        // Add options with costs
-        sourceCombo.Items.Add(new ComboBoxItem { 
-            Content = $"Craft ({craftCost:N0}g)", 
-            Tag = AcquisitionSource.Craft 
-        });
-        sourceCombo.Items.Add(new ComboBoxItem { 
-            Content = $"Buy NQ ({nqCost:N0}g)", 
-            Tag = AcquisitionSource.MarketBuyNq 
-        });
-        sourceCombo.Items.Add(new ComboBoxItem { 
-            Content = $"Buy HQ ({hqCost:N0}g)", 
-            Tag = AcquisitionSource.MarketBuyHq 
-        });
-        
-        // Select current value
-        foreach (ComboBoxItem item in sourceCombo.Items)
-        {
-            if ((AcquisitionSource)item.Tag == node.Source)
-            {
-                sourceCombo.SelectedItem = item;
-                break;
-            }
-        }
-        
-        // If not found, default to first item
-        if (sourceCombo.SelectedItem == null)
-            sourceCombo.SelectedIndex = 0;
-        
-        sourceCombo.SelectionChanged += (s, e) => 
-        {
-            if (sourceCombo.SelectedItem is ComboBoxItem selected)
-            {
-                var newSource = (AcquisitionSource)selected.Tag;
-                SetNodeAcquisitionSource(node, newSource);
-            }
-        };
-        
-        panel.Children.Add(sourceCombo);
-        
-        // HQ Star indicator (shown if MustBeHq is set) - before name
-        if (node.MustBeHq)
-        {
-            var starBlock = new TextBlock
-            {
-                Text = "★ ",
-                Foreground = System.Windows.Media.Brushes.Gold,
-                FontWeight = FontWeights.Bold,
-                VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 12
-            };
-            panel.Children.Add(starBlock);
-        }
-        
-        // Item name and details - use accent color if HQ
-        var nameText = new TextBlock 
-        { 
-            Text = $"{node.Name} x{node.Quantity}",
-            VerticalAlignment = VerticalAlignment.Center,
-            FontWeight = node.Parent == null ? FontWeights.Bold : FontWeights.Normal,
-            Foreground = node.MustBeHq ? (GetAccentBrush() as System.Windows.Media.Brush) : System.Windows.Media.Brushes.White
-        };
-        panel.Children.Add(nameText);
-        
-        // Add recipe info if craftable
-        if (!node.IsUncraftable && !string.IsNullOrEmpty(node.Job) && node.Source == AcquisitionSource.Craft)
-        {
-            var infoText = new TextBlock
-            {
-                Text = $"  ({node.Job} Lv.{node.RecipeLevel}, Yield: {node.Yield})",
-                Foreground = System.Windows.Media.Brushes.Gray,
-                VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 11
-            };
-            panel.Children.Add(infoText);
-        }
-        
-        // Price/cost info
-        var costText = GetNodeCostText(node);
-        if (!string.IsNullOrEmpty(costText))
-        {
-            var priceText = new TextBlock
-            {
-                Text = $"  {costText}",
-                Foreground = System.Windows.Media.Brushes.Gold,
-                VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 11,
-                Margin = new Thickness(8, 0, 0, 0)
-            };
-            panel.Children.Add(priceText);
-        }
-        
-        var treeItem = new TreeViewItem
-        {
-            Header = panel,
-            IsExpanded = true,
-            Tag = node // Store reference to the PlanNode for editing
-        };
-        
-        // Recursively add children
-        foreach (var child in node.Children)
-        {
-            treeItem.Items.Add(CreateTreeViewItem(child));
-        }
-        
-        return treeItem;
-    }
+
 
     /// <summary>
     /// Set the acquisition source for a node.
@@ -1053,10 +843,12 @@ public partial class MainWindow : Window
                 { 
                     Id = r.ItemId, 
                     Name = r.Name, 
-                    Quantity = r.Quantity 
+                    Quantity = r.Quantity,
+                    IsHqRequired = r.MustBeHq
                 }).ToList();
                 ProjectList.ItemsSource = null;
-                ProjectList.ItemsSource = _projectItems;
+                ProjectList.ItemsSource = _projectItems.Take(5).ToList();
+                UpdateQuickViewCount();
                 
                 BuildPlanButton.IsEnabled = _projectItems.Count > 0;
                 StatusLabel.Text = $"Loaded plan: {_currentPlan.Name}";
@@ -1135,7 +927,8 @@ public partial class MainWindow : Window
                 IsHqRequired = r.MustBeHq
             }).ToList();
             ProjectList.ItemsSource = null;
-            ProjectList.ItemsSource = _projectItems;
+            ProjectList.ItemsSource = _projectItems.Take(5).ToList();
+            UpdateQuickViewCount();
             
             // Display the plan
             DisplayPlanInTreeView(_currentPlan);
@@ -1288,7 +1081,8 @@ public partial class MainWindow : Window
                 }
                 
                 ProjectList.ItemsSource = null;
-                ProjectList.ItemsSource = _projectItems;
+                ProjectList.ItemsSource = _projectItems.Take(5).ToList();
+                UpdateQuickViewCount();
                 
                 // Display the recipe tree
                 DisplayPlanInTreeView(_currentPlan);
@@ -1360,6 +1154,8 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Fetch prices for all items in the current plan from Universalis and Garland.
+    /// Uses the Market Data Status window for real-time visualization.
+    /// Each item is updated independently as data arrives (decoupled from full fetch).
     /// </summary>
     private async void OnFetchPrices(object sender, RoutedEventArgs e)
     {
@@ -1373,35 +1169,94 @@ public partial class MainWindow : Window
         var world = WorldCombo.SelectedItem as string ?? "";
         var worldOrDc = string.IsNullOrEmpty(world) || world == "Entire Data Center" ? dc : world;
 
-        StatusLabel.Text = "Fetching prices...";
+        // Initialize or reuse the status window
+        if (_marketDataStatusWindow == null || !_marketDataStatusWindow.IsVisible)
+        {
+            _marketDataStatusWindow = new MarketDataStatusWindow();
+            _marketDataStatusWindow.Owner = this;
+        }
+
+        // Collect all unique items from the plan
+        var allItems = new List<(int itemId, string name, int quantity)>();
+        CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
+        
+        // Initialize the status window with items to fetch
+        _marketDataStatusWindow.InitializeItems(allItems);
+        _marketDataStatusWindow.Show();
+        _marketDataStatusWindow.Activate();
+
+        StatusLabel.Text = $"Fetching prices for {allItems.Count} items...";
 
         try
         {
-            // Collect all unique items from the plan
-            var allItems = new List<(int itemId, string name)>();
-            CollectAllItems(_currentPlan.RootItems, allItems);
-
-            // Fetch prices in bulk
-            var progress = new Progress<(int current, int total, string itemName)>(p =>
+            // Fetch prices with detailed progress reporting
+            var progress = new Progress<(int current, int total, string itemName, PriceFetchStage stage, string? message)>(p =>
             {
-                StatusLabel.Text = $"Fetching prices... {p.current}/{p.total} ({p.itemName})";
+                // Use the detailed message if available, otherwise build one
+                var statusText = p.message ?? p.stage switch
+                {
+                    PriceFetchStage.CheckingCache => $"Checking cache... {p.current}/{p.total}",
+                    PriceFetchStage.FetchingGarlandData => $"Loading item data: {p.itemName} ({p.current}/{p.total})",
+                    PriceFetchStage.FetchingMarketData => $"Fetching market prices... {p.current}/{p.total}",
+                    PriceFetchStage.ProcessingResults => $"Processing results... {p.current}/{p.total}",
+                    PriceFetchStage.Complete => $"Complete! ({p.total} items)",
+                    _ => $"Fetching prices... {p.current}/{p.total}"
+                };
+                
+                StatusLabel.Text = statusText;
+                
+                // Update status window for specific item progress during Garland fetching
+                if (p.stage == PriceFetchStage.FetchingGarlandData && !string.IsNullOrEmpty(p.itemName))
+                {
+                    var item = allItems.FirstOrDefault(i => i.name == p.itemName);
+                    if (item.itemId > 0)
+                    {
+                        _marketDataStatusWindow.SetItemFetching(item.itemId);
+                    }
+                }
             });
 
             var prices = await _priceCheckService.GetBestPricesBulkAsync(
-                allItems, 
+                allItems.Select(i => (i.itemId, i.name)).ToList(), 
                 worldOrDc, 
                 default, 
                 progress,
                 forceRefresh: true);
 
-            // Check if we got any valid prices
-            var validPrices = prices.Where(p => p.Value.Source != PriceSource.Unknown).ToList();
-            var failedCount = allItems.Count - validPrices.Count;
+            // Update status window and plan nodes item by item (decoupled)
+            int successCount = 0;
+            int failedCount = 0;
+            int cachedCount = 0;
+            
+            foreach (var kvp in prices)
+            {
+                int itemId = kvp.Key;
+                var priceInfo = kvp.Value;
+                
+                if (priceInfo.Source == PriceSource.Unknown)
+                {
+                    // Failed
+                    _marketDataStatusWindow.SetItemFailed(itemId, priceInfo.SourceDetails);
+                    failedCount++;
+                }
+                else if (priceInfo.Source == PriceSource.Vendor || priceInfo.Source == PriceSource.Market)
+                {
+                    // Fresh data
+                    _marketDataStatusWindow.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails);
+                    successCount++;
+                }
+                else
+                {
+                    // Cached or other
+                    _marketDataStatusWindow.SetItemCached(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails);
+                    cachedCount++;
+                }
 
-            // Update plan nodes with prices (preserves cached on failure)
-            UpdatePlanWithPrices(_currentPlan.RootItems, prices);
+                // Update plan node immediately (decoupled from full fetch)
+                UpdateSingleNodePrice(_currentPlan.RootItems, itemId, priceInfo);
+            }
 
-            // Refresh tree view (market logistics updated below)
+            // Refresh tree view with updated prices
             DisplayPlanInTreeView(_currentPlan);
             
             // Update market logistics tab with fresh market data
@@ -1409,51 +1264,119 @@ public partial class MainWindow : Window
 
             // Calculate total cost
             var totalCost = _currentPlan.AggregatedMaterials.Sum(m => m.TotalCost);
-            var vendorItems = prices.Count(p => p.Value.Source == PriceSource.Vendor);
-            var marketItems = prices.Count(p => p.Value.Source == PriceSource.Market);
 
-            if (failedCount > 0 && validPrices.Count == 0)
+            if (failedCount > 0 && successCount == 0)
             {
-                // Complete failure - all cached prices preserved
                 StatusLabel.Text = $"Price fetch failed! Using cached prices. Total: {totalCost:N0}g";
             }
             else if (failedCount > 0)
             {
-                // Partial failure
-                StatusLabel.Text = $"Prices updated! Total: {totalCost:N0}g ({vendorItems} vendor, {marketItems} market) - {failedCount} items failed";
+                StatusLabel.Text = $"Prices updated! Total: {totalCost:N0}g ({successCount} success, {failedCount} failed, {cachedCount} cached)";
             }
             else
             {
-                // Success
-                StatusLabel.Text = $"Prices fetched! Total: {totalCost:N0}g ({vendorItems} vendor, {marketItems} market)";
+                StatusLabel.Text = $"Prices fetched! Total: {totalCost:N0}g ({successCount} items)";
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[OnFetchPrices] Failed to fetch prices");
             StatusLabel.Text = $"Failed to fetch prices: {ex.Message}. Cached prices preserved.";
-        }
-        finally
-        {
+            
+            // Mark all pending items as failed
+            foreach (var item in allItems)
+            {
+                _marketDataStatusWindow.SetItemFailed(item.itemId, ex.Message);
+            }
         }
     }
 
     /// <summary>
-    /// Recursively collect all items from the plan.
+    /// Open the Market Data Status window.
     /// </summary>
-    private void CollectAllItems(List<PlanNode> nodes, List<(int itemId, string name)> items)
+    private void OnViewMarketStatus(object sender, RoutedEventArgs e)
+    {
+        if (_marketDataStatusWindow == null || !_marketDataStatusWindow.IsVisible)
+        {
+            _marketDataStatusWindow = new MarketDataStatusWindow();
+            _marketDataStatusWindow.Owner = this;
+            
+            // If we have a current plan, initialize with those items
+            if (_currentPlan != null && _currentPlan.RootItems.Count > 0)
+            {
+                var allItems = new List<(int itemId, string name, int quantity)>();
+                CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
+                _marketDataStatusWindow.InitializeItems(allItems);
+                
+                // Mark items with existing prices as cached/success
+                MarkExistingPricesInStatusWindow(_currentPlan.RootItems);
+            }
+        }
+        
+        _marketDataStatusWindow.Show();
+        _marketDataStatusWindow.Activate();
+    }
+
+    /// <summary>
+    /// Mark items that already have prices in the status window.
+    /// </summary>
+    private void MarkExistingPricesInStatusWindow(List<PlanNode> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.MarketPrice > 0)
+            {
+                _marketDataStatusWindow?.SetItemCached(node.ItemId, node.MarketPrice, node.PriceSourceDetails);
+            }
+            
+            if (node.Children?.Any() == true)
+            {
+                MarkExistingPricesInStatusWindow(node.Children);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Update a single node with price info (decoupled from full fetch).
+    /// </summary>
+    private void UpdateSingleNodePrice(List<PlanNode> nodes, int itemId, PriceInfo priceInfo)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.ItemId == itemId)
+            {
+                node.MarketPrice = priceInfo.UnitPrice;
+                if (node.CanBeHq)
+                {
+                    node.HqMarketPrice = priceInfo.HqUnitPrice ?? 0;
+                }
+                node.PriceSource = priceInfo.Source;
+                node.PriceSourceDetails = priceInfo.SourceDetails;
+            }
+            
+            if (node.Children?.Any() == true)
+            {
+                UpdateSingleNodePrice(node.Children, itemId, priceInfo);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Recursively collect all items from the plan with quantities.
+    /// </summary>
+    private void CollectAllItemsWithQuantity(List<PlanNode> nodes, List<(int itemId, string name, int quantity)> items)
     {
         foreach (var node in nodes)
         {
             // Avoid duplicates
             if (!items.Any(i => i.itemId == node.ItemId))
             {
-                items.Add((node.ItemId, node.Name));
+                items.Add((node.ItemId, node.Name, node.Quantity));
             }
 
             if (node.Children?.Any() == true)
             {
-                CollectAllItems(node.Children, items);
+                CollectAllItemsWithQuantity(node.Children, items);
             }
         }
     }
@@ -1538,6 +1461,10 @@ public partial class MainWindow : Window
                     case PriceSource.Untradeable:
                         untradeableItems.Add(material);
                         break;
+                    default:
+                        // Unknown or other sources - treat as market item
+                        marketItems.Add(material);
+                        break;
                 }
             }
             else
@@ -1578,6 +1505,8 @@ public partial class MainWindow : Window
                     "#3d3e2d");
                 MarketCards.Children.Add(cachedCard);
                 RefreshMarketButton.IsEnabled = true;
+                ViewMarketStatusButton.IsEnabled = true;
+                MenuViewMarketStatus.IsEnabled = true;
                 
                 // Still show Craft vs Buy analysis even with cached data
                 AddCraftVsBuyAnalysisCard(prices);
@@ -1593,6 +1522,8 @@ public partial class MainWindow : Window
                     $"Fetching detailed listings for {marketItems.Count} items from {(searchAllNA ? "all NA DCs" : dc)}...", "#3d3e2d");
                 MarketCards.Children.Add(loadingCard);
                 RefreshMarketButton.IsEnabled = false;
+                ViewMarketStatusButton.IsEnabled = false;
+                MenuViewMarketStatus.IsEnabled = false;
                 
                 try
                 {
@@ -1628,6 +1559,9 @@ public partial class MainWindow : Window
                     
                     // Apply current sort and display
                     ApplyMarketSortAndDisplay();
+                    
+                    // Clear the analyzing message
+                    StatusLabel.Text = $"Market analysis complete. {_currentMarketPlans.Count} items analyzed.";
                 }
                 catch (Exception ex)
                 {
@@ -1639,6 +1573,8 @@ public partial class MainWindow : Window
                 finally
                 {
                     RefreshMarketButton.IsEnabled = true;
+                ViewMarketStatusButton.IsEnabled = true;
+                MenuViewMarketStatus.IsEnabled = true;
                 }
             }
         }
@@ -1919,7 +1855,7 @@ public partial class MainWindow : Window
     {
         var border = new Border
         {
-            Background = GetMutedAccentBrush(),
+            Background = ColorHelper.GetMutedAccentBrush(),
             CornerRadius = new CornerRadius(3),
             Padding = new Thickness(0),
             Margin = new Thickness(0, 0, 0, 4),
@@ -1931,7 +1867,7 @@ public partial class MainWindow : Window
         // Clickable header - compact layout
         var headerBorder = new Border
         {
-            Background = GetMutedAccentBrushLight(),
+            Background = ColorHelper.GetMutedAccentBrushLight(),
             CornerRadius = new CornerRadius(3),
             Padding = new Thickness(8, 6, 8, 6),
             Cursor = Cursors.Hand
@@ -2003,7 +1939,7 @@ public partial class MainWindow : Window
                 Text = recWorld.WorldName,
                 FontWeight = FontWeights.SemiBold,
                 FontSize = 11,
-                Foreground = GetAccentBrush(),
+                Foreground = ColorHelper.GetAccentBrush(),
                 VerticalAlignment = VerticalAlignment.Center
             };
             rightStack.Children.Add(worldText);
@@ -2074,12 +2010,12 @@ public partial class MainWindow : Window
             if (contentStack.Visibility == System.Windows.Visibility.Collapsed)
             {
                 contentStack.Visibility = System.Windows.Visibility.Visible;
-                headerBorder.Background = GetMutedAccentBrushExpanded();
+                headerBorder.Background = ColorHelper.GetMutedAccentBrushExpanded();
             }
             else
             {
                 contentStack.Visibility = System.Windows.Visibility.Collapsed;
-                headerBorder.Background = GetMutedAccentBrushLight();
+                headerBorder.Background = ColorHelper.GetMutedAccentBrushLight();
             }
         };
         
@@ -2092,15 +2028,36 @@ public partial class MainWindow : Window
     /// </summary>
     private Border CreateWorldOptionPanel(WorldShoppingSummary world, bool isRecommended)
     {
-        var backgroundColor = isRecommended ? "#2d4a3e" : "#2d2d2d";
+        // Congested worlds get a distinctive muted background
+        var backgroundColor = world.IsCongested 
+            ? "#3d2d2d"  // Muted reddish for congested
+            : world.IsHomeWorld
+                ? "#3d3520"  // Gold-tinted for home world
+                : isRecommended 
+                    ? "#2d4a3e"  // Greenish for recommended
+                    : "#2d2d2d"; // Default gray
+        
+        var borderBrush = world.IsHomeWorld
+            ? Brushes.Gold  // Gold border for home world
+            : world.IsCongested
+                ? Brushes.IndianRed
+                : isRecommended 
+                    ? Brushes.Gold 
+                    : null;
+        
+        var borderThickness = (world.IsHomeWorld || world.IsCongested || isRecommended) 
+            ? new Thickness(1) 
+            : new Thickness(0);
+        
         var border = new Border
         {
             Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(backgroundColor)),
             CornerRadius = new CornerRadius(2),
             Padding = new Thickness(6, 4, 6, 4),
             Margin = new Thickness(0, 1, 0, 2),
-            BorderBrush = isRecommended ? Brushes.Gold : null,
-            BorderThickness = isRecommended ? new Thickness(1) : new Thickness(0)
+            BorderBrush = borderBrush,
+            BorderThickness = borderThickness,
+            Opacity = (world.IsCongested && !world.IsHomeWorld) ? 0.85 : 1.0  // Fade congested non-home worlds
         };
 
         var stack = new StackPanel();
@@ -2108,22 +2065,60 @@ public partial class MainWindow : Window
         // World name and badges - single line compact
         var headerPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         
+        // World name with appropriate styling
         var worldText = new TextBlock
         {
             Text = world.WorldName,
             FontWeight = FontWeights.SemiBold,
             FontSize = 11,
             Margin = new Thickness(0, 0, 6, 0),
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = world.IsHomeWorld 
+                ? Brushes.Gold  // Gold for home world
+                : world.IsCongested 
+                    ? Brushes.IndianRed  // Red for congested
+                    : Brushes.White
         };
         headerPanel.Children.Add(worldText);
+        
+        // Home world badge (shown first, takes priority)
+        if (world.IsHomeWorld)
+        {
+            var homeBadge = new TextBlock
+            {
+                Text = "★ HOME",
+                Foreground = Brushes.Gold,
+                FontSize = 9,
+                FontWeight = FontWeights.Bold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 4, 0),
+                ToolTip = "Your home world - you can purchase here even when congested"
+            };
+            headerPanel.Children.Add(homeBadge);
+        }
+        
+        // Congested warning badge (only show if NOT home world)
+        if (world.IsCongested && !world.IsHomeWorld)
+        {
+            var congestedBadge = new TextBlock
+            {
+                Text = "⚠ CONGESTED",
+                Foreground = Brushes.IndianRed,
+                FontSize = 9,
+                FontWeight = FontWeights.Bold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 4, 0),
+                ToolTip = "This world is congested and cannot be traveled to for purchases"
+            };
+            headerPanel.Children.Add(congestedBadge);
+        }
 
         if (isRecommended)
         {
             var recText = new TextBlock
             {
                 Text = "★",
-                Foreground = GetAccentBrush(),
+                Foreground = ColorHelper.GetAccentBrush(),
                 FontSize = 10,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 4, 0)
@@ -2173,7 +2168,7 @@ public partial class MainWindow : Window
             {
                 Text = $"Best: {world.BestSingleListing.PricePerUnit:N0}g/ea x{world.BestSingleListing.Quantity}{(world.BestSingleListing.IsHq ? " HQ" : "")}",
                 FontSize = 9,
-                Foreground = GetAccentBrush(),
+                Foreground = ColorHelper.GetAccentBrush(),
                 Margin = new Thickness(0, 0, 0, 2)
             };
             stack.Children.Add(valueText);
@@ -2355,11 +2350,6 @@ public partial class MainWindow : Window
         logWindow.Show();
     }
 
-    private void OnViewInventory(object sender, RoutedEventArgs e)
-    {
-        StatusLabel.Text = "View inventory clicked - not implemented yet";
-    }
-
     private void OnOptions(object sender, RoutedEventArgs e)
     {
         var optionsWindow = App.Services.GetRequiredService<OptionsWindow>();
@@ -2452,7 +2442,7 @@ public partial class MainWindow : Window
         if (sender is TextBox textBox)
         {
             // Get the parent ListBoxItem to find the ProjectItem
-            var item = FindParentListBoxItem(textBox);
+            var item = textBox.FindParent<ListBoxItem>();
             if (item?.DataContext is ProjectItem projectItem)
             {
                 // Parse and validate quantity
@@ -2479,7 +2469,7 @@ public partial class MainWindow : Window
         if (sender is Button button)
         {
             // Find the parent ListBoxItem to get the DataContext
-            var listBoxItem = FindParentListBoxItem(button);
+            var listBoxItem = button.FindParent<ListBoxItem>();
             if (listBoxItem?.DataContext is ProjectItem projectItem)
             {
                 _projectItems.Remove(projectItem);
@@ -2488,73 +2478,62 @@ public partial class MainWindow : Window
                 // Disable build button if no items left
                 BuildPlanButton.IsEnabled = _projectItems.Count > 0;
                 
-                // Refresh the list
-                ProjectList.Items.Refresh();
+                // Refresh the list and count
+                ProjectList.ItemsSource = null;
+                ProjectList.ItemsSource = _projectItems.Take(5).ToList();
+                UpdateQuickViewCount();
             }
         }
     }
 
     /// <summary>
-    /// Get cost text for a node - either market price or estimated craft cost.
+    /// Update the quick view count indicator showing total items and if more are available.
     /// </summary>
-    private string GetNodeCostText(PlanNode node)
+    private void UpdateQuickViewCount()
     {
-        // If buying from market (NQ or HQ)
-        if (node.Source == AcquisitionSource.MarketBuyNq || node.Source == AcquisitionSource.MarketBuyHq)
+        if (_projectItems.Count <= 5)
         {
-            if (node.MarketPrice > 0)
-            {
-                var multiplier = node.Source == AcquisitionSource.MarketBuyHq ? 1.5m : 1m;
-                return $"~{node.MarketPrice * multiplier * node.Quantity:N0}g";
-            }
-            else
-            {
-                return "(market price needed)";
-            }
+            QuickViewCountText.Text = $"({_projectItems.Count})";
         }
-        // If buying from vendor
-        else if (node.Source == AcquisitionSource.VendorBuy)
+        else
         {
-            if (node.MarketPrice > 0)
-            {
-                return $"~{node.MarketPrice * node.Quantity:N0}g (vendor)";
-            }
+            QuickViewCountText.Text = $"(showing 5 of {_projectItems.Count})";
         }
-        // If crafting
-        else if (node.Children.Any())
-        {
-            var childCost = CalculateChildCost(node);
-            if (childCost > 0)
-            {
-                return $"~{childCost:N0}g (craft)";
-            }
-        }
+    }
+
+    /// <summary>
+    /// Open the Project Items management window for better handling of large item lists.
+    /// </summary>
+    private void OnManageItemsClick(object sender, RoutedEventArgs e)
+    {
+        var planName = _currentPlan?.Name;
+        var logger = App.Services.GetRequiredService<ILogger<Views.ProjectItemsWindow>>();
         
-        return string.Empty;
-    }
-
-    /// <summary>
-    /// Calculate total cost of all children (ingredients).
-    /// </summary>
-    private decimal CalculateChildCost(PlanNode node)
-    {
-        decimal total = 0;
-        foreach (var child in node.Children)
+        var window = new Views.ProjectItemsWindow(
+            _projectItems,
+            planName,
+            onItemsChanged: (items) =>
+            {
+                // Update build button state when items change
+                BuildPlanButton.IsEnabled = items.Count > 0;
+            },
+            onAddItem: null,  // Add item from main window search instead
+            logger: logger)
         {
-            if (child.MarketPrice > 0)
-            {
-                total += child.MarketPrice * child.Quantity;
-            }
-            else if (child.Children.Any())
-            {
-                // Recursively calculate sub-ingredients
-                total += CalculateChildCost(child);
-            }
-        }
-        return total;
+            Owner = this
+        };
+        
+        window.ShowDialog();
+        
+        // Refresh the side panel list after closing
+        ProjectList.ItemsSource = null;
+        ProjectList.ItemsSource = _projectItems.Take(5).ToList();
+        UpdateQuickViewCount();
+        BuildPlanButton.IsEnabled = _projectItems.Count > 0;
+        
+        StatusLabel.Text = $"Project items updated: {_projectItems.Count} items";
     }
 
-    /// <summary>
     /// <summary>
     /// Calculate the cost to craft this node (sum of all component costs).
     /// Respects acquisition source - if a child is set to craft, recursively calculate.
@@ -2599,23 +2578,6 @@ public partial class MainWindow : Window
         return total;
     }
 
-    /// <summary>
-    /// Helper to find the parent ListBoxItem from a child element
-    /// </summary>
-    private ListBoxItem? FindParentListBoxItem(DependencyObject child)
-    {
-        DependencyObject? parent = VisualTreeHelper.GetParent(child);
-        
-        while (parent != null && parent is not ListBoxItem)
-        {
-            parent = VisualTreeHelper.GetParent(parent);
-        }
-        
-        return parent as ListBoxItem;
-    }
 
-    private void TabView_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
 
-    }
 }

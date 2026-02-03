@@ -129,7 +129,7 @@
                                    Margin="0,8,0,4"
                                    Foreground="#cccccc"/>
                         <ComboBox x:Name="DefaultDataCenterCombo"
-                                  Margin="0,0,0,16"
+                                  Margin="0,0,0,8"
                                   helpers:ComboBoxAutoWidthBehavior.EnableAutoWidth="True">
                             <ComboBoxItem Content="Aether"/>
                             <ComboBoxItem Content="Primal"/>
@@ -143,10 +143,62 @@
                             <ComboBoxItem Content="Meteor"/>
                         </ComboBox>
 
+                        <TextBlock Text="Home World"
+                                   FontWeight="SemiBold"
+                                   Margin="0,8,0,4"
+                                   Foreground="#cccccc"/>
+                        <TextBlock Text="Your character's home world (optional). Home worlds bypass congested world restrictions in recommendations."
+                                   FontSize="11"
+                                   Foreground="#888888"
+                                   Margin="0,0,0,8"/>
+                        <TextBox x:Name="HomeWorldTextBox"
+                                 Margin="0,0,0,16"
+                                 ToolTip="Enter your home world name (e.g., Gilgamesh, Balmung)"
+                                 Text=""/>
+
                         <ui:ToggleSwitch x:Name="AutoFetchPricesToggle"
                                          Content="Auto-fetch prices on plan build"
                                          Margin="0,8"
                                          ToolTip="Automatically fetch market prices after building a project plan"/>
+
+                        <ui:ToggleSwitch x:Name="ExcludeCongestedWorldsToggle"
+                                         Content="Exclude congested worlds from market fetch"
+                                         Margin="0,8"
+                                         ToolTip="Skip fetching market data for congested worlds (except your home world). Reduces API calls and improves performance."/>
+
+                        <ui:ToggleSwitch x:Name="ParallelApiRequestsToggle"
+                                         Content="Use parallel API requests"
+                                         Margin="0,8"
+                                         ToolTip="Fetch multiple chunks of market data simultaneously for faster loading on large lists. Automatically disabled for small lists."/>
+
+                        <Separator Margin="0,16"/>
+
+                        <!-- World Status Section -->
+                        <TextBlock Text="World Status"
+                                   FontWeight="SemiBold"
+                                   Margin="0,8,0,4"
+                                   Foreground="#cccccc"/>
+                        <TextBlock x:Name="WorldStatusText"
+                                   Text="Status unknown - refresh to load"
+                                   FontSize="11"
+                                   Foreground="#888888"
+                                   Margin="0,0,0,8"/>
+                        <StackPanel Orientation="Horizontal">
+                            <ui:Button x:Name="RefreshWorldStatusButton"
+                                       Content="Refresh World Status"
+                                       Click="OnRefreshWorldStatusClick"
+                                       Margin="0,0,8,0"/>
+                            <TextBlock x:Name="WorldStatusLastUpdated"
+                                       Text=""
+                                       FontSize="11"
+                                       Foreground="#888888"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Text="Fetches current world congestion data from the Lodestone. Congested worlds are marked in market recommendations."
+                                   FontSize="10"
+                                   Foreground="#666666"
+                                   Margin="0,4,0,0"
+                                   TextWrapping="Wrap"/>
 
                         <!-- Include cross-world data toggle (Hidden - Not Implemented) -->
                         <ui:ToggleSwitch x:Name="IncludeCrossWorldToggle"
@@ -208,12 +260,14 @@
             <ui:Button Grid.Column="2"
                        Content="Reset to Defaults"
                        Appearance="Secondary"
-                       Click="OnResetDefaults"/>
+                       Click="OnResetDefaults"
+                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
 
             <ui:Button Grid.Column="4"
                        Content="Save"
                        Appearance="Primary"
-                       Click="OnSave"/>
+                       Click="OnSave"
+                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
         </Grid>
     </Grid>
 </Window>

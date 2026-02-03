@@ -38,7 +38,9 @@ public class SettingsService
         {
             ["default_datacenter"] = "Aether",
             ["include_cross_world"] = true,
-            ["auto_fetch_prices"] = true
+            ["auto_fetch_prices"] = true,
+            ["exclude_congested_worlds"] = true,  // Skip congested worlds (except home) to save API calls
+            ["parallel_api_requests"] = true  // Enable parallel API requests for faster price fetching
         },
         ["ui"] = new Dictionary<string, object>
         {
@@ -208,7 +210,20 @@ public class SettingsService
         
         foreach (var kvp in loaded)
         {
-            if (kvp.Value is Dictionary<string, object> loadedDict &&
+            // Handle JsonElement by converting to proper dictionary
+            Dictionary<string, object>? loadedDict = null;
+            
+            if (kvp.Value is Dictionary<string, object> dict)
+            {
+                loadedDict = dict;
+            }
+            else if (kvp.Value is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Object)
+            {
+                // Convert JsonElement to dictionary
+                loadedDict = JsonSerializer.Deserialize<Dictionary<string, object>>(jsonElement.GetRawText());
+            }
+            
+            if (loadedDict != null &&
                 merged.TryGetValue(kvp.Key, out var defaultValue) &&
                 defaultValue is Dictionary<string, object> defaultDict)
             {

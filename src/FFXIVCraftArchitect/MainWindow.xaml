@@ -96,6 +96,7 @@
                         <!-- View Inventory hidden - not implemented yet -->
                         <!-- <MenuItem Header="View Inventory" Click="OnViewInventory"/> -->
                         <MenuItem Header="Fetch Prices" Click="OnFetchPrices"/>
+                        <MenuItem Header="View Plan Market Data" Click="OnViewMarketStatus" IsEnabled="False" x:Name="MenuViewMarketStatus"/>
                         <Separator/>
                         <MenuItem Header="Options..." Click="OnOptions"/>
                     </MenuItem>
@@ -126,15 +127,12 @@
                                    Icon="{ui:SymbolIcon ArrowSyncCircle24}"
                                    HorizontalAlignment="Stretch"
                                    Margin="0,0,0,8"
-                                   Click="OnSyncInventory"
                                    Visibility="Collapsed"/>
 
                         <!-- Live Mode Toggle (Hidden - Not Implemented) -->
                         <ui:ToggleSwitch x:Name="LiveSwitch"
                                          Content="Live Mode (Packet Capture)"
                                          Margin="0,8"
-                                         Checked="OnLiveModeToggled"
-                                         Unchecked="OnLiveModeToggled"
                                          Visibility="Collapsed"/>
 
                         <TextBlock x:Name="SyncStatus"
@@ -167,7 +165,8 @@
                                    Icon="{ui:SymbolIcon Search24}"
                                    Margin="0,8"
                                    HorizontalAlignment="Stretch"
-                                   Click="OnSearchItem"/>
+                                   Click="OnSearchItem"
+                                   helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
 
                         <!-- Action Buttons -->
                     </StackPanel>
@@ -220,7 +219,8 @@
                                        Margin="0,8,0,0"
                                        HorizontalAlignment="Stretch"
                                        IsEnabled="False"
-                                       Click="OnAddToProject"/>
+                                       Click="OnAddToProject"
+                                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
                         </Grid>
                     </Border>
 
@@ -240,18 +240,32 @@
                                 <RowDefinition Height="*" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <TextBlock Text="Project Items" 
-                                       FontWeight="SemiBold"
-                                       Margin="0,0,0,8"
-                                       Foreground="{DynamicResource AccentBrush}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Quick View" 
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource AccentBrush}"/>
+                                <TextBlock x:Name="QuickViewCountText"
+                                           Grid.Column="1"
+                                           Text=""
+                                           FontSize="10"
+                                           Foreground="#888888"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
 
-                            <!-- Project Items List with Delete, Name, HQ Toggle, and Quantity -->
+                            <!-- Project Items List - Quick View (shows first 5 items) -->
                             <ListBox Grid.Row="1"
                                      x:Name="ProjectList"
                                      Background="Transparent"
-                                     BorderThickness="0">
+                                     BorderThickness="0"
+                                     MaxHeight="200">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
                                         <Border Padding="4" Margin="0,2">
@@ -259,7 +273,8 @@
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="22" />
                                                     <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="36" />
+                                                    <ColumnDefinition Width="60" />
+                                                    <ColumnDefinition Width="8" />
                                                     <ColumnDefinition Width="60" />
                                                 </Grid.ColumnDefinitions>
 
@@ -292,7 +307,9 @@
                                                           FontSize="10"
                                                           ToolTip="Craft as High Quality"/>
 
-                                                <TextBox Grid.Column="3"
+                                                <!-- Column 3 is empty spacer -->
+
+                                                <TextBox Grid.Column="4"
                                                          Text="{Binding Quantity, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                                          VerticalAlignment="Center"
                                                          HorizontalAlignment="Stretch"
@@ -313,10 +330,20 @@
                                        Margin="0,8,0,0"
                                        HorizontalAlignment="Stretch"
                                        IsEnabled="False"
-                                       Click="OnBuildProjectPlan"/>
+                                       Click="OnBuildProjectPlan"
+                                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
+                            
+                            <ui:Button Grid.Row="3"
+                                       x:Name="ManageItemsButton"
+                                       Content="Manage Items..."
+                                       Appearance="Secondary"
+                                       Margin="0,4,0,0"
+                                       HorizontalAlignment="Stretch"
+                                       Click="OnManageItemsClick"
+                                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
 
                             <!-- Quick Actions -->
-                            <Grid Grid.Row="3" Margin="0,8,0,0">
+                            <Grid Grid.Row="4" Margin="0,8,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="4" />
@@ -327,13 +354,15 @@
                                            Content="Save Plan"
                                            Appearance="Secondary"
                                            HorizontalAlignment="Stretch"
-                                           Click="OnSavePlan"/>
+                                           Click="OnSavePlan"
+                                           helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
 
                                 <ui:Button Grid.Column="2"
                                            Content="Load Plan"
                                            Appearance="Primary"
                                            HorizontalAlignment="Stretch"
-                                           Click="OnViewPlans"/>
+                                           Click="OnViewPlans"
+                                           helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
                             </Grid>
 
                         </Grid>
@@ -413,14 +442,16 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="6" />
-                                        <ColumnDefinition Width="120" />
+                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="12" />
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="6" />
-                                        <ColumnDefinition Width="110" />
+                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="12" />
                                         <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="8" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
 
@@ -433,6 +464,7 @@
                                               x:Name="MarketSortCombo"
                                               SelectedIndex="0"
                                               SelectionChanged="OnMarketSortChanged"
+                                              MinWidth="120"
                                               helpers:ComboBoxAutoWidthBehavior.EnableAutoWidth="True">
                                         <ComboBoxItem Content="By Recommended" />
                                         <ComboBoxItem Content="Alphabetical" />
@@ -447,6 +479,7 @@
                                               x:Name="MarketModeCombo"
                                               SelectedIndex="0"
                                               SelectionChanged="OnMarketModeChanged"
+                                              MinWidth="140"
                                               ToolTip="Minimize Total Cost: Only buy what is needed. Maximize Value: Best price per unit, good for frequent crafts."
                                               helpers:ComboBoxAutoWidthBehavior.EnableAutoWidth="True">
                                         <ComboBoxItem Content="Minimize Total Cost" ToolTip="Only buy what is needed to complete a craft." />
@@ -461,11 +494,20 @@
                                               ToolTip="Search all North American Data Centers for potential savings via DC Travel."/>
 
                                     <ui:Button Grid.Column="10"
+                                               x:Name="ViewMarketStatusButton"
+                                               Content="View Status"
+                                               Appearance="Secondary"
+                                               Click="OnViewMarketStatus"
+                                               IsEnabled="False"
+                                               ToolTip="View real-time market data population status"/>
+
+                                    <ui:Button Grid.Column="12"
                                                x:Name="RefreshMarketButton"
                                                Content="Refresh Market Data"
                                                Appearance="Secondary"
                                                Click="OnRefreshMarketData"
-                                               IsEnabled="False"/>
+                                               IsEnabled="False"
+                                               helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
                                 </Grid>
                             </Border>
 

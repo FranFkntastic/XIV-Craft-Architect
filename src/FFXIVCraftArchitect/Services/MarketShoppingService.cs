@@ -14,15 +14,21 @@ public class MarketShoppingService
 {
     private readonly UniversalisService _universalisService;
     private readonly MarketCacheService _cacheService;
+    private readonly WorldStatusService _worldStatusService;
+    private readonly SettingsService _settingsService;
     private readonly ILogger<MarketShoppingService> _logger;
 
     public MarketShoppingService(
         UniversalisService universalisService, 
         MarketCacheService cacheService,
+        WorldStatusService worldStatusService,
+        SettingsService settingsService,
         ILogger<MarketShoppingService> logger)
     {
         _universalisService = universalisService;
         _cacheService = cacheService;
+        _worldStatusService = worldStatusService;
+        _settingsService = settingsService;
         _logger = logger;
     }
 
@@ -196,18 +202,42 @@ public class MarketShoppingService
             return plan;
         }
 
+        // Get user's home world (if set)
+        var homeWorld = _settingsService.Get<string>("market.home_world", "");
+        var hasHomeWorld = !string.IsNullOrWhiteSpace(homeWorld);
+
         // Group listings by world
         var listingsByWorld = marketData.Listings
             .GroupBy(l => l.WorldName)
             .ToDictionary(g => g.Key, g => g.OrderBy(l => l.PricePerUnit).ToList());
 
+        // Check if we should exclude congested worlds
+        var excludeCongested = _settingsService.Get<bool>("market.exclude_congested_worlds", true);
+        
         // Calculate per-world summaries
         foreach (var (worldName, listings) in listingsByWorld)
         {
-            var worldSummary = CalculateWorldSummary(worldName, listings, quantityNeeded, plan.DCAveragePrice);
+            var worldSummary = CalculateWorldSummary(worldName, listings, quantityNeeded, plan.DCAveragePrice, homeWorld);
             if (worldSummary != null)
             {
+                // Skip congested worlds (except home world) if setting is enabled
+                if (excludeCongested && worldSummary.IsCongested && !worldSummary.IsHomeWorld)
+                {
+                    _logger.LogDebug("[MarketShopping] Excluding {World} - congested world (excluded by setting)", worldName);
+                    continue;
+                }
+                
                 plan.WorldOptions.Add(worldSummary);
+                
+                // Log congested world detection (unless it's home world)
+                if (worldSummary.IsCongested && !worldSummary.IsHomeWorld)
+                {
+                    _logger.LogDebug("[MarketShopping] {World} is congested - will be sorted to bottom", worldName);
+                }
+                else if (worldSummary.IsCongested && worldSummary.IsHomeWorld)
+                {
+                    _logger.LogDebug("[MarketShopping] {World} is congested but is home world - keeping normal priority", worldName);
+                }
             }
         }
 
@@ -215,23 +245,30 @@ public class MarketShoppingService
         plan.WorldOptions = FilterWorldOptions(plan.WorldOptions, mode, plan.DCAveragePrice);
 
         // Sort based on recommendation mode
+        // IMPORTANT: Home worlds come first, then congested worlds are sorted to the bottom
         plan.WorldOptions = mode switch
         {
             RecommendationMode.BestUnitPrice => plan.WorldOptions
-                .OrderBy(w => w.ValueScore)
+                .OrderByDescending(w => w.IsHomeWorld)  // Home worlds first
+                .ThenBy(w => w.IsCongested && !w.IsHomeWorld)  // Congested non-home worlds to bottom
+                .ThenBy(w => w.ValueScore)
                 .ThenBy(w => w.WorldName)
                 .ToList(),
             RecommendationMode.MaximizeValue => plan.WorldOptions
-                .OrderBy(w => w.ValueScore)
+                .OrderByDescending(w => w.IsHomeWorld)  // Home worlds first
+                .ThenBy(w => w.IsCongested && !w.IsHomeWorld)  // Congested non-home worlds to bottom
+                .ThenBy(w => w.ValueScore)
                 .ThenBy(w => w.TotalCost)
                 .ToList(),
             _ => plan.WorldOptions
-                .OrderBy(w => w.TotalCost)
+                .OrderByDescending(w => w.IsHomeWorld)  // Home worlds first
+                .ThenBy(w => w.IsCongested && !w.IsHomeWorld)  // Congested non-home worlds to bottom
+                .ThenBy(w => w.TotalCost)
                 .ThenBy(w => w.WorldName)
                 .ToList()
         };
 
-        // Set recommended option
+        // Set recommended option (will be the first non-congested world or home world with best value)
         plan.RecommendedWorld = plan.WorldOptions.FirstOrDefault();
 
         return plan;
@@ -292,12 +329,22 @@ public class MarketShoppingService
         string worldName,
         List<MarketListing> listings,
         int quantityNeeded,
-        decimal dcAveragePrice)
+        decimal dcAveragePrice,
+        string? homeWorld = null)
     {
+        // Get world status (if available)
+        var worldStatus = _worldStatusService.GetWorldStatus(worldName);
+        
+        // Check if this is the user's home world
+        var isHomeWorld = !string.IsNullOrWhiteSpace(homeWorld) && 
+                         worldName.Equals(homeWorld, StringComparison.OrdinalIgnoreCase);
+        
         var summary = new WorldShoppingSummary
         {
             WorldName = worldName,
-            Listings = new List<ShoppingListingEntry>()
+            Listings = new List<ShoppingListingEntry>(),
+            IsHomeWorld = isHomeWorld,
+            Classification = worldStatus?.Classification ?? WorldClassification.Standard
         };
 
         // Track the best single listing for value comparison

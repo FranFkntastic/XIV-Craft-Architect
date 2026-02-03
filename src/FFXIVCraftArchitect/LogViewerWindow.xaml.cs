@@ -33,9 +33,11 @@ public partial class LogViewerWindow : Window
             if (File.Exists(App.LogFilePath))
             {
                 var lines = File.ReadAllLines(App.LogFilePath);
-                foreach (var line in lines)
+                for (int i = 0; i < lines.Length; i++)
                 {
-                    _allEntries.Add(ParseLogEntry(line));
+                    var entry = ParseLogEntry(lines[i]);
+                    entry.LineNumber = i + 1; // 1-based line numbers
+                    _allEntries.Add(entry);
                 }
             }
             else
@@ -131,6 +133,14 @@ public partial class LogViewerWindow : Window
         
         foreach (var entry in filtered)
         {
+            // Add line number prefix (padded to 6 digits)
+            var lineNumberRun = new Run($"[{entry.LineNumber:D6}] ")
+            {
+                Foreground = Brushes.DarkGray,
+                FontSize = 10
+            };
+            paragraph.Inlines.Add(lineNumberRun);
+            
             var run = new Run(entry.RawText)
             {
                 Foreground = GetBrushForLevel(entry.Level)
@@ -177,7 +187,8 @@ public partial class LogViewerWindow : Window
     private void UpdateStatus()
     {
         var filtered = _allEntries.Where(e => ShouldShowEntry(e)).ToList();
-        StatusTextBlock.Text = $"Showing {filtered.Count} of {_allEntries.Count} entries | Debug: {_allEntries.Count(e => e.Level == LogLevel.Debug)} | Info: {_allEntries.Count(e => e.Level == LogLevel.Info)} | Warnings: {_allEntries.Count(e => e.Level == LogLevel.Warning)} | Errors: {_allEntries.Count(e => e.Level == LogLevel.Error)}";
+        var lastLine = _allEntries.Count > 0 ? _allEntries.Max(e => e.LineNumber) : 0;
+        StatusTextBlock.Text = $"Lines: {lastLine} | Showing {filtered.Count} filtered | Debug: {_allEntries.Count(e => e.Level == LogLevel.Debug)} | Info: {_allEntries.Count(e => e.Level == LogLevel.Info)} | Warnings: {_allEntries.Count(e => e.Level == LogLevel.Warning)} | Errors: {_allEntries.Count(e => e.Level == LogLevel.Error)}";
     }
 
     private void OnRefresh(object sender, RoutedEventArgs e)
@@ -215,7 +226,8 @@ public partial class LogViewerWindow : Window
             try
             {
                 var filtered = _allEntries.Where(entry => ShouldShowEntry(entry));
-                File.WriteAllLines(dialog.FileName, filtered.Select(e => e.RawText));
+                var lines = filtered.Select(e => $"[{e.LineNumber:D6}] {e.RawText}");
+                File.WriteAllLines(dialog.FileName, lines);
                 MessageBox.Show("Logs exported successfully!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
@@ -275,8 +287,14 @@ public partial class LogViewerWindow : Window
         if (_searchMatches.Count > 0)
         {
             _currentSearchIndex = (_currentSearchIndex + 1) % _searchMatches.Count;
-            HighlightMatch(_searchMatches[_currentSearchIndex]);
-            StatusTextBlock.Text = $"Match {_currentSearchIndex + 1} of {_searchMatches.Count}";
+            var match = _searchMatches[_currentSearchIndex];
+            HighlightMatch(match);
+            
+            // Try to find the line number for this match
+            var lineNum = GetLineNumberForPosition(match.Start);
+            var lineInfo = lineNum > 0 ? $" (Line {lineNum})" : "";
+            
+            StatusTextBlock.Text = $"Match {_currentSearchIndex + 1} of {_searchMatches.Count}{lineInfo}";
         }
         else
         {
@@ -300,6 +318,61 @@ public partial class LogViewerWindow : Window
         return current;
     }
 
+    /// <summary>
+    /// Get the line number for a given position in the log.
+    /// Returns the line number from the line number run at the start of the line.
+    /// </summary>
+    private int GetLineNumberForPosition(TextPointer position)
+    {
+        try
+        {
+            // Get the paragraph containing this position
+            var paragraph = position.Paragraph;
+            if (paragraph == null) return 0;
+
+            // Find the index of this paragraph's line in the document
+            var allParagraphs = LogRichTextBox.Document.Blocks.OfType<Paragraph>().ToList();
+            var paraIndex = allParagraphs.IndexOf(paragraph);
+            if (paraIndex < 0) return 0;
+
+            // Count lines in previous paragraphs
+            int lineOffset = 0;
+            for (int i = 0; i < paraIndex; i++)
+            {
+                // Count line breaks in previous paragraphs
+                lineOffset += allParagraphs[i].Inlines.OfType<LineBreak>().Count();
+            }
+
+            // Count line breaks within this paragraph up to the position
+            var inlines = paragraph.Inlines.ToList();
+            int inlineIndex = 0;
+            for (int i = 0; i < inlines.Count; i++)
+            {
+                if (inlines[i] is LineBreak)
+                {
+                    // Check if this line break is before our position
+                    if (inlines[i].ContentStart.CompareTo(position) > 0)
+                        break;
+                    lineOffset++;
+                }
+            }
+
+            // The line number run is the first inline of each logical line
+            // Get the logical line index and look up the entry
+            var filtered = _allEntries.Where(e => ShouldShowEntry(e)).ToList();
+            if (lineOffset < filtered.Count)
+            {
+                return filtered[lineOffset].LineNumber;
+            }
+        }
+        catch
+        {
+            // Ignore errors - just return 0
+        }
+        
+        return 0;
+    }
+
     private void HighlightMatch(TextRange range)
     {
         // Clear previous highlights
@@ -315,8 +388,112 @@ public partial class LogViewerWindow : Window
         LogRichTextBox.Focus();
     }
 
+    private void OnGoToLineKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Enter)
+        {
+            GoToLine();
+        }
+    }
+
+    private void OnGoToLineClick(object sender, RoutedEventArgs e)
+    {
+        GoToLine();
+    }
+
+    private void GoToLine()
+    {
+        var lineText = GoToLineTextBox?.Text?.Trim();
+        if (string.IsNullOrEmpty(lineText))
+            return;
+
+        if (!int.TryParse(lineText, out var targetLine))
+        {
+            StatusTextBlock.Text = "Invalid line number";
+            return;
+        }
+
+        // Find the entry with this line number
+        var entry = _allEntries.FirstOrDefault(e => e.LineNumber == targetLine);
+        if (entry == null)
+        {
+            StatusTextBlock.Text = $"Line {targetLine} not found";
+            return;
+        }
+
+        // Check if it's filtered out
+        if (!ShouldShowEntry(entry))
+        {
+            StatusTextBlock.Text = $"Line {targetLine} is filtered out - enable all log levels to view";
+            return;
+        }
+
+        // Find the paragraph offset for this entry
+        var filtered = _allEntries.Where(e => ShouldShowEntry(e)).ToList();
+        var index = filtered.FindIndex(e => e.LineNumber == targetLine);
+        
+        if (index >= 0)
+        {
+            // Calculate approximate vertical offset (approximate line height * index)
+            // This is a rough approximation since RichTextBox doesn't give us exact per-line positions easily
+            var lineHeight = 16; // Approximate line height in pixels
+            var targetOffset = index * lineHeight;
+            
+            // Scroll to the position
+            LogRichTextBox.ScrollToVerticalOffset(targetOffset);
+            
+            // Highlight the line briefly
+            HighlightLine(index);
+            
+            StatusTextBlock.Text = $"Jumped to line {targetLine} (entry {index + 1} of {filtered.Count})";
+        }
+    }
+
+    private void HighlightLine(int lineIndex)
+    {
+        try
+        {
+            // Get the paragraph
+            var paragraph = LogRichTextBox.Document.Blocks.FirstOrDefault() as Paragraph;
+            if (paragraph == null) return;
+
+            // Find the line break at the specified index
+            var inlines = paragraph.Inlines.ToList();
+            
+            // Each "line" consists of: line number run + text run + line break
+            // So we need to find the start of our target line
+            var inlineIndex = lineIndex * 3; // 3 inlines per displayed line
+            
+            if (inlineIndex < inlines.Count)
+            {
+                // Get the text run for this line (index + 1, since +0 is line number)
+                var textRun = inlines[inlineIndex + 1] as Run;
+                if (textRun != null)
+                {
+                    // Create a range for this run
+                    var start = textRun.ContentStart;
+                    var end = textRun.ContentEnd;
+                    var range = new TextRange(start, end);
+                    
+                    // Clear previous highlights
+                    var docRange = new TextRange(LogRichTextBox.Document.ContentStart, LogRichTextBox.Document.ContentEnd);
+                    docRange.ApplyPropertyValue(TextElement.BackgroundProperty, Brushes.Transparent);
+                    
+                    // Apply highlight
+                    range.ApplyPropertyValue(TextElement.BackgroundProperty, Brushes.Yellow);
+                    range.ApplyPropertyValue(TextElement.ForegroundProperty, Brushes.Black);
+                }
+            }
+        }
+        catch
+        {
+            // Ignore highlighting errors - the scroll worked, that's what matters
+        }
+    }
+
     private class LogEntry
     {
+        public int LineNumber { get; set; }
         public string RawText { get; set; } = "";
         public string Timestamp { get; set; } = "";
         public LogLevel Level { get; set; } = LogLevel.Info;

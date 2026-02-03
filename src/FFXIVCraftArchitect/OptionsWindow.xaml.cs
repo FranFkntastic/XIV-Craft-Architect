@@ -14,17 +14,24 @@ public partial class OptionsWindow : Window
 {
     private readonly SettingsService _settingsService;
     private readonly ThemeService _themeService;
+    private readonly WorldStatusService _worldStatusService;
     private readonly ILogger<OptionsWindow> _logger;
     private bool _isLoading;
 
-    public OptionsWindow(SettingsService settingsService, ThemeService themeService, ILogger<OptionsWindow> logger)
+    public OptionsWindow(
+        SettingsService settingsService, 
+        ThemeService themeService, 
+        WorldStatusService worldStatusService,
+        ILogger<OptionsWindow> logger)
     {
         InitializeComponent();
         _settingsService = settingsService;
         _themeService = themeService;
+        _worldStatusService = worldStatusService;
         _logger = logger;
         
         LoadSettings();
+        UpdateWorldStatusUI();
     }
 
     private void LoadSettings()
@@ -42,8 +49,13 @@ public partial class OptionsWindow : Window
             var defaultDc = _settingsService.Get<string>("market.default_datacenter", "Aether") ?? "Aether";
             DefaultDataCenterCombo.SelectedItem = FindComboBoxItem(DefaultDataCenterCombo, defaultDc);
             
+            var homeWorld = _settingsService.Get<string>("market.home_world", "");
+            HomeWorldTextBox.Text = homeWorld ?? "";
+            
             AutoFetchPricesToggle.IsChecked = _settingsService.Get<bool>("market.auto_fetch_prices", true);
             IncludeCrossWorldToggle.IsChecked = _settingsService.Get<bool>("market.include_cross_world", true);
+            ExcludeCongestedWorldsToggle.IsChecked = _settingsService.Get<bool>("market.exclude_congested_worlds", true);
+            ParallelApiRequestsToggle.IsChecked = _settingsService.Get<bool>("market.parallel_api_requests", true);
 
             // Planning Settings
             var defaultMode = _settingsService.Get<string>("planning.default_recommendation_mode", "MinimizeTotalCost");
@@ -154,8 +166,14 @@ public partial class OptionsWindow : Window
             // Save Market Settings
             var selectedDc = (DefaultDataCenterCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Aether";
             _settingsService.Set("market.default_datacenter", selectedDc);
+            
+            var homeWorld = HomeWorldTextBox.Text?.Trim() ?? "";
+            _settingsService.Set("market.home_world", homeWorld);
+            
             _settingsService.Set("market.auto_fetch_prices", AutoFetchPricesToggle.IsChecked == true);
             _settingsService.Set("market.include_cross_world", IncludeCrossWorldToggle.IsChecked == true);
+            _settingsService.Set("market.exclude_congested_worlds", ExcludeCongestedWorldsToggle.IsChecked == true);
+            _settingsService.Set("market.parallel_api_requests", ParallelApiRequestsToggle.IsChecked == true);
 
             // Save Planning Settings
             var selectedMode = DefaultRecommendationModeCombo.SelectedIndex == 1 ? "MaximizeValue" : "MinimizeTotalCost";
@@ -175,6 +193,85 @@ public partial class OptionsWindow : Window
                 "Error",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
+        }
+    }
+    
+    /// <summary>
+    /// Updates the world status UI with current cache information.
+    /// </summary>
+    private void UpdateWorldStatusUI()
+    {
+        try
+        {
+            var worlds = _worldStatusService.GetAllWorldStatuses();
+            var lastUpdated = _worldStatusService.LastUpdated;
+            
+            if (worlds.Count == 0)
+            {
+                WorldStatusText.Text = "No world status data loaded";
+                WorldStatusText.Foreground = Brushes.IndianRed;
+                WorldStatusLastUpdated.Text = "";
+            }
+            else
+            {
+                var congestedCount = worlds.Count(w => w.Value.IsCongested);
+                WorldStatusText.Text = $"{worlds.Count} worlds loaded ({congestedCount} congested)";
+                WorldStatusText.Foreground = Brushes.LightGreen;
+                
+                if (lastUpdated.HasValue)
+                {
+                    var localTime = lastUpdated.Value.ToLocalTime();
+                    var timeAgo = DateTime.Now - localTime;
+                    var timeString = timeAgo.TotalHours < 1 
+                        ? $"{timeAgo.Minutes}m ago" 
+                        : $"{timeAgo.Hours}h ago";
+                    WorldStatusLastUpdated.Text = $"Updated {timeString}";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to update world status UI");
+            WorldStatusText.Text = "Error loading status";
+            WorldStatusText.Foreground = Brushes.IndianRed;
+        }
+    }
+    
+    /// <summary>
+    /// Refreshes world status from the Lodestone.
+    /// </summary>
+    private async void OnRefreshWorldStatusClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            RefreshWorldStatusButton.IsEnabled = false;
+            RefreshWorldStatusButton.Content = "Refreshing...";
+            WorldStatusText.Text = "Fetching from Lodestone...";
+            WorldStatusText.Foreground = Brushes.LightGray;
+            
+            var success = await _worldStatusService.RefreshStatusAsync();
+            
+            if (success)
+            {
+                UpdateWorldStatusUI();
+                _logger.LogInformation("World status refreshed successfully");
+            }
+            else
+            {
+                WorldStatusText.Text = "Failed to refresh - check logs";
+                WorldStatusText.Foreground = Brushes.IndianRed;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to refresh world status");
+            WorldStatusText.Text = $"Error: {ex.Message}";
+            WorldStatusText.Foreground = Brushes.IndianRed;
+        }
+        finally
+        {
+            RefreshWorldStatusButton.IsEnabled = true;
+            RefreshWorldStatusButton.Content = "Refresh World Status";
         }
     }
 }

@@ -88,6 +88,10 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="4" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="8" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="8" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
@@ -98,13 +102,30 @@
                           Foreground="#888888"
                           VerticalAlignment="Center"/>
                 
-                <Button Grid.Column="1"
+                <TextBox Grid.Column="1"
+                         x:Name="GoToLineTextBox"
+                         Width="60"
+                         Height="22"
+                         Background="#1e1e1e"
+                         Foreground="#d4d4d4"
+                         BorderBrush="#555555"
+                         ToolTip="Go to line number (Ctrl+G)"
+                         KeyDown="OnGoToLineKeyDown"/>
+                
+                <Button Grid.Column="3"
+                        Content="Go"
+                        MinWidth="40"
+                        Height="22"
+                        Click="OnGoToLineClick"
+                        ToolTip="Jump to line number"/>
+                
+                <Button Grid.Column="5"
                         Content="Export"
                         MinWidth="80"
                         Height="26"
                         Click="OnExportClick"/>
                 
-                <Button Grid.Column="3"
+                <Button Grid.Column="7"
                         Content="Refresh"
                         MinWidth="80"
                         Height="26"

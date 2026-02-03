@@ -64,6 +64,22 @@ public class WorldShoppingSummary
     /// </summary>
     public bool IsCompetitive => BestSingleListing != null && 
         BestSingleListing.PricePerUnit <= AveragePricePerUnit * 0.9m;
+    
+    /// <summary>
+    /// World classification/status (Congested, Standard, Preferred, etc.)
+    /// </summary>
+    public WorldClassification Classification { get; set; } = WorldClassification.Standard;
+    
+    /// <summary>
+    /// Whether this world is congested (cannot travel to for purchases).
+    /// </summary>
+    public bool IsCongested => Classification == WorldClassification.Congested;
+    
+    /// <summary>
+    /// Whether this world is the user's home world.
+    /// Home worlds bypass congested restrictions since you can always purchase there.
+    /// </summary>
+    public bool IsHomeWorld { get; set; }
 
     public string CostDisplay => $"{TotalCost:N0}g";
     public string PricePerUnitDisplay => $"{AveragePricePerUnit:N0}g";

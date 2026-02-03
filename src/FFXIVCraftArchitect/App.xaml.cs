@@ -32,6 +32,16 @@ public partial class App : Application
         var themeService = Services.GetRequiredService<ThemeService>();
         themeService.RefreshFromSettings();
         
+        // Initialize world status cache (fire and forget - don't block startup)
+        var worldStatusService = Services.GetRequiredService<WorldStatusService>();
+        _ = Task.Run(async () => 
+        {
+            if (worldStatusService.NeedsRefresh())
+            {
+                await worldStatusService.RefreshStatusAsync();
+            }
+        });
+        
         var mainWindow = Services.GetRequiredService<MainWindow>();
         mainWindow.Show();
     }
@@ -83,6 +93,7 @@ public partial class App : Application
         services.AddSingleton<ArtisanService>();
         services.AddSingleton<PriceCheckService>();
         services.AddSingleton<MarketShoppingService>();
+        services.AddSingleton<WorldStatusService>();
 
         // Windows
         services.AddTransient<MainWindow>();

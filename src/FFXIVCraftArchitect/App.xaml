@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:local="clr-namespace:FFXIVCraftArchitect"
              Startup="OnStartup">
     <Application.Resources>
         <ResourceDictionary>
@@ -16,6 +17,9 @@
             <Color x:Key="AccentColorFaded">#1ed4af37</Color>
             <SolidColorBrush x:Key="AccentBrushFaded" Color="#1ed4af37"/>
             <SolidColorBrush x:Key="AccentBorderBrush" Color="#d4af37"/>
+            
+            <!-- Converters -->
+            <local:StringToBrushConverter x:Key="StringToBrushConverter"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

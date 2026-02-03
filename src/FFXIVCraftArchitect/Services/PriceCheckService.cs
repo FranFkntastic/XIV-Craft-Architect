@@ -34,6 +34,7 @@ public class PriceCheckService
 {
     private readonly GarlandService _garlandService;
     private readonly UniversalisService _universalisService;
+    private readonly SettingsService _settingsService;
     private readonly ILogger<PriceCheckService> _logger;
     
     // Cache for prices to avoid repeated API calls
@@ -43,10 +44,12 @@ public class PriceCheckService
     public PriceCheckService(
         GarlandService garlandService,
         UniversalisService universalisService,
+        SettingsService settingsService,
         ILogger<PriceCheckService> logger)
     {
         _garlandService = garlandService;
         _universalisService = universalisService;
+        _settingsService = settingsService;
         _logger = logger;
     }
 
@@ -79,6 +82,10 @@ public class PriceCheckService
             // Fetch item data from Garland (for vendor prices and tradeability)
             var garlandItem = await _garlandService.GetItemAsync(itemId, ct);
             
+            // DEBUG: Log what we got from Garland
+            _logger.LogInformation("[PriceCheck:{ItemName}] Garland: Tradeable={Tradeable}, Vendors={VendorCount}",
+                itemName, garlandItem?.Tradeable, garlandItem?.Vendors?.Count ?? 0);
+            
             // Check if item is tradeable
             if (garlandItem?.Tradeable == false)
             {
@@ -96,6 +103,10 @@ public class PriceCheckService
             var marketData = await _universalisService.GetMarketDataAsync(worldOrDc, itemId, ct: ct);
             var marketPriceNq = GetAverageMarketPrice(marketData, hqOnly: false);
             var marketPriceHq = GetAverageMarketPrice(marketData, hqOnly: true);
+            
+            // DEBUG: Log market data details
+            _logger.LogInformation("[PriceCheck:{ItemName}] Universalis: Listings={Listings}, AvgPrice={AvgPrice}, NQ={Nq}, HQ={Hq}",
+                itemName, marketData?.Listings?.Count ?? 0, marketData?.AveragePrice, marketPriceNq, marketPriceHq);
 
             // Pick the best NQ price (vendors prioritized if equal)
             if (vendorPrice > 0 && (marketPriceNq <= 0 || vendorPrice <= marketPriceNq))
@@ -123,7 +134,8 @@ public class PriceCheckService
                 priceInfo.UnitPrice = 0;
                 priceInfo.Source = PriceSource.Unknown;
                 priceInfo.SourceDetails = "No price data";
-                _logger.LogWarning("[PriceCheck] No price found for {ItemName}", itemName);
+                _logger.LogWarning("[PriceCheck:{ItemName}] No price: vendor={Vendor}, marketNQ={MarketNQ}, marketHQ={MarketHQ}", 
+                    itemName, vendorPrice, marketPriceNq, marketPriceHq);
             }
             
             // Store HQ price if available (only if there are actual HQ listings)
@@ -145,6 +157,18 @@ public class PriceCheckService
     }
 
     /// <summary>
+    /// Progress info for price fetching operations.
+    /// </summary>
+    public enum PriceFetchStage
+    {
+        CheckingCache,
+        FetchingGarlandData,
+        FetchingMarketData,
+        ProcessingResults,
+        Complete
+    }
+
+    /// <summary>
     /// Get prices for multiple items in bulk (more efficient).
     /// </summary>
     /// <param name="forceRefresh">If true, bypass cache and fetch fresh prices for all items.</param>
@@ -152,13 +176,17 @@ public class PriceCheckService
         List<(int itemId, string name)> items, 
         string worldOrDc, 
         CancellationToken ct = default,
-        IProgress<(int current, int total, string itemName)>? progress = null,
+        IProgress<(int current, int total, string itemName, PriceFetchStage stage, string? message)>? progress = null,
         bool forceRefresh = false)
     {
         var results = new Dictionary<int, PriceInfo>();
         var itemsToFetch = new List<(int itemId, string name)>();
 
+        // Report cache checking stage
+        progress?.Report((0, items.Count, "", PriceFetchStage.CheckingCache, "Checking cache for existing prices..."));
+        
         // Check cache first (unless forcing refresh)
+        int cacheHitCount = 0;
         foreach (var (itemId, name) in items)
         {
             if (!forceRefresh && 
@@ -166,6 +194,7 @@ public class PriceCheckService
                 DateTime.UtcNow - cached.LastUpdated < _cacheDuration)
             {
                 results[itemId] = cached;
+                cacheHitCount++;
             }
             else
             {
@@ -176,18 +205,32 @@ public class PriceCheckService
         if (itemsToFetch.Count == 0)
         {
             _logger.LogInformation("[PriceCheck] All {Count} items found in cache", items.Count);
+            progress?.Report((items.Count, items.Count, "", PriceFetchStage.Complete, $"All {items.Count} items found in cache"));
             return results;
         }
 
-        _logger.LogInformation("[PriceCheck] Fetching prices for {Count} items", itemsToFetch.Count);
+        _logger.LogInformation("[PriceCheck] {Cached} items from cache, fetching {ToFetch} items", cacheHitCount, itemsToFetch.Count);
+        progress?.Report((cacheHitCount, items.Count, "", PriceFetchStage.CheckingCache, 
+            $"{cacheHitCount} from cache, fetching {itemsToFetch.Count} from API..."));
 
         // Fetch all item data from Garland first
+        progress?.Report((cacheHitCount, items.Count, "", PriceFetchStage.FetchingGarlandData, "Fetching item data from Garland Tools..."));
+        
         var garlandItems = new Dictionary<int, GarlandItem?>();
+        int garlandProcessed = 0;
         foreach (var (itemId, name) in itemsToFetch)
         {
             try
             {
                 garlandItems[itemId] = await _garlandService.GetItemAsync(itemId, ct);
+                garlandProcessed++;
+                
+                // Report every 10 items or on the last one
+                if (garlandProcessed % 10 == 0 || garlandProcessed == itemsToFetch.Count)
+                {
+                    progress?.Report((cacheHitCount + garlandProcessed, items.Count, name, 
+                        PriceFetchStage.FetchingGarlandData, $"Loading item data: {garlandProcessed}/{itemsToFetch.Count}"));
+                }
             }
             catch (Exception ex)
             {
@@ -201,6 +244,12 @@ public class PriceCheckService
             .Where(i => garlandItems[i.itemId]?.Tradeable != false)
             .Select(i => i.itemId)
             .ToList();
+        
+        var untradeableCount = itemsToFetch.Count - marketIds.Count;
+        if (untradeableCount > 0)
+        {
+            _logger.LogInformation("[PriceCheck] {Count} untradeable items (vendor/gather only)", untradeableCount);
+        }
 
         // Fetch market prices in bulk
         Dictionary<int, UniversalisResponse> marketPrices = new();
@@ -209,7 +258,34 @@ public class PriceCheckService
         {
             try
             {
-                marketPrices = await _universalisService.GetMarketDataBulkAsync(worldOrDc, marketIds, ct);
+                // Check if parallel fetching is enabled
+                var useParallel = _settingsService.Get<bool>("market.parallel_api_requests", true);
+                
+                string fetchMode = useParallel && marketIds.Count > 100 ? "parallel" : "sequential";
+                progress?.Report((cacheHitCount, items.Count, "", PriceFetchStage.FetchingMarketData, 
+                    $"Fetching market prices ({fetchMode}, {marketIds.Count} items)..."));
+                
+                _logger.LogInformation("[PriceCheck] Using {Mode} market fetch for {Count} items", fetchMode, marketIds.Count);
+                
+                if (useParallel && marketIds.Count > 100)
+                {
+                    marketPrices = await _universalisService.GetMarketDataBulkParallelAsync(worldOrDc, marketIds, ct: ct);
+                }
+                else
+                {
+                    marketPrices = await _universalisService.GetMarketDataBulkAsync(worldOrDc, marketIds, ct);
+                }
+                
+                _logger.LogInformation("[PriceCheck] Market fetch returned {ReturnedCount}/{RequestedCount} items", 
+                    marketPrices.Count, marketIds.Count);
+                
+                // Log which items are missing from response
+                var missingItems = marketIds.Where(id => !marketPrices.ContainsKey(id)).ToList();
+                if (missingItems.Any())
+                {
+                    _logger.LogWarning("[PriceCheck] Missing from market response: {MissingIds}", 
+                        string.Join(", ", missingItems));
+                }
             }
             catch (Exception ex)
             {
@@ -221,10 +297,18 @@ public class PriceCheckService
 
         // Process results
         int current = 0;
+        progress?.Report((0, itemsToFetch.Count, "", PriceFetchStage.ProcessingResults, "Processing results..."));
+        
         foreach (var (itemId, name) in itemsToFetch)
         {
             current++;
-            progress?.Report((current, itemsToFetch.Count, name));
+            
+            // Report progress every 5 items
+            if (current % 5 == 0 || current == itemsToFetch.Count)
+            {
+                progress?.Report((current, itemsToFetch.Count, name, PriceFetchStage.ProcessingResults, 
+                    $"Processing: {name} ({current}/{itemsToFetch.Count})"));
+            }
 
             // If market fetch failed, try to use cached price
             if (marketFetchFailed && _priceCache.TryGetValue(itemId, out var cachedPrice))
@@ -261,6 +345,13 @@ public class PriceCheckService
             {
                 marketPriceNq = GetAverageMarketPrice(marketData, hqOnly: false);
                 marketPriceHq = GetAverageMarketPrice(marketData, hqOnly: true);
+                
+                _logger.LogDebug("[PriceCheck] {ItemName}: market data found, {Listings} listings, NQ={NqPrice}, HQ={HqPrice}",
+                    name, marketData.Listings?.Count ?? 0, marketPriceNq, marketPriceHq);
+            }
+            else
+            {
+                _logger.LogWarning("[PriceCheck] {ItemName}: NO market data found in response!", name);
             }
 
             // Pick best price (prefer NQ for default, but track HQ separately)
@@ -272,17 +363,21 @@ public class PriceCheckService
                 priceInfo.SourceDetails = vendor != null 
                     ? $"Vendor: {vendor.Name}"
                     : "Vendor";
+                _logger.LogInformation("[PriceCheck:{Name}] Result: VENDOR @ {Price}g", name, vendorPrice);
             }
             else if (marketPriceNq > 0)
             {
                 priceInfo.UnitPrice = marketPriceNq;
                 priceInfo.Source = PriceSource.Market;
                 priceInfo.SourceDetails = $"Market ({worldOrDc})";
+                _logger.LogInformation("[PriceCheck:{Name}] Result: MARKET @ {Price}g", name, marketPriceNq);
             }
             else
             {
                 priceInfo.Source = PriceSource.Unknown;
                 priceInfo.SourceDetails = "No price data";
+                _logger.LogWarning("[PriceCheck:{Name}] Result: UNKNOWN (vendor={Vendor}, marketNQ={MarketNQ})", 
+                    name, vendorPrice, marketPriceNq);
             }
             
             // Store HQ price if available (only if there are actual HQ listings)

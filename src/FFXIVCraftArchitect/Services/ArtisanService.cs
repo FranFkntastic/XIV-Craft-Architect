@@ -15,12 +15,18 @@ public class ArtisanService
 {
     private readonly ILogger<ArtisanService> _logger;
     private readonly GarlandService _garlandService;
+    private readonly RecipeCalculationService _recipeCalcService;
     private readonly HttpClient _httpClient;
 
-    public ArtisanService(ILogger<ArtisanService> logger, GarlandService garlandService, HttpClient httpClient)
+    public ArtisanService(
+        ILogger<ArtisanService> logger, 
+        GarlandService garlandService, 
+        RecipeCalculationService recipeCalcService,
+        HttpClient httpClient)
     {
         _logger = logger;
         _garlandService = garlandService;
+        _recipeCalcService = recipeCalcService;
         _httpClient = httpClient;
     }
 
@@ -29,6 +35,14 @@ public class ArtisanService
     /// <summary>
     /// Import an Artisan crafting list from JSON.
     /// Artisan exports its lists as JSON which can be pasted into the "Import List From Clipboard" feature.
+    /// 
+    /// The JSON structure has:
+    /// - ID: A random list ID (100-50000), NOT an item ID
+    /// - Recipes: Array of recipes to craft (these are RECIPE IDs, each with quantity)
+    /// - Name: The name of the crafting list
+    /// 
+    /// We import each recipe in the Recipes array by converting recipe IDs to item IDs,
+    /// then let RecipeCalculationService calculate all subcrafts.
     /// </summary>
     public async Task<CraftingPlan?> ImportFromArtisanAsync(
         string artisanJson, 
@@ -47,28 +61,33 @@ public class ArtisanService
             return null;
         }
 
-        if (artisanList?.Recipes == null || artisanList.Recipes.Count == 0)
+        if (artisanList == null)
         {
-            _logger.LogWarning("[Artisan] No recipes found in Artisan import");
+            _logger.LogWarning("[Artisan] Failed to deserialize Artisan list");
             return null;
         }
 
-        var plan = new CraftingPlan
+        if (artisanList.Recipes == null || artisanList.Recipes.Count == 0)
         {
-            Name = string.IsNullOrWhiteSpace(artisanList.Name) ? "Imported from Artisan" : $"{artisanList.Name} (Artisan)",
-            DataCenter = dataCenter,
-            World = world
-        };
+            _logger.LogWarning("[Artisan] No recipes found in Artisan list");
+            return null;
+        }
 
-        // Convert each Artisan recipe to a PlanNode
+        _logger.LogInformation("[Artisan] Importing list '{ListName}' with {RecipeCount} recipes", 
+            artisanList.Name, artisanList.Recipes.Count);
+
+        // Convert each recipe in the Recipes array to an item
+        // The Recipes array contains the actual items to craft (with recipe IDs)
+        var targetItems = new List<(int itemId, string name, int quantity, bool isHqRequired)>();
+        
         foreach (var artisanItem in artisanList.Recipes)
         {
             try
             {
-                var node = await ConvertFromArtisanItemAsync(artisanItem, ct);
-                if (node != null)
+                var targetItem = await ConvertToTargetItemAsync(artisanItem, ct);
+                if (targetItem.HasValue)
                 {
-                    plan.RootItems.Add(node);
+                    targetItems.Add(targetItem.Value);
                 }
             }
             catch (Exception ex)
@@ -77,68 +96,91 @@ public class ArtisanService
             }
         }
 
-        if (plan.RootItems.Count == 0)
+        if (targetItems.Count == 0)
         {
             _logger.LogWarning("[Artisan] No valid items could be imported from Artisan list");
             return null;
         }
 
-        _logger.LogInformation("[Artisan] Imported plan '{PlanName}' with {Count} items from Artisan", 
+        // Use RecipeCalculationService to build complete recipe trees with all subcrafts
+        var plan = await _recipeCalcService.BuildPlanAsync(
+            targetItems, 
+            dataCenter, 
+            world, 
+            ct);
+
+        // Update plan name to indicate it came from Artisan
+        plan.Name = string.IsNullOrWhiteSpace(artisanList.Name) 
+            ? "Imported from Artisan" 
+            : $"{artisanList.Name} (Artisan)";
+
+        _logger.LogInformation("[Artisan] Successfully imported plan '{PlanName}' with {RootCount} root items and full recipe trees", 
             plan.Name, plan.RootItems.Count);
 
         return plan;
     }
 
     /// <summary>
-    /// Convert an ArtisanListItem to a PlanNode.
-    /// Looks up the item ID from the recipe ID.
+    /// Convert an ArtisanListItem to a target item tuple for RecipeCalculationService.
+    /// 
+    /// For older recipes: The ID is a Recipe ID that needs to be looked up via XIVAPI.
+    /// For newer recipes (Dawntrail+): The ID is actually an Item ID because XIVAPI doesn't have them yet.
     /// </summary>
-    private async Task<PlanNode?> ConvertFromArtisanItemAsync(ArtisanListItem artisanItem, CancellationToken ct)
+    private async Task<(int itemId, string name, int quantity, bool isHqRequired)?> ConvertToTargetItemAsync(
+        ArtisanListItem artisanItem, 
+        CancellationToken ct)
     {
-        // Artisan stores Recipe ID, but we need Item ID for our plan
-        // We need to look up the recipe to get the resulting item
-        var recipeId = (int)artisanItem.ID;
+        var id = (int)artisanItem.ID;
         
-        // Try to get recipe info from Garland
-        // Since Garland doesn't have a direct recipe endpoint, we'll search by recipe ID
-        // or look up items that have this recipe
-        var itemData = await TryFindItemByRecipeIdAsync(recipeId, ct);
+        // First, try to treat the ID as an item ID directly (for newer content)
+        // This handles cases where Artisan exports item IDs instead of recipe IDs
+        var itemData = await _garlandService.GetItemAsync(id, ct);
+        
+        if (itemData != null && itemData.Crafts?.Any() == true)
+        {
+            // This is an item ID with a craft recipe - use it directly
+            var craft = itemData.Crafts.OrderBy(c => c.RecipeLevel).First();
+            var yield = Math.Max(1, craft.Yield);
+            var totalQuantity = artisanItem.Quantity * yield;
+            var isHqRequired = !artisanItem.ListItemOptions.NQOnly;
+
+            _logger.LogDebug("[Artisan] Direct item lookup: ID {Id} -> {ItemName} x{Quantity} (HQ: {Hq})", 
+                id, itemData.Name, totalQuantity, isHqRequired);
+
+            return (itemData.Id, itemData.Name, totalQuantity, isHqRequired);
+        }
+        
+        // If direct lookup failed or item has no crafts, try recipe lookup (older content)
+        _logger.LogDebug("[Artisan] Direct item lookup failed for ID {Id}, trying recipe lookup", id);
+        
+        itemData = await TryFindItemByRecipeIdAsync(id, ct);
         
         if (itemData == null)
         {
-            _logger.LogWarning("[Artisan] Could not find item for recipe ID {RecipeId}", recipeId);
+            _logger.LogWarning("[Artisan] Could not find item for ID {Id} (tried as both item and recipe)", id);
             return null;
         }
 
-        // Find the specific craft that matches our recipe ID
-        var craft = itemData.Crafts?.FirstOrDefault(c => c.Id == recipeId);
-        if (craft == null)
+        // Find the specific craft that matches our recipe ID to get yield
+        var craftByRecipe = itemData.Crafts?.FirstOrDefault(c => c.Id == id);
+        if (craftByRecipe == null)
         {
             _logger.LogWarning("[Artisan] Recipe ID {RecipeId} not found in item {ItemName}", 
-                recipeId, itemData.Name);
+                id, itemData.Name);
             return null;
         }
 
         // Calculate total item quantity based on recipe yield and craft count
-        var yield = Math.Max(1, craft.Yield);
-        var totalQuantity = artisanItem.Quantity * yield;
+        var yieldByRecipe = Math.Max(1, craftByRecipe.Yield);
+        var totalQuantityByRecipe = artisanItem.Quantity * yieldByRecipe;
 
-        var node = new PlanNode
-        {
-            ItemId = itemData.Id,
-            Name = itemData.Name,
-            IconId = itemData.IconId,
-            Quantity = totalQuantity,
-            RecipeLevel = craft.RecipeLevel,
-            Job = GetJobName(craft.JobId),
-            Yield = yield,
-            Source = AcquisitionSource.Craft
-        };
+        // HQ requirement from Artisan options
+        var isHqRequiredByRecipe = !artisanItem.ListItemOptions.NQOnly;
 
-        _logger.LogDebug("[Artisan] Imported recipe {RecipeId} -> {ItemName} x{Quantity}", 
-            recipeId, node.Name, node.Quantity);
+        _logger.LogDebug("[Artisan] Mapped recipe {RecipeId} -> {ItemName} (ID: {ItemId}) x{Quantity} (HQ: {Hq})", 
+            id, itemData.Name, itemData.Id, totalQuantityByRecipe, isHqRequiredByRecipe);
 
-        return node;
+        return (itemData.Id, itemData.Name, totalQuantityByRecipe, isHqRequiredByRecipe);
     }
 
     /// <summary>
@@ -221,7 +263,9 @@ public class ArtisanService
         
         // First, try direct item lookup with offsets
         // Many recipes have item IDs that are close to their recipe IDs
-        var offsets = new[] { 0, -100000, -200000, 100000, 200000 };
+        // Offset 11415: Patch 7.4+ items (Courtly Lover's gear, etc.)
+        // Offsets 100000/200000: Common legacy offsets for older content
+        var offsets = new[] { 0, 11415, -100000, -200000, 100000, 200000 };
         
         foreach (var offset in offsets)
         {

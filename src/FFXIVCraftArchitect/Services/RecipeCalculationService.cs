@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using FFXIVCraftArchitect.Helpers;
 using FFXIVCraftArchitect.Models;
 using Microsoft.Extensions.Logging;
 
@@ -178,7 +179,7 @@ public class RecipeCalculationService
         // Use the first available traditional recipe (usually the lowest level/main recipe)
         var recipe = itemData!.Crafts!.OrderBy(r => r.RecipeLevel).First();
         node.RecipeLevel = recipe.RecipeLevel;
-        node.Job = GetJobName(recipe.JobId);
+        node.Job = JobHelper.GetJobName(recipe.JobId);
         node.Yield = Math.Max(1, recipe.Yield);
 
         // Calculate how many times we need to craft
@@ -347,21 +348,7 @@ public class RecipeCalculationService
         return node;
     }
 
-    private static string GetJobName(int jobId)
-    {
-        return jobId switch
-        {
-            1 => "Carpenter",
-            2 => "Blacksmith",
-            3 => "Armorer",
-            4 => "Goldsmith",
-            5 => "Leatherworker",
-            6 => "Weaver",
-            7 => "Alchemist",
-            8 => "Culinarian",
-            _ => "Unknown"
-        };
-    }
+
 
     /// <summary>
     /// Determine if an item can be HQ based on its properties.

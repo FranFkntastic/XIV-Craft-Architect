@@ -5,15 +5,26 @@ namespace FFXIVCraftArchitect.Models;
 /// <summary>
 /// Artisan crafting list format for export/import.
 /// Based on Artisan's NewCraftingList class.
+/// 
+/// Note: The ID field is a random list identifier (100-50000), NOT an item ID.
+/// The actual items to craft are in the Recipes array.
 /// </summary>
 public class ArtisanCraftingList
 {
+    /// <summary>
+    /// A random list ID between 100-50000. This is NOT an item ID or recipe ID.
+    /// Used internally by Artisan to identify the list.
+    /// </summary>
     [JsonPropertyName("ID")]
     public int ID { get; set; }
 
     [JsonPropertyName("Name")]
     public string Name { get; set; } = string.Empty;
 
+    /// <summary>
+    /// List of subcrafts/materials needed. These are recipe IDs, not item IDs.
+    /// These should NOT be imported as top-level items - they're calculated automatically.
+    /// </summary>
     [JsonPropertyName("Recipes")]
     public List<ArtisanListItem> Recipes { get; set; } = new();
 
