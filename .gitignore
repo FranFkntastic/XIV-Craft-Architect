@@ -56,3 +56,9 @@ LEARNING_GUIDE.md
 # Build rules (agent-specific, regenerate as needed)
 .builderrules
 .obsidian/workspace.json
+
+# Agent documentation (regenerate as needed)
+AGENTS.md
+CONTEXT.md
+VS_CODE_GUIDE.md
+PLAN_FORMAT.md
