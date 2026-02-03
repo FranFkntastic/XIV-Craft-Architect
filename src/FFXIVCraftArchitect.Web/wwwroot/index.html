@@ -8,14 +8,44 @@
     
     <!-- MudBlazor CSS -->
     <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" rel="stylesheet" />
-    <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <link href="mudblazor.css" rel="stylesheet" />
     
     <style>
+        /* Fallback CSS variables in case MudThemeProvider doesn't initialize */
+        :root {
+            --mud-palette-primary: #d4a73a;
+            --mud-palette-primary-text: #1a1a1a;
+            --mud-palette-secondary: #9c27b0;
+            --mud-palette-secondary-text: #ffffff;
+            --mud-palette-success: #4caf50;
+            --mud-palette-error: #f44336;
+            --mud-palette-warning: #ff9800;
+            --mud-palette-info: #2196f3;
+            --mud-palette-background: #1e1e1e;
+            --mud-palette-surface: #2d2d2d;
+            --mud-palette-text-primary: #ffffff;
+            --mud-palette-text-secondary: #cccccc;
+            --mud-palette-action-default: #cccccc;
+            --mud-palette-action-disabled: #666666;
+            --mud-palette-action-disabled-background: #444444;
+            --mud-palette-lines-default: #444444;
+            --mud-default-borderradius: 4px;
+            --mud-typography-default-family: 'Roboto', sans-serif;
+            --mud-typography-button-family: 'Roboto', sans-serif;
+            --mud-typography-button-size: 0.875rem;
+            --mud-typography-button-weight: 500;
+            --mud-typography-button-lineheight: 1.75;
+            --mud-typography-button-letterspacing: 0.02857em;
+            --mud-typography-button-text-transform: uppercase;
+        }
+        
         html, body {
             margin: 0;
             padding: 0;
             height: 100%;
             font-family: 'Roboto', sans-serif;
+            background-color: #1e1e1e;
+            color: #ffffff;
         }
         
         #app {
@@ -60,8 +90,63 @@
         <a class="dismiss">🗙</a>
     </div>
 
-    <script src="_framework/blazor.webassembly.js"></script>
-    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+    <!-- Diagnostic Logging -->
+    <script>
+        console.log('[DIAG] === FFXIV Craft Architect Diagnostics ===');
+        console.log('[DIAG] Page URL:', window.location.href);
+        console.log('[DIAG] Base href:', document.querySelector('base')?.href || 'NOT SET');
+        
+        // Immediate check
+        console.log('[DIAG] Document readyState:', document.readyState);
+        console.log('[DIAG] Link elements at load:');
+        document.querySelectorAll('link[rel="stylesheet"]').forEach((link, i) => {
+            console.log('  [' + i + '] href=' + link.href + ', sheet=' + (link.sheet ? 'loaded' : 'null'));
+        });
+        
+        // Check after everything loads
+        window.addEventListener('load', () => {
+            console.log('[DIAG] Window loaded');
+            console.log('[DIAG] All stylesheets:', Array.from(document.styleSheets).map(s => s.href || 'inline'));
+            
+            // Try to find the mudblazor stylesheet by checking all stylesheets
+            let mudblazorSheet = null;
+            for (let sheet of document.styleSheets) {
+                if (sheet.href && sheet.href.includes('mudblazor')) {
+                    mudblazorSheet = sheet;
+                    break;
+                }
+            }
+            
+            if (mudblazorSheet) {
+                console.log('[DIAG] mudblazor.css stylesheet found:', mudblazorSheet.href);
+                try {
+                    console.log('[DIAG] mudblazor.css rules count:', mudblazorSheet.cssRules?.length || 0);
+                } catch (e) {
+                    console.log('[DIAG] mudblazor.css rules count: (cross-origin, can\'t access)');
+                }
+            } else {
+                console.error('[DIAG] mudblazor.css stylesheet NOT FOUND in document.styleSheets');
+            }
+            
+            // Check computed style
+            const testDiv = document.createElement('div');
+            testDiv.className = 'mud-button';
+            testDiv.style.display = 'none';
+            document.body.appendChild(testDiv);
+            const computedStyle = window.getComputedStyle(testDiv);
+            console.log('[DIAG] mud-button text-transform:', computedStyle.textTransform);
+            document.body.removeChild(testDiv);
+            
+            // Check for MudBlazor globals
+            console.log('[DIAG] mudScrollManager:', typeof window.mudScrollManager !== 'undefined' ? 'EXISTS' : 'NOT FOUND');
+        });
+    </script>
+
+    <script src="_framework/blazor.webassembly.js" onload="console.log('[DIAG] blazor.webassembly.js loaded')" onerror="console.error('[DIAG] blazor.webassembly.js FAILED')"></script>
+    <script src="mudblazor.js" onload="console.log('[DIAG] mudblazor.js loaded')" onerror="console.error('[DIAG] mudblazor.js FAILED')"></script>
+    
+    <!-- IndexedDB storage for plans and settings -->
+    <script src="indexedDB.js" onload="console.log('[DIAG] indexedDB.js loaded')" onerror="console.error('[DIAG] indexedDB.js FAILED')"></script>
     
     <!-- Plan import/export helper -->
     <script>
@@ -86,6 +171,8 @@
                 reader.readAsText(file);
             });
         };
+        
+        console.log('[DIAG] Helper functions registered');
     </script>
 </body>
 </html>

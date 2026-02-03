@@ -23,100 +23,102 @@
         <MudText Style="color: #d4a73a; font-weight: 600; margin-right: 24px;">FFXIV Craft Architect</MudText>
         
         <!-- Navigation Tabs -->
-        <div style="display: flex; gap: 4px; margin-right: 24px;">
-            <a href="/" 
-               @onclick="SelectMarketTab"
-               style="@GetMarketTabStyle()">
+        <MudButtonGroup Size="Size.Small" Style="margin-right: 24px;">
+            <MudButton OnClick="@(() => NavigateTo(""))"
+                       Color="@GetTabColor("")"
+                       Variant="@GetTabVariant("")">
                 Market Logistics
-            </a>
-            <a href="/planner" 
-               @onclick="SelectPlannerTab"
-               style="@GetPlannerTabStyle()">
+            </MudButton>
+            <MudButton OnClick="@(() => NavigateTo("planner"))"
+                       Color="@GetTabColor("planner")"
+                       Variant="@GetTabVariant("planner")">
                 Recipe Planner
-            </a>
-        </div>
+            </MudButton>
+        </MudButtonGroup>
         
-        <!-- Menu Bar -->
+        <!-- Menu Bar using MudMenu -->
         <div style="display: flex; gap: 4px; flex-shrink: 0;">
-            <div style="position: relative; display: inline-block;" class="menu-container">
-                <button @onclick="ToggleFileMenu" 
-                        style="background: transparent; border: none; color: #cccccc; padding: 4px 12px; cursor: pointer; font-size: 14px;">File</button>
-                <div id="menu-file" style="display: @_fileMenuDisplay; position: fixed; top: 48px; left: 200px; background: #2d2d2d; border: 1px solid #444; min-width: 150px; z-index: 9999;">
-                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;" 
-                         @onclick="OnNewPlan"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                         onmouseout="this.style.backgroundColor='transparent'">New Plan</div>
-                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
-                         @onclick="OnSavePlan"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                         onmouseout="this.style.backgroundColor='transparent'">Save Plan...</div>
-                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
-                         @onclick="OnLoadPlan"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                         onmouseout="this.style.backgroundColor='transparent'">Load Plans...</div>
-                    <div style="border-top: 1px solid #444; margin: 4px 0;"></div>
-                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
-                         @onclick="OnViewLogs"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                         onmouseout="this.style.backgroundColor='transparent'">View Logs</div>
-                </div>
-            </div>
+            <MudMenu Dense="true" 
+                     AnchorOrigin="Origin.BottomLeft"
+                     TransformOrigin="Origin.TopLeft"
+                     Color="Color.Secondary">
+                <ActivatorContent>
+                    <MudButton Style="color: #cccccc; text-transform: none;" 
+                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">File</MudButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem OnClick="OnNewPlan" Icon="@Icons.Material.Filled.Add">New Plan</MudMenuItem>
+                    <MudMenuItem OnClick="OnSavePlan" Icon="@Icons.Material.Filled.Save">Save Plan...</MudMenuItem>
+                    <MudMenuItem OnClick="OnLoadPlan" Icon="@Icons.Material.Filled.FolderOpen">Load Plans...</MudMenuItem>
+                    <MudDivider />
+                    <MudMenuItem OnClick="OnViewLogs" Icon="@Icons.Material.Filled.Article">View Logs</MudMenuItem>
+                </ChildContent>
+            </MudMenu>
             
-            <div style="position: relative; display: inline-block;" class="menu-container">
-                <button @onclick="ToggleImportMenu" 
-                        style="background: transparent; border: none; color: #cccccc; padding: 4px 12px; cursor: pointer; font-size: 14px;">Import</button>
-                <div id="menu-import" style="display: @_importMenuDisplay; position: fixed; top: 48px; left: 250px; background: #2d2d2d; border: 1px solid #444; min-width: 180px; z-index: 9999;">
-                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
-                         @onclick="OnImportTeamcraft"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                         onmouseout="this.style.backgroundColor='transparent'">From Teamcraft (Text)...</div>
-                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
-                         @onclick="OnImportArtisan"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                         onmouseout="this.style.backgroundColor='transparent'">From Artisan (JSON)...</div>
-                </div>
-            </div>
+            <MudMenu Dense="true"
+                     AnchorOrigin="Origin.BottomLeft"
+                     TransformOrigin="Origin.TopLeft"
+                     Color="Color.Secondary">
+                <ActivatorContent>
+                    <MudButton Style="color: #cccccc; text-transform: none;"
+                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Import</MudButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem OnClick="() => ShowImportDialog(0)" Icon="@Icons.Material.Filled.ContentPaste">
+                        From Teamcraft (Text)...
+                    </MudMenuItem>
+                    <MudMenuItem OnClick="() => ShowImportDialog(1)" Icon="@Icons.Material.Filled.Code">
+                        From Artisan (JSON)...
+                    </MudMenuItem>
+                </ChildContent>
+            </MudMenu>
             
-            <div style="position: relative; display: inline-block;" class="menu-container">
-                <button @onclick="ToggleExportMenu" 
-                        style="background: transparent; border: none; color: #cccccc; padding: 4px 12px; cursor: pointer; font-size: 14px;">Export</button>
-                <div id="menu-export" style="display: @_exportMenuDisplay; position: fixed; top: 48px; left: 310px; background: #2d2d2d; border: 1px solid #444; min-width: 150px; z-index: 9999;">
-                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
-                         @onclick="OnExportTeamcraft"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                         onmouseout="this.style.backgroundColor='transparent'">To Teamcraft URL</div>
-                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
-                         @onclick="OnExportArtisan"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                         onmouseout="this.style.backgroundColor='transparent'">To Artisan (JSON)</div>
-                    <div style="border-top: 1px solid #444; margin: 4px 0;"></div>
-                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
-                         @onclick="OnCopyPlainText"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                         onmouseout="this.style.backgroundColor='transparent'">Copy as Plain Text</div>
-                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
-                         @onclick="OnCopyCsv"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                         onmouseout="this.style.backgroundColor='transparent'">Copy as CSV</div>
-                </div>
-            </div>
+            <MudMenu Dense="true"
+                     AnchorOrigin="Origin.BottomLeft"
+                     TransformOrigin="Origin.TopLeft"
+                     Color="Color.Secondary">
+                <ActivatorContent>
+                    <MudButton Style="color: #cccccc; text-transform: none;"
+                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Export</MudButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem OnClick="OnExportTeamcraft" Icon="@Icons.Material.Filled.Link">
+                        To Teamcraft URL
+                    </MudMenuItem>
+                    <MudMenuItem OnClick="OnExportArtisan" Icon="@Icons.Material.Filled.Code">
+                        To Artisan (JSON)
+                    </MudMenuItem>
+                    <MudDivider />
+                    <MudMenuItem OnClick="OnCopyPlainText" Icon="@Icons.Material.Filled.ContentCopy">
+                        Copy as Plain Text
+                    </MudMenuItem>
+                    <MudMenuItem OnClick="OnCopyCsv" Icon="@Icons.Material.Filled.GridOn">
+                        Copy as CSV
+                    </MudMenuItem>
+                </ChildContent>
+            </MudMenu>
             
-            <div style="position: relative; display: inline-block;" class="menu-container">
-                <button @onclick="ToggleToolsMenu" 
-                        style="background: transparent; border: none; color: #cccccc; padding: 4px 12px; cursor: pointer; font-size: 14px;">Tools</button>
-                <div id="menu-tools" style="display: @_toolsMenuDisplay; position: fixed; top: 48px; left: 370px; background: #2d2d2d; border: 1px solid #444; min-width: 180px; z-index: 9999;">
-                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
-                         @onclick="OnFetchPrices"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                         onmouseout="this.style.backgroundColor='transparent'">Fetch Prices</div>
-                    <div style="padding: 8px 12px; color: #666; cursor: not-allowed;">View Plan Market Data</div>
-                    <div style="border-top: 1px solid #444; margin: 4px 0;"></div>
-                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
-                         @onclick="OnOptions"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                         onmouseout="this.style.backgroundColor='transparent'">Options...</div>
-                </div>
-            </div>
+            <MudMenu Dense="true"
+                     AnchorOrigin="Origin.BottomLeft"
+                     TransformOrigin="Origin.TopLeft"
+                     Color="Color.Secondary">
+                <ActivatorContent>
+                    <MudButton Style="color: #cccccc; text-transform: none;"
+                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Tools</MudButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem OnClick="OnFetchPrices" Icon="@Icons.Material.Filled.Refresh" Disabled="true">
+                        Fetch Prices
+                    </MudMenuItem>
+                    <MudMenuItem Disabled="true" Icon="@Icons.Material.Filled.BarChart">
+                        View Plan Market Data
+                    </MudMenuItem>
+                    <MudDivider />
+                    <MudMenuItem OnClick="OnOptions" Icon="@Icons.Material.Filled.Settings">
+                        Options...
+                    </MudMenuItem>
+                </ChildContent>
+            </MudMenu>
         </div>
         
         <MudSpacer />
@@ -137,31 +139,31 @@
     private string _activeTab = "market";
     private bool _disposed = false;
     
-    // Menu display states
-    private string _fileMenuDisplay = "none";
-    private string _importMenuDisplay = "none";
-    private string _exportMenuDisplay = "none";
-    private string _toolsMenuDisplay = "none";
-    
     private readonly MudTheme _theme = AppTheme.CreateTheme();
 
     protected override void OnInitialized()
     {
+        Console.WriteLine("[DIAG] MainLayout.OnInitialized()");
+        
         // Set initial active tab based on current URL
-        var uri = NavigationManager.Uri.ToLowerInvariant();
-        _activeTab = uri.Contains("/planner") ? "planner" : "market";
+        UpdateActiveTab(NavigationManager.Uri);
         
         // Listen for navigation changes
         NavigationManager.LocationChanged += OnLocationChanged;
+    }
+    
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            Console.WriteLine("[DIAG] MainLayout.OnAfterRender(firstRender=true)");
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            // Setup document click listener for menu closing - use a simple approach
-            await SetupDocumentClickHandlerAsync();
-            
             // Load settings
             await LoadSettingsAsync();
         }
@@ -183,107 +185,41 @@
         catch { /* Ignore settings load errors */ }
     }
 
-    private async Task SetupDocumentClickHandlerAsync()
-    {
-        try
-        {
-            var script = "document.addEventListener('click', function(e) { " +
-                "const menus = document.querySelectorAll('.menu-container > div[id^=menu-]'); " +
-                "menus.forEach(function(menu) { " +
-                "if (!menu.contains(e.target) && !menu.previousElementSibling.contains(e.target)) { " +
-                "menu.style.display = 'none'; }}); });";
-            await JSRuntime.InvokeVoidAsync("eval", script);
-        }
-        catch
-        {
-            // Ignore JS interop errors during prerender
-        }
-    }
-
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
         if (_disposed) return;
         
-        var uri = e.Location.ToLowerInvariant();
-        _activeTab = uri.Contains("/planner") ? "planner" : "market";
-        CloseMenus();
+        UpdateActiveTab(e.Location);
         _ = InvokeAsync(StateHasChanged);
     }
 
-    private void SelectMarketTab()
+    private void UpdateActiveTab(string uri)
     {
-        _activeTab = "market";
-    }
-
-    private void SelectPlannerTab()
-    {
-        _activeTab = "planner";
-    }
-
-    private string GetMarketTabStyle()
-    {
-        var isActive = _activeTab == "market";
-        var baseStyle = "padding: 6px 16px; border-radius: 4px; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.2s; cursor: pointer;";
-        
-        if (isActive)
-        {
-            return $"{baseStyle} background: #d4a73a; color: #1a1a1a;";
-        }
+        var uriLower = uri.ToLowerInvariant();
+        if (uriLower.Contains("/planner"))
+            _activeTab = "planner";
         else
-        {
-            return $"{baseStyle} background: transparent; color: #cccccc;";
-        }
+            _activeTab = "market";
     }
 
-    private string GetPlannerTabStyle()
+    private bool IsActiveTab(string tab)
     {
-        var isActive = _activeTab == "planner";
-        var baseStyle = "padding: 6px 16px; border-radius: 4px; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.2s; cursor: pointer;";
-        
-        if (isActive)
-        {
-            return $"{baseStyle} background: #d4a73a; color: #1a1a1a;";
-        }
-        else
-        {
-            return $"{baseStyle} background: transparent; color: #cccccc;";
-        }
+        return _activeTab == tab;
     }
 
-    private void ToggleFileMenu()
+    private Color GetTabColor(string tab)
     {
-        var wasOpen = _fileMenuDisplay == "block";
-        CloseMenus();
-        _fileMenuDisplay = wasOpen ? "none" : "block";
+        return IsActiveTab(tab) ? Color.Primary : Color.Secondary;
     }
 
-    private void ToggleImportMenu()
+    private Variant GetTabVariant(string tab)
     {
-        var wasOpen = _importMenuDisplay == "block";
-        CloseMenus();
-        _importMenuDisplay = wasOpen ? "none" : "block";
+        return IsActiveTab(tab) ? Variant.Filled : Variant.Text;
     }
 
-    private void ToggleExportMenu()
+    private void NavigateTo(string page)
     {
-        var wasOpen = _exportMenuDisplay == "block";
-        CloseMenus();
-        _exportMenuDisplay = wasOpen ? "none" : "block";
-    }
-
-    private void ToggleToolsMenu()
-    {
-        var wasOpen = _toolsMenuDisplay == "block";
-        CloseMenus();
-        _toolsMenuDisplay = wasOpen ? "none" : "block";
-    }
-
-    private void CloseMenus()
-    {
-        _fileMenuDisplay = "none";
-        _importMenuDisplay = "none";
-        _exportMenuDisplay = "none";
-        _toolsMenuDisplay = "none";
+        NavigationManager.NavigateTo($"/{page}");
     }
 
     // ==================== FILE MENU ====================
@@ -291,14 +227,11 @@
     private void OnNewPlan()
     {
         AppState.ClearPlan();
-        CloseMenus();
         Snackbar.Add("New plan started", Severity.Info);
     }
 
     private async Task OnSavePlan()
     {
-        CloseMenus();
-        
         if (!AppState.ProjectItems.Any() && AppState.CurrentPlan == null)
         {
             Snackbar.Add("Nothing to save. Add items to your plan first.", Severity.Warning);
@@ -345,8 +278,6 @@
 
     private async Task OnLoadPlan()
     {
-        CloseMenus();
-        
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
         var dialog = DialogService.Show<LoadPlanDialog>("Load Plan", options);
         var result = await dialog.Result;
@@ -413,24 +344,11 @@
 
     private async Task OnViewLogs()
     {
-        CloseMenus();
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
         DialogService.Show<LogsDialog>("Logs", options);
     }
 
     // ==================== IMPORT MENU ====================
-    
-    private async Task OnImportTeamcraft()
-    {
-        CloseMenus();
-        await ShowImportDialog(0); // Teamcraft tab
-    }
-
-    private async Task OnImportArtisan()
-    {
-        CloseMenus();
-        await ShowImportDialog(1); // Artisan tab
-    }
     
     private async Task ShowImportDialog(int activeTab)
     {
@@ -472,13 +390,11 @@
     
     private async Task OnExportTeamcraft()
     {
-        CloseMenus();
         await ShowExportDialog(0); // Teamcraft tab
     }
 
     private async Task OnExportArtisan()
     {
-        CloseMenus();
         await ShowExportDialog(1); // Artisan tab
     }
     
@@ -491,8 +407,6 @@
 
     private async Task OnCopyPlainText()
     {
-        CloseMenus();
-        
         var materials = AppState.CurrentPlan?.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList();
         
         if ((materials == null || materials.Count == 0) && AppState.ShoppingItems.Any())
@@ -527,8 +441,6 @@
 
     private async Task OnCopyCsv()
     {
-        CloseMenus();
-        
         var materials = AppState.CurrentPlan?.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList()
             ?? new List<Core.Models.MaterialAggregate>();
         
@@ -578,39 +490,19 @@
     
     private void OnFetchPrices()
     {
-        CloseMenus();
-        
         if (AppState.CurrentPlan == null && !AppState.ShoppingItems.Any())
         {
             Snackbar.Add("No plan to fetch prices for. Create a plan first.", Severity.Warning);
             return;
         }
         
-        // Trigger price fetch - this is handled by the Planner page via event
         Snackbar.Add("Fetching prices...", Severity.Info);
-        _ = FetchPricesAsync();
-    }
-    
-    private async Task FetchPricesAsync()
-    {
-        try
-        {
-            // Price fetch is handled by individual pages - they listen for state changes
-            // Just notify that a refresh was requested
-            AppState.NotifyShoppingListChanged();
-            AppState.NotifyPlanChanged();
-            
-            Snackbar.Add("Price refresh requested. Switch to Market Logistics or Recipe Planner to update prices.", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Price fetch failed: {ex.Message}", Severity.Error);
-        }
+        AppState.NotifyShoppingListChanged();
+        AppState.NotifyPlanChanged();
     }
 
     private async Task OnOptions()
     {
-        CloseMenus();
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
         var dialog = DialogService.Show<OptionsDialog>("Options", options);
         await dialog.Result;

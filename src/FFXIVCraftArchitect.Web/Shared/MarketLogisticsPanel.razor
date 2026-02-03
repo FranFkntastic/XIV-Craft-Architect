@@ -1,0 +1,277 @@
+@using FFXIVCraftArchitect.Core.Models
+
+<MudPaper Elevation="0" Class="pa-0" Style="background: transparent; height: 100%;">
+    <MudGrid Spacing="2" Class="flex-column" Style="height: 100%; margin: 0;">
+        
+        <!-- Filter Controls Row -->
+        <MudItem xs="12" Class="pa-0 pb-2">
+            <MudPaper Elevation="1" Class="pa-2" Style="background: #252525;">
+                <MudGrid Spacing="2">
+                    
+                    <!-- Sort Dropdown -->
+                    <MudItem xs="12" sm="6" md="4" lg="3" Class="pa-1">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <MudText Typo="Typo.body2" Style="color: #888; white-space: nowrap;">Sort:</MudText>
+                            <MudSelect T="FFXIVCraftArchitect.Core.Models.MarketSortOption" 
+                                       Value="_selectedSort"
+                                       ValueChanged="OnSortValueChanged"
+                                       Dense="true"
+                                       Variant="Variant.Filled"
+                                       Style="min-width: 140px;">
+                                <MudSelectItem Value="MarketSortOption.ByRecommended">By Recommended</MudSelectItem>
+                                <MudSelectItem Value="MarketSortOption.Alphabetical">Alphabetical</MudSelectItem>
+                            </MudSelect>
+                        </div>
+                    </MudItem>
+                    
+                    <!-- Mode Dropdown -->
+                    <MudItem xs="12" sm="6" md="4" lg="3" Class="pa-1">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <MudText Typo="Typo.body2" Style="color: #888; white-space: nowrap;">Mode:</MudText>
+                            <MudSelect T="RecommendationMode" 
+                                       Value="_selectedMode"
+                                       ValueChanged="OnModeValueChanged"
+                                       Dense="true"
+                                       Variant="Variant.Filled"
+                                       Style="min-width: 160px;">
+                                <MudSelectItem Value="RecommendationMode.MinimizeTotalCost">Minimize Total Cost</MudSelectItem>
+                                <MudSelectItem Value="RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
+                                <MudSelectItem Value="RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
+                            </MudSelect>
+                        </div>
+                    </MudItem>
+                    
+                    <!-- Search all NA DCs Checkbox -->
+                    <MudItem xs="12" sm="6" md="4" lg="2" Class="pa-1">
+                        <MudCheckBox T="bool"
+                                     Value="_searchAllNA"
+                                     ValueChanged="OnSearchAllNAToggled"
+                                     Dense="true"
+                                     Color="Color.Primary">
+                            <MudText Typo="Typo.body2" Style="color: #ccc;">Search all NA DCs</MudText>
+                        </MudCheckBox>
+                    </MudItem>
+                    
+                    <!-- View Status Button -->
+                    <MudItem xs="6" sm="3" md="3" lg="2" Class="pa-1">
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Secondary"
+                                   Size="Size.Small"
+                                   Disabled="true"
+                                   OnClick="OnViewStatusClick">
+                            View Status
+                        </MudButton>
+                    </MudItem>
+                    
+                    <!-- Refresh Market Data Button -->
+                    <MudItem xs="6" sm="3" md="3" lg="2" Class="pa-1">
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Secondary"
+                                   Size="Size.Small"
+                                   Disabled="true"
+                                   OnClick="OnRefreshClick">
+                            Refresh Market Data
+                        </MudButton>
+                    </MudItem>
+                    
+                </MudGrid>
+            </MudPaper>
+        </MudItem>
+        
+        <!-- Craft vs Buy Analysis Section -->
+        <MudItem xs="12" Class="pa-0 pb-2">
+            <MudExpansionPanel IsExpanded="_craftAnalysisExpanded"
+                               IsExpandedChanged="v => _craftAnalysisExpanded = v"
+                               Style="background: #2d3a2d; margin: 0;"
+                               Dense="true"
+                               HideIcon="false">
+                <TitleContent>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <MudText Typo="Typo.body1" Style="color: #90EE90; font-weight: 600;">📊 Craft vs Buy Analysis</MudText>
+                        @if (!string.IsNullOrEmpty(CraftAnalysisSummary))
+                        {
+                            <MudText Typo="Typo.body2" Style="color: #aaa;">@CraftAnalysisSummary</MudText>
+                        }
+                    </div>
+                </TitleContent>
+                <ChildContent>
+                    <MudPaper Elevation="0" Class="pa-3" Style="background: #252525;">
+                        @if (CraftAnalyses?.Any() == true)
+                        {
+                            <CraftAnalysisPanel Analyses="CraftAnalyses" />
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Style="color: #888; text-align: center; padding: 16px;">
+                                No craft vs buy analysis available.
+                                <br />
+                                <span style="font-size: 12px;">Add items with craftable components to see potential savings.</span>
+                            </MudText>
+                        }
+                    </MudPaper>
+                </ChildContent>
+            </MudExpansionPanel>
+        </MudItem>
+        
+        <!-- Purchase Summary Section -->
+        <MudItem xs="12" Class="pa-0 pb-2">
+            <MudExpansionPanel IsExpanded="_purchaseSummaryExpanded"
+                               IsExpandedChanged="v => _purchaseSummaryExpanded = v"
+                               Style="background: #2d4a3e; margin: 0;"
+                               Dense="true"
+                               HideIcon="false">
+                <TitleContent>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <MudText Typo="Typo.body1" Style="color: #90EE90; font-weight: 600;">📦 Purchase Summary</MudText>
+                        @if (!string.IsNullOrEmpty(PurchaseSummaryText))
+                        {
+                            <MudText Typo="Typo.body2" Style="color: #aaa;">@PurchaseSummaryText</MudText>
+                        }
+                    </div>
+                </TitleContent>
+                <ChildContent>
+                    <MudPaper Elevation="0" Class="pa-3" Style="background: #252525;">
+                        @if (ShoppingPlans?.Any() == true)
+                        {
+                            <MudGrid Spacing="2">
+                                <MudItem xs="12">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #444;">
+                                        <MudText Typo="Typo.body2" Style="color: #888;">Total Items:</MudText>
+                                        <MudText Typo="Typo.body2" Style="color: white; font-weight: 500;">@ShoppingPlans.Count</MudText>
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="12">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #444;">
+                                        <MudText Typo="Typo.body2" Style="color: #888;">DC Average Total:</MudText>
+                                        <MudText Typo="Typo.body2" Style="color: #d4a73a; font-weight: 500;">@TotalDCAverage.ToString("N0")g</MudText>
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="12">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0;">
+                                        <MudText Typo="Typo.body2" Style="color: #888;">Best Value Total:</MudText>
+                                        <MudText Typo="Typo.body2" Style="color: #4caf50; font-weight: 600;">@TotalBestValue.ToString("N0")g</MudText>
+                                    </div>
+                                </MudItem>
+                            </MudGrid>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Style="color: #888; text-align: center; padding: 16px;">
+                                No shopping plans to summarize.
+                                <br />
+                                <span style="font-size: 12px;">Click "Analyze Market" to generate purchase recommendations.</span>
+                            </MudText>
+                        }
+                    </MudPaper>
+                </ChildContent>
+            </MudExpansionPanel>
+        </MudItem>
+        
+        <!-- Market Cards Area -->
+        <MudItem xs="12" Class="pa-0 flex-grow-1" Style="overflow-y: auto; min-height: 0;">
+            <MudPaper Elevation="1" Class="pa-2" Style="background: #2d2d2d; height: 100%;">
+                @if (ShoppingPlans?.Any() == true)
+                {
+                    <MudStack Spacing="2">
+                        @foreach (var plan in GetSortedPlans())
+                        {
+                            <MarketCard Plan="plan" />
+                        }
+                    </MudStack>
+                }
+                else
+                {
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 200px;">
+                        <MudText Typo="Typo.body1" Style="color: #888; text-align: center;">
+                            No market data to display
+                        </MudText>
+                        <MudText Typo="Typo.body2" Style="color: #666; text-align: center; margin-top: 8px;">
+                            Add items to your shopping list and click "Analyze Market" to see world recommendations.
+                        </MudText>
+                    </div>
+                }
+            </MudPaper>
+        </MudItem>
+        
+    </MudGrid>
+</MudPaper>
+
+@code {
+    [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    [Parameter] public List<CraftVsBuyAnalysis> CraftAnalyses { get; set; } = new();
+    [Parameter] public string? CraftAnalysisSummary { get; set; }
+    [Parameter] public string? PurchaseSummaryText { get; set; }
+    [Parameter] public RecommendationMode InitialMode { get; set; } = RecommendationMode.MinimizeTotalCost;
+    [Parameter] public EventCallback OnRefreshMarketData { get; set; }
+    [Parameter] public EventCallback OnViewStatus { get; set; }
+    [Parameter] public EventCallback<FFXIVCraftArchitect.Core.Models.MarketSortOption> OnSortChanged { get; set; }
+    [Parameter] public EventCallback<RecommendationMode> OnModeChanged { get; set; }
+    [Parameter] public EventCallback<bool> OnSearchAllNAChanged { get; set; }
+
+    private MarketSortOption _selectedSort = MarketSortOption.ByRecommended;
+    private RecommendationMode _selectedMode = RecommendationMode.MinimizeTotalCost;
+    private bool _searchAllNA = false;
+    private bool _craftAnalysisExpanded = false;
+    private bool _purchaseSummaryExpanded = true;
+
+    protected override void OnParametersSet()
+    {
+        _selectedMode = InitialMode;
+        ShoppingPlans ??= new List<DetailedShoppingPlan>();
+        CraftAnalyses ??= new List<CraftVsBuyAnalysis>();
+    }
+
+    private async Task OnSortValueChanged(FFXIVCraftArchitect.Core.Models.MarketSortOption value)
+    {
+        _selectedSort = value;
+        await OnSortChanged.InvokeAsync(value);
+    }
+
+    private async Task OnModeValueChanged(RecommendationMode value)
+    {
+        _selectedMode = value;
+        await OnModeChanged.InvokeAsync(value);
+    }
+
+    private async Task OnSearchAllNAToggled(bool value)
+    {
+        _searchAllNA = value;
+        await OnSearchAllNAChanged.InvokeAsync(value);
+    }
+
+    private async Task OnViewStatusClick()
+    {
+        await OnViewStatus.InvokeAsync();
+    }
+
+    private async Task OnRefreshClick()
+    {
+        await OnRefreshMarketData.InvokeAsync();
+    }
+
+    private IEnumerable<DetailedShoppingPlan> GetSortedPlans()
+    {
+        var plans = ShoppingPlans ?? new List<DetailedShoppingPlan>();
+        
+        return _selectedSort switch
+        {
+            FFXIVCraftArchitect.Core.Models.MarketSortOption.Alphabetical => plans.OrderBy(p => p.Name),
+            FFXIVCraftArchitect.Core.Models.MarketSortOption.ByRecommended => plans.OrderBy(p => p.RecommendedWorld?.WorldName ?? string.Empty)
+                                                    .ThenBy(p => p.Name),
+            _ => plans
+        };
+    }
+
+    private decimal TotalDCAverage => ShoppingPlans?.Sum(p => p.DCAveragePrice * p.QuantityNeeded) ?? 0;
+    
+    private decimal TotalBestValue => ShoppingPlans?.Sum(p => 
+    {
+        if (p.RecommendedWorld != null)
+            return p.RecommendedWorld.TotalCost;
+        if (p.WorldOptions.Any())
+            return p.WorldOptions.OrderBy(w => w.TotalCost).First().TotalCost;
+        return p.DCAveragePrice * p.QuantityNeeded;
+    }) ?? 0;
+
+
+}
