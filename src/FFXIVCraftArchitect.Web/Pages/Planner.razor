@@ -1,0 +1,31 @@
+@page "/planner"
+
+<MudText Typo="Typo.h4" Class="mb-4">Recipe Planner</MudText>
+
+<MudAlert Severity="Severity.Info" Class="mb-4">
+    The full recipe planner with crafting tree visualization is available in the desktop app.
+    This web version provides basic item search and market logistics.
+</MudAlert>
+
+<MudCard Elevation="2">
+    <MudCardHeader>
+        <CardHeaderContent>
+            <MudText Typo="Typo.h6">Coming Soon</MudText>
+        </CardHeaderContent>
+    </MudCardHeader>
+    <MudCardContent>
+        <MudText Typo="Typo.body1">
+            Web-based recipe planning with full crafting tree visualization is planned for a future update.
+        </MudText>
+        <MudText Typo="Typo.body2" Class="mt-2 mud-text-secondary">
+            For now, use the Market Logistics tab to search items and analyze market prices,
+            or download the desktop app for full functionality including:
+        </MudText>
+        <MudList T="string" Dense="true">
+            <MudListItem T="string" Icon="@Icons.Material.Filled.Check">Full crafting tree visualization</MudListItem>
+            <MudListItem T="string" Icon="@Icons.Material.Filled.Check">Craft vs Buy analysis</MudListItem>
+            <MudListItem T="string" Icon="@Icons.Material.Filled.Check">Live inventory tracking</MudListItem>
+            <MudListItem T="string" Icon="@Icons.Material.Filled.Check">Artisan & Teamcraft import/export</MudListItem>
+        </MudList>
+    </MudCardContent>
+</MudCard>

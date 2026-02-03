@@ -14,7 +14,7 @@
     <FileVersion>0.1.0.0</FileVersion>
     <Product>FFXIV Craft Architect</Product>
     <Description>Crafting cost calculator with live inventory tracking for FFXIV</Description>
-    <Copyright>Copyright © 2026</Copyright>
+    <Copyright>Copyright  2026</Copyright>
   </PropertyGroup>
 
   <ItemGroup>

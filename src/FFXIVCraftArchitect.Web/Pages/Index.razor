@@ -1,0 +1,488 @@
+@page "/"
+@using Microsoft.AspNetCore.Components.Forms
+
+<MudText Typo="Typo.h4" Class="mb-4">Market Logistics</MudText>
+
+<MudText Typo="Typo.body1" Class="mb-4">
+    Calculate optimal shopping plans for FFXIV crafting materials. 
+    Search for items, build a shopping list, and get world recommendations with price comparisons.
+</MudText>
+
+<MudGrid>
+    <!-- Configuration Panel -->
+    <MudItem xs="12" md="4">
+        <MudCard Elevation="2" Class="mb-4">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">Configuration</MudText>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                @if (_isLoadingWorlds)
+                {
+                    <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="mr-2" />
+                    <MudText Typo="Typo.body2">Loading worlds...</MudText>
+                }
+                else
+                {
+                    <MudSelect T="string" 
+                               @bind-Value="_selectedDataCenter" 
+                               Label="Data Center" 
+                               Variant="Variant.Outlined"
+                               Class="mb-3"
+                               Disabled="_worldData == null">
+                        @foreach (var dc in _worldData?.DataCenters ?? new List<string>())
+                        {
+                            <MudSelectItem Value="@dc">@dc</MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <MudSelect T="RecommendationMode" 
+                               @bind-Value="_recommendationMode" 
+                               Label="Recommendation Mode" 
+                               Variant="Variant.Outlined"
+                               Class="mb-3">
+                        <MudSelectItem Value="@RecommendationMode.MinimizeTotalCost">Minimize Total Cost</MudSelectItem>
+                        <MudSelectItem Value="@RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
+                        <MudSelectItem Value="@RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
+                    </MudSelect>
+                }
+            </MudCardContent>
+        </MudCard>
+
+        <!-- Search Panel -->
+        <MudCard Elevation="2" Class="mb-4">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">Add Items</MudText>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudTextField T="string" 
+                              @bind-Value="_searchQuery" 
+                              Label="Search for items..." 
+                              Variant="Variant.Outlined"
+                              Adornment="Adornment.End"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              OnAdornmentClick="SearchItemsAsync"
+                              OnKeyDown="OnSearchKeyDown"
+                              Disabled="_isSearching"
+                              Class="mb-3" />
+                
+                @if (_isSearching)
+                {
+                    <MudProgressLinear Indeterminate="true" Class="mb-3" />
+                }
+
+                @if (_searchResults.Any())
+                {
+                    <MudList T="GarlandSearchResult" Dense="true" Clickable="true">
+                        @foreach (var result in _searchResults)
+                        {
+                            <MudListItem T="GarlandSearchResult" OnClick="() => AddItemToList(result)">
+                                <div class="d-flex align-center">
+                                    <MudAvatar Size="Size.Small" Class="mr-2">
+                                        <MudImage Src="@GetIconUrl(result.Object.IconId)" />
+                                    </MudAvatar>
+                                    <div>
+                                        <MudText Typo="Typo.body1">@result.Object.Name</MudText>
+                                        <MudText Typo="Typo.caption" Class="mud-text-secondary">ID: @result.Id</MudText>
+                                    </div>
+                                </div>
+                            </MudListItem>
+                        }
+                    </MudList>
+                }
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <!-- Shopping List Panel -->
+    <MudItem xs="12" md="8">
+        <MudCard Elevation="2">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">Shopping List</MudText>
+                </CardHeaderContent>
+                <CardHeaderActions>
+                    <MudIconButton Icon="@Icons.Material.Filled.ClearAll" 
+                                   OnClick="ClearAllItems" 
+                                   Disabled="!_shoppingItems.Any()"
+                                   Title="Clear All" />
+                    <MudButton HtmlTag="label"
+                               Variant="Variant.Text"
+                               StartIcon="@Icons.Material.Filled.Upload"
+                               for="plan-upload">
+                        Import
+                    </MudButton>
+                    <InputFile id="plan-upload" OnChange="ImportPlanAsync" accept=".json" hidden />
+                    <MudIconButton Icon="@Icons.Material.Filled.Download" 
+                                   OnClick="ExportPlanAsync" 
+                                   Disabled="!_shoppingItems.Any()"
+                                   Title="Export Plan" />
+                </CardHeaderActions>
+            </MudCardHeader>
+            
+            <MudCardContent>
+                @if (!_shoppingItems.Any())
+                {
+                    <MudAlert Severity="Severity.Info">
+                        Search for items and add them to your shopping list. Then click "Analyze Market" to get world recommendations.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudTable Items="_shoppingItems" Dense="true" Hover="true">
+                        <HeaderContent>
+                            <MudTh>Item</MudTh>
+                            <MudTh>Quantity</MudTh>
+                            <MudTh Style="text-align: right;">Actions</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <div class="d-flex align-center">
+                                    <MudAvatar Size="Size.Small" Class="mr-2">
+                                        <MudImage Src="@GetIconUrl(context.IconId)" />
+                                    </MudAvatar>
+                                    <MudText>@context.Name</MudText>
+                                </div>
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField T="int" 
+                                                 @bind-Value="context.Quantity" 
+                                                 Min="1" 
+                                                 Max="9999"
+                                                 Variant="Variant.Text"
+                                                 Style="width: 80px;" />
+                            </MudTd>
+                            <MudTd Style="text-align: right;">
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" 
+                                               Size="Size.Small"
+                                               OnClick="() => RemoveItem(context)" />
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudCardContent>
+            
+            <MudCardActions>
+                <MudButton Variant="Variant.Filled" 
+                           Color="Color.Primary" 
+                           OnClick="AnalyzeMarketAsync"
+                           Disabled="!_shoppingItems.Any() || _isAnalyzing || string.IsNullOrWhiteSpace(_selectedDataCenter)"
+                           StartIcon="@Icons.Material.Filled.Analytics">
+                    @if (_isAnalyzing)
+                    {
+                        <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="mr-2" />
+                        <span>Analyzing...</span>
+                    }
+                    else
+                    {
+                        <span>Analyze Market</span>
+                    }
+                </MudButton>
+            </MudCardActions>
+        </MudCard>
+
+        <!-- Results Panel -->
+        @if (_shoppingPlans.Any())
+        {
+            <MudCard Elevation="2" Class="mt-4">
+                <MudCardHeader>
+                    <CardHeaderContent>
+                        <MudText Typo="Typo.h6">Market Analysis Results</MudText>
+                    </CardHeaderContent>
+                </MudCardHeader>
+                <MudCardContent>
+                    @foreach (var plan in _shoppingPlans)
+                    {
+                        <MudPaper Elevation="1" Class="pa-3 mb-3">
+                            <div class="d-flex align-center justify-space-between mb-2">
+                                <div class="d-flex align-center">
+                                    <MudAvatar Size="Size.Medium" Class="mr-3">
+                                        <MudImage Src="@GetIconUrl(plan.ItemId)" />
+                                    </MudAvatar>
+                                    <div>
+                                        <MudText Typo="Typo.h6">@plan.Name</MudText>
+                                        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                            Need: @plan.QuantityNeeded | DC Avg: @plan.DCAveragePrice.ToString("N0")g
+                                        </MudText>
+                                    </div>
+                                </div>
+                            </div>
+
+                            @if (!string.IsNullOrEmpty(plan.Error))
+                            {
+                                <MudAlert Severity="Severity.Error" Dense="true">@plan.Error</MudAlert>
+                            }
+                            else if (plan.HasOptions)
+                            {
+                                <MudExpansionPanels Dense="true">
+                                    @foreach (var world in plan.WorldOptions.Take(5))
+                                    {
+                                        <MudExpansionPanel>
+                                            <TitleContent>
+                                                <div class="d-flex align-center justify-space-between">
+                                                    <div class="d-flex align-center">
+                                                        <MudText Typo="Typo.subtitle1" Class="mr-2">@world.WorldName</MudText>
+                                                        @if (world.IsCompetitive)
+                                                        {
+                                                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text">Best Value</MudChip>
+                                                        }
+                                                    </div>
+                                                    <MudText Typo="Typo.h6" Color="Color.Success">@world.CostDisplay</MudText>
+                                                </div>
+                                                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                                    @(world.ListingsUsed) listing(s) | @world.ExcessQuantity excess
+                                                </MudText>
+                                            </TitleContent>
+                                            <ChildContent>
+                                                <MudTable Items="world.Listings.Where(l => !l.IsAdditionalOption).ToList()" Dense="true">
+                                                    <HeaderContent>
+                                                        <MudTh>Quantity</MudTh>
+                                                        <MudTh>Price/Unit</MudTh>
+                                                        <MudTh>Retainer</MudTh>
+                                                        <MudTh>Subtotal</MudTh>
+                                                    </HeaderContent>
+                                                    <RowTemplate>
+                                                        <MudTd>
+                                                            <MudText Color="context.IsUnderAverage ? Color.Success : Color.Default">
+                                                                @context.QuantityDisplay
+                                                            </MudText>
+                                                        </MudTd>
+                                                        <MudTd>@context.PricePerUnit.ToString("N0")g</MudTd>
+                                                        <MudTd>@context.RetainerName</MudTd>
+                                                        <MudTd>@context.SubtotalDisplay</MudTd>
+                                                    </RowTemplate>
+                                                </MudTable>
+                                            </ChildContent>
+                                        </MudExpansionPanel>
+                                    }
+                                </MudExpansionPanels>
+                            }
+                        </MudPaper>
+                    }
+                </MudCardContent>
+            </MudCard>
+        }
+    </MudItem>
+</MudGrid>
+
+@code {
+    [Inject] private GarlandService GarlandService { get; set; } = null!;
+    [Inject] private UniversalisService UniversalisService { get; set; } = null!;
+    [Inject] private MarketShoppingService MarketShoppingService { get; set; } = null!;
+    [Inject] private RecipeCalculationService RecipeCalculationService { get; set; } = null!;
+    [Inject] private IJSRuntime JSRuntime { get; set; } = null!;
+    [Inject] private ISnackbar Snackbar { get; set; } = null!;
+
+    private WorldData? _worldData;
+    private bool _isLoadingWorlds = true;
+    private string _selectedDataCenter = string.Empty;
+    private RecommendationMode _recommendationMode = RecommendationMode.MinimizeTotalCost;
+
+    private string _searchQuery = string.Empty;
+    private bool _isSearching = false;
+    private List<GarlandSearchResult> _searchResults = new();
+
+    private List<ShoppingItem> _shoppingItems = new();
+    private bool _isAnalyzing = false;
+    private List<DetailedShoppingPlan> _shoppingPlans = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _worldData = await UniversalisService.GetWorldDataAsync();
+            _selectedDataCenter = _worldData.DataCenters.FirstOrDefault() ?? string.Empty;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load world data: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoadingWorlds = false;
+        }
+    }
+
+    private async Task SearchItemsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_searchQuery))
+            return;
+
+        _isSearching = true;
+        _searchResults.Clear();
+        
+        try
+        {
+            var results = await GarlandService.SearchAsync(_searchQuery);
+            _searchResults = results.Take(10).ToList();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Search failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSearching = false;
+        }
+    }
+
+    private void OnSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            _ = SearchItemsAsync();
+        }
+    }
+
+    private void AddItemToList(GarlandSearchResult result)
+    {
+        var existing = _shoppingItems.FirstOrDefault(i => i.Id == result.Id);
+        if (existing != null)
+        {
+            existing.Quantity++;
+        }
+        else
+        {
+            _shoppingItems.Add(new ShoppingItem
+            {
+                Id = result.Id,
+                Name = result.Object.Name,
+                IconId = result.Object.IconId,
+                Quantity = 1
+            });
+        }
+        
+        _searchResults.Clear();
+        _searchQuery = string.Empty;
+        _shoppingPlans.Clear();
+    }
+
+    private void RemoveItem(ShoppingItem item)
+    {
+        _shoppingItems.Remove(item);
+        _shoppingPlans.Clear();
+    }
+
+    private void ClearAllItems()
+    {
+        _shoppingItems.Clear();
+        _shoppingPlans.Clear();
+    }
+
+    private async Task AnalyzeMarketAsync()
+    {
+        if (!_shoppingItems.Any() || string.IsNullOrWhiteSpace(_selectedDataCenter))
+            return;
+
+        _isAnalyzing = true;
+        _shoppingPlans.Clear();
+
+        try
+        {
+            var materials = _shoppingItems.Select(i => new MaterialAggregate
+            {
+                ItemId = i.Id,
+                Name = i.Name,
+                IconId = i.IconId,
+                TotalQuantity = i.Quantity
+            }).ToList();
+
+            var progress = new Progress<string>(msg => { /* Could update UI here */ });
+            
+            _shoppingPlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+                materials,
+                _selectedDataCenter,
+                progress,
+                mode: _recommendationMode);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Market analysis failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isAnalyzing = false;
+        }
+    }
+
+    private async Task ImportPlanAsync(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            var file = e.File;
+            using var stream = file.OpenReadStream(maxAllowedSize: 1024 * 1024); // 1MB limit
+            using var reader = new StreamReader(stream);
+            var json = await reader.ReadToEndAsync();
+            var plan = RecipeCalculationService.DeserializePlan(json);
+            
+            if (plan == null)
+            {
+                Snackbar.Add("Failed to import plan. Invalid format.", Severity.Error);
+                return;
+            }
+
+            _shoppingItems.Clear();
+            foreach (var node in plan.RootItems)
+            {
+                _shoppingItems.Add(new ShoppingItem
+                {
+                    Id = node.ItemId,
+                    Name = node.Name,
+                    IconId = node.IconId,
+                    Quantity = node.Quantity
+                });
+            }
+
+            _selectedDataCenter = plan.DataCenter;
+            Snackbar.Add($"Imported plan: {plan.Name} ({_shoppingItems.Count} items)", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Import failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ExportPlanAsync()
+    {
+        try
+        {
+            var targetItems = _shoppingItems.Select(i => (i.Id, i.Name, i.Quantity, false)).ToList();
+            var plan = await RecipeCalculationService.BuildPlanAsync(
+                targetItems, 
+                _selectedDataCenter, 
+                string.Empty);
+
+            plan.Name = $"WebPlan_{DateTime.Now:yyyyMMdd_HHmmss}";
+            var json = RecipeCalculationService.SerializePlan(plan);
+            
+            var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+            var stream = new MemoryStream(bytes);
+            
+            using var streamRef = new DotNetStreamReference(stream);
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", $"{plan.Name}.json", streamRef);
+            
+            Snackbar.Add("Plan exported successfully!", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Export failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private static string GetIconUrl(int iconId)
+    {
+        // Using XIVAPI for item icons - this works from browser
+        return $"https://xivapi.com/i/{iconId:D6}";
+    }
+
+    private class ShoppingItem
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public int IconId { get; set; }
+        public int Quantity { get; set; }
+    }
+}
