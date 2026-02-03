@@ -365,34 +365,75 @@ static readonly string TeamcraftInventory = Path.Combine(
 
 ## Development Workflow
 
-### Using GitHub Desktop (Recommended)
+### Branch Setup (One-time)
 
-**Initial Setup (One-time):**
-1. Open GitHub Desktop
-2. File → Add local repository... → Browse to project folder
-3. Click "Publish repository" button (top right)
-4. Name: `FFXIVCraftArchitect`, choose Public/Private
-5. Uncheck "Keep this code private" if making it public
-6. Click Publish Repository
+You need two branches:
+- **`main`**: For GitHub Pages deployment (base href = `/XIV-Craft-Architect/`)
+- **`local-dev`**: For local testing (base href = `/`)
 
-**Enable GitHub Pages (in browser):**
-1. Go to `github.com/YOUR_USERNAME/FFXIVCraftArchitect`
+**In GitHub Desktop:**
+1. Create branch: Branch → New branch → Name: `local-dev` → Create branch
+2. Switch to `local-dev` using the branch dropdown at top
+3. Change `index.html` base href to `/` for local testing
+4. The `index.html` file is now "skipped" - Git will ignore changes to it on this branch
+
+### Daily Workflow with GitHub Desktop
+
+**1. Develop Locally**
+- Make sure you're on `local-dev` branch (check dropdown at top)
+- Run: `dotnet watch --project src/FFXIVCraftArchitect.Web`
+- Make your code changes
+- Files appear in GitHub Desktop automatically
+- Commit to `local-dev` with descriptive message
+- Repeat until feature is complete
+
+**2. Deploy to GitHub Pages**
+```
+Branch dropdown → main
+↓
+Branch → Merge into current branch → local-dev
+↓
+If merge conflict on index.html:
+   Right-click index.html → "Resolve using 'main'" (keeps GitHub Pages base href)
+   → Commit merge
+↓
+Push origin
+↓
+Wait 2-3 minutes for GitHub Actions to deploy
+↓
+Test at https://yourusername.github.io/XIV-Craft-Architect/
+```
+
+**3. Continue Developing**
+```
+Branch dropdown → local-dev
+↓
+Keep working, commits to local-dev don't affect deployed site
+```
+
+### Why This Works
+
+The `index.html` file has different base href on each branch:
+- `main`: `/XIV-Craft-Architect/` (GitHub Pages needs this)
+- `local-dev`: `/` (local development needs this)
+
+Git is configured to ignore `index.html` changes on `local-dev`, so:
+- You can freely change code on `local-dev`
+- When merging to `main`, the GitHub Pages base href is preserved
+- No manual file editing needed during deployment
+
+### Initial GitHub Setup (One-time)
+
+**Publish to GitHub:**
+1. GitHub Desktop: Click "Publish repository" button
+2. Name: `XIV-Craft-Architect`, choose Public/Private
+3. Click Publish Repository
+
+**Enable GitHub Pages:**
+1. Go to `github.com/YOUR_USERNAME/XIV-Craft-Architect` in browser
 2. Settings → Pages (left sidebar)
 3. Build and deployment → Source: GitHub Actions
-4. The workflow file (`.github/workflows/deploy-web.yml`) handles the rest
-
-**Daily Workflow:**
-1. Make code changes
-2. GitHub Desktop shows changed files automatically
-3. Write Summary (commit message)
-4. Click "Commit to main"
-5. Click "Push origin" (top button)
-6. GitHub Actions automatically deploys web app
-
-**Check Deployment:**
-1. Go to Actions tab in your repo
-2. Wait for "Deploy Web App to GitHub Pages" to turn green (✓)
-3. Site will be at: `https://yourusername.github.io/FFXIVCraftArchitect/`
+4. Done! Workflow deploys automatically on each push to main
 
 ---
 
