@@ -6,6 +6,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>FFXIVCraftArchitect.Web</RootNamespace>
     <AssemblyName>FFXIVCraftArchitect.Web</AssemblyName>
+    
+    <!-- Enable Razor runtime compilation in Development -->
+    <RazorRuntimeCompilation>true</RazorRuntimeCompilation>
+    
+    <!-- Treat warnings as errors in Release -->
+    <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
+    
+    <!-- Use the analyzers included with the .NET SDK -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,0 +1,153 @@
+@using FFXIVCraftArchitect.Core.Services
+@using FFXIVCraftArchitect.Web.Services
+@inject AppState AppState
+@inject RecipeCalculationService RecipeService
+@inject IJSRuntime JSRuntime
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-4" @bind-ActivePanelIndex="_activeTab">
+            <MudTabPanel Text="Teamcraft URL">
+                <MudText Typo="Typo.body2" Class="mb-4">
+                    Generate a Teamcraft import URL for your current plan.
+                </MudText>
+                @if (_teamcraftUrl != null)
+                {
+                    <MudTextField Value="_teamcraftUrl"
+                                  Label="Teamcraft URL"
+                                  Variant="Variant.Outlined"
+                                  ReadOnly="true"
+                                  Adornment="Adornment.End"
+                                  AdornmentIcon="@Icons.Material.Filled.ContentCopy"
+                                  OnAdornmentClick="() => CopyToClipboard(_teamcraftUrl)" />
+                }
+                else
+                {
+                    <MudButton Color="Color.Primary" OnClick="GenerateTeamcraftUrl" Disabled="!CanExport">
+                        Generate URL
+                    </MudButton>
+                }
+            </MudTabPanel>
+            
+            <MudTabPanel Text="Artisan JSON">
+                <MudText Typo="Typo.body2" Class="mb-4">
+                    Export as Artisan crafting list JSON format.
+                </MudText>
+                @if (_artisanJson != null)
+                {
+                    <MudTextField Value="_artisanJson"
+                                  Label="Artisan JSON"
+                                  Variant="Variant.Outlined"
+                                  Lines="6"
+                                  ReadOnly="true" />
+                    <div class="d-flex gap-2 mt-4">
+                        <MudButton Color="Color.Primary" 
+                                   StartIcon="@Icons.Material.Filled.ContentCopy"
+                                   OnClick="() => CopyToClipboard(_artisanJson)">
+                            Copy JSON
+                        </MudButton>
+                        <MudButton Color="Color.Secondary" 
+                                   StartIcon="@Icons.Material.Filled.Download"
+                                   OnClick="DownloadArtisanJson">
+                            Download
+                        </MudButton>
+                    </div>
+                }
+                else
+                {
+                    <MudButton Color="Color.Primary" OnClick="GenerateArtisanJson" Disabled="!CanExport">
+                        Generate JSON
+                    </MudButton>
+                }
+            </MudTabPanel>
+        </MudTabs>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public int ActiveTab { get; set; } = 0;
+    
+    private int _activeTab = 0;
+    private string? _teamcraftUrl = null;
+    private string? _artisanJson = null;
+    
+    protected override void OnInitialized()
+    {
+        _activeTab = ActiveTab;
+    }
+    
+    private bool CanExport => AppState.CurrentPlan != null || AppState.ProjectItems.Any();
+    
+    private void GenerateTeamcraftUrl()
+    {
+        // Teamcraft URL format: https://ffxivteamcraft.com/import/{base64_json}
+        var items = AppState.ProjectItems.Select(p => new { itemId = p.Id, amount = p.Quantity }).ToList();
+        var json = System.Text.Json.JsonSerializer.Serialize(items);
+        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json));
+        _teamcraftUrl = $"https://ffxivteamcraft.com/import/{base64}";
+    }
+    
+    private async Task GenerateArtisanJson()
+    {
+        try
+        {
+            // Build a plan if needed
+            CraftingPlan? plan = AppState.CurrentPlan;
+            if (plan == null && AppState.ProjectItems.Any())
+            {
+                var targetItems = AppState.ProjectItems.Select(p => (p.Id, p.Name, p.Quantity, p.MustBeHq)).ToList();
+                plan = await RecipeService.BuildPlanAsync(targetItems, AppState.SelectedDataCenter, string.Empty);
+            }
+            
+            if (plan != null)
+            {
+                _artisanJson = RecipeService.SerializePlan(plan);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to generate JSON: {ex.Message}", Severity.Error);
+        }
+    }
+    
+    private async Task CopyToClipboard(string text)
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Snackbar.Add("Copied to clipboard!", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("Failed to copy to clipboard", Severity.Error);
+        }
+    }
+    
+    private async Task DownloadArtisanJson()
+    {
+        if (string.IsNullOrEmpty(_artisanJson)) return;
+        
+        try
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(_artisanJson);
+            var stream = new MemoryStream(bytes);
+            using var streamRef = new DotNetStreamReference(stream);
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", "artisan_export.json", streamRef);
+            Snackbar.Add("Downloaded artisan_export.json", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Download failed: {ex.Message}", Severity.Error);
+        }
+    }
+    
+    private void Cancel()
+    {
+        MudDialog.Cancel();
+    }
+}

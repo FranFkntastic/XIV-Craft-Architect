@@ -1,12 +1,31 @@
 <Router AppAssembly="@typeof(App).Assembly">
     <Found Context="routeData">
-        <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
-        <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+        <ErrorBoundary>
+            <ChildContent>
+                <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
+                <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+            </ChildContent>
+            <ErrorContent>
+                <MudContainer MaxWidth="MaxWidth.Medium" Class="pa-4">
+                    <MudAlert Severity="Severity.Error" Class="mb-4">
+                        <MudText Typo="Typo.h5">An error occurred</MudText>
+                        <MudText>@context.Message</MudText>
+                    </MudAlert>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => StateHasChanged()">
+                        Retry
+                    </MudButton>
+                </MudContainer>
+            </ErrorContent>
+        </ErrorBoundary>
     </Found>
     <NotFound>
         <PageTitle>Not found</PageTitle>
         <LayoutView Layout="@typeof(MainLayout)">
-            <p role="alert">Sorry, there's nothing at this address.</p>
+            <MudContainer MaxWidth="MaxWidth.Medium" Class="pa-4">
+                <MudAlert Severity="Severity.Warning">
+                    Sorry, there's nothing at this address.
+                </MudAlert>
+            </MudContainer>
         </LayoutView>
     </NotFound>
 </Router>

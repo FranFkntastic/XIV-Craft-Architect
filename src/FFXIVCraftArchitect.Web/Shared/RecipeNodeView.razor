@@ -1,0 +1,243 @@
+@using FFXIVCraftArchitect.Core.Models
+
+@if (Node != null)
+{
+    <div style="margin-left: @(Depth * 20)px;">
+        @if (HasChildren)
+        {
+            <!-- Parent Node: Expander -->
+            <div style="border: 1px solid #444; border-radius: 4px; margin-bottom: 4px; overflow: hidden;">
+                <div @onclick="ToggleExpanded"
+                     style="background: #363636; padding: 8px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                    <span style="color: #888; font-size: 12px;">@(_isExpanded ? "▼" : "▶")</span>
+                    <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                        @RenderNodeContentCore()
+                    </div>
+                </div>
+                @if (_isExpanded)
+                {
+                    <div style="padding: 8px; background: #2d2d2d;">
+                        @foreach (var child in Node.Children)
+                        {
+                            <RecipeNodeView Node="child" 
+                                            Depth="Depth + 1"
+                                            OnSourceChanged="OnSourceChanged"
+                                            OnHqChanged="OnHqChanged" />
+                        }
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <!-- Leaf Node: Simple row with acquisition dropdown -->
+            <div style="display: flex; align-items: center; gap: 8px; padding: 6px 0;">
+                @RenderNodeContentCore()
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public PlanNode? Node { get; set; }
+    [Parameter] public int Depth { get; set; }
+    [Parameter] public EventCallback<PlanNode> OnSourceChanged { get; set; }
+    [Parameter] public EventCallback<PlanNode> OnHqChanged { get; set; }
+
+    private bool _isExpanded = true;
+
+    private bool HasChildren => Node?.Children.Any() == true;
+
+    private void ToggleExpanded()
+    {
+        _isExpanded = !_isExpanded;
+    }
+
+    private async Task OnSourceChange(ChangeEventArgs e)
+    {
+        if (Node != null && Enum.TryParse<AcquisitionSource>(e.Value?.ToString(), out var source))
+        {
+            Node.Source = source;
+            await OnSourceChanged.InvokeAsync(Node);
+        }
+    }
+
+    private async Task OnHqToggle()
+    {
+        if (Node != null && Node.CanBeHq)
+        {
+            Node.MustBeHq = !Node.MustBeHq;
+            // If switching to HQ and currently buying NQ, switch to HQ buy
+            if (Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyNq)
+            {
+                Node.Source = AcquisitionSource.MarketBuyHq;
+            }
+            // If switching to NQ and currently buying HQ, switch to NQ buy
+            else if (!Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyHq)
+            {
+                Node.Source = AcquisitionSource.MarketBuyNq;
+            }
+            await OnHqChanged.InvokeAsync(Node);
+        }
+    }
+
+    private RenderFragment RenderNodeContentCore() => __builder =>
+    {
+        if (Node == null) return;
+
+        var color = GetNodeColor();
+        var hqStar = Node.MustBeHq ? "★ " : "";
+        
+        // HQ Toggle button (if item can be HQ)
+        if (Node.CanBeHq)
+        {
+            __builder.OpenElement(0, "button");
+            __builder.AddAttribute(1, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, OnHqToggle));
+            __builder.AddAttribute(2, "style", $"background: transparent; border: none; cursor: pointer; color: {(Node.MustBeHq ? "#d4a73a" : "#666")}; font-size: 14px; padding: 0; width: 20px;");
+            __builder.AddContent(3, "★");
+            __builder.CloseElement();
+        }
+        else
+        {
+            __builder.OpenElement(4, "span");
+            __builder.AddAttribute(5, "style", "width: 20px;");
+            __builder.CloseElement();
+        }
+        
+        // Item name and quantity
+        __builder.OpenElement(6, "span");
+        __builder.AddAttribute(7, "style", $"color: {color}; flex: 1;");
+        __builder.AddContent(8, $"{hqStar}{Node.Name} x{Node.Quantity}");
+        __builder.CloseElement();
+        
+        // Recipe info (if craftable)
+        if (!string.IsNullOrEmpty(Node.Job) && Node.Job != "Company Workshop")
+        {
+            __builder.OpenElement(9, "span");
+            __builder.AddAttribute(10, "style", "color: #888; font-size: 12px;");
+            __builder.AddContent(11, $"Lv.{Node.RecipeLevel} {Node.Job}");
+            __builder.CloseElement();
+        }
+        
+        // Acquisition source dropdown
+        __builder.OpenElement(12, "select");
+        __builder.AddAttribute(13, "value", Node.Source.ToString());
+        __builder.AddAttribute(14, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, OnSourceChange));
+        __builder.AddAttribute(15, "style", "background: #2d2d2d; color: white; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer;");
+        
+        foreach (var source in GetAvailableSources())
+        {
+            __builder.OpenElement(16, "option");
+            __builder.AddAttribute(17, "value", source.ToString());
+            __builder.AddContent(18, GetSourceDisplayName(source));
+            __builder.CloseElement();
+        }
+        
+        __builder.CloseElement(); // select
+        
+        // Price display
+        var priceText = GetPriceDisplay();
+        if (!string.IsNullOrEmpty(priceText))
+        {
+            __builder.OpenElement(19, "span");
+            __builder.AddAttribute(20, "style", "color: #4caf50; font-size: 12px; min-width: 80px; text-align: right;");
+            __builder.AddContent(21, priceText);
+            __builder.CloseElement();
+        }
+    };
+
+    private string GetNodeColor()
+    {
+        if (Node == null) return "#ccc";
+        return Node.Source switch
+        {
+            AcquisitionSource.Craft => "#ffffff",
+            AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq => "#87ceeb",
+            AcquisitionSource.VendorBuy => "#ffd700",
+            _ => "#cccccc"
+        };
+    }
+
+    private List<AcquisitionSource> GetAvailableSources()
+    {
+        if (Node == null) return new List<AcquisitionSource>();
+        
+        var sources = new List<AcquisitionSource>();
+        
+        // Always can buy from market
+        sources.Add(AcquisitionSource.MarketBuyNq);
+        
+        // If item can be HQ, offer HQ option
+        if (Node.CanBeHq)
+        {
+            sources.Add(AcquisitionSource.MarketBuyHq);
+        }
+        
+        // If item has children, can craft it
+        if (Node.Children.Any())
+        {
+            sources.Add(AcquisitionSource.Craft);
+        }
+        
+        return sources;
+    }
+
+    private static string GetSourceDisplayName(AcquisitionSource source) => source switch
+    {
+        AcquisitionSource.Craft => "Craft",
+        AcquisitionSource.MarketBuyNq => "Buy (NQ)",
+        AcquisitionSource.MarketBuyHq => "Buy (HQ)",
+        AcquisitionSource.VendorBuy => "Vendor",
+        _ => source.ToString()
+    };
+
+    private string GetPriceDisplay()
+    {
+        if (Node == null) return "";
+        
+        return Node.Source switch
+        {
+            AcquisitionSource.Craft => $"{CalculateCraftCost():N0}g",
+            AcquisitionSource.MarketBuyNq => Node.MarketPrice > 0 ? $"{Node.MarketPrice:N0}g" : "",
+            AcquisitionSource.MarketBuyHq => Node.HqMarketPrice > 0 ? $"{Node.HqMarketPrice:N0}g" : "",
+            _ => ""
+        };
+    }
+
+    private decimal CalculateCraftCost()
+    {
+        if (Node?.Children == null) return 0;
+        
+        decimal cost = 0;
+        foreach (var child in Node.Children)
+        {
+            cost += child.Source switch
+            {
+                AcquisitionSource.Craft => CalculateChildCraftCost(child),
+                AcquisitionSource.MarketBuyNq => child.MarketPrice * child.Quantity,
+                AcquisitionSource.MarketBuyHq => child.HqMarketPrice * child.Quantity,
+                _ => 0
+            };
+        }
+        return cost;
+    }
+
+    private static decimal CalculateChildCraftCost(PlanNode node)
+    {
+        if (node.Children == null || !node.Children.Any()) 
+            return node.MarketPrice * node.Quantity;
+        
+        decimal cost = 0;
+        foreach (var child in node.Children)
+        {
+            cost += child.Source switch
+            {
+                AcquisitionSource.Craft => CalculateChildCraftCost(child),
+                AcquisitionSource.MarketBuyNq => child.MarketPrice * child.Quantity,
+                AcquisitionSource.MarketBuyHq => child.HqMarketPrice * child.Quantity,
+                _ => 0
+            };
+        }
+        return cost;
+    }
+}

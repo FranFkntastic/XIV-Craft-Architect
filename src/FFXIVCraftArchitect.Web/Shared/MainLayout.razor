@@ -1,66 +1,519 @@
 @inherits LayoutComponentBase
+@using FFXIVCraftArchitect.Web.Services
+@using FFXIVCraftArchitect.Web.Dialogs
+@using FFXIVCraftArchitect.Core.Services
+@inject NavigationManager NavigationManager
+@inject AppState AppState
+@inject IndexedDbService IndexedDb
+@inject IJSRuntime JSRuntime
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject RecipeCalculationService RecipeService
+@inject UniversalisService UniversalisService
+@implements IDisposable
 
 <MudThemeProvider @ref="_mudThemeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
 <MudDialogProvider />
-<MudSnackbarProvider />
+<MudSnackbarProvider MaxDisplayedSnackbars="3" 
+                     SnackbarDefaults="new SnackbarOptions { ShowCloseIcon = false, HideIcon = true }" />
 
-<MudLayout>
-    <MudAppBar Elevation="1">
-        <MudIcon Icon="@Icons.Material.Filled.Construction" Class="mr-3" />
-        <MudText Typo="Typo.h6" Class="mr-4">FFXIV Craft Architect</MudText>
-        <MudText Typo="Typo.caption" Class="mud-text-secondary">Web Companion</MudText>
+<MudLayout Style="height: 100vh; display: flex; flex-direction: column;">
+    <!-- Title Bar with Menu - Fixed at top -->
+    <MudAppBar Elevation="0" Style="background-color: #1a1a1a; border-bottom: 1px solid #d4a73a; flex-shrink: 0;">
+        <MudText Style="color: #d4a73a; font-weight: 600; margin-right: 24px;">FFXIV Craft Architect</MudText>
+        
+        <!-- Navigation Tabs -->
+        <MudButtonGroup Size="Size.Small" Style="margin-right: 24px;">
+            <MudButton OnClick="@(() => NavigateTo(""))"
+                       Color="@GetTabColor("")"
+                       Variant="@GetTabVariant("")">
+                Market Logistics
+            </MudButton>
+            <MudButton OnClick="@(() => NavigateTo("planner"))"
+                       Color="@GetTabColor("planner")"
+                       Variant="@GetTabVariant("planner")">
+                Recipe Planner
+            </MudButton>
+        </MudButtonGroup>
+        
+        <!-- Menu Bar using MudMenu -->
+        <div style="display: flex; gap: 4px; flex-shrink: 0;">
+            <MudMenu Dense="true" 
+                     AnchorOrigin="Origin.BottomLeft"
+                     TransformOrigin="Origin.TopLeft"
+                     Color="Color.Secondary">
+                <ActivatorContent>
+                    <MudButton Style="color: #cccccc; text-transform: none;" 
+                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">File</MudButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem OnClick="OnNewPlan" Icon="@Icons.Material.Filled.Add">New Plan</MudMenuItem>
+                    <MudMenuItem OnClick="OnSavePlan" Icon="@Icons.Material.Filled.Save">Save Plan...</MudMenuItem>
+                    <MudMenuItem OnClick="OnLoadPlan" Icon="@Icons.Material.Filled.FolderOpen">Load Plans...</MudMenuItem>
+                    <MudDivider />
+                    <MudMenuItem OnClick="OnViewLogs" Icon="@Icons.Material.Filled.Article">View Logs</MudMenuItem>
+                </ChildContent>
+            </MudMenu>
+            
+            <MudMenu Dense="true"
+                     AnchorOrigin="Origin.BottomLeft"
+                     TransformOrigin="Origin.TopLeft"
+                     Color="Color.Secondary">
+                <ActivatorContent>
+                    <MudButton Style="color: #cccccc; text-transform: none;"
+                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Import</MudButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem OnClick="() => ShowImportDialog(0)" Icon="@Icons.Material.Filled.ContentPaste">
+                        From Teamcraft (Text)...
+                    </MudMenuItem>
+                    <MudMenuItem OnClick="() => ShowImportDialog(1)" Icon="@Icons.Material.Filled.Code">
+                        From Artisan (JSON)...
+                    </MudMenuItem>
+                </ChildContent>
+            </MudMenu>
+            
+            <MudMenu Dense="true"
+                     AnchorOrigin="Origin.BottomLeft"
+                     TransformOrigin="Origin.TopLeft"
+                     Color="Color.Secondary">
+                <ActivatorContent>
+                    <MudButton Style="color: #cccccc; text-transform: none;"
+                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Export</MudButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem OnClick="OnExportTeamcraft" Icon="@Icons.Material.Filled.Link">
+                        To Teamcraft URL
+                    </MudMenuItem>
+                    <MudMenuItem OnClick="OnExportArtisan" Icon="@Icons.Material.Filled.Code">
+                        To Artisan (JSON)
+                    </MudMenuItem>
+                    <MudDivider />
+                    <MudMenuItem OnClick="OnCopyPlainText" Icon="@Icons.Material.Filled.ContentCopy">
+                        Copy as Plain Text
+                    </MudMenuItem>
+                    <MudMenuItem OnClick="OnCopyCsv" Icon="@Icons.Material.Filled.GridOn">
+                        Copy as CSV
+                    </MudMenuItem>
+                </ChildContent>
+            </MudMenu>
+            
+            <MudMenu Dense="true"
+                     AnchorOrigin="Origin.BottomLeft"
+                     TransformOrigin="Origin.TopLeft"
+                     Color="Color.Secondary">
+                <ActivatorContent>
+                    <MudButton Style="color: #cccccc; text-transform: none;"
+                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Tools</MudButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem OnClick="OnFetchPrices" Icon="@Icons.Material.Filled.Refresh" Disabled="true">
+                        Fetch Prices
+                    </MudMenuItem>
+                    <MudMenuItem Disabled="true" Icon="@Icons.Material.Filled.BarChart">
+                        View Plan Market Data
+                    </MudMenuItem>
+                    <MudDivider />
+                    <MudMenuItem OnClick="OnOptions" Icon="@Icons.Material.Filled.Settings">
+                        Options...
+                    </MudMenuItem>
+                </ChildContent>
+            </MudMenu>
+        </div>
+        
         <MudSpacer />
-        <MudIconButton Icon="@(_isDarkMode ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)" 
-                       @onclick="ToggleDarkMode" 
-                       Color="Color.Inherit" 
-                       Title="Toggle Dark Mode" />
-        <MudIconButton Icon="@Icons.Custom.Brands.GitHub" 
-                       Color="Color.Inherit" 
-                       Href="https://github.com/yourusername/FFXIVCraftArchitect" 
-                       Target="_blank" />
+        
+        <MudLink Href="https://github.com/FranFkntastic/FFXIVCraftArchitect" 
+                 Target="_blank" 
+                 Style="color: #d4a73a; text-decoration: none; font-size: 14px;">GitHub</MudLink>
     </MudAppBar>
     
-    <MudDrawer @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Elevation="1" Variant="DrawerVariant.Persistent">
-        <MudNavMenu>
-            <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home">Market Logistics</MudNavLink>
-            <MudNavLink Href="planner" Icon="@Icons.Material.Filled.List">Recipe Planner</MudNavLink>
-            <MudDivider Class="my-2" />
-            <MudNavLink Href="about" Icon="@Icons.Material.Filled.Info">About</MudNavLink>
-        </MudNavMenu>
-    </MudDrawer>
-    
-    <MudMainContent>
-        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pa-4">
-            @Body
-        </MudContainer>
+    <MudMainContent Style="background-color: #1e1e1e; flex: 1; overflow-y: auto; overflow-x: hidden;">
+        @Body
     </MudMainContent>
 </MudLayout>
 
 @code {
-    private bool _drawerOpen = true;
     private bool _isDarkMode = true;
     private MudThemeProvider _mudThemeProvider = null!;
+    private string _activeTab = "market";
+    private bool _disposed = false;
     
-    private readonly MudTheme _theme = new MudTheme
-    {
-        Palette = new PaletteLight
-        {
-            Primary = "#1976d2",
-            Secondary = "#9c27b0",
-            AppbarBackground = "#1976d2",
-        },
-        PaletteDark = new PaletteDark
-        {
-            Primary = "#90caf9",
-            Secondary = "#ce93d8",
-            AppbarBackground = "#1e1e1e",
-            Background = "#121212",
-            Surface = "#1e1e1e",
-        }
-    };
+    private readonly MudTheme _theme = AppTheme.CreateTheme();
 
-    private void ToggleDarkMode()
+    protected override void OnInitialized()
     {
-        _isDarkMode = !_isDarkMode;
+        Console.WriteLine("[DIAG] MainLayout.OnInitialized()");
+        
+        // Set initial active tab based on current URL
+        UpdateActiveTab(NavigationManager.Uri);
+        
+        // Listen for navigation changes
+        NavigationManager.LocationChanged += OnLocationChanged;
+    }
+    
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            Console.WriteLine("[DIAG] MainLayout.OnAfterRender(firstRender=true)");
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Load settings
+            await LoadSettingsAsync();
+        }
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        try
+        {
+            var autoSave = await IndexedDb.LoadSettingAsync("autoSave", true);
+            var defaultDc = await IndexedDb.LoadSettingAsync("defaultDataCenter", "Aether");
+            
+            AppState.IsAutoSaveEnabled = autoSave;
+            if (string.IsNullOrEmpty(AppState.SelectedDataCenter))
+            {
+                AppState.SelectedDataCenter = defaultDc;
+            }
+        }
+        catch { /* Ignore settings load errors */ }
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        if (_disposed) return;
+        
+        UpdateActiveTab(e.Location);
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void UpdateActiveTab(string uri)
+    {
+        var uriLower = uri.ToLowerInvariant();
+        if (uriLower.Contains("/planner"))
+            _activeTab = "planner";
+        else
+            _activeTab = "market";
+    }
+
+    private bool IsActiveTab(string tab)
+    {
+        return _activeTab == tab;
+    }
+
+    private Color GetTabColor(string tab)
+    {
+        return IsActiveTab(tab) ? Color.Primary : Color.Secondary;
+    }
+
+    private Variant GetTabVariant(string tab)
+    {
+        return IsActiveTab(tab) ? Variant.Filled : Variant.Text;
+    }
+
+    private void NavigateTo(string page)
+    {
+        NavigationManager.NavigateTo($"/{page}");
+    }
+
+    // ==================== FILE MENU ====================
+    
+    private void OnNewPlan()
+    {
+        AppState.ClearPlan();
+        Snackbar.Add("New plan started", Severity.Info);
+    }
+
+    private async Task OnSavePlan()
+    {
+        if (!AppState.ProjectItems.Any() && AppState.CurrentPlan == null)
+        {
+            Snackbar.Add("Nothing to save. Add items to your plan first.", Severity.Warning);
+            return;
+        }
+        
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = DialogService.Show<SavePlanDialog>("Save Plan", options);
+        var result = await dialog.Result;
+        
+        if (result?.Data is string planName)
+        {
+            var planData = new StoredPlan
+            {
+                Id = Guid.NewGuid().ToString(),
+                Name = planName,
+                DataCenter = AppState.SelectedDataCenter,
+                ModifiedAt = DateTime.UtcNow,
+                ProjectItems = AppState.ProjectItems.Select(p => new StoredProjectItem
+                {
+                    Id = p.Id,
+                    Name = p.Name,
+                    IconId = p.IconId,
+                    Quantity = p.Quantity,
+                    MustBeHq = p.MustBeHq
+                }).ToList(),
+                PlanJson = AppState.CurrentPlan != null 
+                    ? System.Text.Json.JsonSerializer.Serialize(AppState.CurrentPlan) 
+                    : null
+            };
+            
+            var success = await IndexedDb.SavePlanAsync(planData);
+            if (success)
+            {
+                Snackbar.Add($"Saved '{planName}'", Severity.Success);
+                await RefreshSavedPlansListAsync();
+            }
+            else
+            {
+                Snackbar.Add("Failed to save plan", Severity.Error);
+            }
+        }
+    }
+
+    private async Task OnLoadPlan()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
+        var dialog = DialogService.Show<LoadPlanDialog>("Load Plan", options);
+        var result = await dialog.Result;
+        
+        if (result?.Data is string planId)
+        {
+            await LoadPlanByIdAsync(planId);
+        }
+    }
+    
+    private async Task LoadPlanByIdAsync(string planId)
+    {
+        try
+        {
+            var storedPlan = await IndexedDb.LoadPlanAsync(planId);
+            if (storedPlan == null)
+            {
+                Snackbar.Add("Plan not found", Severity.Error);
+                return;
+            }
+            
+            CraftingPlan? plan = null;
+            if (!string.IsNullOrEmpty(storedPlan.PlanJson))
+            {
+                try
+                {
+                    plan = System.Text.Json.JsonSerializer.Deserialize<CraftingPlan>(storedPlan.PlanJson);
+                }
+                catch { /* Plan JSON may be incompatible, that's ok */ }
+            }
+            
+            AppState.LoadStoredPlan(storedPlan, plan);
+            Snackbar.Add($"Loaded '{storedPlan.Name}'", Severity.Success);
+            
+            // Navigate to planner if we have a plan
+            if (plan != null || AppState.ProjectItems.Any())
+            {
+                NavigationManager.NavigateTo("/planner");
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load plan: {ex.Message}", Severity.Error);
+        }
+    }
+    
+    private async Task RefreshSavedPlansListAsync()
+    {
+        var plans = await IndexedDb.LoadAllPlansAsync();
+        AppState.SavedPlans = plans
+            .Where(p => p.Id != "autosave")
+            .Select(p => new StoredPlanSummary
+            {
+                Id = p.Id,
+                Name = p.Name,
+                ModifiedAt = p.ModifiedAt,
+                SavedAt = p.SavedAt,
+                DataCenter = p.DataCenter,
+                ItemCount = p.ProjectItems.Count
+            })
+            .ToList();
+        AppState.NotifySavedPlansChanged();
+    }
+
+    private async Task OnViewLogs()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
+        DialogService.Show<LogsDialog>("Logs", options);
+    }
+
+    // ==================== IMPORT MENU ====================
+    
+    private async Task ShowImportDialog(int activeTab)
+    {
+        var parameters = new DialogParameters { ["ActiveTab"] = activeTab };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
+        var dialog = DialogService.Show<ImportDialog>("Import", parameters, options);
+        var result = await dialog.Result;
+        
+        if (result?.Data is List<ImportDialog.ImportItem> items)
+        {
+            // Add imported items to project
+            foreach (var item in items)
+            {
+                if (!AppState.ProjectItems.Any(p => p.Id == item.Id))
+                {
+                    AppState.ProjectItems.Add(new PlannerProjectItem
+                    {
+                        Id = item.Id,
+                        Name = item.Name,
+                        IconId = item.IconId,
+                        Quantity = item.Quantity,
+                        MustBeHq = false
+                    });
+                }
+            }
+            
+            AppState.NotifyPlanChanged();
+            Snackbar.Add($"Imported {items.Count} items", Severity.Success);
+            
+            // Navigate to planner
+            if (items.Count > 0)
+            {
+                NavigationManager.NavigateTo("/planner");
+            }
+        }
+    }
+
+    // ==================== EXPORT MENU ====================
+    
+    private async Task OnExportTeamcraft()
+    {
+        await ShowExportDialog(0); // Teamcraft tab
+    }
+
+    private async Task OnExportArtisan()
+    {
+        await ShowExportDialog(1); // Artisan tab
+    }
+    
+    private async Task ShowExportDialog(int activeTab)
+    {
+        var parameters = new DialogParameters { ["ActiveTab"] = activeTab };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
+        DialogService.Show<ExportDialog>("Export", parameters, options);
+    }
+
+    private async Task OnCopyPlainText()
+    {
+        var materials = AppState.CurrentPlan?.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList();
+        
+        if ((materials == null || materials.Count == 0) && AppState.ShoppingItems.Any())
+        {
+            // Use shopping items instead
+            materials = AppState.ShoppingItems.Select(s => new Core.Models.MaterialAggregate
+            {
+                ItemId = s.Id,
+                Name = s.Name,
+                TotalQuantity = s.Quantity,
+                UnitPrice = 0
+            }).ToList();
+        }
+        
+        if (materials == null || materials.Count == 0)
+        {
+            Snackbar.Add("Nothing to copy. Add items to your shopping list first.", Severity.Warning);
+            return;
+        }
+        
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Shopping List:");
+        sb.AppendLine();
+        
+        foreach (var item in materials)
+        {
+            sb.AppendLine($"{item.Name} x{item.TotalQuantity}");
+        }
+        
+        await CopyTextToClipboardAsync(sb.ToString(), "Shopping list copied!");
+    }
+
+    private async Task OnCopyCsv()
+    {
+        var materials = AppState.CurrentPlan?.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList()
+            ?? new List<Core.Models.MaterialAggregate>();
+        
+        if (materials.Count == 0 && AppState.ShoppingItems.Any())
+        {
+            // Convert shopping items to material format
+            materials = AppState.ShoppingItems.Select(s => new Core.Models.MaterialAggregate
+            {
+                ItemId = s.Id,
+                Name = s.Name,
+                TotalQuantity = s.Quantity,
+                UnitPrice = 0
+            }).ToList();
+        }
+        
+        if (materials.Count == 0)
+        {
+            Snackbar.Add("Nothing to copy. Add items to your shopping list first.", Severity.Warning);
+            return;
+        }
+        
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("Item,Quantity,Unit Price,Total Cost");
+        
+        foreach (var m in materials)
+        {
+            csv.AppendLine($"\"{m.Name}\",{m.TotalQuantity},{m.UnitPrice},{m.TotalCost}");
+        }
+        
+        await CopyTextToClipboardAsync(csv.ToString(), "CSV copied to clipboard!");
+    }
+    
+    private async Task CopyTextToClipboardAsync(string text, string successMessage)
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Snackbar.Add(successMessage, Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("Failed to copy to clipboard", Severity.Error);
+        }
+    }
+
+    // ==================== TOOLS MENU ====================
+    
+    private void OnFetchPrices()
+    {
+        if (AppState.CurrentPlan == null && !AppState.ShoppingItems.Any())
+        {
+            Snackbar.Add("No plan to fetch prices for. Create a plan first.", Severity.Warning);
+            return;
+        }
+        
+        Snackbar.Add("Fetching prices...", Severity.Info);
+        AppState.NotifyShoppingListChanged();
+        AppState.NotifyPlanChanged();
+    }
+
+    private async Task OnOptions()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = DialogService.Show<OptionsDialog>("Options", options);
+        await dialog.Result;
+    }
+
+    public void Dispose()
+    {
+        if (!_disposed)
+        {
+            NavigationManager.LocationChanged -= OnLocationChanged;
+            _disposed = true;
+        }
     }
 }

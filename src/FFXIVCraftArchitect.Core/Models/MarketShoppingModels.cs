@@ -1,6 +1,17 @@
 namespace FFXIVCraftArchitect.Core.Models;
 
 /// <summary>
+/// Sort options for market shopping plan display.
+/// </summary>
+public enum MarketSortOption
+{
+    /// <summary>Sort by recommended world (best value first).</summary>
+    ByRecommended,
+    /// <summary>Sort alphabetically by item name.</summary>
+    Alphabetical
+}
+
+/// <summary>
 /// Filter mode for world recommendations.
 /// </summary>
 public enum RecommendationMode
