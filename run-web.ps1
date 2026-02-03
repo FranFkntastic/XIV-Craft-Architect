@@ -18,24 +18,20 @@ Write-Host ".NET Version: " -NoNewline
 Write-Host (dotnet --version) -ForegroundColor Green
 Write-Host ""
 
-# Check base href in index.html
+# Check and auto-fix base href for local development
 $indexHtml = "src\FFXIVCraftArchitect.Web\wwwroot\index.html"
 if (Test-Path $indexHtml) {
     $content = Get-Content $indexHtml -Raw
     
-    # Check if base href is set to "/" (for local dev)
+    # Check if base href is NOT set to "/" (GitHub Pages uses "/XIV-Craft-Architect/")
     if ($content -notmatch '<base\s+href\s*=\s*"\/"') {
-        Write-Host "WARNING: base href is NOT set to '/' in index.html" -ForegroundColor Yellow
-        Write-Host "For local development, ensure: <base href=""/" />" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Host "To fix for local dev, run:" -ForegroundColor Gray
-        Write-Host "  (Get-Content '$indexHtml') -replace 'base href\s*=\s*""/XIV-Craft-Architect/""', 'base href=""/""' | Set-Content '$indexHtml'" -ForegroundColor Gray
-        Write-Host ""
+        Write-Host "Auto-fixing base href for local development..." -ForegroundColor Yellow
         
-        $continue = Read-Host "Continue anyway? (Y/N)"
-        if ($continue -notmatch '^[Yy]') {
-            exit 0
-        }
+        # Replace GitHub Pages base href with local dev base href
+        $newContent = $content -replace '<base\s+href\s*=\s*"/[^"]*"', '<base href="/"'
+        Set-Content -Path $indexHtml -Value $newContent -NoNewline
+        
+        Write-Host "✓ base href updated to '/' for local development" -ForegroundColor Green
         Write-Host ""
     }
 }
