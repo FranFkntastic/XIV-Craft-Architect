@@ -7,8 +7,7 @@
     <RootNamespace>FFXIVCraftArchitect.Web</RootNamespace>
     <AssemblyName>FFXIVCraftArchitect.Web</AssemblyName>
     
-    <!-- Enable Razor runtime compilation in Development -->
-    <RazorRuntimeCompilation>true</RazorRuntimeCompilation>
+    <!-- Razor runtime compilation disabled for CI/CD compatibility -->
     
     <!-- Treat warnings as errors in Release -->
     <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
