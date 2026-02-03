@@ -363,3 +363,113 @@ This session focused on UI polish, bug fixes, and feature refinement:
 |---------|------|-------|
 | 0.2.0 | 2026-02-02 | UI polish, Artisan support, theming improvements |
 | 0.1.0 | 2026-02-01 | Initial release with core features |
+
+
+---
+
+# FFXIV Craft Architect - Session Context
+
+## Date: 2026-02-02
+
+## Session Status: ✅ COMPLETE - Web Companion Added
+
+---
+
+## Summary of Changes
+
+### Web Companion App (Blazor WASM)
+
+**Feature:** Created a browser-based companion app for market logistics, deployable to GitHub Pages.
+
+**Architecture:**
+- **Core Library** (`FFXIVCraftArchitect.Core`): Shared models and services
+- **Web App** (`FFXIVCraftArchitect.Web`): Blazor WASM frontend
+- **Plan Sharing**: JSON format compatible between web and desktop
+
+**Web App Features:**
+- Item search via Garland Tools API
+- Shopping list builder with quantities
+- Market analysis with world recommendations
+- Plan import/export (JSON)
+- Dark/light theme toggle
+- Responsive design (mobile-friendly)
+
+**Files Added:**
+- `src/FFXIVCraftArchitect.Core/` - Shared class library
+  - `Models/` - CraftingPlan, Recipe, Market data models
+  - `Services/` - GarlandService, UniversalisService, MarketShoppingService, RecipeCalculationService
+  - `Helpers/` - JobHelper
+- `src/FFXIVCraftArchitect.Web/` - Blazor WASM app
+  - `Pages/Index.razor` - Market Logistics UI
+  - `Pages/Planner.razor` - Recipe planner placeholder
+  - `Pages/About.razor` - About page
+  - `Shared/MainLayout.razor` - App shell with navigation
+- `.github/workflows/deploy-web.yml` - GitHub Actions for GitHub Pages deployment
+
+**Files Modified:**
+- `FFXIVCraftArchitect.sln` - Added Core and Web projects
+- `src/FFXIVCraftArchitect/FFXIVCraftArchitect.csproj` - Added reference to Core library
+
+**Deployment:**
+- Pushes to `main` branch trigger automatic deployment
+- Web app available at `https://username.github.io/FFXIVCraftArchitect/`
+
+---
+
+## Architecture Decisions
+
+### Core Library Extraction
+Moved shared code to `FFXIVCraftArchitect.Core` to enable code sharing between WPF and Web:
+
+**What moved to Core:**
+- All data models (CraftingPlan, Recipe, Market data, etc.)
+- API services (GarlandService, UniversalisService)
+- Business logic (market calculations, recipe tree building)
+- Plan serialization/deserialization
+
+**What stays platform-specific:**
+- WPF: XAML UI, file I/O, live inventory injection, settings persistence
+- Web: Razor components, browser APIs, MudBlazor components
+
+**Benefits:**
+- Edit once, both apps benefit
+- Consistent plan format (web ↔ desktop import/export works)
+- Web app gets calculations "for free"
+- Easier testing of business logic
+
+---
+
+## Next Steps
+
+1. **GitHub Pages Setup:** Enable Pages in repository settings
+2. **GitHub Releases:** Set up automated releases with version tags
+3. **Update Checker:** Implement version checking against GitHub releases
+4. **Live Mode:** Implement packet capture for real-time inventory (WPF only)
+5. **Inventory Sync:** Implement Teamcraft inventory synchronization
+6. **Web Recipe Planner:** Full crafting tree visualization in browser
+
+---
+
+## Session Summary
+
+This session focused on creating a web companion app:
+
+**Major Features Added:**
+- FFXIVCraftArchitect.Core shared library
+- Blazor WASM web app with market logistics
+- Plan import/export between web and desktop
+- GitHub Actions deployment to GitHub Pages
+
+**Architecture:**
+- Extracted Core library for code sharing
+- Web app uses MudBlazor for UI
+- Same JSON plan format in both apps
+
+---
+
+## Version History
+
+| Version | Date | Notes |
+|---------|------|-------|
+| 0.2.0 | 2026-02-02 | Web companion app, Core library extraction |
+| 0.1.0 | 2026-02-01 | Initial release with core features |

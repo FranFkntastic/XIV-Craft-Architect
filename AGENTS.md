@@ -2,13 +2,23 @@
 
 **Project:** C# fork of the Python-based FFXIV Craft Architect  
 **Goal:** Replicate functionality with modern C#/.NET while maintaining code quality standards  
-**Status:** Active Development - Core Features Complete
+**Status:** Active Development - Core Features Complete, Web Companion Added
 
 ---
 
 ## Project Overview
 
 This is a C# reimplementation of the FFXIV Craft Architect application, which calculates crafting costs in Final Fantasy XIV with live inventory tracking via DLL injection.
+
+### Multi-Platform Architecture
+
+The project now consists of **three components**:
+
+| Component | Platform | Purpose |
+|-----------|----------|---------|
+| **Core Library** | .NET 8 Class Library | Shared models and services (APIs, calculations) |
+| **WPF Desktop** | Windows Desktop | Full-featured app with live inventory injection |
+| **Web Companion** | Blazor WASM (Browser) | Lightweight market logistics without installation |
 
 ### Original Python Stack
 - **GUI:** customtkinter (modern tkinter wrapper)
@@ -27,15 +37,54 @@ This is a C# reimplementation of the FFXIV Craft Architect application, which ca
 
 ---
 
-## Architecture Mapping (Python → C#)
+## Architecture
 
-| Python Module | C# Namespace | Responsibility |
-|--------------|--------------|----------------|
-| `ffxiv_craft_architect.py` | `FFXIVCraftArchitect` | Main application, main window |
-| `live_inventory.py` | `FFXIVCraftArchitect.LiveInventory` | Live inventory tracking manager |
-| `packet_capture.py` | `FFXIVCraftArchitect.PacketCapture` | DLL injection, named pipe communication |
-| `inventory_helpers.py` | `FFXIVCraftArchitect.Inventory` | Container mappings, utilities |
-| `settings_manager.py` | `FFXIVCraftArchitect.Settings` | Settings persistence |
+### The Golden Rule: Core First
+
+```
+┌─────────────────────────────────────────────────────────┐
+│           FFXIVCraftArchitect.Core (Shared)             │
+│  • Models (CraftingPlan, Recipe, Market data, etc.)     │
+│  • Services (GarlandService, UniversalisService, etc.)  │
+│  • Business logic (market calculations, recipe trees)   │
+└─────────────────────────────────────────────────────────┘
+                    ↗                    ↖
+                   /                        \
+    ┌──────────────┐                        ┌──────────────┐
+    │     WPF      │                        │  Blazor WASM │
+    │   (Desktop)  │                        │    (Web)     │
+    │              │                        │              │
+    │ • WPF UI     │                        │ • MudBlazor  │
+    │ • Live Mode  │                        │   components │
+    │ • File I/O   │                        │ • Browser    │
+    │   (deucalion)│                        │   APIs only  │
+    └──────────────┘                        └──────────────┘
+```
+
+### Edit Once, Benefit Both
+
+**Put shared code in Core:**
+- Data models (add a field → both apps get it)
+- API service logic (fix a bug → both apps fixed)
+- Calculation logic (shopping plans, recipe trees)
+- Plan serialization format (JSON import/export)
+
+**Platform-specific code stays separate:**
+- UI code (XAML vs Razor components)
+- User interactions (WPF drag-drop vs web click handlers)
+- Platform features (live injection only works in WPF)
+
+### Maintenance Guide for Agents
+
+| If you need to... | Edit here | Notes |
+|-------------------|-----------|-------|
+| Add field to item data | `Core/Models/*.cs` | Both apps get it automatically |
+| Fix market price calculation | `Core/Services/MarketShoppingService.cs` | Both apps get the fix |
+| Change API endpoint URL | `Core/Services/*Service.cs` | One place to update |
+| Add UI button in WPF | `WPF/*.xaml` | WPF only |
+| Add UI button in Web | `Web/Pages/*.razor` | Web only |
+| Add desktop-only feature | `WPF/` | Don't add to Core if web can't use it |
+| Add web-only feature | `Web/` | Don't add to Core if desktop doesn't need it |
 
 ---
 
@@ -44,42 +93,57 @@ This is a C# reimplementation of the FFXIV Craft Architect application, which ca
 ```
 FFXIV Craft Architect C# Edition/
 ├── src/
-│   └── FFXIVCraftArchitect/           # Main project
-│       ├── FFXIVCraftArchitect.csproj
-│       ├── App.xaml                   # Application entry (WPF-UI Dark theme)
-│       ├── App.xaml.cs
-│       ├── MainWindow.xaml            # Main GUI (custom styled tabs)
-│       ├── MainWindow.xaml.cs
-│       ├── MainWindow.xaml.tabbed-backup  # Backup of original tab layout
-│       ├── Models/                    # Data models
-│       │   ├── InventoryItem.cs
-│       │   ├── CraftingPlan.cs        # Plan with AcquisitionSource enum
-│       │   ├── MarketListing.cs
-│       │   ├── ArtisanModels.cs       # Artisan plugin import/export
-│       │   ├── MarketShoppingModels.cs # DetailedShoppingPlan, WorldShoppingSummary
-│       │   ├── Recipe.cs
-│       │   └── WorldData.cs
-│       ├── Services/                  # Business logic
-│       │   ├── GarlandService.cs      # Garland Tools API
-│       │   ├── UniversalisService.cs  # Universalis API
-│       │   ├── SettingsService.cs     # settings.json persistence
-│       │   ├── MarketShoppingService.cs # Shopping plan calculation
-│       │   ├── RecipeCalculationService.cs
-│       │   ├── PlanPersistenceService.cs # Save/load plans
-│       │   ├── TeamcraftService.cs    # Import/export
-│       │   ├── ArtisanService.cs      # Artisan import/export
-│       │   └── ThemeService.cs        # Dynamic accent color management
-│       ├── OptionsWindow.xaml         # Settings dialog (Appearance, Market, Planning, Live)
-│       ├── OptionsWindow.xaml.cs
-│       ├── Views/                     # Additional windows
-│       │   ├── InventoryWindow.xaml
-│       │   ├── LogsWindow.xaml
-│       │   └── PlansWindow.xaml
-│       └── Lib/                       # Native dependencies
-│           └── deucalion.dll          # Injected DLL
-├── settings.json                      # User settings (auto_fetch_on_build, accent_color, etc.)
-├── CONTEXT.md                         # Session context / changelog
-└── AGENTS.md                          # This file
+│   ├── FFXIVCraftArchitect.Core/        # SHARED: Models & Services
+│   │   ├── FFXIVCraftArchitect.Core.csproj
+│   │   ├── Helpers/
+│   │   │   └── JobHelper.cs
+│   │   ├── Models/
+│   │   │   ├── CraftingPlan.cs          # Plan serialization (web ↔ desktop)
+│   │   │   ├── GarlandModels.cs         # Garland Tools API models
+│   │   │   ├── MarketListing.cs         # Universalis API models
+│   │   │   ├── MarketShoppingModels.cs  # Shopping plan calculations
+│   │   │   ├── Recipe.cs                # Recipe tree models
+│   │   │   └── WorldData.cs             # Data center/world info
+│   │   └── Services/
+│   │       ├── GarlandService.cs        # Item search & recipe data
+│   │       ├── UniversalisService.cs    # Market board prices
+│   │       ├── RecipeCalculationService.cs  # Build recipe trees
+│   │       └── MarketShoppingService.cs   # Shopping plan logic
+│   │
+│   ├── FFXIVCraftArchitect/             # WPF DESKTOP APP
+│   │   ├── FFXIVCraftArchitect.csproj
+│   │   ├── App.xaml
+│   │   ├── MainWindow.xaml              # Main GUI
+│   │   ├── Models/                      # Desktop-only models
+│   │   ├── Services/                    # Desktop-only services
+│   │   │   ├── SettingsService.cs       # settings.json I/O
+│   │   │   ├── PlanPersistenceService.cs # Plan file save/load
+│   │   │   ├── ArtisanService.cs        # Artisan plugin import/export
+│   │   │   └── TeamcraftService.cs      # Teamcraft integration
+│   │   ├── Views/                       # Additional windows
+│   │   └── Lib/
+│   │       └── deucalion.dll            # Injected DLL (live mode)
+│   │
+│   └── FFXIVCraftArchitect.Web/         # BLAZOR WASM WEB APP
+│       ├── FFXIVCraftArchitect.Web.csproj
+│       ├── App.razor
+│       ├── Program.cs
+│       ├── _Imports.razor
+│       ├── Pages/
+│       │   ├── Index.razor              # Market Logistics UI
+│       │   ├── Planner.razor            # Recipe planner placeholder
+│       │   └── About.razor              # About page
+│       ├── Shared/
+│       │   └── MainLayout.razor         # App shell with nav
+│       └── wwwroot/
+│           └── index.html               # Entry point
+│
+├── .github/workflows/
+│   └── deploy-web.yml                   # Auto-deploy web app to GitHub Pages
+├── settings.json                        # User settings
+├── publish.bat                          # Desktop build script
+├── AGENTS.md                            # This file
+└── CONTEXT.md                           # Session context / changelog
 ```
 
 ---
@@ -142,6 +206,16 @@ FFXIV Craft Architect C# Edition/
 - [x] HQ toggle in Project Items pane
 - [x] Accent color support throughout UI
 
+### Phase 7: Web Companion ✅ (Complete)
+- [x] Create FFXIVCraftArchitect.Core shared library
+- [x] Move shared models and services to Core
+- [x] Create Blazor WASM web project
+- [x] Implement Market Logistics UI in web
+- [x] Add plan import/export (web ↔ desktop compatibility)
+- [x] GitHub Actions deployment to GitHub Pages
+- [x] Update solution file
+- [x] Document architecture for future agents
+
 ---
 
 ## Code Quality Rules (Inherited from Python Edition)
@@ -162,6 +236,11 @@ FFXIV Craft Architect C# Edition/
 ### File Operations
 - Prefer filesystem MCP tools over shell commands
 
+### Multi-Project Awareness
+- **Check which project you're editing** - Core changes affect both apps
+- **Keep Core library pure** - No WPF or Blazor dependencies in Core
+- **Test both apps after Core changes** - A breaking change in Core breaks both
+
 ### Thorough Analysis Requirement (CRITICAL)
 
 **Before submitting ANY code change, agents MUST perform intense and thorough analysis of all possible failure cases.**
@@ -171,6 +250,7 @@ This project involves:
 - WPF UI threading and data binding edge cases
 - File I/O with concurrent access potential
 - Complex JSON deserialization with null/missing fields
+- **NEW:** Blazor WASM browser limitations (no file system, no P/Invoke)
 
 **Required Analysis Checklist:**
 1. **Null/Reference Safety** - Can any property or parameter be null? Add null checks or null-conditional operators (`?.`, `??`)
@@ -181,6 +261,7 @@ This project involves:
 6. **UI Thread Safety** - Dispatch UI updates to the main thread using `Dispatcher.Invoke()`
 7. **Resource Disposal** - Ensure `IDisposable` objects are properly disposed (using statements)
 8. **Edge Cases in Loops** - Empty collections, single items, very large collections
+9. **WASM Compatibility** - If adding to Core, ensure it works in browser (no file I/O, no P/Invoke)
 
 **Example - Bad (causes crashes):**
 ```csharp
@@ -229,13 +310,26 @@ static readonly string TeamcraftInventory = Path.Combine(
 
 ## Dependencies
 
+### Core Library
 ```xml
-<!-- NuGet packages -->
-<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.x" />
-<PackageReference Include="Microsoft.Extensions.Http" Version="8.0.x" />
-<PackageReference Include="System.Net.Http.Json" Version="8.0.x" />
+<PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
+<PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
+<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
+<PackageReference Include="System.Net.Http.Json" Version="8.0.0" />
+```
+
+### WPF Desktop
+```xml
 <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.x" />
+<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.x" />
 <PackageReference Include="WPF-UI" Version="3.0.x" />
+<PackageReference Include="CsvHelper" Version="33.0.x" />
+```
+
+### Web (Blazor WASM)
+```xml
+<PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="8.0.x" />
+<PackageReference Include="MudBlazor" Version="6.12.x" />
 ```
 
 ---
@@ -256,27 +350,38 @@ static readonly string TeamcraftInventory = Path.Combine(
 ### 3. GUI Threading
 - Python uses `threading` + `after()` for UI updates
 - C# WPF uses `Dispatcher.Invoke()` or `IProgress<T>`
+- Blazor uses component state + `StateHasChanged()`
 
 ### 4. Admin Privilege Check
 - Python: `ctypes.windll.shell32.IsUserAnAdmin()`
 - C#: `WindowsPrincipal.IsInRole(WindowsBuiltInRole.Administrator)`
 
+### 5. WASM Limitations
+- No direct file system access (use browser File API)
+- No P/Invoke (can't call native Windows APIs)
+- CORS restrictions when calling APIs (Garland/Universalis must allow)
+
 ---
 
 ## Build Configuration
 
-### Single-File Publish (PowerShell)
+### Desktop App (Single-File Publish)
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained true `
+dotnet publish src/FFXIVCraftArchitect/FFXIVCraftArchitect.csproj `
+    -c Release -r win-x64 --self-contained true `
     -p:PublishSingleFile=true `
-    -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:EnableCompressionInSingleFile=true
+    -p:IncludeNativeLibrariesForSelfExtract=true
+```
+
+### Web App (GitHub Pages)
+```powershell
+dotnet publish src/FFXIVCraftArchitect.Web/FFXIVCraftArchitect.Web.csproj `
+    -c Release -o dist/web
 ```
 
 ### Output
-- **Target:** `FFXIV_Craft_Architect.exe`
-- **Size:** ~30-50 MB (single-file, self-contained)
-- **Requires:** .NET 8 runtime (if not self-contained)
+- **Desktop:** `FFXIV_Craft_Architect.exe` (~30-50 MB)
+- **Web:** Static files in `dist/web/wwwroot` for GitHub Pages
 
 ---
 
@@ -299,6 +404,12 @@ dotnet publish -c Release -r win-x64 --self-contained true `
   - Per-world pricing with excess quantity calculation
   - Best listing highlighting
 
+### Web Companion (NEW)
+- **Blazor WASM app** deployed to GitHub Pages
+- **Market Logistics** - Search items, build shopping lists, analyze market prices
+- **Plan Import/Export** - JSON format shared with desktop app
+- **No installation required** - Works on mobile and desktop browsers
+
 ### UI/UX Improvements
 - **HQ Toggle moved to Project Items** - Set HQ requirement before building plan
 - **Recipe Plan visual refresh** - Gold star (★) + accent color for HQ items
@@ -307,16 +418,16 @@ dotnet publish -c Release -r win-x64 --self-contained true `
 - **Auto-width ComboBoxes** - Dynamic sizing based on content
 - **Build script** (`publish.bat`) for distribution
 
+### Architecture Changes
+- **Extracted Core library** - Shared models and services between WPF and Web
+- **Refactored services** - Removed WPF dependencies from business logic
+- **Plan serialization** - JSON format works in both desktop and web
+
 ### Bug Fixes
 - Refresh button disabled when loading plans with market data
 - Craft cost calculation respecting acquisition source
 - Price fetch error handling preserving cached data
 - Default recommendation mode saving/loading correctly
-
-### Architecture Decisions
-- **ComboBox sizing:** Reusable attached behavior for auto-width
-- **Accent colors:** Helper methods for muted color variations
-- **Settings:** Simplified UX with silent saves
 
 ---
 
@@ -327,8 +438,9 @@ dotnet publish -c Release -r win-x64 --self-contained true `
 3. **Live Mode** - Packet capture for real-time inventory (long term)
 4. **Inventory Sync** - Teamcraft inventory synchronization
 5. **Performance** - Optimization for large crafting plans
+6. **Web Recipe Planner** - Full crafting tree visualization in browser
 
 ---
 
-*Last updated: 2026-01-31*  
+*Last updated: 2026-02-02*  
 *See CONTEXT.md for detailed session notes*
