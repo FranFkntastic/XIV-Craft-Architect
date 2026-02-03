@@ -363,6 +363,39 @@ static readonly string TeamcraftInventory = Path.Combine(
 
 ---
 
+## Development Workflow
+
+### Using GitHub Desktop (Recommended)
+
+**Initial Setup (One-time):**
+1. Open GitHub Desktop
+2. File → Add local repository... → Browse to project folder
+3. Click "Publish repository" button (top right)
+4. Name: `FFXIVCraftArchitect`, choose Public/Private
+5. Uncheck "Keep this code private" if making it public
+6. Click Publish Repository
+
+**Enable GitHub Pages (in browser):**
+1. Go to `github.com/YOUR_USERNAME/FFXIVCraftArchitect`
+2. Settings → Pages (left sidebar)
+3. Build and deployment → Source: GitHub Actions
+4. The workflow file (`.github/workflows/deploy-web.yml`) handles the rest
+
+**Daily Workflow:**
+1. Make code changes
+2. GitHub Desktop shows changed files automatically
+3. Write Summary (commit message)
+4. Click "Commit to main"
+5. Click "Push origin" (top button)
+6. GitHub Actions automatically deploys web app
+
+**Check Deployment:**
+1. Go to Actions tab in your repo
+2. Wait for "Deploy Web App to GitHub Pages" to turn green (✓)
+3. Site will be at: `https://yourusername.github.io/FFXIVCraftArchitect/`
+
+---
+
 ## Build Configuration
 
 ### Desktop App (Single-File Publish)
