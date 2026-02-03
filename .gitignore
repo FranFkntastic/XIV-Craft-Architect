@@ -55,3 +55,4 @@ LEARNING_GUIDE.md
 
 # Build rules (agent-specific, regenerate as needed)
 .builderrules
+.obsidian/workspace.json
