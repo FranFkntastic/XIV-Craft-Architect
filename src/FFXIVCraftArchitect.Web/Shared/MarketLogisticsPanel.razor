@@ -1,10 +1,9 @@
 @using FFXIVCraftArchitect.Core.Models
 
-<MudPaper Elevation="0" Class="pa-0" Style="background: transparent; height: 100%;">
-    <MudGrid Spacing="2" Class="flex-column" Style="height: 100%; margin: 0;">
-        
-        <!-- Filter Controls Row -->
-        <MudItem xs="12" Class="pa-0 pb-2">
+<div style="display: flex; flex-direction: column; height: 100%; gap: 8px;">
+    
+    <!-- Filter Controls Row -->
+    <div style="flex-shrink: 0;">
             <MudPaper Elevation="1" Class="pa-2" Style="background: #252525;">
                 <MudGrid Spacing="2">
                     
@@ -76,10 +75,10 @@
                     
                 </MudGrid>
             </MudPaper>
-        </MudItem>
+        </div>
         
         <!-- Craft vs Buy Analysis Section -->
-        <MudItem xs="12" Class="pa-0 pb-2">
+        <div style="flex-shrink: 0;">
             <MudExpansionPanel IsExpanded="_craftAnalysisExpanded"
                                IsExpandedChanged="v => _craftAnalysisExpanded = v"
                                Style="background: #2d3a2d; margin: 0;"
@@ -111,10 +110,10 @@
                     </MudPaper>
                 </ChildContent>
             </MudExpansionPanel>
-        </MudItem>
+        </div>
         
         <!-- Purchase Summary Section -->
-        <MudItem xs="12" Class="pa-0 pb-2">
+        <div style="flex-shrink: 0;">
             <MudExpansionPanel IsExpanded="_purchaseSummaryExpanded"
                                IsExpandedChanged="v => _purchaseSummaryExpanded = v"
                                Style="background: #2d4a3e; margin: 0;"
@@ -165,10 +164,10 @@
                     </MudPaper>
                 </ChildContent>
             </MudExpansionPanel>
-        </MudItem>
+        </div>
         
         <!-- Market Cards Area -->
-        <MudItem xs="12" Class="pa-0 flex-grow-1" Style="overflow-y: auto; min-height: 0;">
+        <div style="flex-grow: 1; overflow-y: auto; min-height: 0;">
             <MudPaper Elevation="1" Class="pa-2" Style="background: #2d2d2d; height: 100%;">
                 @if (ShoppingPlans?.Any() == true)
                 {
@@ -191,10 +190,9 @@
                     </div>
                 }
             </MudPaper>
-        </MudItem>
+        </div>
         
-    </MudGrid>
-</MudPaper>
+</div>
 
 @code {
     [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
