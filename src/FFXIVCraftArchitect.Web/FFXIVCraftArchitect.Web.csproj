@@ -6,12 +6,30 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>FFXIVCraftArchitect.Web</RootNamespace>
     <AssemblyName>FFXIVCraftArchitect.Web</AssemblyName>
+    
+    <!-- Enable Razor runtime compilation in Development -->
+    <RazorRuntimeCompilation>true</RazorRuntimeCompilation>
+    
+    <!-- Treat warnings as errors in Release -->
+    <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="8.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="8.0.0" PrivateAssets="all" />
     <PackageReference Include="MudBlazor" Version="6.12.0" />
+    
+    <!-- Roslyn Analyzers -->
+    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="8.*">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
+    
+    <!-- Nullable analyzer -->
+    <PackageReference Include="Nullable" Version="1.3.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>

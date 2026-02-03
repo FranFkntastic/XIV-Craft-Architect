@@ -126,24 +126,194 @@ FFXIV Craft Architect C# Edition/
 │   │
 │   └── FFXIVCraftArchitect.Web/         # BLAZOR WASM WEB APP
 │       ├── FFXIVCraftArchitect.Web.csproj
-│       ├── App.razor
-│       ├── Program.cs
-│       ├── _Imports.razor
-│       ├── Pages/
-│       │   ├── Index.razor              # Market Logistics UI
-│       │   ├── Planner.razor            # Recipe planner placeholder
-│       │   └── About.razor              # About page
-│       ├── Shared/
-│       │   └── MainLayout.razor         # App shell with nav
-│       └── wwwroot/
-│           └── index.html               # Entry point
+│       ├── App.razor                    # Root component with routing
+│       ├── Program.cs                   # DI registration, app bootstrap
+│       ├── Theme.cs                     # Centralized MudBlazor theme
+│       ├── _Imports.razor               # Global using statements
+│       │
+│       ├── Pages/                       # Top-level page components
+│       │   ├── Index.razor              # Market Logistics (shopping lists)
+│       │   ├── Planner.razor            # Recipe Planner (crafting trees)
+│       │   └── About.razor              # About page (MudBlazor cards)
+│       │
+│       ├── Shared/                      # Reusable UI components
+│       │   ├── MainLayout.razor         # App shell (menus, nav, theme)
+│       │   ├── RecipeNodeView.razor     # Recursive recipe tree node
+│       │   └── CraftAnalysisPanel.razor # Craft vs Buy analysis display
+│       │
+│       ├── Dialogs/                     # Modal dialogs
+│       │   ├── SavePlanDialog.razor
+│       │   ├── LoadPlanDialog.razor
+│       │   ├── ImportDialog.razor
+│       │   ├── ExportDialog.razor
+│       │   ├── LogsDialog.razor
+│       │   └── OptionsDialog.razor
+│       │
+│       ├── Services/                    # Web-only services (browser APIs)
+│       │   ├── AppState.cs              # Central state management
+│       │   └── IndexedDbService.cs      # Browser storage wrapper
+│       │
+│       └── wwwroot/                     # Static web assets
+│           ├── index.html               # Entry point (base href critical!)
+│           ├── indexedDB.js             # JS interop for IndexedDB
+│           ├── mudblazor.css            # MudBlazor theme styles
+│           └── css/                     # Custom CSS overrides
 │
 ├── .github/workflows/
 │   └── deploy-web.yml                   # Auto-deploy web app to GitHub Pages
+├── .kimi/skills/mudblazor-ffxiv/        # Custom Kimi skill
+│   └── SKILL.md                         # MudBlazor patterns for this project
+├── .builderrules                        # Kimi code generation rules
+├── .editorconfig                        # Code style configuration
 ├── settings.json                        # User settings
 ├── publish.bat                          # Desktop build script
 ├── AGENTS.md                            # This file
 └── CONTEXT.md                           # Session context / changelog
+```
+
+---
+
+## Web App Structure Reference
+
+### Quick Navigation Guide
+
+**To find this UI element...** | **Look in this file...**
+---|---
+Menu bar, tabs, app title | `Shared/MainLayout.razor`
+Market search, shopping list, analyze button | `Pages/Index.razor`
+Recipe tree, craft vs buy analysis, material list | `Pages/Planner.razor`
+Recursive recipe node (expandable tree) | `Shared/RecipeNodeView.razor`
+Craft vs Buy savings panel | `Shared/CraftAnalysisPanel.razor`
+Global state (shopping items, current plan) | `Services/AppState.cs`
+Browser save/load plans | `Services/IndexedDbService.cs`
+
+### Component Hierarchy
+
+```
+App.razor (Router)
+└── MainLayout.razor (App shell)
+    ├── MudThemeProvider (dark theme config)
+    ├── MudSnackbarProvider (toast notifications)
+    └── @Body (page content)
+        │
+        ├── Index.razor ("/")
+        │   ├── Data Center selector
+        │   ├── Item search with results dropdown
+        │   ├── Shopping list table
+        │   ├── Import/Export buttons (file I/O)
+        │   └── Market analysis results cards
+        │
+        ├── Planner.razor ("/planner")
+        │   ├── Project items list (target crafts)
+        │   ├── Build Plan button
+        │   ├── RecipeNodeView (recursive tree)
+        │   ├── CraftAnalysisPanel
+        │   └── Shopping list summary
+        │
+        └── About.razor ("/about")
+            └── MudBlazor cards with info
+```
+
+### State Management
+
+**AppState.cs** - Singleton service that persists across navigation:
+```csharp
+// Shopping/Market state
+List<MarketShoppingItem> ShoppingItems
+List<ShoppingPlan> ShoppingPlans
+string SelectedDataCenter
+RecommendationMode RecommendationMode
+
+// Planner state  
+List<PlannerProjectItem> ProjectItems
+CraftingPlan CurrentPlan
+List<CraftVsBuyAnalysis> CraftAnalyses
+
+// Persistence
+List<StoredPlanSummary> SavedPlans
+DateTime? LastAutoSave
+bool IsAutoSaveEnabled
+
+// Events
+OnShoppingListChanged
+OnPlanChanged
+OnSavedPlansChanged
+```
+
+### Key Razor Syntax Patterns Used
+
+**Event binding with parameters:**
+```razor
+<button @onclick="() => RemoveItem(item)">Remove</button>
+```
+
+**Two-way binding with custom event timing:**
+```razor
+<input @bind="_searchQuery" @bind:event="oninput" @onkeyup="OnSearchKeyUp" />
+```
+
+**Conditional rendering:**
+```razor
+@if (_isLoading) { <span>Loading...</span> }
+else { <span>Ready</span> }
+```
+
+**Loop rendering:**
+```razor
+@foreach (var item in AppState.ShoppingItems)
+{
+    <div @key="item.Id">@item.Name</div>
+}
+```
+
+**Component parameters:**
+```razor
+<RecipeNodeView Node="child" 
+                Depth="Depth + 1"
+                OnSourceChanged="OnNodeSourceChanged" />
+```
+
+```csharp
+@code {
+    [Parameter] public PlanNode? Node { get; set; }
+    [Parameter] public int Depth { get; set; }
+    [Parameter] public EventCallback<PlanNode> OnSourceChanged { get; set; }
+}
+```
+
+**RenderFragment for dynamic content:**
+```csharp
+private RenderFragment RenderNodeContent() => __builder =>
+{
+    __builder.OpenElement(0, "div");
+    __builder.AddContent(1, "Content");
+    __builder.CloseElement();
+};
+```
+
+### Common Fixes
+
+**Input binding conflicts:**
+- ❌ `@bind` + `@onkeydown` - race condition
+- ✅ `@bind:event="oninput"` + `@onkeyup` - proper sequence
+
+**Menu outside-click:**
+```javascript
+// In MainLayout.razor - JS interop for document click
+document.addEventListener('click', function(e) {
+    // Close menus when clicking outside
+});
+```
+
+**Disposal pattern:**
+```csharp
+@implements IDisposable
+
+public void Dispose()
+{
+    AppState.OnPlanChanged -= OnPlanChanged;
+    _timer?.Dispose();
+}
 ```
 
 ---
@@ -215,6 +385,78 @@ FFXIV Craft Architect C# Edition/
 - [x] GitHub Actions deployment to GitHub Pages
 - [x] Update solution file
 - [x] Document architecture for future agents
+
+---
+
+## Development Conventions
+
+### Code Style Configuration
+- **`.editorconfig`** - Code formatting rules (indentation, spacing, braces)
+- **`.builderrules`** - Kimi code generation rules for MudBlazor patterns
+- **`.kimi/skills/mudblazor-ffxiv/SKILL.md`** - Custom patterns for this project
+
+### MudBlazor Web App Patterns
+
+#### Component Structure
+```csharp
+// Services injected at top
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject AppState AppState
+
+// Event handlers use "On" or "Handle" prefix
+private async Task OnSavePlan() { }
+private void HandleItemSelected(Item item) { }
+
+// Private fields use underscore prefix
+private bool _isLoading;
+private string _searchQuery = string.Empty;
+```
+
+#### Dialog Pattern
+```razor
+@* Dialogs/MyDialog.razor *@
+<MudDialog>
+    <DialogContent>
+        <!-- Content -->
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Submit">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    private void Cancel() => MudDialog.Cancel();
+    private void Submit() => MudDialog.Close(DialogResult.Ok(true));
+}
+```
+
+#### State Management Pattern
+```csharp
+// Always call StateHasChanged after async updates
+private async Task LoadData()
+{
+    _isLoading = true;
+    _items = await Service.GetItemsAsync();
+    _isLoading = false;
+    StateHasChanged();
+}
+```
+
+#### Snackbar Notifications
+```csharp
+Snackbar.Add("Success message", Severity.Success);
+Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+Snackbar.Add("Info message", Severity.Info);
+```
+
+### Styling Standards
+- Use MudBlazor utility classes: `pa-4`, `mb-2`, `gap-4`
+- Theme colors: `Color.Primary` (gold), `Color.Error` (red)
+- No inline styles - use component parameters or CSS isolation
+- Elevation: 1 for cards, 2 for dialogs, 4 for app bar
 
 ---
 
@@ -304,6 +546,46 @@ static readonly string TeamcraftInventory = Path.Combine(
     "ffxiv-teamcraft",
     "inventory.json"
 );
+```
+
+---
+
+## Build Configuration
+
+### Code Analysis (Enabled)
+```xml
+<!-- In .csproj files -->
+<PropertyGroup>
+  <Nullable>enable</Nullable>
+  <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
+</PropertyGroup>
+
+<ItemGroup>
+  <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="8.*" />
+  <PackageReference Include="Nullable" Version="1.3.1" />
+</ItemGroup>
+```
+
+### Build Commands
+```bash
+# Build entire solution
+dotnet build
+
+# Build specific project
+dotnet build src/FFXIVCraftArchitect.Web/
+
+# Watch for changes (Web development)
+dotnet watch --project src/FFXIVCraftArchitect.Web
+
+# Clean and rebuild
+dotnet clean src/FFXIVCraftArchitect.Web/
+dotnet build src/FFXIVCraftArchitect.Web/
+
+# Release build (Web)
+dotnet publish src/FFXIVCraftArchitect.Web/ -c Release -o dist/web
+
+# Release build (Desktop)
+dotnet publish src/FFXIVCraftArchitect/ -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
 
 ---
@@ -516,5 +798,37 @@ dotnet publish src/FFXIVCraftArchitect.Web/FFXIVCraftArchitect.Web.csproj `
 
 ---
 
-*Last updated: 2026-02-02*  
+## Documentation Quick Reference
+
+| File | Purpose |
+|------|---------|
+| `.builderrules` | Kimi code generation rules for this project |
+| `.editorconfig` | Code formatting rules (C#, Razor, JSON) |
+| `.kimi/skills/mudblazor-ffxiv/SKILL.md` | Custom MudBlazor patterns and commands |
+| `AGENTS.md` | This file - project overview and conventions |
+| `CONTEXT.md` | Session-specific notes and recent changes |
+
+### Using the Custom Skill
+Reference the skill when asking Kimi to create components:
+```
+Create a dialog for importing Teamcraft lists using the dialog-menu-item pattern
+```
+
+Or reference specific patterns:
+```
+Add a new state property for tracking favorite items using the state-service pattern
+```
+
+---
+
+*Last updated: 2026-02-03*  
 *See CONTEXT.md for detailed session notes*
+
+---
+
+**Recent Documentation Updates:**
+- Added `.builderrules` for code generation guidance
+- Added `.editorconfig` for consistent code formatting  
+- Created custom `.kimi/skills/mudblazor-ffxiv/SKILL.md` for project-specific patterns
+- Added `Theme.cs` for centralized theme configuration
+- Expanded MudBlazor conventions section

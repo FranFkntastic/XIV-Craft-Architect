@@ -269,32 +269,40 @@ public class UniversalisService
 
         _logger?.LogDebug("Fetching world data from Universalis");
 
-        var worldsTask = _httpClient.GetFromJsonAsync<List<WorldInfo>>(WorldsUrl, ct);
-        var dataCentersTask = _httpClient.GetFromJsonAsync<List<DataCenterInfo>>(DataCentersUrl, ct);
-
-        await Task.WhenAll(worldsTask, dataCentersTask);
-
-        var worlds = await worldsTask ?? new List<WorldInfo>();
-        var dataCenters = await dataCentersTask ?? new List<DataCenterInfo>();
-
-        var worldIdToName = worlds.ToDictionary(w => w.Id, w => w.Name);
-
-        var dcToWorlds = dataCenters.ToDictionary(
-            dc => dc.Name,
-            dc => dc.WorldIds
-                .Where(id => worldIdToName.ContainsKey(id))
-                .Select(id => worldIdToName[id])
-                .OrderBy(name => name)
-                .ToList()
-        );
-
-        _worldDataCache = new WorldData
+        try
         {
-            WorldIdToName = worldIdToName,
-            DataCenterToWorlds = dcToWorlds
-        };
+            var worldsTask = _httpClient.GetFromJsonAsync<List<WorldInfo>>(WorldsUrl, ct);
+            var dataCentersTask = _httpClient.GetFromJsonAsync<List<DataCenterInfo>>(DataCentersUrl, ct);
 
-        return _worldDataCache;
+            await Task.WhenAll(worldsTask, dataCentersTask);
+
+            var worlds = await worldsTask ?? new List<WorldInfo>();
+            var dataCenters = await dataCentersTask ?? new List<DataCenterInfo>();
+
+            var worldIdToName = worlds.ToDictionary(w => w.Id, w => w.Name);
+
+            var dcToWorlds = dataCenters.ToDictionary(
+                dc => dc.Name,
+                dc => dc.WorldIds
+                    .Where(id => worldIdToName.ContainsKey(id))
+                    .Select(id => worldIdToName[id])
+                    .OrderBy(name => name)
+                    .ToList()
+            );
+
+            _worldDataCache = new WorldData
+            {
+                WorldIdToName = worldIdToName,
+                DataCenterToWorlds = dcToWorlds
+            };
+
+            return _worldDataCache;
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger?.LogError(ex, "Failed to fetch world data from Universalis");
+            throw new InvalidOperationException($"Failed to fetch world data: {ex.Message}. This may be due to CORS restrictions in the browser.", ex);
+        }
     }
 
     /// <summary>

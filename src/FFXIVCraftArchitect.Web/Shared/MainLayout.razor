@@ -1,66 +1,627 @@
 @inherits LayoutComponentBase
+@using FFXIVCraftArchitect.Web.Services
+@using FFXIVCraftArchitect.Web.Dialogs
+@using FFXIVCraftArchitect.Core.Services
+@inject NavigationManager NavigationManager
+@inject AppState AppState
+@inject IndexedDbService IndexedDb
+@inject IJSRuntime JSRuntime
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject RecipeCalculationService RecipeService
+@inject UniversalisService UniversalisService
+@implements IDisposable
 
 <MudThemeProvider @ref="_mudThemeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
 <MudDialogProvider />
-<MudSnackbarProvider />
+<MudSnackbarProvider MaxDisplayedSnackbars="3" 
+                     SnackbarDefaults="new SnackbarOptions { ShowCloseIcon = false, HideIcon = true }" />
 
-<MudLayout>
-    <MudAppBar Elevation="1">
-        <MudIcon Icon="@Icons.Material.Filled.Construction" Class="mr-3" />
-        <MudText Typo="Typo.h6" Class="mr-4">FFXIV Craft Architect</MudText>
-        <MudText Typo="Typo.caption" Class="mud-text-secondary">Web Companion</MudText>
+<MudLayout Style="height: 100vh; display: flex; flex-direction: column;">
+    <!-- Title Bar with Menu - Fixed at top -->
+    <MudAppBar Elevation="0" Style="background-color: #1a1a1a; border-bottom: 1px solid #d4a73a; flex-shrink: 0;">
+        <MudText Style="color: #d4a73a; font-weight: 600; margin-right: 24px;">FFXIV Craft Architect</MudText>
+        
+        <!-- Navigation Tabs -->
+        <div style="display: flex; gap: 4px; margin-right: 24px;">
+            <a href="/" 
+               @onclick="SelectMarketTab"
+               style="@GetMarketTabStyle()">
+                Market Logistics
+            </a>
+            <a href="/planner" 
+               @onclick="SelectPlannerTab"
+               style="@GetPlannerTabStyle()">
+                Recipe Planner
+            </a>
+        </div>
+        
+        <!-- Menu Bar -->
+        <div style="display: flex; gap: 4px; flex-shrink: 0;">
+            <div style="position: relative; display: inline-block;" class="menu-container">
+                <button @onclick="ToggleFileMenu" 
+                        style="background: transparent; border: none; color: #cccccc; padding: 4px 12px; cursor: pointer; font-size: 14px;">File</button>
+                <div id="menu-file" style="display: @_fileMenuDisplay; position: fixed; top: 48px; left: 200px; background: #2d2d2d; border: 1px solid #444; min-width: 150px; z-index: 9999;">
+                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;" 
+                         @onclick="OnNewPlan"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
+                         onmouseout="this.style.backgroundColor='transparent'">New Plan</div>
+                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
+                         @onclick="OnSavePlan"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
+                         onmouseout="this.style.backgroundColor='transparent'">Save Plan...</div>
+                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
+                         @onclick="OnLoadPlan"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
+                         onmouseout="this.style.backgroundColor='transparent'">Load Plans...</div>
+                    <div style="border-top: 1px solid #444; margin: 4px 0;"></div>
+                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
+                         @onclick="OnViewLogs"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
+                         onmouseout="this.style.backgroundColor='transparent'">View Logs</div>
+                </div>
+            </div>
+            
+            <div style="position: relative; display: inline-block;" class="menu-container">
+                <button @onclick="ToggleImportMenu" 
+                        style="background: transparent; border: none; color: #cccccc; padding: 4px 12px; cursor: pointer; font-size: 14px;">Import</button>
+                <div id="menu-import" style="display: @_importMenuDisplay; position: fixed; top: 48px; left: 250px; background: #2d2d2d; border: 1px solid #444; min-width: 180px; z-index: 9999;">
+                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
+                         @onclick="OnImportTeamcraft"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
+                         onmouseout="this.style.backgroundColor='transparent'">From Teamcraft (Text)...</div>
+                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
+                         @onclick="OnImportArtisan"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
+                         onmouseout="this.style.backgroundColor='transparent'">From Artisan (JSON)...</div>
+                </div>
+            </div>
+            
+            <div style="position: relative; display: inline-block;" class="menu-container">
+                <button @onclick="ToggleExportMenu" 
+                        style="background: transparent; border: none; color: #cccccc; padding: 4px 12px; cursor: pointer; font-size: 14px;">Export</button>
+                <div id="menu-export" style="display: @_exportMenuDisplay; position: fixed; top: 48px; left: 310px; background: #2d2d2d; border: 1px solid #444; min-width: 150px; z-index: 9999;">
+                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
+                         @onclick="OnExportTeamcraft"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
+                         onmouseout="this.style.backgroundColor='transparent'">To Teamcraft URL</div>
+                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
+                         @onclick="OnExportArtisan"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
+                         onmouseout="this.style.backgroundColor='transparent'">To Artisan (JSON)</div>
+                    <div style="border-top: 1px solid #444; margin: 4px 0;"></div>
+                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
+                         @onclick="OnCopyPlainText"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
+                         onmouseout="this.style.backgroundColor='transparent'">Copy as Plain Text</div>
+                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
+                         @onclick="OnCopyCsv"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
+                         onmouseout="this.style.backgroundColor='transparent'">Copy as CSV</div>
+                </div>
+            </div>
+            
+            <div style="position: relative; display: inline-block;" class="menu-container">
+                <button @onclick="ToggleToolsMenu" 
+                        style="background: transparent; border: none; color: #cccccc; padding: 4px 12px; cursor: pointer; font-size: 14px;">Tools</button>
+                <div id="menu-tools" style="display: @_toolsMenuDisplay; position: fixed; top: 48px; left: 370px; background: #2d2d2d; border: 1px solid #444; min-width: 180px; z-index: 9999;">
+                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
+                         @onclick="OnFetchPrices"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
+                         onmouseout="this.style.backgroundColor='transparent'">Fetch Prices</div>
+                    <div style="padding: 8px 12px; color: #666; cursor: not-allowed;">View Plan Market Data</div>
+                    <div style="border-top: 1px solid #444; margin: 4px 0;"></div>
+                    <div style="padding: 8px 12px; color: #ccc; cursor: pointer;"
+                         @onclick="OnOptions"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'" 
+                         onmouseout="this.style.backgroundColor='transparent'">Options...</div>
+                </div>
+            </div>
+        </div>
+        
         <MudSpacer />
-        <MudIconButton Icon="@(_isDarkMode ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)" 
-                       @onclick="ToggleDarkMode" 
-                       Color="Color.Inherit" 
-                       Title="Toggle Dark Mode" />
-        <MudIconButton Icon="@Icons.Custom.Brands.GitHub" 
-                       Color="Color.Inherit" 
-                       Href="https://github.com/yourusername/FFXIVCraftArchitect" 
-                       Target="_blank" />
+        
+        <MudLink Href="https://github.com/FranFkntastic/FFXIVCraftArchitect" 
+                 Target="_blank" 
+                 Style="color: #d4a73a; text-decoration: none; font-size: 14px;">GitHub</MudLink>
     </MudAppBar>
     
-    <MudDrawer @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Elevation="1" Variant="DrawerVariant.Persistent">
-        <MudNavMenu>
-            <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home">Market Logistics</MudNavLink>
-            <MudNavLink Href="planner" Icon="@Icons.Material.Filled.List">Recipe Planner</MudNavLink>
-            <MudDivider Class="my-2" />
-            <MudNavLink Href="about" Icon="@Icons.Material.Filled.Info">About</MudNavLink>
-        </MudNavMenu>
-    </MudDrawer>
-    
-    <MudMainContent>
-        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pa-4">
-            @Body
-        </MudContainer>
+    <MudMainContent Style="background-color: #1e1e1e; flex: 1; overflow-y: auto; overflow-x: hidden;">
+        @Body
     </MudMainContent>
 </MudLayout>
 
 @code {
-    private bool _drawerOpen = true;
     private bool _isDarkMode = true;
     private MudThemeProvider _mudThemeProvider = null!;
+    private string _activeTab = "market";
+    private bool _disposed = false;
     
-    private readonly MudTheme _theme = new MudTheme
-    {
-        Palette = new PaletteLight
-        {
-            Primary = "#1976d2",
-            Secondary = "#9c27b0",
-            AppbarBackground = "#1976d2",
-        },
-        PaletteDark = new PaletteDark
-        {
-            Primary = "#90caf9",
-            Secondary = "#ce93d8",
-            AppbarBackground = "#1e1e1e",
-            Background = "#121212",
-            Surface = "#1e1e1e",
-        }
-    };
+    // Menu display states
+    private string _fileMenuDisplay = "none";
+    private string _importMenuDisplay = "none";
+    private string _exportMenuDisplay = "none";
+    private string _toolsMenuDisplay = "none";
+    
+    private readonly MudTheme _theme = AppTheme.CreateTheme();
 
-    private void ToggleDarkMode()
+    protected override void OnInitialized()
     {
-        _isDarkMode = !_isDarkMode;
+        // Set initial active tab based on current URL
+        var uri = NavigationManager.Uri.ToLowerInvariant();
+        _activeTab = uri.Contains("/planner") ? "planner" : "market";
+        
+        // Listen for navigation changes
+        NavigationManager.LocationChanged += OnLocationChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Setup document click listener for menu closing - use a simple approach
+            await SetupDocumentClickHandlerAsync();
+            
+            // Load settings
+            await LoadSettingsAsync();
+        }
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        try
+        {
+            var autoSave = await IndexedDb.LoadSettingAsync("autoSave", true);
+            var defaultDc = await IndexedDb.LoadSettingAsync("defaultDataCenter", "Aether");
+            
+            AppState.IsAutoSaveEnabled = autoSave;
+            if (string.IsNullOrEmpty(AppState.SelectedDataCenter))
+            {
+                AppState.SelectedDataCenter = defaultDc;
+            }
+        }
+        catch { /* Ignore settings load errors */ }
+    }
+
+    private async Task SetupDocumentClickHandlerAsync()
+    {
+        try
+        {
+            var script = "document.addEventListener('click', function(e) { " +
+                "const menus = document.querySelectorAll('.menu-container > div[id^=menu-]'); " +
+                "menus.forEach(function(menu) { " +
+                "if (!menu.contains(e.target) && !menu.previousElementSibling.contains(e.target)) { " +
+                "menu.style.display = 'none'; }}); });";
+            await JSRuntime.InvokeVoidAsync("eval", script);
+        }
+        catch
+        {
+            // Ignore JS interop errors during prerender
+        }
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        if (_disposed) return;
+        
+        var uri = e.Location.ToLowerInvariant();
+        _activeTab = uri.Contains("/planner") ? "planner" : "market";
+        CloseMenus();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void SelectMarketTab()
+    {
+        _activeTab = "market";
+    }
+
+    private void SelectPlannerTab()
+    {
+        _activeTab = "planner";
+    }
+
+    private string GetMarketTabStyle()
+    {
+        var isActive = _activeTab == "market";
+        var baseStyle = "padding: 6px 16px; border-radius: 4px; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.2s; cursor: pointer;";
+        
+        if (isActive)
+        {
+            return $"{baseStyle} background: #d4a73a; color: #1a1a1a;";
+        }
+        else
+        {
+            return $"{baseStyle} background: transparent; color: #cccccc;";
+        }
+    }
+
+    private string GetPlannerTabStyle()
+    {
+        var isActive = _activeTab == "planner";
+        var baseStyle = "padding: 6px 16px; border-radius: 4px; text-decoration: none; font-size: 14px; font-weight: 500; transition: all 0.2s; cursor: pointer;";
+        
+        if (isActive)
+        {
+            return $"{baseStyle} background: #d4a73a; color: #1a1a1a;";
+        }
+        else
+        {
+            return $"{baseStyle} background: transparent; color: #cccccc;";
+        }
+    }
+
+    private void ToggleFileMenu()
+    {
+        var wasOpen = _fileMenuDisplay == "block";
+        CloseMenus();
+        _fileMenuDisplay = wasOpen ? "none" : "block";
+    }
+
+    private void ToggleImportMenu()
+    {
+        var wasOpen = _importMenuDisplay == "block";
+        CloseMenus();
+        _importMenuDisplay = wasOpen ? "none" : "block";
+    }
+
+    private void ToggleExportMenu()
+    {
+        var wasOpen = _exportMenuDisplay == "block";
+        CloseMenus();
+        _exportMenuDisplay = wasOpen ? "none" : "block";
+    }
+
+    private void ToggleToolsMenu()
+    {
+        var wasOpen = _toolsMenuDisplay == "block";
+        CloseMenus();
+        _toolsMenuDisplay = wasOpen ? "none" : "block";
+    }
+
+    private void CloseMenus()
+    {
+        _fileMenuDisplay = "none";
+        _importMenuDisplay = "none";
+        _exportMenuDisplay = "none";
+        _toolsMenuDisplay = "none";
+    }
+
+    // ==================== FILE MENU ====================
+    
+    private void OnNewPlan()
+    {
+        AppState.ClearPlan();
+        CloseMenus();
+        Snackbar.Add("New plan started", Severity.Info);
+    }
+
+    private async Task OnSavePlan()
+    {
+        CloseMenus();
+        
+        if (!AppState.ProjectItems.Any() && AppState.CurrentPlan == null)
+        {
+            Snackbar.Add("Nothing to save. Add items to your plan first.", Severity.Warning);
+            return;
+        }
+        
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = DialogService.Show<SavePlanDialog>("Save Plan", options);
+        var result = await dialog.Result;
+        
+        if (result?.Data is string planName)
+        {
+            var planData = new StoredPlan
+            {
+                Id = Guid.NewGuid().ToString(),
+                Name = planName,
+                DataCenter = AppState.SelectedDataCenter,
+                ModifiedAt = DateTime.UtcNow,
+                ProjectItems = AppState.ProjectItems.Select(p => new StoredProjectItem
+                {
+                    Id = p.Id,
+                    Name = p.Name,
+                    IconId = p.IconId,
+                    Quantity = p.Quantity,
+                    MustBeHq = p.MustBeHq
+                }).ToList(),
+                PlanJson = AppState.CurrentPlan != null 
+                    ? System.Text.Json.JsonSerializer.Serialize(AppState.CurrentPlan) 
+                    : null
+            };
+            
+            var success = await IndexedDb.SavePlanAsync(planData);
+            if (success)
+            {
+                Snackbar.Add($"Saved '{planName}'", Severity.Success);
+                await RefreshSavedPlansListAsync();
+            }
+            else
+            {
+                Snackbar.Add("Failed to save plan", Severity.Error);
+            }
+        }
+    }
+
+    private async Task OnLoadPlan()
+    {
+        CloseMenus();
+        
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
+        var dialog = DialogService.Show<LoadPlanDialog>("Load Plan", options);
+        var result = await dialog.Result;
+        
+        if (result?.Data is string planId)
+        {
+            await LoadPlanByIdAsync(planId);
+        }
+    }
+    
+    private async Task LoadPlanByIdAsync(string planId)
+    {
+        try
+        {
+            var storedPlan = await IndexedDb.LoadPlanAsync(planId);
+            if (storedPlan == null)
+            {
+                Snackbar.Add("Plan not found", Severity.Error);
+                return;
+            }
+            
+            CraftingPlan? plan = null;
+            if (!string.IsNullOrEmpty(storedPlan.PlanJson))
+            {
+                try
+                {
+                    plan = System.Text.Json.JsonSerializer.Deserialize<CraftingPlan>(storedPlan.PlanJson);
+                }
+                catch { /* Plan JSON may be incompatible, that's ok */ }
+            }
+            
+            AppState.LoadStoredPlan(storedPlan, plan);
+            Snackbar.Add($"Loaded '{storedPlan.Name}'", Severity.Success);
+            
+            // Navigate to planner if we have a plan
+            if (plan != null || AppState.ProjectItems.Any())
+            {
+                NavigationManager.NavigateTo("/planner");
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load plan: {ex.Message}", Severity.Error);
+        }
+    }
+    
+    private async Task RefreshSavedPlansListAsync()
+    {
+        var plans = await IndexedDb.LoadAllPlansAsync();
+        AppState.SavedPlans = plans
+            .Where(p => p.Id != "autosave")
+            .Select(p => new StoredPlanSummary
+            {
+                Id = p.Id,
+                Name = p.Name,
+                ModifiedAt = p.ModifiedAt,
+                SavedAt = p.SavedAt,
+                DataCenter = p.DataCenter,
+                ItemCount = p.ProjectItems.Count
+            })
+            .ToList();
+        AppState.NotifySavedPlansChanged();
+    }
+
+    private async Task OnViewLogs()
+    {
+        CloseMenus();
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
+        DialogService.Show<LogsDialog>("Logs", options);
+    }
+
+    // ==================== IMPORT MENU ====================
+    
+    private async Task OnImportTeamcraft()
+    {
+        CloseMenus();
+        await ShowImportDialog(0); // Teamcraft tab
+    }
+
+    private async Task OnImportArtisan()
+    {
+        CloseMenus();
+        await ShowImportDialog(1); // Artisan tab
+    }
+    
+    private async Task ShowImportDialog(int activeTab)
+    {
+        var parameters = new DialogParameters { ["ActiveTab"] = activeTab };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
+        var dialog = DialogService.Show<ImportDialog>("Import", parameters, options);
+        var result = await dialog.Result;
+        
+        if (result?.Data is List<ImportDialog.ImportItem> items)
+        {
+            // Add imported items to project
+            foreach (var item in items)
+            {
+                if (!AppState.ProjectItems.Any(p => p.Id == item.Id))
+                {
+                    AppState.ProjectItems.Add(new PlannerProjectItem
+                    {
+                        Id = item.Id,
+                        Name = item.Name,
+                        IconId = item.IconId,
+                        Quantity = item.Quantity,
+                        MustBeHq = false
+                    });
+                }
+            }
+            
+            AppState.NotifyPlanChanged();
+            Snackbar.Add($"Imported {items.Count} items", Severity.Success);
+            
+            // Navigate to planner
+            if (items.Count > 0)
+            {
+                NavigationManager.NavigateTo("/planner");
+            }
+        }
+    }
+
+    // ==================== EXPORT MENU ====================
+    
+    private async Task OnExportTeamcraft()
+    {
+        CloseMenus();
+        await ShowExportDialog(0); // Teamcraft tab
+    }
+
+    private async Task OnExportArtisan()
+    {
+        CloseMenus();
+        await ShowExportDialog(1); // Artisan tab
+    }
+    
+    private async Task ShowExportDialog(int activeTab)
+    {
+        var parameters = new DialogParameters { ["ActiveTab"] = activeTab };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
+        DialogService.Show<ExportDialog>("Export", parameters, options);
+    }
+
+    private async Task OnCopyPlainText()
+    {
+        CloseMenus();
+        
+        var materials = AppState.CurrentPlan?.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList();
+        
+        if ((materials == null || materials.Count == 0) && AppState.ShoppingItems.Any())
+        {
+            // Use shopping items instead
+            materials = AppState.ShoppingItems.Select(s => new Core.Models.MaterialAggregate
+            {
+                ItemId = s.Id,
+                Name = s.Name,
+                TotalQuantity = s.Quantity,
+                UnitPrice = 0
+            }).ToList();
+        }
+        
+        if (materials == null || materials.Count == 0)
+        {
+            Snackbar.Add("Nothing to copy. Add items to your shopping list first.", Severity.Warning);
+            return;
+        }
+        
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Shopping List:");
+        sb.AppendLine();
+        
+        foreach (var item in materials)
+        {
+            sb.AppendLine($"{item.Name} x{item.TotalQuantity}");
+        }
+        
+        await CopyTextToClipboardAsync(sb.ToString(), "Shopping list copied!");
+    }
+
+    private async Task OnCopyCsv()
+    {
+        CloseMenus();
+        
+        var materials = AppState.CurrentPlan?.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList()
+            ?? new List<Core.Models.MaterialAggregate>();
+        
+        if (materials.Count == 0 && AppState.ShoppingItems.Any())
+        {
+            // Convert shopping items to material format
+            materials = AppState.ShoppingItems.Select(s => new Core.Models.MaterialAggregate
+            {
+                ItemId = s.Id,
+                Name = s.Name,
+                TotalQuantity = s.Quantity,
+                UnitPrice = 0
+            }).ToList();
+        }
+        
+        if (materials.Count == 0)
+        {
+            Snackbar.Add("Nothing to copy. Add items to your shopping list first.", Severity.Warning);
+            return;
+        }
+        
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("Item,Quantity,Unit Price,Total Cost");
+        
+        foreach (var m in materials)
+        {
+            csv.AppendLine($"\"{m.Name}\",{m.TotalQuantity},{m.UnitPrice},{m.TotalCost}");
+        }
+        
+        await CopyTextToClipboardAsync(csv.ToString(), "CSV copied to clipboard!");
+    }
+    
+    private async Task CopyTextToClipboardAsync(string text, string successMessage)
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Snackbar.Add(successMessage, Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("Failed to copy to clipboard", Severity.Error);
+        }
+    }
+
+    // ==================== TOOLS MENU ====================
+    
+    private void OnFetchPrices()
+    {
+        CloseMenus();
+        
+        if (AppState.CurrentPlan == null && !AppState.ShoppingItems.Any())
+        {
+            Snackbar.Add("No plan to fetch prices for. Create a plan first.", Severity.Warning);
+            return;
+        }
+        
+        // Trigger price fetch - this is handled by the Planner page via event
+        Snackbar.Add("Fetching prices...", Severity.Info);
+        _ = FetchPricesAsync();
+    }
+    
+    private async Task FetchPricesAsync()
+    {
+        try
+        {
+            // Price fetch is handled by individual pages - they listen for state changes
+            // Just notify that a refresh was requested
+            AppState.NotifyShoppingListChanged();
+            AppState.NotifyPlanChanged();
+            
+            Snackbar.Add("Price refresh requested. Switch to Market Logistics or Recipe Planner to update prices.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Price fetch failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OnOptions()
+    {
+        CloseMenus();
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = DialogService.Show<OptionsDialog>("Options", options);
+        await dialog.Result;
+    }
+
+    public void Dispose()
+    {
+        if (!_disposed)
+        {
+            NavigationManager.LocationChanged -= OnLocationChanged;
+            _disposed = true;
+        }
     }
 }

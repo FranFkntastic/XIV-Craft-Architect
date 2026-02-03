@@ -1,0 +1,139 @@
+@using FFXIVCraftArchitect.Core.Models
+
+@if (Analyses.Any())
+{
+    <div style="background: #2d2d2d; border-radius: 4px; border: 1px solid #444; margin-top: 16px;">
+        <!-- Header -->
+        <div style="background: #363636; padding: 12px 16px; border-bottom: 1px solid #444;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="color: #cccccc; font-weight: 500;">Craft vs Buy Analysis</span>
+                <span style="color: #4caf50; font-size: 14px;">Total Savings: @TotalSavingsDisplay</span>
+            </div>
+        </div>
+        
+        <!-- Analysis List -->
+        <div style="padding: 8px;">
+            @foreach (var analysis in Analyses.Where(a => a.IsSignificantSavings).OrderByDescending(a => Math.Abs(a.EffectivePotentialSavings)))
+            {
+                <div style="background: #1e1e1e; border-radius: 4px; padding: 12px; margin-bottom: 8px; border-left: 3px solid @(GetRecommendationColor(analysis));">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+                        <div>
+                            <div style="color: white; font-weight: 500;">
+                                @if (analysis.IsHqRequired)
+                                {
+                                    <span style="color: #d4a73a;">★</span>
+                                }
+                                @analysis.ItemName
+                                <span style="color: #888; font-weight: normal;">x@analysis.Quantity</span>
+                            </div>
+                            <div style="color: #888; font-size: 12px; margin-top: 2px;">
+                                @GetRecommendationText(analysis)
+                            </div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #4caf50; font-weight: 600;">
+                                @GetSavingsDisplay(analysis)
+                            </div>
+                            <div style="color: #888; font-size: 12px;">
+                                @GetSavingsPercentDisplay(analysis)
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Price comparison bar -->
+                    <div style="display: flex; gap: 8px; font-size: 12px;">
+                        <div style="flex: 1; background: #2d2d2d; padding: 8px; border-radius: 4px;">
+                            <div style="color: #888;">Buy @GetQualityLabel(analysis)</div>
+                            <div style="color: @(analysis.EffectiveRecommendation == CraftRecommendation.Buy ? "#ff6b6b" : "#ccc");">
+                                @GetBuyCostDisplay(analysis)
+                            </div>
+                        </div>
+                        <div style="flex: 1; background: #2d2d2d; padding: 8px; border-radius: 4px;">
+                            <div style="color: #888;">Craft</div>
+                            <div style="color: @(analysis.EffectiveRecommendation == CraftRecommendation.Craft ? "#4caf50" : "#ccc");">
+                                @analysis.CraftCost.ToString("N0")g
+                            </div>
+                        </div>
+                    </div>
+                    
+                    @if (analysis.HasQualityWarning && !analysis.IsHqRequired)
+                    {
+                        <div style="background: #5c4a2b; color: #ffd700; padding: 8px; border-radius: 4px; margin-top: 8px; font-size: 12px;">
+                            ⚠ HQ is significantly more expensive. Consider if NQ is acceptable.
+                        </div>
+                    }
+                </div>
+            }
+            
+            @if (!Analyses.Any(a => a.IsSignificantSavings))
+            {
+                <div style="color: #888; text-align: center; padding: 24px;">
+                    No significant craft vs buy differences found.
+                    <br />
+                    <span style="font-size: 12px;">Prices are relatively balanced for your current selections.</span>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public List<CraftVsBuyAnalysis> Analyses { get; set; } = new();
+    
+    protected override void OnParametersSet()
+    {
+        // Ensure Analyses is never null
+        Analyses ??= new List<CraftVsBuyAnalysis>();
+    }
+
+    private decimal TotalSavings => Analyses.Sum(a => a.EffectivePotentialSavings);
+    
+    private string TotalSavingsDisplay => TotalSavings >= 0 
+        ? $"{TotalSavings:N0}g" 
+        : $"({Math.Abs(TotalSavings):N0}g)";
+
+    private static string GetRecommendationColor(CraftVsBuyAnalysis analysis)
+    {
+        return analysis.EffectiveRecommendation switch
+        {
+            CraftRecommendation.Buy => "#ff6b6b",  // Red for buy
+            CraftRecommendation.Craft => "#4caf50", // Green for craft
+            _ => "#888888"
+        };
+    }
+
+    private static string GetRecommendationText(CraftVsBuyAnalysis analysis)
+    {
+        if (analysis.EffectiveRecommendation == CraftRecommendation.Craft)
+        {
+            return $"Craft to save {Math.Abs(analysis.EffectivePotentialSavings):N0}g";
+        }
+        else
+        {
+            return $"Buy to save {Math.Abs(analysis.EffectivePotentialSavings):N0}g";
+        }
+    }
+
+    private static string GetSavingsDisplay(CraftVsBuyAnalysis analysis)
+    {
+        var prefix = analysis.EffectivePotentialSavings >= 0 ? "Save " : "Cost ";
+        return $"{prefix}{Math.Abs(analysis.EffectivePotentialSavings):N0}g";
+    }
+
+    private static string GetSavingsPercentDisplay(CraftVsBuyAnalysis analysis)
+    {
+        var sign = analysis.EffectivePotentialSavings >= 0 ? "-" : "+";
+        return $"{sign}{Math.Abs(analysis.EffectiveSavingsPercent):F0}%";
+    }
+
+    private static string GetQualityLabel(CraftVsBuyAnalysis analysis)
+    {
+        return analysis.IsHqRequired ? "(HQ)" : "(NQ)";
+    }
+
+    private static string GetBuyCostDisplay(CraftVsBuyAnalysis analysis)
+    {
+        var cost = analysis.GetBuyCost(analysis.IsHqRequired);
+        return cost.ToString("N0") + "g";
+    }
+}
