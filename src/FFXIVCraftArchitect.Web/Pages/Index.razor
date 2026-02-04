@@ -7,6 +7,7 @@
 @inject UniversalisService UniversalisService
 @inject RecipeCalculationService RecipeCalculationService
 @inject MarketShoppingService MarketShoppingService
+@inject ProcurementAnalysisService ProcurementService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @inject AppState AppState
@@ -510,24 +511,41 @@
         try
         {
             var targetItems = AppState.ProjectItems.Select(i => (i.Id, i.Name, i.Quantity, i.MustBeHq)).ToList();
+            
+            // Step 1: Build the recipe tree
             AppState.CurrentPlan = await RecipeCalculationService.BuildPlanAsync(
                 targetItems, 
                 AppState.SelectedDataCenter, 
                 string.Empty);
             
-            // Fetch prices for analysis (but don't block on it)
+            // Step 2: Run procurement analysis (craft vs buy decisions, optimal worlds)
+            AppState.BeginOperation("Procurement Analysis", "Analyzing optimal acquisition strategy...");
+            
+            var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+            
+            AppState.CurrentProcurementAnalysis = await ProcurementService.AnalyzePlanAsync(
+                AppState.CurrentPlan,
+                AppState.SelectedDataCenter,
+                AppState.RecommendationMode,
+                progress);
+            
+            AppState.NotifyProcurementAnalysisChanged();
+            AppState.EndOperation($"Analysis complete! {AppState.CurrentProcurementAnalysis.ItemsToCraft} to craft, {AppState.CurrentProcurementAnalysis.ItemsToBuy} to buy");
+            
+            // Step 3: Sync to shopping list (for procurement planner)
+            AppState.SyncProjectToShopping();
+            
+            // Step 4: Refresh basic prices for display (non-blocking)
             _ = Task.Run(async () => 
             {
                 await RefreshPricesAsync();
             });
             
-            // Sync to shopping list
-            AppState.SyncProjectToShopping();
-            
-            Snackbar.Add($"Plan built with {AppState.CurrentPlan.RootItems.Count} items", Severity.Success);
+            Snackbar.Add($"Plan built with {AppState.CurrentPlan.RootItems.Count} items. Procurement analysis complete.", Severity.Success);
         }
         catch (Exception ex)
         {
+            AppState.EndOperation($"Failed: {ex.Message}");
             Snackbar.Add($"Failed to build plan: {ex.Message}", Severity.Error);
         }
         finally

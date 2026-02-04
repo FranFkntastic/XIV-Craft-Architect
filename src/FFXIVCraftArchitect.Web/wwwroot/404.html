@@ -14,6 +14,12 @@
             const path = window.location.pathname;
             const repoName = '/XIV-Craft-Architect';
             
+            // Handle old route redirects for compatibility
+            let cleanPath = path;
+            if (path.includes('/market')) {
+                cleanPath = path.replace('/market', '/procurement');
+            }
+            
             // Store the full path in sessionStorage so the app can pick it up after redirect
             // Remove the repo name from the path if present
             let routePath = path;
@@ -22,7 +28,9 @@
             }
             
             // Store the target path for the app to read after loading
-            sessionStorage.setItem('redirectPath', routePath + window.location.search + window.location.hash);
+            // Use the cleaned path (handles old /market routes)
+            const finalPath = cleanPath.startsWith(repoName) ? cleanPath.substring(repoName.length) : cleanPath;
+            sessionStorage.setItem('redirectPath', finalPath + window.location.search + window.location.hash);
             
             // Redirect to the root of the app
             const baseUrl = window.location.origin + repoName + '/';

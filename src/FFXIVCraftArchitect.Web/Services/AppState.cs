@@ -1,4 +1,5 @@
 using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Core.Services;
 
 namespace FFXIVCraftArchitect.Web.Services;
 
@@ -14,10 +15,11 @@ public class AppState
     public List<CraftVsBuyAnalysis> CraftAnalyses { get; set; } = new();
     public string SelectedDataCenter { get; set; } = "Aether";
     
-    // Market Logistics State
+    // Procurement Planner State
     public List<MarketShoppingItem> ShoppingItems { get; set; } = new();
     public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
     public RecommendationMode RecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
+    public ProcurementAnalysis? CurrentProcurementAnalysis { get; set; }
     
     // Persistence state
     public bool IsAutoSaveEnabled { get; set; } = true;
@@ -36,6 +38,7 @@ public class AppState
     public event Action? OnShoppingListChanged;
     public event Action? OnSavedPlansChanged;
     public event Action? OnStatusChanged;
+    public event Action? OnProcurementAnalysisChanged;
     
     public void NotifyPlanChanged()
     {
@@ -56,6 +59,11 @@ public class AppState
     {
         LastStatusUpdate = DateTime.Now;
         OnStatusChanged?.Invoke();
+    }
+    
+    public void NotifyProcurementAnalysisChanged()
+    {
+        OnProcurementAnalysisChanged?.Invoke();
     }
     
     /// <summary>

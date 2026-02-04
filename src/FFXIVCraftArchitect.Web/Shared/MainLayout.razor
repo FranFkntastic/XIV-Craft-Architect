@@ -29,10 +29,10 @@
                        Variant="@GetTabVariant("planner")">
                 Recipe Planner
             </MudButton>
-            <MudButton OnClick="@(() => NavigateTo("market"))"
-                       Color="@GetTabColor("market")"
-                       Variant="@GetTabVariant("market")">
-                Market Logistics
+            <MudButton OnClick="@(() => NavigateTo("procurement"))"
+                       Color="@GetTabColor("procurement")"
+                       Variant="@GetTabVariant("procurement")">
+                Procurement Planner
             </MudButton>
         </MudButtonGroup>
         
@@ -199,8 +199,8 @@
     private void UpdateActiveTab(string uri)
     {
         var uriLower = uri.ToLowerInvariant();
-        if (uriLower.Contains("/market"))
-            _activeTab = "market";
+        if (uriLower.Contains("/procurement"))
+            _activeTab = "procurement";
         else
             _activeTab = "planner";
     }

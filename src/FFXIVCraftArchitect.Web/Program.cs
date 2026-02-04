@@ -20,6 +20,7 @@ builder.Services.AddScoped<GarlandService>();
 builder.Services.AddScoped<UniversalisService>();
 builder.Services.AddScoped<RecipeCalculationService>();
 builder.Services.AddScoped<MarketShoppingService>();
+builder.Services.AddScoped<ProcurementAnalysisService>();
 
 // Register App State (singleton to persist across tab switches)
 builder.Services.AddSingleton<AppState>();
