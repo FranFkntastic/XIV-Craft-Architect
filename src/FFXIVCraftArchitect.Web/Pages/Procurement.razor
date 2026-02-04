@@ -428,9 +428,8 @@
         AppState.OnShoppingListChanged += OnShoppingListChanged;
         AppState.OnProcurementAnalysisChanged += OnProcurementAnalysisChanged;
         
-        // Clear any previous analysis when page loads - user must explicitly run analysis
-        AppState.CurrentProcurementAnalysis = null;
-        AppState.ShoppingPlans.Clear();
+        // Check if analysis was previously completed (persisted in AppState)
+        _analysisComplete = AppState.CurrentProcurementAnalysis != null || AppState.ShoppingPlans.Any();
     }
 
     private void OnShoppingListChanged()
@@ -519,14 +518,16 @@
         
         _searchResults.Clear();
         _searchQuery = string.Empty;
-        AppState.ShoppingPlans.Clear();
+        // Note: We intentionally do NOT clear ShoppingPlans here to preserve analysis
+        // User should explicitly re-run analysis when ready
         AppState.NotifyShoppingListChanged();
     }
 
     private void RemoveItem(MarketShoppingItem item)
     {
         AppState.ShoppingItems.Remove(item);
-        AppState.ShoppingPlans.Clear();
+        // Note: We intentionally do NOT clear ShoppingPlans here
+        // If user wants fresh analysis, they should explicitly re-run it
         AppState.SetStatus($"Removed {item.Name} from shopping list");
         AppState.NotifyShoppingListChanged();
     }
