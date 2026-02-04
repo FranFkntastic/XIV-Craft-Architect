@@ -14,6 +14,15 @@
 @inject NavigationManager NavigationManager
 @implements IDisposable
 
+<style>
+    .search-results-container .search-result-item:hover {
+        background: linear-gradient(135deg, #3a3020 0%, #2d2520 100%) !important;
+    }
+    .search-results-container .mud-list-item {
+        transition: background-color 0.2s ease;
+    }
+</style>
+
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0" Style="height: calc(100vh - 64px - 28px);">
     <div style="display: grid; grid-template-columns: 280px 350px 1fr; height: 100%; width: 100%;">
         
@@ -98,16 +107,44 @@
             
             @if (_searchResults.Any())
             {
-                <MudPaper Elevation="2" Class="mb-4" Style="max-height: 200px; overflow-y: auto;">
-                    <MudList T="GarlandSearchResult" Dense="true">
+                <MudPaper Elevation="4" 
+                          Class="mt-2 search-results-container" 
+                          Style="max-height: 300px; overflow-y: auto; border-radius: 8px; border: 1px solid #d4a73a; background: #2d2d2d; z-index: 100;">
+                    <div class="px-3 py-2" Style="background: linear-gradient(135deg, #3a3020 0%, #2d2520 100%); border-bottom: 1px solid #d4a73a; display: flex; align-items: center; justify-content: space-between;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <MudIcon Icon="@Icons.Material.Filled.Search" Size="Size.Small" Color="Color.Primary" />
+                            <MudText Typo="Typo.body2" Style="color: #d4a73a; font-weight: 600;">Search Results</MudText>
+                            <MudBadge Content="@_searchResults.Count" Color="Color.Primary" Style="margin-left: 4px;" />
+                        </div>
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" 
+                                       Size="Size.Small" 
+                                       Color="Color.Secondary"
+                                       OnClick="() => _searchResults.Clear()"
+                                       Style="padding: 4px;" />
+                    </div>
+                    <MudList T="GarlandSearchResult" Dense="true" Style="padding: 4px;">
                         @foreach (var result in _searchResults)
                         {
-                            <MudListItem T="GarlandSearchResult" OnClick="() => AddItemToList(result)">
-                                <MudText Typo="Typo.body2">@result.Object.Name</MudText>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">ID: @result.Id</MudText>
+                            <MudListItem T="GarlandSearchResult" 
+                                         OnClick="() => AddItemToList(result)"
+                                         Style="border-radius: 6px; margin: 2px 4px; cursor: pointer;"
+                                         Class="search-result-item">
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <MudIcon Icon="@Icons.Material.Filled.AddCircle" 
+                                             Size="Size.Small" 
+                                             Color="Color.Primary"
+                                             Style="opacity: 0.7;" />
+                                    <div style="flex: 1; min-width: 0;">
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@result.Object.Name</MudText>
+                                        <MudText Typo="Typo.caption" Style="color: #888;">ID: @result.Id</MudText>
+                                    </div>
+                                </div>
                             </MudListItem>
                         }
                     </MudList>
+                    <div class="px-3 py-2" Style="background: #252525; border-top: 1px solid #444; text-align: center;">
+                        <MudText Typo="Typo.caption" Style="color: #888;">Click an item to add it to your list</MudText>
+                    </div>
                 </MudPaper>
             }
 
