@@ -26,6 +26,10 @@ public class AppState
     public DateTime? LastAutoSave { get; set; }
     public List<StoredPlanSummary> SavedPlans { get; set; } = new();
     
+    // Current plan tracking for save-overwrite behavior
+    public string? CurrentPlanId { get; set; }
+    public string? CurrentPlanName { get; set; }
+    
     // Status Bar State
     public string StatusMessage { get; set; } = "Ready";
     public bool IsBusy { get; set; } = false;
@@ -156,6 +160,8 @@ public class AppState
         CraftAnalyses.Clear();
         ShoppingItems.Clear();
         ShoppingPlans.Clear();
+        CurrentPlanId = null;  // Reset plan ID for new plan
+        CurrentPlanName = null;
         NotifyPlanChanged();
         NotifyShoppingListChanged();
     }
@@ -178,6 +184,10 @@ public class AppState
         
         CurrentPlan = deserializedPlan;
         
+        // Track the loaded plan ID for save-overwrite behavior
+        CurrentPlanId = storedPlan.Id;
+        CurrentPlanName = storedPlan.Name;
+        
         // Only sync to shopping if shopping list is empty (preserve existing shopping list otherwise)
         if (!ShoppingItems.Any())
         {
@@ -185,6 +195,15 @@ public class AppState
         }
         
         NotifyPlanChanged();
+    }
+    
+    /// <summary>
+    /// Clear the current plan ID (called when starting a new plan or after explicit "Save As")
+    /// </summary>
+    public void ClearCurrentPlanId()
+    {
+        CurrentPlanId = null;
+        CurrentPlanName = null;
     }
 }
 

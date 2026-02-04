@@ -48,7 +48,8 @@
                 </ActivatorContent>
                 <ChildContent>
                     <MudMenuItem OnClick="OnNewPlan" Icon="@Icons.Material.Filled.Add">New Plan</MudMenuItem>
-                    <MudMenuItem OnClick="OnSavePlan" Icon="@Icons.Material.Filled.Save">Save Plan...</MudMenuItem>
+                    <MudMenuItem OnClick="OnQuickSavePlan" Icon="@Icons.Material.Filled.Save">Save Plan</MudMenuItem>
+                    <MudMenuItem OnClick="OnSavePlan" Icon="@Icons.Material.Filled.SaveAs">Save As...</MudMenuItem>
                     <MudMenuItem OnClick="OnLoadPlan" Icon="@Icons.Material.Filled.FolderOpen">Load Plans...</MudMenuItem>
                     <MudDivider />
                     <MudMenuItem OnClick="OnViewLogs" Icon="@Icons.Material.Filled.Article">View Logs</MudMenuItem>
@@ -233,6 +234,57 @@
         Snackbar.Add("New plan started", Severity.Info);
     }
 
+    private async Task OnQuickSavePlan()
+    {
+        if (!AppState.ProjectItems.Any() && AppState.CurrentPlan == null)
+        {
+            Snackbar.Add("Nothing to save. Add items to your plan first.", Severity.Warning);
+            return;
+        }
+        
+        // Use existing plan ID if available (overwrite), otherwise generate new
+        var planId = AppState.CurrentPlanId ?? Guid.NewGuid().ToString();
+        var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name ?? $"Plan_{DateTime.Now:yyyyMMdd_HHmm}";
+        
+        // If this is a new save, set the ID for future overwrites
+        if (AppState.CurrentPlanId == null)
+        {
+            AppState.CurrentPlanId = planId;
+            AppState.CurrentPlanName = planName;
+        }
+        
+        var planData = new StoredPlan
+        {
+            Id = planId,
+            Name = planName,
+            DataCenter = AppState.SelectedDataCenter,
+            ModifiedAt = DateTime.UtcNow,
+            ProjectItems = AppState.ProjectItems.Select(p => new StoredProjectItem
+            {
+                Id = p.Id,
+                Name = p.Name,
+                IconId = p.IconId,
+                Quantity = p.Quantity,
+                MustBeHq = p.MustBeHq
+            }).ToList(),
+            PlanJson = AppState.CurrentPlan != null 
+                ? System.Text.Json.JsonSerializer.Serialize(AppState.CurrentPlan) 
+                : null
+        };
+        
+        var success = await IndexedDb.SavePlanAsync(planData);
+        if (success)
+        {
+            var action = AppState.CurrentPlanId == planId ? "Updated" : "Saved";
+            Snackbar.Add($"{action} '{planName}'", Severity.Success);
+            await RefreshSavedPlansListAsync();
+        }
+        else
+        {
+            Snackbar.Add("Failed to save plan", Severity.Error);
+        }
+    }
+
     private async Task OnSavePlan()
     {
         if (!AppState.ProjectItems.Any() && AppState.CurrentPlan == null)
@@ -242,11 +294,12 @@
         }
         
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
-        var dialog = DialogService.Show<SavePlanDialog>("Save Plan", options);
+        var dialog = DialogService.Show<SavePlanDialog>("Save As", options);
         var result = await dialog.Result;
         
         if (result?.Data is string planName)
         {
+            // Save As always creates a new plan ID
             var planData = new StoredPlan
             {
                 Id = Guid.NewGuid().ToString(),
@@ -265,6 +318,10 @@
                     ? System.Text.Json.JsonSerializer.Serialize(AppState.CurrentPlan) 
                     : null
             };
+            
+            // Update current plan tracking to the new saved plan
+            AppState.CurrentPlanId = planData.Id;
+            AppState.CurrentPlanName = planData.Name;
             
             var success = await IndexedDb.SavePlanAsync(planData);
             if (success)

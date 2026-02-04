@@ -753,10 +753,20 @@
 
         try
         {
-            var planName = AppState.CurrentPlan?.Name ?? $"Plan_{DateTime.Now:yyyyMMdd_HHmm}";
+            // Use existing plan ID if available (overwrite), otherwise generate new
+            var planId = AppState.CurrentPlanId ?? Guid.NewGuid().ToString();
+            var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name ?? $"Plan_{DateTime.Now:yyyyMMdd_HHmm}";
+            
+            // If this is a new save (no CurrentPlanId), set it for future overwrites
+            if (AppState.CurrentPlanId == null)
+            {
+                AppState.CurrentPlanId = planId;
+                AppState.CurrentPlanName = planName;
+            }
+            
             var planData = new StoredPlan
             {
-                Id = Guid.NewGuid().ToString(),
+                Id = planId,
                 Name = planName,
                 DataCenter = AppState.SelectedDataCenter,
                 ModifiedAt = DateTime.UtcNow,
@@ -776,7 +786,8 @@
             var success = await IndexedDb.SavePlanAsync(planData);
             if (success)
             {
-                Snackbar.Add($"Saved '{planName}' to browser storage", Severity.Success);
+                var action = AppState.CurrentPlanId == planId ? "Updated" : "Saved";
+                Snackbar.Add($"{action} '{planName}' to browser storage", Severity.Success);
                 await RefreshSavedPlansListAsync();
             }
             else
