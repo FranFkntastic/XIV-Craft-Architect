@@ -82,7 +82,9 @@
             </MudPaper>
         </div>
         
-        <!-- Craft vs Buy Analysis Section -->
+        <!-- Craft vs Buy Analysis Section (conditionally shown) -->
+        @if (ShowAnalysisSections)
+        {
         <div style="flex-shrink: 0;">
             <MudPaper Elevation="1" Style="border-radius: 12px; overflow: hidden;">
             <MudExpansionPanel IsExpanded="_craftAnalysisExpanded"
@@ -119,8 +121,11 @@
             </MudExpansionPanel>
             </MudPaper>
         </div>
+        }
         
-        <!-- Purchase Summary Section -->
+        <!-- Purchase Summary Section (conditionally shown) -->
+        @if (ShowAnalysisSections)
+        {
         <div style="flex-shrink: 0;">
             <MudPaper Elevation="1" Style="border-radius: 12px; overflow: hidden;">
             <MudExpansionPanel IsExpanded="_purchaseSummaryExpanded"
@@ -176,6 +181,7 @@
             </MudExpansionPanel>
             </MudPaper>
         </div>
+        }
         
         <!-- Market Cards Area -->
         <div style="flex-grow: 1; overflow-y: auto; min-height: 0;">
@@ -216,6 +222,7 @@
     [Parameter] public EventCallback<FFXIVCraftArchitect.Core.Models.MarketSortOption> OnSortChanged { get; set; }
     [Parameter] public EventCallback<RecommendationMode> OnModeChanged { get; set; }
     [Parameter] public EventCallback<bool> OnSearchAllNAChanged { get; set; }
+    [Parameter] public bool ShowAnalysisSections { get; set; } = true;
 
     private MarketSortOption _selectedSort = MarketSortOption.ByRecommended;
     private RecommendationMode _selectedMode = RecommendationMode.MinimizeTotalCost;

@@ -8,6 +8,7 @@
 @inject UniversalisService UniversalisService
 @inject RecipeCalculationService RecipeCalculationService
 @inject MarketShoppingService MarketShoppingService
+@inject ProcurementAnalysisService ProcurementService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @inject AppState AppState
@@ -282,10 +283,47 @@
         
         <!-- Right Column: Market Results (flex: 1) -->
         <div Class="pa-4" Style="overflow: hidden; min-width: 0;">
-            <MarketLogisticsPanel ShoppingPlans="AppState.ShoppingPlans"
-                                  CraftAnalyses="AppState.CraftAnalyses"
-                                  InitialMode="AppState.RecommendationMode"
-                                  OnModeChanged="OnRecommendationModeChanged" />
+            <!-- View Toggle -->
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                <MudButtonGroup Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">
+                    <MudButton OnClick="() => _showProcurementResults = true"
+                               Variant="@(_showProcurementResults ? Variant.Filled : Variant.Outlined)">
+                        <MudIcon Icon="@Icons.Material.Filled.Assignment" Size="Size.Small" Class="mr-1" />
+                        Procurement Plan
+                    </MudButton>
+                    <MudButton OnClick="() => _showProcurementResults = false"
+                               Variant="@(!_showProcurementResults ? Variant.Filled : Variant.Outlined)">
+                        <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Small" Class="mr-1" />
+                        Market Analysis
+                    </MudButton>
+                </MudButtonGroup>
+                
+                @if (!_showProcurementResults)
+                {
+                    <MudCheckBox T="bool"
+                                Value="ShowAnalysisSections"
+                                ValueChanged="v => ShowAnalysisSections = v"
+                                Dense="true"
+                                Size="Size.Small"
+                                Style="color: #888;">
+                        Show Analysis Sections
+                    </MudCheckBox>
+                }
+            </div>
+            
+            @if (_showProcurementResults)
+            {
+                <ProcurementResultsPanel Analysis="AppState.CurrentProcurementAnalysis"
+                                         SortMode="AppState.RecommendationMode" />
+            }
+            else
+            {
+                <MarketLogisticsPanel ShoppingPlans="AppState.ShoppingPlans"
+                                      CraftAnalyses="AppState.CraftAnalyses"
+                                      InitialMode="AppState.RecommendationMode"
+                                      OnModeChanged="OnRecommendationModeChanged"
+                                      ShowAnalysisSections="ShowAnalysisSections" />
+            }
         </div>
     </div>
 </MudContainer>
@@ -300,6 +338,8 @@
     private List<GarlandSearchResult> _searchResults = new();
     
     private bool _isAnalyzing = false;
+    private bool _showProcurementResults = true;
+    private bool ShowAnalysisSections { get; set; } = true;
 
     protected override async Task OnInitializedAsync()
     {
@@ -334,9 +374,26 @@
         }
 
         AppState.OnShoppingListChanged += OnShoppingListChanged;
+        AppState.OnProcurementAnalysisChanged += OnProcurementAnalysisChanged;
+        
+        // Auto-run analysis if we have a plan but no analysis yet
+        if (AppState.CurrentPlan != null && AppState.CurrentProcurementAnalysis == null)
+        {
+            _ = Task.Run(async () => await RunProcurementAnalysisAsync());
+        }
+        // Or auto-run market analysis if we have shopping items but no shopping plans
+        else if (AppState.ShoppingItems.Any() && !AppState.ShoppingPlans.Any())
+        {
+            _ = Task.Run(async () => await AnalyzeMarketAsync());
+        }
     }
 
     private void OnShoppingListChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+    
+    private void OnProcurementAnalysisChanged()
     {
         InvokeAsync(StateHasChanged);
     }
@@ -344,6 +401,7 @@
     public void Dispose()
     {
         AppState.OnShoppingListChanged -= OnShoppingListChanged;
+        AppState.OnProcurementAnalysisChanged -= OnProcurementAnalysisChanged;
     }
 
     private List<string> GetWorldsForSelectedDc()
@@ -435,6 +493,41 @@
         AppState.ShoppingPlans.Clear();
         AppState.SetStatus($"Cleared {count} items from shopping list");
         AppState.NotifyShoppingListChanged();
+    }
+    
+    private async Task RunProcurementAnalysisAsync()
+    {
+        if (AppState.CurrentPlan == null || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+            return;
+
+        _isAnalyzing = true;
+        AppState.BeginOperation("Procurement Analysis", "Analyzing optimal acquisition strategy...");
+
+        try
+        {
+            var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+            
+            AppState.CurrentProcurementAnalysis = await ProcurementService.AnalyzePlanAsync(
+                AppState.CurrentPlan,
+                AppState.SelectedDataCenter,
+                AppState.RecommendationMode,
+                progress);
+            
+            AppState.NotifyProcurementAnalysisChanged();
+            
+            var analysis = AppState.CurrentProcurementAnalysis;
+            AppState.EndOperation($"Analysis complete! {analysis.ItemsToCraft} to craft, {analysis.ItemsToBuy} to buy");
+            Snackbar.Add($"Procurement analysis complete. Total cost: {analysis.OptimalTotalCost:N0}g", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            AppState.EndOperation($"Analysis failed: {ex.Message}");
+            Snackbar.Add($"Procurement analysis failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isAnalyzing = false;
+        }
     }
 
     private async Task AnalyzeMarketAsync()
