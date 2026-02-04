@@ -9,8 +9,18 @@
         Background="#1e1e1e"
         xmlns:helpers="clr-namespace:FFXIVCraftArchitect.Helpers">
 
+    <Window.Resources>
+        <!-- Gold Accent Brush -->
+        <SolidColorBrush x:Key="GoldAccentBrush" Color="#d4a73a"/>
+        <SolidColorBrush x:Key="CardBackgroundBrush" Color="#2d2d2d"/>
+        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#ffffff"/>
+        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#aaaaaa"/>
+        <SolidColorBrush x:Key="SuccessBrush" Color="#4caf50"/>
+    </Window.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
@@ -19,40 +29,73 @@
         <!-- Title Bar with Menu -->
         <Border Grid.Row="0" 
                 Background="#1a1a1a"
-                BorderBrush="{DynamicResource AccentBrush}"
+                BorderBrush="{StaticResource GoldAccentBrush}"
                 BorderThickness="0,0,0,1"
-                Padding="8,0,8,0">
+                Padding="12,4">
             <Grid>
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
+                <!-- Logo/Title -->
                 <TextBlock Grid.Column="0" 
                            Text="FFXIV Craft Architect" 
-                           FontSize="12"
-                           FontWeight="SemiBold"
+                           FontSize="14"
+                           FontWeight="Bold"
                            VerticalAlignment="Center"
-                           Margin="0,0,12,0"
-                           Foreground="{DynamicResource AccentBrush}"/>
+                           Margin="0,0,24,0"
+                           Foreground="{StaticResource GoldAccentBrush}"/>
+
+                <!-- Navigation Tabs (like web) -->
+                <StackPanel Grid.Column="1" 
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Border x:Name="RecipePlannerTab"
+                            Background="{StaticResource GoldAccentBrush}"
+                            CornerRadius="4"
+                            Padding="12,6"
+                            Margin="0,0,8,0"
+                            Cursor="Hand"
+                            MouseLeftButtonDown="OnRecipePlannerTabClick">
+                        <TextBlock Text="RECIPE PLANNER" 
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#1a1a1a"/>
+                    </Border>
+                    <Border x:Name="ProcurementPlannerTab"
+                            Background="Transparent"
+                            CornerRadius="4"
+                            Padding="12,6"
+                            Margin="0,0,16,0"
+                            Cursor="Hand"
+                            MouseLeftButtonDown="OnProcurementPlannerTabClick">
+                        <TextBlock Text="MARKET ANALYSIS" 
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource GoldAccentBrush}"/>
+                    </Border>
+                </StackPanel>
 
                 <!-- Menu Bar -->
-                <Menu Grid.Column="1" 
+                <Menu Grid.Column="2" 
                       Background="Transparent"
                       VerticalAlignment="Center"
+                      HorizontalAlignment="Left"
                       Padding="0"
                       FontSize="12">
                     <Menu.Resources>
                         <Style TargetType="MenuItem">
                             <Setter Property="Foreground" Value="#cccccc"/>
-                            <Setter Property="Padding" Value="8,2"/>
+                            <Setter Property="Padding" Value="12,4"/>
                             <Style.Triggers>
                                 <Trigger Property="IsHighlighted" Value="True">
-                                    <Setter Property="Background" Value="{DynamicResource AccentBrush}"/>
+                                    <Setter Property="Background" Value="{StaticResource GoldAccentBrush}"/>
                                     <Setter Property="Foreground" Value="#1a1a1a"/>
                                 </Trigger>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="{DynamicResource AccentBrush}"/>
+                                    <Setter Property="Background" Value="{StaticResource GoldAccentBrush}"/>
                                     <Setter Property="Foreground" Value="#1a1a1a"/>
                                 </Trigger>
                             </Style.Triggers>
@@ -93,8 +136,6 @@
                     </MenuItem>
 
                     <MenuItem Header="Tools">
-                        <!-- View Inventory hidden - not implemented yet -->
-                        <!-- <MenuItem Header="View Inventory" Click="OnViewInventory"/> -->
                         <MenuItem Header="Fetch Prices" Click="OnFetchPrices"/>
                         <MenuItem Header="View Plan Market Data" Click="OnViewMarketStatus" IsEnabled="False" x:Name="MenuViewMarketStatus"/>
                         <Separator/>
@@ -104,495 +145,526 @@
             </Grid>
         </Border>
 
-        <!-- Main Content -->
-        <Grid Grid.Row="1">
+        <!-- Hidden controls for backward compatibility -->
+        <Border Grid.Row="1" Visibility="Collapsed">
+            <StackPanel>
+                <Border x:Name="RecipePlanTab"/>
+                <Border x:Name="MarketLogisticsTab"/>
+                <ComboBox x:Name="MarketSortCombo"/>
+                <ComboBox x:Name="MarketModeCombo"/>
+                <CheckBox x:Name="SearchAllNACheck"/>
+                <ui:Button x:Name="ViewMarketStatusButton"/>
+                <ui:Button x:Name="RefreshMarketButton"/>
+                <Border x:Name="RecipePlanContent"/>
+                <Border x:Name="MarketLogisticsContent"/>
+                <StackPanel x:Name="MarketCards"/>
+                <Expander x:Name="MarketSummaryExpander"/>
+                <StackPanel x:Name="MarketSummaryContent"/>
+                <Expander x:Name="CraftVsBuyExpander"/>
+                <StackPanel x:Name="CraftVsBuyContent"/>
+                <TextBlock x:Name="CraftVsBuySummaryText"/>
+                <TextBlock x:Name="MarketSummaryHeaderText"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Main Content Area -->
+        <Grid Grid.Row="2" Margin="0,8,0,0">
             <Grid.ColumnDefinitions>
+                <!-- Left: Project Items -->
                 <ColumnDefinition Width="280" />
-                <ColumnDefinition Width="350" />
+                <!-- Center: Recipe Plan -->
                 <ColumnDefinition Width="*" />
+                <!-- Right: Shopping List (Hidden - Procurement Planner holds this info) -->
+                <ColumnDefinition Width="0" />
             </Grid.ColumnDefinitions>
 
-            <!-- Left Sidebar: Controls -->
+            <!-- Left Panel: Project Items -->
             <Border Grid.Column="0" 
-                    Background="Transparent" 
-                    BorderBrush="Transparent"
-                    BorderThickness="0,0,1,0"
-                    Padding="16,0,16,16">
+                    Background="Transparent"
+                    Padding="16,8,16,16">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel>
-                        <!-- Sync Section (Hidden - Not Implemented) -->
-                        <ui:Button x:Name="SyncButton"
-                                   Content="Sync Teamcraft Inventory"
-                                   Appearance="Primary"
-                                   Icon="{ui:SymbolIcon ArrowSyncCircle24}"
-                                   HorizontalAlignment="Stretch"
-                                   Margin="0,0,0,8"
-                                   Visibility="Collapsed"/>
+                        <!-- Project Items Header -->
+                        <TextBlock Text="Project Items" 
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource GoldAccentBrush}"
+                                   Margin="0,0,0,16"/>
 
-                        <!-- Live Mode Toggle (Hidden - Not Implemented) -->
-                        <ui:ToggleSwitch x:Name="LiveSwitch"
-                                         Content="Live Mode (Packet Capture)"
-                                         Margin="0,8"
-                                         Visibility="Collapsed"/>
-
-                        <TextBlock x:Name="SyncStatus"
-                                   Text="Inventory: Not Synced"
-                                   FontSize="12"
-                                   Foreground="LightGray"
-                                   Margin="0,0,0,20"
-                                   Visibility="Collapsed"/>
-
-                        <!-- Data Center -->
-                        <TextBlock Text="Data Center:" 
-                                   Margin="0,10,0,4"/>
-                        <ComboBox x:Name="DcCombo"
-                                  IsEditable="False"
-                                  SelectionChanged="OnDataCenterSelected"/>
-
-                        <TextBlock Text="World:" 
-                                   Margin="0,10,0,4"/>
-                        <ComboBox x:Name="WorldCombo"
-                                  IsEditable="False"/>
-
-                        <!-- Item Search -->
+                        <!-- Item Name Search -->
                         <TextBlock Text="Item Name:" 
-                                   Margin="0,20,0,4"/>
+                                   Margin="0,0,0,4"
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
                         <ui:TextBox x:Name="ItemSearch"
                                     PlaceholderText="Enter item..."
-                                    KeyDown="OnItemSearchKeyDown"/>
+                                    KeyDown="OnItemSearchKeyDown"
+                                    Margin="0,0,0,8"/>
 
                         <ui:Button Content="Search"
-                                   Icon="{ui:SymbolIcon Search24}"
-                                   Margin="0,8"
+                                   Appearance="Primary"
+                                   Margin="0,0,0,20"
                                    HorizontalAlignment="Stretch"
                                    Click="OnSearchItem"
                                    helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
 
-                        <!-- Action Buttons -->
-                    </StackPanel>
-                </ScrollViewer>
-            </Border>
-
-            <!-- Middle Panel: Search Results and Project Items -->
-            <Border Grid.Column="1" 
-                    Background="Transparent"
-                    BorderBrush="Transparent"
-                    BorderThickness="1,0,1,0"
-                    Padding="16,0,16,16">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-
-                    <!-- Search Results -->
-                    <Border Grid.Row="0" 
-                            Background="#2d2d2d"
-                            CornerRadius="4"
-                            Padding="8"
-                            BorderBrush="{DynamicResource AccentBrush}"
-                            BorderThickness="1">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-
-                            <TextBlock Text="Search Results" 
-                                       FontWeight="SemiBold"
-                                       Margin="0,0,0,8"
-                                       Foreground="{DynamicResource AccentBrush}"/>
-
-                            <ListBox Grid.Row="1"
-                                     x:Name="SearchResults"
-                                     Background="Transparent"
-                                     BorderThickness="0"
-                                     SelectionChanged="OnItemSelected"/>
-
-                            <ui:Button Grid.Row="2"
-                                       x:Name="AddToProjectButton"
-                                       Content="Add to Project"
-                                       Appearance="Primary"
-                                       Margin="0,8,0,0"
-                                       HorizontalAlignment="Stretch"
-                                       IsEnabled="False"
-                                       Click="OnAddToProject"
-                                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
-                        </Grid>
-                    </Border>
-
-                    <!-- Divider -->
-                    <Border Grid.Row="1" Height="16" Background="Transparent"/>
-
-                    <!-- Project Items -->
-                    <Border Grid.Row="2" 
-                            Background="#2d2d2d"
-                            CornerRadius="4"
-                            Padding="8"
-                            BorderBrush="{DynamicResource AccentBrush}"
-                            BorderThickness="1">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-
+                        <!-- Search Results (hidden by default, shown when searching) -->
+                        <Border x:Name="SearchResultsPanel"
+                                Background="{StaticResource CardBackgroundBrush}"
+                                CornerRadius="4"
+                                Padding="8"
+                                Margin="0,0,0,12"
+                                Visibility="Collapsed">
                             <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="Quick View" 
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="Search Results" 
                                            FontWeight="SemiBold"
                                            Margin="0,0,0,8"
-                                           Foreground="{DynamicResource AccentBrush}"/>
-                                <TextBlock x:Name="QuickViewCountText"
-                                           Grid.Column="1"
-                                           Text=""
-                                           FontSize="10"
-                                           Foreground="#888888"
-                                           VerticalAlignment="Center"/>
+                                           Foreground="{StaticResource GoldAccentBrush}"/>
+                                <ListBox Grid.Row="1"
+                                         x:Name="SearchResults"
+                                         Background="Transparent"
+                                         BorderThickness="0"
+                                         MaxHeight="150"
+                                         SelectionChanged="OnItemSelected"/>
+                                <ui:Button Grid.Row="2"
+                                           x:Name="AddToProjectButton"
+                                           Content="Add to Project"
+                                           Appearance="Primary"
+                                           Margin="0,8,0,0"
+                                           HorizontalAlignment="Stretch"
+                                           IsEnabled="False"
+                                           Click="OnAddToProject"/>
                             </Grid>
+                        </Border>
 
-                            <!-- Project Items List - Quick View (shows first 5 items) -->
-                            <ListBox Grid.Row="1"
-                                     x:Name="ProjectList"
+                        <!-- Planned Acquisitions Section -->
+                        <TextBlock Text="Planned Acquisitions" 
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   Margin="0,0,0,8"/>
+
+                        <Border Background="{StaticResource CardBackgroundBrush}"
+                                CornerRadius="4"
+                                Padding="4,4,4,4"
+                                Margin="0,0,0,8"
+                                MinHeight="60">
+                            <ListBox x:Name="ProjectList"
                                      Background="Transparent"
                                      BorderThickness="0"
-                                     MaxHeight="200">
+                                     SelectionChanged="OnProjectItemSelected">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Padding="4" Margin="0,2">
+                                        <Border Padding="2,1" Margin="0" BorderBrush="#3d3d3d" BorderThickness="0,0,0,1">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="22" />
                                                     <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="60" />
-                                                    <ColumnDefinition Width="8" />
-                                                    <ColumnDefinition Width="60" />
+                                                    <ColumnDefinition Width="44" />
+                                                    <ColumnDefinition Width="20" />
                                                 </Grid.ColumnDefinitions>
-
-                                                <!-- Delete button - small red X -->
-                                                <Button Grid.Column="0"
+                                                <TextBlock Grid.Column="0"
+                                                           Text="{Binding Name}" 
+                                                           VerticalAlignment="Center"
+                                                           TextWrapping="Wrap"
+                                                           MaxHeight="32"
+                                                           FontSize="11"
+                                                           LineHeight="14"
+                                                           Margin="0,0,4,0"/>
+                                                <TextBox Grid.Column="1"
+                                                         Text="{Binding Quantity, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                                         VerticalAlignment="Center"
+                                                         HorizontalContentAlignment="Center"
+                                                         FontSize="11"
+                                                         Height="18"
+                                                         Padding="0"
+                                                         GotFocus="OnQuantityGotFocus"
+                                                         PreviewTextInput="OnQuantityPreviewTextInput"
+                                                         LostFocus="OnQuantityChanged"/>
+                                                <Button Grid.Column="2"
                                                         Content="×"
-                                                        Width="18"
-                                                        Height="18"
+                                                        Width="16"
+                                                        Height="16"
                                                         FontSize="12"
                                                         Padding="0"
-                                                        Margin="0"
-                                                        Foreground="Red"
+                                                        Margin="2,0,0,0"
+                                                        Foreground="#ff6b6b"
                                                         Background="Transparent"
                                                         BorderThickness="0"
                                                         Click="OnRemoveProjectItem"
                                                         ToolTip="Remove item"/>
-
-                                                <TextBlock Grid.Column="1"
-                                                           Text="{Binding Name}" 
-                                                           VerticalAlignment="Center"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           Margin="4,0,0,0"/>
-
-                                                <CheckBox Grid.Column="2"
-                                                          Content="HQ"
-                                                          IsChecked="{Binding IsHqRequired, Mode=TwoWay}"
-                                                          VerticalAlignment="Center"
-                                                          HorizontalAlignment="Center"
-                                                          Foreground="Gold"
-                                                          FontSize="10"
-                                                          ToolTip="Craft as High Quality"/>
-
-                                                <!-- Column 3 is empty spacer -->
-
-                                                <TextBox Grid.Column="4"
-                                                         Text="{Binding Quantity, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                                         VerticalAlignment="Center"
-                                                         HorizontalAlignment="Stretch"
-                                                         HorizontalContentAlignment="Center"
-                                                         GotFocus="OnQuantityGotFocus"
-                                                         PreviewTextInput="OnQuantityPreviewTextInput"
-                                                         LostFocus="OnQuantityChanged"/>
                                             </Grid>
                                         </Border>
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                             </ListBox>
+                        </Border>
 
-                            <ui:Button Grid.Row="2"
-                                       x:Name="BuildPlanButton"
-                                       Content="Build Project Plan"
+                        <TextBlock x:Name="QuickViewCountText"
+                                   Text=""
+                                   FontSize="10"
+                                   Foreground="#888888"
+                                   HorizontalAlignment="Right"
+                                   Margin="0,-4,0,8"/>
+
+                        <!-- Build Project Plan Button -->
+                        <ui:Button x:Name="BuildPlanButton"
+                                   Content="Build Project Plan"
+                                   Appearance="Primary"
+                                   Margin="0,8,0,16"
+                                   HorizontalAlignment="Stretch"
+                                   IsEnabled="False"
+                                   Click="OnBuildProjectPlan"
+                                   helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
+
+                        <!-- Quick Actions -->
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <ui:Button Grid.Column="0"
+                                       Content="Save"
                                        Appearance="Success"
-                                       Margin="0,8,0,0"
                                        HorizontalAlignment="Stretch"
-                                       IsEnabled="False"
-                                       Click="OnBuildProjectPlan"
-                                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
-                            
-                            <ui:Button Grid.Row="3"
-                                       x:Name="ManageItemsButton"
-                                       Content="Manage Items..."
-                                       Appearance="Secondary"
-                                       Margin="0,4,0,0"
-                                       HorizontalAlignment="Stretch"
-                                       Click="OnManageItemsClick"
+                                       Click="OnSavePlan"
                                        helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
 
-                            <!-- Quick Actions -->
-                            <Grid Grid.Row="4" Margin="0,8,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="4" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-
-                                <ui:Button Grid.Column="0"
-                                           Content="Save Plan"
-                                           Appearance="Secondary"
-                                           HorizontalAlignment="Stretch"
-                                           Click="OnSavePlan"
-                                           helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
-
-                                <ui:Button Grid.Column="2"
-                                           Content="Load Plan"
-                                           Appearance="Primary"
-                                           HorizontalAlignment="Stretch"
-                                           Click="OnViewPlans"
-                                           helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
-                            </Grid>
-
+                            <ui:Button Grid.Column="2"
+                                       Content="Export"
+                                       Appearance="Info"
+                                       HorizontalAlignment="Stretch"
+                                       Click="OnExportPlainText"
+                                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
                         </Grid>
-                    </Border>
-                </Grid>
+
+                    </StackPanel>
+                </ScrollViewer>
             </Border>
-            <!-- Right Panel: Recipe Plan with Shopping List -->
-            <Border Grid.Column="2" 
-                    Padding="16,0,16,16">
-                <Grid Background="#2d2d2d">
+
+            <!-- Center Panel: Recipe Plan (Visible by default) -->
+            <Border x:Name="RecipePlannerContent"
+                    Grid.Column="1" 
+                    Background="Transparent"
+                    Padding="8,8,16,16">
+                <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <!-- Tab Buttons -->
+                    <!-- Recipe Plan Header -->
                     <StackPanel Grid.Row="0" 
-                                Orientation="Horizontal" 
+                                Orientation="Horizontal"
                                 Margin="0,0,0,8">
-                        <Border x:Name="RecipePlanTab"
-                                Background="{DynamicResource AccentBrush}"
-                                Padding="16,6"
-                                Cursor="Hand"
-                                MouseLeftButtonDown="OnRecipePlanTabClick">
-                            <TextBlock Text="Recipe Plan" 
-                                       FontWeight="SemiBold"
-                                       Foreground="#1a1a1a"/>
-                        </Border>
-                        <Border x:Name="MarketLogisticsTab"
-                                Background="Transparent"
-                                Padding="16,6"
-                                Cursor="Hand"
-                                MouseLeftButtonDown="OnMarketLogisticsTabClick">
-                            <TextBlock Text="Market Logistics" 
-                                       FontWeight="SemiBold"
-                                       Foreground="{DynamicResource AccentBrush}"/>
-                        </Border>
+                        <TextBlock Text="Recipe Plan" 
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource GoldAccentBrush}"
+                                   VerticalAlignment="Center"/>
+                        
+                        <ui:Button x:Name="RefreshPricesButton"
+                                   Content="Refresh Prices"
+                                   Appearance="Secondary"
+                                   Margin="16,0,0,0"
+                                   Click="OnFetchPrices"
+                                   IsEnabled="False"/>
                     </StackPanel>
 
-                    <!-- Recipe Plan Content -->
+                    <!-- Recipe Tree Content -->
                     <Border Grid.Row="1"
-                            x:Name="RecipePlanContent"
-                            Background="#252525"
-                            BorderBrush="{DynamicResource AccentBrush}"
-                            BorderThickness="1"
-                            CornerRadius="4">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="1">
-                            <StackPanel x:Name="RecipePlanPanel" Margin="0,0,0,8">
-                                <!-- Recipe cards populated dynamically -->
+                            Background="{StaticResource CardBackgroundBrush}"
+                            CornerRadius="4"
+                            Padding="12">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="RecipePlanPanel">
+                                <!-- Recipe tree items populated dynamically -->
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <!-- Center Panel: Procurement Planner (Hidden by default) -->
+            <Border x:Name="ProcurementPlannerContent"
+                    Grid.Column="1" 
+                    Background="Transparent"
+                    Padding="8,8,16,16"
+                    Visibility="Collapsed">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Procurement Planner Header -->
+                    <StackPanel Grid.Row="0" 
+                                Orientation="Horizontal"
+                                Margin="0,0,0,8">
+                        <TextBlock Text="Market Analysis" 
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource GoldAccentBrush}"
+                                   VerticalAlignment="Center"/>
+                        
+                        <ui:Button x:Name="ProcurementRefreshButton"
+                                   Content="Refresh Market Data"
+                                   Appearance="Secondary"
+                                   Margin="16,0,0,0"
+                                   Click="OnFetchPrices"
+                                   IsEnabled="False"/>
+                    </StackPanel>
+
+                    <!-- Filter/Sort Controls with Data Center/World -->
+                    <Border Grid.Row="1"
+                            Background="{StaticResource CardBackgroundBrush}"
+                            CornerRadius="4"
+                            Padding="12"
+                            Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal">
+                            <!-- Data Center Selection -->
+                            <TextBlock Text="Data Center:" 
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,6,0"/>
+                            <ComboBox x:Name="DcCombo"
+                                      Width="100"
+                                      IsEditable="False"
+                                      SelectionChanged="OnDataCenterSelected"
+                                      Margin="0,0,16,0"/>
+
+                            <!-- World Selection -->
+                            <TextBlock Text="World:" 
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,6,0"/>
+                            <ComboBox x:Name="WorldCombo"
+                                      Width="120"
+                                      IsEditable="False"
+                                      Margin="0,0,24,0"/>
+
+                            <TextBlock Text="Sort by:" 
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,8,0"/>
+                            <ComboBox x:Name="ProcurementSortCombo"
+                                      Width="150"
+                                      SelectedIndex="0"
+                                      SelectionChanged="OnProcurementSortChanged">
+                                <ComboBoxItem Content="Recommended World"/>
+                                <ComboBoxItem Content="Alphabetical"/>
+                                <ComboBoxItem Content="Price (High to Low)"/>
+                            </ComboBox>
+                            
+                            <TextBlock Text="Mode:" 
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       VerticalAlignment="Center"
+                                       Margin="24,0,8,0"/>
+                            <ComboBox x:Name="ProcurementModeCombo"
+                                      Width="150"
+                                      SelectedIndex="0"
+                                      SelectionChanged="OnProcurementModeChanged">
+                                <ComboBoxItem Content="Minimize Total Cost"/>
+                                <ComboBoxItem Content="Maximize Value"/>
+                            </ComboBox>
+                            
+                            <CheckBox x:Name="ProcurementSearchAllNaCheck"
+                                      Content="Search all NA DCs"
+                                      Foreground="{StaticResource TextSecondaryBrush}"
+                                      Margin="24,0,0,0"
+                                      VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Procurement Content Area -->
+                    <Border Grid.Row="2"
+                            Background="{StaticResource CardBackgroundBrush}"
+                            CornerRadius="4"
+                            Padding="12">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="ProcurementPanel">
+                                <!-- Placeholder content - populated dynamically -->
+                                <TextBlock Text="Build a plan to see market analysis"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           HorizontalAlignment="Center"
+                                           Margin="0,40"
+                                           FontSize="14"/>
                             </StackPanel>
                         </ScrollViewer>
                     </Border>
 
-                    <!-- Market Logistics Content (initially hidden) -->
-                    <Border Grid.Row="1"
-                            x:Name="MarketLogisticsContent"
-                            Background="#252525"
-                            BorderBrush="{DynamicResource AccentBrush}"
-                            BorderThickness="1"
+                    <!-- Procurement Plan Section (Actionable Summary) -->
+                    <Border Grid.Row="3"
+                            Background="{StaticResource CardBackgroundBrush}"
                             CornerRadius="4"
-                            Visibility="Collapsed">
+                            Padding="12"
+                            Margin="0,8,0,0">
                         <Grid>
                             <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            
+                            <TextBlock Grid.Row="0"
+                                       Text="Procurement Plan" 
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource GoldAccentBrush}"
+                                       Margin="0,0,0,8"/>
+                            
+                            <ScrollViewer Grid.Row="1" 
+                                          VerticalScrollBarVisibility="Auto"
+                                          MaxHeight="150">
+                                <StackPanel x:Name="ProcurementPlanPanel">
+                                    <TextBlock Text="No procurement plan available - fetch market data to generate actionable plan"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               FontSize="12"
+                                               TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <!-- Right Panel: Shopping List (Hidden - Procurement Planner holds this info) -->
+            <Border Grid.Column="2" 
+                    Background="Transparent"
+                    Padding="8,8,16,16"
+                    Visibility="Collapsed">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Shopping List Header -->
+                    <TextBlock Grid.Row="0"
+                               Text="Shopping List" 
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource GoldAccentBrush}"
+                               Margin="0,0,0,8"/>
+
+                    <!-- Shopping List Content -->
+                    <Border Grid.Row="1"
+                            Background="{StaticResource CardBackgroundBrush}"
+                            CornerRadius="4"
+                            Padding="0">
+                        <Grid>
+                            <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
 
-                            <!-- Filter Controls -->
-                            <Border Grid.Row="0" 
-                                    Background="#252525"
-                                    CornerRadius="4"
-                                    Padding="8"
-                                    Margin="0,0,0,8">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="6" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="12" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="6" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="12" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="12" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="8" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
+                            <!-- Header Row -->
+                            <Grid Grid.Row="0" 
+                                  Background="#3d3d3d"
+                                  Margin="0,0,0,1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="50" />
+                                    <ColumnDefinition Width="80" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" 
+                                           Text="Item" 
+                                           FontWeight="SemiBold"
+                                           Padding="12,8"
+                                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                                <TextBlock Grid.Column="1" 
+                                           Text="Qty" 
+                                           FontWeight="SemiBold"
+                                           Padding="4,8"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                                <TextBlock Grid.Column="2" 
+                                           Text="Price" 
+                                           FontWeight="SemiBold"
+                                           Padding="8,8"
+                                           HorizontalAlignment="Right"
+                                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                            </Grid>
 
-                                    <TextBlock Grid.Column="0"
-                                               Text="Sort:"
-                                               VerticalAlignment="Center"
-                                               Foreground="Gray"/>
-
-                                    <ComboBox Grid.Column="2"
-                                              x:Name="MarketSortCombo"
-                                              SelectedIndex="0"
-                                              SelectionChanged="OnMarketSortChanged"
-                                              MinWidth="120"
-                                              helpers:ComboBoxAutoWidthBehavior.EnableAutoWidth="True">
-                                        <ComboBoxItem Content="By Recommended" />
-                                        <ComboBoxItem Content="Alphabetical" />
-                                    </ComboBox>
-
-                                    <TextBlock Grid.Column="4"
-                                               Text="Mode:"
-                                               VerticalAlignment="Center"
-                                               Foreground="Gray"/>
-
-                                    <ComboBox Grid.Column="6"
-                                              x:Name="MarketModeCombo"
-                                              SelectedIndex="0"
-                                              SelectionChanged="OnMarketModeChanged"
-                                              MinWidth="140"
-                                              ToolTip="Minimize Total Cost: Only buy what is needed. Maximize Value: Best price per unit, good for frequent crafts."
-                                              helpers:ComboBoxAutoWidthBehavior.EnableAutoWidth="True">
-                                        <ComboBoxItem Content="Minimize Total Cost" ToolTip="Only buy what is needed to complete a craft." />
-                                        <ComboBoxItem Content="Maximize Value" ToolTip="Best price per unit. Good for frequent crafts." />
-                                    </ComboBox>
-
-                                    <CheckBox Grid.Column="8"
-                                              x:Name="SearchAllNACheck"
-                                              Content="Search all NA DCs"
-                                              VerticalAlignment="Center"
-                                              Foreground="LightGray"
-                                              ToolTip="Search all North American Data Centers for potential savings via DC Travel."/>
-
-                                    <ui:Button Grid.Column="10"
-                                               x:Name="ViewMarketStatusButton"
-                                               Content="View Status"
-                                               Appearance="Secondary"
-                                               Click="OnViewMarketStatus"
-                                               IsEnabled="False"
-                                               ToolTip="View real-time market data population status"/>
-
-                                    <ui:Button Grid.Column="12"
-                                               x:Name="RefreshMarketButton"
-                                               Content="Refresh Market Data"
-                                               Appearance="Secondary"
-                                               Click="OnRefreshMarketData"
-                                               IsEnabled="False"
-                                               helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
-                                </Grid>
-                            </Border>
-
-                            <!-- Craft vs Buy Analysis (Collapsible) -->
-                            <Expander Grid.Row="1"
-                                      x:Name="CraftVsBuyExpander"
-                                      Background="#2d3a2d"
-                                      Margin="0,0,0,8"
-                                      IsExpanded="False"
-                                      Visibility="Collapsed">
-                                <Expander.Header>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="📊 Craft vs Buy Analysis" 
-                                                   FontWeight="SemiBold"
-                                                   Foreground="#90EE90"/>
-                                        <TextBlock x:Name="CraftVsBuySummaryText"
-                                                   Text="" 
-                                                   Margin="12,0,0,0"
-                                                   Foreground="LightGray"
-                                                   VerticalAlignment="Center"/>
-                                    </StackPanel>
-                                </Expander.Header>
-                                <Border Background="#252525"
-                                        Padding="12">
-                                    <StackPanel x:Name="CraftVsBuyContent">
-                                        <!-- Analysis content added dynamically -->
-                                    </StackPanel>
-                                </Border>
-                            </Expander>
-
-                            <!-- Purchase Summary (Collapsible) -->
-                            <Expander Grid.Row="2"
-                                      x:Name="MarketSummaryExpander"
-                                      Background="#2d4a3e"
-                                      Margin="0,0,0,8"
-                                      IsExpanded="True"
-                                      Visibility="Collapsed">
-                                <Expander.Header>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="📦 Purchase Summary" 
-                                                   FontWeight="SemiBold"
-                                                   Foreground="#90EE90"/>
-                                        <TextBlock x:Name="MarketSummaryHeaderText"
-                                                   Text="" 
-                                                   Margin="12,0,0,0"
-                                                   Foreground="LightGray"
-                                                   VerticalAlignment="Center"/>
-                                    </StackPanel>
-                                </Expander.Header>
-                                <Border Background="#252525"
-                                        Padding="12">
-                                    <StackPanel x:Name="MarketSummaryContent" />
-                                </Border>
-                            </Expander>
-
-                            <!-- Market Cards -->
-                            <Border Grid.Row="3"
-                                    Background="#2d2d2d"
-                                    CornerRadius="4"
-                                    Padding="8">
-                                <ScrollViewer>
-                                    <StackPanel x:Name="MarketCards">
-                                        <!-- Market cards will be added dynamically -->
-                                    </StackPanel>
-                                </ScrollViewer>
-                            </Border>
+                            <!-- Items List -->
+                            <ScrollViewer Grid.Row="1" 
+                                          VerticalScrollBarVisibility="Auto">
+                                <StackPanel x:Name="ShoppingListPanel">
+                                    <!-- Shopping list items populated dynamically -->
+                                </StackPanel>
+                            </ScrollViewer>
                         </Grid>
+                    </Border>
+
+                    <!-- Total Cost -->
+                    <Border Grid.Row="2"
+                            Background="{StaticResource CardBackgroundBrush}"
+                            CornerRadius="4"
+                            Padding="12,8"
+                            Margin="0,8,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Total Cost:" 
+                                       Foreground="{StaticResource TextSecondaryBrush}"/>
+                            <TextBlock x:Name="TotalCostText"
+                                       Text="0g" 
+                                       FontSize="18"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource SuccessBrush}"
+                                       HorizontalAlignment="Right"/>
+                        </StackPanel>
                     </Border>
                 </Grid>
             </Border>
         </Grid>
 
         <!-- Status Bar -->
-        <Border Grid.Row="2" 
+        <Border Grid.Row="3" 
                 Background="#1a1a1a"
-                BorderBrush="{DynamicResource AccentBrush}"
+                BorderBrush="{StaticResource GoldAccentBrush}"
                 BorderThickness="0,1,0,0"
-                Padding="12,4">
-            <TextBox x:Name="StatusLabel" 
-                     Text="Ready"
-                     Foreground="{DynamicResource AccentBrush}"
-                     Background="Transparent"
-                     BorderThickness="0"
-                     IsReadOnly="True"
-                     IsReadOnlyCaretVisible="True"/>
+                Padding="12,6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0"
+                           x:Name="StatusLabel"
+                           Text="Ready" 
+                           Foreground="{StaticResource GoldAccentBrush}"
+                           VerticalAlignment="Center"/>
+
+                <!-- Status Icons -->
+                <StackPanel Grid.Column="2" 
+                            Orientation="Horizontal"
+                            Margin="0,0,16,0">
+                    <TextBlock x:Name="ItemsCountText"
+                               Text="0 items" 
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               FontSize="11"
+                               Margin="0,0,12,0"/>
+                    <TextBlock x:Name="ProjectsCountText"
+                               Text="0 projects" 
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               FontSize="11"
+                               Margin="0,0,12,0"/>
+                    <TextBlock x:Name="DataCenterStatusText"
+                               Text="No DC" 
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               FontSize="11"/>
+                </StackPanel>
+            </Grid>
         </Border>
     </Grid>
 </Window>

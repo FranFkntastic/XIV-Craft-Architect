@@ -250,6 +250,7 @@
         <!-- Buttons -->
         <Grid Grid.Row="2" Margin="0,16,0,0">
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="8" />
                 <ColumnDefinition Width="Auto" />
@@ -257,13 +258,20 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <ui:Button Grid.Column="2"
+            <ui:Button Grid.Column="0"
+                       Content="Open Settings File"
+                       Appearance="Secondary"
+                       Click="OnOpenSettingsFile"
+                       ToolTip="Open the settings.json file in your default text editor"
+                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
+
+            <ui:Button Grid.Column="3"
                        Content="Reset to Defaults"
                        Appearance="Secondary"
                        Click="OnResetDefaults"
                        helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
 
-            <ui:Button Grid.Column="4"
+            <ui:Button Grid.Column="5"
                        Content="Save"
                        Appearance="Primary"
                        Click="OnSave"

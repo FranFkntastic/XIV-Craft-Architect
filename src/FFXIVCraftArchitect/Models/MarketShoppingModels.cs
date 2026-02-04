@@ -211,3 +211,14 @@ public enum AcquisitionSource
     /// <summary>Buy from vendor (gil)</summary>
     VendorBuy
 }
+
+/// <summary>
+/// Simple shopping list item for transferring between pages.
+/// </summary>
+public class MarketShoppingItem
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public int IconId { get; set; }
+    public int Quantity { get; set; }
+}

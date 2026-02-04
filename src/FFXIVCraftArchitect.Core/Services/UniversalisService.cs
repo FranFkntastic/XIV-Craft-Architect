@@ -72,10 +72,13 @@ public class UniversalisService
     /// <summary>
     /// Get market data for multiple items at once.
     /// Universalis API has a limit of 100 items per request, so we chunk large requests.
+    /// By default, fetches ALL listings from all worlds in the data center.
     /// </summary>
+    /// <param name="entries">Number of listings to return per item. 0 = all available.</param>
     public async Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkAsync(
         string worldOrDc, 
         IEnumerable<int> itemIds, 
+        int entries = 0,
         CancellationToken ct = default)
     {
         const int chunkSize = 100; // Universalis API limit
@@ -85,15 +88,20 @@ public class UniversalisService
         var itemIdList = itemIds.ToList();
         var allResults = new Dictionary<int, UniversalisResponse>();
         
-        _logger?.LogDebug("Fetching bulk market data for {Count} items (chunked by {ChunkSize})", 
-            itemIdList.Count, chunkSize);
+        _logger?.LogDebug("Fetching bulk market data for {Count} items (chunked by {ChunkSize}, entries={Entries})", 
+            itemIdList.Count, chunkSize, entries == 0 ? "all" : entries.ToString());
 
         // Process in chunks to respect API limits
         for (int i = 0; i < itemIdList.Count; i += chunkSize)
         {
             var chunk = itemIdList.Skip(i).Take(chunkSize).ToList();
             var ids = string.Join(",", chunk);
-            var url = string.Format(UniversalisApiUrl, Uri.EscapeDataString(worldOrDc), ids);
+            var baseUrl = string.Format(UniversalisApiUrl, Uri.EscapeDataString(worldOrDc), ids);
+            
+            // Add entries parameter to fetch all listings if specified
+            var url = entries > 0 
+                ? $"{baseUrl}?entries={entries}" 
+                : baseUrl;
             
             _logger?.LogDebug("Fetching chunk {ChunkIndex} ({Start}-{End} of {Total})", 
                 (i / chunkSize) + 1, i + 1, Math.Min(i + chunkSize, itemIdList.Count), itemIdList.Count);

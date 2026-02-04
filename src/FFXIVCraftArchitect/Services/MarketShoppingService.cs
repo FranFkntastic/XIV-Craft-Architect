@@ -34,7 +34,8 @@ public class MarketShoppingService
 
     /// <summary>
     /// Calculate detailed shopping plans for market board items.
-    /// Uses cache to avoid redundant API calls.
+    /// Uses bulk API to fetch all items at once for efficiency, with caching.
+    /// Fetches ALL listings from all worlds in the data center.
     /// </summary>
     public async Task<List<DetailedShoppingPlan>> CalculateDetailedShoppingPlansAsync(
         List<MaterialAggregate> marketItems,
@@ -44,17 +45,66 @@ public class MarketShoppingService
         RecommendationMode mode = RecommendationMode.MinimizeTotalCost)
     {
         var plans = new List<DetailedShoppingPlan>();
-
+        
+        // First pass: check cache and collect items that need fetching
+        var cachedResults = new Dictionary<int, UniversalisResponse>();
+        var itemsToFetch = new List<MaterialAggregate>();
+        
+        foreach (var item in marketItems)
+        {
+            var cached = _cacheService.Get(item.ItemId, dataCenter);
+            if (cached != null)
+            {
+                cachedResults[item.ItemId] = ConvertFromCachedData(cached);
+            }
+            else
+            {
+                itemsToFetch.Add(item);
+            }
+        }
+        
+        // Fetch all uncached items at once using bulk endpoint
+        if (itemsToFetch.Count > 0)
+        {
+            progress?.Report($"Fetching market data for {itemsToFetch.Count} items...");
+            _logger.LogInformation("[MarketShopping] Fetching {Count} items from {DC} using bulk endpoint", 
+                itemsToFetch.Count, dataCenter);
+            
+            try
+            {
+                // Fetch all listings (entries=0 means all available)
+                var fetchedData = await _universalisService.GetMarketDataBulkAsync(
+                    dataCenter, 
+                    itemsToFetch.Select(i => i.ItemId), 
+                    ct);
+                
+                // Add fetched data to cache and results
+                foreach (var kvp in fetchedData)
+                {
+                    cachedResults[kvp.Key] = kvp.Value;
+                    
+                    // Store in cache
+                    var cachedData = ConvertToCachedData(kvp.Key, dataCenter, kvp.Value);
+                    _cacheService.Set(kvp.Key, dataCenter, cachedData);
+                }
+                
+                _logger.LogInformation("[MarketShopping] Successfully fetched {FetchedCount}/{RequestedCount} items",
+                    fetchedData.Count, itemsToFetch.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MarketShopping] Bulk fetch failed, some items may be missing data");
+            }
+        }
+        
+        // Process all items (cached + freshly fetched)
         foreach (var item in marketItems)
         {
             progress?.Report($"Analyzing {item.Name}...");
             
             try
             {
-                // Try to get from cache first
-                var marketData = await GetMarketDataWithCacheAsync(dataCenter, item.ItemId, ct);
-                
-                if (marketData == null)
+                if (!cachedResults.TryGetValue(item.ItemId, out var marketData))
                 {
                     plans.Add(new DetailedShoppingPlan
                     {
@@ -89,33 +139,6 @@ public class MarketShoppingService
         }
 
         return plans;
-    }
-
-    /// <summary>
-    /// Get market data from cache or fetch from API if not cached/stale.
-    /// </summary>
-    private async Task<UniversalisResponse?> GetMarketDataWithCacheAsync(string dataCenter, int itemId, CancellationToken ct)
-    {
-        // Check cache first
-        var cached = _cacheService.Get(itemId, dataCenter);
-        if (cached != null)
-        {
-            _logger.LogDebug("[MarketShopping] Using cached data for {ItemId}@{DC}", itemId, dataCenter);
-            return ConvertFromCachedData(cached);
-        }
-
-        // Fetch from API
-        _logger.LogDebug("[MarketShopping] Fetching fresh data for {ItemId}@{DC}", itemId, dataCenter);
-        var freshData = await _universalisService.GetMarketDataAsync(dataCenter, itemId, ct: ct);
-        
-        if (freshData != null)
-        {
-            // Store in cache
-            var cachedData = ConvertToCachedData(itemId, dataCenter, freshData);
-            _cacheService.Set(itemId, dataCenter, cachedData);
-        }
-        
-        return freshData;
     }
 
     /// <summary>

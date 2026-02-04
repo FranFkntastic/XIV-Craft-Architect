@@ -152,6 +152,9 @@ public partial class MainWindow : Window
             // Cache the search results for later use
             _itemCache.StoreItems(_currentSearchResults.Select(r => (r.Id, r.Object?.Name ?? $"Item_{r.Id}", r.Object?.IconId ?? 0)));
             
+            // Show the search results panel
+            SearchResultsPanel.Visibility = Visibility.Visible;
+            
             StatusLabel.Text = $"Found {_currentSearchResults.Count} results (cached)";
         }
         catch (Exception ex)
@@ -234,6 +237,12 @@ public partial class MainWindow : Window
             DisplayPlanInTreeView(_currentPlan);
             UpdateBuildPlanButtonText();
             
+            // Populate shopping list
+            PopulateShoppingList();
+            
+            // Enable procurement refresh button
+            ProcurementRefreshButton.IsEnabled = true;
+            
             StatusLabel.Text = $"Plan built: {_currentPlan.RootItems.Count} root items, " +
                                $"{_currentPlan.AggregatedMaterials.Count} unique materials";
             
@@ -256,6 +265,81 @@ public partial class MainWindow : Window
         {
             BuildPlanButton.IsEnabled = _projectItems.Count > 0;
         }
+    }
+
+    /// <summary>
+    /// Populates the shopping list panel with aggregated materials.
+    /// </summary>
+    private void PopulateShoppingList()
+    {
+        if (_currentPlan?.AggregatedMaterials == null || ShoppingListPanel == null)
+            return;
+
+        ShoppingListPanel.Children.Clear();
+        decimal totalCost = 0;
+
+        foreach (var material in _currentPlan.AggregatedMaterials.OrderBy(m => m.Name))
+        {
+            var row = new Grid();
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(50) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });
+
+            // Item name
+            var nameBlock = new TextBlock
+            {
+                Text = material.Name,
+                Foreground = Brushes.White,
+                Padding = new Thickness(12, 6, 4, 6),
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetColumn(nameBlock, 0);
+            row.Children.Add(nameBlock);
+
+            // Quantity
+            var qtyBlock = new TextBlock
+            {
+                Text = material.TotalQuantity.ToString(),
+                Foreground = Brushes.LightGray,
+                Padding = new Thickness(4, 6, 4, 6),
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            Grid.SetColumn(qtyBlock, 1);
+            row.Children.Add(qtyBlock);
+
+            // Price (if available)
+            var price = material.UnitPrice > 0 ? material.UnitPrice * material.TotalQuantity : 0;
+            totalCost += price;
+            var priceText = price > 0 ? $"{price:N0}g" : "-";
+            var priceBlock = new TextBlock
+            {
+                Text = priceText,
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4caf50")),
+                Padding = new Thickness(4, 6, 12, 6),
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            Grid.SetColumn(priceBlock, 2);
+            row.Children.Add(priceBlock);
+
+            // Alternate row background
+            if (ShoppingListPanel.Children.Count % 2 == 1)
+            {
+                row.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#333333"));
+            }
+
+            ShoppingListPanel.Children.Add(row);
+        }
+
+        // Update total cost
+        if (TotalCostText != null)
+        {
+            TotalCostText.Text = $"{totalCost:N0}g";
+        }
+    }
+
+    private void OnProjectItemSelected(object sender, SelectionChangedEventArgs e)
+    {
+        // Handle project item selection if needed
     }
 
     /// <summary>
@@ -341,7 +425,7 @@ public partial class MainWindow : Window
     
     /// <summary>
     /// Creates a simple panel for leaf nodes (no children) with acquisition dropdown on the right.
-    /// HQ items show a star and use accent color.
+    /// HQ items show a clickable star toggle (outline when off, gold when on) - only for HQ-capable items.
     /// </summary>
     private StackPanel CreateLeafNodePanel(PlanNode node, int depth)
     {
@@ -350,21 +434,7 @@ public partial class MainWindow : Window
         // Add spacing for alignment (where expand arrow would be on parent nodes)
         panel.Margin = new Thickness(20, 0, 0, 0);
         
-        // HQ Star indicator (shown if MustBeHq is set)
-        if (node.MustBeHq)
-        {
-            var starBlock = new TextBlock
-            {
-                Text = "★ ",
-                Foreground = Brushes.Gold,
-                FontWeight = FontWeights.Bold,
-                VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 12
-            };
-            panel.Children.Add(starBlock);
-        }
-        
-        // Name - use accent color if HQ, otherwise use source-based color
+        // Name - declare early so star click handler can reference it
         var nameBlock = new TextBlock
         {
             Text = node.Name,
@@ -372,6 +442,52 @@ public partial class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = node.MustBeHq ? ColorHelper.GetAccentBrush() : GetNodeForeground(node)
         };
+        
+        // HQ Star toggle (clickable) - only for items that can be HQ
+        if (node.CanBeHq)
+        {
+            var starBlock = new TextBlock
+            {
+                Text = node.MustBeHq ? "★" : "☆",
+                Foreground = node.MustBeHq ? Brushes.Gold : Brushes.Gray,
+                FontWeight = FontWeights.Bold,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 12,
+                Cursor = Cursors.Hand,
+                ToolTip = node.MustBeHq ? "Click to allow NQ" : "Click to require HQ",
+                Margin = new Thickness(0, 0, 4, 0)
+            };
+            starBlock.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                
+                // Optimistic UI: toggle visual state immediately
+                var newState = !node.MustBeHq;
+                starBlock.Text = newState ? "★" : "☆";
+                starBlock.Foreground = newState ? Brushes.Gold : Brushes.Gray;
+                starBlock.ToolTip = newState ? "Click to allow NQ" : "Click to require HQ";
+                
+                // Update name color immediately too
+                nameBlock.Foreground = newState ? ColorHelper.GetAccentBrush() : GetNodeForeground(node);
+                
+                // Then apply the actual change (which will refresh the tree)
+                try
+                {
+                    ToggleNodeHqRequirement(node);
+                }
+                catch (Exception ex)
+                {
+                    // Revert on error
+                    starBlock.Text = node.MustBeHq ? "★" : "☆";
+                    starBlock.Foreground = node.MustBeHq ? Brushes.Gold : Brushes.Gray;
+                    nameBlock.Foreground = node.MustBeHq ? ColorHelper.GetAccentBrush() : GetNodeForeground(node);
+                    StatusLabel.Text = $"Failed to toggle HQ: {ex.Message}";
+                }
+            };
+            panel.Children.Add(starBlock);
+        }
+        
+        // Add name block after star
         panel.Children.Add(nameBlock);
         
         // Quantity
@@ -410,27 +526,13 @@ public partial class MainWindow : Window
     
     /// <summary>
     /// Creates the header panel for a parent recipe node (with children).
-    /// Parent nodes use an expand arrow. HQ items show a star and use accent color.
+    /// Parent nodes use an expand arrow. HQ items show a clickable star toggle - only for HQ-capable items.
     /// </summary>
     private StackPanel CreateNodeHeaderPanel(PlanNode node, bool showDropdown)
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
         
-        // HQ Star indicator (shown if MustBeHq is set)
-        if (node.MustBeHq)
-        {
-            var starBlock = new TextBlock
-            {
-                Text = "★ ",
-                Foreground = Brushes.Gold,
-                FontWeight = FontWeights.Bold,
-                VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 12
-            };
-            panel.Children.Add(starBlock);
-        }
-        
-        // Name - use accent color if HQ, otherwise use source-based color
+        // Name - declare early so star click handler can reference it
         var nameBlock = new TextBlock
         {
             Text = node.Name,
@@ -438,6 +540,52 @@ public partial class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = node.MustBeHq ? ColorHelper.GetAccentBrush() : GetNodeForeground(node)
         };
+        
+        // HQ Star toggle (clickable) - only for items that can be HQ
+        if (node.CanBeHq)
+        {
+            var starBlock = new TextBlock
+            {
+                Text = node.MustBeHq ? "★" : "☆",
+                Foreground = node.MustBeHq ? Brushes.Gold : Brushes.Gray,
+                FontWeight = FontWeights.Bold,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 12,
+                Cursor = Cursors.Hand,
+                ToolTip = node.MustBeHq ? "Click to allow NQ" : "Click to require HQ",
+                Margin = new Thickness(0, 0, 4, 0)
+            };
+            starBlock.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                
+                // Optimistic UI: toggle visual state immediately
+                var newState = !node.MustBeHq;
+                starBlock.Text = newState ? "★" : "☆";
+                starBlock.Foreground = newState ? Brushes.Gold : Brushes.Gray;
+                starBlock.ToolTip = newState ? "Click to allow NQ" : "Click to require HQ";
+                
+                // Update name color immediately too
+                nameBlock.Foreground = newState ? ColorHelper.GetAccentBrush() : GetNodeForeground(node);
+                
+                // Then apply the actual change (which will refresh the tree)
+                try
+                {
+                    ToggleNodeHqRequirement(node);
+                }
+                catch (Exception ex)
+                {
+                    // Revert on error
+                    starBlock.Text = node.MustBeHq ? "★" : "☆";
+                    starBlock.Foreground = node.MustBeHq ? Brushes.Gold : Brushes.Gray;
+                    nameBlock.Foreground = node.MustBeHq ? ColorHelper.GetAccentBrush() : GetNodeForeground(node);
+                    StatusLabel.Text = $"Failed to toggle HQ: {ex.Message}";
+                }
+            };
+            panel.Children.Add(starBlock);
+        }
+        
+        // Add name block after star
         panel.Children.Add(nameBlock);
         
         // Quantity
@@ -501,10 +649,11 @@ public partial class MainWindow : Window
     {
         var combo = new ComboBox
         {
-            Width = 160,
-            Margin = new Thickness(0, 0, 4, 0),
+            Width = 130,
+            Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
-            FontSize = 11
+            FontSize = 11,
+            HorizontalAlignment = HorizontalAlignment.Right
         };
         
         // Determine what options to show based on item characteristics
@@ -525,7 +674,7 @@ public partial class MainWindow : Window
         {
             combo.Items.Add(new ComboBoxItem
             {
-                Content = $"Craft (~{craftCost:N0}g)",
+                Content = $"Craft ~{craftCost:N0}g",
                 Tag = AcquisitionSource.Craft,
                 Foreground = Brushes.White,
                 ToolTip = $"Craft: {craftCost:N0}g"
@@ -537,7 +686,7 @@ public partial class MainWindow : Window
         {
             combo.Items.Add(new ComboBoxItem
             {
-                Content = $"Vendor ({node.MarketPrice * node.Quantity:N0}g)",
+                Content = $"Vendor {node.MarketPrice * node.Quantity:N0}g",
                 Tag = AcquisitionSource.VendorBuy,
                 Foreground = Brushes.LightYellow,
                 ToolTip = $"Vendor: {node.MarketPrice * node.Quantity:N0}g"
@@ -549,7 +698,7 @@ public partial class MainWindow : Window
         {
             combo.Items.Add(new ComboBoxItem
             {
-                Content = $"Buy NQ ({nqCost:N0}g)",
+                Content = $"Buy NQ {nqCost:N0}g",
                 Tag = AcquisitionSource.MarketBuyNq,
                 Foreground = Brushes.LightSkyBlue,
                 ToolTip = $"Market NQ: {nqCost:N0}g"
@@ -561,7 +710,7 @@ public partial class MainWindow : Window
         {
             combo.Items.Add(new ComboBoxItem
             {
-                Content = $"Buy HQ ({hqCost:N0}g)",
+                Content = $"Buy HQ {hqCost:N0}g",
                 Tag = AcquisitionSource.MarketBuyHq,
                 Foreground = Brushes.LightGreen,
                 ToolTip = $"Market HQ: {hqCost:N0}g"
@@ -782,6 +931,14 @@ public partial class MainWindow : Window
         }
         
         StatusLabel.Text = $"{node.Name} {(mustBeHq ? "must be" : "can be")} HQ";
+    }
+
+    /// <summary>
+    /// Toggle the HQ requirement for a node (called when clicking the star).
+    /// </summary>
+    private void ToggleNodeHqRequirement(PlanNode node)
+    {
+        SetNodeMustBeHq(node, !node.MustBeHq);
     }
 
     /// <summary>
@@ -1261,6 +1418,12 @@ public partial class MainWindow : Window
             
             // Update market logistics tab with fresh market data
             await UpdateMarketLogisticsAsync(prices, useCachedData: false);
+            
+            // Refresh procurement panel if visible
+            if (ProcurementPlannerContent.Visibility == Visibility.Visible)
+            {
+                PopulateProcurementPanel();
+            }
 
             // Calculate total cost
             var totalCost = _currentPlan.AggregatedMaterials.Sum(m => m.TotalCost);
@@ -1974,18 +2137,19 @@ public partial class MainWindow : Window
         headerBorder.Child = headerGrid;
         mainStack.Children.Add(headerBorder);
         
-        // Expandable content (all world options)
+        // Expandable content (all world options) - start expanded to show all data
         var contentStack = new StackPanel
         {
-            Visibility = System.Windows.Visibility.Collapsed,
+            Visibility = System.Windows.Visibility.Visible,
             Margin = new Thickness(8, 6, 8, 8)
         };
+        headerBorder.Background = ColorHelper.GetMutedAccentBrushExpanded();
         
         if (plan.HasOptions)
         {
             var optionsHeader = new TextBlock
             {
-                Text = "All Worlds:",
+                Text = "All Worlds (non-congested):",
                 FontWeight = FontWeights.SemiBold,
                 FontSize = 10,
                 Margin = new Thickness(0, 0, 0, 4),
@@ -1993,7 +2157,11 @@ public partial class MainWindow : Window
             };
             contentStack.Children.Add(optionsHeader);
             
-            foreach (var world in plan.WorldOptions)
+            // Show all non-congested worlds, sorted by cost
+            foreach (var world in plan.WorldOptions
+                .Where(w => !w.IsCongested || w.IsHomeWorld) // Show non-congested OR home world
+                .OrderBy(w => w.IsHomeWorld ? 0 : 1) // Home world first
+                .ThenBy(w => w.TotalCost)) // Then by cost
             {
                 var isRecommended = world == plan.RecommendedWorld;
                 var worldPanel = CreateWorldOptionPanel(world, isRecommended);
@@ -2358,33 +2526,364 @@ public partial class MainWindow : Window
     }
     
     /// <summary>
-    /// Switch to Recipe Plan tab
+    /// Switch to Recipe Planner tab
     /// </summary>
-    private void OnRecipePlanTabClick(object sender, MouseButtonEventArgs e)
+    private void OnRecipePlannerTabClick(object sender, MouseButtonEventArgs e)
     {
-        RecipePlanTab.Background = (SolidColorBrush)Application.Current.Resources["AccentBrush"];
-        ((TextBlock)RecipePlanTab.Child).Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1a1a1a"));
+        // Update tab styling
+        RecipePlannerTab.Background = (SolidColorBrush)FindResource("GoldAccentBrush");
+        ((TextBlock)RecipePlannerTab.Child).Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1a1a1a"));
         
-        MarketLogisticsTab.Background = Brushes.Transparent;
-        ((TextBlock)((Border)MarketLogisticsTab).Child).Foreground = (SolidColorBrush)Application.Current.Resources["AccentBrush"];
+        ProcurementPlannerTab.Background = Brushes.Transparent;
+        ((TextBlock)ProcurementPlannerTab.Child).Foreground = (SolidColorBrush)FindResource("GoldAccentBrush");
         
-        RecipePlanContent.Visibility = Visibility.Visible;
-        MarketLogisticsContent.Visibility = Visibility.Collapsed;
+        // Switch content visibility
+        RecipePlannerContent.Visibility = Visibility.Visible;
+        ProcurementPlannerContent.Visibility = Visibility.Collapsed;
+        
+        StatusLabel.Text = "Recipe Planner";
     }
     
     /// <summary>
-    /// Switch to Market Logistics tab
+    /// Switch to Market Analysis tab and populate with market logistics data
     /// </summary>
-    private void OnMarketLogisticsTabClick(object sender, MouseButtonEventArgs e)
+    private void OnProcurementPlannerTabClick(object sender, MouseButtonEventArgs e)
     {
-        RecipePlanTab.Background = Brushes.Transparent;
-        ((TextBlock)RecipePlanTab.Child).Foreground = (SolidColorBrush)Application.Current.Resources["AccentBrush"];
+        // Update tab styling
+        RecipePlannerTab.Background = Brushes.Transparent;
+        ((TextBlock)RecipePlannerTab.Child).Foreground = (SolidColorBrush)FindResource("GoldAccentBrush");
         
-        MarketLogisticsTab.Background = (SolidColorBrush)Application.Current.Resources["AccentBrush"];
-        ((TextBlock)((Border)MarketLogisticsTab).Child).Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1a1a1a"));
+        ProcurementPlannerTab.Background = (SolidColorBrush)FindResource("GoldAccentBrush");
+        ((TextBlock)ProcurementPlannerTab.Child).Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1a1a1a"));
         
-        RecipePlanContent.Visibility = Visibility.Collapsed;
-        MarketLogisticsContent.Visibility = Visibility.Visible;
+        // Switch content visibility
+        RecipePlannerContent.Visibility = Visibility.Collapsed;
+        ProcurementPlannerContent.Visibility = Visibility.Visible;
+        
+        // Populate procurement panel if we have a plan
+        if (_currentPlan != null)
+        {
+            PopulateProcurementPanel();
+        }
+        
+        StatusLabel.Text = "Market Analysis";
+    }
+    
+    /// <summary>
+    /// Populate the Market Analysis panel with expandable cards and actionable procurement plan.
+    /// Uses DetailedShoppingPlan data when available for world recommendations.
+    /// </summary>
+    private void PopulateProcurementPanel()
+    {
+        if (_currentPlan == null)
+        {
+            ProcurementPanel.Children.Clear();
+            ProcurementPanel.Children.Add(new TextBlock 
+            { 
+                Text = "Build a plan to see market analysis",
+                Foreground = Brushes.Gray,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 40, 0, 0)
+            });
+            
+            // Clear procurement plan
+            ProcurementPlanPanel.Children.Clear();
+            ProcurementPlanPanel.Children.Add(new TextBlock 
+            { 
+                Text = "No procurement plan available - fetch market data to generate actionable plan",
+                Foreground = Brushes.Gray,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap
+            });
+            return;
+        }
+        
+        // Clear existing content
+        ProcurementPanel.Children.Clear();
+        
+        // Check if we have detailed market plans with world recommendations
+        if (_currentMarketPlans?.Any() == true)
+        {
+            PopulateProcurementWithMarketPlans();
+            PopulateProcurementPlanSummary();
+            return;
+        }
+        
+        // Fall back to simple aggregated materials view if no market data yet
+        PopulateProcurementWithSimpleMaterials();
+        
+        // Clear procurement plan
+        ProcurementPlanPanel.Children.Clear();
+        ProcurementPlanPanel.Children.Add(new TextBlock 
+        { 
+            Text = "Click 'Refresh Market Data' to generate an actionable procurement plan with world recommendations",
+            Foreground = Brushes.Gray,
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap
+        });
+    }
+    
+    /// <summary>
+    /// Populate the actionable procurement plan summary at the bottom of Market Analysis.
+    /// Groups items by recommended world for efficient shopping.
+    /// </summary>
+    private void PopulateProcurementPlanSummary()
+    {
+        ProcurementPlanPanel.Children.Clear();
+        
+        if (_currentMarketPlans?.Any() != true)
+            return;
+        
+        // Group items by recommended world
+        var itemsByWorld = _currentMarketPlans
+            .Where(p => p.RecommendedWorld != null)
+            .GroupBy(p => p.RecommendedWorld!.WorldName)
+            .OrderBy(g => g.Key)
+            .ToList();
+        
+        if (!itemsByWorld.Any())
+        {
+            ProcurementPlanPanel.Children.Add(new TextBlock 
+            { 
+                Text = "No viable market listings found",
+                Foreground = Brushes.Gray,
+                FontSize = 12
+            });
+            return;
+        }
+        
+        // Create shopping list by world
+        foreach (var worldGroup in itemsByWorld)
+        {
+            var worldName = worldGroup.Key;
+            var items = worldGroup.ToList();
+            var worldTotal = items.Sum(i => i.RecommendedWorld?.TotalCost ?? 0);
+            var isHomeWorld = items.First().RecommendedWorld?.IsHomeWorld ?? false;
+            
+            // World header
+            var worldHeader = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+            
+            var worldText = new TextBlock
+            {
+                Text = worldName,
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 12,
+                Foreground = isHomeWorld ? Brushes.Gold : Brushes.White
+            };
+            worldHeader.Children.Add(worldText);
+            
+            if (isHomeWorld)
+            {
+                worldHeader.Children.Add(new TextBlock
+                {
+                    Text = " ★ HOME",
+                    Foreground = Brushes.Gold,
+                    FontSize = 10,
+                    FontWeight = FontWeights.Bold,
+                    Margin = new Thickness(4, 0, 0, 0)
+                });
+            }
+            
+            worldHeader.Children.Add(new TextBlock
+            {
+                Text = $" - {items.Count} items, {worldTotal:N0}g total",
+                Foreground = Brushes.Gray,
+                FontSize = 11,
+                Margin = new Thickness(8, 0, 0, 0)
+            });
+            
+            ProcurementPlanPanel.Children.Add(worldHeader);
+            
+            // Items for this world
+            foreach (var item in items.OrderBy(i => i.Name))
+            {
+                var itemText = new TextBlock
+                {
+                    Text = $"  • {item.Name} ×{item.QuantityNeeded} = {item.RecommendedWorld?.TotalCost:N0}g",
+                    FontSize = 11,
+                    Foreground = Brushes.LightGray,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 0, 2)
+                };
+                ProcurementPlanPanel.Children.Add(itemText);
+            }
+            
+            // Spacer between worlds
+            ProcurementPlanPanel.Children.Add(new Border { Height = 12 });
+        }
+        
+        // Grand total
+        var grandTotal = _currentMarketPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
+        var totalText = new TextBlock
+        {
+            Text = $"Grand Total: {grandTotal:N0}g",
+            FontWeight = FontWeights.Bold,
+            FontSize = 12,
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4caf50")),
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        ProcurementPlanPanel.Children.Add(totalText);
+    }
+    
+    /// <summary>
+    /// Populate procurement panel with detailed world recommendations from _currentMarketPlans.
+    /// </summary>
+    private void PopulateProcurementWithMarketPlans()
+    {
+        // Calculate totals
+        var grandTotal = _currentMarketPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
+        var itemsWithOptions = _currentMarketPlans.Count(p => p.HasOptions);
+        var itemsWithoutOptions = _currentMarketPlans.Count(p => !p.HasOptions);
+        
+        // Summary header
+        var summaryPanel = new Border
+        {
+            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3d3d3d")),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(16),
+            Margin = new Thickness(0, 0, 0, 16)
+        };
+        
+        var summaryStack = new StackPanel();
+        summaryStack.Children.Add(new TextBlock
+        {
+            Text = $"Total Procurement Cost: {grandTotal:N0}g",
+            FontSize = 18,
+            FontWeight = FontWeights.Bold,
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4caf50"))
+        });
+        summaryStack.Children.Add(new TextBlock
+        {
+            Text = $"Items with market data: {itemsWithOptions}  •  Need price fetch: {itemsWithoutOptions}",
+            Foreground = Brushes.Gray,
+            Margin = new Thickness(0, 4, 0, 0)
+        });
+        summaryPanel.Child = summaryStack;
+        ProcurementPanel.Children.Add(summaryPanel);
+        
+        // Get sort preference
+        var sortIndex = ProcurementSortCombo?.SelectedIndex ?? 0;
+        IEnumerable<DetailedShoppingPlan> sortedPlans = _currentMarketPlans;
+        
+        switch (sortIndex)
+        {
+            case 0: // By Recommended World (default)
+                sortedPlans = _currentMarketPlans
+                    .OrderBy(p => p.RecommendedWorld?.WorldName ?? "ZZZ")
+                    .ThenBy(p => p.Name);
+                break;
+            case 1: // Alphabetical
+                sortedPlans = _currentMarketPlans.OrderBy(p => p.Name);
+                break;
+            case 2: // Price (High to Low)
+                sortedPlans = _currentMarketPlans
+                    .OrderByDescending(p => p.RecommendedWorld?.TotalCost ?? 0)
+                    .ThenBy(p => p.Name);
+                break;
+        }
+        
+        // Create expandable cards for each item
+        foreach (var plan in sortedPlans)
+        {
+            var card = CreateExpandableMarketCard(plan);
+            ProcurementPanel.Children.Add(card);
+        }
+    }
+    
+    /// <summary>
+    /// Fallback: Populate with simple material aggregation when no market data fetched yet.
+    /// </summary>
+    private void PopulateProcurementWithSimpleMaterials()
+    {
+        var materials = _currentPlan?.AggregatedMaterials;
+        
+        if (materials?.Any() != true)
+        {
+            ProcurementPanel.Children.Add(new TextBlock 
+            { 
+                Text = "No materials to display",
+                Foreground = Brushes.Gray,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 40, 0, 0)
+            });
+            return;
+        }
+        
+        // Show placeholder prompting user to fetch prices
+        var placeholderPanel = new StackPanel 
+        { 
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 40, 0, 0)
+        };
+        
+        placeholderPanel.Children.Add(new TextBlock 
+        { 
+            Text = "No market data available",
+            Foreground = Brushes.Gray,
+            FontSize = 14,
+            HorizontalAlignment = HorizontalAlignment.Center
+        });
+        
+        placeholderPanel.Children.Add(new TextBlock 
+        { 
+            Text = "Click 'Refresh Market Data' to see world recommendations and generate a procurement plan",
+            Foreground = Brushes.Gray,
+            FontSize = 12,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 8, 0, 0)
+        });
+        
+        placeholderPanel.Children.Add(new TextBlock 
+        { 
+            Text = $"Materials to analyze: {materials.Count}",
+            Foreground = Brushes.Gray,
+            FontSize = 11,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 16, 0, 0)
+        });
+        
+        ProcurementPanel.Children.Add(placeholderPanel);
+    }
+    
+
+    
+    /// <summary>
+    /// Handle sort selection change in Procurement Planner
+    /// </summary>
+    private void OnProcurementSortChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Skip if not fully loaded yet
+        if (_currentPlan == null)
+            return;
+            
+        // Re-populate to apply new sort (only if we have market plans to sort)
+        if (ProcurementPlannerContent.Visibility == Visibility.Visible && _currentMarketPlans?.Any() == true)
+        {
+            PopulateProcurementPanel();
+        }
+    }
+    
+    /// <summary>
+    /// Handle mode selection change in Procurement Planner
+    /// </summary>
+    private void OnProcurementModeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Skip if services aren't initialized yet (during InitializeComponent)
+        if (_settingsService == null)
+            return;
+            
+        // Save setting and refresh if visible
+        if (ProcurementModeCombo.SelectedIndex >= 0)
+        {
+            var mode = ProcurementModeCombo.SelectedIndex == 1 ? "MaximizeValue" : "MinimizeTotalCost";
+            _settingsService.Set("planning.default_recommendation_mode", mode);
+            
+            // Re-populate to apply new mode if visible
+            if (ProcurementPlannerContent.Visibility == Visibility.Visible && _currentPlan != null)
+            {
+                PopulateProcurementPanel();
+            }
+        }
     }
 
     private void OnNewPlan(object sender, RoutedEventArgs e)

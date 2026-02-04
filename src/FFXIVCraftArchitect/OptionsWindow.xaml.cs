@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.IO;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -272,6 +274,42 @@ public partial class OptionsWindow : Window
         {
             RefreshWorldStatusButton.IsEnabled = true;
             RefreshWorldStatusButton.Content = "Refresh World Status";
+        }
+    }
+    
+    /// <summary>
+    /// Opens the settings.json file in the default text editor.
+    /// </summary>
+    private void OnOpenSettingsFile(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var settingsPath = _settingsService.SettingsFilePath;
+            
+            // Ensure the file exists before trying to open it
+            if (!File.Exists(settingsPath))
+            {
+                // Save current settings to create the file
+                _settingsService.Set("application.version", "0.1.0");
+            }
+            
+            // Open with default editor
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = settingsPath,
+                UseShellExecute = true
+            });
+            
+            _logger.LogInformation("Opened settings file: {Path}", settingsPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to open settings file");
+            MessageBox.Show(
+                $"Failed to open settings file: {ex.Message}",
+                "Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
 }

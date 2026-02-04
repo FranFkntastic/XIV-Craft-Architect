@@ -52,6 +52,11 @@ public class SettingsService
         }
     };
 
+    /// <summary>
+    /// Gets the full path to the settings file.
+    /// </summary>
+    public string SettingsFilePath => _settingsPath;
+
     public SettingsService(ILogger<SettingsService> logger)
     {
         _logger = logger;
@@ -91,6 +96,12 @@ public class SettingsService
                 current = value;
             }
 
+            // Handle JsonElement (values loaded from JSON are stored as JsonElement)
+            if (current is JsonElement jsonElement)
+            {
+                return ConvertJsonElement<T>(jsonElement, defaultValue);
+            }
+
             if (current is T typedValue)
                 return typedValue;
 
@@ -101,6 +112,62 @@ public class SettingsService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to get setting: {KeyPath}", keyPath);
+            return defaultValue;
+        }
+    }
+
+    /// <summary>
+    /// Converts a JsonElement to the target type T.
+    /// </summary>
+    private static T? ConvertJsonElement<T>(JsonElement element, T? defaultValue = default)
+    {
+        try
+        {
+            var targetType = typeof(T);
+            
+            // Handle nullable types
+            if (Nullable.GetUnderlyingType(targetType) != null)
+            {
+                targetType = Nullable.GetUnderlyingType(targetType)!;
+            }
+
+            // Handle common primitive types
+            if (targetType == typeof(string))
+            {
+                if (element.ValueKind == JsonValueKind.String)
+                    return (T)(object)element.GetString()!;
+                return (T)(object)element.ToString()!;
+            }
+            
+            if (targetType == typeof(bool))
+            {
+                if (element.ValueKind == JsonValueKind.True)
+                    return (T)(object)true;
+                if (element.ValueKind == JsonValueKind.False)
+                    return (T)(object)false;
+                return defaultValue;
+            }
+            
+            if (targetType == typeof(int) || targetType == typeof(long))
+            {
+                if (element.TryGetInt64(out var longVal))
+                    return (T)Convert.ChangeType(longVal, targetType);
+                return defaultValue;
+            }
+            
+            if (targetType == typeof(double))
+            {
+                if (element.TryGetDouble(out var doubleVal))
+                    return (T)(object)doubleVal;
+                return defaultValue;
+            }
+
+            // For other types (enums, complex objects), use JSON deserialization
+            var json = element.GetRawText();
+            return JsonSerializer.Deserialize<T>(json);
+        }
+        catch (Exception)
+        {
             return defaultValue;
         }
     }
