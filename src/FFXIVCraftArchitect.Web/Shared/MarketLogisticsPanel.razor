@@ -1,22 +1,23 @@
 @using FFXIVCraftArchitect.Core.Models
 
-<div style="display: flex; flex-direction: column; height: 100%; gap: 8px;">
+<div style="display: flex; flex-direction: column; height: 100%; gap: 10px;">
     
     <!-- Filter Controls Row -->
     <div style="flex-shrink: 0;">
-            <MudPaper Elevation="1" Class="pa-2" Style="background: #252525;">
-                <MudGrid Spacing="2">
+            <MudPaper Elevation="2" Class="pa-3" Style="background: linear-gradient(135deg, #2d2d2d 0%, #252525 100%); border-radius: 12px;">
+                <MudGrid Spacing="2" Style="align-items: center;">
                     
                     <!-- Sort Dropdown -->
                     <MudItem xs="12" sm="6" md="4" lg="3" Class="pa-1">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <MudText Typo="Typo.body2" Style="color: #888; white-space: nowrap;">Sort:</MudText>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <MudText Typo="Typo.body2" Style="color: #888; white-space: nowrap; font-weight: 500;">Sort:</MudText>
                             <MudSelect T="FFXIVCraftArchitect.Core.Models.MarketSortOption" 
                                        Value="_selectedSort"
                                        ValueChanged="OnSortValueChanged"
                                        Dense="true"
-                                       Variant="Variant.Filled"
-                                       Style="min-width: 140px;">
+                                       Variant="Variant.Outlined"
+                                       Style="min-width: 140px; background: #1e1e1e; border-radius: 6px;"
+                                       AdornmentColor="Color.Primary">
                                 <MudSelectItem Value="MarketSortOption.ByRecommended">By Recommended</MudSelectItem>
                                 <MudSelectItem Value="MarketSortOption.Alphabetical">Alphabetical</MudSelectItem>
                             </MudSelect>
@@ -25,14 +26,15 @@
                     
                     <!-- Mode Dropdown -->
                     <MudItem xs="12" sm="6" md="4" lg="3" Class="pa-1">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <MudText Typo="Typo.body2" Style="color: #888; white-space: nowrap;">Mode:</MudText>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <MudText Typo="Typo.body2" Style="color: #888; white-space: nowrap; font-weight: 500;">Mode:</MudText>
                             <MudSelect T="RecommendationMode" 
                                        Value="_selectedMode"
                                        ValueChanged="OnModeValueChanged"
                                        Dense="true"
-                                       Variant="Variant.Filled"
-                                       Style="min-width: 160px;">
+                                       Variant="Variant.Outlined"
+                                       Style="min-width: 160px; background: #1e1e1e; border-radius: 6px;"
+                                       AdornmentColor="Color.Primary">
                                 <MudSelectItem Value="RecommendationMode.MinimizeTotalCost">Minimize Total Cost</MudSelectItem>
                                 <MudSelectItem Value="RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
                                 <MudSelectItem Value="RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
@@ -46,31 +48,34 @@
                                      Value="_searchAllNA"
                                      ValueChanged="OnSearchAllNAToggled"
                                      Dense="true"
-                                     Color="Color.Primary">
-                            <MudText Typo="Typo.body2" Style="color: #ccc;">Search all NA DCs</MudText>
+                                     Color="Color.Primary"
+                                     Style="background: #1e1e1e; border-radius: 6px; padding: 4px 8px;">
+                            <MudText Typo="Typo.body2" Style="color: #ccc;">All NA DCs</MudText>
                         </MudCheckBox>
                     </MudItem>
                     
-                    <!-- View Status Button -->
-                    <MudItem xs="6" sm="3" md="3" lg="2" Class="pa-1">
-                        <MudButton Variant="Variant.Filled"
-                                   Color="Color.Secondary"
-                                   Size="Size.Small"
-                                   Disabled="true"
-                                   OnClick="OnViewStatusClick">
-                            View Status
-                        </MudButton>
-                    </MudItem>
-                    
-                    <!-- Refresh Market Data Button -->
-                    <MudItem xs="6" sm="3" md="3" lg="2" Class="pa-1">
-                        <MudButton Variant="Variant.Filled"
-                                   Color="Color.Secondary"
-                                   Size="Size.Small"
-                                   Disabled="true"
-                                   OnClick="OnRefreshClick">
-                            Refresh Market Data
-                        </MudButton>
+                    <!-- Action Buttons -->
+                    <MudItem xs="12" sm="12" md="6" lg="4" Class="pa-1">
+                        <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Secondary"
+                                       Size="Size.Small"
+                                       Disabled="true"
+                                       OnClick="OnViewStatusClick"
+                                       StartIcon="@Icons.Material.Filled.Visibility"
+                                       Style="border-radius: 6px;">
+                                Status
+                            </MudButton>
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Primary"
+                                       Size="Size.Small"
+                                       Disabled="true"
+                                       OnClick="OnRefreshClick"
+                                       StartIcon="@Icons.Material.Filled.Refresh"
+                                       Style="border-radius: 6px;">
+                                Refresh
+                            </MudButton>
+                        </div>
                     </MudItem>
                     
                 </MudGrid>
@@ -79,17 +84,19 @@
         
         <!-- Craft vs Buy Analysis Section -->
         <div style="flex-shrink: 0;">
+            <MudPaper Elevation="1" Style="border-radius: 12px; overflow: hidden;">
             <MudExpansionPanel IsExpanded="_craftAnalysisExpanded"
                                IsExpandedChanged="v => _craftAnalysisExpanded = v"
-                               Style="background: #2d3a2d; margin: 0;"
+                               Style="background: linear-gradient(135deg, #2d3a2d 0%, #263626 100%); margin: 0;"
                                Dense="true"
                                HideIcon="false">
                 <TitleContent>
                     <div style="display: flex; align-items: center; gap: 12px;">
-                        <MudText Typo="Typo.body1" Style="color: #90EE90; font-weight: 600;">📊 Craft vs Buy Analysis</MudText>
+                        <MudIcon Icon="@Icons.Material.Filled.Assessment" Color="Color.Success" Size="Size.Small" />
+                        <MudText Typo="Typo.body1" Style="color: #90EE90; font-weight: 600;">Craft vs Buy Analysis</MudText>
                         @if (!string.IsNullOrEmpty(CraftAnalysisSummary))
                         {
-                            <MudText Typo="Typo.body2" Style="color: #aaa;">@CraftAnalysisSummary</MudText>
+                            <MudText Typo="Typo.caption" Style="color: #aaa; background: #1e1e1e; padding: 2px 8px; border-radius: 10px;">@CraftAnalysisSummary</MudText>
                         }
                     </div>
                 </TitleContent>
@@ -110,21 +117,24 @@
                     </MudPaper>
                 </ChildContent>
             </MudExpansionPanel>
+            </MudPaper>
         </div>
         
         <!-- Purchase Summary Section -->
         <div style="flex-shrink: 0;">
+            <MudPaper Elevation="1" Style="border-radius: 12px; overflow: hidden;">
             <MudExpansionPanel IsExpanded="_purchaseSummaryExpanded"
                                IsExpandedChanged="v => _purchaseSummaryExpanded = v"
-                               Style="background: #2d4a3e; margin: 0;"
+                               Style="background: linear-gradient(135deg, #2d4a3e 0%, #263d33 100%); margin: 0;"
                                Dense="true"
                                HideIcon="false">
                 <TitleContent>
                     <div style="display: flex; align-items: center; gap: 12px;">
-                        <MudText Typo="Typo.body1" Style="color: #90EE90; font-weight: 600;">📦 Purchase Summary</MudText>
+                        <MudIcon Icon="@Icons.Material.Filled.Inventory" Color="Color.Success" Size="Size.Small" />
+                        <MudText Typo="Typo.body1" Style="color: #90EE90; font-weight: 600;">Purchase Summary</MudText>
                         @if (!string.IsNullOrEmpty(PurchaseSummaryText))
                         {
-                            <MudText Typo="Typo.body2" Style="color: #aaa;">@PurchaseSummaryText</MudText>
+                            <MudText Typo="Typo.caption" Style="color: #aaa; background: #1e1e1e; padding: 2px 8px; border-radius: 10px;">@PurchaseSummaryText</MudText>
                         }
                     </div>
                 </TitleContent>
@@ -164,14 +174,15 @@
                     </MudPaper>
                 </ChildContent>
             </MudExpansionPanel>
+            </MudPaper>
         </div>
         
         <!-- Market Cards Area -->
         <div style="flex-grow: 1; overflow-y: auto; min-height: 0;">
-            <MudPaper Elevation="1" Class="pa-2" Style="background: #2d2d2d; height: 100%;">
+            <MudPaper Elevation="2" Class="pa-3" Style="background: linear-gradient(180deg, #2d2d2d 0%, #252525 100%); height: 100%; border-radius: 12px;">
                 @if (ShoppingPlans?.Any() == true)
                 {
-                    <MudStack Spacing="2">
+                    <MudStack Spacing="3">
                         @foreach (var plan in GetSortedPlans())
                         {
                             <MarketCard Plan="plan" />

@@ -15,7 +15,7 @@ if "%~1"=="" (
     echo Example: publish.bat 0.2.0 Release
     echo.
     echo Default: version=0.1.0, configuration=Release
-    set VERSION=0.1.1
+    set VERSION=0.1.2
 ) else (
     set VERSION=%~1
 )

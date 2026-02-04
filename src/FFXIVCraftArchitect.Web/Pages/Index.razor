@@ -14,7 +14,7 @@
 @inject NavigationManager NavigationManager
 @implements IDisposable
 
-<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0" Style="height: calc(100vh - 64px);">
+<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0" Style="height: calc(100vh - 64px - 28px);">
     <div style="display: grid; grid-template-columns: 280px 350px 1fr; height: 100%; width: 100%;">
         
         <!-- Left Column: Controls (280px) -->
@@ -129,82 +129,115 @@
         
         <!-- Middle Column: Shopping List (350px) -->
         <div Class="pa-4" Style="border-right: 1px solid #444; overflow-y: auto; min-width: 350px; max-width: 350px;">
-            <MudPaper Elevation="1" Class="pa-0" Style="height: 100%; display: flex; flex-direction: column;">
-                <MudToolBar Dense="true" Class="px-4" Style="border-bottom: 1px solid #444;">
-                    <MudText Typo="Typo.subtitle1" Color="Color.Secondary">Shopping List</MudText>
-                    <MudSpacer />
-                    <MudButtonGroup Size="Size.Small">
-                        <MudButton OnClick="ClearAllItems"
-                                   Disabled="!AppState.ShoppingItems.Any()"
-                                   Variant="Variant.Outlined"
-                                   Color="Color.Secondary"
-                                   Size="Size.Small">
-                            Clear
-                        </MudButton>
-                        <MudButton Component="label"
-                                   For="import-file"
-                                   Variant="Variant.Outlined"
-                                   Color="Color.Secondary"
-                                   Size="Size.Small">
-                            Import
+            <MudPaper Elevation="2" Class="pa-0" Style="height: 100%; display: flex; flex-direction: column; border-radius: 12px; overflow: hidden;">
+                <!-- Header -->
+                <div class="px-4 py-3" Style="background: linear-gradient(135deg, #2d2d2d 0%, #252525 100%); border-bottom: 1px solid #444;">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Color="Color.Primary" Size="Size.Small" />
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600; color: #d4a73a;">Shopping List</MudText>
+                            @if (AppState.ShoppingItems.Any())
+                            {
+                                <MudBadge Content="@AppState.ShoppingItems.Count" Color="Color.Primary" Overlap="true" Origin="Origin.TopRight" 
+                                          Style="margin-left: 4px;" />
+                            }
+                        </div>
+                        <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary" Style="border-radius: 8px;">
+                            <MudIconButton OnClick="ClearAllItems"
+                                           Disabled="!AppState.ShoppingItems.Any()"
+                                           Icon="@Icons.Material.Filled.DeleteSweep"
+                                           Color="Color.Error"
+                                           Size="Size.Small"
+                                           Title="Clear All" />
+                            <MudIconButton Component="label"
+                                           For="import-file"
+                                           Icon="@Icons.Material.Filled.Upload"
+                                           Color="Color.Secondary"
+                                           Size="Size.Small"
+                                           Title="Import Plan" />
                             <InputFile id="import-file" OnChange="ImportPlanAsync" accept=".json" style="display: none;" />
-                        </MudButton>
-                        <MudButton OnClick="ExportPlanAsync"
-                                   Disabled="!AppState.ShoppingItems.Any()"
-                                   Variant="Variant.Outlined"
-                                   Color="Color.Secondary"
-                                   Size="Size.Small">
-                            Export
-                        </MudButton>
-                    </MudButtonGroup>
-                </MudToolBar>
+                            <MudIconButton OnClick="ExportPlanAsync"
+                                           Disabled="!AppState.ShoppingItems.Any()"
+                                           Icon="@Icons.Material.Filled.Download"
+                                           Color="Color.Secondary"
+                                           Size="Size.Small"
+                                           Title="Export Plan" />
+                        </MudButtonGroup>
+                    </div>
+                </div>
                 
-                <div style="padding: 16px; flex: 1; overflow-y: auto;">
+                <div style="padding: 12px; flex: 1; overflow-y: auto;">
                     @if (!AppState.ShoppingItems.Any())
                     {
-                        <MudAlert Severity="Severity.Info" Dense="true" Class="my-2">
-                            Search for items and add them to your shopping list.
-                        </MudAlert>
+                        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 24px; text-align: center;">
+                            <MudIcon Icon="@Icons.Material.Filled.ShoppingBasket" 
+                                     Size="Size.Large" 
+                                     Color="Color.Secondary" 
+                                     Style="opacity: 0.5; margin-bottom: 12px;" />
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                Your shopping list is empty
+                            </MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="opacity: 0.7; margin-top: 4px;">
+                                Search for items to add them here
+                            </MudText>
+                        </div>
                     }
                     else
                     {
-                        <MudStack Spacing="1">
+                        <MudStack Spacing="2">
                             @foreach (var item in AppState.ShoppingItems)
                             {
-                                <MudPaper Elevation="0" Class="pa-2 d-flex align-center gap-2">
-                                    <MudText Typo="Typo.body2" Class="flex-grow-1">@item.Name</MudText>
+                                <MudPaper Elevation="0" 
+                                          Class="pa-3 d-flex align-center gap-3" 
+                                          Style="background: #2a2a2a; border-radius: 8px; border: 1px solid #383838;">
+                                    <MudText Typo="Typo.body2" Class="flex-grow-1" Style="font-weight: 500;">@item.Name</MudText>
                                     <MudNumericField @bind-Value="item.Quantity"
                                                      Min="1"
                                                      Max="9999"
                                                      Variant="Variant.Outlined"
                                                      Dense="true"
-                                                     Style="width: 70px;" />
+                                                     Style="width: 70px;"
+                                                     Adornment="Adornment.End"
+                                                     AdornmentText="x" />
                                     <MudIconButton Icon="@Icons.Material.Filled.Delete"
                                                    OnClick="() => RemoveItem(item)"
                                                    Color="Color.Error"
-                                                   Size="Size.Small" />
+                                                   Size="Size.Small"
+                                                   Variant="Variant.Outlined" />
                                 </MudPaper>
                             }
                         </MudStack>
                     }
                 </div>
                 
-                <div class="pa-4" style="border-top: 1px solid #444;">
+                <div class="pa-4" style="background: linear-gradient(180deg, #252525 0%, #2d2d2d 100%); border-top: 1px solid #444;">
                     <MudButton OnClick="AnalyzeMarketAsync"
                                Disabled="!AppState.ShoppingItems.Any() || _isAnalyzing || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter)"
                                Color="Color.Primary"
                                Variant="Variant.Filled"
-                               FullWidth="true">
+                               FullWidth="true"
+                               Style="border-radius: 8px; height: 40px;"
+                               StartIcon="@(_isAnalyzing ? "" : Icons.Material.Filled.Analytics)">
                         @if (_isAnalyzing)
                         {
                             <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                            <span>Analyzing...</span>
+                            <span>Analyzing Market...</span>
                         }
                         else
                         {
                             <span>Analyze Market</span>
                         }
                     </MudButton>
+                    @if (!string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+                    {
+                        <MudText Typo="Typo.caption" 
+                                 Color="Color.Secondary" 
+                                 Align="Align.Center" 
+                                 Class="d-block mt-2"
+                                 Style="opacity: 0.7;">
+                            Using @AppState.SelectedDataCenter data center
+                        </MudText>
+                    }
                 </div>
             </MudPaper>
         </div>
@@ -292,14 +325,17 @@
 
         _isSearching = true;
         _searchResults.Clear();
+        AppState.BeginOperation("Searching", $"Searching for '{_searchQuery}'...");
         
         try
         {
             var results = await GarlandService.SearchAsync(_searchQuery);
             _searchResults = results.Take(10).ToList();
+            AppState.EndOperation($"Found {_searchResults.Count} results for '{_searchQuery}'");
         }
         catch (Exception ex)
         {
+            AppState.SetStatus($"Search failed: {ex.Message}");
             Snackbar.Add($"Search failed: {ex.Message}", Severity.Error);
         }
         finally
@@ -322,6 +358,7 @@
         if (existing != null)
         {
             existing.Quantity++;
+            AppState.SetStatus($"Increased {result.Object.Name} quantity to {existing.Quantity}");
         }
         else
         {
@@ -332,6 +369,7 @@
                 IconId = result.Object.IconId,
                 Quantity = 1
             });
+            AppState.SetStatus($"Added {result.Object.Name} to shopping list");
         }
         
         _searchResults.Clear();
@@ -344,13 +382,16 @@
     {
         AppState.ShoppingItems.Remove(item);
         AppState.ShoppingPlans.Clear();
+        AppState.SetStatus($"Removed {item.Name} from shopping list");
         AppState.NotifyShoppingListChanged();
     }
 
     private void ClearAllItems()
     {
+        var count = AppState.ShoppingItems.Count;
         AppState.ShoppingItems.Clear();
         AppState.ShoppingPlans.Clear();
+        AppState.SetStatus($"Cleared {count} items from shopping list");
         AppState.NotifyShoppingListChanged();
     }
 
@@ -361,6 +402,7 @@
 
         _isAnalyzing = true;
         AppState.ShoppingPlans.Clear();
+        AppState.BeginOperation("Market Analysis", $"Analyzing {AppState.ShoppingItems.Count} items on {AppState.SelectedDataCenter}...");
 
         try
         {
@@ -382,10 +424,13 @@
                 
             AppState.NotifyShoppingListChanged();
             
+            var bestValue = AppState.ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
+            AppState.EndOperation($"Analysis complete! Potential savings found.");
             Snackbar.Add($"Analysis complete. Found deals for {AppState.ShoppingPlans.Count} items.", Severity.Success);
         }
         catch (Exception ex)
         {
+            AppState.SetStatus($"Analysis failed: {ex.Message}");
             Snackbar.Add($"Market analysis failed: {ex.Message}", Severity.Error);
         }
         finally

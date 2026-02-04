@@ -1,0 +1,162 @@
+@using FFXIVCraftArchitect.Web.Services
+@inject AppState AppState
+@implements IDisposable
+
+<div class="status-bar">
+    <div class="status-left">
+        @if (AppState.IsBusy)
+        {
+            <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" Class="status-spinner" />
+        }
+        else
+        {
+            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" 
+                     Size="Size.Small" 
+                     Color="Color.Success" 
+                     Class="status-icon" />
+        }
+        <span class="status-text @(AppState.IsBusy ? "busy" : "ready")">@AppState.StatusMessage</span>
+    </div>
+    
+    <div class="status-center">
+        @if (AppState.ShoppingItems.Any())
+        {
+            <span class="status-badge">
+                <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" />
+                @AppState.ShoppingItems.Count items
+            </span>
+        }
+        @if (AppState.ProjectItems.Any())
+        {
+            <span class="status-badge">
+                <MudIcon Icon="@Icons.Material.Filled.ListAlt" Size="Size.Small" />
+                @AppState.ProjectItems.Count projects
+            </span>
+        }
+        @if (!string.IsNullOrEmpty(AppState.SelectedDataCenter))
+        {
+            <span class="status-badge dc-badge">
+                <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" />
+                @AppState.SelectedDataCenter
+            </span>
+        }
+    </div>
+    
+    <div class="status-right">
+        @if (AppState.IsBusy && AppState.ProgressPercent > 0)
+        {
+            <span class="progress-text">@AppState.ProgressPercent.ToString("F0")%</span>
+        }
+        <span class="timestamp">@AppState.LastStatusUpdate.ToString("HH:mm:ss")</span>
+    </div>
+</div>
+
+<style>
+    .status-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 16px;
+        background: linear-gradient(180deg, #252525 0%, #1e1e1e 100%);
+        border-top: 1px solid #333;
+        font-size: 12px;
+        height: 28px;
+        flex-shrink: 0;
+    }
+    
+    .status-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+        min-width: 0;
+    }
+    
+    .status-spinner {
+        width: 14px !important;
+        height: 14px !important;
+    }
+    
+    .status-icon {
+        width: 14px;
+        height: 14px;
+    }
+    
+    .status-text {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    
+    .status-text.ready {
+        color: #aaa;
+    }
+    
+    .status-text.busy {
+        color: #d4a73a;
+        font-weight: 500;
+    }
+    
+    .status-center {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        justify-content: center;
+    }
+    
+    .status-badge {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        background: #333;
+        border-radius: 12px;
+        color: #ccc;
+        font-size: 11px;
+    }
+    
+    .status-badge.dc-badge {
+        background: #2d4a3e;
+        color: #90EE90;
+    }
+    
+    .status-right {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex: 1;
+        justify-content: flex-end;
+    }
+    
+    .progress-text {
+        color: #d4a73a;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+    }
+    
+    .timestamp {
+        color: #666;
+        font-variant-numeric: tabular-nums;
+    }
+</style>
+
+@code {
+    protected override void OnInitialized()
+    {
+        AppState.OnStatusChanged += OnStatusChanged;
+        AppState.OnShoppingListChanged += OnStatusChanged;
+        AppState.OnPlanChanged += OnStatusChanged;
+    }
+    
+    private void OnStatusChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+    
+    public void Dispose()
+    {
+        AppState.OnStatusChanged -= OnStatusChanged;
+        AppState.OnShoppingListChanged -= OnStatusChanged;
+        AppState.OnPlanChanged -= OnStatusChanged;
+    }
+}

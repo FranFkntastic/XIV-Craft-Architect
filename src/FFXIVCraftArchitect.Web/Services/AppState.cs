@@ -24,10 +24,18 @@ public class AppState
     public DateTime? LastAutoSave { get; set; }
     public List<StoredPlanSummary> SavedPlans { get; set; } = new();
     
+    // Status Bar State
+    public string StatusMessage { get; set; } = "Ready";
+    public bool IsBusy { get; set; } = false;
+    public double ProgressPercent { get; set; } = 0;
+    public string? CurrentOperation { get; set; } = null;
+    public DateTime LastStatusUpdate { get; set; } = DateTime.Now;
+    
     // Event to notify subscribers when plan changes
     public event Action? OnPlanChanged;
     public event Action? OnShoppingListChanged;
     public event Action? OnSavedPlansChanged;
+    public event Action? OnStatusChanged;
     
     public void NotifyPlanChanged()
     {
@@ -42,6 +50,61 @@ public class AppState
     public void NotifySavedPlansChanged()
     {
         OnSavedPlansChanged?.Invoke();
+    }
+    
+    public void NotifyStatusChanged()
+    {
+        LastStatusUpdate = DateTime.Now;
+        OnStatusChanged?.Invoke();
+    }
+    
+    /// <summary>
+    /// Set status message and optionally show busy state.
+    /// </summary>
+    public void SetStatus(string message, bool busy = false, double? progress = null)
+    {
+        StatusMessage = message;
+        IsBusy = busy;
+        if (progress.HasValue)
+        {
+            ProgressPercent = Math.Clamp(progress.Value, 0, 100);
+        }
+        else if (!busy)
+        {
+            ProgressPercent = 0;
+        }
+        NotifyStatusChanged();
+    }
+    
+    /// <summary>
+    /// Start a long-running operation with a name.
+    /// </summary>
+    public void BeginOperation(string operationName, string? message = null)
+    {
+        CurrentOperation = operationName;
+        SetStatus(message ?? $"{operationName}...", busy: true);
+    }
+    
+    /// <summary>
+    /// End the current operation.
+    /// </summary>
+    public void EndOperation(string? message = null)
+    {
+        CurrentOperation = null;
+        SetStatus(message ?? "Ready", busy: false, progress: 0);
+    }
+    
+    /// <summary>
+    /// Update progress of current operation (0-100).
+    /// </summary>
+    public void UpdateProgress(double percent, string? message = null)
+    {
+        ProgressPercent = Math.Clamp(percent, 0, 100);
+        if (!string.IsNullOrEmpty(message))
+        {
+            StatusMessage = message;
+        }
+        NotifyStatusChanged();
     }
     
     /// <summary>
