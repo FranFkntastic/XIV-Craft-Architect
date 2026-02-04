@@ -4,7 +4,34 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FFXIV Craft Architect - Web</title>
-    <base href="/" />
+    <!-- Dynamic base href based on environment -->
+    <script>
+        (function() {
+            const hostname = window.location.hostname;
+            const pathname = window.location.pathname;
+            
+            // Determine base href based on environment
+            let baseHref;
+            if (hostname === 'localhost' || hostname === '127.0.0.1') {
+                // Local development
+                baseHref = '/';
+                console.log('[ENV] Local development detected, base href: /');
+            } else if (hostname.includes('github.io') || pathname.startsWith('/XIV-Craft-Architect/')) {
+                // GitHub Pages deployment
+                baseHref = '/XIV-Craft-Architect/';
+                console.log('[ENV] GitHub Pages detected, base href: /XIV-Craft-Architect/');
+            } else {
+                // Default to root for other environments
+                baseHref = '/';
+                console.log('[ENV] Unknown environment, default base href: /');
+            }
+            
+            // Set the base href
+            const baseElement = document.createElement('base');
+            baseElement.href = baseHref;
+            document.head.appendChild(baseElement);
+        })();
+    </script>
     
     <!-- MudBlazor CSS -->
     <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" rel="stylesheet" />
