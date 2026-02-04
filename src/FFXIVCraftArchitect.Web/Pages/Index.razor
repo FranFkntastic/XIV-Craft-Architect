@@ -77,12 +77,13 @@
             }
             
             <MudTextField @bind-Value="_searchQuery"
+                          @bind-Value:event="oninput"
                           Label="Item Name"
                           Placeholder="Enter item..."
                           Variant="Variant.Outlined"
                           Dense="true"
                           Class="mb-2"
-                          @onkeyup="OnSearchKeyUp"
+                          @onkeydown="OnSearchKeyDown"
                           Adornment="Adornment.End"
                           AdornmentIcon="@Icons.Material.Filled.Search"
                           AdornmentColor="Color.Primary" />
@@ -362,6 +363,8 @@
 
         _isSearching = true;
         _searchResults.Clear();
+        await InvokeAsync(StateHasChanged); // Force UI update to show loading state
+        
         AppState.BeginOperation("Searching", $"Searching for '{_searchQuery}'...");
         
         try
@@ -369,6 +372,7 @@
             var results = await GarlandService.SearchAsync(_searchQuery);
             _searchResults = results.Take(10).ToList();
             AppState.EndOperation($"Found {_searchResults.Count} results for '{_searchQuery}'");
+            await InvokeAsync(StateHasChanged); // Force UI update to show results
         }
         catch (Exception ex)
         {
@@ -378,10 +382,11 @@
         finally
         {
             _isSearching = false;
+            await InvokeAsync(StateHasChanged); // Ensure UI is updated
         }
     }
 
-    private void OnSearchKeyUp(KeyboardEventArgs e)
+    private void OnSearchKeyDown(KeyboardEventArgs e)
     {
         if (e.Key == "Enter")
         {
