@@ -77,16 +77,16 @@
             }
             
             <MudTextField @bind-Value="_searchQuery"
-                          @bind-Value:event="oninput"
                           Label="Item Name"
                           Placeholder="Enter item..."
                           Variant="Variant.Outlined"
                           Dense="true"
                           Class="mb-2"
-                          @onkeydown="OnSearchKeyDown"
+                          OnKeyDown="OnSearchKeyDown"
                           Adornment="Adornment.End"
                           AdornmentIcon="@Icons.Material.Filled.Search"
-                          AdornmentColor="Color.Primary" />
+                          AdornmentColor="Color.Primary"
+                          OnAdornmentClick="SearchItemsAsync" />
             
             <MudButton OnClick="SearchItemsAsync"
                        Disabled="_isSearching"
@@ -386,11 +386,11 @@
         }
     }
 
-    private void OnSearchKeyDown(KeyboardEventArgs e)
+    private async Task OnSearchKeyDown(KeyboardEventArgs e)
     {
         if (e.Key == "Enter")
         {
-            _ = SearchItemsAsync();
+            await SearchItemsAsync();
         }
     }
 
