@@ -1,0 +1,184 @@
+@using FFXIVCraftArchitect.Core.Models
+
+<div style="background: linear-gradient(135deg, #3a3520 0%, #2d2a1a 100%); border-radius: 8px; border: 1px solid #555; overflow: hidden;">
+    <!-- Header (always visible) -->
+    <div @onclick="ToggleExpanded" 
+         style="display: flex; align-items: center; padding: 12px 16px; cursor: pointer; background: linear-gradient(135deg, #4a4528 0%, #3d3a20 100%); border-bottom: @(_isExpanded ? "1px solid #555" : "none");"
+         onmouseover="this.style.background='linear-gradient(135deg, #5a5530 0%, #4d4a28 100%)'" 
+         onmouseout="this.style.background='linear-gradient(135deg, #4a4528 0%, #3d3a20 100%)'">
+        
+        <!-- Expand Icon -->
+        <MudIcon Icon="@(_isExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" 
+                 Style="color: #d4a73a; margin-right: 12px;" 
+                 Size="Size.Small" />
+        
+        <!-- Item Icon placeholder -->
+        <div style="width: 32px; height: 32px; border-radius: 4px; background: #1a1a1a; display: flex; align-items: center; justify-content: center; margin-right: 12px;">
+            <MudIcon Icon="@Icons.Material.Filled.ShoppingBag" Size="Size.Small" Style="color: #d4a73a;" />
+        </div>
+        
+        <!-- Item Name & Quantity -->
+        <div style="flex: 1; min-width: 0;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <MudText Typo="Typo.body2" Style="color: #fff; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    @Plan.Name
+                </MudText>
+                <MudText Typo="Typo.body2" Style="color: #d4a73a;">×@(Plan.QuantityNeeded)</MudText>
+            </div>
+            @if (!string.IsNullOrEmpty(Plan.Error))
+            {
+                <MudText Typo="Typo.caption" Style="color: #f44336;">@Plan.Error</MudText>
+            }
+        </div>
+        
+        <!-- Best World Info (header summary) -->
+        @if (Plan.RecommendedWorld != null)
+        {
+            <div style="text-align: right; margin-right: 16px;">
+                <div style="display: flex; align-items: center; gap: 4px; justify-content: flex-end;">
+                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Style="color: #4caf50;" />
+                    <MudText Typo="Typo.body2" Style="color: #90EE90; font-weight: 600;">@Plan.RecommendedWorld.WorldName</MudText>
+                </div>
+                <MudText Typo="Typo.caption" Style="color: #888;">@Plan.RecommendedWorld.AveragePricePerUnit.ToString("N0")g each</MudText>
+            </div>
+            
+            <!-- Total Cost -->
+            <div style="text-align: right; min-width: 100px;">
+                <MudText Typo="Typo.body1" Style="color: #d4a73a; font-weight: 700;">@Plan.RecommendedWorld.TotalCost.ToString("N0")g</MudText>
+                @if (Plan.RecommendedWorld.ExcessQuantity > 0)
+                {
+                    <MudText Typo="Typo.caption" Style="color: #ff9800;">+@Plan.RecommendedWorld.ExcessQuantity excess</MudText>
+                }
+            </div>
+        }
+        else
+        {
+            <MudText Typo="Typo.caption" Style="color: #888; margin-right: 16px;">No data</MudText>
+        }
+    </div>
+    
+    <!-- Expanded Details -->
+    @if (_isExpanded && Plan.WorldOptions?.Any() == true)
+    {
+        <div style="background: #252520; padding: 12px 16px;">
+            @foreach (var world in GetSortedWorlds())
+            {
+                var isBest = world.WorldName == Plan.RecommendedWorld?.WorldName;
+                var bestPricePerUnit = world.BestSingleListing?.PricePerUnit ?? world.AveragePricePerUnit;
+                <div style="margin-bottom: 12px; padding: 10px 12px; background: @(isBest ? "#1a3a1a" : "#1e1e1a"); border-radius: 6px; border: 1px solid @(isBest ? "#4caf50" : "#333");">
+                    <!-- World Header -->
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            @if (isBest)
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Style="color: #4caf50;" />
+                            }
+                            <span style="color: @(isBest ? "#90EE90" : "#ccc"); font-weight: 600;">
+                                @world.WorldName
+                            </span>
+                        </div>
+                        <div style="text-align: right;">
+                            <span style="color: @(isBest ? "#90EE90" : "#ccc"); font-weight: 600;">
+                                @world.TotalCost.ToString("N0")g total
+                            </span>
+                            @if (world.ExcessQuantity > 0)
+                            {
+                                <MudText Typo="Typo.caption" Style="color: #ff9800;">+@world.ExcessQuantity excess</MudText>
+                            }
+                        </div>
+                    </div>
+                    
+                    <!-- Best Price Info -->
+                    <div style="margin-bottom: 8px; padding: 4px 8px; background: rgba(0,0,0,0.3); border-radius: 4px;">
+                        <MudText Typo="Typo.caption" Style="color: #888;">
+                            Best: <span style="color: #d4a73a;">@bestPricePerUnit.ToString("N0")g</span>/ea · @world.ListingsUsed listings used
+                        </MudText>
+                    </div>
+                    
+                    <!-- Individual Listings -->
+                    @if (world.Listings?.Any() == true)
+                    {
+                        <div style="font-family: monospace; font-size: 12px;">
+                            @foreach (var listing in world.Listings.OrderBy(l => l.PricePerUnit))
+                            {
+                                var listingTotal = listing.Quantity * listing.PricePerUnit;
+                                var isUsed = !listing.IsAdditionalOption;
+                                
+                                <div style="display: flex; align-items: center; padding: 2px 0; color: @(isUsed ? "#ccc" : "#666"); border-bottom: 1px solid #333;">
+                                    <!-- Quantity indicator -->
+                                    <span style="width: 90px; color: @(isUsed ? "#90EE90" : "#666");">
+                                        ×@(listing.Quantity)
+                                        @if (isUsed && listing.NeededFromStack > 0 && listing.NeededFromStack < listing.Quantity)
+                                        {
+                                            <span style="color: #ff9800;">(need @listing.NeededFromStack)</span>
+                                        }
+                                        else if (listing.ExcessQuantity > 0)
+                                        {
+                                            <span style="color: #666;">(+@listing.ExcessQuantity extra)</span>
+                                        }
+                                    </span>
+                                    
+                                    <!-- Price per unit -->
+                                    <span style="width: 80px; color: @(listing.IsHq ? "#ffeb3b" : "#ccc");">
+                                        @if (listing.IsHq)
+                                        {
+                                            <span style="color: #ffeb3b;">★</span>
+                                        }
+                                        @listing.PricePerUnit.ToString("N0")g
+                                    </span>
+                                    
+                                    <!-- Total for this listing -->
+                                    <span style="width: 100px; text-align: right; color: @(isUsed ? "#d4a73a" : "#666");">
+                                        = @listingTotal.ToString("N0")g
+                                    </span>
+                                    
+                                    <!-- Retainer name -->
+                                    <span style="flex: 1; text-align: right; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 8px;">
+                                        @listing.RetainerName
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public DetailedShoppingPlan Plan { get; set; } = null!;
+    
+    [Parameter]
+    public bool InitiallyExpanded { get; set; } = false;
+    
+    private bool _isExpanded;
+    
+    protected override void OnInitialized()
+    {
+        _isExpanded = InitiallyExpanded;
+    }
+    
+    private void ToggleExpanded()
+    {
+        _isExpanded = !_isExpanded;
+    }
+    
+    private List<WorldShoppingSummary> GetSortedWorlds()
+    {
+        if (Plan.WorldOptions == null)
+            return new List<WorldShoppingSummary>();
+        
+        // Sort: recommended world first, then by total cost
+        return Plan.WorldOptions
+            .OrderBy(w => w.WorldName != Plan.RecommendedWorld?.WorldName)
+            .ThenBy(w => w.TotalCost)
+            .ToList();
+    }
+    
+    private string GetIconUrl(int iconId)
+    {
+        return $"https://www.garlandtools.org/files/icons/item/{iconId}.png";
+    }
+}
