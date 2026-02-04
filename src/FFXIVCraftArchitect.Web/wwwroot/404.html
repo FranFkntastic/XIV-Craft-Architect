@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FFXIV Craft Architect - Web</title>
+    <script>
+        // GitHub Pages SPA redirect script
+        // This handles client-side routing by redirecting all 404s to index.html
+        // while preserving the path for the Blazor router to handle
+        
+        (function() {
+            // Get the current path and repository name
+            const path = window.location.pathname;
+            const repoName = '/XIV-Craft-Architect';
+            
+            // Store the full path in sessionStorage so the app can pick it up after redirect
+            // Remove the repo name from the path if present
+            let routePath = path;
+            if (path.startsWith(repoName)) {
+                routePath = path.substring(repoName.length);
+            }
+            
+            // Store the target path for the app to read after loading
+            sessionStorage.setItem('redirectPath', routePath + window.location.search + window.location.hash);
+            
+            // Redirect to the root of the app
+            const baseUrl = window.location.origin + repoName + '/';
+            window.location.replace(baseUrl);
+        })();
+    </script>
+</head>
+<body>
+    <p>Redirecting to FFXIV Craft Architect...</p>
+</body>
+</html>

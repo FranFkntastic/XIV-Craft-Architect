@@ -25,14 +25,14 @@
         <!-- Navigation Tabs -->
         <MudButtonGroup Size="Size.Small" Style="margin-right: 24px;">
             <MudButton OnClick="@(() => NavigateTo(""))"
-                       Color="@GetTabColor("")"
-                       Variant="@GetTabVariant("")">
-                Market Logistics
-            </MudButton>
-            <MudButton OnClick="@(() => NavigateTo("planner"))"
                        Color="@GetTabColor("planner")"
                        Variant="@GetTabVariant("planner")">
                 Recipe Planner
+            </MudButton>
+            <MudButton OnClick="@(() => NavigateTo("market"))"
+                       Color="@GetTabColor("market")"
+                       Variant="@GetTabVariant("market")">
+                Market Logistics
             </MudButton>
         </MudButtonGroup>
         
@@ -199,10 +199,10 @@
     private void UpdateActiveTab(string uri)
     {
         var uriLower = uri.ToLowerInvariant();
-        if (uriLower.Contains("/planner"))
-            _activeTab = "planner";
-        else
+        if (uriLower.Contains("/market"))
             _activeTab = "market";
+        else
+            _activeTab = "planner";
     }
 
     private bool IsActiveTab(string tab)
@@ -318,7 +318,7 @@
             // Navigate to planner if we have a plan
             if (plan != null || AppState.ProjectItems.Any())
             {
-                NavigationManager.NavigateTo("/planner");
+                NavigationManager.NavigateTo("/");
             }
         }
         catch (Exception ex)
@@ -384,7 +384,7 @@
             // Navigate to planner
             if (items.Count > 0)
             {
-                NavigationManager.NavigateTo("/planner");
+                NavigationManager.NavigateTo("/");
             }
         }
     }

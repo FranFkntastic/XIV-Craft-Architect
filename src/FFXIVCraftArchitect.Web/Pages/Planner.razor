@@ -1,7 +1,8 @@
-@page "/planner"
+@page "/market"
 @using FFXIVCraftArchitect.Core.Models
 @using FFXIVCraftArchitect.Core.Services
 @using FFXIVCraftArchitect.Web.Services
+@using FFXIVCraftArchitect.Web.Shared
 @using Microsoft.AspNetCore.Components.Forms
 @inject GarlandService GarlandService
 @inject UniversalisService UniversalisService
@@ -10,335 +11,312 @@
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @inject AppState AppState
-@inject IndexedDbService IndexedDb
 @inject NavigationManager NavigationManager
 @implements IDisposable
 
-<!-- 3-Column Layout matching WPF -->
-<div style="display: grid; grid-template-columns: 280px 1fr 350px; gap: 0; height: calc(100vh - 64px);">
-    
-    <!-- Left Column: Project Items -->
-    <div style="padding: 16px; overflow-y: auto; border-right: 1px solid #333;">
-        <div style="font-size: 16px; font-weight: 600; color: #d4a73a; margin-bottom: 16px;">Project Items</div>
+<style>
+    .search-results-container .search-result-item:hover {
+        background: linear-gradient(135deg, #3a3020 0%, #2d2520 100%) !important;
+    }
+    .search-results-container .mud-list-item {
+        transition: background-color 0.2s ease;
+    }
+</style>
+
+<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0" Style="height: calc(100vh - 64px - 28px);">
+    <div style="display: grid; grid-template-columns: 280px 350px 1fr; height: 100%; width: 100%;">
         
-        <!-- Add Item Section -->
-        <div style="margin-bottom: 16px;">
-            <div style="color: #cccccc; font-size: 14px; margin-bottom: 4px;">Item Name:</div>
-            <input type="text" 
-                   @bind="_searchQuery"
-                   @bind:event="oninput"
-                   @onkeyup="OnSearchKeyUp"
-                   placeholder="Enter item..."
-                   style="width: 100%; padding: 8px; background: #2d2d2d; color: white; border: 1px solid #444; border-radius: 4px; box-sizing: border-box;" />
+        <!-- Left Column: Controls (280px) -->
+        <div Class="pa-4" Style="border-right: 1px solid #444; overflow-y: auto; min-width: 280px; max-width: 280px;">
+            <MudText Typo="Typo.h6" Color="Color.Primary" Class="mb-4">Market Logistics</MudText>
             
-            <button @onclick="SearchItemsAsync" 
-                    disabled="@_isSearching"
-                    style="width: 100%; padding: 8px; margin-top: 8px; background: #d4a73a; color: #1a1a1a; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+            @if (_isLoadingWorlds)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="my-4" />
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Align="Align.Center">Loading worlds...</MudText>
+            }
+            else
+            {
+                <MudSelect T="string"
+                           @bind-Value="AppState.SelectedDataCenter"
+                           Label="Data Center"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Class="mb-3"
+                           AdornmentColor="Color.Primary">
+                    @foreach (var dc in _worldData?.DataCenters ?? new List<string>())
+                    {
+                        <MudSelectItem Value="@dc">@dc</MudSelectItem>
+                    }
+                </MudSelect>
+                
+                <MudSelect T="string"
+                           @bind-Value="_selectedWorld"
+                           Label="World"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Class="mb-3"
+                           Disabled="string.IsNullOrEmpty(AppState.SelectedDataCenter)">
+                    <MudSelectItem Value="@string.Empty">Any World</MudSelectItem>
+                    @foreach (var world in GetWorldsForSelectedDc())
+                    {
+                        <MudSelectItem Value="@world">@world</MudSelectItem>
+                    }
+                </MudSelect>
+                
+                <MudSelect T="RecommendationMode"
+                           @bind-Value="AppState.RecommendationMode"
+                           Label="Mode"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Class="mb-4">
+                    <MudSelectItem Value="@RecommendationMode.MinimizeTotalCost">Minimize Cost</MudSelectItem>
+                    <MudSelectItem Value="@RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
+                    <MudSelectItem Value="@RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
+                </MudSelect>
+            }
+            
+            <MudTextField @bind-Value="_searchQuery"
+                          Label="Item Name"
+                          Placeholder="Enter item..."
+                          Variant="Variant.Outlined"
+                          Dense="true"
+                          Class="mb-2"
+                          OnKeyDown="OnSearchKeyDown"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          AdornmentColor="Color.Primary"
+                          OnAdornmentClick="SearchItemsAsync" />
+            
+            <MudButton OnClick="SearchItemsAsync"
+                       Disabled="_isSearching"
+                       Color="Color.Primary"
+                       Variant="Variant.Filled"
+                       FullWidth="true"
+                       Class="mb-4"
+                       StartIcon="@Icons.Material.Filled.Search">
                 @if (_isSearching)
                 {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
                     <span>Searching...</span>
                 }
                 else
                 {
                     <span>Search</span>
                 }
-            </button>
+            </MudButton>
             
             @if (_searchResults.Any())
             {
-                <div style="margin-top: 8px; background: #2d2d2d; border-radius: 4px; border: 1px solid #d4a73a; max-height: 200px; overflow-y: auto;">
-                    @foreach (var result in _searchResults)
-                    {
-                        <div @onclick="() => AddProjectItem(result)" 
-                             style="padding: 8px; cursor: pointer; border-bottom: 1px solid #444;"
-                             onmouseover="this.style.backgroundColor='#3d3d3d'" 
-                             onmouseout="this.style.backgroundColor='transparent'">
-                            <div style="color: white;">@result.Object.Name</div>
-                            <div style="color: #888; font-size: 12px;">ID: @result.Id</div>
+                <MudPaper Elevation="4" 
+                          Class="mt-2 search-results-container" 
+                          Style="max-height: 300px; overflow-y: auto; border-radius: 8px; border: 1px solid #d4a73a; background: #2d2d2d; z-index: 100;">
+                    <div class="px-3 py-2" Style="background: linear-gradient(135deg, #3a3020 0%, #2d2520 100%); border-bottom: 1px solid #d4a73a; display: flex; align-items: center; justify-content: space-between;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <MudIcon Icon="@Icons.Material.Filled.Search" Size="Size.Small" Color="Color.Primary" />
+                            <MudText Typo="Typo.body2" Style="color: #d4a73a; font-weight: 600;">Search Results</MudText>
+                            <MudBadge Content="@_searchResults.Count" Color="Color.Primary" Style="margin-left: 4px;" />
                         </div>
-                    }
-                </div>
-            }
-        </div>
-        
-        <!-- Project Items List -->
-        <div style="background: #2d2d2d; border-radius: 4px; border: 1px solid #444;">
-            <div style="background: #363636; padding: 12px; border-bottom: 1px solid #444;">
-                <span style="color: #cccccc; font-weight: 500;">Target Items</span>
-            </div>
-            <div style="padding: 8px;">
-                @if (!AppState.ProjectItems.Any())
-                {
-                    <div style="color: #888; text-align: center; padding: 24px; font-size: 14px;">
-                        Search for items to add to your project.
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" 
+                                       Size="Size.Small" 
+                                       Color="Color.Secondary"
+                                       OnClick="() => _searchResults.Clear()"
+                                       Style="padding: 4px;" />
                     </div>
-                }
-                else
-                {
-                    @foreach (var item in AppState.ProjectItems)
-                    {
-                        <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: #1e1e1e; border-radius: 4px; margin-bottom: 8px;">
-                            <button @onclick="() => ToggleItemHq(item)"
-                                    style="background: transparent; border: none; cursor: pointer; color: @(item.MustBeHq ? "#d4a73a" : "#666"); font-size: 14px; padding: 0; width: 20px;">
-                                ★
-                            </button>
-                            <div style="flex: 1; color: @(item.MustBeHq ? "#d4a73a" : "white");">
-                                @item.Name
-                            </div>
-                            <input type="number" 
-                                   @bind="item.Quantity"
-                                   min="1"
-                                   max="9999"
-                                   style="width: 60px; padding: 4px; background: #2d2d2d; color: white; border: 1px solid #444; border-radius: 4px; text-align: center;" />
-                            <button @onclick="() => RemoveProjectItem(item)"
-                                    style="background: transparent; border: none; color: #ff6b6b; cursor: pointer; font-size: 12px;">
-                                ×
-                            </button>
-                        </div>
-                    }
-                }
-            </div>
-            
-            <!-- Build Plan Button -->
-            <div style="padding: 12px; border-top: 1px solid #444;">
-                <button @onclick="BuildPlanAsync"
-                        disabled="@(!AppState.ProjectItems.Any() || _isBuildingPlan)"
-                        style="width: 100%; padding: 10px; background: #d4a73a; color: #1a1a1a; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                    @if (_isBuildingPlan)
-                    {
-                        <span>Building...</span>
-                    }
-                    else
-                    {
-                        <span>Build Project Plan</span>
-                    }
-                </button>
-            </div>
-        </div>
-        
-        <!-- Data Center / World -->
-        <div style="margin-top: 16px;">
-            <div style="color: #cccccc; font-size: 14px; margin-bottom: 4px;">Data Center:</div>
-            <select @bind="AppState.SelectedDataCenter"
-                    style="width: 100%; padding: 8px; background: #2d2d2d; color: white; border: 1px solid #444; border-radius: 4px;">
-                @foreach (var dc in _worldData?.DataCenters ?? new List<string>())
-                {
-                    <option value="@dc">@dc</option>
-                }
-            </select>
-        </div>
-        
-        <!-- Plan Actions -->
-        @if (AppState.CurrentPlan != null || AppState.ProjectItems.Any())
-        {
-            <div style="margin-top: 16px; display: flex; gap: 8px;">
-                <button @onclick="SaveToBrowserAsync"
-                        style="flex: 1; padding: 8px; background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                    Save
-                </button>
-                <button @onclick="ExportPlanAsync"
-                        style="flex: 1; padding: 8px; background: #2196f3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                    Export
-                </button>
-            </div>
-            
-            @if (AppState.LastAutoSave.HasValue)
-            {
-                <div style="color: #888; font-size: 11px; text-align: center; margin-top: 8px;">
-                    Auto-saved: @AppState.LastAutoSave.Value.ToString("HH:mm:ss")
-                </div>
-            }
-        }
-    </div>
-    
-    <!-- Middle Column: Recipe Tree -->
-    <div style="padding: 16px; overflow-y: auto; border-right: 1px solid #333;" id="recipe-tree-container">
-        <div style="font-size: 16px; font-weight: 600; color: #d4a73a; margin-bottom: 16px;">Recipe Plan</div>
-        
-        @if (AppState.CurrentPlan == null)
-        {
-            <div style="color: #888; text-align: center; padding: 40px;">
-                <div style="font-size: 18px; margin-bottom: 8px;">No Plan Built Yet</div>
-                <div style="font-size: 14px;">Add items to your project and click "Build Project Plan" to see the recipe tree.</div>
-                
-                <!-- Saved Plans Section -->
-                @if (AppState.SavedPlans.Any())
-                {
-                    <div style="margin-top: 32px; text-align: left;">
-                        <div style="color: #d4a73a; font-size: 14px; margin-bottom: 12px;">Saved Plans:</div>
-                        @foreach (var plan in AppState.SavedPlans)
+                    <MudList T="GarlandSearchResult" Dense="true" Style="padding: 4px;">
+                        @foreach (var result in _searchResults)
                         {
-                            <div style="background: #2d2d2d; padding: 12px; border-radius: 4px; margin-bottom: 8px; border: 1px solid #444; display: flex; justify-content: space-between; align-items: center;">
-                                <div>
-                                    <div style="color: white; font-weight: 500;">@plan.Name</div>
-                                    <div style="color: #888; font-size: 12px;">
-                                        @plan.DataCenter • @plan.ItemCount items • @plan.SavedAt.ToString("MMM dd, HH:mm")
+                            <MudListItem T="GarlandSearchResult" 
+                                         OnClick="() => AddItemToList(result)"
+                                         Style="border-radius: 6px; margin: 2px 4px; cursor: pointer;"
+                                         Class="search-result-item">
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <MudIcon Icon="@Icons.Material.Filled.AddCircle" 
+                                             Size="Size.Small" 
+                                             Color="Color.Primary"
+                                             Style="opacity: 0.7;" />
+                                    <div style="flex: 1; min-width: 0;">
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@result.Object.Name</MudText>
+                                        <MudText Typo="Typo.caption" Style="color: #888;">ID: @result.Id</MudText>
                                     </div>
                                 </div>
-                                <div style="display: flex; gap: 4px;">
-                                    <button @onclick="() => LoadSavedPlanAsync(plan.Id)"
-                                            style="padding: 4px 12px; background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                                        Load
-                                    </button>
-                                    <button @onclick="() => DeleteSavedPlanAsync(plan.Id)"
-                                            style="padding: 4px 8px; background: transparent; color: #ff6b6b; border: 1px solid #ff6b6b; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                                        ×
-                                    </button>
-                                </div>
-                            </div>
+                            </MudListItem>
                         }
+                    </MudList>
+                    <div class="px-3 py-2" Style="background: #252525; border-top: 1px solid #444; text-align: center;">
+                        <MudText Typo="Typo.caption" Style="color: #888;">Click an item to add it to your list</MudText>
                     </div>
-                }
-            </div>
-        }
-        else
-        {
-            <!-- Refresh Prices Button -->
-            <div style="margin-bottom: 16px;">
-                <button @onclick="RefreshPricesAsync"
-                        disabled="@_isRefreshingPrices"
-                        style="padding: 8px 16px; background: #2d2d2d; color: #ccc; border: 1px solid #555; border-radius: 4px; cursor: pointer;">
-                    @if (_isRefreshingPrices)
-                    {
-                        <span>Fetching Prices...</span>
-                    }
-                    else
-                    {
-                        <span>Refresh Prices</span>
-                    }
-                </button>
-            </div>
-            
-            <!-- Recipe Tree -->
-            <div style="background: #2d2d2d; border-radius: 4px; border: 1px solid #444; padding: 12px;">
-                @foreach (var rootItem in AppState.CurrentPlan.RootItems)
-                {
-                    <RecipeNodeView Node="rootItem" 
-                                    Depth="0"
-                                    OnSourceChanged="OnNodeSourceChanged"
-                                    OnHqChanged="OnNodeHqChanged" />
-                }
-            </div>
-            
-            <!-- Craft vs Buy Analysis -->
-            <CraftAnalysisPanel Analyses="AppState.CraftAnalyses" />
-        }
-    </div>
-    
-    <!-- Right Column: Shopping List -->
-    <div style="padding: 16px; overflow-y: auto;">
-        <div style="font-size: 16px; font-weight: 600; color: #d4a73a; margin-bottom: 16px;">Shopping List</div>
-        
-        @if (AppState.CurrentPlan == null)
-        {
-            <div style="color: #888; text-align: center; padding: 24px;">
-                Build a plan to see your shopping list.
-            </div>
-        }
-        else
-        {
-            var materials = AppState.CurrentPlan.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList();
-            
-            @if (!materials.Any())
-            {
-                <div style="color: #888; text-align: center; padding: 24px;">
-                    All items are set to be crafted.
-                    <br />
-                    <span style="font-size: 12px;">Change acquisition sources to generate a shopping list.</span>
-                </div>
+                </MudPaper>
             }
-            else
+
+            @if (AppState.ShoppingItems.Any())
             {
-                <div style="background: #2d2d2d; border-radius: 4px; border: 1px solid #444;">
-                    <!-- Header -->
-                    <div style="background: #363636; padding: 12px; border-bottom: 1px solid #444;">
-                        <div style="display: flex; justify-content: space-between; color: #ccc; font-size: 12px; font-weight: 500;">
-                            <span>Item</span>
-                            <span>Qty</span>
-                            <span>Price</span>
+                <MudDivider Class="my-4" />
+                <MudButton OnClick="GoToPlanner"
+                           Color="Color.Info"
+                           Variant="Variant.Filled"
+                           FullWidth="true"
+                           EndIcon="@Icons.Material.Filled.ArrowForward">
+                    Open in Recipe Planner
+                </MudButton>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Align="Align.Center" Class="mt-2 d-block">
+                    @AppState.ShoppingItems.Count items ready
+                </MudText>
+            }
+        </div>
+        
+        <!-- Middle Column: Shopping List (350px) -->
+        <div Class="pa-4" Style="border-right: 1px solid #444; overflow-y: auto; min-width: 350px; max-width: 350px;">
+            <MudPaper Elevation="2" Class="pa-0" Style="height: 100%; display: flex; flex-direction: column; border-radius: 12px; overflow: hidden;">
+                <!-- Header -->
+                <div class="px-4 py-3" Style="background: linear-gradient(135deg, #2d2d2d 0%, #252525 100%); border-bottom: 1px solid #444;">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Color="Color.Primary" Size="Size.Small" />
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600; color: #d4a73a;">Shopping List</MudText>
+                            @if (AppState.ShoppingItems.Any())
+                            {
+                                <MudBadge Content="@AppState.ShoppingItems.Count" Color="Color.Primary" Overlap="true" Origin="Origin.TopRight" 
+                                          Style="margin-left: 4px;" />
+                            }
                         </div>
-                    </div>
-                    
-                    <!-- Items -->
-                    <div style="padding: 8px;">
-                        @foreach (var material in materials)
-                        {
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; background: #1e1e1e; border-radius: 4px; margin-bottom: 6px;">
-                                <div style="flex: 1; color: @(material.RequiresHq ? "#d4a73a" : "white"); font-size: 13px;">
-                                    @if (material.RequiresHq)
-                                    {
-                                        <span>★</span>
-                                    }
-                                    @material.Name
-                                </div>
-                                <div style="color: #ccc; font-size: 13px; min-width: 50px; text-align: center;">
-                                    @material.TotalQuantity
-                                </div>
-                                <div style="color: #4caf50; font-size: 12px; min-width: 80px; text-align: right;">
-                                    @if (material.UnitPrice > 0)
-                                    {
-                                        <span>@material.TotalCost.ToString("N0")g</span>
-                                    }
-                                    else
-                                    {
-                                        <span style="color: #888;">-</span>
-                                    }
-                                </div>
-                            </div>
-                        }
-                    </div>
-                    
-                    <!-- Total -->
-                    <div style="background: #363636; padding: 12px; border-top: 1px solid #444;">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <span style="color: #ccc; font-size: 14px;">Total Cost:</span>
-                            <span style="color: #4caf50; font-weight: 600; font-size: 16px;">
-                                @materials.Sum(m => m.TotalCost).ToString("N0")g
-                            </span>
-                        </div>
+                        <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary" Style="border-radius: 8px;">
+                            <MudIconButton OnClick="ClearAllItems"
+                                           Disabled="!AppState.ShoppingItems.Any()"
+                                           Icon="@Icons.Material.Filled.DeleteSweep"
+                                           Color="Color.Error"
+                                           Size="Size.Small"
+                                           Title="Clear All" />
+                            <MudIconButton Component="label"
+                                           For="import-file"
+                                           Icon="@Icons.Material.Filled.Upload"
+                                           Color="Color.Secondary"
+                                           Size="Size.Small"
+                                           Title="Import Plan" />
+                            <InputFile id="import-file" OnChange="ImportPlanAsync" accept=".json" style="display: none;" />
+                            <MudIconButton OnClick="ExportPlanAsync"
+                                           Disabled="!AppState.ShoppingItems.Any()"
+                                           Icon="@Icons.Material.Filled.Download"
+                                           Color="Color.Secondary"
+                                           Size="Size.Small"
+                                           Title="Export Plan" />
+                        </MudButtonGroup>
                     </div>
                 </div>
                 
-                <!-- Export Buttons -->
-                <div style="margin-top: 12px; display: flex; gap: 8px;">
-                    <button @onclick="ExportToArtisanAsync"
-                            style="flex: 1; padding: 8px; background: #673ab7; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                        Export to Artisan
-                    </button>
-                    <button @onclick="ExportToCsvAsync"
-                            style="flex: 1; padding: 8px; background: #2d2d2d; color: #ccc; border: 1px solid #555; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                        Export CSV
-                    </button>
+                <div style="padding: 12px; flex: 1; overflow-y: auto;">
+                    @if (!AppState.ShoppingItems.Any())
+                    {
+                        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 24px; text-align: center;">
+                            <MudIcon Icon="@Icons.Material.Filled.ShoppingBasket" 
+                                     Size="Size.Large" 
+                                     Color="Color.Secondary" 
+                                     Style="opacity: 0.5; margin-bottom: 12px;" />
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                Your shopping list is empty
+                            </MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="opacity: 0.7; margin-top: 4px;">
+                                Search for items to add them here
+                            </MudText>
+                        </div>
+                    }
+                    else
+                    {
+                        <MudStack Spacing="2">
+                            @foreach (var item in AppState.ShoppingItems)
+                            {
+                                <MudPaper Elevation="0" 
+                                          Class="pa-3 d-flex align-center gap-3" 
+                                          Style="background: #2a2a2a; border-radius: 8px; border: 1px solid #383838;">
+                                    <MudText Typo="Typo.body2" Class="flex-grow-1" Style="font-weight: 500;">@item.Name</MudText>
+                                    <MudNumericField @bind-Value="item.Quantity"
+                                                     Min="1"
+                                                     Max="9999"
+                                                     Variant="Variant.Outlined"
+                                                     Dense="true"
+                                                     Style="width: 70px;"
+                                                     Adornment="Adornment.End"
+                                                     AdornmentText="x" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                   OnClick="() => RemoveItem(item)"
+                                                   Color="Color.Error"
+                                                   Size="Size.Small"
+                                                   Variant="Variant.Outlined" />
+                                </MudPaper>
+                            }
+                        </MudStack>
+                    }
                 </div>
-            }
-        }
+                
+                <div class="pa-4" style="background: linear-gradient(180deg, #252525 0%, #2d2d2d 100%); border-top: 1px solid #444;">
+                    <MudButton OnClick="AnalyzeMarketAsync"
+                               Disabled="!AppState.ShoppingItems.Any() || _isAnalyzing || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter)"
+                               Color="Color.Primary"
+                               Variant="Variant.Filled"
+                               FullWidth="true"
+                               Style="border-radius: 8px; height: 40px;"
+                               StartIcon="@(_isAnalyzing ? "" : Icons.Material.Filled.Analytics)">
+                        @if (_isAnalyzing)
+                        {
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                            <span>Analyzing Market...</span>
+                        }
+                        else
+                        {
+                            <span>Analyze Market</span>
+                        }
+                    </MudButton>
+                    @if (!string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+                    {
+                        <MudText Typo="Typo.caption" 
+                                 Color="Color.Secondary" 
+                                 Align="Align.Center" 
+                                 Class="d-block mt-2"
+                                 Style="opacity: 0.7;">
+                            Using @AppState.SelectedDataCenter data center
+                        </MudText>
+                    }
+                </div>
+            </MudPaper>
+        </div>
+        
+        <!-- Right Column: Market Results (flex: 1) -->
+        <div Class="pa-4" Style="overflow: hidden; min-width: 0;">
+            <MarketLogisticsPanel ShoppingPlans="AppState.ShoppingPlans"
+                                  CraftAnalyses="AppState.CraftAnalyses"
+                                  InitialMode="AppState.RecommendationMode"
+                                  OnModeChanged="OnRecommendationModeChanged" />
+        </div>
     </div>
-</div>
+</MudContainer>
 
 @code {
     private WorldData? _worldData;
-    
+    private bool _isLoadingWorlds = true;
+    private string _selectedWorld = string.Empty;
+
     private string _searchQuery = string.Empty;
     private bool _isSearching = false;
     private List<GarlandSearchResult> _searchResults = new();
     
-    private bool _isBuildingPlan = false;
-    private bool _isRefreshingPrices = false;
-    private System.Threading.Timer? _autoSaveTimer;
+    private bool _isAnalyzing = false;
 
     protected override async Task OnInitializedAsync()
     {
         try
         {
             _worldData = await UniversalisService.GetWorldDataAsync();
+            _isLoadingWorlds = false;
+            
             if (string.IsNullOrEmpty(AppState.SelectedDataCenter))
             {
                 AppState.SelectedDataCenter = _worldData.DataCenters.FirstOrDefault() ?? "Aether";
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Fallback
+            Console.WriteLine($"Index.razor: ERROR - {ex}");
+            
             _worldData = new WorldData
             {
                 DataCenterToWorlds = new Dictionary<string, List<string>>
@@ -349,92 +327,33 @@
                     ["Dynamis"] = new() { "Cuchulainn", "Golem", "Halicarnassus", "Kraken", "Maduin", "Marilith", "Rafflesia", "Seraph" }
                 }
             };
+            AppState.SelectedDataCenter = "Aether";
+            _isLoadingWorlds = false;
+            
+            Snackbar.Add($"Using fallback world data. API error: {ex.Message}", Severity.Warning);
         }
 
-        // Subscribe to state changes
-        AppState.OnPlanChanged += OnPlanChanged;
-        
-        // Load saved plans list
-        await RefreshSavedPlansListAsync();
-        
-        // Try to load auto-save
-        await TryLoadAutoSaveAsync();
-        
-        // Setup auto-save timer (every 30 seconds)
-        _autoSaveTimer = new System.Threading.Timer(
-            async _ => await AutoSaveAsync(),
-            null,
-            TimeSpan.FromSeconds(30),
-            TimeSpan.FromSeconds(30));
+        AppState.OnShoppingListChanged += OnShoppingListChanged;
     }
 
-    private void OnPlanChanged()
+    private void OnShoppingListChanged()
     {
         InvokeAsync(StateHasChanged);
     }
 
     public void Dispose()
     {
-        AppState.OnPlanChanged -= OnPlanChanged;
-        _autoSaveTimer?.Dispose();
+        AppState.OnShoppingListChanged -= OnShoppingListChanged;
+    }
+
+    private List<string> GetWorldsForSelectedDc()
+    {
+        if (_worldData?.DataCenterToWorlds == null || string.IsNullOrEmpty(AppState.SelectedDataCenter))
+            return new List<string>();
         
-        // Final auto-save on dispose
-        if (AppState.IsAutoSaveEnabled)
-        {
-            _ = AutoSaveAsync();
-        }
-    }
-
-    private async Task RefreshSavedPlansListAsync()
-    {
-        var plans = await IndexedDb.LoadAllPlansAsync();
-        AppState.SavedPlans = plans
-            .Where(p => p.Id != "autosave") // Don't show autosave in list
-            .Select(p => new StoredPlanSummary
-            {
-                Id = p.Id,
-                Name = p.Name,
-                ModifiedAt = p.ModifiedAt,
-                SavedAt = p.SavedAt,
-                DataCenter = p.DataCenter,
-                ItemCount = p.ProjectItems.Count
-            })
-            .ToList();
-        AppState.NotifySavedPlansChanged();
-    }
-
-    private async Task TryLoadAutoSaveAsync()
-    {
-        var autoSave = await IndexedDb.LoadAutoSaveAsync();
-        if (autoSave?.ProjectItems.Any() == true)
-        {
-            // Ask user if they want to restore? For now, just restore silently
-            CraftingPlan? plan = null;
-            if (!string.IsNullOrEmpty(autoSave.PlanJson))
-            {
-                try
-                {
-                    plan = System.Text.Json.JsonSerializer.Deserialize<CraftingPlan>(autoSave.PlanJson);
-                }
-                catch { }
-            }
-            
-            AppState.LoadStoredPlan(autoSave, plan);
-            Snackbar.Add("Restored previous session", Severity.Info);
-        }
-    }
-
-    private async Task AutoSaveAsync()
-    {
-        if (!AppState.IsAutoSaveEnabled)
-            return;
-            
-        var success = await IndexedDb.AutoSaveStateAsync(AppState);
-        if (success)
-        {
-            AppState.LastAutoSave = DateTime.Now;
-            await InvokeAsync(StateHasChanged);
-        }
+        return _worldData.DataCenterToWorlds.TryGetValue(AppState.SelectedDataCenter, out var worlds) 
+            ? worlds.OrderBy(w => w).ToList() 
+            : new List<string>();
     }
 
     private async Task SearchItemsAsync()
@@ -444,368 +363,192 @@
 
         _isSearching = true;
         _searchResults.Clear();
+        await InvokeAsync(StateHasChanged); // Force UI update to show loading state
+        
+        AppState.BeginOperation("Searching", $"Searching for '{_searchQuery}'...");
         
         try
         {
             var results = await GarlandService.SearchAsync(_searchQuery);
             _searchResults = results.Take(10).ToList();
+            AppState.EndOperation($"Found {_searchResults.Count} results for '{_searchQuery}'");
+            await InvokeAsync(StateHasChanged); // Force UI update to show results
         }
         catch (Exception ex)
         {
+            AppState.SetStatus($"Search failed: {ex.Message}");
             Snackbar.Add($"Search failed: {ex.Message}", Severity.Error);
         }
         finally
         {
             _isSearching = false;
+            await InvokeAsync(StateHasChanged); // Ensure UI is updated
         }
     }
 
-    private void OnSearchKeyUp(KeyboardEventArgs e)
+    private async Task OnSearchKeyDown(KeyboardEventArgs e)
     {
         if (e.Key == "Enter")
         {
-            _ = SearchItemsAsync();
+            await SearchItemsAsync();
         }
     }
 
-    private void AddProjectItem(GarlandSearchResult result)
+    private void AddItemToList(GarlandSearchResult result)
     {
-        if (!AppState.ProjectItems.Any(i => i.Id == result.Id))
+        var existing = AppState.ShoppingItems.FirstOrDefault(i => i.Id == result.Id);
+        if (existing != null)
         {
-            AppState.ProjectItems.Add(new PlannerProjectItem
+            existing.Quantity++;
+            AppState.SetStatus($"Increased {result.Object.Name} quantity to {existing.Quantity}");
+        }
+        else
+        {
+            AppState.ShoppingItems.Add(new MarketShoppingItem
             {
                 Id = result.Id,
                 Name = result.Object.Name,
                 IconId = result.Object.IconId,
-                Quantity = 1,
-                MustBeHq = false
+                Quantity = 1
             });
-            AppState.NotifyPlanChanged();
+            AppState.SetStatus($"Added {result.Object.Name} to shopping list");
         }
         
         _searchResults.Clear();
         _searchQuery = string.Empty;
+        AppState.ShoppingPlans.Clear();
+        AppState.NotifyShoppingListChanged();
     }
 
-    private void RemoveProjectItem(PlannerProjectItem item)
+    private void RemoveItem(MarketShoppingItem item)
     {
-        AppState.ProjectItems.Remove(item);
-        AppState.NotifyPlanChanged();
+        AppState.ShoppingItems.Remove(item);
+        AppState.ShoppingPlans.Clear();
+        AppState.SetStatus($"Removed {item.Name} from shopping list");
+        AppState.NotifyShoppingListChanged();
     }
 
-    private void ToggleItemHq(PlannerProjectItem item)
+    private void ClearAllItems()
     {
-        item.MustBeHq = !item.MustBeHq;
-        AppState.NotifyPlanChanged();
+        var count = AppState.ShoppingItems.Count;
+        AppState.ShoppingItems.Clear();
+        AppState.ShoppingPlans.Clear();
+        AppState.SetStatus($"Cleared {count} items from shopping list");
+        AppState.NotifyShoppingListChanged();
     }
 
-    private async Task BuildPlanAsync()
+    private async Task AnalyzeMarketAsync()
     {
-        if (!AppState.ProjectItems.Any() || _isBuildingPlan)
+        if (!AppState.ShoppingItems.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
             return;
 
-        _isBuildingPlan = true;
-        StateHasChanged(); // Force UI update for button state
-        
+        _isAnalyzing = true;
+        AppState.ShoppingPlans.Clear();
+        AppState.BeginOperation("Market Analysis", $"Analyzing {AppState.ShoppingItems.Count} items on {AppState.SelectedDataCenter}...");
+
         try
         {
-            var targetItems = AppState.ProjectItems.Select(i => (i.Id, i.Name, i.Quantity, i.MustBeHq)).ToList();
-            AppState.CurrentPlan = await RecipeCalculationService.BuildPlanAsync(
-                targetItems, 
-                AppState.SelectedDataCenter, 
-                string.Empty);
-            
-            // Fetch prices for analysis (but don't block on it)
-            _ = Task.Run(async () => 
+            var materials = AppState.ShoppingItems.Select(i => new MaterialAggregate
             {
-                await RefreshPricesAsync();
-            });
+                ItemId = i.Id,
+                Name = i.Name,
+                IconId = i.IconId,
+                TotalQuantity = i.Quantity
+            }).ToList();
+
+            var progress = new Progress<string>(msg => { });
             
-            // Sync to shopping list
-            AppState.SyncProjectToShopping();
+            AppState.ShoppingPlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+                materials,
+                AppState.SelectedDataCenter,
+                progress,
+                mode: AppState.RecommendationMode);
+                
+            AppState.NotifyShoppingListChanged();
             
-            Snackbar.Add($"Plan built with {AppState.CurrentPlan.RootItems.Count} items", Severity.Success);
+            var bestValue = AppState.ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
+            AppState.EndOperation($"Analysis complete! Potential savings found.");
+            Snackbar.Add($"Analysis complete. Found deals for {AppState.ShoppingPlans.Count} items.", Severity.Success);
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to build plan: {ex.Message}", Severity.Error);
+            AppState.SetStatus($"Analysis failed: {ex.Message}");
+            Snackbar.Add($"Market analysis failed: {ex.Message}", Severity.Error);
         }
         finally
         {
-            _isBuildingPlan = false;
+            _isAnalyzing = false;
         }
     }
 
-    private async Task RefreshPricesAsync()
+    private void OnRecommendationModeChanged(RecommendationMode mode)
     {
-        if (AppState.CurrentPlan == null)
-            return;
-
-        _isRefreshingPrices = true;
-        
-        try
+        AppState.RecommendationMode = mode;
+        if (AppState.ShoppingItems.Any())
         {
-            var allItemIds = CollectAllItemIds(AppState.CurrentPlan.RootItems);
-            var responses = await UniversalisService.GetMarketDataBulkAsync(AppState.SelectedDataCenter, allItemIds);
-            
-            // Update nodes with prices
-            foreach (var root in AppState.CurrentPlan.RootItems)
-            {
-                UpdateNodePrices(root, responses);
-            }
-            
-            // Recalculate craft vs buy analysis
-            await CalculateCraftVsBuyAnalysisAsync();
-            
-            AppState.NotifyPlanChanged();
-            
-            Snackbar.Add("Prices updated", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to fetch prices: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _isRefreshingPrices = false;
+            _ = AnalyzeMarketAsync();
         }
     }
 
-    private static List<int> CollectAllItemIds(List<PlanNode> nodes)
-    {
-        var ids = new HashSet<int>();
-        foreach (var node in nodes)
-        {
-            CollectItemIdsRecursive(node, ids);
-        }
-        return ids.ToList();
-    }
-
-    private static void CollectItemIdsRecursive(PlanNode node, HashSet<int> ids)
-    {
-        ids.Add(node.ItemId);
-        foreach (var child in node.Children)
-        {
-            CollectItemIdsRecursive(child, ids);
-        }
-    }
-
-    private static void UpdateNodePrices(PlanNode node, Dictionary<int, UniversalisResponse> responses)
-    {
-        if (responses.TryGetValue(node.ItemId, out var response))
-        {
-            node.MarketPrice = (decimal)response.AveragePrice;
-            var hqListings = response.Listings.Where(l => l.IsHq).ToList();
-            if (hqListings.Any())
-            {
-                node.HqMarketPrice = (decimal)hqListings.Average(l => l.PricePerUnit);
-            }
-        }
-        
-        foreach (var child in node.Children)
-        {
-            UpdateNodePrices(child, responses);
-        }
-    }
-
-    private async Task CalculateCraftVsBuyAnalysisAsync()
-    {
-        if (AppState.CurrentPlan == null)
-            return;
-
-        AppState.CraftAnalyses.Clear();
-        
-        foreach (var root in AppState.CurrentPlan.RootItems)
-        {
-            await AnalyzeNodeAsync(root);
-        }
-    }
-
-    private async Task AnalyzeNodeAsync(PlanNode node)
-    {
-        if (node.Children.Any())
-        {
-            // Calculate craft cost (sum of child costs)
-            var craftCost = await CalculateNodeCraftCostAsync(node);
-            
-            // Buy cost
-            var buyCostNq = node.MarketPrice * node.Quantity;
-            var buyCostHq = node.HqMarketPrice > 0 ? node.HqMarketPrice * node.Quantity : buyCostNq;
-            
-            var analysis = new CraftVsBuyAnalysis
-            {
-                ItemId = node.ItemId,
-                ItemName = node.Name,
-                Quantity = node.Quantity,
-                BuyCostNq = buyCostNq,
-                BuyCostHq = buyCostHq,
-                CraftCost = craftCost,
-                PotentialSavingsNq = buyCostNq - craftCost,
-                PotentialSavingsHq = buyCostHq - craftCost,
-                SavingsPercentNq = buyCostNq > 0 ? ((buyCostNq - craftCost) / buyCostNq) * 100 : 0,
-                SavingsPercentHq = buyCostHq > 0 ? ((buyCostHq - craftCost) / buyCostHq) * 100 : 0,
-                RecommendationNq = craftCost < buyCostNq ? CraftRecommendation.Craft : CraftRecommendation.Buy,
-                RecommendationHq = craftCost < buyCostHq ? CraftRecommendation.Craft : CraftRecommendation.Buy,
-                IsCurrentlySetToCraft = node.Source == AcquisitionSource.Craft,
-                IsHqRequired = node.MustBeHq,
-                HasHqData = node.HqMarketPrice > 0
-            };
-            
-            AppState.CraftAnalyses.Add(analysis);
-        }
-        
-        // Recurse into children
-        foreach (var child in node.Children)
-        {
-            await AnalyzeNodeAsync(child);
-        }
-    }
-
-    private async Task<decimal> CalculateNodeCraftCostAsync(PlanNode node)
-    {
-        decimal cost = 0;
-        
-        foreach (var child in node.Children)
-        {
-            cost += child.Source switch
-            {
-                AcquisitionSource.Craft => await CalculateNodeCraftCostAsync(child),
-                AcquisitionSource.MarketBuyNq => child.MarketPrice * child.Quantity,
-                AcquisitionSource.MarketBuyHq => (child.HqMarketPrice > 0 ? child.HqMarketPrice : child.MarketPrice) * child.Quantity,
-                _ => 0
-            };
-        }
-        
-        return cost;
-    }
-
-    private void OnNodeSourceChanged(PlanNode node)
-    {
-        // Recalculate shopping list
-        AppState.NotifyPlanChanged();
-    }
-
-    private void OnNodeHqChanged(PlanNode node)
-    {
-        AppState.NotifyPlanChanged();
-    }
-
-    private async Task SaveToBrowserAsync()
-    {
-        if (!AppState.ProjectItems.Any())
-            return;
-
-        try
-        {
-            var planName = AppState.CurrentPlan?.Name ?? $"Plan_{DateTime.Now:yyyyMMdd_HHmm}";
-            var planData = new StoredPlan
-            {
-                Id = Guid.NewGuid().ToString(),
-                Name = planName,
-                DataCenter = AppState.SelectedDataCenter,
-                ModifiedAt = DateTime.UtcNow,
-                ProjectItems = AppState.ProjectItems.Select(p => new StoredProjectItem
-                {
-                    Id = p.Id,
-                    Name = p.Name,
-                    IconId = p.IconId,
-                    Quantity = p.Quantity,
-                    MustBeHq = p.MustBeHq
-                }).ToList(),
-                PlanJson = AppState.CurrentPlan != null 
-                    ? System.Text.Json.JsonSerializer.Serialize(AppState.CurrentPlan) 
-                    : null
-            };
-
-            var success = await IndexedDb.SavePlanAsync(planData);
-            if (success)
-            {
-                Snackbar.Add($"Saved '{planName}' to browser storage", Severity.Success);
-                await RefreshSavedPlansListAsync();
-            }
-            else
-            {
-                Snackbar.Add("Failed to save plan", Severity.Error);
-            }
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
-        }
-    }
-
-    private async Task LoadSavedPlanAsync(string planId)
+    private async Task ImportPlanAsync(InputFileChangeEventArgs e)
     {
         try
         {
-            var storedPlan = await IndexedDb.LoadPlanAsync(planId);
-            if (storedPlan == null)
+            var file = e.File;
+            using var stream = file.OpenReadStream(maxAllowedSize: 1024 * 1024);
+            using var reader = new StreamReader(stream);
+            var json = await reader.ReadToEndAsync();
+            var plan = RecipeCalculationService.DeserializePlan(json);
+            
+            if (plan == null)
             {
-                Snackbar.Add("Plan not found", Severity.Error);
+                Snackbar.Add("Failed to import plan. Invalid format.", Severity.Error);
                 return;
             }
 
-            CraftingPlan? plan = null;
-            if (!string.IsNullOrEmpty(storedPlan.PlanJson))
+            AppState.ShoppingItems.Clear();
+            foreach (var node in plan.RootItems)
             {
-                try
+                AppState.ShoppingItems.Add(new MarketShoppingItem
                 {
-                    plan = System.Text.Json.JsonSerializer.Deserialize<CraftingPlan>(storedPlan.PlanJson);
-                }
-                catch (Exception ex)
-                {
-                    Snackbar.Add($"Warning: Could not load full plan data: {ex.Message}", Severity.Warning);
-                }
+                    Id = node.ItemId,
+                    Name = node.Name,
+                    IconId = node.IconId,
+                    Quantity = node.Quantity
+                });
             }
 
-            AppState.LoadStoredPlan(storedPlan, plan);
+            AppState.SelectedDataCenter = plan.DataCenter;
+            AppState.NotifyShoppingListChanged();
             
-            if (plan != null)
-            {
-                // Recalculate analysis
-                await CalculateCraftVsBuyAnalysisAsync();
-            }
-            
-            Snackbar.Add($"Loaded '{storedPlan.Name}'", Severity.Success);
+            Snackbar.Add($"Imported plan: {plan.Name} ({AppState.ShoppingItems.Count} items)", Severity.Success);
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Load failed: {ex.Message}", Severity.Error);
-        }
-    }
-
-    private async Task DeleteSavedPlanAsync(string planId)
-    {
-        try
-        {
-            var success = await IndexedDb.DeletePlanAsync(planId);
-            if (success)
-            {
-                Snackbar.Add("Plan deleted", Severity.Success);
-                await RefreshSavedPlansListAsync();
-            }
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
+            Snackbar.Add($"Import failed: {ex.Message}", Severity.Error);
         }
     }
 
     private async Task ExportPlanAsync()
     {
-        if (AppState.CurrentPlan == null)
-            return;
-
         try
         {
-            var json = RecipeCalculationService.SerializePlan(AppState.CurrentPlan);
+            var targetItems = AppState.ShoppingItems.Select(i => (i.Id, i.Name, i.Quantity, false)).ToList();
+            var plan = await RecipeCalculationService.BuildPlanAsync(
+                targetItems, 
+                AppState.SelectedDataCenter, 
+                string.Empty);
+
+            plan.Name = $"WebPlan_{DateTime.Now:yyyyMMdd_HHmmss}";
+            var json = RecipeCalculationService.SerializePlan(plan);
+            
             var bytes = System.Text.Encoding.UTF8.GetBytes(json);
             var stream = new MemoryStream(bytes);
             
             using var streamRef = new DotNetStreamReference(stream);
-            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", $"{AppState.CurrentPlan.Name}.json", streamRef);
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", $"{plan.Name}.json", streamRef);
             
-            Snackbar.Add("Plan exported to Downloads!", Severity.Success);
+            Snackbar.Add("Plan exported successfully!", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -813,58 +556,9 @@
         }
     }
 
-    private async Task ExportToArtisanAsync()
+    private void GoToPlanner()
     {
-        if (AppState.CurrentPlan == null)
-            return;
-
-        try
-        {
-            var targetItems = AppState.CurrentPlan.RootItems.Select(r => (r.ItemId, r.Name, r.Quantity, r.MustBeHq)).ToList();
-            var exportPlan = await RecipeCalculationService.BuildPlanAsync(targetItems, AppState.SelectedDataCenter, string.Empty);
-            
-            var json = RecipeCalculationService.SerializePlan(exportPlan);
-            var bytes = System.Text.Encoding.UTF8.GetBytes(json);
-            var stream = new MemoryStream(bytes);
-            
-            using var streamRef = new DotNetStreamReference(stream);
-            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", "artisan_import.json", streamRef);
-            
-            Snackbar.Add("Exported for Artisan!", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Export failed: {ex.Message}", Severity.Error);
-        }
-    }
-
-    private async Task ExportToCsvAsync()
-    {
-        if (AppState.CurrentPlan == null)
-            return;
-
-        try
-        {
-            var materials = AppState.CurrentPlan.AggregatedMaterials.Where(m => m.TotalQuantity > 0);
-            var csv = new System.Text.StringBuilder();
-            csv.AppendLine("Item,Quantity,Unit Price,Total Cost");
-            
-            foreach (var m in materials)
-            {
-                csv.AppendLine($"{m.Name},{m.TotalQuantity},{m.UnitPrice},{m.TotalCost}");
-            }
-            
-            var bytes = System.Text.Encoding.UTF8.GetBytes(csv.ToString());
-            var stream = new MemoryStream(bytes);
-            
-            using var streamRef = new DotNetStreamReference(stream);
-            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", "shopping_list.csv", streamRef);
-            
-            Snackbar.Add("CSV exported!", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Export failed: {ex.Message}", Severity.Error);
-        }
+        AppState.SyncShoppingToProject();
+        NavigationManager.NavigateTo("/");
     }
 }

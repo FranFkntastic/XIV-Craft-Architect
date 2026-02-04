@@ -201,5 +201,31 @@
         
         console.log('[DIAG] Helper functions registered');
     </script>
+    
+    <!-- GitHub Pages SPA redirect handler -->
+    <script>
+        // Check if we have a stored redirect path from 404.html
+        (function() {
+            const redirectPath = sessionStorage.getItem('redirectPath');
+            if (redirectPath) {
+                console.log('[REDIRECT] Found stored path:', redirectPath);
+                sessionStorage.removeItem('redirectPath');
+                
+                // Wait for Blazor to be ready, then navigate
+                window.addEventListener('load', () => {
+                    // Small delay to ensure Blazor has initialized
+                    setTimeout(() => {
+                        if (window.Blazor && window.Blazor.navigateTo) {
+                            console.log('[REDIRECT] Navigating to:', redirectPath);
+                            window.Blazor.navigateTo(redirectPath);
+                        } else {
+                            console.log('[REDIRECT] Blazor not ready, using location.replace');
+                            window.location.replace(window.location.origin + window.location.pathname + '#' + redirectPath);
+                        }
+                    }, 100);
+                });
+            }
+        })();
+    </script>
 </body>
 </html>
