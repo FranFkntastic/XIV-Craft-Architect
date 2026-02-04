@@ -178,8 +178,11 @@ public class AppState
         
         CurrentPlan = deserializedPlan;
         
-        // Sync to shopping
-        SyncProjectToShopping();
+        // Only sync to shopping if shopping list is empty (preserve existing shopping list otherwise)
+        if (!ShoppingItems.Any())
+        {
+            SyncProjectToShopping();
+        }
         
         NotifyPlanChanged();
     }

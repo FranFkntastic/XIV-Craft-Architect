@@ -38,43 +38,49 @@
             }
             else
             {
-                <MudSelect T="string"
-                           @bind-Value="AppState.SelectedDataCenter"
-                           Label="Data Center"
-                           Variant="Variant.Outlined"
-                           Dense="true"
-                           Class="mb-3"
-                           AdornmentColor="Color.Primary">
-                    @foreach (var dc in _worldData?.DataCenters ?? new List<string>())
-                    {
-                        <MudSelectItem Value="@dc">@dc</MudSelectItem>
-                    }
-                </MudSelect>
+                <div style="margin-bottom: 12px;">
+                    <div style="color: #888; font-size: 12px; margin-bottom: 4px;">Data Center</div>
+                    <MudSelect T="string"
+                               @bind-Value="AppState.SelectedDataCenter"
+                               Variant="Variant.Outlined"
+                               Dense="true"
+                               AdornmentColor="Color.Primary"
+                               Style="width: 100%;">
+                        @foreach (var dc in _worldData?.DataCenters ?? new List<string>())
+                        {
+                            <MudSelectItem Value="@dc">@dc</MudSelectItem>
+                        }
+                    </MudSelect>
+                </div>
                 
-                <MudSelect T="string"
-                           @bind-Value="_selectedWorld"
-                           Label="World"
-                           Variant="Variant.Outlined"
-                           Dense="true"
-                           Class="mb-3"
-                           Disabled="string.IsNullOrEmpty(AppState.SelectedDataCenter)">
-                    <MudSelectItem Value="@string.Empty">Any World</MudSelectItem>
-                    @foreach (var world in GetWorldsForSelectedDc())
-                    {
-                        <MudSelectItem Value="@world">@world</MudSelectItem>
-                    }
-                </MudSelect>
+                <div style="margin-bottom: 12px;">
+                    <div style="color: #888; font-size: 12px; margin-bottom: 4px;">World</div>
+                    <MudSelect T="string"
+                               @bind-Value="_selectedWorld"
+                               Variant="Variant.Outlined"
+                               Dense="true"
+                               Disabled="string.IsNullOrEmpty(AppState.SelectedDataCenter)"
+                               Style="width: 100%;">
+                        <MudSelectItem Value="@string.Empty">Any World</MudSelectItem>
+                        @foreach (var world in GetWorldsForSelectedDc())
+                        {
+                            <MudSelectItem Value="@world">@world</MudSelectItem>
+                        }
+                    </MudSelect>
+                </div>
                 
-                <MudSelect T="RecommendationMode"
-                           @bind-Value="AppState.RecommendationMode"
-                           Label="Mode"
-                           Variant="Variant.Outlined"
-                           Dense="true"
-                           Class="mb-4">
-                    <MudSelectItem Value="@RecommendationMode.MinimizeTotalCost">Minimize Cost</MudSelectItem>
-                    <MudSelectItem Value="@RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
-                    <MudSelectItem Value="@RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
-                </MudSelect>
+                <div style="margin-bottom: 16px;">
+                    <div style="color: #888; font-size: 12px; margin-bottom: 4px;">Mode</div>
+                    <MudSelect T="RecommendationMode"
+                               @bind-Value="AppState.RecommendationMode"
+                               Variant="Variant.Outlined"
+                               Dense="true"
+                               Style="width: 100%;">
+                        <MudSelectItem Value="@RecommendationMode.MinimizeTotalCost">Minimize Cost</MudSelectItem>
+                        <MudSelectItem Value="@RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
+                        <MudSelectItem Value="@RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
+                    </MudSelect>
+                </div>
             }
             
             <MudTextField @bind-Value="_searchQuery"
