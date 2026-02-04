@@ -1,0 +1,347 @@
+@using FFXIVCraftArchitect.Web.Services
+@inject AppState AppState
+@inject IndexedDbService IndexedDb
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<MudDialog Style="min-width: 600px; max-width: 800px;">
+    <DialogContent>
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+            <!-- Current Plan Section -->
+            @if (AppState.CurrentPlan != null || AppState.ProjectItems.Any())
+            {
+                <MudPaper Elevation="1" Class="pa-4" Style="background: linear-gradient(135deg, #2d4a2d 0%, #253825 100%); border-radius: 8px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <div>
+                            <MudText Typo="Typo.h6" Style="color: #90EE90;">Current Plan</MudText>
+                            <MudText Typo="Typo.body2" Style="color: #888;">
+                                @AppState.ProjectItems.Count items · @AppState.SelectedDataCenter
+                                @if (!string.IsNullOrEmpty(AppState.CurrentPlanId))
+                                {
+                                    <span> · Saved as: <span style="color: #d4a73a;">@AppState.CurrentPlanName</span></span>
+                                }
+                            </MudText>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            @if (!string.IsNullOrEmpty(AppState.CurrentPlanId))
+                            {
+                                <MudButton OnClick="OverwriteCurrentPlan" 
+                                           Color="Color.Primary" 
+                                           Variant="Variant.Filled"
+                                           StartIcon="@Icons.Material.Filled.Save">
+                                    Overwrite
+                                </MudButton>
+                            }
+                            <MudButton OnClick="SaveAsNewPlan" 
+                                       Color="Color.Secondary" 
+                                       Variant="Variant.Outlined"
+                                       StartIcon="@Icons.Material.Filled.SaveAs">
+                                Save As New
+                            </MudButton>
+                        </div>
+                    </div>
+                </MudPaper>
+            }
+            else
+            {
+                <MudPaper Elevation="1" Class="pa-4" Style="background: #2d2d2d; border-radius: 8px;">
+                    <MudText Typo="Typo.body1" Style="color: #888; text-align: center;">
+                        No active plan. Create a plan in the Recipe Planner first.
+                    </MudText>
+                </MudPaper>
+            }
+
+            <!-- Saved Plans List -->
+            <MudText Typo="Typo.h6" Style="color: #d4a73a; margin-top: 8px;">Saved Plans</MudText>
+            
+            @if (_savedPlans?.Any() != true)
+            {
+                <MudPaper Elevation="0" Class="pa-4" Style="background: #252525; border-radius: 8px;">
+                    <MudText Typo="Typo.body2" Style="color: #666; text-align: center;">
+                        No saved plans yet. Save a plan to see it here.
+                    </MudText>
+                </MudPaper>
+            }
+            else
+            {
+                <MudList T="StoredPlanSummary" Dense="true" Style="background: #252525; border-radius: 8px;">
+                    @foreach (var plan in _savedPlans.OrderByDescending(p => p.ModifiedAt))
+                    {
+                        var isCurrentPlan = plan.Id == AppState.CurrentPlanId;
+                        <MudListItem T="StoredPlanSummary" Style="padding: 12px 16px; border-bottom: 1px solid #333;">
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <!-- Plan Icon/Indicator -->
+                                <div style="width: 40px; height: 40px; border-radius: 8px; background: @(isCurrentPlan ? "#4caf50" : "#3d3d3d"); display: flex; align-items: center; justify-content: center;">
+                                    <MudIcon Icon="@Icons.Material.Filled.Assignment" 
+                                             Size="Size.Medium" 
+                                             Style="@GetIconColor(isCurrentPlan)" />
+                                </div>
+                                
+                                <!-- Plan Info -->
+                                <div style="flex: 1; min-width: 0;">
+                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                        <MudText Typo="Typo.body1" Style="color: #fff; font-weight: 600;">
+                                            @plan.Name
+                                        </MudText>
+                                        @if (isCurrentPlan)
+                                        {
+                                            <MudChip T="string" Color="Color.Success" Size="Size.Small" Style="height: 20px; font-size: 10px;">CURRENT</MudChip>
+                                        }
+                                    </div>
+                                    <MudText Typo="Typo.caption" Style="color: #888;">
+                                        @plan.DataCenter · @plan.ItemCount items · Modified @plan.ModifiedAt.ToLocalTime().ToString("g")
+                                    </MudText>
+                                </div>
+                                
+                                <!-- Actions -->
+                                <div style="display: flex; gap: 4px;">
+                                    <MudIconButton OnClick="() => LoadPlan(plan.Id)" 
+                                                   Icon="@Icons.Material.Filled.FolderOpen" 
+                                                   Color="Color.Primary"
+                                                   Size="Size.Small"
+                                                   Title="Load Plan" />
+                                    <MudIconButton OnClick="() => DeletePlan(plan.Id, plan.Name)" 
+                                                   Icon="@Icons.Material.Filled.Delete" 
+                                                   Color="Color.Error"
+                                                   Size="Size.Small"
+                                                   Title="Delete Plan" />
+                                </div>
+                            </div>
+                        </MudListItem>
+                    }
+                </MudList>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
+    
+    private List<StoredPlanSummary> _savedPlans = new();
+    
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshSavedPlansListAsync();
+    }
+    
+    private async Task RefreshSavedPlansListAsync()
+    {
+        try
+        {
+            var plans = await IndexedDb.LoadAllPlansAsync();
+            _savedPlans = plans
+                .Where(p => p.Id != "autosave")
+                .Select(p => new StoredPlanSummary
+                {
+                    Id = p.Id,
+                    Name = p.Name,
+                    ModifiedAt = p.ModifiedAt,
+                    SavedAt = p.SavedAt,
+                    DataCenter = p.DataCenter,
+                    ItemCount = p.ProjectItems.Count
+                })
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load saved plans: {ex.Message}", Severity.Error);
+        }
+    }
+    
+    private async Task OverwriteCurrentPlan()
+    {
+        if (string.IsNullOrEmpty(AppState.CurrentPlanId))
+        {
+            await SaveAsNewPlan();
+            return;
+        }
+        
+        try
+        {
+            var planData = new StoredPlan
+            {
+                Id = AppState.CurrentPlanId,
+                Name = AppState.CurrentPlanName ?? $"Plan_{DateTime.Now:yyyyMMdd_HHmm}",
+                DataCenter = AppState.SelectedDataCenter,
+                ModifiedAt = DateTime.UtcNow,
+                ProjectItems = AppState.ProjectItems.Select(p => new StoredProjectItem
+                {
+                    Id = p.Id,
+                    Name = p.Name,
+                    IconId = p.IconId,
+                    Quantity = p.Quantity,
+                    MustBeHq = p.MustBeHq
+                }).ToList(),
+                PlanJson = AppState.CurrentPlan != null 
+                    ? System.Text.Json.JsonSerializer.Serialize(AppState.CurrentPlan) 
+                    : null
+            };
+            
+            var success = await IndexedDb.SavePlanAsync(planData);
+            if (success)
+            {
+                Snackbar.Add($"Updated '{planData.Name}'", Severity.Success);
+                await RefreshSavedPlansListAsync();
+            }
+            else
+            {
+                Snackbar.Add("Failed to save plan", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
+        }
+    }
+    
+    private async Task SaveAsNewPlan()
+    {
+        // Prompt for name using a simple dialog
+        var parameters = new DialogParameters
+        {
+            ["DefaultName"] = $"Plan_{DateTime.Now:yyyyMMdd_HHmm}"
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = await DialogService.ShowAsync<SavePlanDialog>("Save As", parameters, options);
+        var result = await dialog.Result;
+        
+        if (result?.Data is string planName && !string.IsNullOrWhiteSpace(planName))
+        {
+            try
+            {
+                var planData = new StoredPlan
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    Name = planName,
+                    DataCenter = AppState.SelectedDataCenter,
+                    ModifiedAt = DateTime.UtcNow,
+                    ProjectItems = AppState.ProjectItems.Select(p => new StoredProjectItem
+                    {
+                        Id = p.Id,
+                        Name = p.Name,
+                        IconId = p.IconId,
+                        Quantity = p.Quantity,
+                        MustBeHq = p.MustBeHq
+                    }).ToList(),
+                    PlanJson = AppState.CurrentPlan != null 
+                        ? System.Text.Json.JsonSerializer.Serialize(AppState.CurrentPlan) 
+                        : null
+                };
+                
+                // Update current plan tracking
+                AppState.CurrentPlanId = planData.Id;
+                AppState.CurrentPlanName = planData.Name;
+                
+                var success = await IndexedDb.SavePlanAsync(planData);
+                if (success)
+                {
+                    Snackbar.Add($"Saved '{planName}'", Severity.Success);
+                    await RefreshSavedPlansListAsync();
+                }
+                else
+                {
+                    Snackbar.Add("Failed to save plan", Severity.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+    
+    private async Task LoadPlan(string planId)
+    {
+        try
+        {
+            var storedPlan = await IndexedDb.LoadPlanAsync(planId);
+            if (storedPlan == null)
+            {
+                Snackbar.Add("Plan not found", Severity.Error);
+                return;
+            }
+            
+            CraftingPlan? plan = null;
+            if (!string.IsNullOrEmpty(storedPlan.PlanJson))
+            {
+                try
+                {
+                    plan = System.Text.Json.JsonSerializer.Deserialize<CraftingPlan>(storedPlan.PlanJson);
+                }
+                catch { /* Plan JSON may be incompatible, that's ok */ }
+            }
+            
+            AppState.LoadStoredPlan(storedPlan, plan);
+            Snackbar.Add($"Loaded '{storedPlan.Name}'", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load plan: {ex.Message}", Severity.Error);
+        }
+    }
+    
+    private async Task DeletePlan(string planId, string planName)
+    {
+        // Check if deleting current plan
+        if (planId == AppState.CurrentPlanId)
+        {
+            var confirmCurrent = await DialogService.ShowMessageBox(
+                "Delete Current Plan",
+                $"'{planName}' is your current plan. Deleting it will not affect your current work, but you won't be able to overwrite it anymore. Continue?",
+                yesText: "Delete",
+                cancelText: "Cancel");
+            
+            if (confirmCurrent != true)
+                return;
+        }
+        
+        var confirm = await DialogService.ShowMessageBox(
+            "Delete Plan",
+            $"Are you sure you want to delete '{planName}'?",
+            yesText: "Delete",
+            cancelText: "Cancel");
+        
+        if (confirm == true)
+        {
+            try
+            {
+                var success = await IndexedDb.DeletePlanAsync(planId);
+                if (success)
+                {
+                    Snackbar.Add($"Deleted '{planName}'", Severity.Success);
+                    
+                    // If we deleted the current plan, clear the tracking
+                    if (planId == AppState.CurrentPlanId)
+                    {
+                        AppState.ClearCurrentPlanId();
+                    }
+                    
+                    await RefreshSavedPlansListAsync();
+                }
+                else
+                {
+                    Snackbar.Add("Failed to delete plan", Severity.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+    
+    private void Close()
+    {
+        MudDialog.Close();
+    }
+    
+    private string GetIconColor(bool isCurrentPlan)
+    {
+        return isCurrentPlan ? "color: #fff;" : "color: #888;";
+    }
+}
