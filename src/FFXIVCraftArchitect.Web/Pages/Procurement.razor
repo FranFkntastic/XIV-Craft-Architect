@@ -250,7 +250,7 @@
                 </div>
                 
                 <div class="pa-4" style="background: linear-gradient(180deg, #252525 0%, #2d2d2d 100%); border-top: 1px solid #444;">
-                    <MudButton OnClick="AnalyzeMarketAsync"
+                    <MudButton OnClick="RunMarketAnalysisAsync"
                                Disabled="!AppState.ShoppingItems.Any() || _isAnalyzing || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter)"
                                Color="Color.Primary"
                                Variant="Variant.Filled"
@@ -283,45 +283,91 @@
         
         <!-- Right Column: Market Results (flex: 1) -->
         <div Class="pa-4" Style="overflow: hidden; min-width: 0;">
-            <!-- View Toggle -->
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-                <MudButtonGroup Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">
-                    <MudButton OnClick="() => _showProcurementResults = true"
-                               Variant="@(_showProcurementResults ? Variant.Filled : Variant.Outlined)">
-                        <MudIcon Icon="@Icons.Material.Filled.Assignment" Size="Size.Small" Class="mr-1" />
-                        Procurement Plan
-                    </MudButton>
-                    <MudButton OnClick="() => _showProcurementResults = false"
-                               Variant="@(!_showProcurementResults ? Variant.Filled : Variant.Outlined)">
-                        <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Small" Class="mr-1" />
-                        Market Analysis
-                    </MudButton>
-                </MudButtonGroup>
-                
-                @if (!_showProcurementResults)
-                {
-                    <MudCheckBox T="bool"
-                                Value="ShowAnalysisSections"
-                                ValueChanged="v => ShowAnalysisSections = v"
-                                Dense="true"
-                                Size="Size.Small"
-                                Style="color: #888;">
-                        Show Analysis Sections
-                    </MudCheckBox>
-                }
-            </div>
-            
-            @if (_showProcurementResults)
+            @if (_analysisComplete)
             {
-                <ProcurementResultsPanel Analysis="AppState.CurrentProcurementAnalysis" />
+                <!-- Show results after analysis -->
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                    <MudButtonGroup Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">
+                        <MudButton OnClick="() => _showProcurementResults = true"
+                                   Variant="@(_showProcurementResults ? Variant.Filled : Variant.Outlined)">
+                            <MudIcon Icon="@Icons.Material.Filled.Assignment" Size="Size.Small" Class="mr-1" />
+                            Procurement Plan
+                        </MudButton>
+                        <MudButton OnClick="() => _showProcurementResults = false"
+                                   Variant="@(!_showProcurementResults ? Variant.Filled : Variant.Outlined)">
+                            <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Small" Class="mr-1" />
+                            Market Analysis
+                        </MudButton>
+                    </MudButtonGroup>
+                    
+                    @if (!_showProcurementResults)
+                    {
+                        <MudCheckBox T="bool"
+                                    Value="ShowAnalysisSections"
+                                    ValueChanged="v => ShowAnalysisSections = v"
+                                    Dense="true"
+                                    Size="Size.Small"
+                                    Style="color: #888;">
+                            Show Analysis Sections
+                        </MudCheckBox>
+                    }
+                </div>
+                
+                @if (_showProcurementResults)
+                {
+                    <ProcurementResultsPanel Analysis="AppState.CurrentProcurementAnalysis" />
+                }
+                else
+                {
+                    <MarketLogisticsPanel ShoppingPlans="AppState.ShoppingPlans"
+                                          CraftAnalyses="AppState.CraftAnalyses"
+                                          InitialMode="AppState.RecommendationMode"
+                                          OnModeChanged="OnRecommendationModeChanged"
+                                          ShowAnalysisSections="ShowAnalysisSections" />
+                }
             }
             else
             {
-                <MarketLogisticsPanel ShoppingPlans="AppState.ShoppingPlans"
-                                      CraftAnalyses="AppState.CraftAnalyses"
-                                      InitialMode="AppState.RecommendationMode"
-                                      OnModeChanged="OnRecommendationModeChanged"
-                                      ShowAnalysisSections="ShowAnalysisSections" />
+                <!-- Show items waiting for analysis -->
+                <MudPaper Elevation="2" Class="pa-4" Style="background: linear-gradient(135deg, #2d2d2d 0%, #252525 100%); height: 100%; border-radius: 12px;">
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center;">
+                        <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Large" Style="color: #555; margin-bottom: 16px;" />
+                        <MudText Typo="Typo.h6" Style="color: #888; margin-bottom: 8px;">Items Ready for Analysis</MudText>
+                        <MudText Typo="Typo.body2" Style="color: #666; margin-bottom: 24px;">
+                            @(AppState.ShoppingItems.Count) items from your recipe plan are waiting to be analyzed
+                        </MudText>
+                        
+                        @if (AppState.ShoppingItems.Any())
+                        {
+                            <MudButton OnClick="RunMarketAnalysisAsync"
+                                       Color="Color.Primary"
+                                       Variant="Variant.Filled"
+                                       Size="Size.Large"
+                                       StartIcon="@Icons.Material.Filled.Analytics"
+                                       Disabled="_isAnalyzing">
+                                @if (_isAnalyzing)
+                                {
+                                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                    <span>Analyzing...</span>
+                                }
+                                else
+                                {
+                                    <span>Analyze Market</span>
+                                }
+                            </MudButton>
+                            
+                            <MudText Typo="Typo.caption" Style="color: #888; margin-top: 16px;">
+                                Mode: @AppState.RecommendationMode · Data Center: @AppState.SelectedDataCenter
+                            </MudText>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Style="color: #888;">
+                                No items to analyze. Build a project plan in the Recipe Planner first.
+                            </MudText>
+                        }
+                    </div>
+                </MudPaper>
             }
         </div>
     </div>
@@ -338,6 +384,7 @@
     
     private bool _isAnalyzing = false;
     private bool _showProcurementResults = true;
+    private bool _analysisComplete = false;
     private bool ShowAnalysisSections { get; set; } = true;
 
     protected override async Task OnInitializedAsync()
@@ -375,16 +422,9 @@
         AppState.OnShoppingListChanged += OnShoppingListChanged;
         AppState.OnProcurementAnalysisChanged += OnProcurementAnalysisChanged;
         
-        // Auto-run analysis if we have a plan but no analysis yet
-        if (AppState.CurrentPlan != null && AppState.CurrentProcurementAnalysis == null)
-        {
-            _ = Task.Run(async () => await RunProcurementAnalysisAsync());
-        }
-        // Or auto-run market analysis if we have shopping items but no shopping plans
-        else if (AppState.ShoppingItems.Any() && !AppState.ShoppingPlans.Any())
-        {
-            _ = Task.Run(async () => await AnalyzeMarketAsync());
-        }
+        // Clear any previous analysis when page loads - user must explicitly run analysis
+        AppState.CurrentProcurementAnalysis = null;
+        AppState.ShoppingPlans.Clear();
     }
 
     private void OnShoppingListChanged()
@@ -494,52 +534,20 @@
         AppState.NotifyShoppingListChanged();
     }
     
-    private async Task RunProcurementAnalysisAsync()
+    private async Task RunMarketAnalysisAsync()
     {
-        if (AppState.CurrentPlan == null || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
-            return;
-
-        _isAnalyzing = true;
-        AppState.BeginOperation("Procurement Analysis", "Analyzing optimal acquisition strategy...");
-
-        try
-        {
-            var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
-            
-            AppState.CurrentProcurementAnalysis = await ProcurementService.AnalyzePlanAsync(
-                AppState.CurrentPlan,
-                AppState.SelectedDataCenter,
-                AppState.RecommendationMode,
-                progress);
-            
-            AppState.NotifyProcurementAnalysisChanged();
-            
-            var analysis = AppState.CurrentProcurementAnalysis;
-            AppState.EndOperation($"Analysis complete! {analysis.ItemsToCraft} to craft, {analysis.ItemsToBuy} to buy");
-            Snackbar.Add($"Procurement analysis complete. Total cost: {analysis.OptimalTotalCost:N0}g", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            AppState.EndOperation($"Analysis failed: {ex.Message}");
-            Snackbar.Add($"Procurement analysis failed: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _isAnalyzing = false;
-        }
-    }
-
-    private async Task AnalyzeMarketAsync()
-    {
+        // This is the user-initiated analysis that populates both market data and procurement plan
         if (!AppState.ShoppingItems.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
             return;
 
         _isAnalyzing = true;
+        _analysisComplete = false;
         AppState.ShoppingPlans.Clear();
         AppState.BeginOperation("Market Analysis", $"Analyzing {AppState.ShoppingItems.Count} items on {AppState.SelectedDataCenter}...");
 
         try
         {
+            // Step 1: Run detailed market analysis for all shopping items
             var materials = AppState.ShoppingItems.Select(i => new MaterialAggregate
             {
                 ItemId = i.Id,
@@ -548,19 +556,33 @@
                 TotalQuantity = i.Quantity
             }).ToList();
 
-            var progress = new Progress<string>(msg => { });
+            var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
             
             AppState.ShoppingPlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
                 materials,
                 AppState.SelectedDataCenter,
                 progress,
                 mode: AppState.RecommendationMode);
+            
+            // Step 2: If we have a recipe plan, also run procurement analysis
+            if (AppState.CurrentPlan != null)
+            {
+                AppState.SetStatus("Running procurement analysis...", busy: true);
+                AppState.CurrentProcurementAnalysis = await ProcurementService.AnalyzePlanAsync(
+                    AppState.CurrentPlan,
+                    AppState.SelectedDataCenter,
+                    AppState.RecommendationMode,
+                    progress);
                 
+                AppState.NotifyProcurementAnalysisChanged();
+            }
+            
+            _analysisComplete = true;
             AppState.NotifyShoppingListChanged();
             
             var bestValue = AppState.ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
-            AppState.EndOperation($"Analysis complete! Potential savings found.");
-            Snackbar.Add($"Analysis complete. Found deals for {AppState.ShoppingPlans.Count} items.", Severity.Success);
+            AppState.EndOperation($"Analysis complete! Found deals for {AppState.ShoppingPlans.Count} items.");
+            Snackbar.Add($"Market analysis complete. Click 'Procurement Plan' or 'Market Analysis' tabs to view results.", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -578,7 +600,7 @@
         AppState.RecommendationMode = mode;
         if (AppState.ShoppingItems.Any())
         {
-            _ = AnalyzeMarketAsync();
+            _ = RunMarketAnalysisAsync();
         }
     }
 

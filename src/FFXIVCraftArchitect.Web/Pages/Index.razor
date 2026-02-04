@@ -506,7 +506,7 @@
             return;
 
         _isBuildingPlan = true;
-        StateHasChanged(); // Force UI update for button state
+        StateHasChanged();
         
         try
         {
@@ -518,30 +518,20 @@
                 AppState.SelectedDataCenter, 
                 string.Empty);
             
-            // Step 2: Run procurement analysis (craft vs buy decisions, optimal worlds)
-            AppState.BeginOperation("Procurement Analysis", "Analyzing optimal acquisition strategy...");
+            // Step 2: Fetch prices for all items (craftable and buyable)
+            AppState.BeginOperation("Fetching Prices", "Loading market prices for all materials...");
+            await RefreshPricesAsync();
             
-            var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+            // Step 3: Clear any previous procurement analysis (user must re-analyze)
+            AppState.CurrentProcurementAnalysis = null;
+            AppState.ShoppingPlans.Clear();
             
-            AppState.CurrentProcurementAnalysis = await ProcurementService.AnalyzePlanAsync(
-                AppState.CurrentPlan,
-                AppState.SelectedDataCenter,
-                AppState.RecommendationMode,
-                progress);
+            // Step 4: Populate shopping list with items marked as "buy" from recipe plan
+            // These will be shown in Procurement Planner for potential analysis
+            PopulateShoppingListFromPlan();
             
-            AppState.NotifyProcurementAnalysisChanged();
-            AppState.EndOperation($"Analysis complete! {AppState.CurrentProcurementAnalysis.ItemsToCraft} to craft, {AppState.CurrentProcurementAnalysis.ItemsToBuy} to buy");
-            
-            // Step 3: Sync to shopping list (for procurement planner)
-            AppState.SyncProjectToShopping();
-            
-            // Step 4: Refresh basic prices for display (non-blocking)
-            _ = Task.Run(async () => 
-            {
-                await RefreshPricesAsync();
-            });
-            
-            Snackbar.Add($"Plan built with {AppState.CurrentPlan.RootItems.Count} items. Procurement analysis complete.", Severity.Success);
+            AppState.EndOperation($"Plan built with {AppState.CurrentPlan.RootItems.Count} items. Go to Procurement Planner to analyze.");
+            Snackbar.Add($"Plan built! Prices fetched. Go to Procurement Planner to run market analysis.", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -551,6 +541,54 @@
         finally
         {
             _isBuildingPlan = false;
+        }
+    }
+    
+    private void PopulateShoppingListFromPlan()
+    {
+        // Collect all items from the plan that are marked for buying
+        // This includes leaf nodes (materials) and any craftable nodes the user set to "buy"
+        var buyItems = new List<MarketShoppingItem>();
+        
+        foreach (var root in AppState.CurrentPlan?.RootItems ?? new List<PlanNode>())
+        {
+            CollectBuyItems(root, buyItems);
+        }
+        
+        AppState.ShoppingItems = buyItems;
+        AppState.NotifyShoppingListChanged();
+    }
+    
+    private void CollectBuyItems(PlanNode node, List<MarketShoppingItem> buyItems)
+    {
+        // If this node is set to buy (or is uncraftable), add it to the shopping list
+        if (node.Source == AcquisitionSource.MarketBuyNq || node.Source == AcquisitionSource.MarketBuyHq || node.IsUncraftable)
+        {
+            // Only add if not already in the list (aggregate quantities)
+            var existing = buyItems.FirstOrDefault(i => i.Id == node.ItemId);
+            if (existing != null)
+            {
+                existing.Quantity += node.Quantity;
+            }
+            else
+            {
+                buyItems.Add(new MarketShoppingItem
+                {
+                    Id = node.ItemId,
+                    Name = node.Name,
+                    IconId = node.IconId,
+                    Quantity = node.Quantity
+                });
+            }
+        }
+        
+        // Recursively check children
+        if (node.Children?.Any() == true)
+        {
+            foreach (var child in node.Children)
+            {
+                CollectBuyItems(child, buyItems);
+            }
         }
     }
 
