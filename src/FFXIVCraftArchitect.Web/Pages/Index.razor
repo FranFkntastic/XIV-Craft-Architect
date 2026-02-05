@@ -893,11 +893,13 @@
 
     private void GoToMarketAnalysis()
     {
-        NavigationManager.NavigateTo("market");
+        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
+        NavigationManager.NavigateTo($"{baseUri}/market");
     }
 
     private void GoToProcurement()
     {
-        NavigationManager.NavigateTo("procurement");
+        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
+        NavigationManager.NavigateTo($"{baseUri}/procurement");
     }
 }

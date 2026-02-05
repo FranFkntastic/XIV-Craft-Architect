@@ -286,7 +286,9 @@
     {
         // Set the auto-expand item ID so the market analysis page knows which card to expand
         AppState.AutoExpandItemId = Item.ItemId;
-        NavigationManager.NavigateTo("market");
+        // Use BaseUri to ensure proper GitHub Pages subpath navigation
+        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
+        NavigationManager.NavigateTo($"{baseUri}/market");
     }
 
     private string GetActionIcon() => Item.Recommendation switch

@@ -316,11 +316,13 @@
 
     private void GoToPlanner()
     {
-        NavigationManager.NavigateTo(".");
+        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
+        NavigationManager.NavigateTo($"{baseUri}/");
     }
 
     private void GoToProcurement()
     {
-        NavigationManager.NavigateTo("procurement");
+        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
+        NavigationManager.NavigateTo($"{baseUri}/procurement");
     }
 }

@@ -327,7 +327,9 @@
 
     private void NavigateTo(string page)
     {
-        NavigationManager.NavigateTo($"/{page}");
+        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
+        var path = string.IsNullOrEmpty(page) ? "" : $"/{page}";
+        NavigationManager.NavigateTo($"{baseUri}{path}");
     }
 
     // ==================== FILE MENU ====================
@@ -371,7 +373,8 @@
             // Navigate to planner if we have a plan
             if (plan != null || AppState.ProjectItems.Any())
             {
-                NavigationManager.NavigateTo(".");
+                var baseUri = NavigationManager.BaseUri.TrimEnd('/');
+                NavigationManager.NavigateTo($"{baseUri}/");
             }
         }
         catch (Exception ex)
@@ -437,7 +440,8 @@
             // Navigate to planner
             if (items.Count > 0)
             {
-                NavigationManager.NavigateTo(".");
+                var baseUri = NavigationManager.BaseUri.TrimEnd('/');
+                NavigationManager.NavigateTo($"{baseUri}/");
             }
         }
     }
