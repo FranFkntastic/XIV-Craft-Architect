@@ -371,7 +371,7 @@
             // Navigate to planner if we have a plan
             if (plan != null || AppState.ProjectItems.Any())
             {
-                NavigationManager.NavigateTo("/");
+                NavigationManager.NavigateTo(".");
             }
         }
         catch (Exception ex)
@@ -437,7 +437,7 @@
             // Navigate to planner
             if (items.Count > 0)
             {
-                NavigationManager.NavigateTo("/");
+                NavigationManager.NavigateTo(".");
             }
         }
     }
