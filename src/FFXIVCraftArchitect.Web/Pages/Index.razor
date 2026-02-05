@@ -893,13 +893,13 @@
 
     private void GoToMarketAnalysis()
     {
-        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
-        NavigationManager.NavigateTo($"{baseUri}/market");
+        // Use relative path (no leading slash) so it resolves against base href correctly
+        NavigationManager.NavigateTo("market");
     }
 
     private void GoToProcurement()
     {
-        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
-        NavigationManager.NavigateTo($"{baseUri}/procurement");
+        // Use relative path (no leading slash) so it resolves against base href correctly
+        NavigationManager.NavigateTo("procurement");
     }
 }

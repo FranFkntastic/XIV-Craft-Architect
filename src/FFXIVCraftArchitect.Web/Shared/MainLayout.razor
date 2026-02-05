@@ -327,9 +327,8 @@
 
     private void NavigateTo(string page)
     {
-        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
-        var path = string.IsNullOrEmpty(page) ? "" : $"/{page}";
-        NavigationManager.NavigateTo($"{baseUri}{path}");
+        // Use relative path (no leading slash) so it resolves against base href correctly
+        NavigationManager.NavigateTo(string.IsNullOrEmpty(page) ? "./" : page);
     }
 
     // ==================== FILE MENU ====================
@@ -373,8 +372,8 @@
             // Navigate to planner if we have a plan
             if (plan != null || AppState.ProjectItems.Any())
             {
-                var baseUri = NavigationManager.BaseUri.TrimEnd('/');
-                NavigationManager.NavigateTo($"{baseUri}/");
+                // Use relative path (no leading slash) so it resolves against base href correctly
+                NavigationManager.NavigateTo("./");
             }
         }
         catch (Exception ex)
@@ -440,8 +439,8 @@
             // Navigate to planner
             if (items.Count > 0)
             {
-                var baseUri = NavigationManager.BaseUri.TrimEnd('/');
-                NavigationManager.NavigateTo($"{baseUri}/");
+                // Use relative path (no leading slash) so it resolves against base href correctly
+                NavigationManager.NavigateTo("./");
             }
         }
     }

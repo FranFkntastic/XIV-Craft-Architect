@@ -239,13 +239,13 @@
 
     private void GoToPlanner()
     {
-        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
-        NavigationManager.NavigateTo($"{baseUri}/");
+        // Use relative path (no leading slash) so it resolves against base href correctly
+        NavigationManager.NavigateTo("./");
     }
 
     private void GoToMarketAnalysis()
     {
-        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
-        NavigationManager.NavigateTo($"{baseUri}/market");
+        // Use relative path (no leading slash) so it resolves against base href correctly
+        NavigationManager.NavigateTo("market");
     }
 }

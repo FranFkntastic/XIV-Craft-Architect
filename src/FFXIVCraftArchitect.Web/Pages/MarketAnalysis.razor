@@ -316,13 +316,13 @@
 
     private void GoToPlanner()
     {
-        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
-        NavigationManager.NavigateTo($"{baseUri}/");
+        // Use relative path (no leading slash) so it resolves against base href correctly
+        NavigationManager.NavigateTo("./");
     }
 
     private void GoToProcurement()
     {
-        var baseUri = NavigationManager.BaseUri.TrimEnd('/');
-        NavigationManager.NavigateTo($"{baseUri}/procurement");
+        // Use relative path (no leading slash) so it resolves against base href correctly
+        NavigationManager.NavigateTo("procurement");
     }
 }
