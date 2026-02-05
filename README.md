@@ -1,11 +1,10 @@
 # FFXIV Craft Architect
-A crafting cost calculator for Final Fantasy XIV with live inventory tracking.
+Yet another crafting cost calculator for Final Fantasy XIV.
 
 ## Features
 
-- **Crafting Cost Calculator** - Calculate total costs for multi-step recipes
 - **Market Data Integration** - Real-time prices from Universalis
-- **Recipe Analysis** - Hierarchical view of all materials needed
+- **Actionable Plan Compilation** - Suggested world travel plans to get the best prices with minimum effort.
 
 ## Requirements
 
