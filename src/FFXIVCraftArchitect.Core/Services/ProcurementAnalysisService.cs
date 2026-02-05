@@ -78,6 +78,101 @@ public class ProcurementAnalysisService
     }
 
     /// <summary>
+    /// Analyze procurement options using pre-fetched market analysis results.
+    /// This avoids redundant API calls when market data is already available.
+    /// </summary>
+    public Task<ProcurementAnalysis> AnalyzePlanWithMarketDataAsync(
+        CraftingPlan plan,
+        List<DetailedShoppingPlan> shoppingPlans,
+        string dataCenter,
+        RecommendationMode mode = RecommendationMode.MinimizeTotalCost,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        _logger?.LogInformation("[Procurement] Starting analysis with existing market data for plan with {Count} root items", 
+            plan.RootItems.Count);
+        
+        var analysis = new ProcurementAnalysis
+        {
+            DataCenter = dataCenter,
+            AnalysisMode = mode,
+            AnalyzedAt = DateTime.UtcNow
+        };
+
+        // Step 1: Aggregate all materials needed
+        progress?.Report("Aggregating materials...");
+        var allMaterials = AggregateMaterials(plan.RootItems);
+        analysis.TotalMaterials = allMaterials.Count;
+        
+        _logger?.LogInformation("[Procurement] Aggregated {Count} unique materials", allMaterials.Count);
+
+        // Step 2: Convert shopping plans to market data dictionary
+        var marketData = ConvertShoppingPlansToMarketData(shoppingPlans);
+        
+        // Step 3: Analyze each material's procurement options using existing data
+        progress?.Report("Analyzing procurement options...");
+        foreach (var material in allMaterials)
+        {
+            ct.ThrowIfCancellationRequested();
+            
+            var itemAnalysis = AnalyzeItemProcurement(material, marketData, plan, mode);
+            analysis.ItemAnalyses.Add(itemAnalysis);
+            
+            progress?.Report($"Analyzed {material.Name}");
+        }
+
+        // Step 4: Calculate totals
+        CalculateTotals(analysis);
+        
+        _logger?.LogInformation("[Procurement] Analysis complete. Optimal cost: {Cost:F0}g", 
+            analysis.OptimalTotalCost);
+        
+        return Task.FromResult(analysis);
+    }
+
+    /// <summary>
+    /// Convert DetailedShoppingPlan results to UniversalisResponse dictionary format.
+    /// </summary>
+    private Dictionary<int, UniversalisResponse> ConvertShoppingPlansToMarketData(List<DetailedShoppingPlan> shoppingPlans)
+    {
+        var marketData = new Dictionary<int, UniversalisResponse>();
+        
+        foreach (var plan in shoppingPlans)
+        {
+            var listings = new List<MarketListing>();
+            
+            // Convert world options to listings
+            foreach (var worldOption in plan.WorldOptions)
+            {
+                foreach (var listing in worldOption.Listings.Where(l => !l.IsAdditionalOption))
+                {
+                    listings.Add(new MarketListing
+                    {
+                        WorldName = worldOption.WorldName,
+                        PricePerUnit = listing.PricePerUnit,
+                        Quantity = listing.Quantity,
+                        RetainerName = listing.RetainerName,
+                        IsHq = listing.IsHq
+                    });
+                }
+            }
+            
+            // Use recommended world for average price calculation
+            var avgPrice = plan.RecommendedWorld?.AveragePricePerUnit ?? plan.DCAveragePrice;
+            
+            marketData[plan.ItemId] = new UniversalisResponse
+            {
+                ItemId = plan.ItemId,
+                Listings = listings,
+                AveragePrice = (double)avgPrice,
+                AveragePriceHq = (double)avgPrice // Simplified - could calculate from HQ listings
+            };
+        }
+        
+        return marketData;
+    }
+
+    /// <summary>
     /// Aggregate all materials from the recipe tree, including sub-craftables.
     /// </summary>
     private List<MaterialAggregate> AggregateMaterials(List<PlanNode> rootItems)

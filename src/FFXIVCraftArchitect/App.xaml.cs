@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Services;
 
 namespace FFXIVCraftArchitect;
@@ -18,6 +19,16 @@ public partial class App : Application
         AppContext.BaseDirectory, 
         "debug.log"
     );
+    
+    /// <summary>
+    /// Watch state restored on startup (used for state persistence across restarts).
+    /// </summary>
+    public static WatchState? RestoredWatchState { get; set; }
+    
+    /// <summary>
+    /// Reference to the main window for watch state saving.
+    /// </summary>
+    public static MainWindow? CurrentMainWindow { get; private set; }
 
     private void OnStartup(object sender, StartupEventArgs e)
     {
@@ -42,27 +53,39 @@ public partial class App : Application
             }
         });
         
+        // Try to restore previous state (from manual restart with save)
+        RestoredWatchState = WatchState.Load();
+        if (RestoredWatchState != null)
+        {
+            LogMessage("[State] Restored state from previous session");
+        }
+        
         var mainWindow = Services.GetRequiredService<MainWindow>();
+        CurrentMainWindow = mainWindow;
         mainWindow.Show();
+    }
+    
+    private static void LogMessage(string message)
+    {
+        try
+        {
+            File.AppendAllText(LogFilePath, $"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
+        }
+        catch { }
     }
 
     private void OnExit(object sender, ExitEventArgs e)
     {
-        // Save market cache to disk before exiting
+        // SQLite cache auto-saves, just dispose properly
         try
         {
-            var cacheService = Services.GetRequiredService<MarketCacheService>();
-            cacheService.SaveCacheToDiskAsync().Wait(TimeSpan.FromSeconds(5));
+            var cacheService = Services.GetRequiredService<Core.Services.IMarketCacheService>() as IDisposable;
+            cacheService?.Dispose();
         }
-        catch (Exception ex)
-        {
-            // Log to debug log if possible
-            try
-            {
-                File.AppendAllText(LogFilePath, $"[{DateTime.Now:HH:mm:ss}] [Error] Failed to save market cache: {ex}\n");
-            }
-            catch { }
-        }
+        catch { }
+        
+        // Clear watch state on normal exit
+        WatchState.Clear();
     }
 
     private void ConfigureServices(IServiceCollection services)
@@ -85,7 +108,7 @@ public partial class App : Application
         services.AddSingleton<GarlandService>();
         services.AddSingleton<UniversalisService>();
         services.AddSingleton<ItemCacheService>();
-        services.AddSingleton<MarketCacheService>();        // Global market data cache
+        services.AddSingleton<Core.Services.IMarketCacheService, SqliteMarketCacheService>();  // Global market data cache
         services.AddSingleton<RecommendationCsvService>(); // Plan-specific recommendations
         services.AddSingleton<RecipeCalculationService>();
         services.AddSingleton<PlanPersistenceService>();

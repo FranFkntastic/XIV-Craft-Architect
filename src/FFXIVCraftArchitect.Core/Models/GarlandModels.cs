@@ -169,10 +169,41 @@ public class GarlandItem
     public List<GarlandUsedInCraft>? UsedInCrafts { get; set; }
     
     /// <summary>
-    /// Vendors that sell this item
+    /// Vendors that sell this item. Can be an array of vendor objects or vendor IDs (integers).
     /// </summary>
     [JsonPropertyName("vendors")]
-    public List<GarlandVendor>? Vendors { get; set; }
+    public List<object>? VendorsRaw { get; set; }
+    
+    /// <summary>
+    /// Parsed vendor information (only includes properly formatted vendor objects)
+    /// </summary>
+    [JsonIgnore]
+    public List<GarlandVendor> Vendors => ParseVendors(VendorsRaw);
+    
+    private static List<GarlandVendor> ParseVendors(List<object>? rawVendors)
+    {
+        if (rawVendors == null) return new List<GarlandVendor>();
+        
+        var result = new List<GarlandVendor>();
+        foreach (var v in rawVendors)
+        {
+            // Skip integer IDs - we only want full vendor objects
+            if (v is JsonElement element)
+            {
+                if (element.ValueKind == JsonValueKind.Object)
+                {
+                    try
+                    {
+                        var vendor = JsonSerializer.Deserialize<GarlandVendor>(element.GetRawText());
+                        if (vendor != null) result.Add(vendor);
+                    }
+                    catch { /* Skip invalid vendor entries */ }
+                }
+                // Integer vendor IDs are ignored - we can't use them without additional lookups
+            }
+        }
+        return result;
+    }
     
     /// <summary>
     /// Whether this item can be traded on the market board (1 = true, 0 = false in JSON)

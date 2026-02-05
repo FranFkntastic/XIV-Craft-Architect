@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.IO;
+using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Models;
 using Microsoft.Extensions.Logging;
 
@@ -8,19 +9,19 @@ namespace FFXIVCraftArchitect.Services;
 /// <summary>
 /// Service for calculating optimal market board shopping plans.
 /// Groups listings by world and applies intelligent filtering.
-/// Uses MarketCacheService to avoid redundant API calls.
+/// Uses IMarketCacheService to avoid redundant API calls.
 /// </summary>
 public class MarketShoppingService
 {
     private readonly UniversalisService _universalisService;
-    private readonly MarketCacheService _cacheService;
+    private readonly Core.Services.IMarketCacheService _cacheService;
     private readonly WorldStatusService _worldStatusService;
     private readonly SettingsService _settingsService;
     private readonly ILogger<MarketShoppingService> _logger;
 
     public MarketShoppingService(
         UniversalisService universalisService, 
-        MarketCacheService cacheService,
+        Core.Services.IMarketCacheService cacheService,
         WorldStatusService worldStatusService,
         SettingsService settingsService,
         ILogger<MarketShoppingService> logger)
@@ -52,7 +53,7 @@ public class MarketShoppingService
         
         foreach (var item in marketItems)
         {
-            var cached = _cacheService.Get(item.ItemId, dataCenter);
+            var cached = await _cacheService.GetAsync(item.ItemId, dataCenter);
             if (cached != null)
             {
                 cachedResults[item.ItemId] = ConvertFromCachedData(cached);
@@ -85,7 +86,7 @@ public class MarketShoppingService
                     
                     // Store in cache
                     var cachedData = ConvertToCachedData(kvp.Key, dataCenter, kvp.Value);
-                    _cacheService.Set(kvp.Key, dataCenter, cachedData);
+                    await _cacheService.SetAsync(kvp.Key, dataCenter, cachedData);
                 }
                 
                 _logger.LogInformation("[MarketShopping] Successfully fetched {FetchedCount}/{RequestedCount} items",
@@ -144,7 +145,7 @@ public class MarketShoppingService
     /// <summary>
     /// Convert cached data back to UniversalisResponse format.
     /// </summary>
-    private UniversalisResponse ConvertFromCachedData(CachedMarketData cached)
+    private UniversalisResponse ConvertFromCachedData(Core.Services.CachedMarketData cached)
     {
         var listings = new List<MarketListing>();
         
@@ -174,14 +175,14 @@ public class MarketShoppingService
     /// <summary>
     /// Convert UniversalisResponse to cached format.
     /// </summary>
-    private CachedMarketData ConvertToCachedData(int itemId, string dataCenter, UniversalisResponse response)
+    private Core.Services.CachedMarketData ConvertToCachedData(int itemId, string dataCenter, UniversalisResponse response)
     {
         var worlds = response.Listings
             .GroupBy(l => l.WorldName)
-            .Select(g => new CachedWorldData
+            .Select(g => new Core.Services.CachedWorldData
             {
                 WorldName = g.Key,
-                Listings = g.Select(l => new CachedListing
+                Listings = g.Select(l => new Core.Services.CachedListing
                 {
                     Quantity = l.Quantity,
                     PricePerUnit = l.PricePerUnit,
@@ -191,7 +192,7 @@ public class MarketShoppingService
             })
             .ToList();
         
-        return new CachedMarketData
+        return new Core.Services.CachedMarketData
         {
             ItemId = itemId,
             DataCenter = dataCenter,

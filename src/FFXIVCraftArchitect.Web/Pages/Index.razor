@@ -13,6 +13,7 @@
 @inject AppState AppState
 @inject IndexedDbService IndexedDb
 @inject NavigationManager NavigationManager
+@inject ILogger<Index> Logger
 @implements IDisposable
 
 <!-- 3-Column Layout matching WPF -->
@@ -117,17 +118,7 @@
             </div>
         </div>
         
-        <!-- Data Center / World -->
-        <div style="margin-top: 16px;">
-            <div style="color: #cccccc; font-size: 14px; margin-bottom: 4px;">Data Center:</div>
-            <select @bind="AppState.SelectedDataCenter"
-                    style="width: 100%; padding: 8px; background: #2d2d2d; color: white; border: 1px solid #444; border-radius: 4px;">
-                @foreach (var dc in _worldData?.DataCenters ?? new List<string>())
-                {
-                    <option value="@dc">@dc</option>
-                }
-            </select>
-        </div>
+
         
         <!-- Plan Actions -->
         @if (AppState.CurrentPlan != null || AppState.ProjectItems.Any())
@@ -311,62 +302,46 @@
                         Export CSV
                     </button>
                 </div>
+                
+                <!-- Navigation to Market Analysis & Procurement -->
+                <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #444;">
+                    <div style="font-size: 12px; color: #888; margin-bottom: 8px;">Market Tools:</div>
+                    <div style="display: flex; gap: 8px;">
+                        <button @onclick="GoToMarketAnalysis"
+                                disabled="@(!AppState.ShoppingItems.Any())"
+                                style="flex: 1; padding: 10px; background: #d4a73a; color: #1a1a1a; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600;">
+                            Market Analysis →
+                        </button>
+                        <button @onclick="GoToProcurement"
+                                disabled="@(!AppState.ShoppingItems.Any())"
+                                style="flex: 1; padding: 10px; background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600;">
+                            Procurement Plan →
+                        </button>
+                    </div>
+                </div>
             }
         }
     </div>
 </div>
 
 @code {
-    private WorldData? _worldData;
-    
     private string _searchQuery = string.Empty;
     private bool _isSearching = false;
     private List<GarlandSearchResult> _searchResults = new();
     
     private bool _isBuildingPlan = false;
     private bool _isRefreshingPrices = false;
-    private System.Threading.Timer? _autoSaveTimer;
 
     protected override async Task OnInitializedAsync()
     {
-        try
-        {
-            _worldData = await UniversalisService.GetWorldDataAsync();
-            if (string.IsNullOrEmpty(AppState.SelectedDataCenter))
-            {
-                AppState.SelectedDataCenter = _worldData.DataCenters.FirstOrDefault() ?? "Aether";
-            }
-        }
-        catch
-        {
-            // Fallback
-            _worldData = new WorldData
-            {
-                DataCenterToWorlds = new Dictionary<string, List<string>>
-                {
-                    ["Aether"] = new() { "Adamantoise", "Cactuar", "Faerie", "Gilgamesh", "Jenova", "Midgardsormr", "Sargatanas", "Siren" },
-                    ["Primal"] = new() { "Behemoth", "Excalibur", "Exodus", "Famfrit", "Hyperion", "Lamia", "Leviathan", "Ultros" },
-                    ["Crystal"] = new() { "Balmung", "Brynhildr", "Coeurl", "Diabolos", "Goblin", "Malboro", "Mateus", "Zalera" },
-                    ["Dynamis"] = new() { "Cuchulainn", "Golem", "Halicarnassus", "Kraken", "Maduin", "Marilith", "Rafflesia", "Seraph" }
-                }
-            };
-        }
-
         // Subscribe to state changes
         AppState.OnPlanChanged += OnPlanChanged;
         
         // Load saved plans list
         await RefreshSavedPlansListAsync();
         
-        // Try to load auto-save
-        await TryLoadAutoSaveAsync();
-        
-        // Setup auto-save timer (every 30 seconds)
-        _autoSaveTimer = new System.Threading.Timer(
-            async _ => await AutoSaveAsync(),
-            null,
-            TimeSpan.FromSeconds(30),
-            TimeSpan.FromSeconds(30));
+        // Note: WorldData, auto-save restoration, and auto-save timer are now
+        // all handled centrally in MainLayout.razor
     }
 
     private void OnPlanChanged()
@@ -377,13 +352,8 @@
     public void Dispose()
     {
         AppState.OnPlanChanged -= OnPlanChanged;
-        _autoSaveTimer?.Dispose();
         
-        // Final auto-save on dispose
-        if (AppState.IsAutoSaveEnabled)
-        {
-            _ = AutoSaveAsync();
-        }
+        // Note: Auto-save timer is now managed centrally in MainLayout.razor
     }
 
     private async Task RefreshSavedPlansListAsync()
@@ -402,40 +372,6 @@
             })
             .ToList();
         AppState.NotifySavedPlansChanged();
-    }
-
-    private async Task TryLoadAutoSaveAsync()
-    {
-        var autoSave = await IndexedDb.LoadAutoSaveAsync();
-        if (autoSave?.ProjectItems.Any() == true)
-        {
-            // Ask user if they want to restore? For now, just restore silently
-            CraftingPlan? plan = null;
-            if (!string.IsNullOrEmpty(autoSave.PlanJson))
-            {
-                try
-                {
-                    plan = System.Text.Json.JsonSerializer.Deserialize<CraftingPlan>(autoSave.PlanJson);
-                }
-                catch { }
-            }
-            
-            AppState.LoadStoredPlan(autoSave, plan);
-            Snackbar.Add("Restored previous session", Severity.Info);
-        }
-    }
-
-    private async Task AutoSaveAsync()
-    {
-        if (!AppState.IsAutoSaveEnabled)
-            return;
-            
-        var success = await IndexedDb.AutoSaveStateAsync(AppState);
-        if (success)
-        {
-            AppState.LastAutoSave = DateTime.Now;
-            await InvokeAsync(StateHasChanged);
-        }
     }
 
     private async Task SearchItemsAsync()
@@ -737,7 +673,8 @@
 
     private void OnNodeSourceChanged(PlanNode node)
     {
-        // Recalculate shopping list
+        // Recalculate shopping list when acquisition source changes
+        PopulateShoppingListFromPlan();
         AppState.NotifyPlanChanged();
     }
 
@@ -826,6 +763,25 @@
             }
 
             AppState.LoadStoredPlan(storedPlan, plan);
+            
+            // Restore market analysis if available
+            if (!string.IsNullOrEmpty(storedPlan.MarketPlansJson))
+            {
+                try
+                {
+                    var marketPlans = System.Text.Json.JsonSerializer.Deserialize<List<DetailedShoppingPlan>>(storedPlan.MarketPlansJson);
+                    if (marketPlans?.Any() == true)
+                    {
+                        AppState.ShoppingPlans = marketPlans;
+                        AppState.RecommendationMode = storedPlan.SavedRecommendationMode;
+                        AppState.NotifyShoppingListChanged();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger?.LogWarning(ex, "Failed to restore market analysis");
+                }
+            }
             
             if (plan != null)
             {
@@ -933,5 +889,15 @@
         {
             Snackbar.Add($"Export failed: {ex.Message}", Severity.Error);
         }
+    }
+
+    private void GoToMarketAnalysis()
+    {
+        NavigationManager.NavigateTo("/market");
+    }
+
+    private void GoToProcurement()
+    {
+        NavigationManager.NavigateTo("/procurement");
     }
 }

@@ -1,10 +1,12 @@
 using CsvHelper.Configuration;
+using FFXIVCraftArchitect.Core.Models;
 
 namespace FFXIVCraftArchitect.Models;
 
 /// <summary>
 /// Plan-specific shopping recommendations stored in CSV format.
 /// This is the "strategy" file that records what was recommended for this specific plan.
+/// Each row represents one world option for one item.
 /// </summary>
 public class RecommendationCsvRecord
 {
@@ -24,7 +26,17 @@ public class RecommendationCsvRecord
     public int QuantityNeeded { get; set; }
 
     /// <summary>
-    /// Recommended world to purchase from.
+    /// Name of the world this row represents.
+    /// </summary>
+    public string WorldName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Whether this world is the recommended one for this item.
+    /// </summary>
+    public bool IsRecommended { get; set; }
+
+    /// <summary>
+    /// [Deprecated] Kept for backward compatibility. Use WorldName with IsRecommended=true.
     /// </summary>
     public string RecommendedWorld { get; set; } = string.Empty;
 
@@ -87,9 +99,9 @@ public class RecommendationCsvRecord
     public bool? IsHq3 { get; set; }
 
     /// <summary>
-    /// Convert back to a DetailedShoppingPlan for display.
+    /// Convert this row to a WorldShoppingSummary.
     /// </summary>
-    public DetailedShoppingPlan ToShoppingPlan()
+    public WorldShoppingSummary ToWorldSummary()
     {
         var listings = new List<ShoppingListingEntry>();
         
@@ -144,9 +156,12 @@ public class RecommendationCsvRecord
             });
         }
 
-        var recommendedWorld = new WorldShoppingSummary
+        // Use WorldName if available, fall back to RecommendedWorld for backward compat
+        var worldName = !string.IsNullOrEmpty(WorldName) ? WorldName : RecommendedWorld;
+
+        return new WorldShoppingSummary
         {
-            WorldName = RecommendedWorld,
+            WorldName = worldName,
             TotalCost = TotalCost,
             AveragePricePerUnit = AveragePricePerUnit,
             ListingsUsed = ListingsUsed,
@@ -156,44 +171,58 @@ public class RecommendationCsvRecord
             Listings = listings,
             BestSingleListing = listings.FirstOrDefault()
         };
+    }
 
+    /// <summary>
+    /// [Deprecated] Use ToWorldSummary() and group by ItemId at the service layer.
+    /// Kept for backward compatibility.
+    /// </summary>
+    public DetailedShoppingPlan ToShoppingPlan()
+    {
+        var worldSummary = ToWorldSummary();
         return new DetailedShoppingPlan
         {
             ItemId = ItemId,
             Name = Name,
             QuantityNeeded = QuantityNeeded,
             DCAveragePrice = DCAveragePrice,
-            RecommendedWorld = recommendedWorld,
-            WorldOptions = new List<WorldShoppingSummary> { recommendedWorld }
+            RecommendedWorld = IsRecommended ? worldSummary : null,
+            WorldOptions = new List<WorldShoppingSummary> { worldSummary }
         };
     }
 
     /// <summary>
-    /// Create a CSV record from a DetailedShoppingPlan.
+    /// Create CSV records from a DetailedShoppingPlan (one row per world).
     /// </summary>
-    public static RecommendationCsvRecord FromShoppingPlan(DetailedShoppingPlan plan)
+    public static List<RecommendationCsvRecord> FromShoppingPlanToRecords(DetailedShoppingPlan plan)
     {
-        var record = new RecommendationCsvRecord
-        {
-            ItemId = plan.ItemId,
-            Name = plan.Name,
-            QuantityNeeded = plan.QuantityNeeded,
-            DCAveragePrice = plan.DCAveragePrice,
-            GeneratedAt = DateTime.UtcNow
-        };
+        var records = new List<RecommendationCsvRecord>();
+        var worldsToSave = plan.WorldOptions.Any() ? plan.WorldOptions : 
+                          (plan.RecommendedWorld != null ? new List<WorldShoppingSummary> { plan.RecommendedWorld } : new List<WorldShoppingSummary>());
 
-        if (plan.RecommendedWorld != null)
+        foreach (var world in worldsToSave)
         {
-            record.RecommendedWorld = plan.RecommendedWorld.WorldName;
-            record.TotalCost = plan.RecommendedWorld.TotalCost;
-            record.AveragePricePerUnit = plan.RecommendedWorld.AveragePricePerUnit;
-            record.ListingsUsed = plan.RecommendedWorld.ListingsUsed;
-            record.IsFullyUnderAverage = plan.RecommendedWorld.IsFullyUnderAverage;
-            record.TotalQuantityPurchased = plan.RecommendedWorld.TotalQuantityPurchased;
-            record.ExcessQuantity = plan.RecommendedWorld.ExcessQuantity;
+            var isRecommended = plan.RecommendedWorld?.WorldName == world.WorldName;
+            var record = new RecommendationCsvRecord
+            {
+                ItemId = plan.ItemId,
+                Name = plan.Name,
+                QuantityNeeded = plan.QuantityNeeded,
+                DCAveragePrice = plan.DCAveragePrice,
+                GeneratedAt = DateTime.UtcNow,
+                WorldName = world.WorldName,
+                IsRecommended = isRecommended,
+                RecommendedWorld = isRecommended ? world.WorldName : string.Empty,
+                TotalCost = world.TotalCost,
+                AveragePricePerUnit = world.AveragePricePerUnit,
+                ListingsUsed = world.ListingsUsed,
+                IsFullyUnderAverage = world.IsFullyUnderAverage,
+                TotalQuantityPurchased = world.TotalQuantityPurchased,
+                ExcessQuantity = world.ExcessQuantity
+            };
 
             // Extract up to 3 listings
-            var listings = plan.RecommendedWorld.Listings
+            var listings = world.Listings
                 .Where(l => !l.IsAdditionalOption)
                 .Take(3)
                 .ToList();
@@ -221,9 +250,27 @@ public class RecommendationCsvRecord
                 record.Qty3 = listings[2].Quantity;
                 record.IsHq3 = listings[2].IsHq;
             }
+
+            records.Add(record);
         }
 
-        return record;
+        return records;
+    }
+
+    /// <summary>
+    /// [Deprecated] Use FromShoppingPlanToRecords() instead.
+    /// Kept for backward compatibility - only saves the recommended world.
+    /// </summary>
+    public static RecommendationCsvRecord FromShoppingPlan(DetailedShoppingPlan plan)
+    {
+        var records = FromShoppingPlanToRecords(plan);
+        return records.FirstOrDefault() ?? new RecommendationCsvRecord 
+        { 
+            ItemId = plan.ItemId,
+            Name = plan.Name,
+            QuantityNeeded = plan.QuantityNeeded,
+            DCAveragePrice = plan.DCAveragePrice
+        };
     }
 }
 
@@ -237,6 +284,8 @@ public sealed class RecommendationCsvMap : ClassMap<RecommendationCsvRecord>
         Map(m => m.ItemId).Name("itemId");
         Map(m => m.Name).Name("name");
         Map(m => m.QuantityNeeded).Name("quantityNeeded");
+        Map(m => m.WorldName).Name("worldName");
+        Map(m => m.IsRecommended).Name("isRecommended");
         Map(m => m.RecommendedWorld).Name("recommendedWorld");
         Map(m => m.TotalCost).Name("totalCost");
         Map(m => m.AveragePricePerUnit).Name("averagePricePerUnit");

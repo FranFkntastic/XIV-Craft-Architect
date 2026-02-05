@@ -1,6 +1,7 @@
 using System.IO;
 using System.Net.Http;
 using System.Text.RegularExpressions;
+using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Models;
 using Microsoft.Extensions.Logging;
 
@@ -40,7 +41,7 @@ public class WorldStatusService
     /// <summary>
     /// Gets the status for a specific world.
     /// </summary>
-    public WorldStatus? GetWorldStatus(string worldName)
+    public Models.WorldStatus? GetWorldStatus(string worldName)
     {
         if (_cachedData?.Worlds == null) return null;
         
@@ -63,9 +64,9 @@ public class WorldStatusService
     /// <summary>
     /// Gets all world statuses.
     /// </summary>
-    public Dictionary<string, WorldStatus> GetAllWorldStatuses()
+    public Dictionary<string, Models.WorldStatus> GetAllWorldStatuses()
     {
-        return _cachedData?.Worlds ?? new Dictionary<string, WorldStatus>();
+        return _cachedData?.Worlds ?? new Dictionary<string, Models.WorldStatus>();
     }
     
     /// <summary>
@@ -125,9 +126,9 @@ public class WorldStatusService
     /// <summary>
     /// Parses the Lodestone HTML to extract world status information.
     /// </summary>
-    private List<WorldStatus> ParseWorldStatusHtml(string html)
+    private List<Models.WorldStatus> ParseWorldStatusHtml(string html)
     {
-        var worlds = new List<WorldStatus>();
+        var worlds = new List<Models.WorldStatus>();
         
         try
         {
@@ -158,7 +159,7 @@ public class WorldStatusService
                     var canCreateCharacter = characterCreationHtml.Contains("world-ic__available") &&
                                             !characterCreationHtml.Contains("world-ic__unavailable");
                     
-                    worlds.Add(new WorldStatus
+                    worlds.Add(new Models.WorldStatus
                     {
                         Name = worldName,
                         Classification = classification,

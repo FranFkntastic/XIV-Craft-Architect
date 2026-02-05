@@ -1,214 +1,99 @@
 @using FFXIVCraftArchitect.Core.Models
 
-<div style="display: flex; flex-direction: column; height: 100%; gap: 10px;">
+<div style="display: flex; flex-direction: column; height: 100%; gap: 6px;">
     
-    <!-- Filter Controls Row -->
-    <div style="flex-shrink: 0;">
-            <MudPaper Elevation="2" Class="pa-3" Style="background: linear-gradient(135deg, #2d2d2d 0%, #252525 100%); border-radius: 12px;">
-                <MudGrid Spacing="2" Style="align-items: center;">
-                    
-                    <!-- Sort Dropdown -->
-                    <MudItem xs="12" sm="6" md="4" lg="3" Class="pa-1">
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <MudText Typo="Typo.body2" Style="color: #888; white-space: nowrap; font-weight: 500;">Sort:</MudText>
-                            <MudSelect T="FFXIVCraftArchitect.Core.Models.MarketSortOption" 
-                                       Value="_selectedSort"
-                                       ValueChanged="OnSortValueChanged"
-                                       Dense="true"
-                                       Variant="Variant.Outlined"
-                                       Style="min-width: 140px; background: #1e1e1e; border-radius: 6px;"
-                                       AdornmentColor="Color.Primary">
-                                <MudSelectItem Value="MarketSortOption.ByRecommended">By Recommended</MudSelectItem>
-                                <MudSelectItem Value="MarketSortOption.Alphabetical">Alphabetical</MudSelectItem>
-                            </MudSelect>
-                        </div>
-                    </MudItem>
-                    
-                    <!-- Mode Dropdown -->
-                    <MudItem xs="12" sm="6" md="4" lg="3" Class="pa-1">
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <MudText Typo="Typo.body2" Style="color: #888; white-space: nowrap; font-weight: 500;">Mode:</MudText>
-                            <MudSelect T="RecommendationMode" 
-                                       Value="_selectedMode"
-                                       ValueChanged="OnModeValueChanged"
-                                       Dense="true"
-                                       Variant="Variant.Outlined"
-                                       Style="min-width: 160px; background: #1e1e1e; border-radius: 6px;"
-                                       AdornmentColor="Color.Primary">
-                                <MudSelectItem Value="RecommendationMode.MinimizeTotalCost">Minimize Total Cost</MudSelectItem>
-                                <MudSelectItem Value="RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
-                                <MudSelectItem Value="RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
-                            </MudSelect>
-                        </div>
-                    </MudItem>
-                    
-                    <!-- Search all NA DCs Checkbox -->
-                    <MudItem xs="12" sm="6" md="4" lg="2" Class="pa-1">
-                        <MudCheckBox T="bool"
-                                     Value="_searchAllNA"
-                                     ValueChanged="OnSearchAllNAToggled"
-                                     Dense="true"
-                                     Color="Color.Primary"
-                                     Style="background: #1e1e1e; border-radius: 6px; padding: 4px 8px;">
-                            <MudText Typo="Typo.body2" Style="color: #ccc;">All NA DCs</MudText>
-                        </MudCheckBox>
-                    </MudItem>
-                    
-                    <!-- Action Buttons -->
-                    <MudItem xs="12" sm="12" md="6" lg="4" Class="pa-1">
-                        <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Secondary"
-                                       Size="Size.Small"
-                                       Disabled="true"
-                                       OnClick="OnViewStatusClick"
-                                       StartIcon="@Icons.Material.Filled.Visibility"
-                                       Style="border-radius: 6px;">
-                                Status
-                            </MudButton>
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Primary"
-                                       Size="Size.Small"
-                                       Disabled="true"
-                                       OnClick="OnRefreshClick"
-                                       StartIcon="@Icons.Material.Filled.Refresh"
-                                       Style="border-radius: 6px;">
-                                Refresh
-                            </MudButton>
-                        </div>
-                    </MudItem>
-                    
-                </MudGrid>
-            </MudPaper>
-        </div>
-        
-        <!-- Craft vs Buy Analysis Section (conditionally shown) -->
-        @if (ShowAnalysisSections)
-        {
+    <!-- Compressed Purchase Summary -->
+    @if (ShowAnalysisSections && ShoppingPlans?.Any() == true)
+    {
         <div style="flex-shrink: 0;">
-            <MudPaper Elevation="1" Style="border-radius: 12px; overflow: hidden;">
-            <MudExpansionPanel IsExpanded="_craftAnalysisExpanded"
-                               IsExpandedChanged="v => _craftAnalysisExpanded = v"
-                               Style="background: linear-gradient(135deg, #2d3a2d 0%, #263626 100%); margin: 0;"
-                               Dense="true"
-                               HideIcon="false">
-                <TitleContent>
-                    <div style="display: flex; align-items: center; gap: 12px;">
-                        <MudIcon Icon="@Icons.Material.Filled.Assessment" Color="Color.Success" Size="Size.Small" />
-                        <MudText Typo="Typo.body1" Style="color: #90EE90; font-weight: 600;">Craft vs Buy Analysis</MudText>
-                        @if (!string.IsNullOrEmpty(CraftAnalysisSummary))
-                        {
-                            <MudText Typo="Typo.caption" Style="color: #aaa; background: #1e1e1e; padding: 2px 8px; border-radius: 10px;">@CraftAnalysisSummary</MudText>
-                        }
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: #2a3a2a; border-radius: 4px; border: 1px solid #3a5a3a;">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <MudIcon Icon="@Icons.Material.Filled.Savings" Color="Color.Success" Size="Size.Small" />
+                    <span style="color: #90EE90; font-weight: 600; font-size: 14px;">
+                        @TotalBestValue.ToString("N0")g
+                    </span>
+                    <span style="color: #888; font-size: 12px;">best value</span>
+                </div>
+                <div style="display: flex; gap: 16px;">
+                    <span style="color: #aaa; font-size: 12px;">
+                        <span style="color: #666;">DC Avg:</span> @TotalDCAverage.ToString("N0")g
+                    </span>
+                    @if (TotalSavings > 0)
+                    {
+                        <span style="color: #4caf50; font-size: 12px;">
+                            Save @TotalSavings.ToString("N0")g
+                        </span>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+    
+    <!-- Expanded Item Panel (Top) -->
+    @if (_expandedPlan != null)
+    {
+        <div style="flex-shrink: 0; max-height: 50%; overflow-y: auto;">
+            <ExpandedItemPanel Plan="_expandedPlan" OnClose="CloseExpanded" />
+        </div>
+    }
+    
+    <!-- Collapsed Cards Grid (Bottom) -->
+    <div style="flex-grow: 1; overflow-y: auto; min-height: 0;">
+        @if (ShoppingPlans?.Any() == true)
+        {
+            <!-- Craft vs Buy Analysis (collapsible, full width) -->
+            @if (ShowAnalysisSections && CraftAnalyses?.Any() == true)
+            {
+                <div style="margin-bottom: 8px; background: #2a2a25; border-radius: 4px; border: 1px solid #444; overflow: hidden;">
+                    <div @onclick="ToggleCraftAnalysis"
+                         style="background: #363630; padding: 8px 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <MudIcon Icon="@Icons.Material.Filled.Assessment" Color="Color.Success" Size="Size.Small" />
+                            <span style="color: #90EE90; font-weight: 600; font-size: 13px;">Craft vs Buy Analysis</span>
+                            @if (!string.IsNullOrEmpty(CraftAnalysisSummary))
+                            {
+                                <span style="color: #aaa; background: #1e1e1e; padding: 2px 8px; border-radius: 10px; font-size: 11px;">@CraftAnalysisSummary</span>
+                            }
+                        </div>
+                        <MudIcon Icon="@(_craftAnalysisExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" 
+                                 Color="Color.Secondary" Size="Size.Small" />
                     </div>
-                </TitleContent>
-                <ChildContent>
-                    <MudPaper Elevation="0" Class="pa-3" Style="background: #252525;">
-                        @if (CraftAnalyses?.Any() == true)
-                        {
+                    @if (_craftAnalysisExpanded)
+                    {
+                        <div style="background: #1e1e1a; padding: 8px;">
                             <CraftAnalysisPanel Analyses="CraftAnalyses" />
-                        }
-                        else
-                        {
-                            <MudText Typo="Typo.body2" Style="color: #888; text-align: center; padding: 16px;">
-                                No craft vs buy analysis available.
-                                <br />
-                                <span style="font-size: 12px;">Add items with craftable components to see potential savings.</span>
-                            </MudText>
-                        }
-                    </MudPaper>
-                </ChildContent>
-            </MudExpansionPanel>
-            </MudPaper>
-        </div>
+                        </div>
+                    }
+                </div>
+            }
+            
+            <!-- Collapsed Cards Grid -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(450px, 1fr)); gap: 6px; align-items: start;">
+                @foreach (var plan in GetSortedPlans())
+                {
+                    var isSelected = _expandedPlan?.ItemId == plan.ItemId;
+                    <div @onclick="() => SelectPlan(plan)" style="cursor: pointer;">
+                        <MarketAnalysisCard @key="plan.ItemId" 
+                                           Plan="plan" 
+                                           IsCollapsed="true"
+                                           IsSelected="isSelected" />
+                    </div>
+                }
+            </div>
         }
-        
-        <!-- Purchase Summary Section (conditionally shown) -->
-        @if (ShowAnalysisSections)
+        else
         {
-        <div style="flex-shrink: 0;">
-            <MudPaper Elevation="1" Style="border-radius: 12px; overflow: hidden;">
-            <MudExpansionPanel IsExpanded="_purchaseSummaryExpanded"
-                               IsExpandedChanged="v => _purchaseSummaryExpanded = v"
-                               Style="background: linear-gradient(135deg, #2d4a3e 0%, #263d33 100%); margin: 0;"
-                               Dense="true"
-                               HideIcon="false">
-                <TitleContent>
-                    <div style="display: flex; align-items: center; gap: 12px;">
-                        <MudIcon Icon="@Icons.Material.Filled.Inventory" Color="Color.Success" Size="Size.Small" />
-                        <MudText Typo="Typo.body1" Style="color: #90EE90; font-weight: 600;">Purchase Summary</MudText>
-                        @if (!string.IsNullOrEmpty(PurchaseSummaryText))
-                        {
-                            <MudText Typo="Typo.caption" Style="color: #aaa; background: #1e1e1e; padding: 2px 8px; border-radius: 10px;">@PurchaseSummaryText</MudText>
-                        }
-                    </div>
-                </TitleContent>
-                <ChildContent>
-                    <MudPaper Elevation="0" Class="pa-3" Style="background: #252525;">
-                        @if (ShoppingPlans?.Any() == true)
-                        {
-                            <MudGrid Spacing="2">
-                                <MudItem xs="12">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #444;">
-                                        <MudText Typo="Typo.body2" Style="color: #888;">Total Items:</MudText>
-                                        <MudText Typo="Typo.body2" Style="color: white; font-weight: 500;">@ShoppingPlans.Count</MudText>
-                                    </div>
-                                </MudItem>
-                                <MudItem xs="12">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #444;">
-                                        <MudText Typo="Typo.body2" Style="color: #888;">DC Average Total:</MudText>
-                                        <MudText Typo="Typo.body2" Style="color: #d4a73a; font-weight: 500;">@TotalDCAverage.ToString("N0")g</MudText>
-                                    </div>
-                                </MudItem>
-                                <MudItem xs="12">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0;">
-                                        <MudText Typo="Typo.body2" Style="color: #888;">Best Value Total:</MudText>
-                                        <MudText Typo="Typo.body2" Style="color: #4caf50; font-weight: 600;">@TotalBestValue.ToString("N0")g</MudText>
-                                    </div>
-                                </MudItem>
-                            </MudGrid>
-                        }
-                        else
-                        {
-                            <MudText Typo="Typo.body2" Style="color: #888; text-align: center; padding: 16px;">
-                                No shopping plans to summarize.
-                                <br />
-                                <span style="font-size: 12px;">Click "Analyze Market" to generate purchase recommendations.</span>
-                            </MudText>
-                        }
-                    </MudPaper>
-                </ChildContent>
-            </MudExpansionPanel>
-            </MudPaper>
-        </div>
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 200px; background: #252525; border-radius: 8px;">
+                <MudText Typo="Typo.body1" Style="color: #888; text-align: center;">
+                    No market data to display
+                </MudText>
+                <MudText Typo="Typo.body2" Style="color: #666; text-align: center; margin-top: 8px;">
+                    Add items to your shopping list and click "Analyze Market" to see world recommendations.
+                </MudText>
+            </div>
         }
-        
-        <!-- Market Cards Area -->
-        <div style="flex-grow: 1; overflow-y: auto; min-height: 0;">
-            <MudPaper Elevation="2" Class="pa-3" Style="background: linear-gradient(180deg, #2d2d2d 0%, #252525 100%); height: 100%; border-radius: 12px;">
-                @if (ShoppingPlans?.Any() == true)
-                {
-                    <MudStack Spacing="2">
-                        @foreach (var plan in GetSortedPlans())
-                        {
-                            <MarketAnalysisCard Plan="plan" />
-                        }
-                    </MudStack>
-                }
-                else
-                {
-                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 200px;">
-                        <MudText Typo="Typo.body1" Style="color: #888; text-align: center;">
-                            No market data to display
-                        </MudText>
-                        <MudText Typo="Typo.body2" Style="color: #666; text-align: center; margin-top: 8px;">
-                            Add items to your shopping list and click "Analyze Market" to see world recommendations.
-                        </MudText>
-                    </div>
-                }
-            </MudPaper>
-        </div>
-        
+    </div>
+    
 </div>
 
 @code {
@@ -219,60 +104,70 @@
     [Parameter] public RecommendationMode InitialMode { get; set; } = RecommendationMode.MinimizeTotalCost;
     [Parameter] public EventCallback OnRefreshMarketData { get; set; }
     [Parameter] public EventCallback OnViewStatus { get; set; }
-    [Parameter] public EventCallback<FFXIVCraftArchitect.Core.Models.MarketSortOption> OnSortChanged { get; set; }
+    [Parameter] public EventCallback<MarketSortOption> OnSortChanged { get; set; }
     [Parameter] public EventCallback<RecommendationMode> OnModeChanged { get; set; }
     [Parameter] public EventCallback<bool> OnSearchAllNAChanged { get; set; }
     [Parameter] public bool ShowAnalysisSections { get; set; } = true;
+    [Parameter] public MarketSortOption CurrentSort { get; set; } = MarketSortOption.ByRecommended;
+    [Parameter] public int? AutoExpandItemId { get; set; }
 
-    private MarketSortOption _selectedSort = MarketSortOption.ByRecommended;
-    private RecommendationMode _selectedMode = RecommendationMode.MinimizeTotalCost;
-    private bool _searchAllNA = false;
     private bool _craftAnalysisExpanded = false;
-    private bool _purchaseSummaryExpanded = true;
+    private DetailedShoppingPlan? _expandedPlan;
+    private bool _autoExpandProcessed = false;
 
     protected override void OnParametersSet()
     {
-        _selectedMode = InitialMode;
         ShoppingPlans ??= new List<DetailedShoppingPlan>();
         CraftAnalyses ??= new List<CraftVsBuyAnalysis>();
+        
+        // Handle auto-expand once when the parameter is set
+        if (!_autoExpandProcessed && AutoExpandItemId.HasValue && ShoppingPlans.Any())
+        {
+            var planToExpand = ShoppingPlans.FirstOrDefault(p => p.ItemId == AutoExpandItemId.Value);
+            if (planToExpand != null)
+            {
+                _expandedPlan = planToExpand;
+            }
+            _autoExpandProcessed = true;
+        }
+        else if (!AutoExpandItemId.HasValue)
+        {
+            // Reset when no auto-expand is requested
+            _autoExpandProcessed = false;
+        }
     }
 
-    private async Task OnSortValueChanged(FFXIVCraftArchitect.Core.Models.MarketSortOption value)
+    private void ToggleCraftAnalysis()
     {
-        _selectedSort = value;
-        await OnSortChanged.InvokeAsync(value);
+        _craftAnalysisExpanded = !_craftAnalysisExpanded;
     }
 
-    private async Task OnModeValueChanged(RecommendationMode value)
+    private void SelectPlan(DetailedShoppingPlan plan)
     {
-        _selectedMode = value;
-        await OnModeChanged.InvokeAsync(value);
+        if (_expandedPlan?.ItemId == plan.ItemId)
+        {
+            // Clicking the already expanded plan closes it
+            _expandedPlan = null;
+        }
+        else
+        {
+            _expandedPlan = plan;
+        }
     }
 
-    private async Task OnSearchAllNAToggled(bool value)
+    private void CloseExpanded()
     {
-        _searchAllNA = value;
-        await OnSearchAllNAChanged.InvokeAsync(value);
-    }
-
-    private async Task OnViewStatusClick()
-    {
-        await OnViewStatus.InvokeAsync();
-    }
-
-    private async Task OnRefreshClick()
-    {
-        await OnRefreshMarketData.InvokeAsync();
+        _expandedPlan = null;
     }
 
     private IEnumerable<DetailedShoppingPlan> GetSortedPlans()
     {
         var plans = ShoppingPlans ?? new List<DetailedShoppingPlan>();
         
-        return _selectedSort switch
+        return CurrentSort switch
         {
-            FFXIVCraftArchitect.Core.Models.MarketSortOption.Alphabetical => plans.OrderBy(p => p.Name),
-            FFXIVCraftArchitect.Core.Models.MarketSortOption.ByRecommended => plans.OrderBy(p => p.RecommendedWorld?.WorldName ?? string.Empty)
+            MarketSortOption.Alphabetical => plans.OrderBy(p => p.Name),
+            MarketSortOption.ByRecommended => plans.OrderBy(p => p.RecommendedWorld?.WorldName ?? string.Empty)
                                                     .ThenBy(p => p.Name),
             _ => plans
         };
@@ -289,5 +184,5 @@
         return p.DCAveragePrice * p.QuantityNeeded;
     }) ?? 0;
 
-
+    private decimal TotalSavings => Math.Max(0, TotalDCAverage - TotalBestValue);
 }

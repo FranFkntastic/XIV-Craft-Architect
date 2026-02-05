@@ -46,6 +46,7 @@ public enum WorldClassification
 {
     Standard,
     Preferred,
+    PreferredPlus,
     Congested
 }
 

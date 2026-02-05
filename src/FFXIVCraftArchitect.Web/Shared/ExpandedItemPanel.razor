@@ -1,0 +1,167 @@
+@using FFXIVCraftArchitect.Core.Models
+
+<div style="background: #2a2a25; border-radius: 8px; border: 2px solid #d4a73a; overflow: hidden; margin-bottom: 12px;">
+    <!-- Header -->
+    <div style="display: flex; align-items: center; padding: 12px 16px; background: #363630; border-bottom: 1px solid #444;">
+        <MudIcon Icon="@Icons.Material.Filled.ExpandLess" 
+                 Style="color: #d4a73a; margin-right: 8px;" 
+                 Size="Size.Medium" />
+        
+        <div style="flex: 1;">
+            <MudText Typo="Typo.h6" Style="color: #fff; font-weight: 600;">
+                @Plan.Name
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color: #888;">
+                Quantity needed: <span style="color: #d4a73a;">×@Plan.QuantityNeeded</span>
+            </MudText>
+        </div>
+        
+        @if (Plan.RecommendedWorld != null)
+        {
+            <div style="text-align: right; margin-right: 24px;">
+                <MudText Typo="Typo.caption" Style="color: #888;">Best World</MudText>
+                <MudText Typo="Typo.h6" Style="color: #90EE90; font-weight: 600;">
+                    @Plan.RecommendedWorld.WorldName
+                </MudText>
+            </div>
+            
+            <div style="text-align: right; margin-right: 24px;">
+                <MudText Typo="Typo.caption" Style="color: #888;">Unit Price</MudText>
+                <MudText Typo="Typo.h6" Style="color: #ccc; font-weight: 600;">
+                    @Plan.RecommendedWorld.AveragePricePerUnit.ToString("N0")g
+                </MudText>
+            </div>
+            
+            <div style="text-align: right;">
+                <MudText Typo="Typo.caption" Style="color: #888;">Total Cost</MudText>
+                <MudText Typo="Typo.h6" Style="color: #d4a73a; font-weight: 600;">
+                    @Plan.RecommendedWorld.TotalCost.ToString("N0")g
+                </MudText>
+            </div>
+        }
+        
+        <MudIconButton Icon="@Icons.Material.Filled.Close"
+                       OnClick="OnClose"
+                       Style="color: #888; margin-left: 16px;"
+                       Size="Size.Small" />
+    </div>
+    
+    <!-- World Options Grid -->
+    <div style="padding: 16px; background: #1e1e1a;">
+        @if (Plan.WorldOptions?.Any() == true)
+        {
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 12px;">
+                @foreach (var world in GetSortedWorlds())
+                {
+                    var isBest = world.WorldName == Plan.RecommendedWorld?.WorldName;
+                    <div style="padding: 12px; background: @(isBest ? "#1a3a1a" : "#252520"); border-radius: 6px; border: 1px solid @(isBest ? "#4caf50" : "#444"); border-left: 4px solid @(isBest ? "#4caf50" : "#444");">
+                        <!-- World Header -->
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                @if (isBest)
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" 
+                                             Size="Size.Small" 
+                                             Style="color: #4caf50;" />
+                                }
+                                <MudText Typo="Typo.subtitle1" 
+                                         Style="@GetWorldNameStyle(isBest)">
+                                    @world.WorldName
+                                </MudText>
+                            </div>
+                            <div style="text-align: right;">
+                                <MudText Typo="Typo.subtitle1" 
+                                         Style="@GetWorldCostStyle(isBest)">
+                                    @world.TotalCost.ToString("N0")g
+                                </MudText>
+                                @if (world.ExcessQuantity > 0)
+                                {
+                                    <MudText Typo="Typo.caption" Style="color: #ff9800;">
+                                        +@world.ExcessQuantity extra
+                                    </MudText>
+                                }
+                            </div>
+                        </div>
+                        
+                        <!-- Listings Table -->
+                        @if (world.Listings?.Any() == true)
+                        {
+                            <div style="background: rgba(0,0,0,0.3); border-radius: 4px; padding: 8px;">
+                                <!-- Header Row -->
+                                <div style="display: flex; padding: 4px 8px; border-bottom: 1px solid #333; color: #666; font-size: 12px; font-weight: 600;">
+                                    <span style="width: 60px;">Qty</span>
+                                    <span style="width: 80px;">Price</span>
+                                    <span style="width: 90px; text-align: right;">Total</span>
+                                    <span style="flex: 1; text-align: right;">Retainer</span>
+                                </div>
+                                
+                                <!-- Listing Rows -->
+                                @foreach (var listing in world.Listings.Where(l => !l.IsAdditionalOption).OrderBy(l => l.PricePerUnit))
+                                {
+                                    var listingTotal = listing.Quantity * listing.PricePerUnit;
+                                    <div style="display: flex; padding: 6px 8px; color: #aaa; font-size: 13px; border-bottom: 1px solid #2a2a2a;">
+                                        <span style="width: 60px; color: #90EE90;">×@(listing.Quantity)</span>
+                                        <span style="width: 80px; color: @(listing.IsHq ? "#ffeb3b" : "#ccc");">
+                                            @if (listing.IsHq)
+                                            {
+                                                <span style="margin-right: 2px;">★</span>
+                                            }
+                                            @listing.PricePerUnit.ToString("N0")g
+                                        </span>
+                                        <span style="width: 90px; text-align: right; color: #d4a73a;">
+                                            @listingTotal.ToString("N0")g
+                                        </span>
+                                        <span style="flex: 1; text-align: right; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 8px;">
+                                            @listing.RetainerName
+                                        </span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Style="color: #666; font-style: italic;">
+                                No detailed listings available
+                            </MudText>
+                        }
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div style="text-align: center; padding: 24px;">
+                <MudIcon Icon="@Icons.Material.Filled.SearchOff" 
+                         Size="Size.Large" 
+                         Style="color: #555; margin-bottom: 8px;" />
+                <MudText Typo="Typo.body1" Style="color: #888;">
+                    No market data available for this item
+                </MudText>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public DetailedShoppingPlan Plan { get; set; } = null!;
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private List<WorldShoppingSummary> GetSortedWorlds()
+    {
+        if (Plan.WorldOptions == null)
+            return new List<WorldShoppingSummary>();
+        
+        return Plan.WorldOptions
+            .OrderBy(w => w.WorldName != Plan.RecommendedWorld?.WorldName)
+            .ThenBy(w => w.TotalCost)
+            .ToList();
+    }
+
+    private string GetWorldNameStyle(bool isBest) => isBest 
+        ? "color: #90EE90; font-weight: 600;" 
+        : "color: #ccc; font-weight: 600;";
+
+    private string GetWorldCostStyle(bool isBest) => isBest 
+        ? "color: #90EE90; font-weight: 600;" 
+        : "color: #ccc; font-weight: 600;";
+}

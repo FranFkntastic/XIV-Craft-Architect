@@ -64,6 +64,18 @@
                                    FontWeight="SemiBold"
                                    Foreground="#1a1a1a"/>
                     </Border>
+                    <Border x:Name="MarketAnalysisTab"
+                            Background="Transparent"
+                            CornerRadius="4"
+                            Padding="12,6"
+                            Margin="0,0,8,0"
+                            Cursor="Hand"
+                            MouseLeftButtonDown="OnMarketAnalysisTabClick">
+                        <TextBlock Text="MARKET ANALYSIS" 
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource GoldAccentBrush}"/>
+                    </Border>
                     <Border x:Name="ProcurementPlannerTab"
                             Background="Transparent"
                             CornerRadius="4"
@@ -71,7 +83,7 @@
                             Margin="0,0,16,0"
                             Cursor="Hand"
                             MouseLeftButtonDown="OnProcurementPlannerTabClick">
-                        <TextBlock Text="MARKET ANALYSIS" 
+                        <TextBlock Text="PROCUREMENT PLAN" 
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="{StaticResource GoldAccentBrush}"/>
@@ -106,8 +118,6 @@
                         <MenuItem Header="New Plan" Click="OnNewPlan"/>
                         <MenuItem Header="Save Plan..." Click="OnSavePlan"/>
                         <MenuItem Header="Load Plans..." Click="OnViewPlans"/>
-                        <Separator/>
-                        <MenuItem Header="View Logs" Click="OnViewLogs"/>
                     </MenuItem>
 
                     <MenuItem Header="Import">
@@ -138,6 +148,13 @@
                     <MenuItem Header="Tools">
                         <MenuItem Header="Fetch Prices" Click="OnFetchPrices"/>
                         <MenuItem Header="View Plan Market Data" Click="OnViewMarketStatus" IsEnabled="False" x:Name="MenuViewMarketStatus"/>
+                        <Separator/>
+                        <MenuItem Header="Restart App" Click="OnRestartApp" ToolTip="Restart the application (preserves current plan)"/>
+                        <Separator/>
+                        <MenuItem Header="Debug Tools">
+                            <MenuItem Header="View Logs" Click="OnViewLogs" ToolTip="Open the log viewer window"/>
+                            <MenuItem Header="Debugging Options..." Click="OnDebugOptions" ToolTip="Open debugging settings"/>
+                        </MenuItem>
                         <Separator/>
                         <MenuItem Header="Options..." Click="OnOptions"/>
                     </MenuItem>
@@ -374,6 +391,22 @@
                                    Margin="16,0,0,0"
                                    Click="OnFetchPrices"
                                    IsEnabled="False"/>
+                        
+                        <ui:Button x:Name="ExpandAllButton"
+                                   Content="Expand All"
+                                   Appearance="Secondary"
+                                   Margin="8,0,0,0"
+                                   Click="OnExpandAll"
+                                   IsEnabled="False"
+                                   ToolTip="Expand all recipe nodes"/>
+                        
+                        <ui:Button x:Name="CollapseAllButton"
+                                   Content="Collapse All"
+                                   Appearance="Secondary"
+                                   Margin="4,0,0,0"
+                                   Click="OnCollapseAll"
+                                   IsEnabled="False"
+                                   ToolTip="Collapse all recipe nodes"/>
                     </StackPanel>
 
                     <!-- Recipe Tree Content -->
@@ -390,8 +423,8 @@
                 </Grid>
             </Border>
 
-            <!-- Center Panel: Procurement Planner (Hidden by default) -->
-            <Border x:Name="ProcurementPlannerContent"
+            <!-- Center Panel: Market Analysis (Hidden by default) -->
+            <Border x:Name="MarketAnalysisContent"
                     Grid.Column="1" 
                     Background="Transparent"
                     Padding="8,8,16,16"
@@ -401,10 +434,9 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <!-- Procurement Planner Header -->
+                    <!-- Market Analysis Header -->
                     <StackPanel Grid.Row="0" 
                                 Orientation="Horizontal"
                                 Margin="0,0,0,8">
@@ -420,6 +452,14 @@
                                    Margin="16,0,0,0"
                                    Click="OnFetchPrices"
                                    IsEnabled="False"/>
+                        
+                        <ui:Button x:Name="RebuildFromCacheButton"
+                                   Content="Rebuild from Cache"
+                                   Appearance="Secondary"
+                                   Margin="8,0,0,0"
+                                   Click="OnRebuildFromCache"
+                                   IsEnabled="False"
+                                   ToolTip="Rebuild market analysis using cached prices without calling API"/>
                     </StackPanel>
 
                     <!-- Filter/Sort Controls with Data Center/World -->
@@ -455,7 +495,7 @@
                                        VerticalAlignment="Center"
                                        Margin="0,0,8,0"/>
                             <ComboBox x:Name="ProcurementSortCombo"
-                                      Width="150"
+                                      Width="170"
                                       SelectedIndex="0"
                                       SelectionChanged="OnProcurementSortChanged">
                                 <ComboBoxItem Content="Recommended World"/>
@@ -468,7 +508,7 @@
                                        VerticalAlignment="Center"
                                        Margin="24,0,8,0"/>
                             <ComboBox x:Name="ProcurementModeCombo"
-                                      Width="150"
+                                      Width="170"
                                       SelectedIndex="0"
                                       SelectionChanged="OnProcurementModeChanged">
                                 <ComboBoxItem Content="Minimize Total Cost"/>
@@ -483,7 +523,7 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- Procurement Content Area -->
+                    <!-- Market Analysis Content Area -->
                     <Border Grid.Row="2"
                             Background="{StaticResource CardBackgroundBrush}"
                             CornerRadius="4"
@@ -499,37 +539,42 @@
                             </StackPanel>
                         </ScrollViewer>
                     </Border>
+                </Grid>
+            </Border>
 
-                    <!-- Procurement Plan Section (Actionable Summary) -->
-                    <Border Grid.Row="3"
+            <!-- Center Panel: Procurement Planner (Hidden by default) -->
+            <Border x:Name="ProcurementPlannerContent"
+                    Grid.Column="1" 
+                    Background="Transparent"
+                    Padding="8,8,16,16"
+                    Visibility="Collapsed">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Procurement Plan Header -->
+                    <TextBlock Grid.Row="0"
+                               Text="Procurement Plan" 
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource GoldAccentBrush}"
+                               Margin="0,0,0,8"/>
+                    
+                    <!-- Procurement Plan Content -->
+                    <Border Grid.Row="1"
                             Background="{StaticResource CardBackgroundBrush}"
                             CornerRadius="4"
-                            Padding="12"
-                            Margin="0,8,0,0">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            
-                            <TextBlock Grid.Row="0"
-                                       Text="Procurement Plan" 
-                                       FontSize="14"
-                                       FontWeight="SemiBold"
-                                       Foreground="{StaticResource GoldAccentBrush}"
-                                       Margin="0,0,0,8"/>
-                            
-                            <ScrollViewer Grid.Row="1" 
-                                          VerticalScrollBarVisibility="Auto"
-                                          MaxHeight="150">
-                                <StackPanel x:Name="ProcurementPlanPanel">
-                                    <TextBlock Text="No procurement plan available - fetch market data to generate actionable plan"
-                                               Foreground="{StaticResource TextSecondaryBrush}"
-                                               FontSize="12"
-                                               TextWrapping="Wrap"/>
-                                </StackPanel>
-                            </ScrollViewer>
-                        </Grid>
+                            Padding="12">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="ProcurementPlanPanel">
+                                <TextBlock Text="No procurement plan available - fetch market data to generate actionable plan"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           FontSize="12"
+                                           TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </ScrollViewer>
                     </Border>
                 </Grid>
             </Border>

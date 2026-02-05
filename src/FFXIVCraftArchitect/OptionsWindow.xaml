@@ -228,20 +228,57 @@
                 </ScrollViewer>
             </ui:TabViewItem>
 
-            <!-- Live Mode Tab (Hidden - Not Implemented) -->
-            <ui:TabViewItem Header="Live Mode" Visibility="Collapsed">
+            <!-- Debugging Tab -->
+            <ui:TabViewItem Header="Debugging">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="8">
-                        <ui:ToggleSwitch x:Name="AutoElevateToggle"
-                                         Content="Auto-elevate on live mode"
+                        <TextBlock Text="Diagnostic Logging"
+                                   FontWeight="SemiBold"
+                                   Margin="0,8,0,4"
+                                   Foreground="#cccccc"/>
+                        <TextBlock Text="Enable detailed diagnostic output for troubleshooting. Changes take effect immediately."
+                                   FontSize="11"
+                                   Foreground="#888888"
+                                   Margin="0,0,0,8"/>
+                        
+                        <ui:ToggleSwitch x:Name="EnableDiagnosticLoggingToggle"
+                                         Content="Enable RecipePlanner diagnostic logging"
                                          Margin="0,8"
-                                         ToolTip="Automatically request admin privileges when enabling live mode"/>
+                                         ToolTip="Logs detailed RecipePlanner VM operations to debug.log"/>
 
-                        <ui:ToggleSwitch x:Name="ShowAdminWarningToggle"
-                                         Content="Show admin warning"
-                                         Margin="0,8"
-                                         IsChecked="True"
-                                         ToolTip="Show warning about admin privileges when starting live mode"/>
+                        <Separator Margin="0,16"/>
+
+                        <TextBlock Text="Log Level"
+                                   FontWeight="SemiBold"
+                                   Margin="0,8,0,4"
+                                   Foreground="#cccccc"/>
+                        <TextBlock Text="Minimum log level to write to debug.log. Debug produces the most output, Error the least."
+                                   FontSize="11"
+                                   Foreground="#888888"
+                                   Margin="0,0,0,8"/>
+                        <ComboBox x:Name="LogLevelCombo"
+                                  Margin="0,0,0,16"
+                                  helpers:ComboBoxAutoWidthBehavior.EnableAutoWidth="True">
+                            <ComboBoxItem Content="Debug (Verbose)" ToolTip="All log messages including detailed debug output"/>
+                            <ComboBoxItem Content="Info" ToolTip="Informational messages and above (default)"/>
+                            <ComboBoxItem Content="Warning" ToolTip="Warnings and errors only"/>
+                            <ComboBoxItem Content="Error" ToolTip="Errors only"/>
+                        </ComboBox>
+
+                        <Separator Margin="0,16"/>
+
+                        <TextBlock Text="Debug Tools"
+                                   FontWeight="SemiBold"
+                                   Margin="0,8,0,4"
+                                   Foreground="#cccccc"/>
+                        <ui:Button Content="View Logs"
+                                   Click="OnViewLogsClick"
+                                   Margin="0,8"
+                                   ToolTip="Open the log viewer window"/>
+                        <TextBlock Text="Opens debug.log in the log viewer for troubleshooting."
+                                   FontSize="11"
+                                   Foreground="#888888"
+                                   Margin="0,0,0,8"/>
                     </StackPanel>
                 </ScrollViewer>
             </ui:TabViewItem>

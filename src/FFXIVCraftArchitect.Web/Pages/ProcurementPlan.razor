@@ -1,0 +1,249 @@
+@page "/procurement"
+@using FFXIVCraftArchitect.Core.Models
+@using FFXIVCraftArchitect.Core.Services
+@using FFXIVCraftArchitect.Web.Services
+@inject GarlandService GarlandService
+@inject UniversalisService UniversalisService
+@inject RecipeCalculationService RecipeCalculationService
+@inject MarketShoppingService MarketShoppingService
+@inject ProcurementAnalysisService ProcurementService
+@inject IJSRuntime JSRuntime
+@inject ISnackbar Snackbar
+@inject AppState AppState
+@inject NavigationManager NavigationManager
+@implements IDisposable
+
+<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0" Style="height: calc(100vh - 64px - 28px);">
+    <div style="display: grid; grid-template-columns: 280px 1fr; height: 100%; width: 100%;">
+        
+        <!-- Left Column: Controls -->
+        <div Class="pa-4" Style="border-right: 1px solid #444; overflow-y: auto; min-width: 280px; max-width: 280px;">
+            <MudText Typo="Typo.h6" Color="Color.Primary" Class="mb-4">Procurement Plan</MudText>
+            
+            <div style="margin-bottom: 12px;">
+                <div style="color: #888; font-size: 12px; margin-bottom: 4px;">Mode</div>
+                <MudSelect T="RecommendationMode"
+                           @bind-Value="AppState.RecommendationMode"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Style="width: 100%;">
+                    <MudSelectItem Value="@RecommendationMode.MinimizeTotalCost">Minimize Total Cost</MudSelectItem>
+                    <MudSelectItem Value="@RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
+                    <MudSelectItem Value="@RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
+                </MudSelect>
+            </div>
+            
+            <MudButton OnClick="RunAnalysisAsync"
+                       Disabled="!CanAnalyze() || _isAnalyzing"
+                       Color="Color.Primary"
+                       Variant="Variant.Filled"
+                       FullWidth="true"
+                       Class="mb-4"
+                       StartIcon="@(_isAnalyzing ? "" : Icons.Material.Filled.Assignment)">
+                @if (_isAnalyzing)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                    <span>Analyzing...</span>
+                }
+                else
+                {
+                    <span>Generate Plan</span>
+                }
+            </MudButton>
+            
+            <MudDivider Class="my-4" />
+            
+            <!-- Status Info -->
+            @if (AppState.ShoppingPlans.Any())
+            {
+                <MudAlert Severity="Severity.Info" Class="mb-4" Dense="true">
+                    <MudText Typo="Typo.caption">
+                        Using market data from @(AppState.ShoppingPlans.Count) analyzed items.
+                    </MudText>
+                </MudAlert>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Warning" Class="mb-4" Dense="true">
+                    <MudText Typo="Typo.caption">
+                        No market analysis found. Run Market Analysis first for accurate results.
+                    </MudText>
+                </MudAlert>
+            }
+            
+            <MudButton OnClick="GoToPlanner"
+                       Color="Color.Info"
+                       Variant="Variant.Outlined"
+                       FullWidth="true"
+                       Class="mb-2"
+                       StartIcon="@Icons.Material.Filled.ArrowBack">
+                Back to Planner
+            </MudButton>
+            
+            <MudButton OnClick="GoToMarketAnalysis"
+                       Color="Color.Warning"
+                       Variant="Variant.Outlined"
+                       FullWidth="true"
+                       StartIcon="@Icons.Material.Filled.Analytics">
+                Market Analysis
+            </MudButton>
+            
+            @if (AppState.CurrentProcurementAnalysis != null)
+            {
+                <MudDivider Class="my-4" />
+                
+                <MudPaper Elevation="2" Class="pa-3" Style="background: linear-gradient(135deg, #2d4a2d 0%, #253825 100%); border-radius: 8px;">
+                    <MudText Typo="Typo.caption" Style="color: #888;">Total Optimal Cost</MudText>
+                    <MudText Typo="Typo.h6" Style="color: #d4a73a; font-weight: 700;">
+                        @AppState.CurrentProcurementAnalysis.OptimalTotalCost.ToString("N0")g
+                    </MudText>
+                    
+                    <div style="display: flex; gap: 8px; margin-top: 12px;">
+                        <div style="flex: 1; text-align: center; padding: 8px; background: rgba(33, 150, 243, 0.1); border-radius: 6px;">
+                            <MudIcon Icon="@Icons.Material.Filled.Build" Size="Size.Small" Style="color: #2196f3;" />
+                            <MudText Typo="Typo.caption" Style="color: #2196f3; display: block;">
+                                @AppState.CurrentProcurementAnalysis.ItemsToCraft
+                            </MudText>
+                        </div>
+                        <div style="flex: 1; text-align: center; padding: 8px; background: rgba(76, 175, 80, 0.1); border-radius: 6px;">
+                            <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" Style="color: #4caf50;" />
+                            <MudText Typo="Typo.caption" Style="color: #4caf50; display: block;">
+                                @AppState.CurrentProcurementAnalysis.ItemsToBuy
+                            </MudText>
+                        </div>
+                    </div>
+                </MudPaper>
+            }
+        </div>
+        
+        <!-- Right Column: Procurement Plan Results -->
+        <div Class="pa-4" Style="overflow: hidden; min-width: 0;">
+            <ProcurementResultsPanel Analysis="AppState.CurrentProcurementAnalysis" ShoppingPlans="AppState.ShoppingPlans" />
+        </div>
+    </div>
+</MudContainer>
+
+@code {
+    private bool _isAnalyzing = false;
+
+    protected override void OnInitialized()
+    {
+        // Subscribe to changes (including restoration from auto-save)
+        AppState.OnProcurementAnalysisChanged += OnProcurementAnalysisChanged;
+        AppState.OnPlanChanged += OnPlanChanged;
+        AppState.OnShoppingListChanged += OnShoppingListChanged;
+    }
+
+    private void OnProcurementAnalysisChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnPlanChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnShoppingListChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        AppState.OnProcurementAnalysisChanged -= OnProcurementAnalysisChanged;
+        AppState.OnPlanChanged -= OnPlanChanged;
+        AppState.OnShoppingListChanged -= OnShoppingListChanged;
+    }
+
+    private bool CanAnalyze()
+    {
+        return AppState.CurrentPlan != null && 
+               GetBuyItems().Any() && 
+               !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
+    }
+
+    /// <summary>
+    /// Get the current items marked for buying from the recipe plan.
+    /// </summary>
+    private List<MaterialAggregate> GetBuyItems()
+    {
+        if (AppState.CurrentPlan == null)
+            return new List<MaterialAggregate>();
+        
+        return AppState.CurrentPlan.AggregatedMaterials
+            .Where(m => m.TotalQuantity > 0)
+            .ToList();
+    }
+
+    private async Task RunAnalysisAsync()
+    {
+        if (!CanAnalyze())
+            return;
+
+        _isAnalyzing = true;
+        AppState.BeginOperation("Procurement Analysis", "Generating optimal procurement plan...");
+
+        try
+        {
+            var materials = GetBuyItems();
+            var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+            
+            // Use existing market analysis results if available and data center matches
+            List<DetailedShoppingPlan> shoppingPlans;
+            
+            if (AppState.ShoppingPlans.Any() && AppState.ShoppingPlans.First().WorldOptions.Any())
+            {
+                // Reuse existing market analysis
+                AppState.SetStatus("Using existing market analysis...", busy: true);
+                shoppingPlans = AppState.ShoppingPlans;
+            }
+            else
+            {
+                // Run market analysis first
+                AppState.SetStatus("Running market analysis first...", busy: true);
+                shoppingPlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+                    materials,
+                    AppState.SelectedDataCenter,
+                    progress,
+                    mode: AppState.RecommendationMode);
+                
+                AppState.ShoppingPlans = shoppingPlans;
+                AppState.NotifyShoppingListChanged();
+            }
+            
+            // Run procurement analysis using the market data
+            AppState.SetStatus("Running procurement analysis...", busy: true);
+            AppState.CurrentProcurementAnalysis = await ProcurementService.AnalyzePlanWithMarketDataAsync(
+                AppState.CurrentPlan!,
+                shoppingPlans,
+                AppState.SelectedDataCenter,
+                AppState.RecommendationMode,
+                progress);
+            
+            AppState.NotifyProcurementAnalysisChanged();
+            
+            AppState.EndOperation("Procurement plan generated!");
+            Snackbar.Add("Procurement plan generated successfully!", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            AppState.SetStatus($"Analysis failed: {ex.Message}");
+            Snackbar.Add($"Procurement analysis failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isAnalyzing = false;
+        }
+    }
+
+    private void GoToPlanner()
+    {
+        NavigationManager.NavigateTo("/");
+    }
+
+    private void GoToMarketAnalysis()
+    {
+        NavigationManager.NavigateTo("/market");
+    }
+}

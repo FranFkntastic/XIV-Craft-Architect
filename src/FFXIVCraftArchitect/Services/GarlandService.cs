@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using FFXIVCraftArchitect.Helpers;
 using FFXIVCraftArchitect.Models;
+using FFXIVCraftArchitect.Core.Models;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Services;

@@ -19,6 +19,20 @@
     </div>
     
     <div class="status-center">
+        @if (!string.IsNullOrEmpty(AppState.SelectedRegion))
+        {
+            <span class="status-badge region-badge">
+                <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" />
+                @AppState.SelectedRegion
+            </span>
+        }
+        @if (!string.IsNullOrEmpty(AppState.SelectedDataCenter))
+        {
+            <span class="status-badge dc-badge">
+                <MudIcon Icon="@Icons.Material.Filled.DataUsage" Size="Size.Small" />
+                @AppState.SelectedDataCenter
+            </span>
+        }
         @if (AppState.ShoppingItems.Any())
         {
             <span class="status-badge">
@@ -31,13 +45,6 @@
             <span class="status-badge">
                 <MudIcon Icon="@Icons.Material.Filled.ListAlt" Size="Size.Small" />
                 @AppState.ProjectItems.Count projects
-            </span>
-        }
-        @if (!string.IsNullOrEmpty(AppState.SelectedDataCenter))
-        {
-            <span class="status-badge dc-badge">
-                <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" />
-                @AppState.SelectedDataCenter
             </span>
         }
     </div>
@@ -100,7 +107,7 @@
     .status-center {
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 8px;
         justify-content: center;
     }
     
@@ -113,6 +120,11 @@
         border-radius: 12px;
         color: #ccc;
         font-size: 11px;
+    }
+    
+    .status-badge.region-badge {
+        background: #3d3d2d;
+        color: #d4a73a;
     }
     
     .status-badge.dc-badge {

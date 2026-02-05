@@ -1,0 +1,68 @@
+@inject ISnackbar Snackbar
+
+<MudDialog Style="min-width: 300px;">
+    <DialogContent>
+        <div style="padding: 8px 0;">
+            <MudTextField @bind-Value="_newName"
+                          Label="Plan Name"
+                          Variant="Variant.Outlined"
+                          FullWidth="true"
+                          AutoFocus="true"
+                          OnKeyDown="OnKeyDown"
+                          Immediate="true" />
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel"
+                   Color="Color.Secondary"
+                   Variant="Variant.Text">
+            Cancel
+        </MudButton>
+        <MudButton OnClick="Submit"
+                   Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   Disabled="@(!CanSubmit)">
+            Rename
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
+    
+    [Parameter] public string CurrentName { get; set; } = string.Empty;
+    
+    private string _newName = string.Empty;
+    
+    protected override void OnInitialized()
+    {
+        _newName = CurrentName;
+    }
+    
+    private bool CanSubmit => !string.IsNullOrWhiteSpace(_newName) && _newName != CurrentName;
+    
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && CanSubmit)
+        {
+            Submit();
+        }
+        else if (e.Key == "Escape")
+        {
+            Cancel();
+        }
+    }
+    
+    private void Submit()
+    {
+        if (CanSubmit)
+        {
+            MudDialog.Close(DialogResult.Ok(_newName.Trim()));
+        }
+    }
+    
+    private void Cancel()
+    {
+        MudDialog.Close(DialogResult.Cancel());
+    }
+}

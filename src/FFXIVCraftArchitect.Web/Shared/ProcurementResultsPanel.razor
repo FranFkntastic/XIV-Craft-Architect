@@ -5,12 +5,12 @@
 <div style="display: flex; flex-direction: column; height: 100%; gap: 12px;">
     
     <!-- Header Summary Card -->
-    <MudPaper Elevation="2" Class="pa-3" Style="background: linear-gradient(135deg, #2d4a2d 0%, #253825 100%); border-radius: 12px; flex-shrink: 0;">
-        <div style="display: flex; align-items: center; justify-content: space-between;">
+    <div style="flex-shrink: 0;">
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: #2a3a2a; border-radius: 6px; border: 1px solid #3a5a3a;">
             <div style="display: flex; align-items: center; gap: 12px;">
-                <MudIcon Icon="@Icons.Material.Filled.Assignment" Color="Color.Success" Size="Size.Large" />
+                <MudIcon Icon="@Icons.Material.Filled.Assignment" Color="Color.Success" Size="Size.Medium" />
                 <div>
-                    <MudText Typo="Typo.h6" Style="color: #90EE90; font-weight: 600;">Procurement Plan</MudText>
+                    <MudText Typo="Typo.subtitle1" Style="color: #90EE90; font-weight: 600;">Procurement Plan</MudText>
                     @if (Analysis != null)
                     {
                         <MudText Typo="Typo.caption" Style="color: #888;">
@@ -22,7 +22,7 @@
             @if (Analysis != null)
             {
                 <div style="text-align: right;">
-                    <MudText Typo="Typo.h5" Style="color: #d4a73a; font-weight: 700;">@Analysis.OptimalTotalCost.ToString("N0")g</MudText>
+                    <MudText Typo="Typo.h6" Style="color: #d4a73a; font-weight: 700;">@Analysis.OptimalTotalCost.ToString("N0")g</MudText>
                     <MudText Typo="Typo.caption" Style="color: #888;">total optimal cost</MudText>
                 </div>
             }
@@ -30,26 +30,34 @@
         
         @if (Analysis != null)
         {
-            <div style="display: flex; gap: 16px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #444;">
-                <div style="flex: 1; text-align: center; padding: 8px; background: rgba(33, 150, 243, 0.1); border-radius: 6px;">
+            <div style="display: flex; gap: 12px; margin-top: 8px;">
+                <div style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px; background: rgba(33, 150, 243, 0.1); border-radius: 4px;">
                     <MudIcon Icon="@Icons.Material.Filled.Build" Size="Size.Small" Style="color: #2196f3;" />
-                    <MudText Typo="Typo.body2" Style="color: #2196f3; font-weight: 600;">@Analysis.ItemsToCraft to Craft</MudText>
-                    <MudText Typo="Typo.caption" Style="color: #888;">@Analysis.TotalCraftCost.ToString("N0")g</MudText>
+                    <MudText Typo="Typo.body2" Style="color: #2196f3; font-weight: 600;">@Analysis.ItemsToCraft Craft</MudText>
+                    <MudText Typo="Typo.caption" Style="color: #888;">(@Analysis.TotalCraftCost.ToString("N0")g)</MudText>
                 </div>
-                <div style="flex: 1; text-align: center; padding: 8px; background: rgba(76, 175, 80, 0.1); border-radius: 6px;">
+                <div style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px; background: rgba(76, 175, 80, 0.1); border-radius: 4px;">
                     <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" Style="color: #4caf50;" />
-                    <MudText Typo="Typo.body2" Style="color: #4caf50; font-weight: 600;">@Analysis.ItemsToBuy to Buy</MudText>
-                    <MudText Typo="Typo.caption" Style="color: #888;">@Analysis.TotalPurchaseCost.ToString("N0")g</MudText>
+                    <MudText Typo="Typo.body2" Style="color: #4caf50; font-weight: 600;">@Analysis.ItemsToBuy Buy</MudText>
+                    <MudText Typo="Typo.caption" Style="color: #888;">(@Analysis.TotalPurchaseCost.ToString("N0")g)</MudText>
                 </div>
             </div>
         }
-    </MudPaper>
+    </div>
     
-    <!-- Actionable Items List -->
-    <MudPaper Elevation="1" Style="flex: 1; overflow-y: auto; border-radius: 12px; background: #1e1e1e;">
+    <!-- Expanded Item Panel (Top) -->
+    @if (_expandedItem != null)
+    {
+        <div style="flex-shrink: 0; max-height: 50%; overflow-y: auto;">
+            <ExpandedProcurementPanel Item="_expandedItem" ShoppingPlans="ShoppingPlans" OnClose="CloseExpanded" />
+        </div>
+    }
+    
+    <!-- Collapsed Cards Grid (Bottom) -->
+    <div style="flex-grow: 1; overflow-y: auto; min-height: 0;">
         @if (Analysis?.ItemAnalyses?.Any() != true)
         {
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 40px; text-align: center;">
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 40px; text-align: center; background: #252525; border-radius: 8px;">
                 <MudIcon Icon="@Icons.Material.Filled.Assignment" Size="Size.Large" Style="color: #555; margin-bottom: 16px;" />
                 <MudText Typo="Typo.body1" Style="color: #888;">No procurement plan available</MudText>
                 <MudText Typo="Typo.caption" Style="color: #666; margin-top: 8px;">
@@ -59,183 +67,129 @@
         }
         else
         {
-            <MudList T="ItemProcurementAnalysis" Dense="true" Style="padding: 8px;">
+            <!-- Section Headers and Cards -->
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+                
                 <!-- Items to Craft -->
-                @foreach (var item in GetItemsToCraft())
+                @if (GetItemsToCraft().Any())
                 {
-                    <MudListItem T="ItemProcurementAnalysis" Style="padding: 12px; margin-bottom: 8px; background: linear-gradient(135deg, #1a3a4a 0%, #1a3040 100%); border-radius: 8px; border: 1px solid #2196f3;">
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            @if (item.IconId > 0)
-                            {
-                                <img src="@GetIconUrl(item.IconId)" style="width: 40px; height: 40px; border-radius: 4px; background: #1a1a1a;" />
-                            }
-                            else
-                            {
-                                <div style="width: 40px; height: 40px; border-radius: 4px; background: #1a1a1a; display: flex; align-items: center; justify-content: center;">
-                                    <MudIcon Icon="@Icons.Material.Filled.Build" Size="Size.Medium" Style="color: #2196f3;" />
-                                </div>
-                            }
-                            
-                            <div style="flex: 1; min-width: 0;">
-                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-                                    <MudText Typo="Typo.body1" Style="color: #fff; font-weight: 600;">@item.Name</MudText>
-                                    <MudText Typo="Typo.body2" Style="color: #d4a73a;">×@(item.QuantityNeeded)</MudText>
-                                    <MudChip T="string" Color="Color.Info" Size="Size.Small" Style="height: 22px; font-size: 11px;">
-                                        <MudIcon Icon="@Icons.Material.Filled.Build" Size="Size.Small" Style="font-size: 12px; margin-right: 4px;" />
-                                        CRAFT
-                                    </MudChip>
-                                </div>
-                                
-                                <MudText Typo="Typo.body2" Style="color: #2196f3; font-weight: 600;">
-                                    @item.CraftCost.ToString("N0")g craft cost
-                                </MudText>
-                            </div>
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #2196f3;">
+                            <MudIcon Icon="@Icons.Material.Filled.Build" Size="Size.Small" Style="color: #2196f3;" />
+                            <MudText Typo="Typo.subtitle2" Style="color: #2196f3; font-weight: 600;">Items to Craft</MudText>
+                            <MudText Typo="Typo.caption" Style="color: #888;">(@GetItemsToCraft().Count())</MudText>
                         </div>
-                        
-                        @if (item.CraftComponents?.Any() == true)
-                        {
-                            <div style="margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.3); border-radius: 6px; margin-left: 52px;">
-                                <MudText Typo="Typo.caption" Style="color: #888; margin-bottom: 4px; display: block;">Requires:</MudText>
-                                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                                    @foreach (var component in item.CraftComponents)
-                                    {
-                                        <div style="display: flex; align-items: center; gap: 4px; background: #2d2d2d; padding: 4px 10px; border-radius: 4px;">
-                                            @if (component.IconId > 0)
-                                            {
-                                                <img src="@GetIconUrl(component.IconId)" style="width: 20px; height: 20px;" />
-                                            }
-                                            <MudText Typo="Typo.caption" Style="color: #ccc;">@component.Name ×@(component.Quantity)</MudText>
-                                        </div>
-                                    }
+                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 6px; align-items: start;">
+                            @foreach (var item in GetItemsToCraft())
+                            {
+                                var isSelected = _expandedItem?.ItemId == item.ItemId;
+                                <div @onclick="() => SelectItem(item)" style="cursor: pointer;">
+                                    <ProcurementItemCard Item="item" IsSelected="isSelected" />
                                 </div>
-                            </div>
-                        }
-                    </MudListItem>
+                            }
+                        </div>
+                    </div>
                 }
                 
                 <!-- Items to Buy -->
-                @foreach (var item in GetItemsToBuy())
+                @if (GetItemsToBuy().Any())
                 {
-                    <MudListItem T="ItemProcurementAnalysis" Style="padding: 12px; margin-bottom: 8px; background: linear-gradient(135deg, #1a3a2a 0%, #1a3025 100%); border-radius: 8px; border: 1px solid #4caf50;">
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            @if (item.IconId > 0)
-                            {
-                                <img src="@GetIconUrl(item.IconId)" style="width: 40px; height: 40px; border-radius: 4px; background: #1a1a1a;" />
-                            }
-                            else
-                            {
-                                <div style="width: 40px; height: 40px; border-radius: 4px; background: #1a1a1a; display: flex; align-items: center; justify-content: center;">
-                                    <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Medium" Style="color: #4caf50;" />
-                                </div>
-                            }
-                            
-                            <div style="flex: 1; min-width: 0;">
-                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-                                    <MudText Typo="Typo.body1" Style="color: #fff; font-weight: 600;">@item.Name</MudText>
-                                    <MudText Typo="Typo.body2" Style="color: #d4a73a;">×@(item.QuantityNeeded)</MudText>
-                                    <MudChip T="string" Color="Color.Success" Size="Size.Small" Style="height: 22px; font-size: 11px;">
-                                        <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" Style="font-size: 12px; margin-right: 4px;" />
-                                        BUY
-                                    </MudChip>
-                                </div>
-                                
-                                @if (item.BestWorldPurchase != null)
-                                {
-                                    <div style="display: flex; align-items: center; gap: 16px;">
-                                        <MudText Typo="Typo.body2" Style="color: #4caf50; font-weight: 600;">
-                                            @item.BestWorldPurchase.TotalCost.ToString("N0")g
-                                        </MudText>
-                                        <div style="display: flex; align-items: center; gap: 4px;">
-                                            <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" Style="color: #90EE90;" />
-                                            <MudText Typo="Typo.body2" Style="color: #90EE90; font-weight: 500;">@item.BestWorldPurchase.WorldName</MudText>
-                                            <MudText Typo="Typo.caption" Style="color: #888;">(@item.BestWorldPurchase.UnitPrice.ToString("N0")g/ea)</MudText>
-                                        </div>
-                                    </div>
-                                }
-                                else
-                                {
-                                    <MudText Typo="Typo.body2" Style="color: #ff9800;">No market data available</MudText>
-                                }
-                            </div>
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #4caf50;">
+                            <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" Style="color: #4caf50;" />
+                            <MudText Typo="Typo.subtitle2" Style="color: #4caf50; font-weight: 600;">Items to Buy</MudText>
+                            <MudText Typo="Typo.caption" Style="color: #888;">(@GetItemsToBuy().Count())</MudText>
                         </div>
-                    </MudListItem>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 6px; align-items: start;">
+                            @foreach (var item in GetItemsToBuy())
+                            {
+                                var isSelected = _expandedItem?.ItemId == item.ItemId;
+                                <div @onclick="() => SelectItem(item)" style="cursor: pointer;">
+                                    <ProcurementItemCard Item="item" IsSelected="isSelected" />
+                                </div>
+                            }
+                        </div>
+                    </div>
                 }
                 
                 <!-- Items with No Data -->
-                @foreach (var item in GetItemsWithNoData())
+                @if (GetItemsWithNoData().Any())
                 {
-                    <MudListItem T="ItemProcurementAnalysis" Style="padding: 12px; margin-bottom: 8px; background: #2d2d2d; border-radius: 8px; border: 1px solid #666;">
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            @if (item.IconId > 0)
-                            {
-                                <img src="@GetIconUrl(item.IconId)" style="width: 40px; height: 40px; border-radius: 4px; background: #1a1a1a;" />
-                            }
-                            else
-                            {
-                                <div style="width: 40px; height: 40px; border-radius: 4px; background: #1a1a1a; display: flex; align-items: center; justify-content: center;">
-                                    <MudIcon Icon="@Icons.Material.Filled.Help" Size="Size.Medium" Style="color: #666;" />
-                                </div>
-                            }
-                            
-                            <div style="flex: 1; min-width: 0;">
-                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-                                    <MudText Typo="Typo.body1" Style="color: #aaa; font-weight: 600;">@item.Name</MudText>
-                                    <MudText Typo="Typo.body2" Style="color: #888;">×@(item.QuantityNeeded)</MudText>
-                                    <MudChip T="string" Color="Color.Default" Size="Size.Small" Style="height: 22px; font-size: 11px;">NO DATA</MudChip>
-                                </div>
-                                
-                                <MudText Typo="Typo.caption" Style="color: #ff9800;">
-                                    <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" Style="font-size: 14px; vertical-align: middle;" />
-                                    No market data available - check manually
-                                </MudText>
-                            </div>
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #666;">
+                            <MudIcon Icon="@Icons.Material.Filled.Help" Size="Size.Small" Style="color: #666;" />
+                            <MudText Typo="Typo.subtitle2" Style="color: #888; font-weight: 600;">No Data Available</MudText>
+                            <MudText Typo="Typo.caption" Style="color: #888;">(@GetItemsWithNoData().Count())</MudText>
                         </div>
-                    </MudListItem>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 6px; align-items: start;">
+                            @foreach (var item in GetItemsWithNoData())
+                            {
+                                var isSelected = _expandedItem?.ItemId == item.ItemId;
+                                <div @onclick="() => SelectItem(item)" style="cursor: pointer;">
+                                    <ProcurementItemCard Item="item" IsSelected="isSelected" />
+                                </div>
+                            }
+                        </div>
+                    </div>
                 }
-            </MudList>
+            </div>
         }
-    </MudPaper>
+    </div>
 </div>
 
 @code {
     [Parameter]
     public ProcurementAnalysis? Analysis { get; set; }
     
-    private List<ItemProcurementAnalysis> GetItemsToCraft()
+    [Parameter]
+    public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    
+    private ItemProcurementAnalysis? _expandedItem;
+    
+    private void SelectItem(ItemProcurementAnalysis item)
+    {
+        if (_expandedItem?.ItemId == item.ItemId)
+        {
+            _expandedItem = null;
+        }
+        else
+        {
+            _expandedItem = item;
+        }
+    }
+    
+    private void CloseExpanded()
+    {
+        _expandedItem = null;
+    }
+    
+    private IEnumerable<ItemProcurementAnalysis> GetItemsToCraft()
     {
         if (Analysis?.ItemAnalyses == null)
-            return new List<ItemProcurementAnalysis>();
+            return Enumerable.Empty<ItemProcurementAnalysis>();
         
         return Analysis.ItemAnalyses
             .Where(i => i.Recommendation == ProcurementRecommendation.Craft)
-            .OrderBy(i => i.Name)
-            .ToList();
+            .OrderBy(i => i.Name);
     }
     
-    private List<ItemProcurementAnalysis> GetItemsToBuy()
+    private IEnumerable<ItemProcurementAnalysis> GetItemsToBuy()
     {
         if (Analysis?.ItemAnalyses == null)
-            return new List<ItemProcurementAnalysis>();
+            return Enumerable.Empty<ItemProcurementAnalysis>();
         
         return Analysis.ItemAnalyses
             .Where(i => i.Recommendation == ProcurementRecommendation.BuyFromMarket)
-            .OrderBy(i => i.Name)
-            .ToList();
+            .OrderBy(i => i.Name);
     }
     
-    private List<ItemProcurementAnalysis> GetItemsWithNoData()
+    private IEnumerable<ItemProcurementAnalysis> GetItemsWithNoData()
     {
         if (Analysis?.ItemAnalyses == null)
-            return new List<ItemProcurementAnalysis>();
+            return Enumerable.Empty<ItemProcurementAnalysis>();
         
         return Analysis.ItemAnalyses
             .Where(i => i.Recommendation == ProcurementRecommendation.NoDataAvailable)
-            .OrderBy(i => i.Name)
-            .ToList();
-    }
-    
-    private string GetIconUrl(int iconId)
-    {
-        return $"https://www.garlandtools.org/files/icons/item/{iconId}.png";
+            .OrderBy(i => i.Name);
     }
 }

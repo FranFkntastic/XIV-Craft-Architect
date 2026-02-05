@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Models;
 using Microsoft.Extensions.Logging;
 

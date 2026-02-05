@@ -62,6 +62,10 @@ public partial class OptionsWindow : Window
             // Planning Settings
             var defaultMode = _settingsService.Get<string>("planning.default_recommendation_mode", "MinimizeTotalCost");
             DefaultRecommendationModeCombo.SelectedIndex = defaultMode == "MaximizeValue" ? 1 : 0;
+
+            // Debugging Settings
+            EnableDiagnosticLoggingToggle.IsChecked = _settingsService.Get<bool>("debug.enable_diagnostic_logging", false);
+            LogLevelCombo.SelectedIndex = _settingsService.Get<int>("debug.log_level", 1); // Default to Info (index 1)
         }
         catch (Exception ex)
         {
@@ -180,6 +184,10 @@ public partial class OptionsWindow : Window
             // Save Planning Settings
             var selectedMode = DefaultRecommendationModeCombo.SelectedIndex == 1 ? "MaximizeValue" : "MinimizeTotalCost";
             _settingsService.Set("planning.default_recommendation_mode", selectedMode);
+
+            // Save Debugging Settings
+            _settingsService.Set("debug.enable_diagnostic_logging", EnableDiagnosticLoggingToggle.IsChecked == true);
+            _settingsService.Set("debug.log_level", LogLevelCombo.SelectedIndex);
             
             _logger.LogInformation("Settings saved successfully");
             
@@ -277,6 +285,29 @@ public partial class OptionsWindow : Window
         }
     }
     
+    /// <summary>
+    /// Opens the log viewer window.
+    /// </summary>
+    private void OnViewLogsClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var logWindow = new LogViewerWindow();
+            logWindow.Owner = this;
+            logWindow.Show();
+            _logger.LogInformation("Opened log viewer");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to open log viewer");
+            MessageBox.Show(
+                $"Failed to open log viewer: {ex.Message}",
+                "Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
     /// <summary>
     /// Opens the settings.json file in the default text editor.
     /// </summary>

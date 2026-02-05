@@ -1,0 +1,135 @@
+- generic [ref=e19]:
+  - banner [ref=e20]:
+    - generic [ref=e21]:
+      - paragraph [ref=e22]: FFXIV Craft Architect
+      - group [ref=e23]:
+        - button "Recipe Planner" [ref=e24] [cursor=pointer]:
+          - generic [ref=e25]: Recipe Planner
+        - button "Market Analysis" [disabled]:
+          - generic: Market Analysis
+        - button "Procurement Plan" [disabled]:
+          - generic: Procurement Plan
+      - generic [ref=e26]:
+        - button "File" [ref=e29] [cursor=pointer]:
+          - generic [ref=e30]:
+            - text: File
+            - img [ref=e32]
+        - button "Import" [ref=e37] [cursor=pointer]:
+          - generic [ref=e38]:
+            - text: Import
+            - img [ref=e40]
+        - button "Export" [ref=e45] [cursor=pointer]:
+          - generic [ref=e46]:
+            - text: Export
+            - img [ref=e48]
+        - button "Tools" [ref=e53] [cursor=pointer]:
+          - generic [ref=e54]:
+            - text: Tools
+            - img [ref=e56]
+      - link "GitHub" [ref=e59] [cursor=pointer]:
+        - /url: https://github.com/FranFkntastic/FFXIVCraftArchitect
+  - generic [ref=e61]:
+    - generic [ref=e62]:
+      - generic [ref=e63]: Project Items
+      - generic [ref=e64]:
+        - generic [ref=e65]: "Item Name:"
+        - textbox "Enter item..." [ref=e66]
+        - button "Search" [ref=e146] [cursor=pointer]:
+          - generic [ref=e147]: Search
+      - generic [ref=e69]:
+        - generic [ref=e70]: Target Items
+        - generic [ref=e71]:
+          - generic [ref=e72]:
+            - button "★" [ref=e73] [cursor=pointer]
+            - generic [ref=e74]: Iron Ingot
+            - spinbutton [ref=e75]: "1"
+            - button "×" [ref=e76] [cursor=pointer]
+          - generic [ref=e156]:
+            - button "★" [ref=e157] [cursor=pointer]
+            - generic [ref=e158]: Iron Alembic
+            - spinbutton [ref=e159]: "1"
+            - button "×" [ref=e160] [cursor=pointer]
+        - button "Build Project Plan" [ref=e78] [cursor=pointer]:
+          - generic [ref=e183]: Build Project Plan
+      - generic [ref=e80]:
+        - generic [ref=e81]: "Data Center:"
+        - combobox [ref=e82]:
+          - option "Aether" [selected]
+          - option "Chaos"
+          - option "Crystal"
+          - option "Dynamis"
+          - option "Elemental"
+          - option "Gaia"
+          - option "Light"
+          - option "Mana"
+          - option "Materia"
+          - option "Meteor"
+          - option "NA Cloud DC (Beta)"
+          - option "Primal"
+          - option "한국"
+          - option "猫小胖"
+          - option "莫古力"
+          - option "豆豆柴"
+          - option "陆行鸟"
+          - option "陸行鳥"
+      - generic [ref=e83]:
+        - button "Save" [ref=e84] [cursor=pointer]
+        - button "Export" [ref=e85] [cursor=pointer]
+      - generic [ref=e155]: "Auto-saved: 02:19:16"
+    - generic [ref=e86]:
+      - generic [ref=e87]: Recipe Plan
+      - button "Refresh Prices" [ref=e89] [cursor=pointer]:
+        - generic [ref=e184]: Refresh Prices
+      - generic [ref=e91]:
+        - generic [ref=e93]:
+          - generic [ref=e94]: Iron Ingot x1
+          - combobox [ref=e95] [cursor=pointer]:
+            - option "Buy (NQ)" [selected]
+          - generic [ref=e96]: 148g
+        - generic [ref=e186]:
+          - generic [ref=e187]: Iron Alembic x1
+          - combobox [ref=e188] [cursor=pointer]:
+            - option "Buy (NQ)" [selected]
+          - generic [ref=e189]: 4,138g
+    - generic [ref=e97]:
+      - generic [ref=e98]: Shopping List
+      - generic [ref=e99]:
+        - generic [ref=e101]:
+          - generic [ref=e102]: Item
+          - generic [ref=e103]: Qty
+          - generic [ref=e104]: Price
+        - generic [ref=e105]:
+          - generic [ref=e106]:
+            - generic [ref=e107]: Iron Alembic
+            - generic [ref=e108]: "1"
+            - generic [ref=e110]: 4,138g
+          - generic [ref=e190]:
+            - generic [ref=e191]: Iron Ingot
+            - generic [ref=e192]: "1"
+            - generic [ref=e194]: 148g
+        - generic [ref=e112]:
+          - generic [ref=e113]: "Total Cost:"
+          - generic [ref=e114]: 4,286g
+      - generic [ref=e115]:
+        - button "Export to Artisan" [ref=e116] [cursor=pointer]
+        - button "Export CSV" [ref=e117] [cursor=pointer]
+      - generic [ref=e118]:
+        - generic [ref=e119]: "Market Tools:"
+        - generic [ref=e120]:
+          - button "Market Analysis →" [ref=e121] [cursor=pointer]
+          - button "Procurement Plan →" [ref=e122] [cursor=pointer]
+  - generic [ref=e123]:
+    - generic [ref=e124]:
+      - img [ref=e195]
+      - generic [ref=e128]: Plan built with 2 items. Go to Procurement Planner to analyze.
+    - generic [ref=e129]:
+      - generic [ref=e130]:
+        - img [ref=e131]
+        - text: 2 items
+      - generic [ref=e134]:
+        - img [ref=e135]
+        - text: 2 projects
+      - generic [ref=e138]:
+        - img [ref=e139]
+        - text: Aether
+    - generic [ref=e143]: 02:18:56

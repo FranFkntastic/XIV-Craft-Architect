@@ -1,4 +1,6 @@
 using System.Text.Json;
+using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Core.Services;
 using Microsoft.JSInterop;
 
 namespace FFXIVCraftArchitect.Web.Services;
@@ -185,7 +187,11 @@ public class IndexedDbService
                 }).ToList(),
                 PlanJson = state.CurrentPlan != null 
                     ? System.Text.Json.JsonSerializer.Serialize(state.CurrentPlan) 
-                    : null
+                    : null,
+                MarketPlansJson = state.ShoppingPlans?.Any() == true
+                    ? System.Text.Json.JsonSerializer.Serialize(state.ShoppingPlans)
+                    : null,
+                SavedRecommendationMode = state.RecommendationMode
             };
 
             return await SavePlanAsync(planData);
@@ -194,6 +200,57 @@ public class IndexedDbService
         {
             _logger?.LogError(ex, "Failed to auto-save state");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Save market analysis results for a plan.
+    /// </summary>
+    public async Task<bool> SaveMarketAnalysisAsync(string planId, List<DetailedShoppingPlan> shoppingPlans, RecommendationMode mode)
+    {
+        try
+        {
+            await EnsureInitialized();
+            
+            // Load existing plan first
+            var existingPlan = await LoadPlanAsync(planId);
+            if (existingPlan == null)
+                return false;
+            
+            // Update with market data
+            existingPlan.MarketPlansJson = System.Text.Json.JsonSerializer.Serialize(shoppingPlans);
+            existingPlan.SavedRecommendationMode = mode;
+            existingPlan.ModifiedAt = DateTime.UtcNow;
+            
+            return await SavePlanAsync(existingPlan);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save market analysis for plan {PlanId}", planId);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Load market analysis results.
+    /// </summary>
+    public async Task<(List<DetailedShoppingPlan>? Plans, RecommendationMode Mode)> LoadMarketAnalysisAsync(string planId)
+    {
+        try
+        {
+            await EnsureInitialized();
+            
+            var plan = await LoadPlanAsync(planId);
+            if (plan?.MarketPlansJson == null)
+                return (null, RecommendationMode.MinimizeTotalCost);
+            
+            var plans = System.Text.Json.JsonSerializer.Deserialize<List<DetailedShoppingPlan>>(plan.MarketPlansJson);
+            return (plans, plan.SavedRecommendationMode);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to load market analysis for plan {PlanId}", planId);
+            return (null, RecommendationMode.MinimizeTotalCost);
         }
     }
 
@@ -229,6 +286,16 @@ public class StoredPlan
     public string DataCenter { get; set; } = "Aether";
     public List<StoredProjectItem> ProjectItems { get; set; } = new();
     public string? PlanJson { get; set; }
+    
+    /// <summary>
+    /// Serialized market analysis shopping plans.
+    /// </summary>
+    public string? MarketPlansJson { get; set; }
+    
+    /// <summary>
+    /// Recommendation mode used for the saved market analysis.
+    /// </summary>
+    public RecommendationMode SavedRecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
 }
 
 /// <summary>

@@ -1,17 +1,7 @@
 using System.Text.Json.Serialization;
+using FFXIVCraftArchitect.Core.Models;
 
 namespace FFXIVCraftArchitect.Models;
-
-/// <summary>
-/// World classification/status from Lodestone.
-/// </summary>
-public enum WorldClassification
-{
-    Standard,
-    Preferred,
-    PreferredPlus,
-    Congested
-}
 
 /// <summary>
 /// Status information for a single world.

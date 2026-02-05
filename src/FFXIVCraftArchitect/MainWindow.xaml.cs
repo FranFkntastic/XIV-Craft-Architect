@@ -1,16 +1,31 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Coordinators;
 using FFXIVCraftArchitect.Helpers;
-using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Services;
+using FFXIVCraftArchitect.UIBuilders;
+using FFXIVCraftArchitect.ViewModels;
 using FFXIVCraftArchitect.Views;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using static FFXIVCraftArchitect.Services.PriceCheckService;
 using Window = System.Windows.Window;
+
+// Type aliases for disambiguation
+using CraftingPlan = FFXIVCraftArchitect.Core.Models.CraftingPlan;
+using PlanNode = FFXIVCraftArchitect.Core.Models.PlanNode;
+using AcquisitionSource = FFXIVCraftArchitect.Core.Models.AcquisitionSource;
+using DetailedShoppingPlan = FFXIVCraftArchitect.Core.Models.DetailedShoppingPlan;
+using MaterialAggregate = FFXIVCraftArchitect.Core.Models.MaterialAggregate;
+using PriceSource = FFXIVCraftArchitect.Core.Models.PriceSource;
+using PriceInfo = FFXIVCraftArchitect.Services.PriceInfo;
+using WatchState = FFXIVCraftArchitect.Models.WatchState;
 
 namespace FFXIVCraftArchitect;
 
@@ -41,21 +56,31 @@ public partial class MainWindow : Window
     private readonly MarketShoppingService _marketShoppingService;
     private readonly ILogger<MainWindow> _logger;
 
+    // ViewModels
+    private readonly RecipePlannerViewModel _recipeVm = new();
+    private readonly MarketAnalysisViewModel _marketVm = new();
+    
+    // UI Builders
+    private RecipeTreeUiBuilder? _recipeTreeBuilder;
+    
     // Search state
     private List<GarlandSearchResult> _currentSearchResults = new();
     private GarlandSearchResult? _selectedSearchResult;
     
-    // Project state
-    private List<ProjectItem> _projectItems = new();
-    
-    // Current crafting plan
-    private CraftingPlan? _currentPlan;
-    
-    // Current market shopping plans for filtering/sorting
-    private List<DetailedShoppingPlan> _currentMarketPlans = new();
-    
     // Market data status window for real-time fetch visualization
     private MarketDataStatusWindow? _marketDataStatusWindow;
+    
+    // Backwards compatibility properties (using Core.Models types)
+    private Core.Models.CraftingPlan? _currentPlan => _recipeVm.CurrentPlan;
+    private List<Core.Models.DetailedShoppingPlan> _currentMarketPlans => _marketVm.ShoppingPlans.Select(vm => vm.Plan).ToList();
+    
+    // Current plan file path
+    private string? _currentPlanPath;
+    
+    // Coordinators
+    private readonly ImportCoordinator _importCoordinator;
+    private readonly ExportCoordinator _exportCoordinator;
+    private readonly PlanPersistenceCoordinator _planCoordinator;
 
     public MainWindow()
     {
@@ -72,6 +97,27 @@ public partial class MainWindow : Window
         _marketShoppingService = App.Services.GetRequiredService<MarketShoppingService>();
         _logger = App.Services.GetRequiredService<ILogger<MainWindow>>();
 
+        // Inject logger into ViewModels (respect diagnostic setting)
+        var diagnosticLoggingEnabled = _settingsService.Get<bool>("debug.enable_diagnostic_logging", false);
+        _recipeVm.SetLogger(App.Services.GetRequiredService<ILogger<RecipePlannerViewModel>>(), enableDiagnostics: diagnosticLoggingEnabled);
+
+        // Initialize UI builder with ViewModel callbacks
+        _recipeTreeBuilder = new RecipeTreeUiBuilder(
+            onAcquisitionChanged: (nodeId, source) => _recipeVm.SetNodeAcquisition(nodeId, source),
+            onHqChanged: (nodeId, isHq, mode) => _recipeVm.SetNodeHq(nodeId, isHq, mode)
+        );
+        
+        // Initialize coordinators
+        _importCoordinator = new ImportCoordinator(this);
+        _exportCoordinator = new ExportCoordinator();
+        _planCoordinator = new PlanPersistenceCoordinator(this);
+        
+        // Wire up ViewModel events
+        _recipeVm.NodeAcquisitionChanged += OnNodeAcquisitionChanged;
+        _recipeVm.NodeHqChanged += OnNodeHqChanged;
+        _recipeVm.PropertyChanged += OnRecipeVmPropertyChanged;
+        _marketVm.PropertyChanged += OnMarketVmPropertyChanged;
+        
         Loaded += OnLoaded;
     }
 
@@ -83,6 +129,92 @@ public partial class MainWindow : Window
         // Apply default recommendation mode setting
         var defaultMode = _settingsService.Get<string>("planning.default_recommendation_mode", "MinimizeTotalCost");
         MarketModeCombo.SelectedIndex = defaultMode == "MaximizeValue" ? 1 : 0;
+        
+        // Restore watch state if available (hot reload)
+        if (App.RestoredWatchState != null)
+        {
+            await RestoreWatchStateAsync(App.RestoredWatchState);
+            App.RestoredWatchState = null; // Clear after restore
+        }
+    }
+    
+    // =========================================================================
+    // ViewModel Event Handlers
+    // =========================================================================
+    
+    private void OnRecipeVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(RecipePlannerViewModel.CurrentPlan):
+                if (_recipeVm.CurrentPlan != null)
+                {
+                    _recipeTreeBuilder?.BuildTree(_recipeVm.RootNodes, RecipePlanPanel);
+                    PopulateShoppingList();
+                    ProcurementRefreshButton.IsEnabled = true;
+                    RebuildFromCacheButton.IsEnabled = true;
+                    RefreshPricesButton.IsEnabled = true;
+                    ExpandAllButton.IsEnabled = true;
+                    CollapseAllButton.IsEnabled = true;
+                }
+                else
+                {
+                    ProcurementRefreshButton.IsEnabled = false;
+                    RebuildFromCacheButton.IsEnabled = false;
+                    RefreshPricesButton.IsEnabled = false;
+                    ExpandAllButton.IsEnabled = false;
+                    CollapseAllButton.IsEnabled = false;
+                }
+                break;
+                
+            case nameof(RecipePlannerViewModel.ProjectItems):
+                ProjectList.ItemsSource = _recipeVm.ProjectItems.Take(5).ToList();
+                UpdateQuickViewCount();
+                BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
+                break;
+                
+            case nameof(RecipePlannerViewModel.StatusMessage):
+                StatusLabel.Text = _recipeVm.StatusMessage;
+                break;
+        }
+    }
+    
+    private void OnMarketVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(MarketAnalysisViewModel.ShoppingPlans):
+                ApplyMarketSortAndDisplay();
+                break;
+                
+            case nameof(MarketAnalysisViewModel.StatusMessage):
+                StatusLabel.Text = _marketVm.StatusMessage;
+                break;
+        }
+    }
+    
+    private void OnNodeAcquisitionChanged(object? sender, NodeChangedEventArgs e)
+    {
+        // Update just the dropdown UI, no full rebuild
+        _recipeTreeBuilder?.UpdateNodeAcquisition(e.NodeId, e.Node.Source);
+        
+        // Update aggregated materials display
+        PopulateShoppingList();
+        
+        // If market analysis is visible, update it
+        if (IsMarketViewVisible())
+        {
+            PopulateProcurementPanel();
+        }
+    }
+    
+    private void OnNodeHqChanged(object? sender, NodeChangedEventArgs e)
+    {
+        // Update just the HQ indicator, no full rebuild
+        _recipeTreeBuilder?.UpdateNodeHqIndicator(e.NodeId, e.Node.MustBeHq);
+        
+        // Update aggregated materials (HQ affects price)
+        PopulateShoppingList();
     }
 
     private async Task LoadWorldDataAsync()
@@ -188,7 +320,7 @@ public partial class MainWindow : Window
         var itemName = _selectedSearchResult.Object?.Name ?? $"Item_{_selectedSearchResult.Id}";
 
         // Check if already in project
-        var existing = _projectItems.FirstOrDefault(p => p.Id == _selectedSearchResult.Id);
+        var existing = _recipeVm.ProjectItems.FirstOrDefault(p => p.Id == _selectedSearchResult.Id);
         if (existing != null)
         {
             existing.Quantity++;
@@ -196,7 +328,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            _projectItems.Add(new ProjectItem
+            _recipeVm.ProjectItems.Add(new ProjectItem
             {
                 Id = _selectedSearchResult.Id,
                 Name = itemName,
@@ -207,16 +339,16 @@ public partial class MainWindow : Window
 
         // Refresh project list (limited to first 5 for quick view)
         ProjectList.ItemsSource = null;
-        ProjectList.ItemsSource = _projectItems.Take(5).ToList();
+        ProjectList.ItemsSource = _recipeVm.ProjectItems.Take(5).ToList();
         UpdateQuickViewCount();
         
         // Enable build button if we have items
-        BuildPlanButton.IsEnabled = _projectItems.Count > 0;
+        BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
     }
 
     private async void OnBuildProjectPlan(object sender, RoutedEventArgs e)
     {
-        if (_projectItems.Count == 0)
+        if (_recipeVm.ProjectItems.Count == 0)
         {
             StatusLabel.Text = "Add items to project first";
             return;
@@ -225,13 +357,13 @@ public partial class MainWindow : Window
         var dc = DcCombo.SelectedItem as string ?? "Aether";
         var world = WorldCombo.SelectedItem as string ?? "";
 
-        StatusLabel.Text = $"Building plan for {_projectItems.Count} items...";
+        StatusLabel.Text = $"Building plan for {_recipeVm.ProjectItems.Count} items...";
         BuildPlanButton.IsEnabled = false;
         
         try
         {
-            var targets = _projectItems.Select(p => (p.Id, p.Name, p.Quantity, p.IsHqRequired)).ToList();
-            _currentPlan = await _recipeCalcService.BuildPlanAsync(targets, dc, world);
+            var targets = _recipeVm.ProjectItems.Select(p => (p.Id, p.Name, p.Quantity, p.IsHqRequired)).ToList();
+            _recipeVm.CurrentPlan = await _recipeCalcService.BuildPlanAsync(targets, dc, world);
             
             // Display in TreeView
             DisplayPlanInTreeView(_currentPlan);
@@ -240,8 +372,9 @@ public partial class MainWindow : Window
             // Populate shopping list
             PopulateShoppingList();
             
-            // Enable procurement refresh button
+            // Enable procurement refresh buttons
             ProcurementRefreshButton.IsEnabled = true;
+            RebuildFromCacheButton.IsEnabled = true;
             
             StatusLabel.Text = $"Plan built: {_currentPlan.RootItems.Count} root items, " +
                                $"{_currentPlan.AggregatedMaterials.Count} unique materials";
@@ -263,7 +396,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            BuildPlanButton.IsEnabled = _projectItems.Count > 0;
+            BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
         }
     }
 
@@ -353,403 +486,83 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Display the crafting plan in the TreeView with craft/buy toggles.
+    /// Delegates to RecipeTreeUiBuilder for actual tree construction.
     /// </summary>
     private void DisplayPlanInTreeView(CraftingPlan plan)
     {
-        // Preserve scroll position to prevent jarring jumps when toggling HQ
-        var scrollViewer = RecipePlanPanel.FindParent<ScrollViewer>();
-        var scrollOffset = scrollViewer?.VerticalOffset ?? 0;
-        
-        RecipePlanPanel.Children.Clear();
-        
-        foreach (var rootItem in plan.RootItems)
-        {
-            var rootExpander = CreateRecipeExpander(rootItem, 0);
-            RecipePlanPanel.Children.Add(rootExpander);
-        }
-        
-        // Restore scroll position after layout is updated
-        if (scrollViewer != null)
-        {
-            Dispatcher.BeginInvoke(() =>
-            {
-                scrollViewer.ScrollToVerticalOffset(scrollOffset);
-            }, System.Windows.Threading.DispatcherPriority.Render);
-        }
-    }
-    
-
-    
-    /// <summary>
-    /// Creates an Expander-based recipe card with proper styling.
-    /// Parent nodes (with children) get an expand arrow to show/hide subcrafts.
-    /// Leaf nodes (no children) show an acquisition source dropdown instead.
-    /// </summary>
-    private UIElement CreateRecipeExpander(PlanNode node, int depth)
-    {
-        // Leaf node: Show simple panel with acquisition dropdown on the right
-        if (node.Children.Count == 0)
-        {
-            return CreateLeafNodePanel(node, depth);
-        }
-        
-        // Parent node: Create Expander with arrow for subcrafts AND dropdown on the right
-        // This allows buying complex crafted items (like submarine parts) instead of crafting
-        var headerPanel = CreateNodeHeaderPanel(node, showDropdown: true);
-        
-        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#252525"));
-        
-        var expander = new Expander
-        {
-            Header = headerPanel,
-            IsExpanded = true,
-            Background = depth == 0 ? brush : Brushes.Transparent,
-            Padding = new Thickness(depth == 0 ? 8 : 0),
-            Margin = depth == 0 ? new Thickness(0, 0, 0, 8) : new Thickness(0),
-            Tag = node
-        };
-        
-        // Style the Expander header
-        expander.Resources["ExpanderHeaderStyle"] = CreateExpanderHeaderStyle();
-        
-        // Add children
-        var childrenPanel = new StackPanel { Margin = new Thickness(16, 4, 0, 0) };
-        foreach (var child in node.Children)
-        {
-            childrenPanel.Children.Add(CreateRecipeExpander(child, depth + 1));
-        }
-        expander.Content = childrenPanel;
-        
-        return expander;
+        _recipeTreeBuilder?.BuildTree(_recipeVm.RootNodes, RecipePlanPanel);
     }
     
     /// <summary>
-    /// Creates a simple panel for leaf nodes (no children) with acquisition dropdown on the right.
-    /// HQ items show a clickable star toggle (outline when off, gold when on) - only for HQ-capable items.
+    /// Adds expand/collapse buttons to a root node's header panel.
+    /// Buttons are added at the end (right side) of the header.
+    /// Called by RecipeTreeUiBuilder.
     /// </summary>
-    private StackPanel CreateLeafNodePanel(PlanNode node, int depth)
+    private void AddRootExpandCollapseButtons(StackPanel headerPanel, Expander rootExpander)
     {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        
-        // Add spacing for alignment (where expand arrow would be on parent nodes)
-        panel.Margin = new Thickness(20, 0, 0, 0);
-        
-        // Name - declare early so star click handler can reference it
-        var nameBlock = new TextBlock
+        // Expand all button for this root
+        var expandButton = new TextBlock
         {
-            Text = node.Name,
-            FontWeight = FontWeights.SemiBold,
-            VerticalAlignment = VerticalAlignment.Center,
-            Foreground = node.MustBeHq ? ColorHelper.GetAccentBrush() : GetNodeForeground(node)
-        };
-        
-        // HQ Star toggle (clickable) - only for items that can be HQ
-        if (node.CanBeHq)
-        {
-            var starBlock = new TextBlock
-            {
-                Text = node.MustBeHq ? "★" : "☆",
-                Foreground = node.MustBeHq ? Brushes.Gold : Brushes.Gray,
-                FontWeight = FontWeights.Bold,
-                VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 12,
-                Cursor = Cursors.Hand,
-                ToolTip = node.MustBeHq ? "Click to allow NQ" : "Click to require HQ",
-                Margin = new Thickness(0, 0, 4, 0)
-            };
-            starBlock.MouseLeftButtonDown += (s, e) =>
-            {
-                e.Handled = true;
-                
-                // Optimistic UI: toggle visual state immediately
-                var newState = !node.MustBeHq;
-                starBlock.Text = newState ? "★" : "☆";
-                starBlock.Foreground = newState ? Brushes.Gold : Brushes.Gray;
-                starBlock.ToolTip = newState ? "Click to allow NQ" : "Click to require HQ";
-                
-                // Update name color immediately too
-                nameBlock.Foreground = newState ? ColorHelper.GetAccentBrush() : GetNodeForeground(node);
-                
-                // Then apply the actual change (which will refresh the tree)
-                try
-                {
-                    ToggleNodeHqRequirement(node);
-                }
-                catch (Exception ex)
-                {
-                    // Revert on error
-                    starBlock.Text = node.MustBeHq ? "★" : "☆";
-                    starBlock.Foreground = node.MustBeHq ? Brushes.Gold : Brushes.Gray;
-                    nameBlock.Foreground = node.MustBeHq ? ColorHelper.GetAccentBrush() : GetNodeForeground(node);
-                    StatusLabel.Text = $"Failed to toggle HQ: {ex.Message}";
-                }
-            };
-            panel.Children.Add(starBlock);
-        }
-        
-        // Add name block after star
-        panel.Children.Add(nameBlock);
-        
-        // Quantity
-        var qtyBlock = new TextBlock
-        {
-            Text = $" ×{node.Quantity}",
+            Text = "+",
+            FontWeight = FontWeights.Bold,
+            FontSize = 14,
             Foreground = Brushes.LightGray,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        panel.Children.Add(qtyBlock);
-        
-        // Price estimate display
-        var priceText = GetNodePriceDisplay(node);
-        if (!string.IsNullOrEmpty(priceText))
-        {
-            var priceBlock = new TextBlock
-            {
-                Text = priceText,
-                Foreground = Brushes.Gray,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(8, 0, 8, 0),
-                FontSize = 11
-            };
-            panel.Children.Add(priceBlock);
-        }
-        
-        // Acquisition source dropdown (MOVED TO RIGHT SIDE)
-        var sourceCombo = CreateAcquisitionSourceDropdown(node);
-        if (sourceCombo != null)
-        {
-            panel.Children.Add(sourceCombo);
-        }
-        
-        return panel;
-    }
-    
-    /// <summary>
-    /// Creates the header panel for a parent recipe node (with children).
-    /// Parent nodes use an expand arrow. HQ items show a clickable star toggle - only for HQ-capable items.
-    /// </summary>
-    private StackPanel CreateNodeHeaderPanel(PlanNode node, bool showDropdown)
-    {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        
-        // Name - declare early so star click handler can reference it
-        var nameBlock = new TextBlock
-        {
-            Text = node.Name,
-            FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = node.MustBeHq ? ColorHelper.GetAccentBrush() : GetNodeForeground(node)
+            Margin = new Thickness(8, 0, 2, 0),
+            Cursor = Cursors.Hand,
+            ToolTip = "Expand all subcrafts in this recipe"
+        };
+        expandButton.MouseLeftButtonDown += (s, e) =>
+        {
+            e.Handled = true;
+            SetExpanderSubtreeState(rootExpander, isExpanded: true);
         };
         
-        // HQ Star toggle (clickable) - only for items that can be HQ
-        if (node.CanBeHq)
+        // Collapse all button for this root
+        var collapseButton = new TextBlock
         {
-            var starBlock = new TextBlock
-            {
-                Text = node.MustBeHq ? "★" : "☆",
-                Foreground = node.MustBeHq ? Brushes.Gold : Brushes.Gray,
-                FontWeight = FontWeights.Bold,
-                VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 12,
-                Cursor = Cursors.Hand,
-                ToolTip = node.MustBeHq ? "Click to allow NQ" : "Click to require HQ",
-                Margin = new Thickness(0, 0, 4, 0)
-            };
-            starBlock.MouseLeftButtonDown += (s, e) =>
-            {
-                e.Handled = true;
-                
-                // Optimistic UI: toggle visual state immediately
-                var newState = !node.MustBeHq;
-                starBlock.Text = newState ? "★" : "☆";
-                starBlock.Foreground = newState ? Brushes.Gold : Brushes.Gray;
-                starBlock.ToolTip = newState ? "Click to allow NQ" : "Click to require HQ";
-                
-                // Update name color immediately too
-                nameBlock.Foreground = newState ? ColorHelper.GetAccentBrush() : GetNodeForeground(node);
-                
-                // Then apply the actual change (which will refresh the tree)
-                try
-                {
-                    ToggleNodeHqRequirement(node);
-                }
-                catch (Exception ex)
-                {
-                    // Revert on error
-                    starBlock.Text = node.MustBeHq ? "★" : "☆";
-                    starBlock.Foreground = node.MustBeHq ? Brushes.Gold : Brushes.Gray;
-                    nameBlock.Foreground = node.MustBeHq ? ColorHelper.GetAccentBrush() : GetNodeForeground(node);
-                    StatusLabel.Text = $"Failed to toggle HQ: {ex.Message}";
-                }
-            };
-            panel.Children.Add(starBlock);
-        }
-        
-        // Add name block after star
-        panel.Children.Add(nameBlock);
-        
-        // Quantity
-        var qtyBlock = new TextBlock
-        {
-            Text = $" ×{node.Quantity}",
+            Text = "−",
+            FontWeight = FontWeights.Bold,
+            FontSize = 14,
             Foreground = Brushes.LightGray,
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(2, 0, 4, 0),
+            Cursor = Cursors.Hand,
+            ToolTip = "Collapse all subcrafts in this recipe"
         };
-        panel.Children.Add(qtyBlock);
-        
-        // Price estimate display
-        var priceText = GetNodePriceDisplay(node);
-        if (!string.IsNullOrEmpty(priceText))
+        collapseButton.MouseLeftButtonDown += (s, e) =>
         {
-            var priceBlock = new TextBlock
-            {
-                Text = priceText,
-                Foreground = Brushes.Gray,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(8, 0, 8, 0),
-                FontSize = 11
-            };
-            panel.Children.Add(priceBlock);
-        }
+            e.Handled = true;
+            SetExpanderSubtreeState(rootExpander, isExpanded: false);
+        };
         
-        // Recipe info (job, level, yield) - only when crafting
-        if (!node.IsUncraftable && !string.IsNullOrEmpty(node.Job) && node.Source == AcquisitionSource.Craft)
-        {
-            var infoBlock = new TextBlock
-            {
-                Text = $"  ({node.Job} Lv.{node.RecipeLevel}, Yield: {node.Yield})",
-                Foreground = Brushes.Gray,
-                VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 11,
-                Margin = new Thickness(8, 0, 8, 0)
-            };
-            panel.Children.Add(infoBlock);
-        }
-        
-        // Acquisition source dropdown (on the right for all nodes, including branch nodes)
-        // This allows buying complex crafted items like submarine parts instead of crafting them
-        if (showDropdown)
-        {
-            var sourceCombo = CreateAcquisitionSourceDropdown(node);
-            if (sourceCombo != null)
-            {
-                panel.Children.Add(sourceCombo);
-            }
-        }
-        
-        return panel;
+        // Add at the end of the header panel (right side)
+        headerPanel.Children.Add(expandButton);
+        headerPanel.Children.Add(collapseButton);
     }
     
     /// <summary>
-    /// Creates a dropdown for selecting acquisition source with cost info.
-    /// Filters options based on item type (craftable, gathered, vendor, etc.)
-    /// Shows NQ/HQ prices with real market data.
+    /// Set the expand/collapse state of an expander and all its nested children.
     /// </summary>
-    private ComboBox? CreateAcquisitionSourceDropdown(PlanNode node)
+    private void SetExpanderSubtreeState(Expander expander, bool isExpanded)
     {
-        var combo = new ComboBox
+        expander.IsExpanded = isExpanded;
+        
+        if (expander.Content is StackPanel panel)
         {
-            Width = 130,
-            Margin = new Thickness(8, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            FontSize = 11,
-            HorizontalAlignment = HorizontalAlignment.Right
-        };
-        
-        // Determine what options to show based on item characteristics
-        var hasRecipe = !node.IsUncraftable && node.Children.Count > 0;
-        var hasMarketNqPrice = node.MarketPrice > 0;
-        // Only show Buy HQ if there's an actual HQ price (not just estimated)
-        var hasMarketHqPrice = node.HqMarketPrice > 0 && node.CanBeHq;
-        var isVendorItem = node.PriceSource == PriceSource.Vendor;
-        
-        // Calculate costs
-        var craftCost = hasRecipe ? CalculateNodeCraftCost(node) : 0;
-        var nqCost = hasMarketNqPrice ? node.MarketPrice * node.Quantity : 0;
-        // Use actual HQ price only (no more estimation)
-        var hqCost = hasMarketHqPrice ? node.HqMarketPrice * node.Quantity : 0;
-        
-        // Add Craft option (only for craftable items)
-        if (hasRecipe)
-        {
-            combo.Items.Add(new ComboBoxItem
+            foreach (var child in panel.Children)
             {
-                Content = $"Craft ~{craftCost:N0}g",
-                Tag = AcquisitionSource.Craft,
-                Foreground = Brushes.White,
-                ToolTip = $"Craft: {craftCost:N0}g"
-            });
-        }
-        
-        // Add Vendor option (for vendor items)
-        if (isVendorItem)
-        {
-            combo.Items.Add(new ComboBoxItem
-            {
-                Content = $"Vendor {node.MarketPrice * node.Quantity:N0}g",
-                Tag = AcquisitionSource.VendorBuy,
-                Foreground = Brushes.LightYellow,
-                ToolTip = $"Vendor: {node.MarketPrice * node.Quantity:N0}g"
-            });
-        }
-        
-        // Add Buy NQ option (if market price available)
-        if (hasMarketNqPrice)
-        {
-            combo.Items.Add(new ComboBoxItem
-            {
-                Content = $"Buy NQ {nqCost:N0}g",
-                Tag = AcquisitionSource.MarketBuyNq,
-                Foreground = Brushes.LightSkyBlue,
-                ToolTip = $"Market NQ: {nqCost:N0}g"
-            });
-        }
-        
-        // Add Buy HQ option (if item can be HQ and market price available)
-        if (node.CanBeHq && hasMarketHqPrice)
-        {
-            combo.Items.Add(new ComboBoxItem
-            {
-                Content = $"Buy HQ {hqCost:N0}g",
-                Tag = AcquisitionSource.MarketBuyHq,
-                Foreground = Brushes.LightGreen,
-                ToolTip = $"Market HQ: {hqCost:N0}g"
-            });
-        }
-        
-        // If no options available, don't show dropdown
-        if (combo.Items.Count == 0)
-            return null;
-        
-        // Select current value
-        foreach (ComboBoxItem item in combo.Items)
-        {
-            if ((AcquisitionSource)item.Tag == node.Source)
-            {
-                combo.SelectedItem = item;
-                break;
+                if (child is Expander childExpander)
+                {
+                    SetExpanderSubtreeState(childExpander, isExpanded);
+                }
             }
         }
-        
-        // Default to first if not found
-        if (combo.SelectedItem == null && combo.Items.Count > 0)
-            combo.SelectedIndex = 0;
-        
-        // Handle selection change
-        combo.SelectionChanged += (s, e) =>
-        {
-            if (combo.SelectedItem is ComboBoxItem selected)
-            {
-                var newSource = (AcquisitionSource)selected.Tag;
-                SetNodeAcquisitionSource(node, newSource);
-            }
-        };
-        
-        return combo;
     }
     
     /// <summary>
     /// Gets the foreground color based on acquisition source.
+    /// Called by RecipeTreeUiBuilder.
     /// </summary>
     private Brush GetNodeForeground(PlanNode node) => node.Source switch
     {
@@ -763,6 +576,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Gets a price display string for a node based on its acquisition source.
     /// Shows craft cost for crafted items and market price for bought items.
+    /// Called by RecipeTreeUiBuilder.
     /// </summary>
     private string GetNodePriceDisplay(PlanNode node)
     {
@@ -779,18 +593,6 @@ public partial class MainWindow : Window
             _ => ""
         };
     }
-
-    /// <summary>
-    /// Creates the style for Expander headers.
-    /// </summary>
-    private Style CreateExpanderHeaderStyle()
-    {
-        var style = new Style(typeof(System.Windows.Controls.Primitives.ToggleButton));
-        style.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
-        style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
-        style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(4)));
-        return style;
-    }
     
     /// <summary>
     /// Display plan and update market logistics using saved prices (for plan loading).
@@ -802,11 +604,12 @@ public partial class MainWindow : Window
         // Restore saved market plans if available
         if (plan.SavedMarketPlans?.Count > 0 == true)
         {
-            _currentMarketPlans = plan.SavedMarketPlans;
-            ApplyMarketSortAndDisplay();
+            _marketVm.SetShoppingPlans(plan.SavedMarketPlans);
+            PopulateProcurementPanel();
             
-            // Enable refresh button since we have market data to refresh
+            // Enable buttons since we have market data
             RefreshMarketButton.IsEnabled = true;
+            RebuildFromCacheButton.IsEnabled = true;
             ViewMarketStatusButton.IsEnabled = true;
             MenuViewMarketStatus.IsEnabled = true;
             
@@ -827,6 +630,9 @@ public partial class MainWindow : Window
             var savedPrices = ExtractPricesFromPlan(plan);
             await UpdateMarketLogisticsAsync(savedPrices, useCachedData: true);
             StatusLabel.Text = $"Loaded plan with {savedPrices.Count} cached prices. Click 'Refresh Market Data' for detailed listings.";
+            
+            // Enable rebuild from cache since we have cached prices
+            RebuildFromCacheButton.IsEnabled = true;
         }
         else
         {
@@ -876,71 +682,6 @@ public partial class MainWindow : Window
         }
     }
 
-
-
-    /// <summary>
-    /// Set the acquisition source for a node.
-    /// </summary>
-    private void SetNodeAcquisitionSource(PlanNode node, AcquisitionSource source)
-    {
-        _recipeCalcService.SetAcquisitionSource(node, source);
-        
-        // Refresh the display
-        if (_currentPlan != null)
-        {
-            DisplayPlanInTreeView(_currentPlan);
-        }
-        
-        var sourceText = source switch
-        {
-            AcquisitionSource.MarketBuyNq => "buy NQ",
-            AcquisitionSource.MarketBuyHq => "buy HQ",
-            AcquisitionSource.VendorBuy => "buy from vendor",
-            _ => "craft"
-        };
-        
-        StatusLabel.Text = $"{node.Name} set to {sourceText}";
-    }
-
-    /// <summary>
-    /// Set whether an item must be HQ quality. This is saved with the plan.
-    /// If setting to HQ and currently buying NQ, switches to buy HQ.
-    /// </summary>
-    private void SetNodeMustBeHq(PlanNode node, bool mustBeHq)
-    {
-        node.MustBeHq = mustBeHq;
-        
-        // If setting HQ requirement and currently buying NQ, switch to buy HQ
-        if (mustBeHq && node.Source == AcquisitionSource.MarketBuyNq)
-        {
-            _recipeCalcService.SetAcquisitionSource(node, AcquisitionSource.MarketBuyHq);
-        }
-        // If clearing HQ requirement and currently buying HQ, switch to buy NQ
-        else if (!mustBeHq && node.Source == AcquisitionSource.MarketBuyHq)
-        {
-            _recipeCalcService.SetAcquisitionSource(node, AcquisitionSource.MarketBuyNq);
-        }
-        
-        // Mark plan as modified
-        _currentPlan?.MarkModified();
-        
-        // Refresh the display
-        if (_currentPlan != null)
-        {
-            DisplayPlanInTreeView(_currentPlan);
-        }
-        
-        StatusLabel.Text = $"{node.Name} {(mustBeHq ? "must be" : "can be")} HQ";
-    }
-
-    /// <summary>
-    /// Toggle the HQ requirement for a node (called when clicking the star).
-    /// </summary>
-    private void ToggleNodeHqRequirement(PlanNode node)
-    {
-        SetNodeMustBeHq(node, !node.MustBeHq);
-    }
-
     /// <summary>
     /// Save the current plan to disk.
     /// </summary>
@@ -951,28 +692,17 @@ public partial class MainWindow : Window
             StatusLabel.Text = "No plan to save - build a plan first";
             return;
         }
-
-        var saveDialog = new SavePlanDialog(_planPersistence, _currentPlan.Name)
+        
+        var result = await _planCoordinator.SavePlanAsync(
+            _currentPlan,
+            _recipeVm.ProjectItems.ToList(),
+            _currentPlanPath);
+        
+        if (result.Success)
         {
-            Owner = this
-        };
-
-        if (saveDialog.ShowDialog() == true)
-        {
-            // Update plan name if changed
-            _currentPlan.Name = saveDialog.PlanName;
-            
-            var success = await _planPersistence.SavePlanAsync(
-                _currentPlan, 
-                customName: saveDialog.PlanName,
-                overwritePath: saveDialog.OverwritePath);
-            
-            StatusLabel.Text = success 
-                ? saveDialog.IsOverwrite 
-                    ? $"Plan overwritten: {_currentPlan.Name}" 
-                    : $"Plan saved: {_currentPlan.Name}" 
-                : "Failed to save plan";
+            _currentPlanPath = result.PlanPath;
         }
+        StatusLabel.Text = result.Message;
     }
 
     /// <summary>
@@ -980,45 +710,30 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnViewPlans(object sender, RoutedEventArgs e)
     {
-        var browser = new PlanBrowserWindow(_planPersistence, this)
+        var (selected, plan, projectItems) = await _planCoordinator.ShowPlanBrowserAsync(
+            _currentPlan,
+            _recipeVm.ProjectItems.ToList(),
+            _currentPlanPath ?? "");
+        
+        if (selected && plan != null && projectItems != null)
         {
-            Owner = this
-        };
-
-        if (browser.ShowDialog() == true && browser.SelectedAction == PlanBrowserAction.Load && 
-            !string.IsNullOrEmpty(browser.SelectedPlanPath))
-        {
-            _currentPlan = await _planPersistence.LoadPlanAsync(browser.SelectedPlanPath);
+            _recipeVm.CurrentPlan = plan;
             
-            if (_currentPlan != null)
+            _recipeVm.ProjectItems.Clear();
+            foreach (var item in projectItems)
             {
-                await DisplayPlanWithCachedPrices(_currentPlan);
-                UpdateBuildPlanButtonText();
-                
-                // Sync to project items
-                _projectItems = _currentPlan.RootItems.Select(r => new ProjectItem 
-                { 
-                    Id = r.ItemId, 
-                    Name = r.Name, 
-                    Quantity = r.Quantity,
-                    IsHqRequired = r.MustBeHq
-                }).ToList();
-                ProjectList.ItemsSource = null;
-                ProjectList.ItemsSource = _projectItems.Take(5).ToList();
-                UpdateQuickViewCount();
-                
-                BuildPlanButton.IsEnabled = _projectItems.Count > 0;
-                StatusLabel.Text = $"Loaded plan: {_currentPlan.Name}";
+                _recipeVm.ProjectItems.Add(item);
             }
-            else
-            {
-                StatusLabel.Text = "Failed to load plan";
-            }
-        }
-        else if (browser.SelectedAction == PlanBrowserAction.RenameCurrent && _currentPlan != null)
-        {
-            // Rename was requested for current plan
-            OnRenamePlan(sender, e);
+            
+            ProjectList.ItemsSource = null;
+            ProjectList.ItemsSource = _recipeVm.ProjectItems.Take(5).ToList();
+            UpdateQuickViewCount();
+            BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
+            
+            // Restore market analysis from saved plan
+            await DisplayPlanWithCachedPrices(plan);
+            
+            StatusLabel.Text = $"Loaded plan: {plan.Name}";
         }
     }
 
@@ -1027,34 +742,13 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnRenamePlan(object sender, RoutedEventArgs e)
     {
-        if (_currentPlan == null)
+        var result = await _planCoordinator.RenamePlanAsync(_currentPlanPath);
+        
+        if (result.Success)
         {
-            StatusLabel.Text = "No plan to rename - build or load a plan first";
-            return;
+            _currentPlanPath = result.PlanPath;
         }
-
-        var inputDialog = new RenamePlanDialog(_currentPlan.Name)
-        {
-            Owner = this
-        };
-
-        if (inputDialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(inputDialog.NewName))
-        {
-            var oldName = _currentPlan.Name;
-            _currentPlan.Name = inputDialog.NewName;
-            _currentPlan.MarkModified();
-            
-            // Auto-save after rename
-            var success = await _planPersistence.SavePlanAsync(_currentPlan);
-            if (success)
-            {
-                StatusLabel.Text = $"Renamed plan from '{oldName}' to '{_currentPlan.Name}'";
-            }
-            else
-            {
-                StatusLabel.Text = "Renamed in memory but failed to save";
-            }
-        }
+        StatusLabel.Text = result.Message;
     }
 
     /// <summary>
@@ -1065,57 +759,37 @@ public partial class MainWindow : Window
         var dc = DcCombo.SelectedItem as string ?? "Aether";
         var world = WorldCombo.SelectedItem as string ?? "";
         
-        var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
-        var importDialog = new TeamcraftImportWindow(teamcraft, dc, world)
+        var result = _importCoordinator.ImportFromTeamcraft(dc, world);
+        
+        if (result.Success && result.Plan != null)
         {
-            Owner = this
-        };
-
-        if (importDialog.ShowDialog() == true && importDialog.ImportedPlan != null)
-        {
-            _currentPlan = importDialog.ImportedPlan;
-            
-            // Sync to project items
-            _projectItems = _currentPlan.RootItems.Select(r => new ProjectItem 
-            { 
-                Id = r.ItemId, 
-                Name = r.Name, 
-                Quantity = r.Quantity,
-                IsHqRequired = r.MustBeHq
-            }).ToList();
-            ProjectList.ItemsSource = null;
-            ProjectList.ItemsSource = _projectItems.Take(5).ToList();
-            UpdateQuickViewCount();
-            
-            // Display the plan
-            DisplayPlanInTreeView(_currentPlan);
-            
-            BuildPlanButton.IsEnabled = _projectItems.Count > 0;
-            StatusLabel.Text = $"Imported plan with {_currentPlan.RootItems.Count} items from Teamcraft";
+            ApplyImportResult(result);
         }
+        StatusLabel.Text = result.Message;
     }
 
     /// <summary>
-    /// Try to set clipboard text with retry logic (clipboard may be locked by another app).
-    /// Uses async delay to avoid blocking UI thread.
+    /// Apply import result from coordinator to the view model.
     /// </summary>
-    private async Task<bool> TrySetClipboardAsync(string text, int maxRetries = 5)
+    private void ApplyImportResult(ImportCoordinator.ImportResult result)
     {
-        for (int i = 0; i < maxRetries; i++)
+        if (result.Plan == null || result.ProjectItems == null) return;
+        
+        _recipeVm.CurrentPlan = result.Plan;
+        
+        // Update project items
+        _recipeVm.ProjectItems.Clear();
+        foreach (var item in result.ProjectItems)
         {
-            try
-            {
-                // Use STA-safe clipboard operation
-                await Dispatcher.InvokeAsync(() => Clipboard.SetText(text));
-                return true;
-            }
-            catch
-            {
-                if (i == maxRetries - 1) return false;
-                await Task.Delay(100); // Non-blocking delay
-            }
+            _recipeVm.ProjectItems.Add(item);
         }
-        return false;
+        
+        ProjectList.ItemsSource = null;
+        ProjectList.ItemsSource = _recipeVm.ProjectItems.Take(5).ToList();
+        UpdateQuickViewCount();
+        
+        DisplayPlanInTreeView(_currentPlan);
+        BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
     }
 
     /// <summary>
@@ -1123,18 +797,17 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnExportTeamcraft(object sender, RoutedEventArgs e)
     {
-        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        var result = _exportCoordinator.ExportToTeamcraft(_currentPlan);
+        
+        if (!result.Success)
         {
-            StatusLabel.Text = "No plan to export - build a plan first";
+            StatusLabel.Text = result.Message;
             return;
         }
-
-        var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
-        var url = teamcraft.ExportToTeamcraft(_currentPlan);
         
-        if (await TrySetClipboardAsync(url))
+        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
         {
-            StatusLabel.Text = "Teamcraft URL copied to clipboard!";
+            StatusLabel.Text = result.Message;
         }
         else
         {
@@ -1148,40 +821,23 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnExportArtisan(object sender, RoutedEventArgs e)
     {
-        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
-        {
-            StatusLabel.Text = "No plan to export - build a plan first";
-            return;
-        }
-
         StatusLabel.Text = "Exporting to Artisan format...";
         
-        try
+        var result = await _exportCoordinator.ExportToArtisanAsync(_currentPlan);
+        
+        if (!result.Success)
         {
-            var artisan = App.Services.GetRequiredService<ArtisanService>();
-            var result = await artisan.ExportToArtisanAsync(_currentPlan);
-            
-            if (await TrySetClipboardAsync(result.Json))
-            {
-                if (result.Success)
-                {
-                    StatusLabel.Text = $"Artisan export complete! {result.RecipeCount} recipes copied to clipboard.";
-                }
-                else
-                {
-                    var summary = artisan.CreateExportSummary(result);
-                    StatusLabel.Text = summary;
-                }
-            }
-            else
-            {
-                StatusLabel.Text = "Failed to copy - clipboard may be in use.";
-            }
+            StatusLabel.Text = result.Message;
+            return;
         }
-        catch (Exception ex)
+        
+        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
         {
-            _logger.LogError(ex, "Failed to export to Artisan format");
-            StatusLabel.Text = $"Export failed: {ex.Message}";
+            StatusLabel.Text = result.Message;
+        }
+        else
+        {
+            StatusLabel.Text = "Failed to copy - clipboard may be in use.";
         }
     }
 
@@ -1194,71 +850,15 @@ public partial class MainWindow : Window
         var dc = DcCombo.SelectedItem as string ?? "Aether";
         var world = WorldCombo.SelectedItem as string ?? "";
         
-        // Get clipboard content
-        string clipboardText;
-        try
-        {
-            clipboardText = Clipboard.GetText();
-        }
-        catch (Exception ex)
-        {
-            StatusLabel.Text = "Failed to read clipboard. Please try again.";
-            _logger.LogError(ex, "Failed to read clipboard for Artisan import");
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(clipboardText))
-        {
-            StatusLabel.Text = "Clipboard is empty. Copy an Artisan export first.";
-            return;
-        }
-
         StatusLabel.Text = "Importing from Artisan...";
         
-        try
+        var result = await _importCoordinator.ImportFromArtisanAsync(dc, world);
+        
+        if (result.Success && result.Plan != null)
         {
-            var artisan = App.Services.GetRequiredService<ArtisanService>();
-            var plan = await artisan.ImportFromArtisanAsync(clipboardText, dc, world);
-            
-            if (plan != null)
-            {
-                _currentPlan = plan;
-                
-                // Update project items display
-                _projectItems.Clear();
-                foreach (var item in plan.RootItems)
-                {
-                    _projectItems.Add(new ProjectItem 
-                    { 
-                        Id = item.ItemId, 
-                        Name = item.Name, 
-                        Quantity = item.Quantity,
-                        IsHqRequired = item.MustBeHq
-                    });
-                }
-                
-                ProjectList.ItemsSource = null;
-                ProjectList.ItemsSource = _projectItems.Take(5).ToList();
-                UpdateQuickViewCount();
-                
-                // Display the recipe tree
-                DisplayPlanInTreeView(_currentPlan);
-                
-                // Enable buttons
-                BuildPlanButton.IsEnabled = _projectItems.Count > 0;
-                
-                StatusLabel.Text = $"Imported plan with {_currentPlan.RootItems.Count} items from Artisan";
-            }
-            else
-            {
-                StatusLabel.Text = "Failed to import - invalid Artisan format or no recipes found.";
-            }
+            ApplyImportResult(result);
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to import from Artisan format");
-            StatusLabel.Text = $"Import failed: {ex.Message}";
-        }
+        StatusLabel.Text = result.Message;
     }
 
     /// <summary>
@@ -1266,18 +866,17 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnExportPlainText(object sender, RoutedEventArgs e)
     {
-        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        var result = _exportCoordinator.ExportToPlainText(_currentPlan);
+        
+        if (!result.Success)
         {
-            StatusLabel.Text = "No plan to export - build a plan first";
+            StatusLabel.Text = result.Message;
             return;
         }
-
-        var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
-        var text = teamcraft.ExportToPlainText(_currentPlan);
         
-        if (await TrySetClipboardAsync(text))
+        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
         {
-            StatusLabel.Text = "Plan text copied to clipboard!";
+            StatusLabel.Text = result.Message;
         }
         else
         {
@@ -1290,18 +889,17 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnExportCsv(object sender, RoutedEventArgs e)
     {
-        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        var result = _exportCoordinator.ExportToCsv(_currentPlan);
+        
+        if (!result.Success)
         {
-            StatusLabel.Text = "No plan to export - build a plan first";
+            StatusLabel.Text = result.Message;
             return;
         }
-
-        var teamcraft = App.Services.GetRequiredService<TeamcraftService>();
-        var csv = teamcraft.ExportToCsv(_currentPlan);
         
-        if (await TrySetClipboardAsync(csv))
+        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
         {
-            StatusLabel.Text = "CSV copied to clipboard!";
+            StatusLabel.Text = result.Message;
         }
         else
         {
@@ -1420,10 +1018,13 @@ public partial class MainWindow : Window
             await UpdateMarketLogisticsAsync(prices, useCachedData: false);
             
             // Refresh procurement panel if visible
-            if (ProcurementPlannerContent.Visibility == Visibility.Visible)
+            if (IsMarketViewVisible())
             {
                 PopulateProcurementPanel();
             }
+            
+            // Enable rebuild from cache button since we now have cached prices
+            RebuildFromCacheButton.IsEnabled = true;
 
             // Calculate total cost
             var totalCost = _currentPlan.AggregatedMaterials.Sum(m => m.TotalCost);
@@ -1450,6 +1051,103 @@ public partial class MainWindow : Window
             foreach (var item in allItems)
             {
                 _marketDataStatusWindow.SetItemFailed(item.itemId, ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Rebuild market analysis from cached prices without calling the API.
+    /// Useful for testing or when offline.
+    /// </summary>
+    private async void OnRebuildFromCache(object sender, RoutedEventArgs e)
+    {
+        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        {
+            StatusLabel.Text = "No plan - build a plan first";
+            return;
+        }
+
+        // Extract cached prices from the plan nodes
+        var cachedPrices = ExtractPricesFromPlan(_currentPlan);
+        
+        if (cachedPrices.Count == 0)
+        {
+            StatusLabel.Text = "No cached prices available. Click 'Refresh Market Data' to fetch prices.";
+            return;
+        }
+
+        StatusLabel.Text = $"Rebuilding market analysis from {cachedPrices.Count} cached prices...";
+        RebuildFromCacheButton.IsEnabled = false;
+        
+        try
+        {
+            // Update market logistics using cached data
+            await UpdateMarketLogisticsAsync(cachedPrices, useCachedData: true);
+            
+            // Refresh the tree view to show cached prices
+            DisplayPlanInTreeView(_currentPlan);
+            
+            StatusLabel.Text = $"Market analysis rebuilt from {cachedPrices.Count} cached prices. Click 'Refresh Market Data' for current listings.";
+            _logger.LogInformation("[OnRebuildFromCache] Rebuilt market analysis from {Count} cached prices", cachedPrices.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[OnRebuildFromCache] Failed to rebuild from cache");
+            StatusLabel.Text = $"Failed to rebuild from cache: {ex.Message}";
+        }
+        finally
+        {
+            RebuildFromCacheButton.IsEnabled = true;
+        }
+    }
+
+    /// <summary>
+    /// Expand all recipe nodes in the tree.
+    /// </summary>
+    private void OnExpandAll(object sender, RoutedEventArgs e)
+    {
+        SetAllExpandersState(isExpanded: true);
+    }
+    
+    /// <summary>
+    /// Collapse all recipe nodes in the tree.
+    /// </summary>
+    private void OnCollapseAll(object sender, RoutedEventArgs e)
+    {
+        SetAllExpandersState(isExpanded: false);
+    }
+    
+    /// <summary>
+    /// Set all Expander controls in the recipe tree to the specified state.
+    /// </summary>
+    private void SetAllExpandersState(bool isExpanded)
+    {
+        foreach (var child in RecipePlanPanel.Children)
+        {
+            if (child is Expander expander)
+            {
+                expander.IsExpanded = isExpanded;
+                SetExpanderChildrenState(expander, isExpanded);
+            }
+        }
+        
+        StatusLabel.Text = isExpanded ? "All nodes expanded" : "All nodes collapsed";
+    }
+    
+    /// <summary>
+    /// Recursively set the expand state of all nested Expanders.
+    /// </summary>
+    private void SetExpanderChildrenState(Expander parent, bool isExpanded)
+    {
+        if (parent.Content is StackPanel panel)
+        {
+            foreach (var child in panel.Children)
+            {
+                if (child is Expander childExpander)
+                {
+                    childExpander.IsExpanded = isExpanded;
+                    SetExpanderChildrenState(childExpander, isExpanded);
+                }
             }
         }
     }
@@ -1597,7 +1295,7 @@ public partial class MainWindow : Window
     /// <param name="useCachedData">If true, use saved prices without re-fetching market listings.</param>
     private async Task UpdateMarketLogisticsAsync(Dictionary<int, PriceInfo> prices, bool useCachedData = false)
     {
-        _currentMarketPlans.Clear();
+        _marketVm.Clear();
         MarketCards.Children.Clear();
         
         // Clear and hide Craft vs Buy analysis
@@ -1671,6 +1369,12 @@ public partial class MainWindow : Window
                 ViewMarketStatusButton.IsEnabled = true;
                 MenuViewMarketStatus.IsEnabled = true;
                 
+                // Restore shopping plans from saved plan data for procurement panel
+                if (_currentPlan?.SavedMarketPlans?.Any() == true)
+                {
+                    _marketVm.SetShoppingPlans(_currentPlan.SavedMarketPlans);
+                }
+                
                 // Still show Craft vs Buy analysis even with cached data
                 AddCraftVsBuyAnalysisCard(prices);
             }
@@ -1709,7 +1413,7 @@ public partial class MainWindow : Window
                             marketItems, dc, progress, mode: mode);
                     }
                     
-                    _currentMarketPlans = shoppingPlans;
+                    _marketVm.SetShoppingPlans(shoppingPlans);
                     
                     // Save market plans to the current plan for persistence
                     if (_currentPlan != null)
@@ -2518,11 +2222,82 @@ public partial class MainWindow : Window
         logWindow.Show();
     }
 
+    /// <summary>
+    /// Restart the application, preserving the current plan state.
+    /// This is useful for troubleshooting or refreshing the app without losing work.
+    /// </summary>
+    private void OnRestartApp(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(
+            "Restart the application? Your current plan will be preserved.",
+            "Restart App",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question) == MessageBoxResult.Yes)
+        {
+            // Save state manually since we're not going through the named pipe flow
+            var state = new WatchState
+            {
+                CurrentPlan = GetCurrentPlanForWatch(),
+                DataCenter = GetCurrentDataCenter(),
+                World = GetCurrentWorld()
+            };
+            state.Save();
+            
+            // SQLite cache auto-saves, nothing to do here
+            
+            // Launch a new instance of the app before shutting down
+            var exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+            // Assembly.Location returns the DLL path, so we need to find the EXE
+            var exeDirectory = Path.GetDirectoryName(exePath);
+            var exeName = "FFXIV_Craft_Architect.exe";
+            var fullExePath = Path.Combine(exeDirectory ?? ".", exeName);
+            
+            try
+            {
+                var startInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = fullExePath,
+                    WorkingDirectory = exeDirectory,
+                    UseShellExecute = true
+                };
+                System.Diagnostics.Process.Start(startInfo);
+            }
+            catch (Exception ex)
+            {
+                // If launching fails, just exit with code 42 (for watch mode)
+                // The state is already saved
+                StatusLabel.Text = $"Could not restart: {ex.Message}. State saved.";
+                Environment.ExitCode = 42;
+            }
+            
+            // Shutdown this instance
+            Application.Current.Shutdown();
+        }
+    }
+
     private void OnOptions(object sender, RoutedEventArgs e)
     {
         var optionsWindow = App.Services.GetRequiredService<OptionsWindow>();
         optionsWindow.Owner = this;
-        optionsWindow.ShowDialog();
+        var result = optionsWindow.ShowDialog();
+        
+        // Apply diagnostic logging setting immediately if saved
+        if (result == true)
+        {
+            var diagnosticLoggingEnabled = _settingsService.Get<bool>("debug.enable_diagnostic_logging", false);
+            _recipeVm.SetDiagnosticLoggingEnabled(diagnosticLoggingEnabled);
+            _logger.LogInformation("Diagnostic logging {Status}", diagnosticLoggingEnabled ? "enabled" : "disabled");
+        }
+    }
+
+    /// <summary>
+    /// Opens the Options window directly to the Debugging tab.
+    /// </summary>
+    private void OnDebugOptions(object sender, RoutedEventArgs e)
+    {
+        // Note: To implement this properly, we'd need to add a way to select a specific tab
+        // For now, just open the Options window normally
+        OnOptions(sender, e);
     }
     
     /// <summary>
@@ -2530,43 +2305,89 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnRecipePlannerTabClick(object sender, MouseButtonEventArgs e)
     {
-        // Update tab styling
-        RecipePlannerTab.Background = (SolidColorBrush)FindResource("GoldAccentBrush");
-        ((TextBlock)RecipePlannerTab.Child).Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1a1a1a"));
-        
-        ProcurementPlannerTab.Background = Brushes.Transparent;
-        ((TextBlock)ProcurementPlannerTab.Child).Foreground = (SolidColorBrush)FindResource("GoldAccentBrush");
+        SetTabActive(RecipePlannerTab);
+        SetTabInactive(MarketAnalysisTab);
+        SetTabInactive(ProcurementPlannerTab);
         
         // Switch content visibility
         RecipePlannerContent.Visibility = Visibility.Visible;
+        MarketAnalysisContent.Visibility = Visibility.Collapsed;
         ProcurementPlannerContent.Visibility = Visibility.Collapsed;
         
         StatusLabel.Text = "Recipe Planner";
     }
     
     /// <summary>
-    /// Switch to Market Analysis tab and populate with market logistics data
+    /// Switch to Market Analysis tab
     /// </summary>
-    private void OnProcurementPlannerTabClick(object sender, MouseButtonEventArgs e)
+    private void OnMarketAnalysisTabClick(object sender, MouseButtonEventArgs e)
     {
-        // Update tab styling
-        RecipePlannerTab.Background = Brushes.Transparent;
-        ((TextBlock)RecipePlannerTab.Child).Foreground = (SolidColorBrush)FindResource("GoldAccentBrush");
-        
-        ProcurementPlannerTab.Background = (SolidColorBrush)FindResource("GoldAccentBrush");
-        ((TextBlock)ProcurementPlannerTab.Child).Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1a1a1a"));
+        SetTabInactive(RecipePlannerTab);
+        SetTabActive(MarketAnalysisTab);
+        SetTabInactive(ProcurementPlannerTab);
         
         // Switch content visibility
         RecipePlannerContent.Visibility = Visibility.Collapsed;
-        ProcurementPlannerContent.Visibility = Visibility.Visible;
+        MarketAnalysisContent.Visibility = Visibility.Visible;
+        ProcurementPlannerContent.Visibility = Visibility.Collapsed;
         
-        // Populate procurement panel if we have a plan
+        // Populate market analysis panel if we have a plan
         if (_currentPlan != null)
         {
             PopulateProcurementPanel();
         }
         
         StatusLabel.Text = "Market Analysis";
+    }
+    
+    /// <summary>
+    /// Switch to Procurement Plan tab
+    /// </summary>
+    private void OnProcurementPlannerTabClick(object sender, MouseButtonEventArgs e)
+    {
+        SetTabInactive(RecipePlannerTab);
+        SetTabInactive(MarketAnalysisTab);
+        SetTabActive(ProcurementPlannerTab);
+        
+        // Switch content visibility
+        RecipePlannerContent.Visibility = Visibility.Collapsed;
+        MarketAnalysisContent.Visibility = Visibility.Collapsed;
+        ProcurementPlannerContent.Visibility = Visibility.Visible;
+        
+        // Populate procurement plan panel if we have a plan
+        if (_currentPlan != null)
+        {
+            PopulateProcurementPlanSummary();
+        }
+        
+        StatusLabel.Text = "Procurement Plan";
+    }
+    
+    /// <summary>
+    /// Sets a tab to active (gold background, dark text)
+    /// </summary>
+    private void SetTabActive(Border tab)
+    {
+        tab.Background = (SolidColorBrush)FindResource("GoldAccentBrush");
+        ((TextBlock)tab.Child).Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1a1a1a"));
+    }
+    
+    /// <summary>
+    /// Sets a tab to inactive (transparent background, gold text)
+    /// </summary>
+    private void SetTabInactive(Border tab)
+    {
+        tab.Background = Brushes.Transparent;
+        ((TextBlock)tab.Child).Foreground = (SolidColorBrush)FindResource("GoldAccentBrush");
+    }
+    
+    /// <summary>
+    /// Checks if either market analysis or procurement plan view is visible.
+    /// </summary>
+    private bool IsMarketViewVisible()
+    {
+        return MarketAnalysisContent.Visibility == Visibility.Visible 
+            || ProcurementPlannerContent.Visibility == Visibility.Visible;
     }
     
     /// <summary>
@@ -2735,30 +2556,44 @@ public partial class MainWindow : Window
         var itemsWithOptions = _currentMarketPlans.Count(p => p.HasOptions);
         var itemsWithoutOptions = _currentMarketPlans.Count(p => !p.HasOptions);
         
-        // Summary header
+        // Summary header - flattened horizontal layout
         var summaryPanel = new Border
         {
             Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3d3d3d")),
             CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(16),
-            Margin = new Thickness(0, 0, 0, 16)
+            Padding = new Thickness(12, 8, 12, 8),
+            Margin = new Thickness(0, 0, 0, 12)
         };
         
-        var summaryStack = new StackPanel();
-        summaryStack.Children.Add(new TextBlock
+        var summaryGrid = new Grid();
+        summaryGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        summaryGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        
+        // Cost on the left
+        var costText = new TextBlock
         {
-            Text = $"Total Procurement Cost: {grandTotal:N0}g",
-            FontSize = 18,
+            Text = $"Total: {grandTotal:N0}g",
+            FontSize = 16,
             FontWeight = FontWeights.Bold,
-            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4caf50"))
-        });
-        summaryStack.Children.Add(new TextBlock
+            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4caf50")),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(costText, 0);
+        summaryGrid.Children.Add(costText);
+        
+        // Stats on the right
+        var statsText = new TextBlock
         {
-            Text = $"Items with market data: {itemsWithOptions}  •  Need price fetch: {itemsWithoutOptions}",
+            Text = $"{itemsWithOptions} items with data  •  {itemsWithoutOptions} need fetch",
             Foreground = Brushes.Gray,
-            Margin = new Thickness(0, 4, 0, 0)
-        });
-        summaryPanel.Child = summaryStack;
+            FontSize = 11,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(statsText, 1);
+        summaryGrid.Children.Add(statsText);
+        
+        summaryPanel.Child = summaryGrid;
         ProcurementPanel.Children.Add(summaryPanel);
         
         // Get sort preference
@@ -2857,7 +2692,7 @@ public partial class MainWindow : Window
             return;
             
         // Re-populate to apply new sort (only if we have market plans to sort)
-        if (ProcurementPlannerContent.Visibility == Visibility.Visible && _currentMarketPlans?.Any() == true)
+        if (IsMarketViewVisible() && _currentMarketPlans?.Any() == true)
         {
             PopulateProcurementPanel();
         }
@@ -2879,7 +2714,7 @@ public partial class MainWindow : Window
             _settingsService.Set("planning.default_recommendation_mode", mode);
             
             // Re-populate to apply new mode if visible
-            if (ProcurementPlannerContent.Visibility == Visibility.Visible && _currentPlan != null)
+            if (IsMarketViewVisible() && _currentPlan != null)
             {
                 PopulateProcurementPanel();
             }
@@ -2889,8 +2724,8 @@ public partial class MainWindow : Window
     private void OnNewPlan(object sender, RoutedEventArgs e)
     {
         // Clear current plan and project items
-        _currentPlan = null;
-        _projectItems.Clear();
+        _recipeVm.CurrentPlan = null;
+        _recipeVm.ProjectItems.Clear();
         ProjectList.ItemsSource = null;
         RecipePlanPanel?.Children.Clear();
         
@@ -2971,15 +2806,15 @@ public partial class MainWindow : Window
             var listBoxItem = button.FindParent<ListBoxItem>();
             if (listBoxItem?.DataContext is ProjectItem projectItem)
             {
-                _projectItems.Remove(projectItem);
+                _recipeVm.ProjectItems.Remove(projectItem);
                 StatusLabel.Text = $"Removed {projectItem.Name} from project";
                 
                 // Disable build button if no items left
-                BuildPlanButton.IsEnabled = _projectItems.Count > 0;
+                BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
                 
                 // Refresh the list and count
                 ProjectList.ItemsSource = null;
-                ProjectList.ItemsSource = _projectItems.Take(5).ToList();
+                ProjectList.ItemsSource = _recipeVm.ProjectItems.Take(5).ToList();
                 UpdateQuickViewCount();
             }
         }
@@ -2990,13 +2825,13 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdateQuickViewCount()
     {
-        if (_projectItems.Count <= 5)
+        if (_recipeVm.ProjectItems.Count <= 5)
         {
-            QuickViewCountText.Text = $"({_projectItems.Count})";
+            QuickViewCountText.Text = $"({_recipeVm.ProjectItems.Count})";
         }
         else
         {
-            QuickViewCountText.Text = $"(showing 5 of {_projectItems.Count})";
+            QuickViewCountText.Text = $"(showing 5 of {_recipeVm.ProjectItems.Count})";
         }
     }
 
@@ -3009,7 +2844,7 @@ public partial class MainWindow : Window
         var logger = App.Services.GetRequiredService<ILogger<Views.ProjectItemsWindow>>();
         
         var window = new Views.ProjectItemsWindow(
-            _projectItems,
+            _recipeVm.ProjectItems.ToList(),
             planName,
             onItemsChanged: (items) =>
             {
@@ -3026,11 +2861,11 @@ public partial class MainWindow : Window
         
         // Refresh the side panel list after closing
         ProjectList.ItemsSource = null;
-        ProjectList.ItemsSource = _projectItems.Take(5).ToList();
+        ProjectList.ItemsSource = _recipeVm.ProjectItems.Take(5).ToList();
         UpdateQuickViewCount();
-        BuildPlanButton.IsEnabled = _projectItems.Count > 0;
+        BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
         
-        StatusLabel.Text = $"Project items updated: {_projectItems.Count} items";
+        StatusLabel.Text = $"Project items updated: {_recipeVm.ProjectItems.Count} items";
     }
 
     /// <summary>
@@ -3077,6 +2912,159 @@ public partial class MainWindow : Window
         return total;
     }
 
+    // =========================================================================
+    // Watch Mode Helpers (Hot Reload Support)
+    // =========================================================================
+    
+    /// <summary>
+    /// Gets the current plan for watch mode state saving.
+    /// </summary>
+    public CraftingPlan? GetCurrentPlanForWatch()
+    {
+        // Ensure market plans are saved to the plan before returning
+        if (_currentPlan != null && _currentMarketPlans.Count > 0)
+        {
+            _currentPlan.SavedMarketPlans = _currentMarketPlans;
+        }
+        return _currentPlan;
+    }
+    
+    /// <summary>
+    /// Gets the currently selected data center.
+    /// </summary>
+    public string? GetCurrentDataCenter()
+    {
+        return DcCombo.SelectedItem as string;
+    }
+    
+    /// <summary>
+    /// Gets the currently selected world (or "Entire Data Center").
+    /// </summary>
+    public string? GetCurrentWorld()
+    {
+        return WorldCombo.SelectedItem as string;
+    }
+    
+    /// <summary>
+    /// Restores state from a watch mode reload.
+    /// </summary>
+    /// <summary>
+    /// After restart with save, check if there's cached market data for plan items.
+    /// If so, show a message prompting user to re-analyze.
+    /// </summary>
+    private async Task PromptToReanalyzeCachedMarketDataAsync()
+    {
+        if (_currentPlan?.AggregatedMaterials == null)
+            return;
+        
+        var cacheService = App.Services.GetService<Core.Services.IMarketCacheService>();
+        if (cacheService == null)
+            return;
+        
+        var dataCenter = DcCombo.SelectedItem as string;
+        if (string.IsNullOrEmpty(dataCenter))
+            return;
+        
+        // Check which items have cached data
+        var itemIds = _currentPlan.AggregatedMaterials.Select(m => m.ItemId).ToList();
+        var missing = await cacheService.GetMissingAsync(
+            itemIds.Select(id => (id, dataCenter)).ToList());
+        var cachedCount = itemIds.Count - missing.Count;
+        
+        if (cachedCount > 0)
+        {
+            // Show informational message in ProcurementPanel
+            ProcurementPanel.Children.Clear();
+            
+            var infoPanel = new StackPanel 
+            { 
+                Orientation = Orientation.Vertical,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 40, 0, 0)
+            };
+            
+            infoPanel.Children.Add(new TextBlock
+            {
+                Text = "📦 Market Data Available in Cache",
+                FontSize = 16,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = (SolidColorBrush)Resources["GoldAccentBrush"],
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 8)
+            });
+            
+            infoPanel.Children.Add(new TextBlock
+            {
+                Text = $"{cachedCount} of {itemIds.Count} items have cached market data.",
+                FontSize = 13,
+                Foreground = Brushes.LightGray,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 16)
+            });
+            
+            infoPanel.Children.Add(new TextBlock
+            {
+                Text = "Click 'Refresh Market Data' above to re-analyze using cached data.",
+                FontSize = 12,
+                Foreground = Brushes.Gray,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                TextWrapping = TextWrapping.Wrap,
+                TextAlignment = TextAlignment.Center
+            });
+            
+            ProcurementPanel.Children.Add(infoPanel);
+            
+            StatusLabel.Text = $"[Watch] State restored. {cachedCount} items have cached market data.";
+        }
+    }
 
+    public async Task RestoreWatchStateAsync(WatchState state)
+    {
+        if (state.CurrentPlan == null)
+            return;
+        
+        // Restore data center
+        if (!string.IsNullOrEmpty(state.DataCenter))
+        {
+            DcCombo.SelectedItem = state.DataCenter;
+            OnDataCenterSelected(null, null);
+            
+            // Wait a moment for world combo to populate
+            await Task.Delay(100);
+            
+            // Restore world if specified
+            if (!string.IsNullOrEmpty(state.World))
+            {
+                WorldCombo.SelectedItem = state.World;
+            }
+        }
+        
+        // Restore plan
+        _recipeVm.CurrentPlan = state.CurrentPlan;
+        
+        // Restore project items from plan
+        _recipeVm.ProjectItems = new ObservableCollection<ProjectItem>(_currentPlan.RootItems.Select(r => new ProjectItem
+        {
+            Id = r.ItemId,
+            Name = r.Name,
+            Quantity = r.Quantity,
+            IsHqRequired = r.MustBeHq
+        }));
+        
+        ProjectList.ItemsSource = _recipeVm.ProjectItems.Take(5).ToList();
+        UpdateQuickViewCount();
+        BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
+        
+        // Display plan
+        DisplayPlanInTreeView(_currentPlan);
+        UpdateBuildPlanButtonText();
+        PopulateShoppingList();
+        ProcurementRefreshButton.IsEnabled = true;
+        
+        StatusLabel.Text = "[Watch] State restored from reload";
+        
+        // Check if there's cached market data that can be re-analyzed
+        await PromptToReanalyzeCachedMarketDataAsync();
+    }
 
 }

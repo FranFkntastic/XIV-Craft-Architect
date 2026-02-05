@@ -3,6 +3,7 @@ using System.IO;
 using CsvHelper;
 using CsvHelper.Configuration;
 using FFXIVCraftArchitect.Models;
+using FFXIVCraftArchitect.Core.Models;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Services;
@@ -24,13 +25,17 @@ public class RecommendationCsvService
 
     /// <summary>
     /// Save recommendations to a CSV file companion to the plan.
+    /// Writes one row per world option to preserve multi-world data.
     /// </summary>
     public async Task<bool> SaveRecommendationsAsync(string planFileName, List<DetailedShoppingPlan> recommendations)
     {
         try
         {
             var csvPath = GetCsvPath(planFileName);
-            var records = recommendations.Select(RecommendationCsvRecord.FromShoppingPlan).ToList();
+            // Flatten all world options into records
+            var records = recommendations
+                .SelectMany(RecommendationCsvRecord.FromShoppingPlanToRecords)
+                .ToList();
 
             var config = new CsvConfiguration(CultureInfo.InvariantCulture)
             {
@@ -42,8 +47,8 @@ public class RecommendationCsvService
             csv.Context.RegisterClassMap<RecommendationCsvMap>();
             await csv.WriteRecordsAsync(records);
 
-            _logger.LogInformation("[RecommendationCsv] Saved {Count} recommendations to {Path}", 
-                records.Count, csvPath);
+            _logger.LogInformation("[RecommendationCsv] Saved {RecordCount} records ({PlanCount} plans) to {Path}", 
+                records.Count, recommendations.Count, csvPath);
             return true;
         }
         catch (Exception ex)
@@ -55,6 +60,7 @@ public class RecommendationCsvService
 
     /// <summary>
     /// Load recommendations from a CSV file.
+    /// Groups rows by ItemId to reconstruct multi-world options.
     /// Returns empty list if file doesn't exist.
     /// </summary>
     public async Task<List<DetailedShoppingPlan>> LoadRecommendationsAsync(string planFileName)
@@ -78,10 +84,15 @@ public class RecommendationCsvService
             {
                 records.Add(record);
             }
-            var plans = records.Select(r => r.ToShoppingPlan()).ToList();
 
-            _logger.LogInformation("[RecommendationCsv] Loaded {Count} recommendations from {Path}", 
-                plans.Count, csvPath);
+            // Group records by ItemId to reconstruct multi-world plans
+            var plans = records
+                .GroupBy(r => r.ItemId)
+                .Select(g => MergeRecordsToPlan(g.ToList()))
+                .ToList();
+
+            _logger.LogInformation("[RecommendationCsv] Loaded {PlanCount} plans ({RecordCount} records) from {Path}", 
+                plans.Count, records.Count, csvPath);
             return plans;
         }
         catch (Exception ex)
@@ -89,6 +100,34 @@ public class RecommendationCsvService
             _logger.LogError(ex, "[RecommendationCsv] Failed to load recommendations for {PlanFile}", planFileName);
             return new List<DetailedShoppingPlan>();
         }
+    }
+
+    /// <summary>
+    /// Merge multiple CSV records (one per world) into a single DetailedShoppingPlan.
+    /// </summary>
+    private DetailedShoppingPlan MergeRecordsToPlan(List<RecommendationCsvRecord> records)
+    {
+        if (records.Count == 0)
+            return new DetailedShoppingPlan();
+
+        if (records.Count == 1)
+            return records[0].ToShoppingPlan();
+
+        // Multiple records = multiple worlds for same item
+        var first = records.First();
+        var worldOptions = records.Select(r => r.ToWorldSummary()).ToList();
+        var recommended = records.FirstOrDefault(r => r.IsRecommended)?.ToWorldSummary() 
+            ?? worldOptions.First();
+
+        return new DetailedShoppingPlan
+        {
+            ItemId = first.ItemId,
+            Name = first.Name,
+            QuantityNeeded = first.QuantityNeeded,
+            DCAveragePrice = first.DCAveragePrice,
+            RecommendedWorld = recommended,
+            WorldOptions = worldOptions
+        };
     }
 
     /// <summary>

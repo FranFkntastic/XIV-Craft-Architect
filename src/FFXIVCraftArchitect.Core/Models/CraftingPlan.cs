@@ -327,6 +327,12 @@ public class PlanNode
     public string? Notes { get; set; }
     
     /// <summary>
+    /// If true, this node represents a circular reference in the recipe tree.
+    /// The item appears elsewhere in the crafting chain and cannot be expanded further.
+    /// </summary>
+    public bool IsCircularReference { get; set; }
+    
+    /// <summary>
     /// Deep clone this node and all children
     /// </summary>
     public PlanNode Clone()

@@ -1,6 +1,7 @@
 @inherits LayoutComponentBase
 @using FFXIVCraftArchitect.Web.Services
 @using FFXIVCraftArchitect.Web.Dialogs
+@using FFXIVCraftArchitect.Core.Models
 @using FFXIVCraftArchitect.Core.Services
 @inject NavigationManager NavigationManager
 @inject AppState AppState
@@ -10,6 +11,7 @@
 @inject IDialogService DialogService
 @inject RecipeCalculationService RecipeService
 @inject UniversalisService UniversalisService
+@inject ILogger<MainLayout> Logger
 @implements IDisposable
 
 <MudThemeProvider @ref="_mudThemeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
@@ -29,10 +31,15 @@
                        Variant="@GetTabVariant("planner")">
                 Recipe Planner
             </MudButton>
+            <MudButton OnClick="@(() => NavigateTo("market"))"
+                       Color="@GetTabColor("market")"
+                       Variant="@GetTabVariant("market")">
+                Market Analysis
+            </MudButton>
             <MudButton OnClick="@(() => NavigateTo("procurement"))"
                        Color="@GetTabColor("procurement")"
                        Variant="@GetTabVariant("procurement")">
-                Procurement Planner
+                Procurement Plan
             </MudButton>
         </MudButtonGroup>
         
@@ -168,6 +175,35 @@
         {
             // Load settings
             await LoadSettingsAsync();
+            
+            // Initialize world data (shared across all pages)
+            await AppState.InitializeWorldDataAsync(UniversalisService);
+            
+            // Restore auto-saved plan (if any) - this runs regardless of which page user is on
+            await RestoreAutoSaveAsync();
+            
+            // Start auto-save timer (app-wide)
+            AppState.StartAutoSaveTimer(AutoSaveCallback);
+        }
+    }
+    
+    private async Task AutoSaveCallback()
+    {
+        if (!AppState.IsAutoSaveEnabled)
+            return;
+            
+        try
+        {
+            var success = await IndexedDb.AutoSaveStateAsync(AppState);
+            if (success)
+            {
+                AppState.LastAutoSave = DateTime.Now;
+                Logger?.LogDebug("Auto-saved state at {Time}", AppState.LastAutoSave.Value.ToString("HH:mm:ss"));
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger?.LogError(ex, "Auto-save failed");
         }
     }
 
@@ -187,6 +223,69 @@
         catch { /* Ignore settings load errors */ }
     }
 
+    private async Task RestoreAutoSaveAsync()
+    {
+        try
+        {
+            // Only restore if no plan is currently loaded
+            if (AppState.CurrentPlan != null || AppState.ProjectItems.Any())
+                return;
+
+            var autoSave = await IndexedDb.LoadAutoSaveAsync();
+            if (autoSave?.ProjectItems.Any() != true)
+                return;
+
+            // Deserialize the plan
+            CraftingPlan? plan = null;
+            if (!string.IsNullOrEmpty(autoSave.PlanJson))
+            {
+                try
+                {
+                    plan = System.Text.Json.JsonSerializer.Deserialize<CraftingPlan>(autoSave.PlanJson);
+                }
+                catch (Exception ex)
+                {
+                    Logger?.LogWarning(ex, "Failed to deserialize plan JSON from auto-save");
+                }
+            }
+
+            // Restore market analysis if available
+            if (!string.IsNullOrEmpty(autoSave.MarketPlansJson))
+            {
+                try
+                {
+                    var marketPlans = System.Text.Json.JsonSerializer.Deserialize<List<DetailedShoppingPlan>>(autoSave.MarketPlansJson);
+                    if (marketPlans?.Any() == true)
+                    {
+                        AppState.ShoppingPlans = marketPlans;
+                        AppState.RecommendationMode = autoSave.SavedRecommendationMode;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger?.LogWarning(ex, "Failed to restore market analysis from auto-save");
+                }
+            }
+
+            // Load the plan into AppState
+            AppState.LoadStoredPlan(autoSave, plan);
+            
+            // Notify that plan has changed (will refresh UI)
+            AppState.NotifyPlanChanged();
+            AppState.NotifyShoppingListChanged();
+            
+            Snackbar.Add("Restored previous session", Severity.Info);
+            Logger?.LogInformation("Auto-restored plan '{PlanName}' with {ProjectItemCount} items and {MarketPlanCount} market plans", 
+                autoSave.Name, 
+                autoSave.ProjectItems.Count,
+                AppState.ShoppingPlans.Count);
+        }
+        catch (Exception ex)
+        {
+            Logger?.LogError(ex, "Failed to restore auto-save");
+        }
+    }
+
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
         if (_disposed) return;
@@ -200,8 +299,15 @@
         var uriLower = uri.ToLowerInvariant();
         if (uriLower.Contains("/procurement"))
             _activeTab = "procurement";
+        else if (uriLower.Contains("/market"))
+            _activeTab = "market";
         else
             _activeTab = "planner";
+    }
+    
+    private bool HasPlan()
+    {
+        return AppState.CurrentPlan != null || AppState.ShoppingItems.Any();
     }
 
     private bool IsActiveTab(string tab)
@@ -463,6 +569,16 @@
         if (!_disposed)
         {
             NavigationManager.LocationChanged -= OnLocationChanged;
+            
+            // Stop auto-save timer
+            AppState.StopAutoSaveTimer();
+            
+            // Final auto-save on dispose
+            if (AppState.IsAutoSaveEnabled)
+            {
+                _ = IndexedDb.AutoSaveStateAsync(AppState);
+            }
+            
             _disposed = true;
         }
     }

@@ -93,8 +93,9 @@
         {
             __builder.OpenElement(0, "button");
             __builder.AddAttribute(1, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, OnHqToggle));
-            __builder.AddAttribute(2, "style", $"background: transparent; border: none; cursor: pointer; color: {(Node.MustBeHq ? "#d4a73a" : "#666")}; font-size: 14px; padding: 0; width: 20px;");
-            __builder.AddContent(3, "★");
+            __builder.AddEventStopPropagationAttribute(2, "onclick", true);
+            __builder.AddAttribute(3, "style", $"background: transparent; border: none; cursor: pointer; color: {(Node.MustBeHq ? "#d4a73a" : "#666")}; font-size: 14px; padding: 0; width: 20px;");
+            __builder.AddContent(4, "★");
             __builder.CloseElement();
         }
         else
@@ -108,6 +109,15 @@
         __builder.OpenElement(6, "span");
         __builder.AddAttribute(7, "style", $"color: {color}; flex: 1;");
         __builder.AddContent(8, $"{hqStar}{Node.Name} x{Node.Quantity}");
+        // Circular reference indicator
+        if (Node.IsCircularReference)
+        {
+            __builder.OpenElement(9, "span");
+            __builder.AddAttribute(10, "style", "color: #ff9800; margin-left: 6px; font-size: 12px; cursor: help;");
+            __builder.AddAttribute(11, "title", "This item is already being crafted higher up in the recipe chain. To avoid infinite loops, purchase this from the market instead.");
+            __builder.AddContent(12, "↻ circular");
+            __builder.CloseElement();
+        }
         __builder.CloseElement();
         
         // Recipe info (if craftable)

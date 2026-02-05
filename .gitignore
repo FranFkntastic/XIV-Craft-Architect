@@ -50,9 +50,6 @@ inventory_cache.json
 # Agent-specific files (Kimi CLI)
 .kimi/
 
-# User learning guide (personal reference)
-LEARNING_GUIDE.md
-
 # Build rules (agent-specific, regenerate as needed)
 .builderrules
 .obsidian/workspace.json
@@ -63,3 +60,4 @@ CONTEXT.md
 VS_CODE_GUIDE.md
 PLAN_FORMAT.md
 
+dev utilities/

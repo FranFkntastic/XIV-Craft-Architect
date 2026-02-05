@@ -1,3 +1,4 @@
+using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Models;
 using Microsoft.Extensions.Logging;
 

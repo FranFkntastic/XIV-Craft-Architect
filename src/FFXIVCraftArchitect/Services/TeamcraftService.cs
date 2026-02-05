@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text;
 using FFXIVCraftArchitect.Models;
+using FFXIVCraftArchitect.Core.Models;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Services;

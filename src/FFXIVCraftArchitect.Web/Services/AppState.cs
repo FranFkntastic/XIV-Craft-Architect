@@ -4,6 +4,11 @@ using FFXIVCraftArchitect.Core.Services;
 namespace FFXIVCraftArchitect.Web.Services;
 
 /// <summary>
+/// Global application state that persists across pages.
+/// Centralizes WorldData, auto-save, and plan state management.
+/// </summary>
+
+/// <summary>
 /// Application-wide state service to share data between pages.
 /// Plans persist when switching between Market Logistics and Recipe Planner tabs.
 /// </summary>
@@ -14,12 +19,16 @@ public class AppState
     public List<PlannerProjectItem> ProjectItems { get; set; } = new();
     public List<CraftVsBuyAnalysis> CraftAnalyses { get; set; } = new();
     public string SelectedDataCenter { get; set; } = "Aether";
+    public string SelectedRegion { get; set; } = "North America";
     
     // Procurement Planner State
     public List<MarketShoppingItem> ShoppingItems { get; set; } = new();
     public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
     public RecommendationMode RecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
     public ProcurementAnalysis? CurrentProcurementAnalysis { get; set; }
+    
+    // Auto-expand item ID when navigating from procurement to market analysis
+    public int? AutoExpandItemId { get; set; }
     
     // Persistence state
     public bool IsAutoSaveEnabled { get; set; } = true;
@@ -103,7 +112,11 @@ public class AppState
     public void EndOperation(string? message = null)
     {
         CurrentOperation = null;
-        SetStatus(message ?? "Ready", busy: false, progress: 0);
+        IsBusy = false;
+        ProgressPercent = 0;
+        // Set status directly to avoid any race conditions with progress callbacks
+        StatusMessage = message ?? "Ready";
+        NotifyStatusChanged();
     }
     
     /// <summary>
@@ -204,6 +217,73 @@ public class AppState
     {
         CurrentPlanId = null;
         CurrentPlanName = null;
+    }
+    
+    /// <summary>
+    /// Cached world data for data center/world selection.
+    /// Loaded once and shared across all pages.
+    /// </summary>
+    public WorldData? WorldData { get; set; }
+    
+    /// <summary>
+    /// Auto-save timer reference for cleanup.
+    /// </summary>
+    public System.Threading.Timer? AutoSaveTimer { get; set; }
+    
+    /// <summary>
+    /// Initialize the world data cache.
+    /// </summary>
+    public async Task InitializeWorldDataAsync(UniversalisService universalisService)
+    {
+        if (WorldData != null) return;
+        
+        try
+        {
+            WorldData = await universalisService.GetWorldDataAsync();
+            
+            if (string.IsNullOrEmpty(SelectedDataCenter))
+            {
+                SelectedDataCenter = WorldData.DataCenters.FirstOrDefault() ?? "Aether";
+            }
+        }
+        catch
+        {
+            // Fallback to hardcoded data centers
+            WorldData = new WorldData
+            {
+                DataCenterToWorlds = new Dictionary<string, List<string>>
+                {
+                    ["Aether"] = new() { "Adamantoise", "Cactuar", "Faerie", "Gilgamesh", "Jenova", "Midgardsormr", "Sargatanas", "Siren" },
+                    ["Primal"] = new() { "Behemoth", "Excalibur", "Exodus", "Famfrit", "Hyperion", "Lamia", "Leviathan", "Ultros" },
+                    ["Crystal"] = new() { "Balmung", "Brynhildr", "Coeurl", "Diabolos", "Goblin", "Malboro", "Mateus", "Zalera" },
+                    ["Dynamis"] = new() { "Cuchulainn", "Golem", "Halicarnassus", "Kraken", "Maduin", "Marilith", "Rafflesia", "Seraph" }
+                }
+            };
+            SelectedDataCenter = "Aether";
+        }
+    }
+    
+    /// <summary>
+    /// Start the auto-save timer.
+    /// </summary>
+    public void StartAutoSaveTimer(Func<Task> saveCallback, int intervalSeconds = 30)
+    {
+        StopAutoSaveTimer();
+        
+        AutoSaveTimer = new System.Threading.Timer(
+            async _ => await saveCallback(),
+            null,
+            TimeSpan.FromSeconds(intervalSeconds),
+            TimeSpan.FromSeconds(intervalSeconds));
+    }
+    
+    /// <summary>
+    /// Stop the auto-save timer.
+    /// </summary>
+    public void StopAutoSaveTimer()
+    {
+        AutoSaveTimer?.Dispose();
+        AutoSaveTimer = null;
     }
 }
 

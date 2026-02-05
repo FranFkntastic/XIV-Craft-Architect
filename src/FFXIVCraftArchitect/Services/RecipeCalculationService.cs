@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Helpers;
 using FFXIVCraftArchitect.Models;
 using Microsoft.Extensions.Logging;
@@ -112,13 +113,14 @@ public class RecipeCalculationService
         // Check for circular dependency within this item's tree
         if (visitedItems.Contains(itemId) && parent != null)
         {
-            _logger.LogWarning("[RecipeCalc] Circular dependency detected for item {ItemId}", itemId);
+            _logger.LogWarning("[RecipeCalc] Circular dependency detected for item {ItemId} ({Name})", itemId, name);
             return new PlanNode
             {
                 ItemId = itemId,
-                Name = $"{name} (Circular)",
+                Name = name, // Keep original name - don't append "(Circular)"
                 Quantity = quantity,
                 IsUncraftable = true,
+                IsCircularReference = true, // Mark as circular reference for UI indication
                 Source = AcquisitionSource.MarketBuyNq,
                 Parent = parent
             };
