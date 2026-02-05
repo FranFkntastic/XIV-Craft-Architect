@@ -61,6 +61,16 @@ public class WorldShoppingSummary
     public int ExcessQuantity { get; set; }
     
     /// <summary>
+    /// Whether this world has sufficient stock to fulfill the full quantity needed.
+    /// </summary>
+    public bool HasSufficientStock { get; set; } = true;
+    
+    /// <summary>
+    /// How many more items are needed if this world has insufficient stock.
+    /// </summary>
+    public int ShortfallQuantity { get; set; }
+    
+    /// <summary>
     /// The best single listing on this world (for value comparison).
     /// </summary>
     public ShoppingListingEntry? BestSingleListing { get; set; }

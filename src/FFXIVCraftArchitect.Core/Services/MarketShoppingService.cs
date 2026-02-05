@@ -259,15 +259,18 @@ public class MarketShoppingService
             });
         }
 
-        if (remaining > 0)
-            return null;
-
+        // Track if this world has sufficient stock
+        summary.HasSufficientStock = remaining <= 0;
+        
         summary.TotalCost = totalCost;
-        summary.AveragePricePerUnit = (decimal)totalCost / quantityNeeded;
+        summary.AveragePricePerUnit = summary.HasSufficientStock 
+            ? (decimal)totalCost / quantityNeeded 
+            : (decimal)totalCost / Math.Max(1, summary.Listings.Where(l => !l.IsAdditionalOption).Sum(l => l.Quantity));
         summary.ListingsUsed = listingsUsed;
         summary.IsFullyUnderAverage = summary.Listings.Where(l => !l.IsAdditionalOption).All(l => l.IsUnderAverage);
         summary.TotalQuantityPurchased = summary.Listings.Where(l => !l.IsAdditionalOption).Sum(l => l.Quantity);
-        summary.ExcessQuantity = summary.TotalQuantityPurchased - quantityNeeded;
+        summary.ExcessQuantity = Math.Max(0, summary.TotalQuantityPurchased - quantityNeeded);
+        summary.ShortfallQuantity = Math.Max(0, remaining);
 
         return summary;
     }
