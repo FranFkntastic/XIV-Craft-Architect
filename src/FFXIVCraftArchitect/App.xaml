@@ -9,6 +9,7 @@
             <ResourceDictionary.MergedDictionaries>
                 <ui:ThemesDictionary Theme="Dark" />
                 <ui:ControlsDictionary />
+                <ResourceDictionary Source="Resources/ThemeColors.xaml" />
             </ResourceDictionary.MergedDictionaries>
             
             <!-- Default accent color resources - updated dynamically by ThemeService -->

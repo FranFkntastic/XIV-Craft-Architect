@@ -135,27 +135,54 @@ public static class ButtonAutoShrinkBehavior
         var paddingProperty = element.GetType().GetProperty("Padding");
         Thickness padding = paddingProperty?.GetValue(element) is Thickness t ? t : new Thickness(0);
 
-        // Calculate available width (accounting for padding)
-        var availableWidth = element.ActualWidth - padding.Left - padding.Right - 8;
-        var availableHeight = element.ActualHeight - padding.Top - padding.Bottom - 4;
+        // Calculate available width (accounting for padding and margins)
+        // Add more padding buffer to prevent edge clipping
+        var availableWidth = element.ActualWidth - padding.Left - padding.Right - 16;
+        var availableHeight = element.ActualHeight - padding.Top - padding.Bottom - 8;
 
-        if (availableWidth <= 0 || availableHeight <= 0) return;
+        if (availableWidth <= 0 || availableHeight <= 0)
+        {
+            // Element not fully rendered yet, keep original size
+            SetFontSize(element, originalSize);
+            return;
+        }
 
         // Get font properties via reflection
         var fontFamily = element.GetType().GetProperty("FontFamily")?.GetValue(element) as FontFamily ?? new FontFamily("Segoe UI");
         var fontWeight = element.GetType().GetProperty("FontWeight")?.GetValue(element) is FontWeight fw ? fw : FontWeights.Normal;
         var fontStyle = element.GetType().GetProperty("FontStyle")?.GetValue(element) is FontStyle fs ? fs : FontStyles.Normal;
 
-        // Start with original size and reduce if needed
+        // Start with original size
         var fontSize = originalSize;
-        SetFontSize(element, fontSize);
-
-        // Measure text size
-        while (fontSize > minSize && IsTextOverflowing(content, fontFamily, fontSize, fontWeight, fontStyle, availableWidth, availableHeight))
+        
+        // Measure text size at original size first
+        if (!IsTextOverflowing(content, fontFamily, fontSize, fontWeight, fontStyle, availableWidth, availableHeight))
         {
-            fontSize -= 0.5;
+            // Text fits at original size, restore it
             SetFontSize(element, fontSize);
+            return;
         }
+
+        // Binary search for optimal font size instead of linear decrements
+        var low = minSize;
+        var high = originalSize;
+        
+        while (high - low > 0.5)
+        {
+            var mid = (low + high) / 2;
+            if (IsTextOverflowing(content, fontFamily, mid, fontWeight, fontStyle, availableWidth, availableHeight))
+            {
+                high = mid;
+            }
+            else
+            {
+                low = mid;
+            }
+        }
+        
+        // Use the largest size that fits
+        fontSize = low;
+        SetFontSize(element, fontSize);
     }
 
     private static void SetFontSize(FrameworkElement element, double fontSize)

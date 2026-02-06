@@ -37,18 +37,26 @@ public class SettingsService
         ["market"] = new Dictionary<string, object>
         {
             ["default_datacenter"] = "Aether",
+            ["home_world"] = "",  // User's home world - persists across sessions
             ["include_cross_world"] = true,
             ["auto_fetch_prices"] = true,
             ["exclude_congested_worlds"] = true,  // Skip congested worlds (except home) to save API calls
+            ["exclude_blacklisted_worlds"] = true,  // Skip user-blacklisted worlds (except home)
             ["parallel_api_requests"] = true  // Enable parallel API requests for faster price fetching
         },
         ["ui"] = new Dictionary<string, object>
         {
-            ["accent_color"] = "#d4af37"  // Gold default
+            ["accent_color"] = "#d4af37",  // Gold default
+            ["use_split_pane_market_view"] = true  // Modern split-pane layout (false = legacy view)
         },
         ["planning"] = new Dictionary<string, object>
         {
             ["default_recommendation_mode"] = "MinimizeTotalCost"  // or "MaximizeValue"
+        },
+        ["debug"] = new Dictionary<string, object>
+        {
+            ["enable_diagnostic_logging"] = false,
+            ["log_level"] = 1  // Info = 1
         }
     };
 
@@ -60,10 +68,16 @@ public class SettingsService
     public SettingsService(ILogger<SettingsService> logger)
     {
         _logger = logger;
-        _settingsPath = Path.Combine(
-            AppContext.BaseDirectory,
-            "settings.json"
+        // Use LocalApplicationData for settings to persist across app updates
+        // and avoid issues with AppContext.BaseDirectory changing between dev/publish
+        var appDataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "FFXIVCraftArchitect"
         );
+        Directory.CreateDirectory(appDataDir);
+        _settingsPath = Path.Combine(appDataDir, "settings.json");
+        
+        _logger.LogInformation("Settings file path: {Path}", _settingsPath);
         
         _jsonOptions = new JsonSerializerOptions
         {
@@ -73,6 +87,12 @@ public class SettingsService
         };
 
         _settings = LoadSettings();
+        
+        // Log loaded settings for debugging
+        _logger.LogInformation("Loaded settings - market.default_datacenter: {DC}, market.home_world: {Home}, market.exclude_congested_worlds: {Exclude}",
+            Get<string>("market.default_datacenter", "NOT_SET"),
+            Get<string>("market.home_world", "NOT_SET"),
+            Get<bool>("market.exclude_congested_worlds", false));
     }
 
     /// <summary>
@@ -199,7 +219,10 @@ public class SettingsService
         }
 
         // Set the value
+        var oldValue = current.TryGetValue(keys[^1], out var existing) ? existing : null;
         current[keys[^1]] = value!;
+        
+        _logger.LogDebug("Setting {Key}: {OldValue} -> {NewValue}", keyPath, oldValue, value);
         
         // Save to disk
         SaveSettings();
@@ -258,10 +281,21 @@ public class SettingsService
         {
             var json = JsonSerializer.Serialize(settings, _jsonOptions);
             File.WriteAllText(_settingsPath, json);
+            
+            // Verify file was written
+            var fileInfo = new FileInfo(_settingsPath);
+            if (fileInfo.Exists)
+            {
+                _logger.LogDebug("Settings saved to {Path} ({Bytes} bytes)", _settingsPath, fileInfo.Length);
+            }
+            else
+            {
+                _logger.LogWarning("Settings file not found after save: {Path}", _settingsPath);
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to save settings");
+            _logger.LogError(ex, "Failed to save settings to {Path}", _settingsPath);
         }
     }
 

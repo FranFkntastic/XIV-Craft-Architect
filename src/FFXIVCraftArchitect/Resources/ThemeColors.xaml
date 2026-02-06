@@ -1,0 +1,67 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    
+    <!-- ============================================================
+         FFXIV Craft Architect - Theme Colors Resource Dictionary
+         
+         This file contains all color resources extracted from 
+         code-behind files to enable centralized theme management.
+         ============================================================ -->
+    
+    <!-- Card Backgrounds -->
+    <SolidColorBrush x:Key="CardBackgroundBrush" Color="#2d2d2d"/>
+    <SolidColorBrush x:Key="CardBackgroundAltBrush" Color="#333333"/>
+    <SolidColorBrush x:Key="CardBackgroundVendorBrush" Color="#3e4a2d"/>
+    <SolidColorBrush x:Key="CardBackgroundMarketBrush" Color="#3d3e2d"/>
+    <SolidColorBrush x:Key="CardBackgroundErrorBrush" Color="#4a2d2d"/>
+    <SolidColorBrush x:Key="CardBackgroundUntradeableBrush" Color="#4a3d2d"/>
+    <SolidColorBrush x:Key="CardBackgroundPlaceholderBrush" Color="#2d3d4a"/>
+    <SolidColorBrush x:Key="CardBackgroundSummaryBrush" Color="#3d3d3d"/>
+    
+    <!-- World Status Backgrounds -->
+    <SolidColorBrush x:Key="WorldBackgroundCongestedBrush" Color="#3d2d2d"/>
+    <SolidColorBrush x:Key="WorldBackgroundHomeBrush" Color="#3d3520"/>
+    <SolidColorBrush x:Key="WorldBackgroundRecommendedBrush" Color="#2d4a3e"/>
+    <SolidColorBrush x:Key="WorldBackgroundDefaultBrush" Color="#2d2d2d"/>
+    
+    <!-- Node Backgrounds (Recipe Tree) -->
+    <SolidColorBrush x:Key="NodeBackgroundRootBrush" Color="#252525"/>
+    
+    <!-- Text Colors -->
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#ffffff"/>
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#aaaaaa"/>
+    <SolidColorBrush x:Key="TextMutedBrush" Color="#888888"/>
+    <SolidColorBrush x:Key="TextDarkBrush" Color="#1a1a1a"/>
+    
+    <!-- Accent Colors -->
+    <SolidColorBrush x:Key="AccentGoldBrush" Color="#d4a73a"/>
+    <SolidColorBrush x:Key="AccentGoldLightBrush" Color="#d4af37"/>
+    <SolidColorBrush x:Key="SuccessGreenBrush" Color="#4caf50"/>
+    <SolidColorBrush x:Key="ErrorRedBrush" Color="#ff6b6b"/>
+    <SolidColorBrush x:Key="WarningOrangeBrush" Color="#ff9800"/>
+    <SolidColorBrush x:Key="IndianRedBrush" Color="#cd5c5c"/>
+    <SolidColorBrush x:Key="LightGreenBrush" Color="#90ee90"/>
+    <SolidColorBrush x:Key="LightSkyBlueBrush" Color="#87cefa"/>
+    <SolidColorBrush x:Key="LightYellowBrush" Color="#ffffe0"/>
+    <SolidColorBrush x:Key="LightCoralBrush" Color="#f08080"/>
+    <SolidColorBrush x:Key="LightGrayBrush" Color="#d3d3d3"/>
+    <SolidColorBrush x:Key="GrayBrush" Color="#808080"/>
+    <SolidColorBrush x:Key="DarkGrayBrush" Color="#a9a9a9"/>
+    
+    <!-- Window/Panel Backgrounds -->
+    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#1e1e1e"/>
+    <SolidColorBrush x:Key="WindowBackgroundDarkBrush" Color="#1a1a1a"/>
+    <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#252525"/>
+    <SolidColorBrush x:Key="MutedAccentBrush" Color="#3d3d3d"/>
+    <SolidColorBrush x:Key="MutedAccentLightBrush" Color="#4d4d4d"/>
+    
+    <!-- Button Backgrounds -->
+    <SolidColorBrush x:Key="ButtonActiveBackgroundBrush" Color="#3d3d3d"/>
+    <SolidColorBrush x:Key="ButtonTransparentBrush" Color="#00000000"/>
+    
+    <!-- System Brushes (mapped for consistency) -->
+    <SolidColorBrush x:Key="SystemWhiteBrush" Color="#ffffff"/>
+    <SolidColorBrush x:Key="SystemBlackBrush" Color="#000000"/>
+    <SolidColorBrush x:Key="SystemTransparentBrush" Color="#00000000"/>
+    
+</ResourceDictionary>

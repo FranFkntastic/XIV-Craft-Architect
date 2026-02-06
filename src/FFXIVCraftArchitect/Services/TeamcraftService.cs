@@ -2,6 +2,7 @@ using System.IO;
 using System.Text;
 using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Services;
@@ -9,7 +10,7 @@ namespace FFXIVCraftArchitect.Services;
 /// <summary>
 /// Service for importing/exporting crafting lists to/from Teamcraft.
 /// </summary>
-public class TeamcraftService
+public class TeamcraftService : ITeamcraftService
 {
     private readonly ILogger<TeamcraftService> _logger;
     private readonly GarlandService _garlandService;

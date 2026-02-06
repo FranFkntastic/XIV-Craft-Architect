@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using Microsoft.Extensions.Logging;
 using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Services.Interfaces;
 
 namespace FFXIVCraftArchitect.Services;
 
@@ -11,7 +12,7 @@ namespace FFXIVCraftArchitect.Services;
 /// Service for interacting with the Universalis API.
 /// Ported from Python: UNIVERSALIS_API constant
 /// </summary>
-public class UniversalisService
+public class UniversalisService : IUniversalisService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<UniversalisService> _logger;

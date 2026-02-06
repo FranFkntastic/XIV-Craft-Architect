@@ -28,7 +28,11 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase 
         };
         
-        var cacheDir = Path.Combine(AppContext.BaseDirectory, "Cache");
+        // Use LocalApplicationData for better persistence across updates
+        var cacheDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "FFXIVCraftArchitect",
+            "Cache");
         Directory.CreateDirectory(cacheDir);
         _dbPath = Path.Combine(cacheDir, "market_cache.db");
         
@@ -68,8 +72,22 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
     /// </summary>
     private void MigrateFromJsonIfNeeded()
     {
-        var jsonPath = Path.Combine(AppContext.BaseDirectory, "Cache", "market_cache.json");
-        if (!File.Exists(jsonPath)) return;
+        // Check both old and new locations for JSON cache
+        var oldJsonPath = Path.Combine(AppContext.BaseDirectory, "Cache", "market_cache.json");
+        var jsonPath = oldJsonPath;
+        
+        if (!File.Exists(jsonPath))
+        {
+            // Also check LocalApplicationData location
+            var newCacheDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "FFXIVCraftArchitect",
+                "Cache");
+            jsonPath = Path.Combine(newCacheDir, "market_cache.json");
+            if (!File.Exists(jsonPath)) return;
+        }
+        
+        _logger.LogInformation("[SqliteMarketCache] Found legacy JSON cache at {Path}", jsonPath);
 
         try
         {

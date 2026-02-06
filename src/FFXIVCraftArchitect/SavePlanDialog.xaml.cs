@@ -1,5 +1,6 @@
 using System.Windows;
 using FFXIVCraftArchitect.Services;
+using FFXIVCraftArchitect.Services.Interfaces;
 
 namespace FFXIVCraftArchitect;
 
@@ -8,7 +9,7 @@ namespace FFXIVCraftArchitect;
 /// </summary>
 public partial class SavePlanDialog : Window
 {
-    private readonly PlanPersistenceService _planPersistence;
+    private readonly IPlanPersistenceService _planPersistence;
     private List<PlanInfo> _plans = new();
 
     /// <summary>
@@ -26,7 +27,7 @@ public partial class SavePlanDialog : Window
     /// </summary>
     public bool IsOverwrite { get; private set; }
 
-    public SavePlanDialog(PlanPersistenceService planPersistence, string currentName)
+    public SavePlanDialog(IPlanPersistenceService planPersistence, string currentName)
     {
         InitializeComponent();
         _planPersistence = planPersistence;

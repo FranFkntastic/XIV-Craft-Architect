@@ -1,5 +1,6 @@
 using System.Windows;
 using FFXIVCraftArchitect.Services;
+using FFXIVCraftArchitect.Services.Interfaces;
 
 namespace FFXIVCraftArchitect;
 
@@ -18,7 +19,7 @@ public enum PlanBrowserAction
 /// </summary>
 public partial class PlanBrowserWindow : Window
 {
-    private readonly PlanPersistenceService _planPersistence;
+    private readonly IPlanPersistenceService _planPersistence;
     private readonly MainWindow? _mainWindow;
     private List<PlanInfo> _plans = new();
 
@@ -32,7 +33,7 @@ public partial class PlanBrowserWindow : Window
     /// </summary>
     public PlanBrowserAction SelectedAction { get; private set; } = PlanBrowserAction.None;
 
-    public PlanBrowserWindow(PlanPersistenceService planPersistence, MainWindow? mainWindow = null)
+    public PlanBrowserWindow(IPlanPersistenceService planPersistence, MainWindow? mainWindow = null)
     {
         InitializeComponent();
         _planPersistence = planPersistence;

@@ -3,7 +3,9 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Core.Services;
 using FFXIVCraftArchitect.Models;
+using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Services;
@@ -12,22 +14,25 @@ namespace FFXIVCraftArchitect.Services;
 /// Service for importing/exporting crafting lists to/from Artisan format.
 /// Artisan is a Dalamud plugin for FFXIV crafting automation.
 /// </summary>
-public class ArtisanService
+public class ArtisanService : IArtisanService
 {
     private readonly ILogger<ArtisanService> _logger;
     private readonly GarlandService _garlandService;
     private readonly RecipeCalculationService _recipeCalcService;
+    private readonly ITeamcraftRecipeService _teamcraftService;
     private readonly HttpClient _httpClient;
 
     public ArtisanService(
         ILogger<ArtisanService> logger, 
         GarlandService garlandService, 
         RecipeCalculationService recipeCalcService,
+        ITeamcraftRecipeService teamcraftService,
         HttpClient httpClient)
     {
         _logger = logger;
         _garlandService = garlandService;
         _recipeCalcService = recipeCalcService;
+        _teamcraftService = teamcraftService;
         _httpClient = httpClient;
     }
 
@@ -42,8 +47,9 @@ public class ArtisanService
     /// - Recipes: Array of recipes to craft (these are RECIPE IDs, each with quantity)
     /// - Name: The name of the crafting list
     /// 
-    /// We import each recipe in the Recipes array by converting recipe IDs to item IDs,
-    /// then let RecipeCalculationService calculate all subcrafts.
+    /// IMPORTANT: Artisan's Recipes array includes subcrafts. We only import the ROOT recipes
+    /// (recipes whose resulting items are not ingredients of other recipes in the list).
+    /// Subcrafts are calculated automatically by RecipeCalculationService.
     /// </summary>
     public async Task<CraftingPlan?> ImportFromArtisanAsync(
         string artisanJson, 
@@ -77,31 +83,62 @@ public class ArtisanService
         _logger.LogInformation("[Artisan] Importing list '{ListName}' with {RecipeCount} recipes", 
             artisanList.Name, artisanList.Recipes.Count);
 
-        // Convert each recipe in the Recipes array to an item
-        // The Recipes array contains the actual items to craft (with recipe IDs)
-        var targetItems = new List<(int itemId, string name, int quantity, bool isHqRequired)>();
+        // First, collect all recipe info and their ingredients
+        var recipeInfos = new List<ArtisanRecipeInfo>();
+        var recipeIdToItemId = new Dictionary<uint, int>();
         
         foreach (var artisanItem in artisanList.Recipes)
         {
             try
             {
-                var targetItem = await ConvertToTargetItemAsync(artisanItem, ct);
-                if (targetItem.HasValue)
+                var recipeInfo = await GetRecipeInfoAsync(artisanItem, ct);
+                if (recipeInfo != null)
                 {
-                    targetItems.Add(targetItem.Value);
+                    recipeInfos.Add(recipeInfo);
+                    recipeIdToItemId[artisanItem.ID] = recipeInfo.ResultItemId;
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[Artisan] Error converting Artisan recipe ID {RecipeId}", artisanItem.ID);
+                _logger.LogError(ex, "[Artisan] Error getting recipe info for ID {RecipeId}", artisanItem.ID);
             }
         }
 
-        if (targetItems.Count == 0)
+        if (recipeInfos.Count == 0)
         {
-            _logger.LogWarning("[Artisan] No valid items could be imported from Artisan list");
+            _logger.LogWarning("[Artisan] No valid recipes could be processed from Artisan list");
             return null;
         }
+
+        // Build a set of all item IDs that are ingredients (subcrafts)
+        var subcraftItemIds = new HashSet<int>();
+        foreach (var recipeInfo in recipeInfos)
+        {
+            foreach (var ingredientId in recipeInfo.IngredientItemIds)
+            {
+                subcraftItemIds.Add(ingredientId);
+            }
+        }
+
+        // Root recipes are those whose result items are NOT ingredients of other recipes
+        var rootRecipes = recipeInfos
+            .Where(r => !subcraftItemIds.Contains(r.ResultItemId))
+            .ToList();
+
+        _logger.LogInformation("[Artisan] Identified {RootCount} root recipes out of {TotalCount} total recipes", 
+            rootRecipes.Count, recipeInfos.Count);
+
+        if (rootRecipes.Count == 0)
+        {
+            // Fallback: if no roots found (circular dependency?), use all recipes
+            _logger.LogWarning("[Artisan] No root recipes identified, falling back to importing all recipes");
+            rootRecipes = recipeInfos;
+        }
+
+        // Convert root recipes to target items
+        var targetItems = rootRecipes
+            .Select(r => (r.ResultItemId, r.ResultItemName, r.Quantity, r.IsHqRequired))
+            .ToList();
 
         // Use RecipeCalculationService to build complete recipe trees with all subcrafts
         var plan = await _recipeCalcService.BuildPlanAsync(
@@ -122,167 +159,127 @@ public class ArtisanService
     }
 
     /// <summary>
-    /// Convert an ArtisanListItem to a target item tuple for RecipeCalculationService.
-    /// 
-    /// For older recipes: The ID is a Recipe ID that needs to be looked up via XIVAPI.
-    /// For newer recipes (Dawntrail+): The ID is actually an Item ID because XIVAPI doesn't have them yet.
+    /// Internal class to hold recipe information for dependency analysis.
     /// </summary>
-    private async Task<(int itemId, string name, int quantity, bool isHqRequired)?> ConvertToTargetItemAsync(
-        ArtisanListItem artisanItem, 
-        CancellationToken ct)
+    private class ArtisanRecipeInfo
     {
-        var id = (int)artisanItem.ID;
-        
-        // First, try to treat the ID as an item ID directly (for newer content)
-        // This handles cases where Artisan exports item IDs instead of recipe IDs
-        var itemData = await _garlandService.GetItemAsync(id, ct);
-        
-        if (itemData != null && itemData.Crafts?.Any() == true)
-        {
-            // This is an item ID with a craft recipe - use it directly
-            var craft = itemData.Crafts.OrderBy(c => c.RecipeLevel).First();
-            var yield = Math.Max(1, craft.Yield);
-            var totalQuantity = artisanItem.Quantity * yield;
-            var isHqRequired = !artisanItem.ListItemOptions.NQOnly;
-
-            _logger.LogDebug("[Artisan] Direct item lookup: ID {Id} -> {ItemName} x{Quantity} (HQ: {Hq})", 
-                id, itemData.Name, totalQuantity, isHqRequired);
-
-            return (itemData.Id, itemData.Name, totalQuantity, isHqRequired);
-        }
-        
-        // If direct lookup failed or item has no crafts, try recipe lookup (older content)
-        _logger.LogDebug("[Artisan] Direct item lookup failed for ID {Id}, trying recipe lookup", id);
-        
-        itemData = await TryFindItemByRecipeIdAsync(id, ct);
-        
-        if (itemData == null)
-        {
-            _logger.LogWarning("[Artisan] Could not find item for ID {Id} (tried as both item and recipe)", id);
-            return null;
-        }
-
-        // Find the specific craft that matches our recipe ID to get yield
-        var craftByRecipe = itemData.Crafts?.FirstOrDefault(c => c.Id == id);
-        if (craftByRecipe == null)
-        {
-            _logger.LogWarning("[Artisan] Recipe ID {RecipeId} not found in item {ItemName}", 
-                id, itemData.Name);
-            return null;
-        }
-
-        // Calculate total item quantity based on recipe yield and craft count
-        var yieldByRecipe = Math.Max(1, craftByRecipe.Yield);
-        var totalQuantityByRecipe = artisanItem.Quantity * yieldByRecipe;
-
-        // HQ requirement from Artisan options
-        var isHqRequiredByRecipe = !artisanItem.ListItemOptions.NQOnly;
-
-        _logger.LogDebug("[Artisan] Mapped recipe {RecipeId} -> {ItemName} (ID: {ItemId}) x{Quantity} (HQ: {Hq})", 
-            id, itemData.Name, itemData.Id, totalQuantityByRecipe, isHqRequiredByRecipe);
-
-        return (itemData.Id, itemData.Name, totalQuantityByRecipe, isHqRequiredByRecipe);
+        public uint RecipeId { get; set; }
+        public int ResultItemId { get; set; }
+        public string ResultItemName { get; set; } = string.Empty;
+        public int Quantity { get; set; }
+        public bool IsHqRequired { get; set; }
+        public List<int> IngredientItemIds { get; set; } = new();
     }
 
     /// <summary>
-    /// Try to find an item by its recipe ID using XIVAPI.
-    /// XIVAPI provides recipe lookups which give us the resulting Item ID.
+    /// Get recipe information including ingredients for dependency analysis.
+    /// </summary>
+    private async Task<ArtisanRecipeInfo?> GetRecipeInfoAsync(ArtisanListItem artisanItem, CancellationToken ct)
+    {
+        var id = (int)artisanItem.ID;
+        
+        // Try to find the item for this recipe
+        var itemData = await TryFindItemByRecipeIdAsync(id, ct);
+        
+        if (itemData == null)
+        {
+            // Try direct item lookup as fallback
+            itemData = await _garlandService.GetItemAsync(id, ct);
+        }
+        
+        if (itemData == null)
+        {
+            _logger.LogWarning("[Artisan] Could not find item for recipe ID {RecipeId}", id);
+            return null;
+        }
+
+        // Find the specific craft
+        var craft = itemData.Crafts?.FirstOrDefault(c => c.Id == id);
+        if (craft == null && itemData.Crafts?.Any() == true)
+        {
+            // If no exact match, use first craft
+            craft = itemData.Crafts.OrderBy(c => c.RecipeLevel).First();
+        }
+
+        if (craft == null)
+        {
+            _logger.LogWarning("[Artisan] No craft found for item {ItemName} (ID: {ItemId})", 
+                itemData.Name, itemData.Id);
+            return null;
+        }
+
+        // Calculate quantity based on recipe yield
+        var yield = Math.Max(1, craft.Yield);
+        var totalQuantity = artisanItem.Quantity * yield;
+
+        // Get ingredient item IDs
+        var ingredientIds = craft.Ingredients
+            .Select(i => i.Id)
+            .ToList();
+
+        return new ArtisanRecipeInfo
+        {
+            RecipeId = artisanItem.ID,
+            ResultItemId = itemData.Id,
+            ResultItemName = itemData.Name,
+            Quantity = totalQuantity,
+            IsHqRequired = !artisanItem.ListItemOptions.NQOnly,
+            IngredientItemIds = ingredientIds
+        };
+    }
+
+    /// <summary>
+    /// Try to find an item by its recipe ID.
+    /// Uses multiple strategies in order of reliability:
+    /// 1. Teamcraft CDN (authoritative, covers all recipes including Dawntrail)
+    /// 2. XIVAPI recipe lookup (fallback)
     /// </summary>
     private async Task<GarlandItem?> TryFindItemByRecipeIdAsync(int recipeId, CancellationToken ct)
     {
-        // Approach 1: Use XIVAPI to look up the recipe
+        // Strategy 1: Use Teamcraft CDN (primary source - has all recipes including Dawntrail)
         try
         {
-            _logger.LogDebug("[Artisan] Looking up recipe ID {RecipeId} via XIVAPI", recipeId);
+            _logger.LogDebug("[Artisan] Looking up recipe ID {RecipeId} via Teamcraft CDN", recipeId);
+            var itemId = await _teamcraftService.GetItemIdForRecipeAsync(recipeId, ct);
+            if (itemId.HasValue)
+            {
+                var item = await _garlandService.GetItemAsync(itemId.Value, ct);
+                if (item != null)
+                {
+                    _logger.LogInformation("[Artisan] Mapped recipe ID {RecipeId} to item ID {ItemId} ({ItemName}) via Teamcraft CDN",
+                        recipeId, item.Id, item.Name);
+                    return item;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[Artisan] Teamcraft CDN lookup failed for recipe ID {RecipeId}", recipeId);
+        }
+
+        // Strategy 2: Use XIVAPI as fallback
+        try
+        {
+            _logger.LogDebug("[Artisan] Falling back to XIVAPI for recipe ID {RecipeId}", recipeId);
             var recipeInfo = await GetXivApiRecipeAsync(recipeId, ct);
             if (recipeInfo?.ItemResultId > 0)
             {
                 var item = await _garlandService.GetItemAsync(recipeInfo.ItemResultId, ct);
                 if (item != null)
                 {
-                    _logger.LogDebug("[Artisan] Mapped recipe ID {RecipeId} to item ID {ItemId} ({ItemName}) via XIVAPI",
+                    _logger.LogInformation("[Artisan] Mapped recipe ID {RecipeId} to item ID {ItemId} ({ItemName}) via XIVAPI",
                         recipeId, item.Id, item.Name);
                     return item;
                 }
-            }
-            else
-            {
-                _logger.LogWarning("[Artisan] XIVAPI returned no ItemResult for recipe ID {RecipeId}", recipeId);
             }
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "[Artisan] XIVAPI recipe lookup failed for recipe ID {RecipeId}", recipeId);
         }
-
-        // Approach 2: Try searching Garland by recipe ID directly
-        // This works for many recipes even without XIVAPI
-        try
-        {
-            _logger.LogDebug("[Artisan] Trying Garland direct lookup for recipe ID {RecipeId}", recipeId);
-            var item = await TryFindItemByRecipeInGarlandAsync(recipeId, ct);
-            if (item != null)
-            {
-                _logger.LogDebug("[Artisan] Mapped recipe ID {RecipeId} to item ID {ItemId} ({ItemName}) via Garland",
-                    recipeId, item.Id, item.Name);
-                return item;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "[Artisan] Garland recipe lookup failed for recipe ID {RecipeId}", recipeId);
-        }
-
-        // Approach 3: Try the recipe ID as an item ID (fallback for some old recipes)
-        try
-        {
-            _logger.LogDebug("[Artisan] Trying recipe ID {RecipeId} as item ID", recipeId);
-            var item = await _garlandService.GetItemAsync(recipeId, ct);
-            if (item?.Crafts?.Any(c => c.Id == recipeId) == true)
-            {
-                _logger.LogDebug("[Artisan] Found item for recipe ID {RecipeId} using recipe ID as item ID", recipeId);
-                return item;
-            }
-        }
-        catch { /* Ignore and continue */ }
         
         _logger.LogWarning("[Artisan] Could not find item for recipe ID {RecipeId}. " +
-            "The item may not be available in Garland Tools or XIVAPI.", recipeId);
-        
-        return null;
-    }
-
-    /// <summary>
-    /// Try to find an item by searching for a craft with the given recipe ID.
-    /// This searches common recipe ID ranges and uses Garland's search.
-    /// </summary>
-    private async Task<GarlandItem?> TryFindItemByRecipeInGarlandAsync(int recipeId, CancellationToken ct)
-    {
-        // Recipe IDs are typically in specific ranges by job/craft type
-        // We can try to estimate the item ID from the recipe ID
-        // This is a heuristic approach but works for many cases
-        
-        // First, try direct item lookup with offsets
-        // Many recipes have item IDs that are close to their recipe IDs
-        // Offset 11415: Patch 7.4+ items (Courtly Lover's gear, etc.)
-        // Offsets 100000/200000: Common legacy offsets for older content
-        var offsets = new[] { 0, 11415, -100000, -200000, 100000, 200000 };
-        
-        foreach (var offset in offsets)
-        {
-            var estimatedItemId = recipeId + offset;
-            if (estimatedItemId <= 0) continue;
-            
-            try
-            {
-                var item = await _garlandService.GetItemAsync(estimatedItemId, ct);
-                if (item?.Crafts?.Any(c => c.Id == recipeId) == true)
-                {
-                    return item;
-                }
-            }
-            catch { /* Continue to next offset */ }
-        }
+            "The recipe may not be available in Teamcraft CDN or XIVAPI.", recipeId);
         
         return null;
     }

@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.IO;
 using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Models;
+using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Services;
@@ -11,13 +12,14 @@ namespace FFXIVCraftArchitect.Services;
 /// Groups listings by world and applies intelligent filtering.
 /// Uses IMarketCacheService to avoid redundant API calls.
 /// </summary>
-public class MarketShoppingService
+public class MarketShoppingService : IMarketShoppingService
 {
     private readonly UniversalisService _universalisService;
     private readonly Core.Services.IMarketCacheService _cacheService;
     private readonly WorldStatusService _worldStatusService;
     private readonly SettingsService _settingsService;
     private readonly ILogger<MarketShoppingService> _logger;
+    private Dictionary<string, int> _worldNameToIdMapping = new();
 
     public MarketShoppingService(
         UniversalisService universalisService, 
@@ -31,6 +33,15 @@ public class MarketShoppingService
         _worldStatusService = worldStatusService;
         _settingsService = settingsService;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Sets the world name to ID mapping for travel prohibition checks.
+    /// </summary>
+    /// <param name="mapping">Dictionary mapping world names to IDs</param>
+    public void SetWorldNameToIdMapping(Dictionary<string, int> mapping)
+    {
+        _worldNameToIdMapping = mapping;
     }
 
     /// <summary>

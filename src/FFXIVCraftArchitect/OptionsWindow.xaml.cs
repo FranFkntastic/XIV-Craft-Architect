@@ -46,6 +46,7 @@ public partial class OptionsWindow : Window
             var accentColor = _settingsService.Get<string>("ui.accent_color", "#d4af37") ?? "#d4af37";
             AccentColorTextBox.Text = accentColor;
             UpdateAccentPreview(accentColor);
+            UseSplitPaneMarketViewToggle.IsChecked = _settingsService.Get<bool>("ui.use_split_pane_market_view", true);
 
             // Market Settings
             var defaultDc = _settingsService.Get<string>("market.default_datacenter", "Aether") ?? "Aether";
@@ -168,6 +169,7 @@ public partial class OptionsWindow : Window
 
             // Save UI Settings - apply accent color immediately
             _themeService.SetAccentColor(accentColor);
+            _settingsService.Set("ui.use_split_pane_market_view", UseSplitPaneMarketViewToggle.IsChecked == true);
 
             // Save Market Settings
             var selectedDc = (DefaultDataCenterCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Aether";

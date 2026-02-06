@@ -13,6 +13,7 @@ namespace FFXIVCraftArchitect.Models;
 /// </summary>
 public class WatchState
 {
+
     /// <summary>
     /// The current crafting plan being worked on.
     /// Note: This is converted to/from PlanFileData for serialization.
@@ -55,19 +56,26 @@ public class WatchState
     /// </summary>
     public void Save()
     {
-        SavedAt = DateTimeOffset.UtcNow;
-        
-        // Convert to serializable DTO format (same as PlanPersistenceService)
-        var stateData = new WatchStateData
+        try
         {
-            SavedAt = SavedAt,
-            DataCenter = DataCenter,
-            World = World,
-            PlanData = CurrentPlan != null ? ConvertPlanToData(CurrentPlan) : null
-        };
-        
-        var json = JsonSerializer.Serialize(stateData, JsonOptions);
-        File.WriteAllText(StateFilePath, json);
+            SavedAt = DateTimeOffset.UtcNow;
+            
+            // Convert to serializable DTO format (same as PlanPersistenceService)
+            var stateData = new WatchStateData
+            {
+                SavedAt = SavedAt,
+                DataCenter = DataCenter,
+                World = World,
+                PlanData = CurrentPlan != null ? ConvertPlanToData(CurrentPlan) : null
+            };
+            
+            var json = JsonSerializer.Serialize(stateData, JsonOptions);
+            File.WriteAllText(StateFilePath, json);
+        }
+        catch (Exception ex)
+        {
+            App.LogMessage($"[WatchState] Failed to save watch state to {StateFilePath}: {ex.GetType().Name}: {ex.Message}");
+        }
     }
     
     /// <summary>
@@ -95,7 +103,11 @@ public class WatchState
             if (DateTimeOffset.UtcNow - stateData.SavedAt > maxAge)
             {
                 // Clean up stale file
-                try { File.Delete(StateFilePath); } catch { }
+                try { File.Delete(StateFilePath); } 
+                catch (Exception ex) 
+                { 
+                    App.LogMessage($"[WatchState] Failed to delete stale watch state file at {StateFilePath}: {ex.GetType().Name}: {ex.Message}");
+                }
                 return null;
             }
             
@@ -110,8 +122,9 @@ public class WatchState
             
             return state;
         }
-        catch
+        catch (Exception ex)
         {
+            App.LogMessage($"[WatchState] Failed to load watch state from {StateFilePath}: {ex.GetType().Name}: {ex.Message}");
             return null;
         }
     }
@@ -126,7 +139,10 @@ public class WatchState
             if (File.Exists(StateFilePath))
                 File.Delete(StateFilePath);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            App.LogMessage($"[WatchState] Failed to clear watch state file at {StateFilePath}: {ex.GetType().Name}: {ex.Message}");
+        }
     }
     
     /// <summary>

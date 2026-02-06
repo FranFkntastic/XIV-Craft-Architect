@@ -44,6 +44,10 @@ public class RecipeCalculationService
             World = world
         };
 
+        // Clear the per-plan item cache. This is intentional - the cache is used only within
+        // a single plan build to avoid redundant API calls for the same item (e.g., when an item
+        // appears in multiple recipe branches). It is NOT meant to persist across plan builds,
+        // as different plans may be built for different patches/versions with different recipes.
         _itemCache.Clear();
 
         foreach (var (itemId, name, quantity, isHqRequired) in targetItems)

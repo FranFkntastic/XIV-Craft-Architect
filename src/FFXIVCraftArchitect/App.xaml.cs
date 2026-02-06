@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Services;
+using FFXIVCraftArchitect.Services.Interfaces;
+using FFXIVCraftArchitect.Coordinators;
 
 namespace FFXIVCraftArchitect;
 
@@ -65,7 +67,7 @@ public partial class App : Application
         mainWindow.Show();
     }
     
-    private static void LogMessage(string message)
+    public static void LogMessage(string message)
     {
         try
         {
@@ -101,6 +103,21 @@ public partial class App : Application
         services.AddHttpClient<GarlandService>();
         services.AddHttpClient<UniversalisService>();
         services.AddHttpClient<ArtisanService>();
+        services.AddHttpClient<Core.Services.ITeamcraftRecipeService, Core.Services.TeamcraftRecipeService>();
+        
+        // Named HttpClients for services that use IHttpClientFactory
+        services.AddHttpClient("Waitingway", c =>
+        {
+            c.DefaultRequestHeaders.Add("User-Agent", "FFXIV Craft Architect/1.0");
+            c.Timeout = TimeSpan.FromSeconds(10);
+            c.BaseAddress = new Uri("https://waiting.camora.dev/");
+        });
+        
+        services.AddHttpClient("WorldStatus", c =>
+        {
+            c.DefaultRequestHeaders.Add("User-Agent", "FFXIV Craft Architect/1.0");
+            c.Timeout = TimeSpan.FromSeconds(30);
+        });
         
         // Services
         services.AddSingleton<SettingsService>();
@@ -112,11 +129,21 @@ public partial class App : Application
         services.AddSingleton<RecommendationCsvService>(); // Plan-specific recommendations
         services.AddSingleton<RecipeCalculationService>();
         services.AddSingleton<PlanPersistenceService>();
+        services.AddSingleton<IPlanPersistenceService>(sp => sp.GetRequiredService<PlanPersistenceService>());
         services.AddSingleton<TeamcraftService>();
+        services.AddSingleton<ITeamcraftService>(sp => sp.GetRequiredService<TeamcraftService>());
         services.AddSingleton<ArtisanService>();
+        services.AddSingleton<IArtisanService>(sp => sp.GetRequiredService<ArtisanService>());
         services.AddSingleton<PriceCheckService>();
         services.AddSingleton<MarketShoppingService>();
         services.AddSingleton<WorldStatusService>();
+        services.AddSingleton<WaitingwayTravelService>();
+        services.AddSingleton<WorldBlacklistService>();
+
+        // Coordinators
+        services.AddTransient<ExportCoordinator>();
+        services.AddTransient<ImportCoordinator>();
+        services.AddTransient<PlanPersistenceCoordinator>();
 
         // Windows
         services.AddTransient<MainWindow>();

@@ -1,7 +1,6 @@
 using System.Windows;
 using FFXIVCraftArchitect.Core.Models;
-using FFXIVCraftArchitect.Services;
-using Microsoft.Extensions.DependencyInjection;
+using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Coordinators;
@@ -12,15 +11,18 @@ namespace FFXIVCraftArchitect.Coordinators;
 /// </summary>
 public class ExportCoordinator
 {
-    private readonly TeamcraftService _teamcraftService;
-    private readonly ArtisanService _artisanService;
+    private readonly ITeamcraftService _teamcraftService;
+    private readonly IArtisanService _artisanService;
     private readonly ILogger<ExportCoordinator> _logger;
 
-    public ExportCoordinator()
+    public ExportCoordinator(
+        ITeamcraftService teamcraftService,
+        IArtisanService artisanService,
+        ILogger<ExportCoordinator> logger)
     {
-        _teamcraftService = App.Services.GetRequiredService<TeamcraftService>();
-        _artisanService = App.Services.GetRequiredService<ArtisanService>();
-        _logger = App.Services.GetRequiredService<ILogger<ExportCoordinator>>();
+        _teamcraftService = teamcraftService;
+        _artisanService = artisanService;
+        _logger = logger;
     }
 
     /// <summary>

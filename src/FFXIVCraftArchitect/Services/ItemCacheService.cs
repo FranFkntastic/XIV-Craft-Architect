@@ -1,6 +1,10 @@
 using System.IO;
 using Microsoft.Extensions.Logging;
 
+// Required for async method signatures
+using Task = System.Threading.Tasks.Task;
+using CancellationToken = System.Threading.CancellationToken;
+
 namespace FFXIVCraftArchitect.Services;
 
 /// <summary>
@@ -43,11 +47,43 @@ public class ItemCacheService
     }
 
     /// <summary>
+    /// Get item name from cache asynchronously. Returns null if not cached.
+    /// </summary>
+    public async Task<string?> GetItemNameAsync(int itemId, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            return _cache.TryGetValue(itemId, out var item) ? item.Name : null;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
     /// Get icon ID from cache. Returns null if not cached.
     /// </summary>
     public int? GetIconId(int itemId)
     {
         _lock.Wait();
+        try
+        {
+            return _cache.TryGetValue(itemId, out var item) ? item.IconId : null;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Get icon ID from cache asynchronously. Returns null if not cached.
+    /// </summary>
+    public async Task<int?> GetIconIdAsync(int itemId, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
         try
         {
             return _cache.TryGetValue(itemId, out var item) ? item.IconId : null;
@@ -80,11 +116,55 @@ public class ItemCacheService
     }
 
     /// <summary>
+    /// Get both name and icon ID from cache asynchronously.
+    /// </summary>
+    public async Task<(string? Name, int? IconId)> GetItemAsync(int itemId, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            if (_cache.TryGetValue(itemId, out var item))
+            {
+                item.LastAccessed = DateTime.UtcNow;
+                return (item.Name, item.IconId);
+            }
+            return (null, null);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
     /// Store item in cache.
     /// </summary>
     public void StoreItem(int itemId, string name, int iconId = 0)
     {
         _lock.Wait();
+        try
+        {
+            _cache[itemId] = new CachedItem
+            {
+                Id = itemId,
+                Name = name,
+                IconId = iconId,
+                LastAccessed = DateTime.UtcNow
+            };
+            _isDirty = true;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Store item in cache asynchronously.
+    /// </summary>
+    public async Task StoreItemAsync(int itemId, string name, int iconId = 0, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
         try
         {
             _cache[itemId] = new CachedItem
@@ -129,6 +209,32 @@ public class ItemCacheService
     }
 
     /// <summary>
+    /// Store multiple items in cache asynchronously.
+    /// </summary>
+    public async Task StoreItemsAsync(IEnumerable<(int Id, string Name, int IconId)> items, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            foreach (var (id, name, iconId) in items)
+            {
+                _cache[id] = new CachedItem
+                {
+                    Id = id,
+                    Name = name,
+                    IconId = iconId,
+                    LastAccessed = DateTime.UtcNow
+                };
+            }
+            _isDirty = true;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
     /// Check if item exists in cache.
     /// </summary>
     public bool Contains(int itemId)
@@ -145,11 +251,45 @@ public class ItemCacheService
     }
 
     /// <summary>
+    /// Check if item exists in cache asynchronously.
+    /// </summary>
+    public async Task<bool> ContainsAsync(int itemId, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            return _cache.ContainsKey(itemId);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
     /// Get cache statistics.
     /// </summary>
     public (int Count, DateTime? Oldest) GetStats()
     {
         _lock.Wait();
+        try
+        {
+            var count = _cache.Count;
+            var oldest = _cache.Values.MinBy(i => i.LastAccessed)?.LastAccessed;
+            return (count, oldest);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Get cache statistics asynchronously.
+    /// </summary>
+    public async Task<(int Count, DateTime? Oldest)> GetStatsAsync(CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
         try
         {
             var count = _cache.Count;

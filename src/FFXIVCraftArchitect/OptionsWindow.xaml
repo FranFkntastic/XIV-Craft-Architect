@@ -116,6 +116,22 @@
                                     BorderBrush="#666666"
                                     Click="OnPresetColorClick"/>
                         </WrapPanel>
+
+                        <Separator Margin="0,16"/>
+
+                        <TextBlock Text="Market Analysis Layout"
+                                   FontWeight="SemiBold"
+                                   Margin="0,8,0,4"
+                                   Foreground="#cccccc"/>
+                        <TextBlock Text="Choose between the modern split-pane view (like the web app) or the legacy card-based view."
+                                   FontSize="11"
+                                   Foreground="#888888"
+                                   Margin="0,0,0,8"
+                                   TextWrapping="Wrap"/>
+                        <ui:ToggleSwitch x:Name="UseSplitPaneMarketViewToggle"
+                                         Content="Use split-pane market view"
+                                         Margin="0,4"
+                                         ToolTip="Modern layout: expanded items on top, collapsed cards below (like web app)"/>
                     </StackPanel>
                 </ScrollViewer>
             </ui:TabViewItem>

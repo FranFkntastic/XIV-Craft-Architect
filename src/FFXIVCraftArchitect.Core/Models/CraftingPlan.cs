@@ -375,9 +375,14 @@ public class PlanNode
     /// </summary>
     public void PropagateQuantityChange(int parentQuantity)
     {
+        // Store original base quantity before mutation
+        int originalQuantity = Quantity;
+        
         // Recalculate based on parent's new quantity
-        // This is a placeholder - actual logic depends on recipe structure
-        Quantity = parentQuantity * (Yield > 0 ? (Quantity / Yield) : Quantity);
+        // Formula: newQuantity = ceil(parentQuantity * (originalQuantity / Yield))
+        Quantity = Yield > 0 
+            ? (int)Math.Ceiling(parentQuantity * (double)originalQuantity / Yield)
+            : originalQuantity;
         
         foreach (var child in Children)
         {

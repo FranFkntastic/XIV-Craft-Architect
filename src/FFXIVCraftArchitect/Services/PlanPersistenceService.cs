@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Models;
+using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Services;
@@ -14,7 +15,7 @@ namespace FFXIVCraftArchitect.Services;
 /// 2. plan.recommendations.csv - Plan-specific shopping strategy
 /// 3. market_cache.json - Global raw market data (shared across plans)
 /// </summary>
-public class PlanPersistenceService
+public class PlanPersistenceService : IPlanPersistenceService
 {
     private readonly ILogger<PlanPersistenceService> _logger;
     private readonly RecommendationCsvService _recommendationService;

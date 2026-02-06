@@ -1,8 +1,7 @@
 using System.IO;
 using System.Windows;
 using FFXIVCraftArchitect.Core.Models;
-using FFXIVCraftArchitect.Services;
-using Microsoft.Extensions.DependencyInjection;
+using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Coordinators;
@@ -13,17 +12,15 @@ namespace FFXIVCraftArchitect.Coordinators;
 /// </summary>
 public class PlanPersistenceCoordinator
 {
-    private readonly PlanPersistenceService _persistenceService;
+    private readonly IPlanPersistenceService _persistenceService;
     private readonly ILogger<PlanPersistenceCoordinator> _logger;
-    private readonly Window _ownerWindow;
-    private readonly MainWindow? _mainWindow;
 
-    public PlanPersistenceCoordinator(Window ownerWindow)
+    public PlanPersistenceCoordinator(
+        IPlanPersistenceService persistenceService,
+        ILogger<PlanPersistenceCoordinator> logger)
     {
-        _ownerWindow = ownerWindow;
-        _mainWindow = ownerWindow as MainWindow;
-        _persistenceService = App.Services.GetRequiredService<PlanPersistenceService>();
-        _logger = App.Services.GetRequiredService<ILogger<PlanPersistenceCoordinator>>();
+        _persistenceService = persistenceService;
+        _logger = logger;
     }
 
     /// <summary>
@@ -38,13 +35,15 @@ public class PlanPersistenceCoordinator
     /// Shows the plan browser dialog to load a plan.
     /// </summary>
     public async Task<(bool Selected, CraftingPlan? Plan, List<ProjectItem>? ProjectItems)> ShowPlanBrowserAsync(
+        Window ownerWindow,
         CraftingPlan? currentPlan,
         List<ProjectItem> currentProjectItems,
         string currentPlanPath)
     {
-        var browser = new PlanBrowserWindow(_persistenceService, _mainWindow)
+        var mainWindow = ownerWindow as MainWindow;
+        var browser = new PlanBrowserWindow(_persistenceService, mainWindow)
         {
-            Owner = _ownerWindow
+            Owner = ownerWindow
         };
 
         if (browser.ShowDialog() != true)
@@ -86,13 +85,14 @@ public class PlanPersistenceCoordinator
     /// Shows the save plan dialog and saves if confirmed.
     /// </summary>
     public async Task<PersistenceResult> SavePlanAsync(
+        Window ownerWindow,
         CraftingPlan plan,
         List<ProjectItem> projectItems,
         string? currentPlanPath)
     {
         var saveDialog = new SavePlanDialog(_persistenceService, plan.Name)
         {
-            Owner = _ownerWindow
+            Owner = ownerWindow
         };
 
         if (saveDialog.ShowDialog() != true)
@@ -138,7 +138,7 @@ public class PlanPersistenceCoordinator
     /// <summary>
     /// Shows the rename plan dialog and renames if confirmed.
     /// </summary>
-    public async Task<PersistenceResult> RenamePlanAsync(string currentPlanPath)
+    public async Task<PersistenceResult> RenamePlanAsync(Window ownerWindow, string currentPlanPath)
     {
         if (string.IsNullOrEmpty(currentPlanPath))
         {
@@ -154,7 +154,7 @@ public class PlanPersistenceCoordinator
 
         var renameDialog = new RenamePlanDialog(plan.Name)
         {
-            Owner = _ownerWindow
+            Owner = ownerWindow
         };
 
         if (renameDialog.ShowDialog() != true)

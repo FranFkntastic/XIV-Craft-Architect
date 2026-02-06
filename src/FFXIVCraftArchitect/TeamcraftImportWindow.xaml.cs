@@ -1,7 +1,7 @@
 using System.Windows;
 using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Models;
-using FFXIVCraftArchitect.Services;
+using FFXIVCraftArchitect.Services.Interfaces;
 
 namespace FFXIVCraftArchitect;
 
@@ -10,7 +10,7 @@ namespace FFXIVCraftArchitect;
 /// </summary>
 public partial class TeamcraftImportWindow : Window
 {
-    private readonly TeamcraftService _teamcraftService;
+    private readonly ITeamcraftService _teamcraftService;
     private readonly string _dataCenter;
     private readonly string _world;
 
@@ -19,7 +19,7 @@ public partial class TeamcraftImportWindow : Window
     /// </summary>
     public CraftingPlan? ImportedPlan { get; private set; }
 
-    public TeamcraftImportWindow(TeamcraftService teamcraftService, string dataCenter, string world)
+    public TeamcraftImportWindow(ITeamcraftService teamcraftService, string dataCenter, string world)
     {
         InitializeComponent();
         _teamcraftService = teamcraftService;

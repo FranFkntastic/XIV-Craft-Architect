@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using FFXIVCraftArchitect.Helpers;
 using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Services;
@@ -13,7 +14,7 @@ namespace FFXIVCraftArchitect.Services;
 /// Service for interacting with the Garland Tools API.
 /// Ported from Python: GARLAND_SEARCH and GARLAND_ITEM constants
 /// </summary>
-public class GarlandService
+public class GarlandService : IGarlandService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<GarlandService> _logger;

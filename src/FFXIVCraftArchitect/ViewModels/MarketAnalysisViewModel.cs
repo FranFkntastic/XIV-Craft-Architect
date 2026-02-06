@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using FFXIVCraftArchitect.Core.Models;
@@ -9,7 +10,7 @@ namespace FFXIVCraftArchitect.ViewModels;
 /// ViewModel for the Market Analysis panel.
 /// Manages shopping plans, recommendations, and procurement grouping.
 /// </summary>
-public class MarketAnalysisViewModel : INotifyPropertyChanged
+public class MarketAnalysisViewModel : ViewModelBase
 {
     private ObservableCollection<ShoppingPlanViewModel> _shoppingPlans = new();
     private ObservableCollection<ProcurementWorldViewModel> _groupedByWorld = new();
@@ -22,13 +23,24 @@ public class MarketAnalysisViewModel : INotifyPropertyChanged
 
     public MarketAnalysisViewModel()
     {
-        _shoppingPlans.CollectionChanged += (s, e) => 
+        _shoppingPlans.CollectionChanged += OnShoppingPlansCollectionChanged;
+    }
+
+    private void OnShoppingPlansCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        OnPropertyChanged(nameof(ShoppingPlans));
+        OnPropertyChanged(nameof(TotalCost));
+        OnPropertyChanged(nameof(HasData));
+        RegroupByWorld();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
         {
-            OnPropertyChanged(nameof(ShoppingPlans));
-            OnPropertyChanged(nameof(TotalCost));
-            OnPropertyChanged(nameof(HasData));
-            RegroupByWorld();
-        };
+            _shoppingPlans.CollectionChanged -= OnShoppingPlansCollectionChanged;
+        }
+        base.Dispose(disposing);
     }
 
     /// <summary>
@@ -254,12 +266,6 @@ public class MarketAnalysisViewModel : INotifyPropertyChanged
         GroupedByWorld = new ObservableCollection<ProcurementWorldViewModel>(groups);
     }
 
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
 }
 
 /// <summary>

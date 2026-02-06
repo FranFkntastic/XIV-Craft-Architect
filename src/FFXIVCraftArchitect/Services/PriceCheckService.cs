@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Models;
 using Microsoft.Extensions.Logging;
@@ -39,7 +40,7 @@ public class PriceCheckService
     private readonly ILogger<PriceCheckService> _logger;
     
     // Cache for prices to avoid repeated API calls
-    private readonly Dictionary<int, PriceInfo> _priceCache = new();
+    private readonly ConcurrentDictionary<int, PriceInfo> _priceCache = new();
     private readonly TimeSpan _cacheDuration = TimeSpan.FromHours(1);
 
     public PriceCheckService(

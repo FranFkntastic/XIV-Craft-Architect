@@ -17,12 +17,8 @@ publish/
 # VS Code
 .vscode/
 
-# NuGet
-*.nupkg
-packages/
 
 # Build results
-*.dll
 *.exe
 !deucalion.dll  # Keep the injected DLL
 *.pdb
@@ -56,8 +52,10 @@ inventory_cache.json
 
 # Agent documentation (regenerate as needed)
 AGENTS.md
-CONTEXT.md
-VS_CODE_GUIDE.md
-PLAN_FORMAT.md
 
-dev utilities/
+Feb 5 Refactor/
+restart-with-save.ps1
+run-web.ps1
+start-app.ps1
+publish.bat
+docs/

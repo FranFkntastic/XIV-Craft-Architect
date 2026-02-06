@@ -341,11 +341,27 @@ public class ProcurementAnalysisService
         decimal totalCost = 0;
         foreach (var child in node.Children)
         {
-            // Cost is the market price of each component
-            if (marketData.TryGetValue(child.ItemId, out var market))
+            decimal childCost;
+
+            // If child is marked as Craft and has its own children, recursively calculate craft cost
+            if (child.Source == AcquisitionSource.Craft && child.Children?.Any() == true)
             {
-                totalCost += (decimal)market.AveragePrice * child.Quantity;
+                childCost = CalculateCraftCost(child, marketData);
             }
+            else
+            {
+                // Use market price for child (or fallback to 0 if no data)
+                if (marketData.TryGetValue(child.ItemId, out var market))
+                {
+                    childCost = (decimal)market.AveragePrice * child.Quantity;
+                }
+                else
+                {
+                    childCost = 0;
+                }
+            }
+
+            totalCost += childCost;
         }
         return totalCost;
     }

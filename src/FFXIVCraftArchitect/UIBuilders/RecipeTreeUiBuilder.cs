@@ -132,7 +132,7 @@ public class RecipeTreeUiBuilder
             Background = Brushes.Transparent
         };
 
-        // Left side: Icon + HQ star + Name
+        // Left side: Icon + HQ toggle + Name
         var leftPanel = new StackPanel 
         { 
             Orientation = Orientation.Horizontal,
@@ -152,25 +152,40 @@ public class RecipeTreeUiBuilder
         };
         leftPanel.Children.Add(jobIcon);
 
-        // HQ indicator
+        // HQ toggle button (if item can be HQ) - now next to the name
+        Button? hqButton = null;
+        if (nodeVm.CanBeHq)
+        {
+            hqButton = CreateHqToggleButton(nodeVm);
+            leftPanel.Children.Add(hqButton);
+        }
+        else
+        {
+            // Add spacer for alignment when no HQ toggle
+            leftPanel.Children.Add(new FrameworkElement { Width = 24 });
+        }
+
+        // Item name with HQ indicator prefix
+        var nameBlock = new TextBlock
+        {
+            Text = $"{nodeVm.Name} x{nodeVm.Quantity}",
+            Foreground = GetNodeForeground(nodeVm),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0, 0, 0)
+        };
+        leftPanel.Children.Add(nameBlock);
+
+        // HQ indicator text (shows [HQ] when enabled)
         var hqIndicator = new TextBlock
         {
             Name = "HqIndicator",
             Text = nodeVm.MustBeHq ? " [HQ]" : "",
             Foreground = nodeVm.MustBeHq ? Brushes.Gold : Brushes.Transparent,
             FontSize = 11,
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(2, 0, 0, 0)
         };
         leftPanel.Children.Add(hqIndicator);
-
-        // Item name
-        var nameBlock = new TextBlock
-        {
-            Text = $"{nodeVm.Name} x{nodeVm.Quantity}",
-            Foreground = GetNodeForeground(nodeVm),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        leftPanel.Children.Add(nameBlock);
 
         // Circular reference indicator
         if (nodeVm.IsCircularReference)
@@ -190,7 +205,7 @@ public class RecipeTreeUiBuilder
         DockPanel.SetDock(leftPanel, Dock.Left);
         panel.Children.Add(leftPanel);
 
-        // Right side: Dropdown + HQ button
+        // Right side: Dropdown only
         var rightPanel = new StackPanel 
         { 
             Orientation = Orientation.Horizontal,
@@ -202,13 +217,6 @@ public class RecipeTreeUiBuilder
         if (dropdown != null)
         {
             rightPanel.Children.Add(dropdown);
-        }
-
-        // HQ toggle button (if item can be HQ)
-        if (nodeVm.CanBeHq)
-        {
-            var hqButton = CreateHqToggleButton(nodeVm);
-            rightPanel.Children.Add(hqButton);
         }
 
         DockPanel.SetDock(rightPanel, Dock.Right);
@@ -251,7 +259,29 @@ public class RecipeTreeUiBuilder
             panel.Children.Add(levelBlock);
         }
 
-        // HQ indicator
+        // HQ toggle button (if item can be HQ) - now next to the name
+        if (nodeVm.CanBeHq)
+        {
+            var hqButton = CreateHqToggleButton(nodeVm);
+            panel.Children.Add(hqButton);
+        }
+        else
+        {
+            // Add spacer for alignment when no HQ toggle
+            panel.Children.Add(new FrameworkElement { Width = 24 });
+        }
+
+        // Item name with quantity
+        var nameBlock = new TextBlock
+        {
+            Text = $"{nodeVm.Name} x{nodeVm.Quantity}",
+            Foreground = GetNodeForeground(nodeVm),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0, 0, 0)
+        };
+        panel.Children.Add(nameBlock);
+
+        // HQ indicator text (shows [HQ] when enabled)
         var hqIndicator = new TextBlock
         {
             Name = "HqIndicator",
@@ -259,18 +289,9 @@ public class RecipeTreeUiBuilder
             Foreground = nodeVm.MustBeHq ? Brushes.Gold : Brushes.Transparent,
             FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 2, 0)
+            Margin = new Thickness(2, 0, 0, 0)
         };
         panel.Children.Add(hqIndicator);
-
-        // Item name with quantity
-        var nameBlock = new TextBlock
-        {
-            Text = $"{nodeVm.Name} x{nodeVm.Quantity}",
-            Foreground = GetNodeForeground(nodeVm),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        panel.Children.Add(nameBlock);
 
         // Circular reference indicator
         if (nodeVm.IsCircularReference)
@@ -290,7 +311,7 @@ public class RecipeTreeUiBuilder
         // Spacer
         panel.Children.Add(new FrameworkElement { Width = 8 });
 
-        // Right-side controls
+        // Right-side controls: Dropdown only
         if (showDropdown)
         {
             // Acquisition dropdown
@@ -298,13 +319,6 @@ public class RecipeTreeUiBuilder
             if (dropdown != null)
             {
                 panel.Children.Add(dropdown);
-            }
-
-            // HQ toggle
-            if (nodeVm.CanBeHq)
-            {
-                var hqButton = CreateHqToggleButton(nodeVm);
-                panel.Children.Add(hqButton);
             }
         }
 

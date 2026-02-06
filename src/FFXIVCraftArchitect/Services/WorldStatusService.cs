@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Text.RegularExpressions;
 using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Models;
+using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Services;
@@ -11,7 +12,7 @@ namespace FFXIVCraftArchitect.Services;
 /// Service for fetching and caching FFXIV world status from the Lodestone.
 /// Scrapes the official world status page to get congestion data.
 /// </summary>
-public class WorldStatusService
+public class WorldStatusService : IWorldStatusService, IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<WorldStatusService> _logger;
@@ -21,11 +22,10 @@ public class WorldStatusService
     private const string LodestoneWorldStatusUrl = "https://na.finalfantasyxiv.com/lodestone/worldstatus/";
     private readonly TimeSpan _cacheValidity = TimeSpan.FromHours(6); // Refresh every 6 hours
     
-    public WorldStatusService(ILogger<WorldStatusService> logger)
+    public WorldStatusService(IHttpClientFactory httpClientFactory, ILogger<WorldStatusService> logger)
     {
         _logger = logger;
-        _httpClient = new HttpClient();
-        _httpClient.DefaultRequestHeaders.Add("User-Agent", "FFXIV Craft Architect/1.0");
+        _httpClient = httpClientFactory.CreateClient("WorldStatus");
         
         // Store cache in app data folder
         var appDataPath = Path.Combine(
@@ -36,6 +36,14 @@ public class WorldStatusService
         
         // Load cached data on startup
         LoadCachedData();
+    }
+    
+    /// <summary>
+    /// Disposes the HttpClient instance.
+    /// </summary>
+    public void Dispose()
+    {
+        _httpClient.Dispose();
     }
     
     /// <summary>

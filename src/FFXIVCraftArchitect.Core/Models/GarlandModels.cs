@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -178,9 +179,9 @@ public class GarlandItem
     /// Parsed vendor information (only includes properly formatted vendor objects)
     /// </summary>
     [JsonIgnore]
-    public List<GarlandVendor> Vendors => ParseVendors(VendorsRaw);
+    public List<GarlandVendor> Vendors => ParseVendors(VendorsRaw, Id);
     
-    private static List<GarlandVendor> ParseVendors(List<object>? rawVendors)
+    private static List<GarlandVendor> ParseVendors(List<object>? rawVendors, int itemId)
     {
         if (rawVendors == null) return new List<GarlandVendor>();
         
@@ -197,7 +198,10 @@ public class GarlandItem
                         var vendor = JsonSerializer.Deserialize<GarlandVendor>(element.GetRawText());
                         if (vendor != null) result.Add(vendor);
                     }
-                    catch { /* Skip invalid vendor entries */ }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"[GarlandItem] Failed to parse vendor entry for item {itemId}. Skipping. Error: {ex.Message}");
+                    }
                 }
                 // Integer vendor IDs are ignored - we can't use them without additional lookups
             }

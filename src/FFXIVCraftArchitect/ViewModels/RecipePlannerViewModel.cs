@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using FFXIVCraftArchitect.Core.Models;
@@ -10,7 +11,7 @@ namespace FFXIVCraftArchitect.ViewModels;
 /// ViewModel for the Recipe Planner panel.
 /// Manages project items, recipe tree state, and node interactions.
 /// </summary>
-public class RecipePlannerViewModel : INotifyPropertyChanged
+public class RecipePlannerViewModel : ViewModelBase
 {
     private CraftingPlan? _currentPlan;
     private ObservableCollection<ProjectItem> _projectItems = new();
@@ -22,8 +23,28 @@ public class RecipePlannerViewModel : INotifyPropertyChanged
 
     public RecipePlannerViewModel()
     {
-        _projectItems.CollectionChanged += (s, e) => OnPropertyChanged(nameof(ProjectItems));
-        _rootNodes.CollectionChanged += (s, e) => OnPropertyChanged(nameof(RootNodes));
+        _projectItems.CollectionChanged += OnProjectItemsCollectionChanged;
+        _rootNodes.CollectionChanged += OnRootNodesCollectionChanged;
+    }
+
+    private void OnProjectItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        OnPropertyChanged(nameof(ProjectItems));
+    }
+
+    private void OnRootNodesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        OnPropertyChanged(nameof(RootNodes));
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _projectItems.CollectionChanged -= OnProjectItemsCollectionChanged;
+            _rootNodes.CollectionChanged -= OnRootNodesCollectionChanged;
+        }
+        base.Dispose(disposing);
     }
 
     /// <summary>
@@ -359,56 +380,6 @@ public class RecipePlannerViewModel : INotifyPropertyChanged
         }
     }
 
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
-}
-
-/// <summary>
-/// ViewModel for a project item (root-level craft target).
-/// </summary>
-public class ProjectItemViewModel : INotifyPropertyChanged
-{
-    private int _id;
-    private string _name = string.Empty;
-    private int _quantity = 1;
-    private bool _isHqRequired;
-
-    public int Id
-    {
-        get => _id;
-        set { _id = value; OnPropertyChanged(); }
-    }
-
-    public string Name
-    {
-        get => _name;
-        set { _name = value; OnPropertyChanged(); }
-    }
-
-    public int Quantity
-    {
-        get => _quantity;
-        set { _quantity = value; OnPropertyChanged(); }
-    }
-
-    public bool IsHqRequired
-    {
-        get => _isHqRequired;
-        set { _isHqRequired = value; OnPropertyChanged(); }
-    }
-
-    public override string ToString() => $"{Name} x{Quantity}";
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
 }
 
 /// <summary>

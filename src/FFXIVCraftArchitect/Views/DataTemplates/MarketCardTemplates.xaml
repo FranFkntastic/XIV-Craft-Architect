@@ -1,0 +1,670 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:vm="clr-namespace:FFXIVCraftArchitect.ViewModels"
+                    xmlns:local="clr-namespace:FFXIVCraftArchitect.Views.DataTemplates">
+    
+    <!-- ============================================================
+         Market Card DataTemplates
+         
+         These templates replace the code-behind methods:
+         - CreateExpandableMarketCard()
+         - CreateCollapsedMarketCard()
+         - CreateWorldOptionPanel()
+         
+         All visual properties match the original code-behind exactly.
+         ============================================================ -->
+    
+    <!-- Boolean to Visibility Converter -->
+    <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+    
+    <!-- Inverse Boolean to Visibility Converter -->
+    <local:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
+    
+    <!-- Null to Visibility Converter -->
+    <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter"/>
+    
+    <!-- String NullOrEmpty to Visibility Converter -->
+    <local:StringNullOrEmptyToVisibilityConverter x:Key="StringNullOrEmptyToVisibilityConverter"/>
+    
+    <!-- Savings Visibility Converter -->
+    <local:SavingsVisibilityConverter x:Key="SavingsVisibilityConverter"/>
+    
+    <!-- String to Brush Converter -->
+    <local:StringToBrushConverter x:Key="StringToBrushConverter"/>
+    
+    <!-- Boolean to FontStyle Converter -->
+    <local:BoolToFontStyleConverter x:Key="BoolToFontStyleConverter"/>
+    
+    <!-- String to FontWeight Converter -->
+    <local:StringToFontWeightConverter x:Key="StringToFontWeightConverter"/>
+    
+    <!-- ============================================================
+         EXPANDABLE MARKET CARD TEMPLATE
+         Main template for the expandable market card in Market Logistics
+         ============================================================ -->
+    <DataTemplate DataType="{x:Type vm:MarketCardViewModel}">
+        <Border Background="{StaticResource MutedAccentBrush}"
+                CornerRadius="3"
+                Padding="0"
+                Margin="0,0,0,4">
+            <StackPanel>
+                <!-- Clickable Header -->
+                <Border Background="{StaticResource MutedAccentLightBrush}"
+                        CornerRadius="3"
+                        Padding="8,6,8,6"
+                        Cursor="Hand">
+                    <Border.InputBindings>
+                        <MouseBinding MouseAction="LeftClick" Command="{Binding ToggleExpandCommand}"/>
+                    </Border.InputBindings>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        
+                        <!-- Left Side: Item name, quantity, DC average -->
+                        <StackPanel Grid.Column="0" 
+                                    Orientation="Horizontal" 
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Name}"
+                                       FontWeight="SemiBold"
+                                       FontSize="12"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding QuantityNeeded, StringFormat=' ×{0}'}"
+                                       FontSize="12"
+                                       Foreground="{StaticResource LightGrayBrush}"
+                                       VerticalAlignment="Center"
+                                       Margin="4,0,0,0"/>
+                            
+                            <!-- Error display -->
+                            <TextBlock Text="{Binding Error, StringFormat='  •  Error: {0}'}"
+                                       Foreground="{StaticResource ErrorRedBrush}"
+                                       FontSize="10"
+                                       VerticalAlignment="Center"
+                                       Margin="8,0,0,0"
+                                       Visibility="{Binding Error, Converter={StaticResource StringNullOrEmptyToVisibilityConverter}}"/>
+                            
+                            <!-- DC Average (shown when no error) -->
+                            <TextBlock Text="{Binding DCAveragePrice, StringFormat='  •  Avg: {0:N0}g'}"
+                                       Foreground="{StaticResource GrayBrush}"
+                                       FontSize="10"
+                                       VerticalAlignment="Center"
+                                       Margin="8,0,0,0"
+                                       Visibility="{Binding Error, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
+                        </StackPanel>
+                        
+                        <!-- Right Side: Recommended world info -->
+                        <StackPanel Grid.Column="1" 
+                                    Orientation="Horizontal" 
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center">
+                            <!-- Has options display -->
+                            <StackPanel Orientation="Horizontal"
+                                        Visibility="{Binding HasOptions, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <!-- Recommended world name -->
+                                <TextBlock Text="{Binding RecommendedWorld.WorldName}"
+                                           FontWeight="SemiBold"
+                                           FontSize="11"
+                                           Foreground="{Binding RecommendedWorld.WorldNameForeground, FallbackValue={StaticResource AccentGoldBrush}}"
+                                           VerticalAlignment="Center"/>
+                                
+                                <!-- Blacklist button (shown if travel prohibited or congested) -->
+                                <Button Content="🚫"
+                                        FontSize="12"
+                                        Width="24"
+                                        Height="24"
+                                        Padding="0"
+                                        Margin="4,0,0,0"
+                                        Background="Transparent"
+                                        BorderBrush="{StaticResource IndianRedBrush}"
+                                        BorderThickness="1"
+                                        Visibility="{Binding RecommendedWorld.ShowBlacklistButton, Converter={StaticResource BoolToVisibilityConverter}}"
+                                        ToolTip="{Binding RecommendedWorld.WorldName, StringFormat='Blacklist {0} - This world is not available to visit right now. Click to exclude from recommendations for 30 minutes.'}"/>
+                                
+                                <!-- Cost display -->
+                                <TextBlock Text="{Binding RecommendedWorld.CostDisplay, StringFormat='  {0}'}"
+                                           FontSize="11"
+                                           VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding RecommendedWorld.IsFullyUnderAverage}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource LightGreenBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                
+                                <!-- Travel prohibited warning -->
+                                <TextBlock Text="  (travel prohibited)"
+                                           FontSize="9"
+                                           Foreground="{StaticResource IndianRedBrush}"
+                                           VerticalAlignment="Center"
+                                           Visibility="{Binding RecommendedWorld.IsTravelProhibited, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                            </StackPanel>
+                            
+                            <!-- No viable listings -->
+                            <TextBlock Text="No viable listings"
+                                       Foreground="{StaticResource WarningOrangeBrush}"
+                                       FontSize="10"
+                                       HorizontalAlignment="Right"
+                                       Visibility="{Binding HasOptions, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+                
+                <!-- Expandable Content -->
+                <StackPanel Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVisibilityConverter}}"
+                            Margin="8,6,8,8">
+                    <!-- Options Header -->
+                    <TextBlock Text="{Binding WorldOptionsCount, StringFormat='All Worlds ({0} options):'}"
+                               FontWeight="SemiBold"
+                               FontSize="10"
+                               Margin="0,0,0,4"
+                               Foreground="{StaticResource GrayBrush}"
+                               Visibility="{Binding HasOptions, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    
+                    <!-- World Options -->
+                    <ItemsControl ItemsSource="{Binding WorldOptions}"
+                                  Visibility="{Binding HasOptions, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:WorldOptionViewModel}">
+                                <Border Background="{Binding BackgroundColor, Converter={StaticResource StringToBrushConverter}}"
+                                        CornerRadius="2"
+                                        Padding="6,4,6,4"
+                                        Margin="0,1,0,2"
+                                        BorderBrush="{Binding BorderBrushColor, Converter={StaticResource StringToBrushConverter}, FallbackValue={x:Null}}"
+                                        BorderThickness="{Binding BorderThickness}"
+                                        Opacity="{Binding Opacity}">
+                                    <StackPanel>
+                                        <!-- World Header with Badges -->
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <!-- World Name -->
+                                            <TextBlock Text="{Binding WorldName}"
+                                                       FontWeight="SemiBold"
+                                                       FontSize="11"
+                                                       Margin="0,0,6,0"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{Binding WorldNameForeground, Converter={StaticResource StringToBrushConverter}}"/>
+                                            
+                                            <!-- Home Badge -->
+                                            <TextBlock Text="★ HOME"
+                                                       Foreground="{StaticResource AccentGoldBrush}"
+                                                       FontSize="9"
+                                                       FontWeight="Bold"
+                                                       VerticalAlignment="Center"
+                                                       Margin="0,0,4,0"
+                                                       Visibility="{Binding ShowHomeBadge, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                       ToolTip="Your home world - you can purchase here even when congested"/>
+                                            
+                                            <!-- Congested Badge -->
+                                            <TextBlock Text="⚠ CONGESTED"
+                                                       Foreground="{StaticResource IndianRedBrush}"
+                                                       FontSize="9"
+                                                       FontWeight="Bold"
+                                                       VerticalAlignment="Center"
+                                                       Margin="0,0,4,0"
+                                                       Visibility="{Binding ShowCongestedBadge, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                       ToolTip="This world is congested. Travel may be prohibited during peak hours. Try again during off-peak hours (early morning/late night)."/>
+                                            
+                                            <!-- Travel Prohibited Badge -->
+                                            <TextBlock Text="🚫 TRAVEL BLOCKED"
+                                                       Foreground="Red"
+                                                       FontSize="9"
+                                                       FontWeight="Bold"
+                                                       VerticalAlignment="Center"
+                                                       Margin="0,0,4,0"
+                                                       Visibility="{Binding ShowTravelProhibitedBadge, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                       ToolTip="This world is currently at capacity. Travel is temporarily prohibited. Try again in 30-60 minutes."/>
+                                            
+                                            <!-- Blacklisted Badge -->
+                                            <TextBlock Text="⛔ BLACKLISTED"
+                                                       Foreground="{StaticResource DarkGrayBrush}"
+                                                       FontSize="9"
+                                                       FontWeight="Bold"
+                                                       VerticalAlignment="Center"
+                                                       Margin="0,0,4,0"
+                                                       Visibility="{Binding ShowBlacklistedBadge, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                       ToolTip="You have temporarily blacklisted this world. It will be excluded from recommendations."/>
+                                            
+                                            <!-- Recommended Star -->
+                                            <TextBlock Text="★"
+                                                       Foreground="{StaticResource AccentGoldBrush}"
+                                                       FontSize="10"
+                                                       VerticalAlignment="Center"
+                                                       Margin="0,0,4,0"
+                                                       Visibility="{Binding IsRecommended, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                            
+                                            <!-- Competitive Checkmark -->
+                                            <TextBlock Text="✓"
+                                                       Foreground="{StaticResource LightGreenBrush}"
+                                                       FontSize="10"
+                                                       VerticalAlignment="Center"
+                                                       Margin="0,0,4,0"
+                                                       Visibility="{Binding IsCompetitive, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                        </StackPanel>
+                                        
+                                        <!-- Total Cost -->
+                                        <TextBlock FontSize="10" Margin="0,1,0,2">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsFullyUnderAverage}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource LightGreenBrush}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                            <TextBlock.Text>
+                                                <MultiBinding StringFormat="{}{0} total  •  ~{1}/ea">
+                                                    <Binding Path="CostDisplay"/>
+                                                    <Binding Path="PricePerUnitDisplay"/>
+                                                </MultiBinding>
+                                            </TextBlock.Text>
+                                            <TextBlock.ToolTip>
+                                                <Binding Path="HasExcess">
+                                                    <Binding.Converter>
+                                                        <local:BoolToStringConverter TrueValue="FFXIV requires buying full stacks. You'll have excess items." FalseValue="{x:Null}"/>
+                                                    </Binding.Converter>
+                                                </Binding>
+                                            </TextBlock.ToolTip>
+                                        </TextBlock>
+                                        
+                                        <!-- Best Unit Price (if competitive) -->
+                                        <TextBlock Text="{Binding BestSingleListing, StringFormat='Best: {0:N0}g/ea x{1}'}"
+                                                   FontSize="9"
+                                                   Foreground="{StaticResource AccentGoldBrush}"
+                                                   Margin="0,0,0,2"
+                                                   Visibility="{Binding BestSingleListing, Converter={StaticResource NullToVisibilityConverter}}"/>
+                                        
+                                        <!-- Listings Header -->
+                                        <TextBlock Text="Listings:"
+                                                   FontSize="9"
+                                                   Foreground="{StaticResource GrayBrush}"
+                                                   Margin="0,2,0,1"/>
+                                        
+                                        <!-- Individual Listings -->
+                                        <ItemsControl ItemsSource="{Binding Listings}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type vm:ListingViewModel}">
+                                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,1">
+                                                        <!-- Quantity -->
+                                                        <TextBlock Text="{Binding QuantityDisplay}"
+                                                                   FontSize="9"
+                                                                   Width="100"
+                                                                   Foreground="{Binding QuantityForeground, Converter={StaticResource StringToBrushConverter}}"
+                                                                   FontStyle="{Binding IsQuantityItalic, Converter={StaticResource BoolToFontStyleConverter}}"
+                                                                   ToolTip="{Binding QuantityTooltip}"/>
+                                                        
+                                                        <!-- Price -->
+                                                        <TextBlock Text="{Binding PricePerUnit, StringFormat='@{0:N0}g'}"
+                                                                   FontSize="9"
+                                                                   Width="60"
+                                                                   Foreground="{Binding PriceForeground, Converter={StaticResource StringToBrushConverter}}"
+                                                                   FontWeight="{Binding PriceFontWeight, Converter={StaticResource StringToFontWeightConverter}}"/>
+                                                        
+                                                        <!-- Subtotal -->
+                                                        <TextBlock Text="{Binding SubtotalDisplay, StringFormat='= {0}'}"
+                                                                   FontSize="9"
+                                                                   Foreground="{Binding SubtotalForeground, Converter={StaticResource StringToBrushConverter}}"
+                                                                   Width="70"/>
+                                                        
+                                                        <!-- Retainer -->
+                                                        <TextBlock Text="{Binding RetainerDisplay}"
+                                                                   FontSize="9"
+                                                                   Foreground="{Binding RetainerForeground, Converter={StaticResource StringToBrushConverter}}"
+                                                                   FontStyle="Italic"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </DataTemplate>
+    
+    <!-- ============================================================
+         COLLAPSED MARKET CARD TEMPLATE
+         Compact card for split-pane view
+         ============================================================ -->
+    <DataTemplate x:Key="CollapsedMarketCardTemplate" DataType="{x:Type vm:MarketCardViewModel}">
+        <Border Background="{StaticResource CardBackgroundBrush}"
+                CornerRadius="4"
+                Padding="10,8,10,8"
+                Margin="0,0,8,8"
+                Width="320"
+                Cursor="Hand">
+            <StackPanel>
+                <!-- Top Row: Item name and quantity -->
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding Name}"
+                               FontWeight="SemiBold"
+                               FontSize="12"
+                               TextTrimming="CharacterEllipsis"
+                               MaxWidth="220"/>
+                    <TextBlock Text="{Binding QuantityNeeded, StringFormat=' ×{0}'}"
+                               FontSize="12"
+                               Foreground="{StaticResource LightGrayBrush}"
+                               Margin="4,0,0,0"/>
+                </StackPanel>
+                
+                <!-- Second Row: DC Average -->
+                <TextBlock Text="{Binding DCAveragePrice, StringFormat='DC Avg: {0:N0}g'}"
+                           FontSize="10"
+                           Foreground="{StaticResource GrayBrush}"
+                           Margin="0,2,0,0"/>
+                
+                <!-- Third Row: Error or Recommended World -->
+                <!-- Error Display -->
+                <TextBlock Text="{Binding Error, StringFormat='Error: {0}'}"
+                           FontSize="10"
+                           Foreground="{StaticResource IndianRedBrush}"
+                           Margin="0,4,0,0"
+                           TextTrimming="CharacterEllipsis"
+                           Visibility="{Binding Error, Converter={StaticResource StringNullOrEmptyToVisibilityConverter}}"/>
+                
+                <!-- Recommended World Display -->
+                <StackPanel Visibility="{Binding RecommendedWorld, Converter={StaticResource NullToVisibilityConverter}}">
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <!-- World Name -->
+                        <TextBlock Text="{Binding RecommendedWorld.WorldName}"
+                                   FontWeight="SemiBold"
+                                   FontSize="11">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource AccentGoldBrush}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding RecommendedWorld.IsTravelProhibited}" Value="True">
+                                            <Setter Property="Foreground" Value="{StaticResource IndianRedBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        
+                        <!-- Blacklist Button -->
+                        <Button Content="🚫"
+                                FontSize="12"
+                                Width="24"
+                                Height="24"
+                                Padding="0"
+                                Margin="4,0,0,0"
+                                Background="Transparent"
+                                BorderBrush="{StaticResource IndianRedBrush}"
+                                BorderThickness="1"
+                                Visibility="{Binding RecommendedWorld.ShowBlacklistButton, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                        
+                        <!-- Cost -->
+                        <TextBlock Text="{Binding RecommendedWorld.CostDisplay, StringFormat='  {0}'}"
+                                   FontSize="11"
+                                   Margin="4,0,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding RecommendedWorld.IsFullyUnderAverage}" Value="True">
+                                            <Setter Property="Foreground" Value="{StaticResource LightGreenBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                    
+                    <!-- Travel Prohibited Warning -->
+                    <TextBlock Text="🚫 Travel prohibited - click icon to blacklist"
+                               FontSize="9"
+                               Foreground="{StaticResource IndianRedBrush}"
+                               Margin="0,2,0,0"
+                               Visibility="{Binding RecommendedWorld.IsTravelProhibited, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    
+                    <!-- Congested Warning -->
+                    <TextBlock Text="⚠ Congested - may be blocked during peak"
+                               FontSize="9"
+                               Foreground="{StaticResource WarningOrangeBrush}"
+                               Margin="0,2,0,0"
+                               Visibility="{Binding RecommendedWorld.ShowCongestedBadge, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    
+                    <!-- Savings Indicator -->
+                    <TextBlock FontSize="9"
+                               Foreground="{StaticResource LightGreenBrush}"
+                               Margin="0,2,0,0">
+                        <TextBlock.Text>
+                            <MultiBinding StringFormat="Save {0:N0}g">
+                                <Binding Path="RecommendedWorld.TotalCost"/>
+                            </MultiBinding>
+                        </TextBlock.Text>
+                        <TextBlock.Visibility>
+                            <MultiBinding Converter="{StaticResource SavingsVisibilityConverter}">
+                                <Binding Path="RecommendedWorld.TotalCost"/>
+                                <Binding Path="DCAveragePrice"/>
+                                <Binding Path="QuantityNeeded"/>
+                            </MultiBinding>
+                        </TextBlock.Visibility>
+                    </TextBlock>
+                </StackPanel>
+                
+                <!-- No Data Display -->
+                <TextBlock Text="No viable listings"
+                           FontSize="10"
+                           Foreground="{StaticResource WarningOrangeBrush}"
+                           Margin="0,4,0,0"
+                           Visibility="{Binding HasOptions, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
+            </StackPanel>
+        </Border>
+    </DataTemplate>
+    
+    <!-- ============================================================
+         EXPANDED PANEL TEMPLATE
+         Template for the expanded panel in split-pane market view
+         Replaces BuildExpandedPanel() and CreateExpandedWorldPanel()
+         ============================================================ -->
+    <DataTemplate DataType="{x:Type vm:ExpandedPanelViewModel}">
+        <StackPanel>
+            <!-- Header with Close Button -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <TextBlock Grid.Column="0"
+                           Text="{Binding HeaderText}"
+                           FontWeight="Bold"
+                           FontSize="14"
+                           Foreground="{StaticResource AccentGoldBrush}"/>
+                
+                <TextBlock Grid.Column="1"
+                           Text="✕"
+                           FontSize="14"
+                           Foreground="{StaticResource GrayBrush}"
+                           Cursor="Hand"
+                           ToolTip="Close">
+                    <TextBlock.InputBindings>
+                        <MouseBinding MouseAction="LeftClick" Command="{Binding CloseCommand}"/>
+                    </TextBlock.InputBindings>
+                </TextBlock>
+            </Grid>
+            
+            <!-- DC Average -->
+            <TextBlock Text="{Binding DCAverageText}"
+                       FontSize="11"
+                       Foreground="{StaticResource GrayBrush}"
+                       Margin="0,4,0,12"/>
+            
+            <!-- World Options (shown when HasOptions is true) -->
+            <StackPanel Visibility="{Binding HasOptions, Converter={StaticResource BoolToVisibilityConverter}}">
+                <TextBlock Text="{Binding OptionsHeaderText}"
+                           FontWeight="SemiBold"
+                           FontSize="11"
+                           Foreground="{StaticResource GrayBrush}"
+                           Margin="0,0,0,8"/>
+                
+                <ItemsControl ItemsSource="{Binding WorldOptions}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type vm:ExpandedWorldViewModel}">
+                            <Border Background="{Binding BackgroundColor, Converter={StaticResource StringToBrushConverter}}"
+                                    CornerRadius="3"
+                                    Padding="8,6,8,6"
+                                    Margin="0,0,0,6"
+                                    BorderBrush="{Binding BorderBrushColor, Converter={StaticResource StringToBrushConverter}, FallbackValue={x:Null}}"
+                                    BorderThickness="{Binding BorderThickness}"
+                                    Opacity="{Binding Opacity}">
+                                <StackPanel>
+                                    <!-- World Header with Badges -->
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <!-- World Name -->
+                                        <TextBlock Text="{Binding WorldName}"
+                                                   FontWeight="SemiBold"
+                                                   FontSize="12"
+                                                   Foreground="{Binding WorldNameForeground, Converter={StaticResource StringToBrushConverter}}"/>
+                                        
+                                        <!-- Home Badge -->
+                                        <TextBlock Text="  ★ HOME"
+                                                   Foreground="{StaticResource AccentGoldBrush}"
+                                                   FontSize="10"
+                                                   FontWeight="Bold"
+                                                   Visibility="{Binding ShowHomeBadge, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                        
+                                        <!-- Congested Badge -->
+                                        <TextBlock Text="  ⚠ CONGESTED"
+                                                   Foreground="{StaticResource IndianRedBrush}"
+                                                   FontSize="10"
+                                                   FontWeight="Bold"
+                                                   Visibility="{Binding ShowCongestedBadge, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                   ToolTip="This world is congested. Travel may be prohibited during peak hours."/>
+                                        
+                                        <!-- Blacklist Button -->
+                                        <Button Content="🚫"
+                                                FontSize="12"
+                                                Width="24"
+                                                Height="24"
+                                                Padding="0"
+                                                Margin="4,0,0,0"
+                                                Background="Transparent"
+                                                BorderBrush="{StaticResource IndianRedBrush}"
+                                                BorderThickness="1"
+                                                Visibility="{Binding ShowBlacklistButton, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                ToolTip="{Binding WorldName, StringFormat='Blacklist {0} - This world is not available to visit right now. Click to exclude from recommendations for 30 minutes.'}"/>
+                                        
+                                        <!-- Travel Prohibited Badge -->
+                                        <TextBlock Text="  🚫 TRAVEL BLOCKED"
+                                                   Foreground="Red"
+                                                   FontSize="10"
+                                                   FontWeight="Bold"
+                                                   Visibility="{Binding ShowTravelProhibitedBadge, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                   ToolTip="This world is currently at capacity. Travel is temporarily prohibited."/>
+                                        
+                                        <!-- Blacklisted Badge -->
+                                        <TextBlock Text="  ⛔ BLACKLISTED"
+                                                   Foreground="{StaticResource DarkGrayBrush}"
+                                                   FontSize="10"
+                                                   FontWeight="Bold"
+                                                   Visibility="{Binding ShowBlacklistedBadge, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                   ToolTip="You have temporarily blacklisted this world."/>
+                                        
+                                        <!-- Recommended Badge -->
+                                        <TextBlock Text="  ★ Recommended"
+                                                   Foreground="{StaticResource AccentGoldBrush}"
+                                                   FontSize="10"
+                                                   Margin="4,0,0,0"
+                                                   Visibility="{Binding IsRecommended, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                    </StackPanel>
+                                    
+                                    <!-- Cost -->
+                                    <TextBlock Text="{Binding CostText}"
+                                               FontSize="11"
+                                               Margin="0,2,0,4"
+                                               ToolTip="{Binding CostTooltip}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsFullyUnderAverage}" Value="True">
+                                                        <Setter Property="Foreground" Value="{StaticResource LightGreenBrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    
+                                    <!-- Listings Header -->
+                                    <TextBlock Text="Listings:"
+                                               FontSize="10"
+                                               Foreground="{StaticResource GrayBrush}"
+                                               Margin="0,4,0,2"/>
+                                    
+                                    <!-- Individual Listings -->
+                                    <ItemsControl ItemsSource="{Binding DisplayListings}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate DataType="{x:Type vm:ExpandedListingViewModel}">
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,1">
+                                                    <!-- Quantity -->
+                                                    <TextBlock Text="{Binding QuantityDisplay}"
+                                                               FontSize="10"
+                                                               Width="90"
+                                                               Foreground="{Binding QuantityForeground, Converter={StaticResource StringToBrushConverter}}"
+                                                               FontStyle="{Binding IsQuantityItalic, Converter={StaticResource BoolToFontStyleConverter}}"/>
+                                                    
+                                                    <!-- Price -->
+                                                    <TextBlock Text="{Binding PricePerUnit, StringFormat='@{0:N0}g'}"
+                                                               FontSize="10"
+                                                               Width="65"
+                                                               Foreground="{Binding PriceForeground, Converter={StaticResource StringToBrushConverter}}"
+                                                               FontWeight="{Binding PriceFontWeight, Converter={StaticResource StringToFontWeightConverter}}"/>
+                                                    
+                                                    <!-- Subtotal -->
+                                                    <TextBlock Text="{Binding SubtotalDisplay, StringFormat='= {0}'}"
+                                                               FontSize="10"
+                                                               Foreground="{Binding SubtotalForeground, Converter={StaticResource StringToBrushConverter}}"
+                                                               Width="75"/>
+                                                    
+                                                    <!-- Retainer -->
+                                                    <TextBlock Text="{Binding RetainerDisplay}"
+                                                               FontSize="10"
+                                                               Foreground="{Binding RetainerForeground, Converter={StaticResource StringToBrushConverter}}"
+                                                               FontStyle="Italic"/>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    
+                                    <!-- More Listings -->
+                                    <TextBlock Text="{Binding MoreListingsText}"
+                                               FontSize="9"
+                                               Foreground="{StaticResource GrayBrush}"
+                                               FontStyle="Italic"
+                                               Margin="0,2,0,0"
+                                               Visibility="{Binding HasMoreListings, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+            
+            <!-- Error Display -->
+            <TextBlock Text="{Binding Error, StringFormat='Error: {0}'}"
+                       FontSize="11"
+                       Foreground="{StaticResource IndianRedBrush}"
+                       Margin="0,8,0,0"
+                       Visibility="{Binding HasError, Converter={StaticResource BoolToVisibilityConverter}}"/>
+            
+            <!-- No Data Message -->
+            <TextBlock Text="No market data available for this item"
+                       FontSize="11"
+                       Foreground="{StaticResource WarningOrangeBrush}"
+                       Margin="0,8,0,0"
+                       Visibility="{Binding ShowNoData, Converter={StaticResource BoolToVisibilityConverter}}"/>
+        </StackPanel>
+    </DataTemplate>
+    
+</ResourceDictionary>

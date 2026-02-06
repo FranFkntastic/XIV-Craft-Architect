@@ -10,12 +10,19 @@
         xmlns:helpers="clr-namespace:FFXIVCraftArchitect.Helpers">
 
     <Window.Resources>
-        <!-- Gold Accent Brush -->
-        <SolidColorBrush x:Key="GoldAccentBrush" Color="#d4a73a"/>
-        <SolidColorBrush x:Key="CardBackgroundBrush" Color="#2d2d2d"/>
-        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#ffffff"/>
-        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#aaaaaa"/>
-        <SolidColorBrush x:Key="SuccessBrush" Color="#4caf50"/>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Resources/ThemeColors.xaml"/>
+                <ResourceDictionary Source="Views/DataTemplates/MarketCardTemplates.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            
+            <!-- Local Window Resources -->
+            <SolidColorBrush x:Key="GoldAccentBrush" Color="#d4a73a"/>
+            <SolidColorBrush x:Key="CardBackgroundBrush" Color="#2d2d2d"/>
+            <SolidColorBrush x:Key="TextPrimaryBrush" Color="#ffffff"/>
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="#aaaaaa"/>
+            <SolidColorBrush x:Key="SuccessBrush" Color="#4caf50"/>
+        </ResourceDictionary>
     </Window.Resources>
 
     <Grid>
@@ -149,6 +156,8 @@
                         <MenuItem Header="Fetch Prices" Click="OnFetchPrices"/>
                         <MenuItem Header="View Plan Market Data" Click="OnViewMarketStatus" IsEnabled="False" x:Name="MenuViewMarketStatus"/>
                         <Separator/>
+                        <MenuItem Header="View Blacklisted Worlds" Click="OnViewBlacklistedWorlds" ToolTip="View and manage temporarily blacklisted worlds"/>
+                        <Separator/>
                         <MenuItem Header="Restart App" Click="OnRestartApp" ToolTip="Restart the application (preserves current plan)"/>
                         <Separator/>
                         <MenuItem Header="Debug Tools">
@@ -162,7 +171,7 @@
             </Grid>
         </Border>
 
-        <!-- Hidden controls for backward compatibility -->
+        <!-- Hidden controls for backward compatibility (STILL USED BY CODE-BEHIND) -->
         <Border Grid.Row="1" Visibility="Collapsed">
             <StackPanel>
                 <Border x:Name="RecipePlanTab"/>
@@ -331,10 +340,21 @@
                         <ui:Button x:Name="BuildPlanButton"
                                    Content="Build Project Plan"
                                    Appearance="Primary"
-                                   Margin="0,8,0,16"
+                                   Margin="0,8,0,8"
                                    HorizontalAlignment="Stretch"
                                    IsEnabled="False"
                                    Click="OnBuildProjectPlan"
+                                   helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
+
+                        <!-- Browse Plan Button -->
+                        <ui:Button x:Name="BrowsePlanButton"
+                                   Content="Browse Plan..."
+                                   Appearance="Secondary"
+                                   Margin="0,0,0,16"
+                                   HorizontalAlignment="Stretch"
+                                   IsEnabled="False"
+                                   Click="OnBrowsePlan"
+                                   ToolTip="Open plan browser to manage root items"
                                    helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
 
                         <!-- Quick Actions -->
@@ -528,16 +548,54 @@
                             Background="{StaticResource CardBackgroundBrush}"
                             CornerRadius="4"
                             Padding="12">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <StackPanel x:Name="ProcurementPanel">
-                                <!-- Placeholder content - populated dynamically -->
-                                <TextBlock Text="Build a plan to see market analysis"
-                                           Foreground="{StaticResource TextSecondaryBrush}"
-                                           HorizontalAlignment="Center"
-                                           Margin="0,40"
-                                           FontSize="14"/>
-                            </StackPanel>
-                        </ScrollViewer>
+                        <Grid>
+                            <!-- Legacy View (default) - shown when split-pane is disabled -->
+                            <ScrollViewer x:Name="LegacyProcurementScrollViewer"
+                                          VerticalScrollBarVisibility="Auto">
+                                <StackPanel x:Name="ProcurementPanel">
+                                    <!-- Placeholder content - populated dynamically -->
+                                    <TextBlock Text="Build a plan to see market analysis"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               HorizontalAlignment="Center"
+                                               Margin="0,40"
+                                               FontSize="14"/>
+                                </StackPanel>
+                            </ScrollViewer>
+                            
+                            <!-- Split-Pane View (modern) - shown when split-pane is enabled -->
+                            <Grid x:Name="SplitPaneMarketView"
+                                  Visibility="Collapsed">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                
+                                <!-- Top Panel: Expanded Item View (scrollable) -->
+                                <Border x:Name="SplitPaneExpandedPanel"
+                                        Grid.Row="0"
+                                        Background="#252525"
+                                        CornerRadius="4"
+                                        Margin="0,0,0,8"
+                                        Visibility="Collapsed"
+                                        MaxHeight="300">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                  Padding="12">
+                                        <StackPanel x:Name="SplitPaneExpandedContent">
+                                            <!-- Expanded item content populated dynamically -->
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Border>
+                                
+                                <!-- Bottom Panel: Collapsed Cards Grid -->
+                                <ScrollViewer Grid.Row="1"
+                                              VerticalScrollBarVisibility="Auto">
+                                    <WrapPanel x:Name="SplitPaneCardsGrid"
+                                               Orientation="Horizontal">
+                                        <!-- Collapsed cards populated dynamically -->
+                                    </WrapPanel>
+                                </ScrollViewer>
+                            </Grid>
+                        </Grid>
                     </Border>
                 </Grid>
             </Border>
@@ -689,6 +747,16 @@
                            Text="Ready" 
                            Foreground="{StaticResource GoldAccentBrush}"
                            VerticalAlignment="Center"/>
+
+                <!-- Market Total Cost (shown in split-pane view) -->
+                <TextBlock Grid.Column="1"
+                           x:Name="MarketTotalCostText"
+                           Text="" 
+                           Foreground="{StaticResource SuccessBrush}"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Right"
+                           Margin="0,0,16,0"/>
 
                 <!-- Status Icons -->
                 <StackPanel Grid.Column="2" 

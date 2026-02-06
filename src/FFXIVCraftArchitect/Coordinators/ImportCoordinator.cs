@@ -1,10 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using FFXIVCraftArchitect.Core.Models;
-using FFXIVCraftArchitect.Services;
+using FFXIVCraftArchitect.Services.Interfaces;
 using FFXIVCraftArchitect.ViewModels;
 using FFXIVCraftArchitect.Views;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Coordinators;
@@ -15,17 +14,18 @@ namespace FFXIVCraftArchitect.Coordinators;
 /// </summary>
 public class ImportCoordinator
 {
-    private readonly TeamcraftService _teamcraftService;
-    private readonly ArtisanService _artisanService;
+    private readonly ITeamcraftService _teamcraftService;
+    private readonly IArtisanService _artisanService;
     private readonly ILogger<ImportCoordinator> _logger;
-    private readonly Window _ownerWindow;
 
-    public ImportCoordinator(Window ownerWindow)
+    public ImportCoordinator(
+        ITeamcraftService teamcraftService,
+        IArtisanService artisanService,
+        ILogger<ImportCoordinator> logger)
     {
-        _ownerWindow = ownerWindow;
-        _teamcraftService = App.Services.GetRequiredService<TeamcraftService>();
-        _artisanService = App.Services.GetRequiredService<ArtisanService>();
-        _logger = App.Services.GetRequiredService<ILogger<ImportCoordinator>>();
+        _teamcraftService = teamcraftService;
+        _artisanService = artisanService;
+        _logger = logger;
     }
 
     /// <summary>
@@ -40,11 +40,11 @@ public class ImportCoordinator
     /// <summary>
     /// Import from Teamcraft "Copy as Text" format using a dialog.
     /// </summary>
-    public ImportResult ImportFromTeamcraft(string dataCenter, string world)
+    public ImportResult ImportFromTeamcraft(Window ownerWindow, string dataCenter, string world)
     {
         var importDialog = new TeamcraftImportWindow(_teamcraftService, dataCenter, world)
         {
-            Owner = _ownerWindow
+            Owner = ownerWindow
         };
 
         if (importDialog.ShowDialog() != true || importDialog.ImportedPlan == null)

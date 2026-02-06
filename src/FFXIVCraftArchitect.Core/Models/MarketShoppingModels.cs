@@ -52,6 +52,7 @@ public class DetailedShoppingPlan
 public class WorldShoppingSummary
 {
     public string WorldName { get; set; } = string.Empty;
+    public int WorldId { get; set; }
     public long TotalCost { get; set; }
     public decimal AveragePricePerUnit { get; set; }
     public int ListingsUsed { get; set; }
@@ -101,11 +102,33 @@ public class WorldShoppingSummary
     /// Home worlds bypass congested restrictions since you can always purchase there.
     /// </summary>
     public bool IsHomeWorld { get; set; }
+    
+    /// <summary>
+    /// Whether this world has been blacklisted by the user.
+    /// Blacklisted worlds are excluded from recommendations (unless it's the home world).
+    /// </summary>
+    public bool IsBlacklisted { get; set; }
+    
+    /// <summary>
+    /// Whether travel to this world is currently prohibited (real-time from Waitingway API).
+    /// This indicates the world is at capacity for visitors.
+    /// </summary>
+    public bool IsTravelProhibited { get; set; }
+    
+    /// <summary>
+    /// Warning message for congested worlds during peak hours.
+    /// </summary>
+    public string? CongestedWarning { get; set; }
 
     public string CostDisplay => $"{TotalCost:N0}g";
     public string PricePerUnitDisplay => $"{AveragePricePerUnit:N0}g";
     public string ValueScoreDisplay => $"{ValueScore:N0}g";
     public bool HasExcess => ExcessQuantity > 0;
+    
+    /// <summary>
+    /// Whether this world has any accessibility issues (congested, blacklisted, or travel prohibited).
+    /// </summary>
+    public bool HasAccessibilityIssues => IsCongested || IsBlacklisted || IsTravelProhibited;
 }
 
 /// <summary>
