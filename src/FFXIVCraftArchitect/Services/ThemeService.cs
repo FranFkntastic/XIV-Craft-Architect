@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Media;
 using Microsoft.Extensions.Logging;
+using SettingsService = FFXIVCraftArchitect.Core.Services.SettingsService;
 
 namespace FFXIVCraftArchitect.Services;
 

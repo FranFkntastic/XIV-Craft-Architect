@@ -20,6 +20,7 @@ public enum PlanBrowserAction
 public partial class PlanBrowserWindow : Window
 {
     private readonly IPlanPersistenceService _planPersistence;
+    private readonly IDialogService _dialogs;
     private readonly MainWindow? _mainWindow;
     private List<PlanInfo> _plans = new();
 
@@ -33,10 +34,11 @@ public partial class PlanBrowserWindow : Window
     /// </summary>
     public PlanBrowserAction SelectedAction { get; private set; } = PlanBrowserAction.None;
 
-    public PlanBrowserWindow(IPlanPersistenceService planPersistence, MainWindow? mainWindow = null)
+    public PlanBrowserWindow(IPlanPersistenceService planPersistence, DialogServiceFactory dialogFactory, MainWindow? mainWindow = null)
     {
         InitializeComponent();
         _planPersistence = planPersistence;
+        _dialogs = dialogFactory.CreateForWindow(this);
         _mainWindow = mainWindow;
         
         // Load plans when window opens
@@ -123,24 +125,22 @@ public partial class PlanBrowserWindow : Window
         }
     }
 
-    private void OnDeletePlan(object sender, RoutedEventArgs e)
+    private async void OnDeletePlan(object sender, RoutedEventArgs e)
     {
         var selected = PlansListBox.SelectedItem as PlanInfo;
         if (selected == null || string.IsNullOrEmpty(selected.FilePath))
             return;
 
-        var result = MessageBox.Show(
+        if (!await _dialogs.ConfirmAsync(
             $"Are you sure you want to delete '{selected.Name}'?",
-            "Confirm Delete",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning);
-
-        if (result == MessageBoxResult.Yes)
+            "Confirm Delete"))
         {
-            if (_planPersistence.DeletePlan(selected.FilePath))
-            {
-                RefreshPlanList();
-            }
+            return;
+        }
+
+        if (_planPersistence.DeletePlan(selected.FilePath))
+        {
+            RefreshPlanList();
         }
     }
 

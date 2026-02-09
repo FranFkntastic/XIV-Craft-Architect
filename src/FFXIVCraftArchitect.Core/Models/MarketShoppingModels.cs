@@ -1,4 +1,82 @@
+using FFXIVCraftArchitect.Core.Services;
+
 namespace FFXIVCraftArchitect.Core.Models;
+
+/// <summary>
+/// Configuration for market analysis behavior.
+/// Controls the trade-off between cost optimization and travel efficiency.
+/// </summary>
+public class MarketAnalysisConfig
+{
+    /// <summary>
+    /// Weight between fewer worlds (0) and optimal cost (100).
+    /// 0 = Minimize travel, visit as few worlds as possible
+    /// 50 = Balanced approach
+    /// 100 = Pure cost optimization, visit any world for best price
+    /// </summary>
+    public int CostVsTravelWeight { get; set; } = 50;
+    
+    /// <summary>
+    /// Minimum savings percentage required to suggest a multi-world split.
+    /// Default 10% - splits that save less than this are not recommended.
+    /// </summary>
+    public decimal MinSplitSavingsPercent { get; set; } = 10m;
+    
+    /// <summary>
+    /// Maximum number of worlds to visit for a single item.
+    /// Uses soft limit based on tier 1 recommendations if null.
+    /// </summary>
+    public int? MaxWorldsPerItem { get; set; }
+    
+    /// <summary>
+    /// Whether to prefer worlds that are already being visited for other items.
+    /// Enabled by default for travel consolidation.
+    /// </summary>
+    public bool PreferConsolidatedWorlds { get; set; } = true;
+    
+    /// <summary>
+    /// How much extra weight to give consolidated worlds (0-50).
+    /// Higher values strongly prefer visiting worlds already on the route.
+    /// </summary>
+    public int ConsolidationBonus { get; set; } = 20;
+    
+    /// <summary>
+    /// Creates config from settings service.
+    /// </summary>
+    public static MarketAnalysisConfig FromSettings(SettingsService settings)
+    {
+        return new MarketAnalysisConfig
+        {
+            CostVsTravelWeight = settings.Get("analysis.cost_vs_travel_weight", 50),
+            MinSplitSavingsPercent = settings.Get("analysis.min_split_savings", 10m),
+            MaxWorldsPerItem = settings.Get<int?>("analysis.max_worlds_per_item", null),
+            PreferConsolidatedWorlds = settings.Get("analysis.prefer_consolidated", true),
+            ConsolidationBonus = settings.Get("analysis.consolidation_bonus", 20)
+        };
+    }
+    
+    /// <summary>
+    /// Gets the effective max worlds per item based on tier 1 count.
+    /// </summary>
+    public int GetEffectiveMaxWorlds(int tier1WorldCount)
+    {
+        if (MaxWorldsPerItem.HasValue)
+            return MaxWorldsPerItem.Value;
+        
+        // Soft limit: tier 1 worlds + 1 for supplemental
+        // Weight adjusts this: lower weight = tighter limit
+        var adjustment = (100 - CostVsTravelWeight) / 25; // 0 to 4
+        return Math.Max(2, tier1WorldCount + 1 - adjustment);
+    }
+    
+    /// <summary>
+    /// Checks if a split purchase meets the minimum savings threshold.
+    /// </summary>
+    public bool MeetsSavingsThreshold(decimal savingsPercent)
+    {
+        return savingsPercent >= MinSplitSavingsPercent;
+    }
+}
 
 /// <summary>
 /// Sort options for market shopping plan display.
@@ -44,6 +122,85 @@ public class DetailedShoppingPlan
     public bool HasHqData => HQAveragePrice.HasValue;
 
     public bool HasOptions => WorldOptions.Count > 0;
+    
+    /// <summary>
+    /// Multi-world split recommendation for items that can't be fulfilled on a single world.
+    /// Null if the item can be fully purchased on the recommended world.
+    /// </summary>
+    public List<SplitWorldPurchase>? RecommendedSplit { get; set; }
+    
+    /// <summary>
+    /// Whether this item requires a multi-world split purchase.
+    /// </summary>
+    public bool RequiresSplitPurchase => RecommendedSplit != null && RecommendedSplit.Count > 1;
+    
+    /// <summary>
+    /// Total cost if purchasing via the recommended split (null if no split needed).
+    /// </summary>
+    public long? SplitTotalCost => RecommendedSplit?.Sum(s => s.TotalCost);
+    
+    /// <summary>
+    /// Savings percentage compared to single-world purchase (null if no viable single-world option).
+    /// </summary>
+    public decimal? SplitSavingsPercent 
+    { 
+        get 
+        {
+            if (RecommendedWorld == null || SplitTotalCost == null) return null;
+            var singleCost = RecommendedWorld.TotalCost;
+            var splitCost = SplitTotalCost.Value;
+            return singleCost > 0 ? (singleCost - splitCost) / (decimal)singleCost * 100 : 0;
+        }
+    }
+}
+
+/// <summary>
+/// Represents a partial purchase from a specific world as part of a multi-world split.
+/// </summary>
+public class SplitWorldPurchase
+{
+    /// <summary>
+    /// The world to purchase from.
+    /// </summary>
+    public string WorldName { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Quantity to buy from this world.
+    /// </summary>
+    public int QuantityToBuy { get; set; }
+    
+    /// <summary>
+    /// Price per unit on this world.
+    /// </summary>
+    public decimal PricePerUnit { get; set; }
+    
+    /// <summary>
+    /// Total cost for this portion (QuantityToBuy * PricePerUnit).
+    /// </summary>
+    public long TotalCost => (long)(QuantityToBuy * PricePerUnit);
+    
+    /// <summary>
+    /// Whether this is a partial world (not the primary recommendation).
+    /// </summary>
+    public bool IsPartial { get; set; }
+    
+    /// <summary>
+    /// Context for why this world was selected:
+    /// - "Primary": Best price, main destination
+    /// - "Consolidated": Selected because visiting for other items
+    /// - "Supplemental": Needed to complete quantity after primary
+    /// </summary>
+    public string TravelContext { get; set; } = "Primary";
+    
+    /// <summary>
+    /// How much stock is available beyond what we need.
+    /// </summary>
+    public int ExcessAvailable { get; set; }
+    
+    /// <summary>
+    /// Listings used for this purchase portion.
+    /// </summary>
+    public List<ShoppingListingEntry> Listings { get; set; } = new();
 }
 
 /// <summary>
@@ -247,7 +404,13 @@ public enum CraftRecommendation
 public class PriceInfo
 {
     public int ItemId { get; set; }
+    public string ItemName { get; set; } = string.Empty;
     public decimal UnitPrice { get; set; }
+    public int QuantityAvailable { get; set; }
+    public PriceSource Source { get; set; }
+    public string SourceDetails { get; set; } = string.Empty;
+    public DateTime LastUpdated { get; set; }
     public decimal HqUnitPrice { get; set; }
+    public int HqQuantityAvailable { get; set; }
     public bool HasHqData => HqUnitPrice > 0;
 }

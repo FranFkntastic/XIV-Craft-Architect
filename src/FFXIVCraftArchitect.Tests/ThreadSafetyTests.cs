@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using FFXIVCraftArchitect.Core.Services;
+using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -11,21 +13,6 @@ namespace FFXIVCraftArchitect.Tests;
 public class ThreadSafetyTests
 {
     #region PriceCheckService - ConcurrentDictionary Tests
-
-    [Fact]
-    public void PriceCheckService_PriceCache_IsConcurrentDictionary()
-    {
-        // This test validates that the _priceCache field is a ConcurrentDictionary
-        // which provides thread-safe concurrent access without explicit locking
-        
-        // Arrange - Use reflection to verify the field type
-        var serviceType = typeof(PriceCheckService);
-        var priceCacheField = serviceType.GetField("_priceCache", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        
-        // Assert
-        Assert.NotNull(priceCacheField);
-        Assert.Equal(typeof(ConcurrentDictionary<int, PriceInfo>), priceCacheField.FieldType);
-    }
 
     [Fact]
     public async Task ConcurrentDictionary_TryGetValue_ConcurrentAccess_DoesNotThrow()

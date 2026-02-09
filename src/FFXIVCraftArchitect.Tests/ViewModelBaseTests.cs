@@ -37,13 +37,6 @@ public class ViewModelBaseTests
             set => SetProperty(ref _flag, value);
         }
 
-        public bool SetPropertyResult { get; private set; }
-
-        public bool SetNameWithCallback(string value, Action onChanged)
-        {
-            return SetProperty(ref _name, value, onChanged);
-        }
-
         // Expose OnPropertyChanged for testing
         public void RaisePropertyChanged(string? propertyName = null)
         {
@@ -198,62 +191,6 @@ public class ViewModelBaseTests
         // Assert
         Assert.Equal(0, propertyChangedCount);
         Assert.Equal("Initial", viewModel.Name);
-    }
-
-    [Fact]
-    public void SetProperty_ReturnsTrue_WhenValueChanges()
-    {
-        // Arrange
-        var viewModel = new TestViewModel();
-
-        // Act
-        var result = viewModel.SetNameWithCallback("New Name", () => { });
-
-        // Assert
-        Assert.True(result);
-    }
-
-    [Fact]
-    public void SetProperty_ReturnsFalse_WhenValueUnchanged()
-    {
-        // Arrange
-        var viewModel = new TestViewModel();
-        viewModel.Name = "Same Name";
-
-        // Act
-        var result = viewModel.SetNameWithCallback("Same Name", () => { });
-
-        // Assert
-        Assert.False(result);
-    }
-
-    [Fact]
-    public void SetProperty_WithCallback_InvokesCallback_WhenValueChanges()
-    {
-        // Arrange
-        var viewModel = new TestViewModel();
-        var callbackInvoked = false;
-
-        // Act
-        viewModel.SetNameWithCallback("New Name", () => callbackInvoked = true);
-
-        // Assert
-        Assert.True(callbackInvoked);
-    }
-
-    [Fact]
-    public void SetProperty_WithCallback_DoesNotInvokeCallback_WhenValueUnchanged()
-    {
-        // Arrange
-        var viewModel = new TestViewModel();
-        viewModel.Name = "Same Name";
-        var callbackInvoked = false;
-
-        // Act
-        viewModel.SetNameWithCallback("Same Name", () => callbackInvoked = true);
-
-        // Assert
-        Assert.False(callbackInvoked);
     }
 
     [Fact]

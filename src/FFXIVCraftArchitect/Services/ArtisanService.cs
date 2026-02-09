@@ -4,7 +4,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Core.Services;
-using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
@@ -193,8 +192,8 @@ public class ArtisanService : IArtisanService
             return null;
         }
 
-        // Find the specific craft
-        var craft = itemData.Crafts?.FirstOrDefault(c => c.Id == id);
+        // Find the specific craft (Id is string, compare with parsed value)
+        var craft = itemData.Crafts?.FirstOrDefault(c => c.Id == id.ToString());
         if (craft == null && itemData.Crafts?.Any() == true)
         {
             // If no exact match, use first craft
@@ -502,7 +501,7 @@ public class ArtisanService : IArtisanService
 
         var artisanItem = new ArtisanListItem
         {
-            ID = (uint)recipe.Id,
+            ID = uint.TryParse(recipe.Id, out var recipeId) ? recipeId : 0,
             Quantity = recipeCount,
             ListItemOptions = new ArtisanListItemOptions
             {

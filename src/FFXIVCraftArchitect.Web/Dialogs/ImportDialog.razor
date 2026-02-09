@@ -1,10 +1,54 @@
 @using FFXIVCraftArchitect.Core.Services
+@using FFXIVCraftArchitect.Core.Models
 @inject GarlandService GarlandService
+@inject RecipeCalculationService RecipeService
 @inject ISnackbar Snackbar
 
 <MudDialog>
     <DialogContent>
         <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-4" @bind-ActivePanelIndex="_activeTab">
+            <!-- Native Format - Always first as it's the primary format -->
+            <MudTabPanel Text="Craft Architect (.craftplan)">
+                <MudText Typo="Typo.body2" Class="mb-4">
+                    Import a native Craft Architect plan. This preserves all plan data including acquisition sources and recipe structure.
+                </MudText>
+                
+                <!-- Browse Button - Using label to trigger file input -->
+                <div class="mb-4">
+                    <InputFile id="nativeFileInput" 
+                               OnChange="OnNativeFileSelected"
+                               accept=".craftplan,.json" 
+                               style="display: none;" />
+                    <label for="nativeFileInput" style="display: block; cursor: pointer;">
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.FolderOpen"
+                                   FullWidth="true"
+                                   Style="pointer-events: none;">
+                            Browse for .craftplan file...
+                        </MudButton>
+                    </label>
+                </div>
+                
+                @if (!string.IsNullOrEmpty(_uploadedFileName))
+                {
+                    <MudAlert Severity="Severity.Success" Dense="true" Class="mb-4">
+                        Loaded: @_uploadedFileName
+                    </MudAlert>
+                }
+                
+                <MudDivider Class="my-4" />
+                
+                <MudText Typo="Typo.caption" Class="mb-2 d-block" Style="color: #888;">
+                    Or paste JSON directly:
+                </MudText>
+                <MudTextField @bind-Value="_nativeJson"
+                              Label="Plan JSON"
+                              Variant="Variant.Outlined"
+                              Lines="6"
+                              Placeholder="Paste native plan JSON here..." />
+            </MudTabPanel>
+            
             <MudTabPanel Text="Teamcraft Text">
                 <MudText Typo="Typo.body2" Class="mb-4">
                     Paste a Teamcraft list (format: "Item Name xQuantity" or "Item Name x Quantity", one per line)
@@ -40,7 +84,7 @@
         <MudButton OnClick="Cancel">Cancel</MudButton>
         <MudButton Color="Color.Primary" 
                    OnClick="Import" 
-                   Disabled="_isProcessing || (string.IsNullOrWhiteSpace(_teamcraftText) && string.IsNullOrWhiteSpace(_artisanJson))">
+                   Disabled="_isProcessing || (string.IsNullOrWhiteSpace(_nativeJson) && string.IsNullOrWhiteSpace(_teamcraftText) && string.IsNullOrWhiteSpace(_artisanJson))">
             Import
         </MudButton>
     </DialogActions>
@@ -51,10 +95,12 @@
     [Parameter] public int ActiveTab { get; set; } = 0;
     
     private int _activeTab = 0;
+    private string _nativeJson = "";
     private string _teamcraftText = "";
     private string _artisanJson = "";
     private bool _isProcessing = false;
     private string _processingMessage = "";
+    private string _uploadedFileName = "";
     
     protected override void OnInitialized()
     {
@@ -68,9 +114,14 @@
         
         try
         {
-            var items = new List<ImportItem>();
+            List<ImportItem>? items = null;
+            CraftingPlan? nativePlan = null;
             
-            if (!string.IsNullOrWhiteSpace(_teamcraftText))
+            if (!string.IsNullOrWhiteSpace(_nativeJson))
+            {
+                (items, nativePlan) = await ImportNativeAsync();
+            }
+            else if (!string.IsNullOrWhiteSpace(_teamcraftText))
             {
                 items = await ImportTeamcraftAsync();
             }
@@ -79,9 +130,14 @@
                 items = await ImportArtisanAsync();
             }
             
-            if (items.Count > 0)
+            if (items?.Count > 0)
             {
-                MudDialog.Close(DialogResult.Ok(items));
+                // Return both items and native plan (if available)
+                MudDialog.Close(DialogResult.Ok(new ImportResult 
+                { 
+                    Items = items, 
+                    NativePlan = nativePlan 
+                }));
             }
             else
             {
@@ -96,6 +152,65 @@
         {
             _isProcessing = false;
         }
+    }
+
+    private async Task OnNativeFileSelected(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file == null) return;
+        
+        try
+        {
+            // Read file content
+            using var stream = file.OpenReadStream(maxAllowedSize: 1024 * 1024); // 1MB max
+            using var reader = new StreamReader(stream);
+            _nativeJson = await reader.ReadToEndAsync();
+            _uploadedFileName = file.Name;
+            Snackbar.Add($"Loaded {file.Name} - ready to import", Severity.Success);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to read file: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task<(List<ImportItem> Items, CraftingPlan? Plan)> ImportNativeAsync()
+    {
+        var items = new List<ImportItem>();
+        CraftingPlan? plan = null;
+        
+        try
+        {
+            _processingMessage = "Parsing native plan format...";
+            StateHasChanged();
+            
+            plan = RecipeService.DeserializePlan(_nativeJson);
+            
+            if (plan != null)
+            {
+                // Convert root items to ImportItem list
+                foreach (var rootItem in plan.RootItems)
+                {
+                    items.Add(new ImportItem
+                    {
+                        Id = rootItem.ItemId,
+                        Name = rootItem.Name,
+                        IconId = rootItem.IconId,
+                        Quantity = rootItem.Quantity,
+                        MustBeHq = rootItem.MustBeHq
+                    });
+                }
+                
+                Snackbar.Add($"Imported native plan with {items.Count} items", Severity.Success);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to parse native format: {ex.Message}", Severity.Error);
+        }
+        
+        return (items, plan);
     }
     
     private async Task<List<ImportItem>> ImportTeamcraftAsync()
@@ -249,5 +364,12 @@
         public string Name { get; set; } = "";
         public int IconId { get; set; }
         public int Quantity { get; set; }
+        public bool MustBeHq { get; set; }
+    }
+
+    public class ImportResult
+    {
+        public List<ImportItem> Items { get; set; } = new();
+        public CraftingPlan? NativePlan { get; set; }
     }
 }

@@ -70,10 +70,13 @@
                                EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Import</MudButton>
                 </ActivatorContent>
                 <ChildContent>
-                    <MudMenuItem OnClick="() => ShowImportDialog(0)" Icon="@Icons.Material.Filled.ContentPaste">
+                    <MudMenuItem OnClick="() => ShowImportDialog(0)" Icon="@Icons.Material.Filled.FolderOpen">
+                        From Craft Architect (Native)...
+                    </MudMenuItem>
+                    <MudMenuItem OnClick="() => ShowImportDialog(1)" Icon="@Icons.Material.Filled.ContentPaste">
                         From Teamcraft (Text)...
                     </MudMenuItem>
-                    <MudMenuItem OnClick="() => ShowImportDialog(1)" Icon="@Icons.Material.Filled.Code">
+                    <MudMenuItem OnClick="() => ShowImportDialog(2)" Icon="@Icons.Material.Filled.Code">
                         From Artisan (JSON)...
                     </MudMenuItem>
                 </ChildContent>
@@ -88,11 +91,15 @@
                                EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Export</MudButton>
                 </ActivatorContent>
                 <ChildContent>
+                    <MudMenuItem OnClick="OnExportNative" Icon="@Icons.Material.Filled.FolderOpen">
+                        To Craft Architect (Native)...
+                    </MudMenuItem>
+                    <MudDivider />
                     <MudMenuItem OnClick="OnExportTeamcraft" Icon="@Icons.Material.Filled.Link">
-                        To Teamcraft URL
+                        To Teamcraft URL...
                     </MudMenuItem>
                     <MudMenuItem OnClick="OnExportArtisan" Icon="@Icons.Material.Filled.Code">
-                        To Artisan (JSON)
+                        To Artisan (JSON)...
                     </MudMenuItem>
                     <MudDivider />
                     <MudMenuItem OnClick="OnCopyPlainText" Icon="@Icons.Material.Filled.ContentCopy">
@@ -415,26 +422,55 @@
         var dialog = DialogService.Show<ImportDialog>("Import", parameters, options);
         var result = await dialog.Result;
         
-        if (result?.Data is List<ImportDialog.ImportItem> items)
+        if (result?.Data is ImportDialog.ImportResult importResult)
         {
-            // Add imported items to project
-            foreach (var item in items)
-            {
-                if (!AppState.ProjectItems.Any(p => p.Id == item.Id))
-                {
-                    AppState.ProjectItems.Add(new PlannerProjectItem
-                    {
-                        Id = item.Id,
-                        Name = item.Name,
-                        IconId = item.IconId,
-                        Quantity = item.Quantity,
-                        MustBeHq = false
-                    });
-                }
-            }
+            var items = importResult.Items;
             
-            AppState.NotifyPlanChanged();
-            Snackbar.Add($"Imported {items.Count} items", Severity.Success);
+            // If we have a native plan, restore it fully
+            if (importResult.NativePlan != null)
+            {
+                AppState.CurrentPlan = importResult.NativePlan;
+                
+                // Use the plan's root items
+                AppState.ProjectItems = importResult.NativePlan.RootItems.Select(r => new PlannerProjectItem
+                {
+                    Id = r.ItemId,
+                    Name = r.Name,
+                    IconId = r.IconId,
+                    Quantity = r.Quantity,
+                    MustBeHq = r.MustBeHq
+                }).ToList();
+                
+                // Restore data center if available
+                if (!string.IsNullOrEmpty(importResult.NativePlan.DataCenter))
+                {
+                    AppState.SelectedDataCenter = importResult.NativePlan.DataCenter;
+                }
+                
+                AppState.NotifyPlanChanged();
+                Snackbar.Add($"Imported native plan '{importResult.NativePlan.Name}' with {items.Count} items", Severity.Success);
+            }
+            else
+            {
+                // Add imported items to project (for non-native formats)
+                foreach (var item in items)
+                {
+                    if (!AppState.ProjectItems.Any(p => p.Id == item.Id))
+                    {
+                        AppState.ProjectItems.Add(new PlannerProjectItem
+                        {
+                            Id = item.Id,
+                            Name = item.Name,
+                            IconId = item.IconId,
+                            Quantity = item.Quantity,
+                            MustBeHq = item.MustBeHq
+                        });
+                    }
+                }
+                
+                AppState.NotifyPlanChanged();
+                Snackbar.Add($"Imported {items.Count} items", Severity.Success);
+            }
             
             // Navigate to planner
             if (items.Count > 0)
@@ -447,14 +483,19 @@
 
     // ==================== EXPORT MENU ====================
     
+    private async Task OnExportNative()
+    {
+        await ShowExportDialog(0); // Native tab
+    }
+
     private async Task OnExportTeamcraft()
     {
-        await ShowExportDialog(0); // Teamcraft tab
+        await ShowExportDialog(1); // Teamcraft tab
     }
 
     private async Task OnExportArtisan()
     {
-        await ShowExportDialog(1); // Artisan tab
+        await ShowExportDialog(2); // Artisan tab
     }
     
     private async Task ShowExportDialog(int activeTab)

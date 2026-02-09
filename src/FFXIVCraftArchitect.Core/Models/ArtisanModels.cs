@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace FFXIVCraftArchitect.Models;
+namespace FFXIVCraftArchitect.Core.Models;
 
 /// <summary>
 /// Artisan crafting list format for export/import.
@@ -108,4 +108,15 @@ public class ArtisanExportResult
     /// Whether the export was successful.
     /// </summary>
     public bool Success => MissingRecipes.Count == 0;
+}
+
+/// <summary>
+/// Plan information for persistence.
+/// </summary>
+public class PlanInfo
+{
+    public string Name { get; set; } = string.Empty;
+    public string FilePath { get; set; } = string.Empty;
+    public DateTime ModifiedAt { get; set; }
+    public int ItemCount { get; set; }
 }

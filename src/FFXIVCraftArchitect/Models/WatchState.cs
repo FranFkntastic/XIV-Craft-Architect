@@ -185,12 +185,15 @@ public class WatchState
             RequiresHq = node.RequiresHq,
             MustBeHq = node.MustBeHq,
             CanBeHq = node.CanBeHq,
+            CanBuyFromVendor = node.CanBuyFromVendor,
+            CanCraft = node.CanCraft,
             IsUncraftable = node.IsUncraftable,
             RecipeLevel = node.RecipeLevel,
             Job = node.Job,
             Yield = node.Yield,
             MarketPrice = node.MarketPrice,
             HqMarketPrice = node.HqMarketPrice,
+            VendorPrice = node.VendorPrice,
             PriceSource = node.PriceSource,
             PriceSourceDetails = node.PriceSourceDetails,
             Notes = node.Notes,
@@ -241,6 +244,7 @@ public class WatchState
             Yield = fileNode.Yield,
             MarketPrice = fileNode.MarketPrice,
             HqMarketPrice = fileNode.HqMarketPrice,
+            VendorPrice = fileNode.VendorPrice,
             PriceSource = fileNode.PriceSource,
             PriceSourceDetails = fileNode.PriceSourceDetails ?? string.Empty,
             Notes = fileNode.Notes,
@@ -264,6 +268,8 @@ public class WatchState
         node.RequiresHq = fileNode.RequiresHq;
         node.MustBeHq = fileNode.MustBeHq;
         node.CanBeHq = fileNode.CanBeHq;
+        node.CanBuyFromVendor = fileNode.CanBuyFromVendor;
+        node.CanCraft = fileNode.CanCraft;
         
         return node;
     }

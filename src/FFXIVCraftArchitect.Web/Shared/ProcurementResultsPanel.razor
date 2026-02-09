@@ -2,19 +2,19 @@
 @using FFXIVCraftArchitect.Core.Services
 @inject ISnackbar Snackbar
 
-<div style="display: flex; flex-direction: column; height: 100%; gap: 12px;">
+<div style="display: flex; flex-direction: column; height: 100%; gap: 8px;">
     
     <!-- Header Summary Card -->
     <div style="flex-shrink: 0;">
-        <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: #2a3a2a; border-radius: 6px; border: 1px solid #3a5a3a;">
-            <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #2a3a2a; border-radius: 6px; border: 1px solid #3a5a3a;">
+            <div style="display: flex; align-items: center; gap: 10px;">
                 <MudIcon Icon="@Icons.Material.Filled.Assignment" Color="Color.Success" Size="Size.Medium" />
                 <div>
                     <MudText Typo="Typo.subtitle1" Style="color: #90EE90; font-weight: 600;">Procurement Plan</MudText>
                     @if (Analysis != null)
                     {
                         <MudText Typo="Typo.caption" Style="color: #888;">
-                            @Analysis.DataCenter · @Analysis.ItemsToCraft craft, @Analysis.ItemsToBuy buy
+                            @Analysis.DataCenter · @Analysis.ItemsToBuy items
                         </MudText>
                     }
                 </div>
@@ -23,26 +23,10 @@
             {
                 <div style="text-align: right;">
                     <MudText Typo="Typo.h6" Style="color: #d4a73a; font-weight: 700;">@Analysis.OptimalTotalCost.ToString("N0")g</MudText>
-                    <MudText Typo="Typo.caption" Style="color: #888;">total optimal cost</MudText>
+                    <MudText Typo="Typo.caption" Style="color: #888;">total cost</MudText>
                 </div>
             }
         </div>
-        
-        @if (Analysis != null)
-        {
-            <div style="display: flex; gap: 12px; margin-top: 8px;">
-                <div style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px; background: rgba(33, 150, 243, 0.1); border-radius: 4px;">
-                    <MudIcon Icon="@Icons.Material.Filled.Build" Size="Size.Small" Style="color: #2196f3;" />
-                    <MudText Typo="Typo.body2" Style="color: #2196f3; font-weight: 600;">@Analysis.ItemsToCraft Craft</MudText>
-                    <MudText Typo="Typo.caption" Style="color: #888;">(@Analysis.TotalCraftCost.ToString("N0")g)</MudText>
-                </div>
-                <div style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px; background: rgba(76, 175, 80, 0.1); border-radius: 4px;">
-                    <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" Style="color: #4caf50;" />
-                    <MudText Typo="Typo.body2" Style="color: #4caf50; font-weight: 600;">@Analysis.ItemsToBuy Buy</MudText>
-                    <MudText Typo="Typo.caption" Style="color: #888;">(@Analysis.TotalPurchaseCost.ToString("N0")g)</MudText>
-                </div>
-            </div>
-        }
     </div>
     
     <!-- Expanded Item Panel (Top) -->
@@ -53,7 +37,28 @@
         </div>
     }
     
-    <!-- Collapsed Cards Grid (Bottom) -->
+    <!-- View Toggle -->
+    @if (Analysis?.ItemAnalyses?.Any() == true)
+    {
+        <div style="flex-shrink: 0; display: flex; gap: 6px;">
+            <MudButton OnClick="() => _viewMode = ViewMode.Cards" 
+                       Color="@(_viewMode == ViewMode.Cards ? Color.Primary : Color.Default)"
+                       Variant="Variant.Outlined" 
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.GridView">
+                Cards
+            </MudButton>
+            <MudButton OnClick="() => _viewMode = ViewMode.TextList" 
+                       Color="@(_viewMode == ViewMode.TextList ? Color.Primary : Color.Default)"
+                       Variant="Variant.Outlined" 
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.List">
+                Shopping List
+            </MudButton>
+        </div>
+    }
+    
+    <!-- Content Area -->
     <div style="flex-grow: 1; overflow-y: auto; min-height: 0;">
         @if (Analysis?.ItemAnalyses?.Any() != true)
         {
@@ -65,47 +70,205 @@
                 </MudText>
             </div>
         }
+        else if (_viewMode == ViewMode.TextList)
+        {
+            <!-- Text-based Shopping List View -->
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+                @{ 
+                    var vendorItems = GetVendorItems().ToList();
+                    var marketItems = GetMarketItems().ToList();
+                    var splitItems = GetSplitWorldItems().ToList();
+                    var noDataItems = GetItemsWithNoData().ToList();
+                }
+                
+                <!-- Split-World Items Section -->
+                @foreach (var splitGroup in GetSplitWorldGroups())
+                {
+                    <div style="background: #2a2020; border-radius: 6px; border: 1px solid #5a3a3a; overflow: hidden;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #3a2a2a; border-bottom: 1px solid #444;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <MudIcon Icon="@Icons.Material.Filled.CallSplit" Size="Size.Small" Style="color: #ff9800;" />
+                                <MudText Typo="Typo.subtitle2" Style="color: #ff9800; font-weight: 600;">Split Purchase</MudText>
+                                <MudText Typo="Typo.caption" Style="color: #888;">(@splitGroup.Worlds)</MudText>
+                            </div>
+                            <MudText Typo="Typo.body2" Style="color: #ff9800; font-weight: 600;">
+                                @splitGroup.TotalCost.ToString("N0")g
+                            </MudText>
+                        </div>
+                        <div style="padding: 6px;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead>
+                                    <tr style="color: #888; font-size: 10px; text-align: left;">
+                                        <th style="padding: 4px 8px; font-weight: 500;">Item</th>
+                                        <th style="padding: 4px 8px; font-weight: 500; text-align: center; width: 50px;">Qty</th>
+                                        <th style="padding: 4px 8px; font-weight: 500; text-align: right; width: 80px;">Price</th>
+                                        <th style="padding: 4px 8px; font-weight: 500; text-align: right; width: 80px;">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var entry in splitGroup.Entries)
+                                    {
+                                        <tr style="background: @(splitGroup.Entries.ToList().IndexOf(entry) % 2 == 0 ? "transparent" : "#333");">
+                                            <td style="padding: 6px 8px; color: #fff;">@entry.ItemName</td>
+                                            <td style="padding: 6px 8px; color: #d4a73a; text-align: center;">@entry.Quantity</td>
+                                            <td style="padding: 6px 8px; color: #aaa; text-align: right; font-size: 11px;">@entry.PricePerUnit.ToString("N0")g</td>
+                                            <td style="padding: 6px 8px; color: #4caf50; text-align: right; font-weight: 500;">@entry.TotalCost.ToString("N0")g</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+                
+                <!-- Vendor Items Section -->
+                @if (vendorItems.Any())
+                {
+                    <div style="background: #2a2520; border-radius: 6px; border: 1px solid #5a4a3a; overflow: hidden;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #3a352a; border-bottom: 1px solid #444;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <MudIcon Icon="@Icons.Material.Filled.Store" Size="Size.Small" Style="color: #d4a73a;" />
+                                <MudText Typo="Typo.subtitle2" Style="color: #d4a73a; font-weight: 600;">Vendor</MudText>
+                                <MudText Typo="Typo.caption" Style="color: #888;">(@vendorItems.Count items)</MudText>
+                            </div>
+                            <MudText Typo="Typo.body2" Style="color: #d4a73a; font-weight: 600;">
+                                @vendorItems.Sum(i => GetItemTotalCost(i)).ToString("N0")g
+                            </MudText>
+                        </div>
+                        <div style="padding: 6px;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead>
+                                    <tr style="color: #888; font-size: 10px; text-align: left;">
+                                        <th style="padding: 4px 8px; font-weight: 500;">Item</th>
+                                        <th style="padding: 4px 8px; font-weight: 500; text-align: center; width: 50px;">Qty</th>
+                                        <th style="padding: 4px 8px; font-weight: 500; text-align: right; width: 80px;">Unit</th>
+                                        <th style="padding: 4px 8px; font-weight: 500; text-align: right; width: 80px;">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var item in vendorItems)
+                                    {
+                                        <tr style="background: @(vendorItems.IndexOf(item) % 2 == 0 ? "transparent" : "#333");">
+                                            <td style="padding: 6px 8px; color: #fff;">@item.Name</td>
+                                            <td style="padding: 6px 8px; color: #d4a73a; text-align: center;">@item.QuantityNeeded</td>
+                                            <td style="padding: 6px 8px; color: #aaa; text-align: right; font-size: 11px;">@GetItemUnitPrice(item).ToString("N0")g</td>
+                                            <td style="padding: 6px 8px; color: #4caf50; text-align: right; font-weight: 500;">@GetItemTotalCost(item).ToString("N0")g</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+                
+                <!-- Market Items by World -->
+                @foreach (var worldGroup in GetMarketItemsByWorld())
+                {
+                    <div style="background: #20252a; border-radius: 6px; border: 1px solid #3a4a5a; overflow: hidden;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #2a353a; border-bottom: 1px solid #444;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" Style="color: #90EE90;" />
+                                <MudText Typo="Typo.subtitle2" Style="color: #fff; font-weight: 600;">@worldGroup.Key</MudText>
+                                <MudText Typo="Typo.caption" Style="color: #888;">(@worldGroup.Count() items)</MudText>
+                            </div>
+                            <MudText Typo="Typo.body2" Style="color: #d4a73a; font-weight: 600;">
+                                @worldGroup.Sum(i => GetItemTotalCost(i)).ToString("N0")g
+                            </MudText>
+                        </div>
+                        <div style="padding: 6px;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead>
+                                    <tr style="color: #888; font-size: 10px; text-align: left;">
+                                        <th style="padding: 4px 8px; font-weight: 500;">Item</th>
+                                        <th style="padding: 4px 8px; font-weight: 500; text-align: center; width: 50px;">Qty</th>
+                                        <th style="padding: 4px 8px; font-weight: 500; text-align: right; width: 80px;">Unit</th>
+                                        <th style="padding: 4px 8px; font-weight: 500; text-align: right; width: 80px;">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var item in worldGroup.OrderBy(i => i.Name))
+                                    {
+                                        <tr style="background: @(worldGroup.ToList().IndexOf(item) % 2 == 0 ? "transparent" : "#333");">
+                                            <td style="padding: 6px 8px; color: #fff;">@item.Name</td>
+                                            <td style="padding: 6px 8px; color: #d4a73a; text-align: center;">@item.QuantityNeeded</td>
+                                            <td style="padding: 6px 8px; color: #aaa; text-align: right; font-size: 11px;">@GetItemUnitPrice(item).ToString("N0")g</td>
+                                            <td style="padding: 6px 8px; color: #4caf50; text-align: right; font-weight: 500;">@GetItemTotalCost(item).ToString("N0")g</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+                
+                <!-- No Data Items -->
+                @if (noDataItems.Any())
+                {
+                    <div style="background: #2a2a2a; border-radius: 6px; border: 1px solid #555; overflow: hidden;">
+                        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #363636; border-bottom: 1px solid #444;">
+                            <MudIcon Icon="@Icons.Material.Filled.Help" Size="Size.Small" Style="color: #666;" />
+                            <MudText Typo="Typo.subtitle2" Style="color: #888; font-weight: 600;">No Data</MudText>
+                            <MudText Typo="Typo.caption" Style="color: #888;">(@noDataItems.Count)</MudText>
+                        </div>
+                        <div style="padding: 6px;">
+                            @foreach (var item in noDataItems)
+                            {
+                                <div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px;">
+                                    <MudText Typo="Typo.body2" Style="color: #888; flex: 1;">@item.Name</MudText>
+                                    <MudText Typo="Typo.caption" Style="color: #666;">×@item.QuantityNeeded</MudText>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
         else
         {
-            <!-- Section Headers and Cards -->
-            <div style="display: flex; flex-direction: column; gap: 16px;">
+            <!-- Card View -->
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+                @{ 
+                    var vendorItemsCard = GetVendorItems().ToList();
+                    var allMarketItemsCard = GetAllMarketItems().ToList();
+                    var noDataItemsCard = GetItemsWithNoData().ToList();
+                }
                 
-                <!-- Items to Craft -->
-                @if (GetItemsToCraft().Any())
+                <!-- Vendor Items -->
+                @if (vendorItemsCard.Any())
                 {
                     <div>
-                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #2196f3;">
-                            <MudIcon Icon="@Icons.Material.Filled.Build" Size="Size.Small" Style="color: #2196f3;" />
-                            <MudText Typo="Typo.subtitle2" Style="color: #2196f3; font-weight: 600;">Items to Craft</MudText>
-                            <MudText Typo="Typo.caption" Style="color: #888;">(@GetItemsToCraft().Count())</MudText>
+                        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px; padding: 3px 8px; background: #2a2520; border-radius: 3px; border: 1px solid #5a4a3a;">
+                            <MudIcon Icon="@Icons.Material.Filled.Store" Size="Size.Small" Style="color: #d4a73a;" />
+                            <MudText Typo="Typo.subtitle2" Style="color: #d4a73a; font-weight: 600;">Vendor</MudText>
+                            <MudText Typo="Typo.caption" Style="color: #888;">(@vendorItemsCard.Count)</MudText>
                         </div>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 6px; align-items: start;">
-                            @foreach (var item in GetItemsToCraft())
+                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 4px; align-items: start;">
+                            @foreach (var item in vendorItemsCard)
                             {
                                 var isSelected = _expandedItem?.ItemId == item.ItemId;
                                 <div @onclick="() => SelectItem(item)" style="cursor: pointer;">
-                                    <ProcurementItemCard Item="item" IsSelected="isSelected" />
+                                    <ProcurementItemCard Item="item" ShoppingPlan="GetShoppingPlan(item.ItemId)" IsSelected="isSelected" />
                                 </div>
                             }
                         </div>
                     </div>
                 }
                 
-                <!-- Items to Buy -->
-                @if (GetItemsToBuy().Any())
+                <!-- Market Items (includes single-world and split-world) -->
+                @if (allMarketItemsCard.Any())
                 {
                     <div>
-                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #4caf50;">
-                            <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" Style="color: #4caf50;" />
-                            <MudText Typo="Typo.subtitle2" Style="color: #4caf50; font-weight: 600;">Items to Buy</MudText>
-                            <MudText Typo="Typo.caption" Style="color: #888;">(@GetItemsToBuy().Count())</MudText>
+                        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px; padding: 3px 8px; background: #20252a; border-radius: 3px; border: 1px solid #3a4a5a;">
+                            <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" Style="color: #87ceeb;" />
+                            <MudText Typo="Typo.subtitle2" Style="color: #87ceeb; font-weight: 600;">Market</MudText>
+                            <MudText Typo="Typo.caption" Style="color: #888;">(@allMarketItemsCard.Count)</MudText>
                         </div>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 6px; align-items: start;">
-                            @foreach (var item in GetItemsToBuy())
+                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 4px; align-items: start;">
+                            @foreach (var item in allMarketItemsCard)
                             {
                                 var isSelected = _expandedItem?.ItemId == item.ItemId;
                                 <div @onclick="() => SelectItem(item)" style="cursor: pointer;">
-                                    <ProcurementItemCard Item="item" IsSelected="isSelected" />
+                                    <ProcurementItemCard Item="item" ShoppingPlan="GetShoppingPlan(item.ItemId)" IsSelected="isSelected" />
                                 </div>
                             }
                         </div>
@@ -113,20 +276,20 @@
                 }
                 
                 <!-- Items with No Data -->
-                @if (GetItemsWithNoData().Any())
+                @if (noDataItemsCard.Any())
                 {
                     <div>
-                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #666;">
+                        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px; padding: 3px 8px; background: #2a2a2a; border-radius: 3px; border: 1px solid #555;">
                             <MudIcon Icon="@Icons.Material.Filled.Help" Size="Size.Small" Style="color: #666;" />
-                            <MudText Typo="Typo.subtitle2" Style="color: #888; font-weight: 600;">No Data Available</MudText>
-                            <MudText Typo="Typo.caption" Style="color: #888;">(@GetItemsWithNoData().Count())</MudText>
+                            <MudText Typo="Typo.subtitle2" Style="color: #888; font-weight: 600;">No Data</MudText>
+                            <MudText Typo="Typo.caption" Style="color: #888;">(@noDataItemsCard.Count)</MudText>
                         </div>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 6px; align-items: start;">
-                            @foreach (var item in GetItemsWithNoData())
+                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 4px; align-items: start;">
+                            @foreach (var item in noDataItemsCard)
                             {
                                 var isSelected = _expandedItem?.ItemId == item.ItemId;
                                 <div @onclick="() => SelectItem(item)" style="cursor: pointer;">
-                                    <ProcurementItemCard Item="item" IsSelected="isSelected" />
+                                    <ProcurementItemCard Item="item" ShoppingPlan="GetShoppingPlan(item.ItemId)" IsSelected="isSelected" />
                                 </div>
                             }
                         </div>
@@ -145,6 +308,13 @@
     public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
     
     private ItemProcurementAnalysis? _expandedItem;
+    private ViewMode _viewMode = ViewMode.Cards;
+    
+    private enum ViewMode
+    {
+        Cards,
+        TextList
+    }
     
     private void SelectItem(ItemProcurementAnalysis item)
     {
@@ -163,15 +333,12 @@
         _expandedItem = null;
     }
     
-    private IEnumerable<ItemProcurementAnalysis> GetItemsToCraft()
+    private DetailedShoppingPlan? GetShoppingPlan(int itemId)
     {
-        if (Analysis?.ItemAnalyses == null)
-            return Enumerable.Empty<ItemProcurementAnalysis>();
-        
-        return Analysis.ItemAnalyses
-            .Where(i => i.Recommendation == ProcurementRecommendation.Craft)
-            .OrderBy(i => i.Name);
+        return ShoppingPlans.FirstOrDefault(p => p.ItemId == itemId);
     }
+    
+    // === FILTER METHODS ===
     
     private IEnumerable<ItemProcurementAnalysis> GetItemsToBuy()
     {
@@ -183,6 +350,39 @@
             .OrderBy(i => i.Name);
     }
     
+    private IEnumerable<ItemProcurementAnalysis> GetVendorItems()
+    {
+        return GetItemsToBuy().Where(i => {
+            var plan = GetShoppingPlan(i.ItemId);
+            return plan?.RecommendedWorld?.WorldName == "Vendor";
+        });
+    }
+    
+    private IEnumerable<ItemProcurementAnalysis> GetMarketItems()
+    {
+        return GetItemsToBuy().Where(i => {
+            var plan = GetShoppingPlan(i.ItemId);
+            return plan?.RecommendedWorld?.WorldName != "Vendor" && 
+                   !(plan?.RequiresSplitPurchase == true);
+        });
+    }
+    
+    private IEnumerable<ItemProcurementAnalysis> GetAllMarketItems()
+    {
+        return GetItemsToBuy().Where(i => {
+            var plan = GetShoppingPlan(i.ItemId);
+            return plan?.RecommendedWorld?.WorldName != "Vendor";
+        });
+    }
+    
+    private IEnumerable<ItemProcurementAnalysis> GetSplitWorldItems()
+    {
+        return GetItemsToBuy().Where(i => {
+            var plan = GetShoppingPlan(i.ItemId);
+            return plan?.RequiresSplitPurchase == true && plan.RecommendedSplit?.Any() == true;
+        });
+    }
+    
     private IEnumerable<ItemProcurementAnalysis> GetItemsWithNoData()
     {
         if (Analysis?.ItemAnalyses == null)
@@ -191,5 +391,78 @@
         return Analysis.ItemAnalyses
             .Where(i => i.Recommendation == ProcurementRecommendation.NoDataAvailable)
             .OrderBy(i => i.Name);
+    }
+    
+    // === TEXT LIST GROUPING ===
+    
+    private record SplitWorldGroup(string Worlds, decimal TotalCost, List<SplitWorldEntry> Entries);
+    private record SplitWorldEntry(string ItemName, int Quantity, decimal PricePerUnit, decimal TotalCost);
+    
+    private IEnumerable<SplitWorldGroup> GetSplitWorldGroups()
+    {
+        var splitItems = GetSplitWorldItems().ToList();
+        if (!splitItems.Any()) return Enumerable.Empty<SplitWorldGroup>();
+        
+        // Group by the exact same world combination
+        var groups = splitItems
+            .Select(item =>
+            {
+                var plan = GetShoppingPlan(item.ItemId)!;
+                var worlds = string.Join("+", plan.RecommendedSplit!.Select(s => s.WorldName).OrderBy(w => w));
+                var entries = plan.RecommendedSplit.Select(s => new SplitWorldEntry(
+                    item.Name,
+                    s.QuantityToBuy,
+                    s.PricePerUnit,
+                    s.TotalCost
+                )).ToList();
+                return new { Worlds = worlds, Plan = plan, Entries = entries };
+            })
+            .GroupBy(x => x.Worlds)
+            .Select(g => new SplitWorldGroup(
+                g.Key,
+                g.SelectMany(x => x.Entries).Sum(e => e.TotalCost),
+                g.SelectMany(x => x.Entries).ToList()
+            ))
+            .OrderBy(g => g.Worlds);
+        
+        return groups;
+    }
+    
+    private IEnumerable<IGrouping<string, ItemProcurementAnalysis>> GetMarketItemsByWorld()
+    {
+        var marketItems = GetMarketItems().ToList();
+        
+        return marketItems
+            .Select(item => new
+            {
+                Item = item,
+                World = GetShoppingPlan(item.ItemId)?.RecommendedWorld?.WorldName ?? "Unknown"
+            })
+            .GroupBy(x => x.World, x => x.Item)
+            .OrderBy(g => g.Key);
+    }
+    
+    // === PRICE HELPERS ===
+    
+    private decimal GetItemUnitPrice(ItemProcurementAnalysis item)
+    {
+        var plan = GetShoppingPlan(item.ItemId);
+        if (plan?.RequiresSplitPurchase == true && plan.RecommendedSplit?.Any() == true)
+        {
+            var totalCost = plan.RecommendedSplit.Sum(s => s.TotalCost);
+            var totalQty = plan.RecommendedSplit.Sum(s => s.QuantityToBuy);
+            return totalQty > 0 ? totalCost / totalQty : 0;
+        }
+        return plan?.RecommendedWorld?.AveragePricePerUnit ?? item.MarketPriceNq;
+    }
+    
+    private decimal GetItemTotalCost(ItemProcurementAnalysis item)
+    {
+        var plan = GetShoppingPlan(item.ItemId);
+        if (plan?.RequiresSplitPurchase == true && plan.SplitTotalCost.HasValue)
+        {
+            return plan.SplitTotalCost.Value;
+        }
+        return plan?.RecommendedWorld?.TotalCost ?? (item.MarketPriceNq * item.QuantityNeeded);
     }
 }

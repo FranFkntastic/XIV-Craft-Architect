@@ -5,6 +5,7 @@ using FFXIVCraftArchitect.Services.Interfaces;
 using FFXIVCraftArchitect.ViewModels;
 using FFXIVCraftArchitect.Views;
 using Microsoft.Extensions.Logging;
+using ITeamcraftService = FFXIVCraftArchitect.Core.Services.ITeamcraftService;
 
 namespace FFXIVCraftArchitect.Coordinators;
 

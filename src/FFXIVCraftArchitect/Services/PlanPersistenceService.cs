@@ -359,15 +359,19 @@ public class PlanPersistenceService : IPlanPersistenceService
             RequiresHq = node.RequiresHq,
             MustBeHq = node.MustBeHq,
             CanBeHq = node.CanBeHq,
+            CanBuyFromVendor = node.CanBuyFromVendor,
+            CanCraft = node.CanCraft,
             IsUncraftable = node.IsUncraftable,
             RecipeLevel = node.RecipeLevel,
             Job = node.Job,
             Yield = node.Yield,
             MarketPrice = node.MarketPrice,
             HqMarketPrice = node.HqMarketPrice,
+            VendorPrice = node.VendorPrice,
             PriceSource = node.PriceSource,
             PriceSourceDetails = node.PriceSourceDetails,
             Notes = node.Notes,
+            IsCircularReference = node.IsCircularReference,
             Children = node.Children.Select(ConvertToFileNode).ToList()
         };
     }
@@ -386,6 +390,7 @@ public class PlanPersistenceService : IPlanPersistenceService
             Yield = fileNode.Yield,
             MarketPrice = fileNode.MarketPrice,
             HqMarketPrice = fileNode.HqMarketPrice,
+            VendorPrice = fileNode.VendorPrice,
             PriceSource = fileNode.PriceSource,
             PriceSourceDetails = fileNode.PriceSourceDetails ?? string.Empty,
             Notes = fileNode.Notes,
@@ -410,6 +415,9 @@ public class PlanPersistenceService : IPlanPersistenceService
         node.RequiresHq = fileNode.RequiresHq;
         node.MustBeHq = fileNode.MustBeHq;
         node.CanBeHq = fileNode.CanBeHq;
+        node.CanBuyFromVendor = fileNode.CanBuyFromVendor;
+        node.CanCraft = fileNode.CanCraft;
+        node.IsCircularReference = fileNode.IsCircularReference;
         
         return node;
     }
@@ -481,6 +489,12 @@ public class PlanFileNode
     /// <summary>If true, this item can be HQ (crafted/gathered items can, crystals/aethersands cannot).</summary>
     public bool CanBeHq { get; set; }
     
+    /// <summary>If true, this item can be bought from a vendor.</summary>
+    public bool CanBuyFromVendor { get; set; }
+    
+    /// <summary>If true, this item has a craft recipe and can be crafted.</summary>
+    public bool CanCraft { get; set; }
+    
     public bool IsUncraftable { get; set; }
     public int RecipeLevel { get; set; }
     public string? Job { get; set; }
@@ -492,10 +506,20 @@ public class PlanFileNode
     /// </summary>
     public decimal HqMarketPrice { get; set; }
     
+    /// <summary>
+    /// Vendor price per unit (if available).
+    /// </summary>
+    public decimal VendorPrice { get; set; }
+    
     public PriceSource PriceSource { get; set; }
     public string? PriceSourceDetails { get; set; }
     public string? Notes { get; set; }
     public List<PlanFileNode> Children { get; set; } = new();
+    
+    /// <summary>
+    /// If true, this node is a circular reference and should not be expanded.
+    /// </summary>
+    public bool IsCircularReference { get; set; }
 }
 
 /// <summary>

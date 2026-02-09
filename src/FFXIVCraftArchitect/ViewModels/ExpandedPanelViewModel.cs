@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows.Input;
 using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Infrastructure.Commands;
 
 namespace FFXIVCraftArchitect.ViewModels;
 

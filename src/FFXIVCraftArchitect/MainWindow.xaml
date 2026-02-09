@@ -122,14 +122,18 @@
                     </Menu.Resources>
 
                     <MenuItem Header="File">
-                        <MenuItem Header="New Plan" Click="OnNewPlan"/>
-                        <MenuItem Header="Save Plan..." Click="OnSavePlan"/>
-                        <MenuItem Header="Load Plans..." Click="OnViewPlans"/>
+                        <MenuItem Header="New Plan" Command="{Binding RecipePlanner.ClearCommand}"/>
+                        <MenuItem Header="Save Plan..." Command="{Binding RecipePlanner.SavePlanWithCheckCommand}" ToolTip="Save current plan to file. Shows message if no plan exists."/>
+                        <MenuItem Header="Load Plans..." Command="{Binding RecipePlanner.LoadPlanCommand}"/>
                     </MenuItem>
 
                     <MenuItem Header="Import">
+                        <MenuItem Header="From Craft Architect (Native)..." 
+                                  Click="OnImportNative"
+                                  ToolTip="Import from native .craftplan file (preserves all plan data)"/>
+                        <Separator/>
                         <MenuItem Header="From Teamcraft (Text)..." 
-                                  Click="OnImportTeamcraft"
+                                  Command="{Binding RecipePlanner.ImportFromTeamcraftCommand}"
                                   ToolTip="Import from Teamcraft's Copy as Text feature"/>
                         <MenuItem Header="From Artisan (JSON)" 
                                   Click="OnImportArtisan"
@@ -137,6 +141,10 @@
                     </MenuItem>
 
                     <MenuItem Header="Export">
+                        <MenuItem Header="To Craft Architect (Native)..." 
+                                  Click="OnExportNative"
+                                  ToolTip="Export as native .craftplan file (preserves all plan data)"/>
+                        <Separator/>
                         <MenuItem Header="To Teamcraft URL" 
                                   Click="OnExportTeamcraft"
                                   ToolTip="Export as Teamcraft URL (copied to clipboard)"/>
@@ -162,6 +170,7 @@
                         <Separator/>
                         <MenuItem Header="Debug Tools">
                             <MenuItem Header="View Logs" Click="OnViewLogs" ToolTip="Open the log viewer window"/>
+                            <MenuItem Header="Cache Diagnostics..." Click="OnCacheDiagnostics" ToolTip="View market cache database contents"/>
                             <MenuItem Header="Debugging Options..." Click="OnDebugOptions" ToolTip="Open debugging settings"/>
                         </MenuItem>
                         <Separator/>
@@ -186,9 +195,6 @@
                 <StackPanel x:Name="MarketCards"/>
                 <Expander x:Name="MarketSummaryExpander"/>
                 <StackPanel x:Name="MarketSummaryContent"/>
-                <Expander x:Name="CraftVsBuyExpander"/>
-                <StackPanel x:Name="CraftVsBuyContent"/>
-                <TextBlock x:Name="CraftVsBuySummaryText"/>
                 <TextBlock x:Name="MarketSummaryHeaderText"/>
             </StackPanel>
         </Border>
@@ -210,6 +216,8 @@
                     Padding="16,8,16,16">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel>
+                        <!-- Recipe Planner Left Panel -->
+                        <StackPanel x:Name="RecipePlannerLeftPanel">
                         <!-- Project Items Header -->
                         <TextBlock Text="Project Items" 
                                    FontSize="16"
@@ -369,17 +377,84 @@
                                        Content="Save"
                                        Appearance="Success"
                                        HorizontalAlignment="Stretch"
-                                       Click="OnSavePlan"
+                                       Command="{Binding RecipePlanner.SavePlanCommand}"
                                        helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
 
                             <ui:Button Grid.Column="2"
                                        Content="Export"
                                        Appearance="Info"
                                        HorizontalAlignment="Stretch"
-                                       Click="OnExportPlainText"
+                                       Command="{Binding RecipePlanner.ExportToPlainTextCommand}"
                                        helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
                         </Grid>
 
+                    </StackPanel>
+                    
+                    <!-- Market Analysis Left Panel -->
+                    <StackPanel x:Name="MarketAnalysisLeftPanel" Visibility="Collapsed">
+                        <TextBlock Text="Market Analysis" 
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource GoldAccentBrush}"
+                                   Margin="0,0,0,16"/>
+                        
+                        <TextBlock Text="View market data and shopping plans for your project items." 
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,16"/>
+                        
+                        <ui:Button Content="Conduct Analysis"
+                                   x:Name="LeftPanelConductAnalysisButton"
+                                   Appearance="Primary"
+                                   Margin="0,0,0,8"
+                                   HorizontalAlignment="Stretch"
+                                   Click="OnConductAnalysis"
+                                   IsEnabled="True"
+                                   ToolTip="Analyze using cached market data (fetch if needed)"/>
+                        
+                        <ui:Button Content="View Market Status"
+                                   x:Name="LeftPanelViewMarketStatusButton"
+                                   Appearance="Secondary"
+                                   Margin="0,0,0,8"
+                                   HorizontalAlignment="Stretch"
+                                   Click="OnViewMarketStatus"
+                                   IsEnabled="True"
+                                   ToolTip="View detailed market data status"/>
+                    </StackPanel>
+                    
+                    <!-- Procurement Planner Left Panel -->
+                    <StackPanel x:Name="ProcurementPlannerLeftPanel" Visibility="Collapsed">
+                        <TextBlock Text="Procurement Plan" 
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource GoldAccentBrush}"
+                                   Margin="0,0,0,16"/>
+                        
+                        <TextBlock Text="Optimized shopping plan with world recommendations." 
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,16"/>
+                        
+                        <TextBlock Text="Sort By:" 
+                                   Margin="0,0,0,4"
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <ComboBox x:Name="LeftPanelProcurementSortCombo"
+                                  Margin="0,0,0,16"
+                                  SelectionChanged="OnProcurementSortChanged">
+                            <ComboBoxItem Content="By World" IsSelected="True"/>
+                            <ComboBoxItem Content="By Name"/>
+                            <ComboBoxItem Content="By Cost (High to Low)"/>
+                        </ComboBox>
+                        
+                        <ui:Button Content="Conduct Analysis"
+                                   x:Name="LeftPanelProcurementAnalysisButton"
+                                   Appearance="Primary"
+                                   Margin="0,0,0,8"
+                                   HorizontalAlignment="Stretch"
+                                   Click="OnConductAnalysis"
+                                   IsEnabled="True"
+                                   ToolTip="Analyze using cached market data (fetch if needed)"/>
+                    </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </Border>
@@ -405,18 +480,13 @@
                                    Foreground="{StaticResource GoldAccentBrush}"
                                    VerticalAlignment="Center"/>
                         
-                        <ui:Button x:Name="RefreshPricesButton"
-                                   Content="Refresh Prices"
-                                   Appearance="Secondary"
-                                   Margin="16,0,0,0"
-                                   Click="OnFetchPrices"
-                                   IsEnabled="False"/>
+
                         
                         <ui:Button x:Name="ExpandAllButton"
                                    Content="Expand All"
                                    Appearance="Secondary"
                                    Margin="8,0,0,0"
-                                   Click="OnExpandAll"
+                                   Command="{Binding RecipePlanner.ExpandAllCommand}"
                                    IsEnabled="False"
                                    ToolTip="Expand all recipe nodes"/>
                         
@@ -424,7 +494,7 @@
                                    Content="Collapse All"
                                    Appearance="Secondary"
                                    Margin="4,0,0,0"
-                                   Click="OnCollapseAll"
+                                   Command="{Binding RecipePlanner.CollapseAllCommand}"
                                    IsEnabled="False"
                                    ToolTip="Collapse all recipe nodes"/>
                     </StackPanel>
@@ -467,7 +537,7 @@
                                    VerticalAlignment="Center"/>
                         
                         <ui:Button x:Name="ProcurementRefreshButton"
-                                   Content="Refresh Market Data"
+                                   Content="Refresh Prices"
                                    Appearance="Secondary"
                                    Margin="16,0,0,0"
                                    Click="OnFetchPrices"
@@ -529,7 +599,6 @@
                                        Margin="24,0,8,0"/>
                             <ComboBox x:Name="ProcurementModeCombo"
                                       Width="170"
-                                      SelectedIndex="0"
                                       SelectionChanged="OnProcurementModeChanged">
                                 <ComboBoxItem Content="Minimize Total Cost"/>
                                 <ComboBoxItem Content="Maximize Value"/>

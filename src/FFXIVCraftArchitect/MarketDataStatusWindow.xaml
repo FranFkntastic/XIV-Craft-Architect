@@ -140,16 +140,32 @@
             </DataGrid>
         </Border>
         
-        <!-- Filter buttons -->
+        <!-- Action and Filter buttons -->
         <Border Grid.Row="3" Background="#2d2d2d" Padding="8">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Text="Filter:" VerticalAlignment="Center" Foreground="#888888" Margin="0,0,8,0"/>
-                <Button Content="All" Width="60" Height="24" Margin="0,0,4,0" Click="OnFilterAll"/>
-                <Button Content="Pending" Width="70" Height="24" Margin="0,0,4,0" Click="OnFilterPending"/>
-                <Button Content="Failed" Width="60" Height="24" Margin="0,0,4,0" Click="OnFilterFailed"/>
-                <Button Content="Success" Width="70" Height="24" Margin="0,0,4,0" Click="OnFilterSuccess"/>
-                <Button Content="Export CSV" Width="80" Height="24" Margin="16,0,0,0" Click="OnExportCsv"/>
-            </StackPanel>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                
+                <!-- Refresh button (left side) -->
+                <Button Grid.Column="0"
+                        Content="Refresh Market Data" 
+                        Width="130" Height="28" 
+                        Margin="0,0,16,0" 
+                        Click="OnRefreshMarketData"
+                        ToolTip="Fetch fresh market data from Universalis"/>
+                
+                <!-- Filter buttons (right side) -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <TextBlock Text="Filter:" VerticalAlignment="Center" Foreground="#888888" Margin="0,0,8,0"/>
+                    <Button Content="All" Width="60" Height="24" Margin="0,0,4,0" Click="OnFilterAll"/>
+                    <Button Content="Pending" Width="70" Height="24" Margin="0,0,4,0" Click="OnFilterPending"/>
+                    <Button Content="Failed" Width="60" Height="24" Margin="0,0,4,0" Click="OnFilterFailed"/>
+                    <Button Content="Success" Width="70" Height="24" Margin="0,0,4,0" Click="OnFilterSuccess"/>
+                    <Button Content="Export CSV" Width="80" Height="24" Margin="16,0,0,0" Click="OnExportCsv"/>
+                </StackPanel>
+            </Grid>
         </Border>
     </Grid>
 </Window>

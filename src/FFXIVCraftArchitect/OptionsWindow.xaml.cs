@@ -5,7 +5,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using FFXIVCraftArchitect.Services;
+using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
+using SettingsService = FFXIVCraftArchitect.Core.Services.SettingsService;
 
 namespace FFXIVCraftArchitect;
 
@@ -17,6 +19,8 @@ public partial class OptionsWindow : Window
     private readonly SettingsService _settingsService;
     private readonly ThemeService _themeService;
     private readonly WorldStatusService _worldStatusService;
+    private readonly DialogServiceFactory _dialogFactory;
+    private readonly IDialogService _dialogs;
     private readonly ILogger<OptionsWindow> _logger;
     private bool _isLoading;
 
@@ -24,12 +28,15 @@ public partial class OptionsWindow : Window
         SettingsService settingsService, 
         ThemeService themeService, 
         WorldStatusService worldStatusService,
+        DialogServiceFactory dialogFactory,
         ILogger<OptionsWindow> logger)
     {
         InitializeComponent();
         _settingsService = settingsService;
         _themeService = themeService;
         _worldStatusService = worldStatusService;
+        _dialogFactory = dialogFactory;
+        _dialogs = dialogFactory.CreateForWindow(this);
         _logger = logger;
         
         LoadSettings();
@@ -38,39 +45,65 @@ public partial class OptionsWindow : Window
 
     private void LoadSettings()
     {
+        _logger.LogInformation("[OptionsWindow.LoadSettings] START");
         _isLoading = true;
         
         try
         {
             // UI Settings
             var accentColor = _settingsService.Get<string>("ui.accent_color", "#d4af37") ?? "#d4af37";
+            _logger.LogInformation("[OptionsWindow.LoadSettings] ui.accent_color = '{AccentColor}'", accentColor);
             AccentColorTextBox.Text = accentColor;
             UpdateAccentPreview(accentColor);
-            UseSplitPaneMarketViewToggle.IsChecked = _settingsService.Get<bool>("ui.use_split_pane_market_view", true);
+            
+            var splitPane = _settingsService.Get<bool>("ui.use_split_pane_market_view", true);
+            _logger.LogInformation("[OptionsWindow.LoadSettings] ui.use_split_pane_market_view = {Value}", splitPane);
+            UseSplitPaneMarketViewToggle.IsChecked = splitPane;
 
             // Market Settings
             var defaultDc = _settingsService.Get<string>("market.default_datacenter", "Aether") ?? "Aether";
+            _logger.LogInformation("[OptionsWindow.LoadSettings] market.default_datacenter = '{Value}'", defaultDc);
             DefaultDataCenterCombo.SelectedItem = FindComboBoxItem(DefaultDataCenterCombo, defaultDc);
             
             var homeWorld = _settingsService.Get<string>("market.home_world", "");
+            _logger.LogInformation("[OptionsWindow.LoadSettings] market.home_world = '{Value}'", homeWorld);
             HomeWorldTextBox.Text = homeWorld ?? "";
             
-            AutoFetchPricesToggle.IsChecked = _settingsService.Get<bool>("market.auto_fetch_prices", true);
-            IncludeCrossWorldToggle.IsChecked = _settingsService.Get<bool>("market.include_cross_world", true);
-            ExcludeCongestedWorldsToggle.IsChecked = _settingsService.Get<bool>("market.exclude_congested_worlds", true);
-            ParallelApiRequestsToggle.IsChecked = _settingsService.Get<bool>("market.parallel_api_requests", true);
+            var autoFetch = _settingsService.Get<bool>("market.auto_fetch_prices", true);
+            _logger.LogInformation("[OptionsWindow.LoadSettings] market.auto_fetch_prices = {Value}", autoFetch);
+            AutoFetchPricesToggle.IsChecked = autoFetch;
+            
+            var crossWorld = _settingsService.Get<bool>("market.include_cross_world", true);
+            _logger.LogInformation("[OptionsWindow.LoadSettings] market.include_cross_world = {Value}", crossWorld);
+            IncludeCrossWorldToggle.IsChecked = crossWorld;
+            
+            var excludeCongested = _settingsService.Get<bool>("market.exclude_congested_worlds", true);
+            _logger.LogInformation("[OptionsWindow.LoadSettings] market.exclude_congested_worlds = {Value}", excludeCongested);
+            ExcludeCongestedWorldsToggle.IsChecked = excludeCongested;
+            
+            var parallelApi = _settingsService.Get<bool>("market.parallel_api_requests", true);
+            _logger.LogInformation("[OptionsWindow.LoadSettings] market.parallel_api_requests = {Value}", parallelApi);
+            ParallelApiRequestsToggle.IsChecked = parallelApi;
 
             // Planning Settings
             var defaultMode = _settingsService.Get<string>("planning.default_recommendation_mode", "MinimizeTotalCost");
+            _logger.LogInformation("[OptionsWindow.LoadSettings] planning.default_recommendation_mode = '{Value}'", defaultMode);
             DefaultRecommendationModeCombo.SelectedIndex = defaultMode == "MaximizeValue" ? 1 : 0;
 
             // Debugging Settings
-            EnableDiagnosticLoggingToggle.IsChecked = _settingsService.Get<bool>("debug.enable_diagnostic_logging", false);
-            LogLevelCombo.SelectedIndex = _settingsService.Get<int>("debug.log_level", 1); // Default to Info (index 1)
+            var diagLogging = _settingsService.Get<bool>("debug.enable_diagnostic_logging", false);
+            _logger.LogInformation("[OptionsWindow.LoadSettings] debug.enable_diagnostic_logging = {Value}", diagLogging);
+            EnableDiagnosticLoggingToggle.IsChecked = diagLogging;
+            
+            var logLevel = _settingsService.Get<int>("debug.log_level", 1);
+            _logger.LogInformation("[OptionsWindow.LoadSettings] debug.log_level = {Value}", logLevel);
+            LogLevelCombo.SelectedIndex = logLevel;
+            
+            _logger.LogInformation("[OptionsWindow.LoadSettings] COMPLETE - Settings file: {Path}", _settingsService.SettingsFilePath);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to load settings");
+            _logger.LogError(ex, "[OptionsWindow.LoadSettings] EXCEPTION: {Message}", ex.Message);
         }
         finally
         {
@@ -135,47 +168,48 @@ public partial class OptionsWindow : Window
                Regex.IsMatch(text, "^#[0-9A-Fa-f]{6}$");
     }
 
-    private void OnResetDefaults(object sender, RoutedEventArgs e)
+    private async void OnResetDefaults(object sender, RoutedEventArgs e)
     {
-        var result = MessageBox.Show(
+        if (!await _dialogs.ConfirmAsync(
             "Reset all settings to default values?",
-            "Confirm Reset",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
-
-        if (result == MessageBoxResult.Yes)
+            "Confirm Reset"))
         {
-            _settingsService.ResetToDefaults();
-            LoadSettings();
-            _logger.LogInformation("Settings reset to defaults");
+            return;
         }
+
+        _settingsService.ResetToDefaults();
+        LoadSettings();
+        _logger.LogInformation("Settings reset to defaults");
     }
 
-    private void OnSave(object sender, RoutedEventArgs e)
+    private async void OnSave(object sender, RoutedEventArgs e)
     {
+        _logger.LogInformation("[OptionsWindow.OnSave] START - Saving settings to: {Path}", _settingsService.SettingsFilePath);
+        
         try
         {
             // Validate accent color
             var accentColor = AccentColorTextBox.Text;
             if (!IsValidHexColor(accentColor))
             {
-                MessageBox.Show(
+                await _dialogs.ShowErrorAsync(
                     "Please enter a valid hex color (e.g., #d4af37)",
-                    "Invalid Color",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
+                    "Invalid Color");
                 return;
             }
 
             // Save UI Settings - apply accent color immediately
+            _logger.LogInformation("[OptionsWindow.OnSave] Saving ui.accent_color = '{Value}'", accentColor);
             _themeService.SetAccentColor(accentColor);
             _settingsService.Set("ui.use_split_pane_market_view", UseSplitPaneMarketViewToggle.IsChecked == true);
 
             // Save Market Settings
             var selectedDc = (DefaultDataCenterCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Aether";
+            _logger.LogInformation("[OptionsWindow.OnSave] Saving market.default_datacenter = '{Value}'", selectedDc);
             _settingsService.Set("market.default_datacenter", selectedDc);
             
             var homeWorld = HomeWorldTextBox.Text?.Trim() ?? "";
+            _logger.LogInformation("[OptionsWindow.OnSave] Saving market.home_world = '{Value}'", homeWorld);
             _settingsService.Set("market.home_world", homeWorld);
             
             _settingsService.Set("market.auto_fetch_prices", AutoFetchPricesToggle.IsChecked == true);
@@ -185,13 +219,14 @@ public partial class OptionsWindow : Window
 
             // Save Planning Settings
             var selectedMode = DefaultRecommendationModeCombo.SelectedIndex == 1 ? "MaximizeValue" : "MinimizeTotalCost";
+            _logger.LogInformation("[OptionsWindow.OnSave] Saving planning.default_recommendation_mode = '{Value}'", selectedMode);
             _settingsService.Set("planning.default_recommendation_mode", selectedMode);
 
             // Save Debugging Settings
             _settingsService.Set("debug.enable_diagnostic_logging", EnableDiagnosticLoggingToggle.IsChecked == true);
             _settingsService.Set("debug.log_level", LogLevelCombo.SelectedIndex);
             
-            _logger.LogInformation("Settings saved successfully");
+            _logger.LogInformation("[OptionsWindow.OnSave] COMPLETE - Settings saved successfully");
             
             // Close silently on success - only show dialogs for errors
             DialogResult = true;
@@ -200,11 +235,10 @@ public partial class OptionsWindow : Window
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to save settings");
-            MessageBox.Show(
+            await _dialogs.ShowErrorAsync(
                 $"Failed to save settings: {ex.Message}",
-                "Error",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+                ex,
+                "Error");
         }
     }
     
@@ -290,11 +324,11 @@ public partial class OptionsWindow : Window
     /// <summary>
     /// Opens the log viewer window.
     /// </summary>
-    private void OnViewLogsClick(object sender, RoutedEventArgs e)
+    private async void OnViewLogsClick(object sender, RoutedEventArgs e)
     {
         try
         {
-            var logWindow = new LogViewerWindow();
+            var logWindow = new LogViewerWindow(_dialogFactory);
             logWindow.Owner = this;
             logWindow.Show();
             _logger.LogInformation("Opened log viewer");
@@ -302,18 +336,17 @@ public partial class OptionsWindow : Window
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to open log viewer");
-            MessageBox.Show(
+            await _dialogs.ShowErrorAsync(
                 $"Failed to open log viewer: {ex.Message}",
-                "Error",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+                ex,
+                "Error");
         }
     }
 
     /// <summary>
     /// Opens the settings.json file in the default text editor.
     /// </summary>
-    private void OnOpenSettingsFile(object sender, RoutedEventArgs e)
+    private async void OnOpenSettingsFile(object sender, RoutedEventArgs e)
     {
         try
         {
@@ -338,11 +371,10 @@ public partial class OptionsWindow : Window
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to open settings file");
-            MessageBox.Show(
+            await _dialogs.ShowErrorAsync(
                 $"Failed to open settings file: {ex.Message}",
-                "Error",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+                ex,
+                "Error");
         }
     }
 }

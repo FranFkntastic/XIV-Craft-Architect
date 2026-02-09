@@ -4,6 +4,8 @@ using System.IO;
 using System.Windows;
 using System.Windows.Data;
 using FFXIVCraftArchitect.Models;
+using FFXIVCraftArchitect.Services;
+using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Win32;
 
 namespace FFXIVCraftArchitect;
@@ -16,10 +18,17 @@ public partial class MarketDataStatusWindow : Window
 {
     public ObservableCollection<MarketDataStatusItem> StatusItems { get; } = new();
     private ICollectionView? _filteredView;
+    private readonly IDialogService _dialogs;
 
-    public MarketDataStatusWindow()
+    /// <summary>
+    /// Event raised when the user requests a fresh fetch of market data.
+    /// </summary>
+    public event EventHandler? RefreshMarketDataRequested;
+
+    public MarketDataStatusWindow(DialogServiceFactory dialogFactory)
     {
         InitializeComponent();
+        _dialogs = dialogFactory.CreateForWindow(this);
         SetupDataGrid();
     }
 
@@ -119,18 +128,15 @@ public partial class MarketDataStatusWindow : Window
     /// <summary>
     /// Mark a specific item as using cached data.
     /// </summary>
-    public void SetItemCached(int itemId, decimal price, string sourceDetails)
+    public void SetItemCached(int itemId, decimal price, string sourceDetails, DateTime? fetchedAt = null)
     {
         UpdateItemStatus(itemId, MarketDataFetchStatus.Cached, price, sourceDetails);
         
-        // For cached items, try to extract age from the source details if available
-        // Otherwise assume it was cached just now (this is a simplification)
         var item = StatusItems.FirstOrDefault(i => i.ItemId == itemId);
         if (item != null)
         {
-            // If we have a way to determine original fetch time, use it
-            // Otherwise use a time in the past (we'll use "1 hour ago" as default assumption)
-            item.CacheTimestamp = DateTime.Now.AddHours(-1);
+            // Use the actual fetch timestamp from cache, or assume now if not provided
+            item.CacheTimestamp = fetchedAt?.ToLocalTime() ?? DateTime.Now;
         }
     }
 
@@ -208,7 +214,13 @@ public partial class MarketDataStatusWindow : Window
         }
     }
 
-    private void OnExportCsv(object sender, RoutedEventArgs e)
+    private void OnRefreshMarketData(object sender, RoutedEventArgs e)
+    {
+        // Raise event to notify MainWindow to perform a force refresh
+        RefreshMarketDataRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async void OnExportCsv(object sender, RoutedEventArgs e)
     {
         var dialog = new SaveFileDialog
         {
@@ -232,11 +244,11 @@ public partial class MarketDataStatusWindow : Window
                 }
 
                 File.WriteAllLines(dialog.FileName, lines);
-                MessageBox.Show("Export complete!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+                await _dialogs.ShowInfoAsync("Export complete!", "Success");
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to export: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                await _dialogs.ShowErrorAsync($"Failed to export: {ex.Message}", ex);
             }
         }
     }

@@ -5,7 +5,21 @@ using Microsoft.Extensions.Logging;
 using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Services;
 using FFXIVCraftArchitect.Services.Interfaces;
+using FFXIVCraftArchitect.Services.UI;
+using FFXIVCraftArchitect.ViewModels;
 using FFXIVCraftArchitect.Coordinators;
+using FFXIVCraftArchitect.ViewModels;
+using SettingsService = FFXIVCraftArchitect.Core.Services.SettingsService;
+using GarlandService = FFXIVCraftArchitect.Core.Services.GarlandService;
+using IGarlandService = FFXIVCraftArchitect.Core.Services.Interfaces.IGarlandService;
+using UniversalisService = FFXIVCraftArchitect.Core.Services.UniversalisService;
+using IUniversalisService = FFXIVCraftArchitect.Core.Services.Interfaces.IUniversalisService;
+using RecipeCalculationService = FFXIVCraftArchitect.Core.Services.RecipeCalculationService;
+using MarketShoppingService = FFXIVCraftArchitect.Core.Services.MarketShoppingService;
+using TeamcraftService = FFXIVCraftArchitect.Core.Services.TeamcraftService;
+using ITeamcraftService = FFXIVCraftArchitect.Core.Services.ITeamcraftService;
+using PriceCheckService = FFXIVCraftArchitect.Core.Services.PriceCheckService;
+using WorldDataCoordinator = FFXIVCraftArchitect.Core.Services.WorldDataCoordinator;
 
 namespace FFXIVCraftArchitect;
 
@@ -102,7 +116,6 @@ public partial class App : Application
         // HTTP clients for API services
         services.AddHttpClient<GarlandService>();
         services.AddHttpClient<UniversalisService>();
-        services.AddHttpClient<ArtisanService>();
         services.AddHttpClient<Core.Services.ITeamcraftRecipeService, Core.Services.TeamcraftRecipeService>();
         
         // Named HttpClients for services that use IHttpClientFactory
@@ -123,10 +136,12 @@ public partial class App : Application
         services.AddSingleton<SettingsService>();
         services.AddSingleton<ThemeService>();
         services.AddSingleton<GarlandService>();
+        services.AddSingleton<IGarlandService>(sp => sp.GetRequiredService<GarlandService>());
         services.AddSingleton<UniversalisService>();
+        services.AddSingleton<IUniversalisService>(sp => sp.GetRequiredService<UniversalisService>());
         services.AddSingleton<ItemCacheService>();
-        services.AddSingleton<Core.Services.IMarketCacheService, SqliteMarketCacheService>();  // Global market data cache
-        services.AddSingleton<RecommendationCsvService>(); // Plan-specific recommendations
+        services.AddSingleton<Core.Services.IMarketCacheService, SqliteMarketCacheService>();
+        services.AddSingleton<RecommendationCsvService>();
         services.AddSingleton<RecipeCalculationService>();
         services.AddSingleton<PlanPersistenceService>();
         services.AddSingleton<IPlanPersistenceService>(sp => sp.GetRequiredService<PlanPersistenceService>());
@@ -137,13 +152,29 @@ public partial class App : Application
         services.AddSingleton<PriceCheckService>();
         services.AddSingleton<MarketShoppingService>();
         services.AddSingleton<WorldStatusService>();
+        services.AddSingleton<WorldDataCoordinator>();
         services.AddSingleton<WaitingwayTravelService>();
         services.AddSingleton<WorldBlacklistService>();
+        services.AddSingleton<DialogServiceFactory>();
+        
+        // UI Builders
+        services.AddSingleton<InfoPanelBuilder>();
+        services.AddSingleton<ICardFactory, CardFactory>();
 
         // Coordinators
+        services.AddSingleton<IPriceRefreshCoordinator, PriceRefreshCoordinator>();
+        services.AddSingleton<IShoppingOptimizationCoordinator, ShoppingOptimizationCoordinator>();
+        services.AddSingleton<IWatchListCoordinator, WatchListCoordinator>();
         services.AddTransient<ExportCoordinator>();
         services.AddTransient<ImportCoordinator>();
         services.AddTransient<PlanPersistenceCoordinator>();
+        services.AddTransient<WatchStateCoordinator>();
+        services.AddSingleton<ICoordinatorServices, CoordinatorServices>();
+        
+        // ViewModels
+        services.AddSingleton<MarketAnalysisViewModel>();
+        services.AddSingleton<RecipePlannerViewModel>();
+        services.AddSingleton<MainViewModel>();
 
         // Windows
         services.AddTransient<MainWindow>();

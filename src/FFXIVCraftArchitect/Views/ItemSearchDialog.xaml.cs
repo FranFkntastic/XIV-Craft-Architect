@@ -1,7 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using FFXIVCraftArchitect.Services;
+using FFXIVCraftArchitect.Core.Services;
 
 namespace FFXIVCraftArchitect.Views;
 

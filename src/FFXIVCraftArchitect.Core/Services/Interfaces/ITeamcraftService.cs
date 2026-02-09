@@ -1,6 +1,6 @@
 using FFXIVCraftArchitect.Core.Models;
 
-namespace FFXIVCraftArchitect.Services.Interfaces;
+namespace FFXIVCraftArchitect.Core.Services;
 
 /// <summary>
 /// Service for importing/exporting crafting lists to/from Teamcraft.

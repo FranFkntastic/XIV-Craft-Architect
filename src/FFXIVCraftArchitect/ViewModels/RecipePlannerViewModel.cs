@@ -1,8 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Coordinators;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.ViewModels;
@@ -11,7 +12,7 @@ namespace FFXIVCraftArchitect.ViewModels;
 /// ViewModel for the Recipe Planner panel.
 /// Manages project items, recipe tree state, and node interactions.
 /// </summary>
-public class RecipePlannerViewModel : ViewModelBase
+public partial class RecipePlannerViewModel : ViewModelBase
 {
     private CraftingPlan? _currentPlan;
     private ObservableCollection<ProjectItem> _projectItems = new();
@@ -20,9 +21,19 @@ public class RecipePlannerViewModel : ViewModelBase
     private bool _isLoading;
     private ILogger<RecipePlannerViewModel>? _logger;
     private bool _diagnosticLoggingEnabled;
+    private readonly PlanPersistenceCoordinator _planCoordinator;
+    private readonly ExportCoordinator _exportCoordinator;
+    private readonly ImportCoordinator _importCoordinator;
+    private string _currentPlanPath = string.Empty;
 
-    public RecipePlannerViewModel()
+    public RecipePlannerViewModel(
+        PlanPersistenceCoordinator planCoordinator,
+        ExportCoordinator exportCoordinator,
+        ImportCoordinator importCoordinator)
     {
+        _planCoordinator = planCoordinator;
+        _exportCoordinator = exportCoordinator;
+        _importCoordinator = importCoordinator;
         _projectItems.CollectionChanged += OnProjectItemsCollectionChanged;
         _rootNodes.CollectionChanged += OnRootNodesCollectionChanged;
     }
@@ -195,8 +206,21 @@ public class RecipePlannerViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Removes a project item.
+    /// Adds a project item from a ProjectItem object (for command binding).
     /// </summary>
+    [RelayCommand]
+    public void AddProjectItemFromObject(ProjectItem item)
+    {
+        if (item != null)
+        {
+            AddProjectItem(item.Id, item.Name, item.Quantity, item.IsHqRequired);
+        }
+    }
+
+    /// <summary>
+    /// Removes a project item by ID.
+    /// </summary>
+    [RelayCommand]
     public void RemoveProjectItem(int id)
     {
         var item = _projectItems.FirstOrDefault(p => p.Id == id);
@@ -209,6 +233,7 @@ public class RecipePlannerViewModel : ViewModelBase
     /// <summary>
     /// Clears all project items and the current plan.
     /// </summary>
+    [RelayCommand]
     public void Clear()
     {
         _projectItems.Clear();
@@ -216,7 +241,19 @@ public class RecipePlannerViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Sets the acquisition source for a node.
+    /// Sets the acquisition source for a node (for command binding).
+    /// </summary>
+    [RelayCommand]
+    public void SetNodeAcquisitionFromTuple((string nodeId, string source) parameters)
+    {
+        if (Enum.TryParse<AcquisitionSource>(parameters.source, out var acquisitionSource))
+        {
+            SetNodeAcquisition(parameters.nodeId, acquisitionSource);
+        }
+    }
+
+    /// <summary>
+    /// Sets the acquisition source for a node (internal method).
     /// </summary>
     public void SetNodeAcquisition(string nodeId, AcquisitionSource source)
     {
@@ -262,6 +299,7 @@ public class RecipePlannerViewModel : ViewModelBase
     /// <summary>
     /// Expands all nodes in the tree.
     /// </summary>
+    [RelayCommand]
     public void ExpandAll()
     {
         SetAllNodesExpanded(true);
@@ -270,6 +308,7 @@ public class RecipePlannerViewModel : ViewModelBase
     /// <summary>
     /// Collapses all nodes in the tree.
     /// </summary>
+    [RelayCommand]
     public void CollapseAll()
     {
         SetAllNodesExpanded(false);
@@ -380,15 +419,320 @@ public class RecipePlannerViewModel : ViewModelBase
         }
     }
 
+    // ========================================================================
+    // Plan Persistence Commands
+    // ========================================================================
+
+    /// <summary>
+    /// Saves the current plan.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanSavePlan))]
+    private async Task SavePlanAsync()
+    {
+        if (_currentPlan == null) return;
+        
+        var result = await _planCoordinator.SavePlanAsync(
+            null!, // Window owner - coordinator handles this via service
+            _currentPlan,
+            _projectItems.ToList(),
+            _currentPlanPath);
+        
+        if (result.Success)
+        {
+            _currentPlanPath = result.PlanPath;
+        }
+        StatusMessage = result.Message;
+    }
+
+    /// <summary>
+    /// Loads a plan directly (e.g., from native import).
+    /// </summary>
+    public void LoadPlan(CraftingPlan plan)
+    {
+        if (plan == null) return;
+        
+        // Convert root items to project items
+        _projectItems.Clear();
+        foreach (var rootItem in plan.RootItems)
+        {
+            _projectItems.Add(new ProjectItem
+            {
+                Id = rootItem.ItemId,
+                Name = rootItem.Name,
+                Quantity = rootItem.Quantity,
+                IsHqRequired = rootItem.MustBeHq
+            });
+        }
+        
+        // Set the new plan
+        CurrentPlan = plan;
+        
+        StatusMessage = $"Loaded plan: {plan.Name}";
+    }
+
+    /// <summary>
+    /// Loads a plan from the plan browser.
+    /// </summary>
+    [RelayCommand]
+    private async Task LoadPlanAsync()
+    {
+        var (selected, plan, projectItems) = await _planCoordinator.ShowPlanBrowserAsync(
+            null!, // Window owner - coordinator handles this via service
+            _currentPlan,
+            _projectItems.ToList(),
+            _currentPlanPath);
+        
+        if (selected && plan != null && projectItems != null)
+        {
+            // Update project items
+            _projectItems.Clear();
+            foreach (var item in projectItems)
+            {
+                _projectItems.Add(item);
+            }
+            
+            // Set the new plan
+            CurrentPlan = plan;
+            
+            StatusMessage = $"Loaded plan: {plan.Name}";
+        }
+    }
+
+    /// <summary>
+    /// Renames the current plan.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanRenamePlan))]
+    private async Task RenamePlanAsync()
+    {
+        var result = await _planCoordinator.RenamePlanAsync(null!, _currentPlanPath);
+        
+        if (result.Success)
+        {
+            _currentPlanPath = result.PlanPath;
+        }
+        StatusMessage = result.Message;
+    }
+
+    /// <summary>
+    /// Saves the current plan (with check - shows message if no plan).
+    /// Always enabled, provides feedback if no plan exists.
+    /// </summary>
+    [RelayCommand]
+    private async Task SavePlanWithCheckAsync()
+    {
+        if (_currentPlan == null)
+        {
+            StatusMessage = "No plan to save - build a plan first";
+            return;
+        }
+        
+        await SavePlanAsync();
+    }
+
+    /// <summary>
+    /// Determines if SavePlan command can execute.
+    /// </summary>
+    private bool CanSavePlan() => _currentPlan != null;
+
+    /// <summary>
+    /// Determines if RenamePlan command can execute.
+    /// </summary>
+    private bool CanRenamePlan() => !string.IsNullOrEmpty(_currentPlanPath);
+
+    // ========================================================================
+    // Export Commands
+    // ========================================================================
+
+    /// <summary>
+    /// Exports the current plan to native Craft Architect format.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanExport))]
+    private async Task ExportToNativeAsync()
+    {
+        if (_currentPlan == null) return;
+        
+        StatusMessage = "Exporting to native format...";
+        
+        var result = await _exportCoordinator.ExportToNativeFileAsync(_currentPlan);
+        
+        if (!result.Success)
+        {
+            StatusMessage = result.Message;
+            return;
+        }
+        
+        StatusMessage = result.Message;
+    }
+
+    /// <summary>
+    /// Exports the current plan to Teamcraft format.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanExport))]
+    private async Task ExportToTeamcraftAsync()
+    {
+        if (_currentPlan == null) return;
+        
+        var result = _exportCoordinator.ExportToTeamcraft(_currentPlan);
+        
+        if (!result.Success)
+        {
+            StatusMessage = result.Message;
+            return;
+        }
+        
+        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
+        {
+            StatusMessage = result.Message;
+        }
+        else
+        {
+            StatusMessage = "Failed to copy - clipboard may be in use.";
+        }
+    }
+
+    /// <summary>
+    /// Exports the current plan to Artisan format.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanExport))]
+    private async Task ExportToArtisanAsync()
+    {
+        if (_currentPlan == null) return;
+        
+        StatusMessage = "Exporting to Artisan format...";
+        
+        var result = await _exportCoordinator.ExportToArtisanAsync(_currentPlan);
+        
+        if (!result.Success)
+        {
+            StatusMessage = result.Message;
+            return;
+        }
+        
+        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
+        {
+            StatusMessage = result.Message;
+        }
+        else
+        {
+            StatusMessage = "Failed to copy - clipboard may be in use.";
+        }
+    }
+
+    /// <summary>
+    /// Exports the current plan to plain text.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanExport))]
+    private async Task ExportToPlainTextAsync()
+    {
+        if (_currentPlan == null) return;
+        
+        var result = _exportCoordinator.ExportToPlainText(_currentPlan);
+        
+        if (!result.Success)
+        {
+            StatusMessage = result.Message;
+            return;
+        }
+        
+        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
+        {
+            StatusMessage = result.Message;
+        }
+        else
+        {
+            StatusMessage = "Failed to copy - clipboard may be in use.";
+        }
+    }
+
+    /// <summary>
+    /// Exports the current plan to CSV.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanExport))]
+    private async Task ExportToCsvAsync()
+    {
+        if (_currentPlan == null) return;
+        
+        var result = _exportCoordinator.ExportToCsv(_currentPlan);
+        
+        if (!result.Success)
+        {
+            StatusMessage = result.Message;
+            return;
+        }
+        
+        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
+        {
+            StatusMessage = result.Message;
+        }
+        else
+        {
+            StatusMessage = "Failed to copy - clipboard may be in use.";
+        }
+    }
+
+    /// <summary>
+    /// Determines if export commands can execute.
+    /// </summary>
+    private bool CanExport() => _currentPlan != null;
+
+    // ========================================================================
+    // Import Commands
+    // ========================================================================
+
+    /// <summary>
+    /// Imports a plan from Teamcraft format.
+    /// </summary>
+    [RelayCommand]
+    private void ImportFromTeamcraft()
+    {
+        var result = _importCoordinator.ImportFromTeamcraft(null!, "Aether", "");
+        
+        if (result.Success && result.Plan != null)
+        {
+            ApplyImportResult(result);
+        }
+        StatusMessage = result.Message;
+    }
+
+    /// <summary>
+    /// Imports a plan from Artisan format.
+    /// </summary>
+    [RelayCommand]
+    private async Task ImportFromArtisanAsync()
+    {
+        var result = await _importCoordinator.ImportFromArtisanAsync("Aether", "");
+        
+        if (result.Success && result.Plan != null)
+        {
+            ApplyImportResult(result);
+        }
+        StatusMessage = result.Message;
+    }
+
+    /// <summary>
+    /// Applies import result to ViewModels.
+    /// </summary>
+    private void ApplyImportResult(ImportCoordinator.ImportResult result)
+    {
+        if (result.Plan == null || result.ProjectItems == null) return;
+        
+        CurrentPlan = result.Plan;
+        
+        _projectItems.Clear();
+        foreach (var item in result.ProjectItems)
+        {
+            _projectItems.Add(item);
+        }
+    }
+
 }
 
 /// <summary>
 /// ViewModel wrapper for a PlanNode that supports expansion state.
 /// </summary>
-public class PlanNodeViewModel : INotifyPropertyChanged
+public partial class PlanNodeViewModel : ObservableObject
 {
     private readonly PlanNode _node;
-    private bool _isExpanded = true;
 
     public PlanNodeViewModel(PlanNode node)
     {
@@ -410,19 +754,19 @@ public class PlanNodeViewModel : INotifyPropertyChanged
     public int Yield => _node.Yield;
     public List<PlanNode> Children => _node.Children;
     public bool IsCircularReference => _node.IsCircularReference;
+    
+    /// <summary>
+    /// Whether this item can be bought from a vendor.
+    /// </summary>
+    public bool CanBuyFromVendor => _node.CanBuyFromVendor;
+    
+    /// <summary>
+    /// Whether this item has a craft recipe and can be crafted.
+    /// </summary>
+    public bool CanCraft => _node.CanCraft;
 
-    public bool IsExpanded
-    {
-        get => _isExpanded;
-        set { _isExpanded = value; OnPropertyChanged(); }
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
+    [ObservableProperty]
+    private bool _isExpanded = true;
 }
 
 /// <summary>

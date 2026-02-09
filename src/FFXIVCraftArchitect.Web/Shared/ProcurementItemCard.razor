@@ -1,117 +1,106 @@
 @using FFXIVCraftArchitect.Core.Services
+@using FFXIVCraftArchitect.Core.Models
 
-<div style="background: @(IsSelected ? "#3a3a30" : GetBackgroundColor()); border-radius: 4px; border: 2px solid @(IsSelected ? "#d4a73a" : GetBorderColor()); overflow: hidden; transition: background 0.15s ease;">
-    <div style="display: flex; align-items: center; padding: 6px 10px;">
+@* Two-line card for procurement items *@
+<div style="background: @(IsSelected ? "#3a3a30" : GetBackgroundColor()); border-radius: 4px; border: 1px solid @(IsSelected ? "#d4a73a" : GetBorderColor()); overflow: hidden; min-height: 56px;">
+    
+    @* Line 1: Item Name *@
+    <div style="padding: 6px 10px 2px 10px; border-bottom: 1px solid #3a3a3a;">
+        <MudText Typo="Typo.body2" Style="color: #fff; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+            @Item.Name
+        </MudText>
+    </div>
+    
+    @* Line 2: Details *@
+    <div style="display: flex; align-items: center; padding: 4px 10px 6px 10px;">
         
-        <!-- Selection Indicator -->
-        @if (IsSelected)
-        {
-            <MudIcon Icon="@Icons.Material.Filled.Visibility" 
-                     Style="color: #d4a73a; margin-right: 6px;" 
-                     Size="Size.Small" />
-        }
-        else
-        {
-            <MudIcon Icon="@GetActionIcon()" 
-                     Style="@GetActionStyle()" 
-                     Size="Size.Small" />
-        }
-        
-        <!-- Item Name -->
-        <div style="flex: 1; min-width: 0; overflow: hidden;">
-            <MudText Typo="Typo.body2" Style="@GetNameStyle()">
-                @Item.Name
-            </MudText>
-        </div>
+        <!-- Source icon -->
+        <MudIcon Icon="@GetSourceIcon()" 
+                 Style="@GetSourceIconStyle()" 
+                 Size="Size.Small" />
         
         <!-- Quantity -->
-        <MudText Typo="Typo.caption" Style="color: #d4a73a; margin: 0 8px; min-width: 40px; text-align: right;">
+        <MudText Typo="Typo.caption" Style="color: #d4a73a; margin-right: 12px; min-width: 40px;">
             ×@(Item.QuantityNeeded)
         </MudText>
         
-        <!-- Action Type Badge -->
-        <div style="min-width: 50px; text-align: right; margin-right: 8px;">
-            @switch (Item.Recommendation)
+        <!-- World / Source info -->
+        <div style="flex: 1; min-width: 0; overflow: hidden;">
+            @if (IsSplitWorld)
             {
-                case ProcurementRecommendation.Craft:
-                    <MudText Typo="Typo.caption" Style="color: #2196f3; font-weight: 600;">CRAFT</MudText>
-                    break;
-                case ProcurementRecommendation.BuyFromMarket:
-                    <MudText Typo="Typo.caption" Style="color: #4caf50; font-weight: 600;">BUY</MudText>
-                    break;
-                default:
-                    <MudText Typo="Typo.caption" Style="color: #888;">NO DATA</MudText>
-                    break;
+                <MudText Typo="Typo.caption" Style="color: #ff9800; font-weight: 500;">
+                    @string.Join(" + ", ShoppingPlan!.RecommendedSplit!.Select(s => $"{s.QuantityToBuy}@{s.WorldName}"))
+                </MudText>
+            }
+            else if (IsVendorItem)
+            {
+                <MudText Typo="Typo.caption" Style="color: #d4a73a; font-weight: 500;">
+                    VENDOR
+                </MudText>
+            }
+            else if (Item.BestWorldPurchase != null)
+            {
+                <MudText Typo="Typo.caption" Style="color: #90EE90; font-weight: 500;">
+                    @Item.BestWorldPurchase.WorldName
+                </MudText>
             }
         </div>
         
-        <!-- Cost/World -->
-        @if (Item.Recommendation == ProcurementRecommendation.Craft)
-        {
-            <MudText Typo="Typo.body2" Style="color: #2196f3; font-weight: 600; min-width: 70px; text-align: right;">
-                @Item.CraftCost.ToString("N0")g
-            </MudText>
-        }
-        else if (Item.Recommendation == ProcurementRecommendation.BuyFromMarket && Item.BestWorldPurchase != null)
-        {
-            <div style="text-align: right; min-width: 70px;">
-                <MudText Typo="Typo.body2" Style="color: #4caf50; font-weight: 600;">
+        <!-- Price -->
+        <div style="text-align: right;">
+            @if (IsSplitWorld && ShoppingPlan?.SplitTotalCost.HasValue == true)
+            {
+                <MudText Typo="Typo.body2" Style="color: #ff9800; font-weight: 600;">
+                    @ShoppingPlan.SplitTotalCost.Value.ToString("N0")g
+                </MudText>
+            }
+            else if (IsVendorItem && ShoppingPlan?.RecommendedWorld != null)
+            {
+                <MudText Typo="Typo.body2" Style="color: #d4a73a; font-weight: 600;">
+                    @ShoppingPlan.RecommendedWorld.TotalCost.ToString("N0")g
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color: #888; font-size: 10px; display: block;">
+                    @ShoppingPlan.RecommendedWorld.AveragePricePerUnit.ToString("N0")g/ea
+                </MudText>
+            }
+            else if (Item.BestWorldPurchase != null)
+            {
+                <MudText Typo="Typo.body2" Style="color: #d4a73a; font-weight: 600;">
                     @Item.BestWorldPurchase.TotalCost.ToString("N0")g
                 </MudText>
-                <MudText Typo="Typo.caption" Style="color: #90EE90; font-size: 10px;">
-                    @Item.BestWorldPurchase.WorldName
+                <MudText Typo="Typo.caption" Style="color: #888; font-size: 10px; display: block;">
+                    @Item.BestWorldPurchase.UnitPrice.ToString("N0")g/ea
                 </MudText>
-            </div>
-        }
-        else
-        {
-            <MudText Typo="Typo.caption" Style="color: #666; min-width: 70px; text-align: right;">
-                -
-            </MudText>
-        }
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Style="color: #666;">-</MudText>
+            }
+        </div>
     </div>
 </div>
 
 @code {
     [Parameter] public ItemProcurementAnalysis Item { get; set; } = null!;
+    [Parameter] public DetailedShoppingPlan? ShoppingPlan { get; set; }
     [Parameter] public bool IsSelected { get; set; } = false;
 
-    private string GetBackgroundColor() => Item.Recommendation switch
-    {
-        ProcurementRecommendation.Craft => "#1a3a4a",
-        ProcurementRecommendation.BuyFromMarket => "#1a3a2a",
-        _ => "#2d2d2d"
-    };
+    private bool IsVendorItem => ShoppingPlan?.RecommendedWorld?.WorldName == "Vendor";
+    private bool IsSplitWorld => ShoppingPlan?.RequiresSplitPurchase == true && ShoppingPlan?.RecommendedSplit?.Any() == true;
 
-    private string GetBorderColor() => Item.Recommendation switch
-    {
-        ProcurementRecommendation.Craft => "#2196f3",
-        ProcurementRecommendation.BuyFromMarket => "#4caf50",
-        _ => "#666"
-    };
+    private string GetBackgroundColor() => IsVendorItem 
+        ? "#2a2520"  // Vendor items - warm brown
+        : "#20252a"; // Market items - cool blue-gray
 
-    private string GetActionIcon() => Item.Recommendation switch
-    {
-        ProcurementRecommendation.Craft => Icons.Material.Filled.Build,
-        ProcurementRecommendation.BuyFromMarket => Icons.Material.Filled.ShoppingCart,
-        _ => Icons.Material.Filled.Help
-    };
+    private string GetBorderColor() => IsVendorItem 
+        ? "#5a4a3a"  // Vendor border
+        : "#3a4a5a"; // Market border
 
-    private string GetActionColor() => Item.Recommendation switch
-    {
-        ProcurementRecommendation.Craft => "#2196f3",
-        ProcurementRecommendation.BuyFromMarket => "#4caf50",
-        _ => "#666"
-    };
+    private string GetSourceIcon() => IsVendorItem 
+        ? Icons.Material.Filled.Store 
+        : (IsSplitWorld ? Icons.Material.Filled.CallSplit : Icons.Material.Filled.ShoppingCart);
 
-    private string GetActionStyle() => Item.Recommendation switch
-    {
-        ProcurementRecommendation.Craft => "color: #2196f3; margin-right: 6px;",
-        ProcurementRecommendation.BuyFromMarket => "color: #4caf50; margin-right: 6px;",
-        _ => "color: #666; margin-right: 6px;"
-    };
-
-    private string GetNameStyle() => Item.Recommendation == ProcurementRecommendation.NoDataAvailable 
-        ? "color: #aaa; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" 
-        : "color: #fff; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;";
+    private string GetSourceIconStyle() => IsVendorItem 
+        ? "color: #d4a73a; margin-right: 8px;" 
+        : (IsSplitWorld ? "color: #ff9800; margin-right: 8px;" : "color: #87ceeb; margin-right: 8px;");
 }

@@ -2,6 +2,7 @@ using System.Windows;
 using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Services.Interfaces;
+using ITeamcraftService = FFXIVCraftArchitect.Core.Services.ITeamcraftService;
 
 namespace FFXIVCraftArchitect;
 

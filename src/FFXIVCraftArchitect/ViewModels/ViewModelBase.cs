@@ -1,98 +1,19 @@
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
+using CommunityToolkit.Mvvm.ComponentModel;
 using FFXIVCraftArchitect.Helpers;
 
 namespace FFXIVCraftArchitect.ViewModels;
 
 /// <summary>
 /// Base class for all ViewModels in the application.
-/// Provides INotifyPropertyChanged implementation, IDisposable pattern for cleanup,
-/// and helper methods for safe async operations.
+/// Provides INotifyPropertyChanged implementation via CommunityToolkit.Mvvm,
+/// IDisposable pattern for cleanup, and helper methods for safe async operations.
 /// </summary>
-public abstract class ViewModelBase : INotifyPropertyChanged, IDisposable
+public abstract class ViewModelBase : ObservableObject, IDisposable
 {
     private bool _disposed;
 
-    /// <summary>
-    /// Occurs when a property value changes.
-    /// </summary>
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    /// <summary>
-    /// Raises the <see cref="PropertyChanged"/> event for the specified property.
-    /// </summary>
-    /// <param name="propertyName">Name of the property that changed. 
-    /// Automatically determined from the calling member if not specified.</param>
-    protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
-
-    /// <summary>
-    /// Sets a property value and raises <see cref="PropertyChanged"/> if the value has changed.
-    /// Uses <see cref="EqualityComparer{T}.Default"/> for comparison.
-    /// </summary>
-    /// <typeparam name="T">The type of the property.</typeparam>
-    /// <param name="field">Reference to the backing field.</param>
-    /// <param name="value">The new value to set.</param>
-    /// <param name="propertyName">Name of the property. Automatically determined if not specified.</param>
-    /// <returns>
-    /// <c>true</c> if the property value changed and <see cref="PropertyChanged"/> was raised;
-    /// <c>false</c> if the new value equals the existing value.
-    /// </returns>
-    /// <example>
-    /// <code>
-    /// private string _name = string.Empty;
-    /// 
-    /// public string Name
-    /// {
-    ///     get => _name;
-    ///     set => SetProperty(ref _name, value);
-    /// }
-    /// </code>
-    /// </example>
-    protected bool SetProperty<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
-    {
-        if (EqualityComparer<T>.Default.Equals(field, value))
-            return false;
-
-        field = value;
-        OnPropertyChanged(propertyName);
-        return true;
-    }
-
-    /// <summary>
-    /// Sets a property value, raises <see cref="PropertyChanged"/>, and executes a callback if the value changed.
-    /// </summary>
-    /// <typeparam name="T">The type of the property.</typeparam>
-    /// <param name="field">Reference to the backing field.</param>
-    /// <param name="value">The new value to set.</param>
-    /// <param name="onChanged">Callback to invoke when the value changes. Called after PropertyChanged is raised.</param>
-    /// <param name="propertyName">Name of the property. Automatically determined if not specified.</param>
-    /// <returns>
-    /// <c>true</c> if the property value changed; <c>false</c> otherwise.
-    /// </returns>
-    /// <example>
-    /// <code>
-    /// private int _count;
-    /// 
-    /// public int Count
-    /// {
-    ///     get => _count;
-    ///     set => SetProperty(ref _count, value, () => RecalculateTotal());
-    /// }
-    /// </code>
-    /// </example>
-    protected bool SetProperty<T>(ref T field, T value, Action onChanged, [CallerMemberName] string? propertyName = null)
-    {
-        if (EqualityComparer<T>.Default.Equals(field, value))
-            return false;
-
-        field = value;
-        OnPropertyChanged(propertyName);
-        onChanged();
-        return true;
-    }
+    // Note: Property change notification is handled by ObservableObject base class
+    // Use SetProperty(ref _field, value) from ObservableObject for properties
 
     /// <summary>
     /// Safely executes a task in a fire-and-forget manner, catching any exceptions

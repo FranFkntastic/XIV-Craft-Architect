@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using FFXIVCraftArchitect.Core.Models;
@@ -59,6 +60,7 @@ public class RecipeTreeUiBuilder
 
     /// <summary>
     /// Updates the acquisition source display for a node.
+    /// Finds the dropdown item by Tag rather than index to handle dynamic dropdown content.
     /// </summary>
     public void UpdateNodeAcquisition(string nodeId, AcquisitionSource source)
     {
@@ -66,7 +68,15 @@ public class RecipeTreeUiBuilder
         {
             if (elements.Dropdown != null)
             {
-                elements.Dropdown.SelectedIndex = GetDropdownIndexForSource(source);
+                // Find the item with matching Tag instead of using fixed index
+                var matchingItem = elements.Dropdown.Items
+                    .OfType<ComboBoxItem>()
+                    .FirstOrDefault(item => item.Tag is AcquisitionSource s && s == source);
+                
+                if (matchingItem != null)
+                {
+                    elements.Dropdown.SelectedItem = matchingItem;
+                }
             }
         }
     }
@@ -111,12 +121,6 @@ public class RecipeTreeUiBuilder
             childrenPanel.Children.Add(CreateNodeElement(child, depth + 1));
         }
         expander.Content = childrenPanel;
-
-        // Add expand/collapse buttons for root nodes
-        if (depth == 0 && headerPanel is StackPanel hp)
-        {
-            AddRootExpandCollapseButtons(hp, expander);
-        }
 
         // Register UI elements for updates
         RegisterNodeElements(nodeVm.NodeId, headerPanel);
@@ -327,35 +331,58 @@ public class RecipeTreeUiBuilder
 
     private ComboBox? CreateAcquisitionDropdown(PlanNodeViewModel nodeVm)
     {
-        // Skip dropdown for items that can't be traded
-        if (nodeVm.Source == AcquisitionSource.VendorBuy)
-        {
-            return null;
-        }
-
         var dropdown = new ComboBox
         {
-            Width = 100,
+            Width = 85,
             Height = 22,
-            FontSize = 11,
+            FontSize = 10,
+            Padding = new Thickness(2, 0, 0, 0),
+            Foreground = Brushes.White,
+            Background = Brushes.Transparent,
+            BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#555555")),
+            BorderThickness = new Thickness(1),
             Margin = new Thickness(4, 0, 4, 0),
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center
         };
 
-        dropdown.Items.Add("Craft");
-        dropdown.Items.Add("Buy NQ");
+        // Create items with tags for lookup
+        var craftItem = new ComboBoxItem { Content = "Craft", Tag = AcquisitionSource.Craft };
+        var buyNqItem = new ComboBoxItem { Content = "Buy NQ", Tag = AcquisitionSource.MarketBuyNq };
+        var buyHqItem = new ComboBoxItem { Content = "Buy HQ", Tag = AcquisitionSource.MarketBuyHq };
+        var vendorBuyItem = new ComboBoxItem { Content = "Vendor", Tag = AcquisitionSource.VendorBuy };
+
+        // Only add Craft option if item is actually craftable
+        if (nodeVm.CanCraft)
+        {
+            dropdown.Items.Add(craftItem);
+        }
+        dropdown.Items.Add(buyNqItem);
         if (nodeVm.CanBeHq)
         {
-            dropdown.Items.Add("Buy HQ");
+            dropdown.Items.Add(buyHqItem);
+        }
+        
+        // Add Vendor Buy option if item can be bought from vendor
+        if (nodeVm.CanBuyFromVendor)
+        {
+            dropdown.Items.Add(vendorBuyItem);
         }
 
-        dropdown.SelectedIndex = GetDropdownIndexForSource(nodeVm.Source);
+        // Set selected item based on source
+        dropdown.SelectedItem = nodeVm.Source switch
+        {
+            AcquisitionSource.Craft when nodeVm.CanCraft => craftItem,
+            AcquisitionSource.MarketBuyNq => buyNqItem,
+            AcquisitionSource.MarketBuyHq when nodeVm.CanBeHq => buyHqItem,
+            AcquisitionSource.VendorBuy when nodeVm.CanBuyFromVendor => vendorBuyItem,
+            _ => buyNqItem  // Default to Buy NQ if Craft not available
+        };
 
         dropdown.SelectionChanged += (s, e) =>
         {
-            if (dropdown.SelectedIndex >= 0)
+            if (dropdown.SelectedItem is ComboBoxItem item && item.Tag is AcquisitionSource newSource)
             {
-                var newSource = GetSourceFromDropdownIndex(dropdown.SelectedIndex, nodeVm.CanBeHq);
                 _onAcquisitionChanged(nodeVm.NodeId, newSource);
             }
         };
@@ -388,61 +415,6 @@ public class RecipeTreeUiBuilder
         };
 
         return button;
-    }
-
-    private void AddRootExpandCollapseButtons(StackPanel headerPanel, Expander rootExpander)
-    {
-        // Expand button
-        var expandButton = new TextBlock
-        {
-            Text = "+",
-            FontWeight = FontWeights.Bold,
-            FontSize = 14,
-            Foreground = Brushes.LightGray,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(8, 0, 2, 0),
-            Cursor = Cursors.Hand,
-            ToolTip = "Expand all subcrafts"
-        };
-        expandButton.MouseLeftButtonDown += (s, e) =>
-        {
-            e.Handled = true;
-            SetExpanderSubtreeState(rootExpander, true);
-        };
-
-        // Collapse button
-        var collapseButton = new TextBlock
-        {
-            Text = "−",
-            FontWeight = FontWeights.Bold,
-            FontSize = 14,
-            Foreground = Brushes.LightGray,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(2, 0, 0, 0),
-            Cursor = Cursors.Hand,
-            ToolTip = "Collapse all subcrafts"
-        };
-        collapseButton.MouseLeftButtonDown += (s, e) =>
-        {
-            e.Handled = true;
-            SetExpanderSubtreeState(rootExpander, false);
-        };
-
-        headerPanel.Children.Add(expandButton);
-        headerPanel.Children.Add(collapseButton);
-    }
-
-    private void SetExpanderSubtreeState(Expander expander, bool isExpanded)
-    {
-        expander.IsExpanded = isExpanded;
-        
-        if (expander.Content is StackPanel childrenPanel)
-        {
-            foreach (var child in childrenPanel.Children.OfType<Expander>())
-            {
-                SetExpanderSubtreeState(child, isExpanded);
-            }
-        }
     }
 
     private void RegisterNodeElements(string nodeId, Panel panel, ComboBox? dropdown = null, TextBlock? hqIndicator = null)
@@ -516,8 +488,24 @@ public class RecipeTreeUiBuilder
     private static Style CreateExpanderHeaderStyle()
     {
         var style = new Style(typeof(Expander));
-        // Simplified - in real implementation, would set custom template
+        
+        // Override the ToggleButton template to hide the default arrow
+        var toggleButtonStyle = new Style(typeof(ToggleButton));
+        toggleButtonStyle.Setters.Add(new Setter(Control.TemplateProperty, CreateEmptyToggleButtonTemplate()));
+        
+        style.Resources.Add(typeof(ToggleButton), toggleButtonStyle);
         return style;
+    }
+    
+    private static ControlTemplate CreateEmptyToggleButtonTemplate()
+    {
+        // Create a template that just shows the content, no arrow
+        var template = new ControlTemplate(typeof(ToggleButton));
+        var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        contentPresenter.SetBinding(ContentPresenter.ContentProperty, new System.Windows.Data.Binding("Content") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+        contentPresenter.SetBinding(ContentPresenter.ContentTemplateProperty, new System.Windows.Data.Binding("ContentTemplate") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+        template.VisualTree = contentPresenter;
+        return template;
     }
 }
 

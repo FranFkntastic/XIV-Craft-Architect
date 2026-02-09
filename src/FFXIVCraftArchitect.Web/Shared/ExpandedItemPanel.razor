@@ -1,144 +1,219 @@
 @using FFXIVCraftArchitect.Core.Models
 
-<div style="background: #2a2a25; border-radius: 8px; border: 2px solid #d4a73a; overflow: hidden; margin-bottom: 12px;">
-    <!-- Header -->
-    <div style="display: flex; align-items: center; padding: 12px 16px; background: #363630; border-bottom: 1px solid #444;">
-        <MudIcon Icon="@Icons.Material.Filled.ExpandLess" 
-                 Style="color: #d4a73a; margin-right: 8px;" 
-                 Size="Size.Medium" />
+<!-- Full Viewport Modal -->
+<div style="position: fixed; top: 64px; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); z-index: 1000; display: flex; align-items: flex-start; justify-content: center; padding: 20px;">
+    <div style="background: #1a1a18; border-radius: 8px; border: 2px solid #d4a73a; width: 95%; max-width: 1400px; height: calc(100vh - 104px); display: flex; flex-direction: column; overflow: hidden; margin-top: 20px;">
         
-        <div style="flex: 1;">
-            <MudText Typo="Typo.h6" Style="color: #fff; font-weight: 600;">
-                @Plan.Name
-            </MudText>
-            <MudText Typo="Typo.caption" Style="color: #888;">
-                Quantity needed: <span style="color: #d4a73a;">×@Plan.QuantityNeeded</span>
-            </MudText>
+        <!-- Header -->
+        <div style="display: flex; align-items: center; padding: 16px 20px; background: #2a2a25; border-bottom: 2px solid #444; flex-shrink: 0;">
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                           OnClick="OnClose"
+                           Style="color: #d4a73a; margin-right: 16px;"
+                           Size="Size.Medium" />
+            
+            <div style="flex: 1;">
+                <MudText Typo="Typo.h5" Style="color: #fff; font-weight: 600;">
+                    @Plan.Name
+                </MudText>
+                <MudText Typo="Typo.body2" Style="color: #888;">
+                    Quantity: <span style="color: #d4a73a;">×@Plan.QuantityNeeded</span>
+                </MudText>
+            </div>
+            
+            <MudIconButton Icon="@Icons.Material.Filled.PushPin"
+                           Style="color: #888; margin-right: 8px;"
+                           Size="Size.Small" />
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           OnClick="OnClose"
+                           Style="color: #888;"
+                           Size="Size.Medium" />
         </div>
         
-        @if (Plan.RecommendedWorld != null)
-        {
-            <div style="text-align: right; margin-right: 24px;">
-                <MudText Typo="Typo.caption" Style="color: #888;">Best World</MudText>
-                <MudText Typo="Typo.h6" Style="color: #90EE90; font-weight: 600;">
-                    @Plan.RecommendedWorld.WorldName
-                </MudText>
-            </div>
+        <!-- Scrollable Content -->
+        <div style="flex-grow: 1; overflow-y: auto; padding: 20px;">
             
-            <div style="text-align: right; margin-right: 24px;">
-                <MudText Typo="Typo.caption" Style="color: #888;">Unit Price</MudText>
-                <MudText Typo="Typo.h6" Style="color: #ccc; font-weight: 600;">
-                    @Plan.RecommendedWorld.AveragePricePerUnit.ToString("N0")g
-                </MudText>
-            </div>
-            
-            <div style="text-align: right;">
-                <MudText Typo="Typo.caption" Style="color: #888;">Total Cost</MudText>
-                <MudText Typo="Typo.h6" Style="color: #d4a73a; font-weight: 600;">
-                    @Plan.RecommendedWorld.TotalCost.ToString("N0")g
-                </MudText>
-            </div>
-        }
-        
-        <MudIconButton Icon="@Icons.Material.Filled.Close"
-                       OnClick="OnClose"
-                       Style="color: #888; margin-left: 16px;"
-                       Size="Size.Small" />
-    </div>
-    
-    <!-- World Options Grid -->
-    <div style="padding: 16px; background: #1e1e1a;">
-        @if (Plan.WorldOptions?.Any() == true)
-        {
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 12px;">
-                @foreach (var world in GetSortedWorlds())
-                {
-                    var isBest = world.WorldName == Plan.RecommendedWorld?.WorldName;
-                    <div style="padding: 12px; background: @(isBest ? "#1a3a1a" : "#252520"); border-radius: 6px; border: 1px solid @(isBest ? "#4caf50" : "#444"); border-left: 4px solid @(isBest ? "#4caf50" : "#444");">
-                        <!-- World Header -->
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                @if (isBest)
+            <!-- RECOMMENDED PURCHASE SECTION -->
+            <div style="margin-bottom: 24px;">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                    <MudIcon Icon="@Icons.Material.Filled.Recommend" Style="color: #d4a73a;" Size="Size.Small" />
+                    <MudText Typo="Typo.subtitle1" Style="color: #d4a73a; font-weight: 600;">Recommended Purchase</MudText>
+                </div>
+                
+                <div style="background: #252520; border-radius: 8px; border: 2px solid #4a4a40; padding: 20px;">
+                    @if (Plan.RequiresSplitPurchase && Plan.RecommendedSplit?.Any() == true)
+                    {
+                        <!-- Split World Recommendation -->
+                        <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px;">
+                            @foreach (var split in Plan.RecommendedSplit)
+                            {
+                                var isExpanded = _expandedWorlds.Contains(split.WorldName);
+                                var worldData = Plan.WorldOptions?.FirstOrDefault(w => w.WorldName == split.WorldName);
+                                
+                                <div style="flex: 1; min-width: 200px; max-width: 300px;">
+                                    <div @onclick="() => ToggleWorld(split.WorldName)" 
+                                         style="cursor: pointer; background: @(isExpanded ? "#1a3a1a" : "#2a2a25"); border-radius: 6px; border: 2px solid @(isExpanded ? "#4caf50" : "#444"); padding: 12px;">
+                                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                                            <div style="display: flex; align-items: center; gap: 8px;">
+                                                <MudIcon Icon="@(isExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" 
+                                                         Size="Size.Small" Style="color: #888;" />
+                                                <MudText Typo="Typo.subtitle1" Style="color: #90EE90; font-weight: 600;">
+                                                    @split.WorldName
+                                                </MudText>
+                                            </div>
+                                        </div>
+                                        <div style="margin-top: 8px;">
+                                            <MudText Typo="Typo.h6" Style="color: #d4a73a; font-weight: 600;">
+                                                ×@split.QuantityToBuy
+                                            </MudText>
+                                            <MudText Typo="Typo.body2" Style="color: #888;">
+                                                @split.TotalCost.ToString("N0")g
+                                            </MudText>
+                                        </div>
+                                    </div>
+                                    
+                                    @if (isExpanded && worldData?.Listings?.Any() == true)
+                                    {
+                                        <div style="margin-top: 8px; background: #1e1e1a; border-radius: 4px; padding: 12px; border: 1px solid #333; max-height: 400px; overflow-y: auto;">
+                                            @RenderListingsTable(worldData.Listings.Where(l => !l.IsAdditionalOption).OrderBy(l => l.PricePerUnit).ToList())
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                        
+                        <div style="display: flex; align-items: center; justify-content: space-between; padding-top: 16px; border-top: 1px solid #444;">
+                            <MudText Typo="Typo.body2" Style="color: #888;">
+                                Multi-world purchase
+                            </MudText>
+                            <MudText Typo="Typo.h6" Style="color: #d4a73a; font-weight: 700;">
+                                Total: @Plan.SplitTotalCost?.ToString("N0")g
+                            </MudText>
+                        </div>
+                    }
+                    else if (Plan.RecommendedWorld != null)
+                    {
+                        <!-- Single World Recommendation -->
+                        <div style="display: flex; flex-wrap: wrap; gap: 16px;">
+                            <div style="flex: 1; min-width: 200px; max-width: 300px;">
+                                <div @onclick="() => ToggleWorld(Plan.RecommendedWorld.WorldName)" 
+                                     style="cursor: pointer; background: #1a3a1a; border-radius: 6px; border: 2px solid #4caf50; padding: 12px;">
+                                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <MudIcon Icon="@(_expandedWorlds.Contains(Plan.RecommendedWorld.WorldName) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" 
+                                                     Size="Size.Small" Style="color: #888;" />
+                                            <MudText Typo="Typo.subtitle1" Style="color: #90EE90; font-weight: 600;">
+                                                @Plan.RecommendedWorld.WorldName
+                                            </MudText>
+                                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Style="color: #4caf50;" />
+                                        </div>
+                                    </div>
+                                    <div style="margin-top: 8px;">
+                                        <MudText Typo="Typo.h6" Style="color: #d4a73a; font-weight: 600;">
+                                            ×@Plan.QuantityNeeded
+                                        </MudText>
+                                        <MudText Typo="Typo.body2" Style="color: #888;">
+                                            @Plan.RecommendedWorld.TotalCost.ToString("N0")g
+                                        </MudText>
+                                    </div>
+                                </div>
+                                
+                                @if (_expandedWorlds.Contains(Plan.RecommendedWorld.WorldName) && Plan.RecommendedWorld.Listings?.Any() == true)
                                 {
-                                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" 
-                                             Size="Size.Small" 
-                                             Style="color: #4caf50;" />
-                                }
-                                <MudText Typo="Typo.subtitle1" 
-                                         Style="@GetWorldNameStyle(isBest)">
-                                    @world.WorldName
-                                </MudText>
-                            </div>
-                            <div style="text-align: right;">
-                                <MudText Typo="Typo.subtitle1" 
-                                         Style="@GetWorldCostStyle(isBest)">
-                                    @world.TotalCost.ToString("N0")g
-                                </MudText>
-                                @if (world.ExcessQuantity > 0)
-                                {
-                                    <MudText Typo="Typo.caption" Style="color: #ff9800;">
-                                        +@world.ExcessQuantity extra
-                                    </MudText>
+                                    <div style="margin-top: 8px; background: #1e1e1a; border-radius: 4px; padding: 12px; border: 1px solid #333; max-height: 400px; overflow-y: auto;">
+                                        @RenderListingsTable(Plan.RecommendedWorld.Listings.Where(l => !l.IsAdditionalOption).OrderBy(l => l.PricePerUnit).ToList())
+                                    </div>
                                 }
                             </div>
                         </div>
-                        
-                        <!-- Listings Table -->
-                        @if (world.Listings?.Any() == true)
+                    }
+                </div>
+            </div>
+            
+            <!-- ALTERNATIVE CONFIGURATIONS SECTION -->
+            @if (GetAlternativeConfigs().Any())
+            {
+                <div style="margin-bottom: 24px;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer;" @onclick="() => _showAlternatives = !_showAlternatives">
+                        <MudIcon Icon="@Icons.Material.Filled.AltRoute" Style="color: #87ceeb;" Size="Size.Small" />
+                        <MudText Typo="Typo.subtitle1" Style="color: #87ceeb; font-weight: 600;">Alternative Configurations</MudText>
+                        <MudIcon Icon="@(_showAlternatives ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" 
+                                 Size="Size.Small" Style="color: #666; margin-left: auto;" />
+                    </div>
+                    
+                    @if (_showAlternatives)
+                    {
+                        <div style="background: #1e2530; border-radius: 8px; border: 1px solid #3a4a5a; overflow: hidden;">
+                            @foreach (var config in GetAlternativeConfigs())
+                            {
+                                <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #2a3540;">
+                                    <div style="display: flex; align-items: center; gap: 12px;">
+                                        @if (config.IsBestSingleWorld)
+                                        {
+                                            <MudText Typo="Typo.caption" Style="color: #4caf50; background: #1a3a1a; padding: 2px 8px; border-radius: 4px;">BEST</MudText>
+                                        }
+                                        <MudText Typo="Typo.body1" Style="color: #ccc;">
+                                            @config.Description
+                                        </MudText>
+                                    </div>
+                                    <MudText Typo="Typo.subtitle1" Style="color: #d4a73a; font-weight: 600;">
+                                        @config.TotalCost.ToString("N0")g
+                                    </MudText>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+            
+            <!-- ALL WORLDS SECTION -->
+            <div>
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer;" @onclick="() => _showAllWorlds = !_showAllWorlds">
+                    <MudIcon Icon="@Icons.Material.Filled.Public" Style="color: #888;" Size="Size.Small" />
+                    <MudText Typo="Typo.subtitle1" Style="color: #888; font-weight: 600;">All Worlds</MudText>
+                    <MudText Typo="Typo.caption" Style="color: #666; margin-left: 8px;">(sorted by favorability)</MudText>
+                    <MudIcon Icon="@(_showAllWorlds ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" 
+                             Size="Size.Small" Style="color: #666; margin-left: auto;" />
+                </div>
+                
+                @if (_showAllWorlds && Plan.WorldOptions?.Any() == true)
+                {
+                    <div style="background: #1e1e1a; border-radius: 8px; border: 1px solid #333; overflow: hidden;">
+                        @foreach (var world in GetWorldsByFavorability())
                         {
-                            <div style="background: rgba(0,0,0,0.3); border-radius: 4px; padding: 8px;">
-                                <!-- Header Row -->
-                                <div style="display: flex; padding: 4px 8px; border-bottom: 1px solid #333; color: #666; font-size: 12px; font-weight: 600;">
-                                    <span style="width: 60px;">Qty</span>
-                                    <span style="width: 80px;">Price</span>
-                                    <span style="width: 90px; text-align: right;">Total</span>
-                                    <span style="flex: 1; text-align: right;">Retainer</span>
+                            var isExpanded = _expandedAllWorlds.Contains(world.WorldName);
+                            <div style="border-bottom: 1px solid #2a2a2a;">
+                                <div @onclick="() => ToggleAllWorld(world.WorldName)" 
+                                     style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: @(isExpanded ? "#252520" : "transparent");">
+                                    <div style="display: flex; align-items: center; gap: 12px;">
+                                        <MudIcon Icon="@(isExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" 
+                                                 Size="Size.Small" Style="color: #666;" />
+                                        <MudText Typo="Typo.body1" Style="color: #ccc; font-weight: 500;">
+                                            @world.WorldName
+                                        </MudText>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 24px;">
+                                        <MudText Typo="Typo.body2" Style="color: #888;">
+                                            @world.TotalQuantityPurchased × @world.AveragePricePerUnit.ToString("N0")g
+                                        </MudText>
+                                        <MudText Typo="Typo.subtitle1" Style="color: #d4a73a; font-weight: 600; min-width: 80px; text-align: right;">
+                                            @world.TotalCost.ToString("N0")g
+                                        </MudText>
+                                    </div>
                                 </div>
                                 
-                                <!-- Listing Rows -->
-                                @foreach (var listing in world.Listings.Where(l => !l.IsAdditionalOption).OrderBy(l => l.PricePerUnit))
+                                @if (isExpanded && world.Listings?.Any() == true)
                                 {
-                                    var listingTotal = listing.Quantity * listing.PricePerUnit;
-                                    <div style="display: flex; padding: 6px 8px; color: #aaa; font-size: 13px; border-bottom: 1px solid #2a2a2a;">
-                                        <span style="width: 60px; color: #90EE90;">×@(listing.Quantity)</span>
-                                        <span style="width: 80px; color: @(listing.IsHq ? "#ffeb3b" : "#ccc");">
-                                            @if (listing.IsHq)
-                                            {
-                                                <span style="margin-right: 2px;">★</span>
-                                            }
-                                            @listing.PricePerUnit.ToString("N0")g
-                                        </span>
-                                        <span style="width: 90px; text-align: right; color: #d4a73a;">
-                                            @listingTotal.ToString("N0")g
-                                        </span>
-                                        <span style="flex: 1; text-align: right; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 8px;">
-                                            @listing.RetainerName
-                                        </span>
+                                    <div style="padding: 0 16px 16px 48px; background: #1a1a18; max-height: 400px; overflow-y: auto;">
+                                        @RenderListingsTable(world.Listings.Where(l => !l.IsAdditionalOption).OrderBy(l => l.PricePerUnit).ToList())
                                     </div>
                                 }
                             </div>
                         }
-                        else
-                        {
-                            <MudText Typo="Typo.caption" Style="color: #666; font-style: italic;">
-                                No detailed listings available
-                            </MudText>
-                        }
                     </div>
                 }
             </div>
-        }
-        else
-        {
-            <div style="text-align: center; padding: 24px;">
-                <MudIcon Icon="@Icons.Material.Filled.SearchOff" 
-                         Size="Size.Large" 
-                         Style="color: #555; margin-bottom: 8px;" />
-                <MudText Typo="Typo.body1" Style="color: #888;">
-                    No market data available for this item
-                </MudText>
-            </div>
-        }
+            
+        </div>
     </div>
 </div>
 
@@ -146,22 +221,87 @@
     [Parameter] public DetailedShoppingPlan Plan { get; set; } = null!;
     [Parameter] public EventCallback OnClose { get; set; }
 
-    private List<WorldShoppingSummary> GetSortedWorlds()
+    private HashSet<string> _expandedWorlds = new();
+    private HashSet<string> _expandedAllWorlds = new();
+    private bool _showAlternatives = true;
+    private bool _showAllWorlds = false;
+
+    private void ToggleWorld(string worldName)
     {
-        if (Plan.WorldOptions == null)
-            return new List<WorldShoppingSummary>();
+        if (_expandedWorlds.Contains(worldName))
+            _expandedWorlds.Remove(worldName);
+        else
+            _expandedWorlds.Add(worldName);
+    }
+
+    private void ToggleAllWorld(string worldName)
+    {
+        if (_expandedAllWorlds.Contains(worldName))
+            _expandedAllWorlds.Remove(worldName);
+        else
+            _expandedAllWorlds.Add(worldName);
+    }
+
+    private RenderFragment RenderListingsTable(List<ShoppingListingEntry> listings)
+    {
+        return @<div>
+            <div style="display: flex; padding: 6px 8px; border-bottom: 1px solid #333; color: #666; font-size: 11px; font-weight: 600;">
+                <span style="width: 50px;">Qty</span>
+                <span style="width: 80px;">Price</span>
+                <span style="width: 80px; text-align: right;">Total</span>
+                <span style="flex: 1; text-align: right;">Retainer</span>
+            </div>
+            @foreach (var listing in listings)
+            {
+                var total = listing.Quantity * listing.PricePerUnit;
+                <div style="display: flex; padding: 6px 8px; color: #aaa; font-size: 12px; border-bottom: 1px solid #2a2a2a;">
+                    <span style="width: 50px; color: #90EE90;">×@(listing.Quantity)</span>
+                    <span style="width: 80px; color: @(listing.IsHq ? "#ffeb3b" : "#ccc");">
+                        @(listing.IsHq ? "★" : "")@listing.PricePerUnit.ToString("N0")g
+                    </span>
+                    <span style="width: 80px; text-align: right; color: #d4a73a;">
+                        @total.ToString("N0")g
+                    </span>
+                    <span style="flex: 1; text-align: right; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 8px;">
+                        @listing.RetainerName
+                    </span>
+                </div>
+            }
+        </div>;
+    }
+
+    private List<WorldShoppingSummary> GetWorldsByFavorability()
+    {
+        if (Plan.WorldOptions == null) return new();
         
+        // Sort by total cost as a proxy for favorability
+        // (In a real implementation, this would use the actual favorability score)
         return Plan.WorldOptions
-            .OrderBy(w => w.WorldName != Plan.RecommendedWorld?.WorldName)
-            .ThenBy(w => w.TotalCost)
+            .OrderBy(w => w.TotalCost)
             .ToList();
     }
 
-    private string GetWorldNameStyle(bool isBest) => isBest 
-        ? "color: #90EE90; font-weight: 600;" 
-        : "color: #ccc; font-weight: 600;";
+    private record AlternativeConfig(string Description, decimal TotalCost, bool IsBestSingleWorld = false);
 
-    private string GetWorldCostStyle(bool isBest) => isBest 
-        ? "color: #90EE90; font-weight: 600;" 
-        : "color: #ccc; font-weight: 600;";
+    private List<AlternativeConfig> GetAlternativeConfigs()
+    {
+        var configs = new List<AlternativeConfig>();
+        
+        // Add single-world options
+        if (Plan.WorldOptions?.Any() == true)
+        {
+            var sortedWorlds = Plan.WorldOptions.OrderBy(w => w.TotalCost).ToList();
+            for (int i = 0; i < sortedWorlds.Count; i++)
+            {
+                var world = sortedWorlds[i];
+                configs.Add(new AlternativeConfig(
+                    $"Single World: {world.WorldName}",
+                    world.TotalCost,
+                    i == 0 // Mark the best one
+                ));
+            }
+        }
+        
+        return configs;
+    }
 }

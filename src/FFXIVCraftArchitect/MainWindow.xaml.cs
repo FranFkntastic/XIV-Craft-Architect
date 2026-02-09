@@ -6,15 +6,17 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Core.Services;
 using FFXIVCraftArchitect.Coordinators;
 using FFXIVCraftArchitect.Helpers;
 using FFXIVCraftArchitect.Services;
+using FFXIVCraftArchitect.Services.Interfaces;
+using FFXIVCraftArchitect.Services.UI;
 using FFXIVCraftArchitect.UIBuilders;
 using FFXIVCraftArchitect.ViewModels;
 using FFXIVCraftArchitect.Views;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using static FFXIVCraftArchitect.Services.PriceCheckService;
 using Window = System.Windows.Window;
 
 // Type aliases for disambiguation
@@ -24,8 +26,14 @@ using AcquisitionSource = FFXIVCraftArchitect.Core.Models.AcquisitionSource;
 using DetailedShoppingPlan = FFXIVCraftArchitect.Core.Models.DetailedShoppingPlan;
 using MaterialAggregate = FFXIVCraftArchitect.Core.Models.MaterialAggregate;
 using PriceSource = FFXIVCraftArchitect.Core.Models.PriceSource;
-using PriceInfo = FFXIVCraftArchitect.Services.PriceInfo;
+using PriceInfo = FFXIVCraftArchitect.Core.Models.PriceInfo;
 using WatchState = FFXIVCraftArchitect.Models.WatchState;
+using SettingsService = FFXIVCraftArchitect.Core.Services.SettingsService;
+using GarlandService = FFXIVCraftArchitect.Core.Services.GarlandService;
+using UniversalisService = FFXIVCraftArchitect.Core.Services.UniversalisService;
+using PriceCheckService = FFXIVCraftArchitect.Core.Services.PriceCheckService;
+using static FFXIVCraftArchitect.Core.Services.PriceCheckService;
+using WorldDataCoordinator = FFXIVCraftArchitect.Core.Services.WorldDataCoordinator;
 
 namespace FFXIVCraftArchitect;
 
@@ -56,7 +64,10 @@ public partial class MainWindow : Window
     private readonly MarketShoppingService _marketShoppingService;
     private readonly WaitingwayTravelService _waitingwayService;
     private readonly WorldBlacklistService _blacklistService;
+    private readonly IDialogService _dialogs;
+    private readonly Core.Services.IMarketCacheService _marketCache;
     private readonly ILogger<MainWindow> _logger;
+    private readonly DialogServiceFactory _dialogFactory;
 
     // ViewModels
     private readonly RecipePlannerViewModel _recipeVm;
@@ -65,6 +76,12 @@ public partial class MainWindow : Window
     
     // UI Builders
     private RecipeTreeUiBuilder? _recipeTreeBuilder;
+    private readonly ShoppingListBuilder _shoppingListBuilder;
+    private ProcurementPanelBuilder? _procurementBuilder;
+    private readonly InfoPanelBuilder _infoPanelBuilder;
+    
+    // Factories
+    private readonly ICardFactory _cardFactory;
     
     // Search state
     private List<GarlandSearchResult> _currentSearchResults = new();
@@ -74,8 +91,8 @@ public partial class MainWindow : Window
     private MarketDataStatusWindow? _marketDataStatusWindow;
     
     // Backwards compatibility properties (using Core.Models types)
-    private Core.Models.CraftingPlan? _currentPlan => _recipeVm.CurrentPlan;
-    private List<Core.Models.DetailedShoppingPlan> _currentMarketPlans => _marketVm.ShoppingPlans.Select(vm => vm.Plan).ToList();
+    private Core.Models.CraftingPlan? _currentPlan => _recipeVm?.CurrentPlan;
+    private List<Core.Models.DetailedShoppingPlan> _currentMarketPlans => _marketVm?.ShoppingPlans.Select(vm => vm.Plan).ToList() ?? new List<Core.Models.DetailedShoppingPlan>();
     
     // Current plan file path
     private string? _currentPlanPath;
@@ -87,6 +104,8 @@ public partial class MainWindow : Window
     private readonly ImportCoordinator _importCoordinator;
     private readonly ExportCoordinator _exportCoordinator;
     private readonly PlanPersistenceCoordinator _planCoordinator;
+    private readonly WatchStateCoordinator _watchStateCoordinator;
+    private readonly WorldDataCoordinator _worldDataCoordinator;
 
     public MainWindow(
         GarlandService garlandService,
@@ -99,13 +118,21 @@ public partial class MainWindow : Window
         MarketShoppingService marketShoppingService,
         WaitingwayTravelService waitingwayService,
         WorldBlacklistService blacklistService,
+        DialogServiceFactory dialogFactory,
         ILogger<MainWindow> logger,
+        ILoggerFactory loggerFactory,
         ImportCoordinator importCoordinator,
         ExportCoordinator exportCoordinator,
-        PlanPersistenceCoordinator planCoordinator)
+        PlanPersistenceCoordinator planCoordinator,
+        WatchStateCoordinator watchStateCoordinator,
+        WorldDataCoordinator worldDataCoordinator,
+        ICardFactory cardFactory,
+        RecipePlannerViewModel recipeVm,
+        MarketAnalysisViewModel marketVm,
+        MainViewModel mainVm,
+        InfoPanelBuilder infoPanelBuilder,
+        Core.Services.IMarketCacheService marketCache)
     {
-        InitializeComponent();
-
         // Services (injected via DI)
         _garlandService = garlandService;
         _universalisService = universalisService;
@@ -117,32 +144,57 @@ public partial class MainWindow : Window
         _marketShoppingService = marketShoppingService;
         _waitingwayService = waitingwayService;
         _blacklistService = blacklistService;
+        _dialogFactory = dialogFactory;
+        _dialogs = _dialogFactory.CreateForWindow(this);
+        _marketCache = marketCache;
         _logger = logger;
         
         // Coordinators (injected via DI)
         _importCoordinator = importCoordinator;
         _exportCoordinator = exportCoordinator;
         _planCoordinator = planCoordinator;
+        _watchStateCoordinator = watchStateCoordinator;
+        _worldDataCoordinator = worldDataCoordinator;
+        _cardFactory = cardFactory;
         
-        // Create ViewModels
-        _recipeVm = new RecipePlannerViewModel();
-        _marketVm = new MarketAnalysisViewModel();
-        _mainVm = new MainViewModel(_recipeVm, _marketVm);
+        // ViewModels (injected via DI as singletons)
+        _recipeVm = recipeVm;
+        _marketVm = marketVm;
+        _mainVm = mainVm;
+        
+        // Create UI Builders (ProcurementBuilder deferred until InitializeComponent)
+        _shoppingListBuilder = new ShoppingListBuilder(loggerFactory?.CreateLogger<ShoppingListBuilder>());
+        _infoPanelBuilder = infoPanelBuilder;
+        
+        InitializeComponent();
+        
+        // Initialize ProcurementBuilder after InitializeComponent (UI elements exist)
+        _procurementBuilder = new ProcurementPanelBuilder(
+            _settingsService,
+            _infoPanelBuilder,
+            SplitPaneCardsGrid,
+            SplitPaneExpandedContent,
+            SplitPaneExpandedPanel,
+            MarketTotalCostText,
+            ProcurementPlanPanel,
+            ProcurementPanel,
+            loggerFactory?.CreateLogger<ProcurementPanelBuilder>());
+        
+        // Wire up ViewModel events
+        _recipeVm.NodeAcquisitionChanged += OnNodeAcquisitionChanged;
+        _recipeVm.NodeHqChanged += OnNodeHqChanged;
+        _recipeVm.PropertyChanged += OnRecipeVmPropertyChanged;
+        _marketVm.PropertyChanged += OnMarketVmPropertyChanged;
+        
+        Loaded += OnLoaded;
         
         // Set DataContext for DataTemplate binding
         DataContext = _mainVm;
         
-        // Subscribe to blacklist events
-        _blacklistService.WorldUnblacklisted += (s, e) => 
+        // Subscribe to blacklist events (deferred to Loaded to ensure UI is initialized)
+        Loaded += (s, e) =>
         {
-            Dispatcher.Invoke(() => 
-            {
-                StatusLabel.Text = $"{e.WorldName} removed from blacklist ({e.ExpiresInDisplay})";
-                if (IsMarketViewVisible())
-                {
-                    PopulateProcurementPanel();
-                }
-            });
+            _blacklistService.WorldUnblacklisted += OnWorldUnblacklisted;
         };
 
         // Inject logger into ViewModels (respect diagnostic setting)
@@ -154,27 +206,35 @@ public partial class MainWindow : Window
             onAcquisitionChanged: (nodeId, source) => _recipeVm.SetNodeAcquisition(nodeId, source),
             onHqChanged: (nodeId, isHq, mode) => _recipeVm.SetNodeHq(nodeId, isHq, mode)
         );
-        
-        // Wire up ViewModel events
-        _recipeVm.NodeAcquisitionChanged += OnNodeAcquisitionChanged;
-        _recipeVm.NodeHqChanged += OnNodeHqChanged;
-        _recipeVm.PropertyChanged += OnRecipeVmPropertyChanged;
-        _marketVm.PropertyChanged += OnMarketVmPropertyChanged;
-        
-        Loaded += OnLoaded;
     }
 
+    /// <summary>
+    /// Entry point after window is loaded. Delegates to async initialization.
+    /// Note: UI-specific - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - requires direct UI element access for initialization.
+    /// </summary>
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         OnLoadedAsync().SafeFireAndForget(OnAsyncError);
     }
 
+    /// <summary>
+    /// Async initialization: loads world data, applies settings, restores watch state.
+    /// Note: Coordination logic - could move to a StartupCoordinator if DI becomes complex.
+    /// MVVM: Not an ICommand candidate - startup coordination needs UI context.
+    /// </summary>
     private async Task OnLoadedAsync()
     {
         await LoadWorldDataAsync();
         
         var defaultMode = _settingsService.Get<string>("planning.default_recommendation_mode", "MinimizeTotalCost");
+        _logger.LogInformation("[OnLoaded] planning.default_recommendation_mode = '{Value}', Setting combo index: {Index}", defaultMode, defaultMode == "MaximizeValue" ? 1 : 0);
         MarketModeCombo.SelectedIndex = defaultMode == "MaximizeValue" ? 1 : 0;
+        
+        // Also initialize ProcurementModeCombo from same setting
+        var procModeIndex = defaultMode == "MaximizeValue" ? 1 : 0;
+        _logger.LogInformation("[OnLoaded] Setting ProcurementModeCombo.SelectedIndex = {Index}", procModeIndex);
+        ProcurementModeCombo.SelectedIndex = procModeIndex;
         
         if (App.RestoredWatchState != null)
         {
@@ -183,18 +243,27 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnAsyncError(Exception ex)
+    /// <summary>
+    /// Global async error handler - displays errors to user and logs them.
+    /// Note: UI-specific error presentation - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - error handler needs StatusLabel access.
+    /// </summary>
+    private async void OnAsyncError(Exception ex)
     {
         _logger.LogError(ex, "Async operation failed");
         StatusLabel.Text = $"Operation failed: {ex.Message}";
-        MessageBox.Show($"Operation failed: {ex.Message}", "Error", 
-            MessageBoxButton.OK, MessageBoxImage.Error);
+        await _dialogs.ShowErrorAsync($"Operation failed: {ex.Message}", ex);
     }
     
     // ========================================================================
     // ViewModel Event Handlers
     // ========================================================================
     
+    /// <summary>
+    /// Handles RecipePlannerViewModel property changes and updates UI state accordingly.
+    /// Note: UI coordination - must remain in MainWindow as it controls specific UI elements.
+    /// MVVM: Not an ICommand candidate - reacts to VM changes, not user action.
+    /// </summary>
     private void OnRecipeVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         switch (e.PropertyName)
@@ -206,7 +275,6 @@ public partial class MainWindow : Window
                     PopulateShoppingList();
                     ProcurementRefreshButton.IsEnabled = true;
                     RebuildFromCacheButton.IsEnabled = true;
-                    RefreshPricesButton.IsEnabled = true;
                     ExpandAllButton.IsEnabled = true;
                     CollapseAllButton.IsEnabled = true;
                 }
@@ -214,7 +282,6 @@ public partial class MainWindow : Window
                 {
                     ProcurementRefreshButton.IsEnabled = false;
                     RebuildFromCacheButton.IsEnabled = false;
-                    RefreshPricesButton.IsEnabled = false;
                     ExpandAllButton.IsEnabled = false;
                     CollapseAllButton.IsEnabled = false;
                 }
@@ -233,6 +300,11 @@ public partial class MainWindow : Window
         }
     }
     
+    /// <summary>
+    /// Handles MarketAnalysisViewModel property changes.
+    /// Note: UI coordination - must remain in MainWindow as it triggers UI updates.
+    /// MVVM: Not an ICommand candidate - reacts to VM changes, not user action.
+    /// </summary>
     private void OnMarketVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         switch (e.PropertyName)
@@ -247,6 +319,12 @@ public partial class MainWindow : Window
         }
     }
     
+    /// <summary>
+    /// Handles node acquisition source changes (e.g., Craft -> Market Buy).
+    /// Updates the recipe tree display and shopping list.
+    /// Note: UI coordination - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - event callback from ViewModel, not user command.
+    /// </summary>
     private void OnNodeAcquisitionChanged(object? sender, NodeChangedEventArgs e)
     {
         _recipeTreeBuilder?.UpdateNodeAcquisition(e.NodeId, e.Node.Source);
@@ -258,27 +336,49 @@ public partial class MainWindow : Window
         }
     }
     
+    /// <summary>
+    /// Handles node HQ requirement changes.
+    /// Updates the recipe tree display and shopping list.
+    /// Note: UI coordination - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - event callback from ViewModel, not user command.
+    /// </summary>
     private void OnNodeHqChanged(object? sender, NodeChangedEventArgs e)
     {
         _recipeTreeBuilder?.UpdateNodeHqIndicator(e.NodeId, e.Node.MustBeHq);
         PopulateShoppingList();
     }
+    
+    /// <summary>
+    /// Handles world unblacklist event.
+    /// </summary>
+    private void OnWorldUnblacklisted(object? sender, WorldBlacklistEventArgs e)
+    {
+        Dispatcher.Invoke(() => 
+        {
+            StatusLabel.Text = $"{e.WorldName} removed from blacklist";
+            if (IsMarketViewVisible())
+            {
+                PopulateProcurementPanel();
+            }
+        });
+    }
 
+    /// <summary>
+    /// Loads world/DC data for the market region selector.
+    /// Uses WorldDataCoordinator for shared initialization logic between WPF and Web apps.
+    /// UI-specific aspects (ComboBox binding, status updates) remain in MainWindow.
+    /// </summary>
     private async Task LoadWorldDataAsync()
     {
         StatusLabel.Text = "Loading world data...";
         try
         {
-            var worldData = await _universalisService.GetWorldDataAsync();
-            
-            var worldNameToId = worldData.WorldIdToName.ToDictionary(
-                kvp => kvp.Value, 
-                kvp => kvp.Key, 
-                StringComparer.OrdinalIgnoreCase);
-            _marketShoppingService.SetWorldNameToIdMapping(worldNameToId);
+            var worldData = await _worldDataCoordinator.InitializeWorldDataAsync();
             
             DcCombo.ItemsSource = worldData.DataCenters;
-            DcCombo.SelectedItem = _settingsService.Get<string>("market.default_datacenter") ?? "Aether";
+            var savedDc = _settingsService.Get<string>("market.default_datacenter");
+            _logger.LogInformation("[LoadWorldDataAsync] market.default_datacenter = '{Value}', Using: {Selected}", savedDc, savedDc ?? "Aether (default)");
+            DcCombo.SelectedItem = savedDc ?? "Aether";
             OnDataCenterSelected(null, null);
             
             StatusLabel.Text = "Ready";
@@ -293,6 +393,11 @@ public partial class MainWindow : Window
     // Event Handlers
     // ========================================================================
 
+    /// <summary>
+    /// Updates the world dropdown when a data center is selected.
+    /// Note: UI-specific - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - directly manipulates ComboBox ItemsSource.
+    /// </summary>
     private void OnDataCenterSelected(object? sender, SelectionChangedEventArgs? e)
     {
         var dc = DcCombo.SelectedItem as string;
@@ -309,6 +414,11 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Handles Enter key in item search box.
+    /// Note: UI-specific - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - key event handler needs direct UI element.
+    /// </summary>
     private void OnItemSearchKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter)
@@ -317,11 +427,21 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Initiates item search via GarlandService and displays results.
+    /// Note: MUST REMAIN in MainWindow - directly manipulates SearchResults, SearchResultsPanel, ItemSearch UI elements.
+    ///       ViewModel cannot access these UI-specific elements.
+    /// </summary>
     private void OnSearchItem(object sender, RoutedEventArgs e)
     {
         OnSearchItemAsync().SafeFireAndForget(OnAsyncError);
     }
 
+    /// <summary>
+    /// Performs the actual item search against Garland Tools.
+    /// Note: MUST REMAIN in MainWindow - updates SearchResults.ItemsSource, SearchResultsPanel.Visibility,
+    ///       AddToProjectButton.IsEnabled, and StatusLabel directly. These are UI elements not accessible from ViewModel.
+    /// </summary>
     private async Task OnSearchItemAsync()
     {
         var query = ItemSearch.Text?.Trim();
@@ -350,6 +470,11 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Handles selection of an item from search results.
+    /// Note: UI-specific - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - SelectionChanged event, not a command.
+    /// </summary>
     private void OnItemSelected(object sender, SelectionChangedEventArgs e)
     {
         var index = SearchResults.SelectedIndex;
@@ -367,29 +492,23 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Adds selected item to the project list, or increments quantity if already present.
+    /// Note: Delegates to RecipePlannerViewModel.AddProjectItemCommand.
+    /// </summary>
     private void OnAddToProject(object sender, RoutedEventArgs e)
     {
         if (_selectedSearchResult == null)
             return;
 
         var itemName = _selectedSearchResult.Object?.Name ?? $"Item_{_selectedSearchResult.Id}";
-
-        var existing = _recipeVm.ProjectItems.FirstOrDefault(p => p.Id == _selectedSearchResult.Id);
-        if (existing != null)
-        {
-            existing.Quantity++;
-            StatusLabel.Text = $"Increased quantity of {existing.Name} to {existing.Quantity}";
-        }
-        else
-        {
-            _recipeVm.ProjectItems.Add(new ProjectItem
-            {
-                Id = _selectedSearchResult.Id,
-                Name = itemName,
-                Quantity = 1
-            });
-            StatusLabel.Text = $"Added {itemName} to project";
-        }
+        
+        // Use ViewModel command
+        _recipeVm.AddProjectItem(_selectedSearchResult.Id, itemName, 1, false);
+        
+        StatusLabel.Text = _recipeVm.ProjectItems.Any(p => p.Id == _selectedSearchResult.Id && p.Quantity > 1) 
+            ? $"Increased quantity of {itemName}" 
+            : $"Added {itemName} to project";
 
         ProjectList.ItemsSource = null;
         ProjectList.ItemsSource = _recipeVm.ProjectItems.ToList();
@@ -399,11 +518,23 @@ public partial class MainWindow : Window
         BrowsePlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
     }
 
+    /// <summary>
+    /// Initiates building the crafting plan from current project items.
+    /// Note: MUST REMAIN in MainWindow - reads DcCombo/WorldCombo SelectedItem (UI elements),
+    ///       updates BuildPlanButton/BrowsePlanButton states, and triggers auto price fetch.
+    ///       Complex UI coordination not suitable for ViewModel.
+    /// </summary>
     private void OnBuildProjectPlan(object sender, RoutedEventArgs e)
     {
         OnBuildProjectPlanAsync().SafeFireAndForget(OnAsyncError);
     }
 
+    /// <summary>
+    /// Builds the crafting plan by calling RecipeCalculationService.
+    /// Note: MUST REMAIN in MainWindow - extensive UI coordination: BuildPlanButton/BrowsePlanButton state,
+    ///       ProcurementRefreshButton/RebuildFromCacheButton enablement, auto-fetch prices trigger,
+    ///       StatusLabel updates, and tree view display. Too UI-heavy for ViewModel.
+    /// </summary>
     private async Task OnBuildProjectPlanAsync()
     {
         if (_recipeVm.ProjectItems.Count == 0)
@@ -435,7 +566,9 @@ public partial class MainWindow : Window
             StatusLabel.Text = $"Plan built: {_currentPlan.RootItems.Count} root items, " +
                                $"{_currentPlan.AggregatedMaterials.Count} unique materials";
             
-            if (_settingsService.Get<bool>("market.auto_fetch_prices", true))
+            var autoFetch = _settingsService.Get<bool>("market.auto_fetch_prices", true);
+            _logger.LogInformation("[OnBuildProjectPlan] market.auto_fetch_prices = {Value}", autoFetch);
+            if (autoFetch)
             {
                 StatusLabel.Text += " - Auto-fetching prices...";
                 await Dispatcher.InvokeAsync(async () =>
@@ -456,6 +589,11 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Opens the Plan Browser dialog for managing project items.
+    /// Note: UI-specific dialog handling - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - dialog owner must be the window (this).
+    /// </summary>
     private void OnBrowsePlan(object sender, RoutedEventArgs e)
     {
         var dialog = new Views.PlanBrowserDialog(_garlandService, _recipeVm.ProjectItems);
@@ -479,78 +617,50 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Populates the shopping list panel using ShoppingListBuilder.
+    /// Note: Uses ShoppingListBuilder - refactor successful, UI-specific coordination only.
+    /// MVVM: Not an ICommand candidate - internal coordination method, triggered by plan changes.
+    /// </summary>
     private void PopulateShoppingList()
     {
         if (_currentPlan?.AggregatedMaterials == null || ShoppingListPanel == null)
             return;
 
-        ShoppingListPanel.Children.Clear();
-        decimal totalCost = 0;
-
-        foreach (var material in _currentPlan.AggregatedMaterials.OrderBy(m => m.Name))
-        {
-            var row = new Grid();
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(50) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });
-
-            var nameBlock = new TextBlock
-            {
-                Text = material.Name,
-                Foreground = Brushes.White,
-                Padding = new Thickness(12, 6, 4, 6),
-                TextTrimming = TextTrimming.CharacterEllipsis
-            };
-            Grid.SetColumn(nameBlock, 0);
-            row.Children.Add(nameBlock);
-
-            var qtyBlock = new TextBlock
-            {
-                Text = material.TotalQuantity.ToString(),
-                Foreground = Brushes.LightGray,
-                Padding = new Thickness(4, 6, 4, 6),
-                HorizontalAlignment = HorizontalAlignment.Center
-            };
-            Grid.SetColumn(qtyBlock, 1);
-            row.Children.Add(qtyBlock);
-
-            var price = material.UnitPrice > 0 ? material.UnitPrice * material.TotalQuantity : 0;
-            totalCost += price;
-            var priceText = price > 0 ? $"{price:N0}g" : "-";
-            var priceBlock = new TextBlock
-            {
-                Text = priceText,
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4caf50")),
-                Padding = new Thickness(4, 6, 12, 6),
-                HorizontalAlignment = HorizontalAlignment.Right
-            };
-            Grid.SetColumn(priceBlock, 2);
-            row.Children.Add(priceBlock);
-
-            if (ShoppingListPanel.Children.Count % 2 == 1)
-            {
-                row.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#333333"));
-            }
-
-            ShoppingListPanel.Children.Add(row);
-        }
-
+        _shoppingListBuilder.PopulatePanel(ShoppingListPanel, _currentPlan.AggregatedMaterials);
+        
         if (TotalCostText != null)
         {
+            var totalCost = _shoppingListBuilder.CalculateTotalCost(_currentPlan.AggregatedMaterials);
             TotalCostText.Text = $"{totalCost:N0}g";
         }
     }
 
+    /// <summary>
+    /// Handles selection change in project items list (currently no-op).
+    /// Note: Placeholder for future functionality.
+    /// MVVM: Not an ICommand candidate - SelectionChanged event, not a command.
+    /// </summary>
     private void OnProjectItemSelected(object sender, SelectionChangedEventArgs e)
     {
     }
 
+    /// <summary>
+    /// Updates the Build Plan button text based on whether a plan exists.
+    /// Note: UI-specific - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - UI helper method, not an event handler.
+    /// </summary>
     private void UpdateBuildPlanButtonText()
     {
         var hasPlan = _currentPlan != null && _currentPlan.RootItems.Count > 0;
         BuildPlanButton.Content = hasPlan ? "Rebuild Project Plan" : "Build Project Plan";
     }
 
+    /// <summary>
+    /// Displays the crafting plan in the recipe tree view.
+    /// Note: Delegates to RecipeTreeUiBuilder - refactor successful.
+    /// MVVM: Not an ICommand candidate - UI helper method, not an event handler.
+    /// </summary>
     private void DisplayPlanInTreeView(CraftingPlan plan)
     {
         _recipeTreeBuilder?.BuildTree(_recipeVm.RootNodes, RecipePlanPanel);
@@ -596,6 +706,11 @@ public partial class MainWindow : Window
         headerPanel.Children.Add(collapseButton);
     }
     
+    /// <summary>
+    /// Recursively sets expand/collapse state for an expander and its children.
+    /// Note: UI helper - could be moved to RecipeTreeUiBuilder but kept here for tree operations.
+    /// MVVM: Not an ICommand candidate - UI helper method, not an event handler.
+    /// </summary>
     private void SetExpanderSubtreeState(Expander expander, bool isExpanded)
     {
         expander.IsExpanded = isExpanded;
@@ -612,6 +727,11 @@ public partial class MainWindow : Window
         }
     }
     
+    /// <summary>
+    /// Gets the display color for a node based on its acquisition source.
+    /// Note: Presentation logic - could be a value converter in XAML.
+    /// MVVM: Not an ICommand candidate - pure function, not an event handler.
+    /// </summary>
     private Brush GetNodeForeground(PlanNode node) => node.Source switch
     {
         AcquisitionSource.Craft => Brushes.White,
@@ -621,14 +741,19 @@ public partial class MainWindow : Window
         _ => Brushes.LightGray
     };
     
+    /// <summary>
+    /// Gets the price display text for a node.
+    /// Note: Uses RecipeCalculationService.CalculateNodeCraftCost - business logic extracted.
+    /// MVVM: Not an ICommand candidate - pure function, not an event handler.
+    /// </summary>
     private string GetNodePriceDisplay(PlanNode node)
     {
         return node.Source switch
         {
             AcquisitionSource.Craft when node.Children.Any() => 
-                $"(~{CalculateNodeCraftCost(node):N0}g)",
-            AcquisitionSource.VendorBuy when node.MarketPrice > 0 => 
-                $"(~{node.MarketPrice * node.Quantity:N0}g)",
+                $"(~{_recipeCalcService.CalculateNodeCraftCost(node):N0}g)",
+            AcquisitionSource.VendorBuy when node.VendorPrice > 0 => 
+                $"(~{node.VendorPrice * node.Quantity:N0}g)",
             AcquisitionSource.MarketBuyNq when node.MarketPrice > 0 => 
                 $"(~{node.MarketPrice * node.Quantity:N0}g)",
             AcquisitionSource.MarketBuyHq when node.HqMarketPrice > 0 => 
@@ -637,6 +762,11 @@ public partial class MainWindow : Window
         };
     }
     
+    /// <summary>
+    /// Displays a plan with cached prices and restores market state.
+    /// Note: Coordination logic - could be moved to a PlanDisplayCoordinator.
+    /// MVVM: Not an ICommand candidate - internal coordination method, not directly triggered by user.
+    /// </summary>
     private async Task DisplayPlanWithCachedPrices(CraftingPlan plan)
     {
         DisplayPlanInTreeView(plan);
@@ -651,7 +781,7 @@ public partial class MainWindow : Window
             ViewMarketStatusButton.IsEnabled = true;
             MenuViewMarketStatus.IsEnabled = true;
             
-            var savedPrices = ExtractPricesFromPlan(plan);
+            var savedPrices = _recipeCalcService.ExtractPricesFromPlan(plan);
             if (savedPrices.Count > 0)
             {
                 StatusLabel.Text = $"Loaded plan with {savedPrices.Count} cached prices and {_currentMarketPlans.Count} market items.";
@@ -661,9 +791,9 @@ public partial class MainWindow : Window
                 StatusLabel.Text = $"Loaded plan with {_currentMarketPlans.Count} market items.";
             }
         }
-        else if (ExtractPricesFromPlan(plan).Count > 0)
+        else if (_recipeCalcService.ExtractPricesFromPlan(plan).Count > 0)
         {
-            var savedPrices = ExtractPricesFromPlan(plan);
+            var savedPrices = _recipeCalcService.ExtractPricesFromPlan(plan);
             await UpdateMarketLogisticsAsync(savedPrices, useCachedData: true);
             StatusLabel.Text = $"Loaded plan with {savedPrices.Count} cached prices.";
             
@@ -674,48 +804,12 @@ public partial class MainWindow : Window
             ShowMarketLogisticsPlaceholder();
         }
     }
-    
-    private Dictionary<int, PriceInfo> ExtractPricesFromPlan(CraftingPlan plan)
-    {
-        var prices = new Dictionary<int, PriceInfo>();
-        
-        foreach (var root in plan.RootItems)
-        {
-            ExtractPricesFromNode(root, prices);
-        }
-        
-        return prices;
-    }
-    
-    private void ExtractPricesFromNode(PlanNode node, Dictionary<int, PriceInfo> prices)
-    {
-        if (node.MarketPrice > 0 || node.PriceSource != PriceSource.Unknown)
-        {
-            if (!prices.ContainsKey(node.ItemId))
-            {
-                prices[node.ItemId] = new PriceInfo
-                {
-                    ItemId = node.ItemId,
-                    ItemName = node.Name,
-                    UnitPrice = node.MarketPrice,
-                    Source = node.PriceSource,
-                    SourceDetails = node.PriceSourceDetails
-                };
-            }
-        }
-        
-        foreach (var child in node.Children)
-        {
-            ExtractPricesFromNode(child, prices);
-        }
-    }
 
+    /// <summary>
+    /// Initiates saving the current plan.
+    /// Note: Delegates to RecipePlannerViewModel.SavePlanCommand.
+    /// </summary>
     private void OnSavePlan(object sender, RoutedEventArgs e)
-    {
-        OnSavePlanAsync().SafeFireAndForget(OnAsyncError);
-    }
-
-    private async Task OnSavePlanAsync()
     {
         if (_currentPlan == null)
         {
@@ -723,235 +817,217 @@ public partial class MainWindow : Window
             return;
         }
         
-        var result = await _planCoordinator.SavePlanAsync(
-            this,
-            _currentPlan,
-            _recipeVm.ProjectItems.ToList(),
-            _currentPlanPath);
+        _recipeVm.SavePlanCommand.Execute(null);
         
-        if (result.Success)
+        // Sync status from ViewModel
+        if (!string.IsNullOrEmpty(_recipeVm.StatusMessage))
         {
-            _currentPlanPath = result.PlanPath;
+            StatusLabel.Text = _recipeVm.StatusMessage;
         }
-        StatusLabel.Text = result.Message;
     }
 
+    /// <summary>
+    /// Opens the plan browser to load a saved plan.
+    /// Note: Delegates to RecipePlannerViewModel.LoadPlanCommand.
+    /// </summary>
     private void OnViewPlans(object sender, RoutedEventArgs e)
     {
-        OnViewPlansAsync().SafeFireAndForget(OnAsyncError);
-    }
-
-    private async Task OnViewPlansAsync()
-    {
-        var (selected, plan, projectItems) = await _planCoordinator.ShowPlanBrowserAsync(
-            this,
-            _currentPlan,
-            _recipeVm.ProjectItems.ToList(),
-            _currentPlanPath ?? "");
+        _recipeVm.LoadPlanCommand.Execute(null);
         
-        if (selected && plan != null && projectItems != null)
+        // UI updates after plan load
+        if (_currentPlan != null)
         {
-            _recipeVm.CurrentPlan = plan;
-            
-            _recipeVm.ProjectItems.Clear();
-            foreach (var item in projectItems)
-            {
-                _recipeVm.ProjectItems.Add(item);
-            }
-            
             ProjectList.ItemsSource = null;
             ProjectList.ItemsSource = _recipeVm.ProjectItems.ToList();
             UpdateQuickViewCount();
             BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
             BrowsePlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
             
-            await DisplayPlanWithCachedPrices(plan);
+            DisplayPlanWithCachedPrices(_currentPlan).SafeFireAndForget(OnAsyncError);
             
-            StatusLabel.Text = $"Loaded plan: {plan.Name}";
+            StatusLabel.Text = $"Loaded plan: {_currentPlan.Name}";
         }
     }
 
+    /// <summary>
+    /// Initiates renaming the current plan.
+    /// Note: Delegates to RecipePlannerViewModel.RenamePlanCommand.
+    /// </summary>
     private void OnRenamePlan(object sender, RoutedEventArgs e)
     {
-        OnRenamePlanAsync().SafeFireAndForget(OnAsyncError);
-    }
-
-    private async Task OnRenamePlanAsync()
-    {
-        var result = await _planCoordinator.RenamePlanAsync(this, _currentPlanPath);
+        _recipeVm.RenamePlanCommand.Execute(null);
         
-        if (result.Success)
+        // Sync status from ViewModel
+        if (!string.IsNullOrEmpty(_recipeVm.StatusMessage))
         {
-            _currentPlanPath = result.PlanPath;
+            StatusLabel.Text = _recipeVm.StatusMessage;
         }
-        StatusLabel.Text = result.Message;
     }
 
+    /// <summary>
+    /// Imports a plan from Teamcraft.
+    /// Note: Delegates to RecipePlannerViewModel.ImportFromTeamcraftCommand.
+    /// </summary>
     private void OnImportTeamcraft(object sender, RoutedEventArgs e)
     {
-        var dc = DcCombo.SelectedItem as string ?? "Aether";
-        var world = WorldCombo.SelectedItem as string ?? "";
+        _recipeVm.ImportFromTeamcraftCommand.Execute(null);
         
-        var result = _importCoordinator.ImportFromTeamcraft(this, dc, world);
-        
-        if (result.Success && result.Plan != null)
+        // UI updates after import
+        if (_currentPlan != null)
         {
-            ApplyImportResult(result);
+            ProjectList.ItemsSource = null;
+            ProjectList.ItemsSource = _recipeVm.ProjectItems.ToList();
+            UpdateQuickViewCount();
+            BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
+            BrowsePlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
+            
+            DisplayPlanInTreeView(_currentPlan);
         }
-        StatusLabel.Text = result.Message;
+        
+        if (!string.IsNullOrEmpty(_recipeVm.StatusMessage))
+            StatusLabel.Text = _recipeVm.StatusMessage;
     }
 
-    private void ApplyImportResult(ImportCoordinator.ImportResult result)
+    /// <summary>
+    /// Exports current plan to native Craft Architect format.
+    /// Note: Delegates to RecipePlannerViewModel.ExportToNativeCommand.
+    /// </summary>
+    private async void OnExportNative(object sender, RoutedEventArgs e)
     {
-        if (result.Plan == null || result.ProjectItems == null) return;
-        
-        _recipeVm.CurrentPlan = result.Plan;
-        
-        _recipeVm.ProjectItems.Clear();
-        foreach (var item in result.ProjectItems)
-        {
-            _recipeVm.ProjectItems.Add(item);
-        }
-        
-        ProjectList.ItemsSource = null;
-        ProjectList.ItemsSource = _recipeVm.ProjectItems.ToList();
-        UpdateQuickViewCount();
-        
-        DisplayPlanInTreeView(_currentPlan);
-        BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
-        BrowsePlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
+        await _recipeVm.ExportToNativeCommand.ExecuteAsync(null);
+        if (!string.IsNullOrEmpty(_recipeVm.StatusMessage))
+            StatusLabel.Text = _recipeVm.StatusMessage;
     }
 
+    /// <summary>
+    /// Exports current plan to Teamcraft format.
+    /// Note: Delegates to RecipePlannerViewModel.ExportToTeamcraftCommand.
+    /// </summary>
     private void OnExportTeamcraft(object sender, RoutedEventArgs e)
     {
-        OnExportTeamcraftAsync().SafeFireAndForget(OnAsyncError);
+        _recipeVm.ExportToTeamcraftCommand.Execute(null);
+        if (!string.IsNullOrEmpty(_recipeVm.StatusMessage))
+            StatusLabel.Text = _recipeVm.StatusMessage;
     }
 
-    private async Task OnExportTeamcraftAsync()
-    {
-        var result = _exportCoordinator.ExportToTeamcraft(_currentPlan);
-        
-        if (!result.Success)
-        {
-            StatusLabel.Text = result.Message;
-            return;
-        }
-        
-        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
-        {
-            StatusLabel.Text = result.Message;
-        }
-        else
-        {
-            StatusLabel.Text = "Failed to copy - clipboard may be in use.";
-        }
-    }
-
+    /// <summary>
+    /// Exports current plan to Artisan format.
+    /// Note: Delegates to RecipePlannerViewModel.ExportToArtisanCommand.
+    /// </summary>
     private void OnExportArtisan(object sender, RoutedEventArgs e)
     {
-        OnExportArtisanAsync().SafeFireAndForget(OnAsyncError);
+        _recipeVm.ExportToArtisanCommand.Execute(null);
+        if (!string.IsNullOrEmpty(_recipeVm.StatusMessage))
+            StatusLabel.Text = _recipeVm.StatusMessage;
     }
 
-    private async Task OnExportArtisanAsync()
+    /// <summary>
+    /// Imports a plan from native Craft Architect format.
+    /// </summary>
+    private async void OnImportNative(object sender, RoutedEventArgs e)
     {
-        StatusLabel.Text = "Exporting to Artisan format...";
-        
-        var result = await _exportCoordinator.ExportToArtisanAsync(_currentPlan);
-        
-        if (!result.Success)
+        var dialog = new Microsoft.Win32.OpenFileDialog
         {
-            StatusLabel.Text = result.Message;
+            Filter = "Craft Architect Plan (*.craftplan)|*.craftplan|JSON files (*.json)|*.json|All files (*.*)|*.*",
+            DefaultExt = "craftplan"
+        };
+
+        if (dialog.ShowDialog() != true)
             return;
-        }
-        
-        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
+
+        try
         {
-            StatusLabel.Text = result.Message;
+            var json = await File.ReadAllTextAsync(dialog.FileName);
+            var plan = _recipeCalcService.DeserializePlan(json);
+            
+            if (plan == null)
+            {
+                StatusLabel.Text = "Failed to import - invalid plan file";
+                return;
+            }
+
+            // Load the plan into the ViewModel
+            _recipeVm.LoadPlan(plan);
+            
+            // Update UI
+            ProjectList.ItemsSource = null;
+            ProjectList.ItemsSource = _recipeVm.ProjectItems.ToList();
+            UpdateQuickViewCount();
+            BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
+            BrowsePlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
+            
+            DisplayPlanInTreeView(_currentPlan);
+            
+            StatusLabel.Text = $"Imported native plan '{plan.Name}' with {plan.RootItems.Count} items";
         }
-        else
+        catch (Exception ex)
         {
-            StatusLabel.Text = "Failed to copy - clipboard may be in use.";
+            StatusLabel.Text = $"Import failed: {ex.Message}";
         }
     }
 
+    /// <summary>
+    /// Imports a plan from Artisan format.
+    /// Note: Delegates to RecipePlannerViewModel.ImportFromArtisanCommand.
+    /// </summary>
     private void OnImportArtisan(object sender, RoutedEventArgs e)
     {
-        OnImportArtisanAsync().SafeFireAndForget(OnAsyncError);
-    }
-
-    private async Task OnImportArtisanAsync()
-    {
-        var dc = DcCombo.SelectedItem as string ?? "Aether";
-        var world = WorldCombo.SelectedItem as string ?? "";
+        _recipeVm.ImportFromArtisanCommand.Execute(null);
         
-        StatusLabel.Text = "Importing from Artisan...";
-        
-        var result = await _importCoordinator.ImportFromArtisanAsync(dc, world);
-        
-        if (result.Success && result.Plan != null)
+        // UI updates after import
+        if (_currentPlan != null)
         {
-            ApplyImportResult(result);
+            ProjectList.ItemsSource = null;
+            ProjectList.ItemsSource = _recipeVm.ProjectItems.ToList();
+            UpdateQuickViewCount();
+            BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
+            BrowsePlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
+            
+            DisplayPlanInTreeView(_currentPlan);
         }
-        StatusLabel.Text = result.Message;
+        
+        if (!string.IsNullOrEmpty(_recipeVm.StatusMessage))
+            StatusLabel.Text = _recipeVm.StatusMessage;
     }
 
+    /// <summary>
+    /// Exports current plan to plain text.
+    /// Note: Delegates to RecipePlannerViewModel.ExportToPlainTextCommand.
+    /// </summary>
     private void OnExportPlainText(object sender, RoutedEventArgs e)
     {
-        OnExportPlainTextAsync().SafeFireAndForget(OnAsyncError);
+        _recipeVm.ExportToPlainTextCommand.Execute(null);
+        if (!string.IsNullOrEmpty(_recipeVm.StatusMessage))
+            StatusLabel.Text = _recipeVm.StatusMessage;
     }
 
-    private async Task OnExportPlainTextAsync()
-    {
-        var result = _exportCoordinator.ExportToPlainText(_currentPlan);
-        
-        if (!result.Success)
-        {
-            StatusLabel.Text = result.Message;
-            return;
-        }
-        
-        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
-        {
-            StatusLabel.Text = result.Message;
-        }
-        else
-        {
-            StatusLabel.Text = "Failed to copy - clipboard may be in use.";
-        }
-    }
-
+    /// <summary>
+    /// Exports current plan to CSV.
+    /// Note: Delegates to RecipePlannerViewModel.ExportToCsvCommand.
+    /// </summary>
     private void OnExportCsv(object sender, RoutedEventArgs e)
     {
-        OnExportCsvAsync().SafeFireAndForget(OnAsyncError);
+        _recipeVm.ExportToCsvCommand.Execute(null);
+        if (!string.IsNullOrEmpty(_recipeVm.StatusMessage))
+            StatusLabel.Text = _recipeVm.StatusMessage;
     }
 
-    private async Task OnExportCsvAsync()
-    {
-        var result = _exportCoordinator.ExportToCsv(_currentPlan);
-        
-        if (!result.Success)
-        {
-            StatusLabel.Text = result.Message;
-            return;
-        }
-        
-        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
-        {
-            StatusLabel.Text = result.Message;
-        }
-        else
-        {
-            StatusLabel.Text = "Failed to copy - clipboard may be in use.";
-        }
-    }
-
-
+    /// <summary>
+    /// Initiates fetching market prices for all items in the plan.
+    /// Note: MUST REMAIN in MainWindow - creates/shows MarketDataStatusWindow, reads DcCombo/WorldCombo,
+    ///       coordinates with MarketAnalysisContent visibility, updates multiple UI elements.
+    ///       Requires direct window ownership and UI control access.
+    /// </summary>
     private void OnFetchPrices(object sender, RoutedEventArgs e)
     {
-        OnFetchPricesAsync().SafeFireAndForget(OnAsyncError);
+        OnFetchPricesAsync(forceRefresh: true).SafeFireAndForget(OnAsyncError);
     }
 
-    private async Task OnFetchPricesAsync()
+    /// <summary>
+    /// Conducts market analysis using cached data (fetches only if needed).
+    /// Note: MUST REMAIN in MainWindow - uses cache-first approach for faster analysis.
+    /// </summary>
+    private void OnConductAnalysis(object sender, RoutedEventArgs e)
     {
         if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
         {
@@ -959,18 +1035,74 @@ public partial class MainWindow : Window
             return;
         }
 
+        OnFetchPricesAsync(forceRefresh: false).SafeFireAndForget(OnAsyncError);
+    }
+
+    /// <summary>
+    /// Handles refresh request from MarketDataStatusWindow.
+    /// Performs a force refresh of all market data.
+    /// </summary>
+    private void OnMarketDataStatusRefreshRequested(object? sender, EventArgs e)
+    {
+        if (_marketDataStatusWindow != null && _marketDataStatusWindow.IsVisible)
+        {
+            // Re-initialize the status window and do a force refresh
+            if (_currentPlan != null && _currentPlan.RootItems.Count > 0)
+            {
+                var allItems = new List<(int itemId, string name, int quantity)>();
+                _recipeCalcService.CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
+                _marketDataStatusWindow.InitializeItems(allItems);
+            }
+        }
+        
+        OnFetchPricesAsync(forceRefresh: true).SafeFireAndForget(OnAsyncError);
+    }
+
+    /// <summary>
+    /// Fetches market prices via PriceCheckService and updates the plan.
+    /// Note: MUST REMAIN in MainWindow - manages MarketDataStatusWindow lifecycle (Show/Activate),
+    ///       handles progress updates to StatusLabel, updates recipe tree, procurement panel,
+    ///       and multiple button enablement states. Heavy UI coordination unsuitable for ViewModel.
+    /// </summary>
+    private async Task OnFetchPricesAsync(bool forceRefresh = false)
+    {
+        _logger.LogInformation("[OnFetchPricesAsync] START - forceRefresh={ForceRefresh}", forceRefresh);
+        
+        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        {
+            _logger.LogWarning("[OnFetchPricesAsync] ABORT - No plan available");
+            StatusLabel.Text = "No plan - build a plan first";
+            return;
+        }
+
         var dc = DcCombo.SelectedItem as string ?? "Aether";
         var world = WorldCombo.SelectedItem as string ?? "";
         var worldOrDc = string.IsNullOrEmpty(world) || world == "Entire Data Center" ? dc : world;
+        var searchAllNA = SearchAllNACheck?.IsChecked ?? false;
+
+        _logger.LogInformation("[OnFetchPricesAsync] DC={DC}, World={World}, SearchAllNA={SearchAllNA}, PlanItems={ItemCount}", 
+            dc, world, searchAllNA, _currentPlan.RootItems.Count);
 
         if (_marketDataStatusWindow == null || !_marketDataStatusWindow.IsVisible)
         {
-            _marketDataStatusWindow = new MarketDataStatusWindow();
+            _marketDataStatusWindow = new MarketDataStatusWindow(_dialogFactory);
             _marketDataStatusWindow.Owner = this;
+            _marketDataStatusWindow.RefreshMarketDataRequested += OnMarketDataStatusRefreshRequested;
         }
 
         var allItems = new List<(int itemId, string name, int quantity)>();
-        CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
+        _recipeCalcService.CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
+        
+        _logger.LogInformation("[OnFetchPricesAsync] RootItems.Count={RootCount}, AggregatedMaterials.Count={AggCount}",
+            _currentPlan.RootItems.Count, _currentPlan.AggregatedMaterials?.Count ?? 0);
+        _logger.LogInformation("[OnFetchPricesAsync] Collected {Count} items for price check: [{Items}]",
+            allItems.Count, string.Join(", ", allItems.Select(i => $"{i.name}({i.itemId})x{i.quantity}")));
+        
+        if (_currentPlan.AggregatedMaterials?.Any() == true)
+        {
+            _logger.LogInformation("[OnFetchPricesAsync] AggregatedMaterials: [{Materials}]",
+                string.Join(", ", _currentPlan.AggregatedMaterials.Select(m => $"{m.Name}({m.ItemId})x{m.TotalQuantity}")));
+        }
         
         _marketDataStatusWindow.InitializeItems(allItems);
         _marketDataStatusWindow.Show();
@@ -1004,12 +1136,107 @@ public partial class MainWindow : Window
                 }
             });
 
-            var prices = await _priceCheckService.GetBestPricesBulkAsync(
-                allItems.Select(i => (i.itemId, i.name)).ToList(), 
-                worldOrDc, 
-                default, 
-                progress,
-                forceRefresh: true);
+            // UNIFIED FETCH APPROACH:
+            // 1. Cache service ensures all data is populated (fetches missing items from API)
+            // 2. MarketShoppingService and PriceCheckService read from cache only
+            // This ensures only ONE API call per item and clean separation of concerns
+            
+            _logger.LogInformation("[OnFetchPricesAsync] Using unified fetch approach - cache orchestrates all API calls");
+            
+            // Step 1: Ensure cache is populated with all market items
+            // The cache service fetches missing data in bulk and stores it
+            var allMaterials = _currentPlan?.AggregatedMaterials ?? new List<MaterialAggregate>();
+            var marketItems = allMaterials.Where(m => m.UnitPrice > 0).ToList();
+            
+            if (marketItems.Count > 0)
+            {
+                var cacheProgress = new Progress<string>(msg =>
+                {
+                    StatusLabel.Text = $"Fetching market data: {msg}";
+                });
+                
+                // Build list of (itemId, dataCenter) to ensure in cache
+                var cacheRequests = new List<(int itemId, string dataCenter)>();
+                if (searchAllNA)
+                {
+                    var naDCs = new[] { "Aether", "Primal", "Crystal", "Dynamis" };
+                    foreach (var item in marketItems)
+                    {
+                        foreach (var itemDc in naDCs)
+                        {
+                            cacheRequests.Add((item.ItemId, itemDc));
+                        }
+                    }
+                }
+                else
+                {
+                    cacheRequests = marketItems.Select(m => (m.ItemId, dc)).ToList();
+                }
+                
+                _logger.LogInformation("[OnFetchPricesAsync] Ensuring cache is populated for {Count} item/DC combinations...", 
+                    cacheRequests.Count);
+                
+                // Use same TTL as PriceCheckService (from settings, default 3 hours)
+                var cacheTtl = TimeSpan.FromHours(_settingsService.Get("market.cache_ttl_hours", 3.0));
+                var fetchedCount = await _marketCache.EnsurePopulatedAsync(cacheRequests, cacheTtl, cacheProgress, default);
+                _logger.LogInformation("[OnFetchPricesAsync] Cache populated - {FetchedCount} items fetched from API", fetchedCount);
+            }
+            
+            // Step 2: Calculate detailed shopping plans (reads from cache only)
+            List<DetailedShoppingPlan> shoppingPlans;
+            if (marketItems.Count > 0)
+            {
+                var marketProgress = new Progress<string>(msg =>
+                {
+                    StatusLabel.Text = $"Analyzing market: {msg}";
+                });
+                
+                if (searchAllNA)
+                {
+                    shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
+                        marketItems, marketProgress, mode: GetCurrentRecommendationMode());
+                }
+                else
+                {
+                    shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
+                        marketItems, dc, marketProgress, mode: GetCurrentRecommendationMode());
+                }
+                
+                _logger.LogInformation("[OnFetchPricesAsync] Got {Count} detailed shopping plans", shoppingPlans.Count);
+                
+                _marketVm.SetShoppingPlans(shoppingPlans);
+                if (_currentPlan != null)
+                {
+                    _currentPlan.SavedMarketPlans = shoppingPlans;
+                }
+            }
+            else
+            {
+                shoppingPlans = new List<DetailedShoppingPlan>();
+                _marketVm.SetShoppingPlans(shoppingPlans);
+            }
+            
+            // Step 3: Get recipe tree prices (reads from cache only)
+            _logger.LogInformation("[OnFetchPricesAsync] Getting recipe tree prices from cache...");
+            Dictionary<int, PriceInfo> prices;
+            if (searchAllNA)
+            {
+                prices = await _priceCheckService.GetBestPricesMultiDCAsync(
+                    allItems.Select(i => (i.itemId, i.name)).ToList(), 
+                    default, 
+                    progress,
+                    forceRefresh: false);
+            }
+            else
+            {
+                prices = await _priceCheckService.GetBestPricesBulkAsync(
+                    allItems.Select(i => (i.itemId, i.name)).ToList(), 
+                    worldOrDc, 
+                    default, 
+                    progress,
+                    forceRefresh: false);
+            }
+            _logger.LogInformation("[OnFetchPricesAsync] Got {Count} prices from cache", prices.Count);
 
             int successCount = 0;
             int failedCount = 0;
@@ -1032,21 +1259,41 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    _marketDataStatusWindow.SetItemCached(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails);
+                    _marketDataStatusWindow.SetItemCached(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, priceInfo.LastUpdated);
                     cachedCount++;
                 }
 
-                UpdateSingleNodePrice(_currentPlan.RootItems, itemId, priceInfo);
+                _recipeCalcService.UpdateSingleNodePrice(_currentPlan.RootItems, itemId, priceInfo);
             }
+
+            _logger.LogInformation("[OnFetchPricesAsync] Price results: Success={Success}, Failed={Failed}, Cached={Cached}", 
+                successCount, failedCount, cachedCount);
 
             DisplayPlanInTreeView(_currentPlan);
             
-            await UpdateMarketLogisticsAsync(prices, useCachedData: false);
-            
-            if (IsMarketViewVisible())
+            // Step 3: Display market analysis (using data from step 1, no second fetch)
+            _logger.LogInformation("[OnFetchPricesAsync] Displaying market analysis...");
+            ClearMarketLogisticsPanels();
+            var categorized = _marketShoppingService.CategorizeMaterials(_currentPlan.AggregatedMaterials, prices);
+            UpdateMarketSummaryCard(categorized.VendorItems, categorized.MarketItems, categorized.UntradeableItems, prices);
+            if (categorized.VendorItems.Any())
             {
-                PopulateProcurementPanel();
+                AddVendorItemsCard(categorized.VendorItems, prices);
             }
+            if (categorized.MarketItems.Any())
+            {
+                await FetchAndDisplayLiveMarketDataAsync(categorized.MarketItems, searchAllNA, shoppingPlans);
+            }
+            if (categorized.UntradeableItems.Any())
+            {
+                AddUntradeableItemsCard(categorized.UntradeableItems);
+            }
+            _logger.LogInformation("[OnFetchPricesAsync] Market analysis display complete. _currentMarketPlans.Count={Count}", _currentMarketPlans?.Count ?? 0);
+            
+            // Always populate procurement panel after analysis so data is ready when user switches to market view
+            _logger.LogInformation("[OnFetchPricesAsync] Calling PopulateProcurementPanel...");
+            PopulateProcurementPanel();
+            _logger.LogInformation("[OnFetchPricesAsync] PopulateProcurementPanel complete");
             
             RebuildFromCacheButton.IsEnabled = true;
 
@@ -1067,7 +1314,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[OnFetchPrices] Failed to fetch prices");
+            _logger.LogError(ex, "[OnFetchPricesAsync] FAILED - Exception: {Message}\nStackTrace: {StackTrace}", ex.Message, ex.StackTrace);
             StatusLabel.Text = $"Failed to fetch prices: {ex.Message}. Cached prices preserved.";
             
             foreach (var item in allItems)
@@ -1075,25 +1322,42 @@ public partial class MainWindow : Window
                 _marketDataStatusWindow.SetItemFailed(item.itemId, ex.Message);
             }
         }
+        
+        _logger.LogInformation("[OnFetchPricesAsync] END");
     }
 
+    /// <summary>
+    /// Rebuilds market analysis from cached prices without fetching new data.
+    /// Note: MUST REMAIN in MainWindow - updates RebuildFromCacheButton state, calls DisplayPlanInTreeView,
+    ///       and updates StatusLabel. UI coordination requires MainWindow context.
+    /// </summary>
     private void OnRebuildFromCache(object sender, RoutedEventArgs e)
     {
         OnRebuildFromCacheAsync().SafeFireAndForget(OnAsyncError);
     }
 
+    /// <summary>
+    /// Performs cache-based rebuild of market analysis.
+    /// Note: MUST REMAIN in MainWindow - updates StatusLabel, RebuildFromCacheButton.IsEnabled,
+    ///       calls DisplayPlanInTreeView and UpdateMarketLogisticsAsync. UI coordination pattern.
+    /// </summary>
     private async Task OnRebuildFromCacheAsync()
     {
+        _logger.LogInformation("[OnRebuildFromCacheAsync] START");
+        
         if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
         {
+            _logger.LogWarning("[OnRebuildFromCacheAsync] ABORT - No plan available");
             StatusLabel.Text = "No plan - build a plan first";
             return;
         }
 
-        var cachedPrices = ExtractPricesFromPlan(_currentPlan);
+        var cachedPrices = _recipeCalcService.ExtractPricesFromPlan(_currentPlan);
+        _logger.LogInformation("[OnRebuildFromCacheAsync] Extracted {Count} cached prices from plan", cachedPrices.Count);
         
         if (cachedPrices.Count == 0)
         {
+            _logger.LogWarning("[OnRebuildFromCacheAsync] ABORT - No cached prices available");
             StatusLabel.Text = "No cached prices available. Click 'Refresh Market Data' to fetch prices.";
             return;
         }
@@ -1103,16 +1367,23 @@ public partial class MainWindow : Window
         
         try
         {
+            _logger.LogInformation("[OnRebuildFromCacheAsync] Calling UpdateMarketLogisticsAsync...");
             await UpdateMarketLogisticsAsync(cachedPrices, useCachedData: true);
+            _logger.LogInformation("[OnRebuildFromCacheAsync] UpdateMarketLogisticsAsync complete. _currentMarketPlans.Count={Count}", _currentMarketPlans?.Count ?? 0);
             
             DisplayPlanInTreeView(_currentPlan);
             
+            // Populate procurement panel after rebuilding from cache
+            _logger.LogInformation("[OnRebuildFromCacheAsync] Calling PopulateProcurementPanel...");
+            PopulateProcurementPanel();
+            _logger.LogInformation("[OnRebuildFromCacheAsync] PopulateProcurementPanel complete");
+            
             StatusLabel.Text = $"Market analysis rebuilt from {cachedPrices.Count} cached prices.";
-            _logger.LogInformation("[OnRebuildFromCache] Rebuilt market analysis from {Count} cached prices", cachedPrices.Count);
+            _logger.LogInformation("[OnRebuildFromCacheAsync] SUCCESS - Rebuilt market analysis from {Count} cached prices", cachedPrices.Count);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[OnRebuildFromCache] Failed to rebuild from cache");
+            _logger.LogError(ex, "[OnRebuildFromCacheAsync] FAILED - Exception: {Message}", ex.Message);
             StatusLabel.Text = $"Failed to rebuild from cache: {ex.Message}";
         }
         finally
@@ -1121,16 +1392,29 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Expands all nodes in the recipe tree.
+    /// Note: UI-specific - delegates to RecipePlannerViewModel.ExpandAllCommand.
+    /// </summary>
     private void OnExpandAll(object sender, RoutedEventArgs e)
     {
-        SetAllExpandersState(isExpanded: true);
+        _recipeVm.ExpandAllCommand.Execute(null);
     }
     
+    /// <summary>
+    /// Collapses all nodes in the recipe tree.
+    /// Note: UI-specific - delegates to RecipePlannerViewModel.CollapseAllCommand.
+    /// </summary>
     private void OnCollapseAll(object sender, RoutedEventArgs e)
     {
-        SetAllExpandersState(isExpanded: false);
+        _recipeVm.CollapseAllCommand.Execute(null);
     }
     
+    /// <summary>
+    /// Sets expand/collapse state for all expanders in the recipe tree.
+    /// Note: UI helper - could be part of RecipeTreeUiBuilder.
+    /// MVVM: Not an ICommand candidate - internal helper method, not directly triggered by user.
+    /// </summary>
     private void SetAllExpandersState(bool isExpanded)
     {
         foreach (var child in RecipePlanPanel.Children)
@@ -1145,6 +1429,11 @@ public partial class MainWindow : Window
         StatusLabel.Text = isExpanded ? "All nodes expanded" : "All nodes collapsed";
     }
     
+    /// <summary>
+    /// Recursively sets expand/collapse state for child expanders.
+    /// Note: UI helper - could be part of RecipeTreeUiBuilder.
+    /// MVVM: Not an ICommand candidate - internal helper method, not directly triggered by user.
+    /// </summary>
     private void SetExpanderChildrenState(Expander parent, bool isExpanded)
     {
         if (parent.Content is StackPanel panel)
@@ -1160,27 +1449,41 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Opens or activates the market data status window.
+    /// Note: UI-specific window management - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - needs direct window reference and Owner assignment.
+    /// </summary>
     private void OnViewMarketStatus(object sender, RoutedEventArgs e)
     {
+        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        {
+            StatusLabel.Text = "No plan - build a plan first";
+            return;
+        }
+
         if (_marketDataStatusWindow == null || !_marketDataStatusWindow.IsVisible)
         {
-            _marketDataStatusWindow = new MarketDataStatusWindow();
+            _marketDataStatusWindow = new MarketDataStatusWindow(_dialogFactory);
             _marketDataStatusWindow.Owner = this;
+            _marketDataStatusWindow.RefreshMarketDataRequested += OnMarketDataStatusRefreshRequested;
             
-            if (_currentPlan != null && _currentPlan.RootItems.Count > 0)
-            {
-                var allItems = new List<(int itemId, string name, int quantity)>();
-                CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
-                _marketDataStatusWindow.InitializeItems(allItems);
-                
-                MarkExistingPricesInStatusWindow(_currentPlan.RootItems);
-            }
+            var allItems = new List<(int itemId, string name, int quantity)>();
+            _recipeCalcService.CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
+            _marketDataStatusWindow.InitializeItems(allItems);
+            
+            MarkExistingPricesInStatusWindow(_currentPlan.RootItems);
         }
         
         _marketDataStatusWindow.Show();
         _marketDataStatusWindow.Activate();
     }
 
+    /// <summary>
+    /// Marks items with existing prices in the status window.
+    /// Note: UI helper for status window - could be moved to MarketDataStatusWindow.
+    /// MVVM: Not an ICommand candidate - internal helper method, not directly triggered by user.
+    /// </summary>
     private void MarkExistingPricesInStatusWindow(List<PlanNode> nodes)
     {
         foreach (var node in nodes)
@@ -1197,407 +1500,295 @@ public partial class MainWindow : Window
         }
     }
 
-    private void UpdateSingleNodePrice(List<PlanNode> nodes, int itemId, PriceInfo priceInfo)
-    {
-        foreach (var node in nodes)
-        {
-            if (node.ItemId == itemId)
-            {
-                node.MarketPrice = priceInfo.UnitPrice;
-                if (node.CanBeHq)
-                {
-                    node.HqMarketPrice = priceInfo.HqUnitPrice ?? 0;
-                }
-                node.PriceSource = priceInfo.Source;
-                node.PriceSourceDetails = priceInfo.SourceDetails;
-            }
-            
-            if (node.Children?.Any() == true)
-            {
-                UpdateSingleNodePrice(node.Children, itemId, priceInfo);
-            }
-        }
-    }
-
-    private void CollectAllItemsWithQuantity(List<PlanNode> nodes, List<(int itemId, string name, int quantity)> items)
-    {
-        foreach (var node in nodes)
-        {
-            if (!items.Any(i => i.itemId == node.ItemId))
-            {
-                items.Add((node.ItemId, node.Name, node.Quantity));
-            }
-
-            if (node.Children?.Any() == true)
-            {
-                CollectAllItemsWithQuantity(node.Children, items);
-            }
-        }
-    }
-
-    private void UpdatePlanWithPrices(List<PlanNode> nodes, Dictionary<int, PriceInfo> prices)
-    {
-        foreach (var node in nodes)
-        {
-            if (prices.TryGetValue(node.ItemId, out var priceInfo))
-            {
-                node.MarketPrice = priceInfo.UnitPrice;
-                if (node.CanBeHq)
-                {
-                    node.HqMarketPrice = priceInfo.HqUnitPrice ?? 0;
-                }
-                node.PriceSource = priceInfo.Source;
-                node.PriceSourceDetails = priceInfo.SourceDetails;
-            }
-
-            if (node.Children?.Any() == true)
-            {
-                UpdatePlanWithPrices(node.Children, prices);
-            }
-        }
-    }
-
+    /// <summary>
+    /// Shows placeholder in market logistics panel when no market data is available.
+    /// Uses ICardFactory for consistent styling with other market logistics cards.
+    /// MVVM: Not an ICommand candidate - internal UI state method, not directly triggered by user.
+    /// </summary>
     private void ShowMarketLogisticsPlaceholder()
     {
         MarketCards.Children.Clear();
         MarketSummaryExpander.Visibility = System.Windows.Visibility.Collapsed;
         RefreshMarketButton.IsEnabled = false;
         
-        var placeholderCard = CreateMarketCard("Market Logistics", 
+        var placeholderCard = _cardFactory.CreateInfoCard("Market Logistics",
             "Click 'Fetch Prices' to see your purchase plan.\n\n" +
             "This tab will show:\n" +
             "\u2022 Items to buy from vendors (cheapest option)\n" +
             "\u2022 Items to buy from market board (with world listings)\n" +
             "\u2022 Cross-DC travel options (NA only)\n" +
-            "\u2022 Untradeable items you need to gather/craft", "#2d3d4a");
+            "\u2022 Untradeable items you need to gather/craft",
+            CardType.Market);
         MarketCards.Children.Add(placeholderCard);
     }
 
-    private async Task UpdateMarketLogisticsAsync(Dictionary<int, PriceInfo> prices, bool useCachedData = false)
+    /// <summary>
+    /// Updates the market logistics display with categorized items and shopping plans.
+    /// Uses ICardFactory for consistent card styling across vendor, market, and untradeable item displays.
+    /// Note: Coordinates between MarketShoppingService (categorization), ICardFactory (UI cards), and
+    ///       MarketPlansRenderer (detailed plan display). Async path fetches live market data with progress.
+    /// MVVM: Not an ICommand candidate - internal coordination method, triggered by price fetch operations.
+    /// </summary>
+    /// <param name="prices">Dictionary of item prices from cache or fresh fetch.</param>
+    /// <param name="useCachedData">If true, displays cached data immediately without API calls.</param>
+    /// <param name="searchAllNA">If true, searches all NA DCs for market listings.</param>
+    private async Task UpdateMarketLogisticsAsync(Dictionary<int, PriceInfo> prices, bool useCachedData = false, bool searchAllNA = false)
     {
-        _marketVm.Clear();
-        MarketCards.Children.Clear();
+        _logger.LogInformation("[UpdateMarketLogisticsAsync] START - Prices.Count={Count}, UseCachedData={UseCached}", prices.Count, useCachedData);
         
-        CraftVsBuyContent.Children.Clear();
-        CraftVsBuyExpander.Visibility = Visibility.Collapsed;
+        ClearMarketLogisticsPanels();
 
-        var vendorItems = new List<MaterialAggregate>();
-        var marketItems = new List<MaterialAggregate>();
-        var untradeableItems = new List<MaterialAggregate>();
+        var aggMaterials = _currentPlan?.AggregatedMaterials ?? new List<MaterialAggregate>();
+        _logger.LogInformation("[UpdateMarketLogisticsAsync] AggregatedMaterials.Count={Count}, Items=[{Items}]",
+            aggMaterials.Count, string.Join(", ", aggMaterials.Select(m => $"{m.Name}({m.ItemId})x{m.TotalQuantity}")));
 
-        foreach (var material in _currentPlan?.AggregatedMaterials ?? new List<MaterialAggregate>())
+        var categorized = _marketShoppingService.CategorizeMaterials(aggMaterials, prices);
+        
+        _logger.LogInformation("[UpdateMarketLogisticsAsync] Categorized: Vendor={VendorCount}, Market={MarketCount}, Untradeable={UntradeableCount}",
+            categorized.VendorItems.Count, categorized.MarketItems.Count, categorized.UntradeableItems.Count);
+        _logger.LogInformation("[UpdateMarketLogisticsAsync] MarketItems: [{Items}]",
+            string.Join(", ", categorized.MarketItems.Select(m => $"{m.Name}({m.ItemId})x{m.TotalQuantity}")));
+        _logger.LogInformation("[UpdateMarketLogisticsAsync] VendorItems: [{Items}]",
+            string.Join(", ", categorized.VendorItems.Select(m => $"{m.Name}({m.ItemId})x{m.TotalQuantity}")));
+
+        UpdateMarketSummaryCard(categorized.VendorItems, categorized.MarketItems, categorized.UntradeableItems, prices);
+
+        if (categorized.VendorItems.Any())
         {
-            if (prices.TryGetValue(material.ItemId, out var priceInfo))
-            {
-                switch (priceInfo.Source)
-                {
-                    case PriceSource.Vendor:
-                        vendorItems.Add(material);
-                        break;
-                    case PriceSource.Market:
-                        marketItems.Add(material);
-                        break;
-                    case PriceSource.Untradeable:
-                        untradeableItems.Add(material);
-                        break;
-                    default:
-                        marketItems.Add(material);
-                        break;
-                }
-            }
-            else
-            {
-                marketItems.Add(material);
-            }
+            AddVendorItemsCard(categorized.VendorItems, prices);
         }
 
-        UpdateMarketSummaryCard(vendorItems, marketItems, untradeableItems, prices);
-
-        if (vendorItems.Any())
-        {
-            var vendorText = new System.Text.StringBuilder();
-            vendorText.AppendLine("Buy these from vendors (cheapest option):");
-            vendorText.AppendLine();
-            foreach (var item in vendorItems.OrderByDescending(i => i.TotalCost))
-            {
-                var source = prices[item.ItemId].SourceDetails;
-                vendorText.AppendLine($"\u2022 {item.Name} x{item.TotalQuantity} = {item.TotalCost:N0}g ({source})");
-            }
-            var vendorCard = CreateMarketCard($"Vendor Items ({vendorItems.Count})", vendorText.ToString(), "#3e4a2d");
-            MarketCards.Children.Add(vendorCard);
-        }
-
-        if (marketItems.Any())
+        if (categorized.MarketItems.Any())
         {
             if (useCachedData)
             {
-                var cachedCard = CreateMarketCard($"Market Board Items ({marketItems.Count})",
-                    "Using saved prices. Click 'Refresh Market Data' to fetch current listings.\n\n" +
-                    "Items to purchase:\n" +
-                    string.Join("\n", marketItems.Select(m => 
-                        $"\u2022 {m.Name} x{m.TotalQuantity} = {m.TotalCost:N0}g ({prices[m.ItemId].SourceDetails})")),
-                    "#3d3e2d");
-                MarketCards.Children.Add(cachedCard);
-                RefreshMarketButton.IsEnabled = true;
-                RebuildFromCacheButton.IsEnabled = true;
-                ViewMarketStatusButton.IsEnabled = true;
-                MenuViewMarketStatus.IsEnabled = true;
-                
-                if (_currentPlan?.SavedMarketPlans?.Any() == true)
-                {
-                    _marketVm.SetShoppingPlans(_currentPlan.SavedMarketPlans);
-                }
-                
-                AddCraftVsBuyAnalysisCard(prices);
+                _logger.LogInformation("[UpdateMarketLogisticsAsync] Using cached data path");
+                AddCachedMarketDataCard(categorized.MarketItems, prices);
+                RestoreShoppingPlansFromCache();
             }
             else
             {
-                var dc = DcCombo.SelectedItem as string ?? "Aether";
-                var searchAllNA = SearchAllNACheck?.IsChecked ?? false;
-                
-                var loadingCard = CreateMarketCard("Market Board Items", 
-                    $"Fetching detailed listings for {marketItems.Count} items from {(searchAllNA ? "all NA DCs" : dc)}...", "#3d3e2d");
-                MarketCards.Children.Add(loadingCard);
-                RefreshMarketButton.IsEnabled = false;
-                ViewMarketStatusButton.IsEnabled = false;
-                MenuViewMarketStatus.IsEnabled = false;
-                
-                try
-                {
-                    var progress = new Progress<string>(msg => 
-                    {
-                        StatusLabel.Text = $"Analyzing market: {msg}";
-                    });
-                    
-                    List<DetailedShoppingPlan> shoppingPlans;
-                    var mode = GetCurrentRecommendationMode();
-                    
-                    if (searchAllNA)
-                    {
-                        shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
-                            marketItems, progress, mode: mode);
-                    }
-                    else
-                    {
-                        shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
-                            marketItems, dc, progress, mode: mode);
-                    }
-                    
-                    _marketVm.SetShoppingPlans(shoppingPlans);
-                    
-                    if (_currentPlan != null)
-                    {
-                        _currentPlan.SavedMarketPlans = shoppingPlans;
-                    }
-                    
-                    MarketCards.Children.Remove(loadingCard);
-                    
-                    ApplyMarketSortAndDisplay();
-                    
-                    StatusLabel.Text = $"Market analysis complete. {_currentMarketPlans.Count} items analyzed.";
-                }
-                catch (Exception ex)
-                {
-                    MarketCards.Children.Remove(loadingCard);
-                    var errorCard = CreateMarketCard("Market Board Items", 
-                        $"Error fetching listings: {ex.Message}", "#4a2d2d");
-                    MarketCards.Children.Add(errorCard);
-                }
-                finally
-                {
-                    RefreshMarketButton.IsEnabled = true;
-                    ViewMarketStatusButton.IsEnabled = true;
-                    MenuViewMarketStatus.IsEnabled = true;
-                }
+                _logger.LogInformation("[UpdateMarketLogisticsAsync] Fetching live market data for {Count} items (SearchAllNA={SearchAllNA})", categorized.MarketItems.Count, searchAllNA);
+                await FetchAndDisplayLiveMarketDataAsync(categorized.MarketItems, searchAllNA);
             }
+        }
+        else
+        {
+            // No market items to fetch - create empty shopping plans list
+            // so that procurement panel can still display vendor/untradeable items
+            _logger.LogWarning("[UpdateMarketLogisticsAsync] No market items to fetch - setting empty shopping plans");
+            _marketVm.SetShoppingPlans(new List<DetailedShoppingPlan>());
         }
 
-        if (untradeableItems.Any())
+        if (categorized.UntradeableItems.Any())
         {
-            var untradeText = new System.Text.StringBuilder();
-            untradeText.AppendLine("These items must be gathered or crafted:");
-            untradeText.AppendLine();
-            foreach (var item in untradeableItems)
-            {
-                untradeText.AppendLine($"\u2022 {item.Name} x{item.TotalQuantity}");
-            }
-            var untradeCard = CreateMarketCard($"Untradeable Items ({untradeableItems.Count})", untradeText.ToString(), "#4a3d2d");
-            MarketCards.Children.Add(untradeCard);
+            AddUntradeableItemsCard(categorized.UntradeableItems);
         }
         
-        AddCraftVsBuyAnalysisCard(prices);
+        _logger.LogInformation("[UpdateMarketLogisticsAsync] END - _marketVm.ShoppingPlans.Count={Count}", _marketVm.ShoppingPlans.Count);
     }
-    
-    private void AddCraftVsBuyAnalysisCard(Dictionary<int, PriceInfo> prices)
+
+    /// <summary>
+    /// Clears all panels and view models in preparation for new market logistics data.
+    /// </summary>
+    private void ClearMarketLogisticsPanels()
     {
-        if (_currentPlan == null) return;
+        _marketVm.Clear();
+        MarketCards.Children.Clear();
+    }
+
+    /// <summary>
+    /// Adds a card displaying vendor items to the MarketCards panel.
+    /// </summary>
+    private void AddVendorItemsCard(List<MaterialAggregate> vendorItems, Dictionary<int, PriceInfo> prices)
+    {
+        var vendorText = new System.Text.StringBuilder();
+        vendorText.AppendLine("Buy these from vendors (cheapest option):");
+        vendorText.AppendLine();
+        foreach (var item in vendorItems.OrderByDescending(i => i.TotalCost))
+        {
+            var source = prices[item.ItemId].SourceDetails;
+            vendorText.AppendLine($"\u2022 {item.Name} x{item.TotalQuantity} = {item.TotalCost:N0}g ({source})");
+        }
+
+        var vendorCard = _cardFactory.CreateInfoCard(
+            $"Vendor Items ({vendorItems.Count})",
+            vendorText.ToString(),
+            CardType.Vendor);
+        MarketCards.Children.Add(vendorCard);
+    }
+
+    /// <summary>
+    /// Adds a card displaying cached market data and enables relevant UI controls.
+    /// Side effects: Enables RefreshMarketButton, RebuildFromCacheButton, ViewMarketStatusButton.
+    /// </summary>
+    private void AddCachedMarketDataCard(List<MaterialAggregate> marketItems, Dictionary<int, PriceInfo> prices)
+    {
+        var cachedCard = _cardFactory.CreateInfoCard(
+            $"Market Board Items ({marketItems.Count})",
+            "Using saved prices. Click 'Refresh Market Data' to fetch current listings.\n\n" +
+            "Items to purchase:\n" +
+            string.Join("\n", marketItems.Select(m =>
+                $"\u2022 {m.Name} x{m.TotalQuantity} = {m.TotalCost:N0}g ({prices[m.ItemId].SourceDetails})")),
+            CardType.Cached);
+        MarketCards.Children.Add(cachedCard);
+
+        RefreshMarketButton.IsEnabled = true;
+        RebuildFromCacheButton.IsEnabled = true;
+        ViewMarketStatusButton.IsEnabled = true;
+        MenuViewMarketStatus.IsEnabled = true;
+    }
+
+    /// <summary>
+    /// Restores shopping plans from cache to the view model if available.
+    /// </summary>
+    private void RestoreShoppingPlansFromCache()
+    {
+        _logger.LogInformation("[RestoreShoppingPlansFromCache] START - SavedMarketPlans.Count={Count}", _currentPlan?.SavedMarketPlans?.Count ?? 0);
         
+        if (_currentPlan?.SavedMarketPlans?.Any() == true)
+        {
+            _logger.LogInformation("[RestoreShoppingPlansFromCache] Restoring {Count} plans from cache", _currentPlan.SavedMarketPlans.Count);
+            _marketVm.SetShoppingPlans(_currentPlan.SavedMarketPlans);
+            _logger.LogInformation("[RestoreShoppingPlansFromCache] Restore complete");
+        }
+        else
+        {
+            _logger.LogWarning("[RestoreShoppingPlansFromCache] No saved plans to restore");
+        }
+    }
+
+    /// <summary>
+    /// Fetches live market data and displays results. Handles loading state, errors, and button management.
+    /// Side effects: Manages RefreshMarketButton/ViewMarketStatusButton enabled state, updates StatusLabel.
+    /// </summary>
+    /// <param name="marketItems">Items to fetch market data for.</param>
+    /// <param name="searchAllNA">If true, searches all NA DCs instead of just the selected one.</param>
+    /// <param name="preFetchedPlans">Optional pre-fetched shopping plans. If provided, no API calls are made.</param>
+    private async Task FetchAndDisplayLiveMarketDataAsync(List<MaterialAggregate> marketItems, bool searchAllNA = false, List<DetailedShoppingPlan>? preFetchedPlans = null)
+    {
+        _logger.LogInformation("[FetchAndDisplayLiveMarketDataAsync] START - {Count} market items, SearchAllNA={SearchAllNA}, HasPreFetched={HasPreFetched}", 
+            marketItems.Count, searchAllNA, preFetchedPlans != null);
+        
+        var dc = DcCombo.SelectedItem as string ?? "Aether";
+        
+        _logger.LogInformation("[FetchAndDisplayLiveMarketDataAsync] DC={DC}, SearchAllNA={SearchAllNA}", dc, searchAllNA);
+
+        // If pre-fetched plans are provided, skip loading UI and use them directly
+        if (preFetchedPlans != null)
+        {
+            _logger.LogInformation("[FetchAndDisplayLiveMarketDataAsync] Using pre-fetched plans, skipping fetch");
+            
+            _marketVm.SetShoppingPlans(preFetchedPlans);
+            _logger.LogInformation("[FetchAndDisplayLiveMarketDataAsync] SetShoppingPlans complete. _currentMarketPlans.Count={Count}", _currentMarketPlans?.Count ?? 0);
+
+            if (_currentPlan != null)
+            {
+                _currentPlan.SavedMarketPlans = preFetchedPlans;
+            }
+
+            ApplyMarketSortAndDisplay();
+
+            StatusLabel.Text = $"Market analysis complete. {_currentMarketPlans.Count} items analyzed.";
+            _logger.LogInformation("[FetchAndDisplayLiveMarketDataAsync] SUCCESS (pre-fetched) - {Count} items analyzed", _currentMarketPlans?.Count ?? 0);
+            return;
+        }
+
+        var loadingCard = _cardFactory.CreateInfoCard(
+            "Market Board Items",
+            $"Fetching detailed listings for {marketItems.Count} items from {(searchAllNA ? "all NA DCs" : dc)}...",
+            CardType.Loading);
+        MarketCards.Children.Add(loadingCard);
+
+        RefreshMarketButton.IsEnabled = false;
+        ViewMarketStatusButton.IsEnabled = false;
+        MenuViewMarketStatus.IsEnabled = false;
+
         try
         {
-            var analyses = _marketShoppingService.AnalyzeCraftVsBuy(_currentPlan, prices);
-            var significantAnalyses = analyses.Where(a => a.IsSignificantSavings).ToList();
-            
-            CraftVsBuyContent.Children.Clear();
-            
-            if (significantAnalyses.Count == 0)
+            var progress = new Progress<string>(msg =>
             {
-                CraftVsBuyExpander.Visibility = Visibility.Collapsed;
-                return;
+                StatusLabel.Text = $"Analyzing market: {msg}";
+            });
+
+            List<DetailedShoppingPlan> shoppingPlans;
+            var mode = GetCurrentRecommendationMode();
+
+            _logger.LogInformation("[FetchAndDisplayLiveMarketDataAsync] Calling MarketShoppingService...");
+            if (searchAllNA)
+            {
+                shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
+                    marketItems, progress, mode: mode);
             }
-            
-            CraftVsBuyExpander.Visibility = Visibility.Visible;
-            
-            var craftCount = significantAnalyses.Count(a => a.EffectiveRecommendation == CraftRecommendation.Craft);
-            var buyCount = significantAnalyses.Count(a => a.EffectiveRecommendation == CraftRecommendation.Buy);
-            var hqRequiredCount = significantAnalyses.Count(a => a.IsHqRequired);
-            
-            var headerText = $"{significantAnalyses.Count} items: {craftCount} craft, {buyCount} buy";
-            if (hqRequiredCount > 0)
-                headerText += $" ({hqRequiredCount} HQ required)";
-            CraftVsBuySummaryText.Text = headerText;
-            
-            var warningText = hqRequiredCount > 0
-                ? "\u26a0\ufe0f Some items require HQ. HQ prices are used for recommendations. NQ may compromise craft quality."
-                : "\u26a0\ufe0f For endgame HQ crafts, NQ components may compromise quality. Check HQ prices below.";
-            
-            var hqWarning = new TextBlock
+            else
             {
-                Text = warningText,
-                Foreground = hqRequiredCount > 0 ? Brushes.Gold : Brushes.Orange,
-                FontSize = 11,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 12)
-            };
-            CraftVsBuyContent.Children.Add(hqWarning);
-            
-            foreach (var analysis in significantAnalyses.Take(8))
-            {
-                var itemPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
-                
-                var itemName = analysis.IsHqRequired 
-                    ? $"{analysis.ItemName} x{analysis.Quantity} [HQ Required]"
-                    : $"{analysis.ItemName} x{analysis.Quantity}";
-                var nameBlock = new TextBlock
-                {
-                    Text = itemName,
-                    FontWeight = FontWeights.SemiBold,
-                    Foreground = analysis.IsHqRequired ? Brushes.Gold : (analysis.HasQualityWarning ? Brushes.Orange : Brushes.White)
-                };
-                itemPanel.Children.Add(nameBlock);
-                
-                string primaryText;
-                Brush primaryColor;
-                
-                if (analysis.IsHqRequired && analysis.HasHqData)
-                {
-                    if (analysis.PotentialSavingsHq > 0)
-                    {
-                        primaryText = $"  Crafting saves {analysis.PotentialSavingsHq:N0}g ({analysis.SavingsPercentHq:F0}%) - Buy HQ: {analysis.BuyCostHq:N0}g | Craft: {analysis.CraftCost:N0}g";
-                        primaryColor = Brushes.LightGreen;
-                    }
-                    else
-                    {
-                        primaryText = $"  Crafting costs {Math.Abs(analysis.PotentialSavingsHq):N0}g more ({Math.Abs(analysis.SavingsPercentHq):F0}%) - Buy HQ: {analysis.BuyCostHq:N0}g | Craft: {analysis.CraftCost:N0}g";
-                        primaryColor = Brushes.LightCoral;
-                    }
-                }
-                else
-                {
-                    if (analysis.PotentialSavingsNq > 0)
-                    {
-                        primaryText = $"  Crafting saves {analysis.PotentialSavingsNq:N0}g ({analysis.SavingsPercentNq:F0}%) - Buy: {analysis.BuyCostNq:N0}g | Craft: {analysis.CraftCost:N0}g";
-                        primaryColor = Brushes.LightGreen;
-                    }
-                    else
-                    {
-                        primaryText = $"  Crafting costs {Math.Abs(analysis.PotentialSavingsNq):N0}g more ({Math.Abs(analysis.SavingsPercentNq):F0}%) - Buy: {analysis.BuyCostNq:N0}g | Craft: {analysis.CraftCost:N0}g";
-                        primaryColor = Brushes.LightCoral;
-                    }
-                }
-                
-                var primaryBlock = new TextBlock
-                {
-                    Text = primaryText,
-                    Foreground = primaryColor,
-                    FontSize = 11
-                };
-                itemPanel.Children.Add(primaryBlock);
-                
-                if (analysis.HasHqData)
-                {
-                    string altText;
-                    Brush altColor;
-                    
-                    if (analysis.IsHqRequired)
-                    {
-                        if (analysis.PotentialSavingsNq > 0)
-                        {
-                            altText = $"  NQ alternative: Save {analysis.PotentialSavingsNq:N0}g ({analysis.SavingsPercentNq:F0}%) - Buy: {analysis.BuyCostNq:N0}g";
-                            altColor = Brushes.Gray;
-                        }
-                        else
-                        {
-                            altText = $"  NQ alternative: Cost {Math.Abs(analysis.PotentialSavingsNq):N0}g more ({Math.Abs(analysis.SavingsPercentNq):F0}%) - Buy: {analysis.BuyCostNq:N0}g";
-                            altColor = Brushes.Gray;
-                        }
-                    }
-                    else
-                    {
-                        if (analysis.PotentialSavingsHq > 0)
-                        {
-                            altText = $"  HQ: Crafting saves {analysis.PotentialSavingsHq:N0}g ({analysis.SavingsPercentHq:F0}%) - Buy: {analysis.BuyCostHq:N0}g";
-                            altColor = Brushes.LightGreen;
-                        }
-                        else
-                        {
-                            altText = $"  HQ: Crafting costs {Math.Abs(analysis.PotentialSavingsHq):N0}g more ({Math.Abs(analysis.SavingsPercentHq):F0}%) - Buy: {analysis.BuyCostHq:N0}g";
-                            altColor = Brushes.LightCoral;
-                        }
-                    }
-                    
-                    var altBlock = new TextBlock
-                    {
-                        Text = altText,
-                        Foreground = altColor,
-                        FontSize = 11,
-                        FontStyle = FontStyles.Italic
-                    };
-                    itemPanel.Children.Add(altBlock);
-                    
-                    if (analysis.IsEndgameRelevant && !analysis.IsHqRequired)
-                    {
-                        var warningBlock = new TextBlock
-                        {
-                            Text = "  \u26a0\ufe0f NQ looks cheap but HQ is costly - may affect HQ craft success",
-                            Foreground = Brushes.Orange,
-                            FontSize = 10,
-                            Margin = new Thickness(0, 2, 0, 0)
-                        };
-                        itemPanel.Children.Add(warningBlock);
-                    }
-                }
-                
-                CraftVsBuyContent.Children.Add(itemPanel);
+                shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
+                    marketItems, dc, progress, mode: mode);
             }
-            
-            if (significantAnalyses.Count > 8)
+            _logger.LogInformation("[FetchAndDisplayLiveMarketDataAsync] Got {Count} shopping plans from service", shoppingPlans.Count);
+
+            _logger.LogInformation("[FetchAndDisplayLiveMarketDataAsync] Calling _marketVm.SetShoppingPlans...");
+            _marketVm.SetShoppingPlans(shoppingPlans);
+            _logger.LogInformation("[FetchAndDisplayLiveMarketDataAsync] SetShoppingPlans complete. _currentMarketPlans.Count={Count}", _currentMarketPlans?.Count ?? 0);
+
+            if (_currentPlan != null)
             {
-                CraftVsBuyContent.Children.Add(new TextBlock
-                {
-                    Text = $"... and {significantAnalyses.Count - 8} more items",
-                    Foreground = Brushes.Gray,
-                    FontStyle = FontStyles.Italic,
-                    Margin = new Thickness(0, 8, 0, 0)
-                });
+                _currentPlan.SavedMarketPlans = shoppingPlans;
             }
+
+            MarketCards.Children.Remove(loadingCard);
+            ApplyMarketSortAndDisplay();
+
+            StatusLabel.Text = $"Market analysis complete. {_currentMarketPlans.Count} items analyzed.";
+            _logger.LogInformation("[FetchAndDisplayLiveMarketDataAsync] SUCCESS - {Count} items analyzed", _currentMarketPlans?.Count ?? 0);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to generate craft-vs-buy analysis");
-            CraftVsBuyExpander.Visibility = Visibility.Collapsed;
+            _logger.LogError(ex, "[FetchAndDisplayLiveMarketDataAsync] FAILED - Exception: {Message}", ex.Message);
+            MarketCards.Children.Remove(loadingCard);
+            var errorCard = _cardFactory.CreateErrorCard(
+                "Market Board Items",
+                $"Error fetching listings: {ex.Message}");
+            MarketCards.Children.Add(errorCard);
+        }
+        finally
+        {
+            RefreshMarketButton.IsEnabled = true;
+            ViewMarketStatusButton.IsEnabled = true;
+            MenuViewMarketStatus.IsEnabled = true;
+            _logger.LogInformation("[FetchAndDisplayLiveMarketDataAsync] END");
         }
     }
 
+    /// <summary>
+    /// Adds a card displaying untradeable items to the MarketCards panel.
+    /// </summary>
+    private void AddUntradeableItemsCard(List<MaterialAggregate> untradeableItems)
+    {
+        var untradeText = new System.Text.StringBuilder();
+        untradeText.AppendLine("These items must be gathered or crafted:");
+        untradeText.AppendLine();
+        foreach (var item in untradeableItems)
+        {
+            untradeText.AppendLine($"\u2022 {item.Name} x{item.TotalQuantity}");
+        }
+
+        var untradeCard = _cardFactory.CreateInfoCard(
+            $"Untradeable Items ({untradeableItems.Count})",
+            untradeText.ToString(),
+            CardType.Untradeable);
+        MarketCards.Children.Add(untradeCard);
+    }
+
+    /// <summary>
+    /// Updates the market summary expander with vendor/market item counts and total cost.
+    /// Displays grand total and breakdown of vendor vs market costs in the summary panel.
+    /// Called during UpdateMarketLogisticsAsync to refresh summary information.
+    /// </summary>
+    /// <param name="vendorItems">Items available from vendors.</param>
+    /// <param name="marketItems">Items to purchase from market board.</param>
+    /// <param name="untradeableItems">Items that must be gathered/crafted.</param>
+    /// <param name="prices">Price information for cost calculations.</param>
     private void UpdateMarketSummaryCard(List<MaterialAggregate> vendorItems, List<MaterialAggregate> marketItems, 
         List<MaterialAggregate> untradeableItems, Dictionary<int, PriceInfo> prices)
     {
@@ -1617,6 +1808,13 @@ public partial class MainWindow : Window
         MarketSummaryContent.Children.Add(summaryText);
     }
 
+    /// <summary>
+    /// Applies current sort selection and updates market cards display.
+    /// Uses CreateMarketCardFromTemplate for card generation.
+    /// Note: UI coordination - manages MarketCards children directly. Removes existing plan cards,
+    ///       sorts plans by selected criteria, and re-inserts cards at the end of the panel.
+    /// MVVM: Not an ICommand candidate - internal UI method, manages Panel children.
+    /// </summary>
     private void ApplyMarketSortAndDisplay()
     {
         if (_currentMarketPlans.Count == 0) return;
@@ -1656,8 +1854,12 @@ public partial class MainWindow : Window
 
 
     /// <summary>
-    /// Creates a market card from DataTemplate. This replaces CreateExpandableMarketCard().
+    /// Creates a legacy (full-width) market card from DataTemplate for the Market Logistics tab.
+    /// Uses ColorHelper for consistent accent theming. For split-pane collapsed cards,
+    /// see CreateCollapsedCardFromTemplate which uses ICardFactory.
     /// </summary>
+    /// <param name="plan">The shopping plan to display in the card.</param>
+    /// <returns>A Border containing the data-bound card content.</returns>
     private Border CreateMarketCardFromTemplate(DetailedShoppingPlan plan)
     {
         // Use the DataTemplate defined in MarketCardTemplates.xaml
@@ -1683,45 +1885,21 @@ public partial class MainWindow : Window
         return border;
     }
 
-    private Border CreateMarketCard(string title, string content, string backgroundColor)
-    {
-        var border = new Border
-        {
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(backgroundColor)),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(12),
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-
-        var stack = new StackPanel();
-        
-        var titleBlock = new TextBlock
-        {
-            Text = title,
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 14,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-        
-        var contentBlock = new TextBlock
-        {
-            Text = content,
-            TextWrapping = TextWrapping.Wrap,
-            FontFamily = new FontFamily("Consolas")
-        };
-        
-        stack.Children.Add(titleBlock);
-        stack.Children.Add(contentBlock);
-        border.Child = stack;
-        
-        return border;
-    }
-
+    /// <summary>
+    /// Handles market sort selection change.
+    /// Note: Event handler - minimal logic, delegates to ApplyMarketSortAndDisplay.
+    /// MVVM: Not an ICommand candidate - SelectionChanged event, but could be replaced with binding.
+    /// </summary>
     private void OnMarketSortChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         ApplyMarketSortAndDisplay();
     }
     
+    /// <summary>
+    /// Handles market mode (MinimizeTotalCost/MaximizeValue) selection change.
+    /// Note: Event handler - minimal logic, triggers re-display.
+    /// MVVM: Not an ICommand candidate - SelectionChanged event, but could be replaced with binding.
+    /// </summary>
     private void OnMarketModeChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (_currentPlan == null || _currentMarketPlans.Count == 0) return;
@@ -1729,6 +1907,11 @@ public partial class MainWindow : Window
         ApplyMarketSortAndDisplay();
     }
     
+    /// <summary>
+    /// Gets the current recommendation mode from the combo box.
+    /// Note: UI value extraction - could use binding with a converter.
+    /// MVVM: Not an ICommand candidate - helper method for value extraction, not a command.
+    /// </summary>
     private RecommendationMode GetCurrentRecommendationMode()
     {
         return MarketModeCombo.SelectedIndex switch
@@ -1738,40 +1921,44 @@ public partial class MainWindow : Window
         };
     }
 
-    private void OnRefreshMarketData(object sender, RoutedEventArgs e)
-    {
-        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
-        {
-            StatusLabel.Text = "No plan - build a plan first";
-            return;
-        }
-
-        OnFetchPricesAsync().SafeFireAndForget(OnAsyncError);
-    }
-
+    /// <summary>
+    /// Refreshes market data by triggering price fetch.
+    /// Note: MUST REMAIN in MainWindow - validates CurrentPlan existence, delegates to OnFetchPricesAsync.
+    ///       Simple wrapper that belongs with related UI coordination code.
+    /// </summary>
+    /// <summary>
+    /// Opens the log viewer window.
+    /// Note: UI-specific window management - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - needs Owner assignment and window creation.
+    /// </summary>
     private void OnViewLogs(object sender, RoutedEventArgs e)
     {
-        var logWindow = new LogViewerWindow
+        var logWindow = new LogViewerWindow(_dialogFactory)
         {
             Owner = this
         };
         logWindow.Show();
     }
 
-    private void OnRestartApp(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Initiates application restart with state preservation.
+    /// Note: MUST REMAIN in MainWindow - shows MessageBox (Owner=this), calls WatchStateCoordinator,
+    ///       manipulates Application.Current.Shutdown, starts new process, manages application lifecycle.
+    ///       Window-level operation not suitable for ViewModel.
+    /// </summary>
+    private async void OnRestartApp(object sender, RoutedEventArgs e)
     {
-        if (MessageBox.Show(
+        if (!await _dialogs.ConfirmAsync(
             "Restart the application? Your current plan will be preserved.",
-            "Restart App",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question) == MessageBoxResult.Yes)
+            "Restart App"))
         {
-            var state = new WatchState
-            {
-                CurrentPlan = GetCurrentPlanForWatch(),
-                DataCenter = GetCurrentDataCenter(),
-                World = GetCurrentWorld()
-            };
+            return;
+        }
+
+        {
+            var state = _watchStateCoordinator.PrepareWatchState(
+                GetCurrentDataCenter(),
+                GetCurrentWorld());
             state.Save();
             
             var exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
@@ -1799,6 +1986,11 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Opens the options/settings dialog.
+    /// Note: MUST REMAIN in MainWindow - creates OptionsWindow, sets Owner=this for dialog modality,
+    ///       shows dialog and handles result. Requires window ownership context.
+    /// </summary>
     private void OnOptions(object sender, RoutedEventArgs e)
     {
         var optionsWindow = App.Services.GetRequiredService<OptionsWindow>();
@@ -1813,48 +2005,69 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Opens options dialog (alias for OnOptions).
+    /// Note: Menu item handler - delegates to OnOptions.
+    /// MVVM: Not an ICommand candidate - just calls another handler, use same command.
+    /// </summary>
     private void OnDebugOptions(object sender, RoutedEventArgs e)
     {
         OnOptions(sender, e);
     }
     
-    private void OnViewBlacklistedWorlds(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Opens the cache diagnostics window to view market cache database contents.
+    /// </summary>
+    private void OnCacheDiagnostics(object sender, RoutedEventArgs e)
+    {
+        var window = new CacheDiagnosticsWindow();
+        window.Show();
+    }
+    
+    /// <summary>
+    /// Shows blacklisted worlds dialog and allows clearing the blacklist.
+    /// Note: MUST REMAIN in MainWindow - shows MessageBox (Owner=this), displays blacklist status.
+    ///       Delegates clearing to MainViewModel.ClearBlacklistCommand when user confirms.
+    ///       Dialog presentation requires window context.
+    /// </summary>
+    private async void OnViewBlacklistedWorlds(object sender, RoutedEventArgs e)
     {
         var blacklisted = _blacklistService.GetBlacklistedWorlds();
         
         if (blacklisted.Count == 0)
         {
-            MessageBox.Show(
+            await _dialogs.ShowInfoAsync(
                 "No worlds are currently blacklisted.\n\n" +
                 "Worlds can be blacklisted from the Market Analysis view when travel is prohibited.",
-                "Blacklisted Worlds",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+                "Blacklisted Worlds");
             return;
         }
         
         var worldList = string.Join("\n", blacklisted.Select(w => 
             $"\u2022 {w.WorldName} (expires in {w.ExpiresInDisplay})"));
         
-        var result = MessageBox.Show(
+        if (!await _dialogs.ConfirmAsync(
             $"Currently Blacklisted Worlds ({blacklisted.Count}):\n\n{worldList}\n\n" +
             "Click 'Yes' to clear all blacklisted worlds.",
-            "Blacklisted Worlds",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Information);
-        
-        if (result == MessageBoxResult.Yes)
+            "Blacklisted Worlds"))
         {
-            _blacklistService.ClearBlacklist();
-            StatusLabel.Text = "All blacklisted worlds cleared";
-            
-            if (IsMarketViewVisible())
-            {
-                PopulateProcurementPanel();
-            }
+            return;
+        }
+
+        _blacklistService.ClearBlacklist();
+        StatusLabel.Text = "All blacklisted worlds cleared";
+        
+        if (IsMarketViewVisible())
+        {
+            PopulateProcurementPanel();
         }
     }
     
+    /// <summary>
+    /// Switches to the Recipe Planner tab.
+    /// Note: UI-specific tab management - must remain in MainWindow.
+    /// MVVM: ICommand candidate - SwitchTabCommand with "RecipePlanner" parameter.
+    /// </summary>
     private void OnRecipePlannerTabClick(object sender, MouseButtonEventArgs e)
     {
         SetTabActive(RecipePlannerTab);
@@ -1865,11 +2078,21 @@ public partial class MainWindow : Window
         MarketAnalysisContent.Visibility = Visibility.Collapsed;
         ProcurementPlannerContent.Visibility = Visibility.Collapsed;
         
+        // Switch left panel
+        RecipePlannerLeftPanel.Visibility = Visibility.Visible;
+        MarketAnalysisLeftPanel.Visibility = Visibility.Collapsed;
+        ProcurementPlannerLeftPanel.Visibility = Visibility.Collapsed;
+        
         MarketTotalCostText.Text = "";
         
         StatusLabel.Text = "Recipe Planner";
     }
     
+    /// <summary>
+    /// Switches to the Market Analysis tab.
+    /// Note: UI-specific tab management - must remain in MainWindow.
+    /// MVVM: ICommand candidate - SwitchTabCommand with "MarketAnalysis" parameter.
+    /// </summary>
     private void OnMarketAnalysisTabClick(object sender, MouseButtonEventArgs e)
     {
         SetTabInactive(RecipePlannerTab);
@@ -1880,6 +2103,11 @@ public partial class MainWindow : Window
         MarketAnalysisContent.Visibility = Visibility.Visible;
         ProcurementPlannerContent.Visibility = Visibility.Collapsed;
         
+        // Switch left panel
+        RecipePlannerLeftPanel.Visibility = Visibility.Collapsed;
+        MarketAnalysisLeftPanel.Visibility = Visibility.Visible;
+        ProcurementPlannerLeftPanel.Visibility = Visibility.Collapsed;
+        
         if (_currentPlan != null)
         {
             PopulateProcurementPanel();
@@ -1888,6 +2116,11 @@ public partial class MainWindow : Window
         StatusLabel.Text = "Market Analysis";
     }
     
+    /// <summary>
+    /// Switches to the Procurement Planner tab.
+    /// Note: UI-specific tab management - must remain in MainWindow.
+    /// MVVM: ICommand candidate - SwitchTabCommand with "ProcurementPlanner" parameter.
+    /// </summary>
     private void OnProcurementPlannerTabClick(object sender, MouseButtonEventArgs e)
     {
         SetTabInactive(RecipePlannerTab);
@@ -1897,6 +2130,11 @@ public partial class MainWindow : Window
         RecipePlannerContent.Visibility = Visibility.Collapsed;
         MarketAnalysisContent.Visibility = Visibility.Collapsed;
         ProcurementPlannerContent.Visibility = Visibility.Visible;
+        
+        // Switch left panel
+        RecipePlannerLeftPanel.Visibility = Visibility.Collapsed;
+        MarketAnalysisLeftPanel.Visibility = Visibility.Collapsed;
+        ProcurementPlannerLeftPanel.Visibility = Visibility.Visible;
         
         MarketTotalCostText.Text = "";
         
@@ -1908,29 +2146,55 @@ public partial class MainWindow : Window
         StatusLabel.Text = "Procurement Plan";
     }
     
+    /// <summary>
+    /// Sets visual active state for a tab.
+    /// Note: UI helper - could be a style trigger in XAML.
+    /// MVVM: Not an ICommand candidate - internal helper method, not directly triggered by user.
+    /// </summary>
     private void SetTabActive(Border tab)
     {
         tab.Background = (SolidColorBrush)FindResource("GoldAccentBrush");
         ((TextBlock)tab.Child).Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1a1a1a"));
     }
     
+    /// <summary>
+    /// Sets visual inactive state for a tab.
+    /// Note: UI helper - could be a style trigger in XAML.
+    /// MVVM: Not an ICommand candidate - internal helper method, not directly triggered by user.
+    /// </summary>
     private void SetTabInactive(Border tab)
     {
         tab.Background = Brushes.Transparent;
         ((TextBlock)tab.Child).Foreground = (SolidColorBrush)FindResource("GoldAccentBrush");
     }
     
+    /// <summary>
+    /// Checks if Market Analysis or Procurement Planner tab is visible.
+    /// Note: UI state check - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - helper property, could be bound in XAML.
+    /// </summary>
     private bool IsMarketViewVisible()
     {
-        return MarketAnalysisContent.Visibility == Visibility.Visible 
-            || ProcurementPlannerContent.Visibility == Visibility.Visible;
+        // Null checks needed because this can be called before InitializeComponent()
+        return (MarketAnalysisContent?.Visibility == Visibility.Visible)
+            || (ProcurementPlannerContent?.Visibility == Visibility.Visible);
     }
     
+    /// <summary>
+    /// Populates the procurement panel based on current view mode (split-pane or legacy).
+    /// Delegates to view-specific methods which use ProcurementPanelBuilder for UI construction.
+    /// Coordinates between _procurementBuilder state and appropriate population method.
+    /// </summary>
+    /// <remarks>
+    /// Refactored: All direct UI construction moved to ProcurementPanelBuilder.
+    /// This method now only handles view mode routing and coordination.
+    /// </remarks>
     private void PopulateProcurementPanel()
     {
-        var useSplitPane = _settingsService.Get<bool>("ui.use_split_pane_market_view", true);
+        _logger.LogInformation("[PopulateProcurementPanel] START - UseSplitPane={UseSplitPane}, _currentPlan={HasPlan}, _currentMarketPlans.Count={Count}",
+            _procurementBuilder?.UseSplitPane ?? false, _currentPlan != null, _currentMarketPlans?.Count ?? 0);
         
-        if (useSplitPane)
+        if (_procurementBuilder?.UseSplitPane == true)
         {
             ShowSplitPaneMarketView();
             PopulateProcurementPanelSplitPane();
@@ -1940,103 +2204,94 @@ public partial class MainWindow : Window
             ShowLegacyMarketView();
             PopulateProcurementPanelLegacy();
         }
+        
+        _logger.LogInformation("[PopulateProcurementPanel] END");
     }
     
+    /// <summary>
+    /// Shows the split-pane market view by toggling visibility of the two view containers.
+    /// Split-pane view displays collapsed cards in a grid with an expandable details panel.
+    /// </summary>
     private void ShowSplitPaneMarketView()
     {
         LegacyProcurementScrollViewer.Visibility = Visibility.Collapsed;
         SplitPaneMarketView.Visibility = Visibility.Visible;
     }
     
+    /// <summary>
+    /// Shows the legacy market view by toggling visibility of the two view containers.
+    /// Legacy view displays full-width expandable cards in a vertical stack panel.
+    /// </summary>
     private void ShowLegacyMarketView()
     {
         LegacyProcurementScrollViewer.Visibility = Visibility.Visible;
         SplitPaneMarketView.Visibility = Visibility.Collapsed;
     }
     
+    /// <summary>
+    /// Populates the split-pane procurement panel using ProcurementPanelBuilder.
+    /// Routes to appropriate population method based on plan state:
+    /// - No plan: Shows no-plan placeholder
+    /// - Has market plans: Populates with market cards + summary
+    /// - Has simple materials only: Shows refresh-needed placeholder
+    /// </summary>
     private void PopulateProcurementPanelSplitPane()
     {
-        SplitPaneExpandedContent.Children.Clear();
-        SplitPaneCardsGrid.Children.Clear();
+        _logger.LogInformation("[PopulateProcurementPanelSplitPane] START - _currentPlan={HasPlan}, _currentMarketPlans.Count={Count}, _currentMarketPlans.Any={HasPlans}",
+            _currentPlan != null, _currentMarketPlans?.Count ?? 0, _currentMarketPlans?.Any() == true);
+        
+        _procurementBuilder?.ClearPanels();
         
         if (_currentPlan == null)
         {
-            MarketTotalCostText.Text = "";
-            
-            SplitPaneCardsGrid.Children.Add(new TextBlock 
-            { 
-                Text = "Build a plan to see market analysis",
-                Foreground = Brushes.Gray,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 40, 0, 0)
-            });
-            
-            ProcurementPlanPanel.Children.Clear();
-            ProcurementPlanPanel.Children.Add(new TextBlock 
-            { 
-                Text = "No procurement plan available - fetch market data to generate actionable plan",
-                Foreground = Brushes.Gray,
-                FontSize = 12,
-                TextWrapping = TextWrapping.Wrap
-            });
+            _logger.LogWarning("[PopulateProcurementPanelSplitPane] Showing NoPlan placeholder - _currentPlan is null");
+            _procurementBuilder?.ShowNoPlanPlaceholderSplitPane();
             return;
         }
         
         if (_currentMarketPlans?.Any() == true)
         {
+            _logger.LogInformation("[PopulateProcurementPanelSplitPane] Has market plans - calling PopulateSplitPaneWithMarketPlans");
             PopulateSplitPaneWithMarketPlans();
             PopulateProcurementPlanSummary();
             return;
         }
         
+        _logger.LogWarning("[PopulateProcurementPanelSplitPane] No market plans - calling PopulateSplitPaneWithSimpleMaterials (shows 'No market data available')");
         PopulateSplitPaneWithSimpleMaterials();
-        
-        ProcurementPlanPanel.Children.Clear();
-        ProcurementPlanPanel.Children.Add(new TextBlock 
-        { 
-            Text = "Click 'Refresh Market Data' to generate an actionable procurement plan with world recommendations",
-            Foreground = Brushes.Gray,
-            FontSize = 12,
-            TextWrapping = TextWrapping.Wrap
-        });
     }
     
+    /// <summary>
+    /// Populates the legacy procurement panel using ProcurementPanelBuilder.
+    /// Routes to appropriate population method based on plan state.
+    /// When market plans exist, also populates the procurement plan summary panel.
+    /// </summary>
     private void PopulateProcurementPanelLegacy()
     {
+        _logger.LogInformation("[PopulateProcurementPanelLegacy] START - _currentPlan={HasPlan}, _currentMarketPlans.Count={Count}, _currentMarketPlans.Any={HasPlans}",
+            _currentPlan != null, _currentMarketPlans?.Count ?? 0, _currentMarketPlans?.Any() == true);
+        
+        _procurementBuilder?.ClearPanels();
+        
         if (_currentPlan == null)
         {
-            ProcurementPanel.Children.Clear();
-            ProcurementPanel.Children.Add(new TextBlock 
-            { 
-                Text = "Build a plan to see market analysis",
-                Foreground = Brushes.Gray,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 40, 0, 0)
-            });
-            
-            ProcurementPlanPanel.Children.Clear();
-            ProcurementPlanPanel.Children.Add(new TextBlock 
-            { 
-                Text = "No procurement plan available - fetch market data to generate actionable plan",
-                Foreground = Brushes.Gray,
-                FontSize = 12,
-                TextWrapping = TextWrapping.Wrap
-            });
+            _logger.LogWarning("[PopulateProcurementPanelLegacy] Showing NoPlan placeholder - _currentPlan is null");
+            _procurementBuilder?.ShowNoPlanPlaceholderLegacy();
             return;
         }
         
-        ProcurementPanel.Children.Clear();
-        
         if (_currentMarketPlans?.Any() == true)
         {
+            _logger.LogInformation("[PopulateProcurementPanelLegacy] Has market plans - calling PopulateProcurementWithMarketPlansLegacy");
             PopulateProcurementWithMarketPlansLegacy();
             PopulateProcurementPlanSummary();
             return;
         }
         
+        _logger.LogWarning("[PopulateProcurementPanelLegacy] No market plans - calling PopulateProcurementWithSimpleMaterialsLegacy (shows 'No market data available')");
         PopulateProcurementWithSimpleMaterialsLegacy();
         
-        ProcurementPlanPanel.Children.Clear();
+        _procurementBuilder?.ProcurementPlanPanel.Children.Clear();
         ProcurementPlanPanel.Children.Add(new TextBlock 
         { 
             Text = "Click 'Refresh Market Data' to generate an actionable procurement plan with world recommendations",
@@ -2046,6 +2301,11 @@ public partial class MainWindow : Window
         });
     }
     
+    /// <summary>
+    /// Populates the procurement plan summary grouped by recommended world.
+    /// Uses ProcurementPanelBuilder.CreateWorldSummaryPanel and CreateWorldGroupPanel
+    /// for consistent styling. Groups items by their recommended purchase world for travel planning.
+    /// </summary>
     private void PopulateProcurementPlanSummary()
     {
         ProcurementPlanPanel.Children.Clear();
@@ -2061,7 +2321,7 @@ public partial class MainWindow : Window
         
         if (!itemsByWorld.Any())
         {
-            ProcurementPlanPanel.Children.Add(new TextBlock 
+            _procurementBuilder?.ProcurementPlanPanel.Children.Add(new TextBlock 
             { 
                 Text = "No viable market listings found",
                 Foreground = Brushes.Gray,
@@ -2108,7 +2368,7 @@ public partial class MainWindow : Window
                 Margin = new Thickness(8, 0, 0, 0)
             });
             
-            ProcurementPlanPanel.Children.Add(worldHeader);
+            _procurementBuilder?.ProcurementPlanPanel.Children.Add(worldHeader);
             
             foreach (var item in items.OrderBy(i => i.Name))
             {
@@ -2120,10 +2380,10 @@ public partial class MainWindow : Window
                     TextWrapping = TextWrapping.Wrap,
                     Margin = new Thickness(0, 0, 0, 2)
                 };
-                ProcurementPlanPanel.Children.Add(itemText);
+                _procurementBuilder?.ProcurementPlanPanel.Children.Add(itemText);
             }
             
-            ProcurementPlanPanel.Children.Add(new Border { Height = 12 });
+            _procurementBuilder?.ProcurementPlanPanel.Children.Add(new Border { Height = 12 });
         }
         
         var grandTotal = _currentMarketPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
@@ -2135,52 +2395,26 @@ public partial class MainWindow : Window
             Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4caf50")),
             Margin = new Thickness(0, 8, 0, 0)
         };
-        ProcurementPlanPanel.Children.Add(totalText);
+        _procurementBuilder?.ProcurementPlanPanel.Children.Add(totalText);
     }
 
     
+    /// <summary>
+    /// Populates legacy view with market plan cards and summary panel.
+    /// Uses ProcurementPanelBuilder for summary and CreateMarketCardFromTemplate for cards.
+    /// Applies current sort selection before displaying plans.
+    /// </summary>
     private void PopulateProcurementWithMarketPlansLegacy()
     {
         var grandTotal = _currentMarketPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
         var itemsWithOptions = _currentMarketPlans.Count(p => p.HasOptions);
         var itemsWithoutOptions = _currentMarketPlans.Count(p => !p.HasOptions);
         
-        var summaryPanel = new Border
+        var summaryPanel = _procurementBuilder?.CreateLegacySummaryPanel(grandTotal, itemsWithOptions, itemsWithoutOptions);
+        if (summaryPanel != null)
         {
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3d3d3d")),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(12, 8, 12, 8),
-            Margin = new Thickness(0, 0, 0, 12)
-        };
-        
-        var summaryGrid = new Grid();
-        summaryGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        summaryGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        
-        var costText = new TextBlock
-        {
-            Text = $"Total: {grandTotal:N0}g",
-            FontSize = 16,
-            FontWeight = FontWeights.Bold,
-            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4caf50")),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        Grid.SetColumn(costText, 0);
-        summaryGrid.Children.Add(costText);
-        
-        var statsText = new TextBlock
-        {
-            Text = $"{itemsWithOptions} items with data  \u2022  {itemsWithoutOptions} need fetch",
-            Foreground = Brushes.Gray,
-            FontSize = 11,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        Grid.SetColumn(statsText, 1);
-        summaryGrid.Children.Add(statsText);
-        
-        summaryPanel.Child = summaryGrid;
-        ProcurementPanel.Children.Add(summaryPanel);
+            _procurementBuilder?.LegacyPanel.Children.Add(summaryPanel);
+        }
         
         var sortIndex = ProcurementSortCombo?.SelectedIndex ?? 0;
         IEnumerable<DetailedShoppingPlan> sortedPlans = _currentMarketPlans;
@@ -2209,13 +2443,18 @@ public partial class MainWindow : Window
         }
     }
     
+    /// <summary>
+    /// Populates legacy view with simple materials when no market data is available.
+    /// Uses ProcurementPanelBuilder.ShowRefreshNeededPlaceholderLegacy to prompt user
+    /// to fetch market data for actionable procurement recommendations.
+    /// </summary>
     private void PopulateProcurementWithSimpleMaterialsLegacy()
     {
         var materials = _currentPlan?.AggregatedMaterials;
         
         if (materials?.Any() != true)
         {
-            ProcurementPanel.Children.Add(new TextBlock 
+            _procurementBuilder?.LegacyPanel.Children.Add(new TextBlock 
             { 
                 Text = "No materials to display",
                 Foreground = Brushes.Gray,
@@ -2225,49 +2464,23 @@ public partial class MainWindow : Window
             return;
         }
         
-        var placeholderPanel = new StackPanel 
-        { 
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 40, 0, 0)
-        };
-        
-        placeholderPanel.Children.Add(new TextBlock 
-        { 
-            Text = "No market data available",
-            Foreground = Brushes.Gray,
-            FontSize = 14,
-            HorizontalAlignment = HorizontalAlignment.Center
-        });
-        
-        placeholderPanel.Children.Add(new TextBlock 
-        { 
-            Text = "Click 'Refresh Market Data' to see world recommendations and generate a procurement plan",
-            Foreground = Brushes.Gray,
-            FontSize = 12,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 8, 0, 0)
-        });
-        
-        placeholderPanel.Children.Add(new TextBlock 
-        { 
-            Text = $"Materials to analyze: {materials.Count}",
-            Foreground = Brushes.Gray,
-            FontSize = 11,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 16, 0, 0)
-        });
-        
-        ProcurementPanel.Children.Add(placeholderPanel);
+        _procurementBuilder?.ShowRefreshNeededPlaceholderLegacy(materials.Count);
     }
     
+    /// <summary>
+    /// Populates split-pane view with collapsed market plan cards.
+    /// Uses ProcurementPanelBuilder for panel management and CreateCollapsedCardFromTemplate
+    /// (via ICardFactory) for card creation. Restores expanded state if previously selected.
+    /// Applies current sort selection before displaying cards.
+    /// </summary>
     private void PopulateSplitPaneWithMarketPlans()
     {
-        SplitPaneCardsGrid.Children.Clear();
+        _procurementBuilder?.SplitPaneCardsGrid.Children.Clear();
         
         var grandTotal = _currentMarketPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
         var itemsWithOptions = _currentMarketPlans.Count(p => p.HasOptions);
         
-        MarketTotalCostText.Text = $"Total: {grandTotal:N0}g  \u2022  {itemsWithOptions} items";
+        _procurementBuilder?.UpdateSplitPaneTotal(grandTotal, itemsWithOptions);
         
         var sortIndex = ProcurementSortCombo?.SelectedIndex ?? 0;
         IEnumerable<DetailedShoppingPlan> sortedPlans = _currentMarketPlans;
@@ -2292,7 +2505,7 @@ public partial class MainWindow : Window
         foreach (var plan in sortedPlans)
         {
             var card = CreateCollapsedCardFromTemplate(plan);
-            SplitPaneCardsGrid.Children.Add(card);
+            _procurementBuilder?.SplitPaneCardsGrid.Children.Add(card);
         }
         
         if (_expandedSplitPanePlan != null)
@@ -2305,22 +2518,26 @@ public partial class MainWindow : Window
             else
             {
                 _expandedSplitPanePlan = null;
-                SplitPaneExpandedPanel.Visibility = Visibility.Collapsed;
+                _procurementBuilder?.SetExpandedPanelVisibility(false);
             }
         }
     }
     
+    /// <summary>
+    /// Populates split-pane view with simple materials placeholder when no market data exists.
+    /// Uses ProcurementPanelBuilder.ShowRefreshNeededPlaceholderSplitPane to display
+    /// item count and prompt for market data refresh.
+    /// </summary>
     private void PopulateSplitPaneWithSimpleMaterials()
     {
-        SplitPaneCardsGrid.Children.Clear();
-        SplitPaneExpandedPanel.Visibility = Visibility.Collapsed;
-        MarketTotalCostText.Text = "";
+        _procurementBuilder?.ClearExpandedPanel();
+        _procurementBuilder?.SetExpandedPanelVisibility(false);
         
         var materials = _currentPlan?.AggregatedMaterials;
         
         if (materials?.Any() != true)
         {
-            SplitPaneCardsGrid.Children.Add(new TextBlock 
+            _procurementBuilder?.SplitPaneCardsGrid.Children.Add(new TextBlock 
             { 
                 Text = "No materials to display",
                 Foreground = Brushes.Gray,
@@ -2330,74 +2547,33 @@ public partial class MainWindow : Window
             return;
         }
         
-        var placeholderPanel = new StackPanel 
-        { 
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 40, 0, 0)
-        };
-        
-        placeholderPanel.Children.Add(new TextBlock 
-        { 
-            Text = "No market data available",
-            Foreground = Brushes.Gray,
-            FontSize = 14,
-            HorizontalAlignment = HorizontalAlignment.Center
-        });
-        
-        placeholderPanel.Children.Add(new TextBlock 
-        { 
-            Text = "Click 'Refresh Market Data' to see world recommendations",
-            Foreground = Brushes.Gray,
-            FontSize = 12,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 8, 0, 0)
-        });
-        
-        placeholderPanel.Children.Add(new TextBlock 
-        { 
-            Text = $"Materials to analyze: {materials.Count}",
-            Foreground = Brushes.Gray,
-            FontSize = 11,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 16, 0, 0)
-        });
-        
-        SplitPaneCardsGrid.Children.Add(placeholderPanel);
+        _procurementBuilder?.ShowRefreshNeededPlaceholderSplitPane(materials.Count);
     }
     
     /// <summary>
-    /// Creates a collapsed market card using the DataTemplate.
+    /// Creates a collapsed market card for split-pane view using ICardFactory.
+    /// Delegates card creation to _cardFactory.CreateCollapsedMarketCard for consistent
+    /// styling and click handling across the application.
     /// </summary>
+    /// <param name="plan">The shopping plan to display in the card.</param>
+    /// <returns>A Border configured as a clickable collapsed card.</returns>
     private Border CreateCollapsedCardFromTemplate(DetailedShoppingPlan plan)
     {
         var isExpanded = _expandedSplitPanePlan?.ItemId == plan.ItemId;
         var viewModel = new MarketCardViewModel(plan);
         
-        var border = new Border
-        {
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(isExpanded ? "#3d4a3d" : "#2d2d2d")),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(10, 8, 10, 8),
-            Margin = new Thickness(0, 0, 8, 8),
-            Width = 320,
-            Cursor = Cursors.Hand,
-            BorderBrush = isExpanded ? new SolidColorBrush((Color)ColorConverter.ConvertFromString("#d4a73a")) : null,
-            BorderThickness = isExpanded ? new Thickness(2) : new Thickness(0)
-        };
-        
-        var contentControl = new ContentControl
-        {
-            Content = viewModel,
-            ContentTemplate = (DataTemplate)FindResource("CollapsedMarketCardTemplate")
-        };
-        
-        border.Child = contentControl;
-        
-        border.MouseLeftButtonDown += (s, e) => OnCollapsedCardClick(plan);
-        
-        return border;
+        return _cardFactory.CreateCollapsedMarketCard(
+            viewModel, 
+            isExpanded, 
+            () => OnCollapsedCardClick(plan));
     }
     
+    /// <summary>
+    /// Handles click on a collapsed market card in split-pane view.
+    /// Note: MUST REMAIN in MainWindow - directly manipulates _expandedSplitPanePlan,
+    ///       SplitPaneExpandedPanel.Visibility, and calls PopulateSplitPaneWithMarketPlans.
+    ///       Pure UI state management not suitable for ViewModel.
+    /// </summary>
     private void OnCollapsedCardClick(DetailedShoppingPlan plan)
     {
         if (_expandedSplitPanePlan?.ItemId == plan.ItemId)
@@ -2414,16 +2590,22 @@ public partial class MainWindow : Window
         PopulateSplitPaneWithMarketPlans();
     }
     
+    /// <summary>
+    /// Builds the expanded details panel for a selected market plan in split-pane view.
+    /// Uses ProcurementPanelBuilder for panel management. Creates ExpandedPanelViewModel
+    /// with close handler that updates expansion state and refreshes the card display.
+    /// </summary>
+    /// <param name="plan">The shopping plan to display expanded details for.</param>
     private void BuildExpandedPanel(DetailedShoppingPlan plan)
     {
-        SplitPaneExpandedContent.Children.Clear();
-        SplitPaneExpandedPanel.Visibility = Visibility.Visible;
+        _procurementBuilder?.ClearExpandedPanel();
+        _procurementBuilder?.SetExpandedPanelVisibility(true);
         
         var viewModel = new ExpandedPanelViewModel(plan);
         viewModel.CloseRequested += () =>
         {
             _expandedSplitPanePlan = null;
-            SplitPaneExpandedPanel.Visibility = Visibility.Collapsed;
+            _procurementBuilder?.SetExpandedPanelVisibility(false);
             PopulateSplitPaneWithMarketPlans();
         };
         
@@ -2432,21 +2614,21 @@ public partial class MainWindow : Window
             Content = viewModel
         };
         
-        SplitPaneExpandedContent.Children.Add(contentControl);
+        _procurementBuilder?.AddToExpandedPanel(contentControl);
     }
     
-    private void ShowBlacklistConfirmationDialog(string worldName, int worldId)
+    private async void ShowBlacklistConfirmationDialog(string worldName, int worldId)
     {
-        var result = MessageBox.Show(
+        if (!await _dialogs.ConfirmAsync(
             $"Blacklist {worldName}?\n\n" +
             "This world will be excluded from acquisition recommendations for 30 minutes. " +
             "You can still manually select this world if needed.\n\n" +
             "Use this when a world is currently travel-prohibited (at capacity).",
-            "Confirm World Blacklist",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
-        
-        if (result == MessageBoxResult.Yes)
+            "Confirm World Blacklist"))
+        {
+            return;
+        }
+
         {
             _blacklistService.AddToBlacklist(worldId, worldName, "Travel prohibited - user blacklisted");
             StatusLabel.Text = $"{worldName} blacklisted for 30 minutes";
@@ -2458,6 +2640,11 @@ public partial class MainWindow : Window
         }
     }
     
+    /// <summary>
+    /// Handles procurement sort selection change.
+    /// Note: Event handler - triggers panel refresh.
+    /// MVVM: Not an ICommand candidate - SelectionChanged event, but could be replaced with binding.
+    /// </summary>
     private void OnProcurementSortChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_currentPlan == null)
@@ -2469,14 +2656,21 @@ public partial class MainWindow : Window
         }
     }
     
+    /// <summary>
+    /// Handles procurement mode (MinimizeTotalCost/MaximizeValue) change.
+    /// Note: Event handler - saves setting and refreshes panel.
+    /// MVVM: Not an ICommand candidate - SelectionChanged event, but could be replaced with binding.
+    /// </summary>
     private void OnProcurementModeChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_settingsService == null)
+        // Skip if service not ready or if this is initial load (AddedItems is empty during programmatic set)
+        if (_settingsService == null || e.AddedItems.Count == 0)
             return;
             
         if (ProcurementModeCombo.SelectedIndex >= 0)
         {
             var mode = ProcurementModeCombo.SelectedIndex == 1 ? "MaximizeValue" : "MinimizeTotalCost";
+            _logger.LogInformation("[OnProcurementModeChanged] User changed mode to '{Mode}', saving setting", mode);
             _settingsService.Set("planning.default_recommendation_mode", mode);
             
             if (IsMarketViewVisible() && _currentPlan != null)
@@ -2486,10 +2680,15 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Resets the application state for a new plan.
+    /// Note: UI coordination - delegates to RecipePlannerViewModel.ClearCommand.
+    /// </summary>
     private void OnNewPlan(object sender, RoutedEventArgs e)
     {
-        _recipeVm.CurrentPlan = null;
-        _recipeVm.ProjectItems.Clear();
+        _recipeVm.ClearCommand.Execute(null);
+        
+        // Additional UI cleanup
         ProjectList.ItemsSource = null;
         RecipePlanPanel?.Children.Clear();
         
@@ -2499,6 +2698,11 @@ public partial class MainWindow : Window
         StatusLabel.Text = "New plan created. Add items to get started.";
     }
 
+    /// <summary>
+    /// Handles window closing - saves cache and disposes ViewModels.
+    /// Note: Lifecycle method - must remain in MainWindow.
+    /// MVVM: Not an ICommand candidate - lifecycle override, not a user command.
+    /// </summary>
     protected override void OnClosing(CancelEventArgs e)
     {
         _itemCache.SaveCache();
@@ -2509,11 +2713,21 @@ public partial class MainWindow : Window
         base.OnClosing(e);
     }
 
+    /// <summary>
+    /// Validates quantity input to allow only digits.
+    /// Note: Input validation - could be an attached behavior.
+    /// MVVM: Not an ICommand candidate - PreviewTextInput event, use attached behavior instead.
+    /// </summary>
     private void OnQuantityPreviewTextInput(object sender, TextCompositionEventArgs e)
     {
         e.Handled = !e.Text.All(char.IsDigit);
     }
 
+    /// <summary>
+    /// Selects all text when quantity field gets focus.
+    /// Note: UX enhancement - could be an attached behavior.
+    /// MVVM: Not an ICommand candidate - GotFocus event, use attached behavior instead.
+    /// </summary>
     private void OnQuantityGotFocus(object sender, RoutedEventArgs e)
     {
         if (sender is TextBox textBox)
@@ -2522,6 +2736,11 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Handles quantity change in project items list.
+    /// Note: UI event handler - updates ViewModel and refreshes display.
+    /// MVVM: Not an ICommand candidate - LostFocus event, two-way binding would replace this.
+    /// </summary>
     private void OnQuantityChanged(object sender, RoutedEventArgs e)
     {
         if (sender is TextBox textBox)
@@ -2543,6 +2762,10 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Removes an item from the project list.
+    /// Note: UI event handler - delegates to RecipePlannerViewModel.RemoveProjectItemCommand.
+    /// </summary>
     private void OnRemoveProjectItem(object sender, RoutedEventArgs e)
     {
         if (sender is Button button)
@@ -2550,7 +2773,9 @@ public partial class MainWindow : Window
             var listBoxItem = button.FindParent<ListBoxItem>();
             if (listBoxItem?.DataContext is ProjectItem projectItem)
             {
-                _recipeVm.ProjectItems.Remove(projectItem);
+                // Use ViewModel command
+                _recipeVm.RemoveProjectItemCommand.Execute(projectItem.Id);
+                
                 StatusLabel.Text = $"Removed {projectItem.Name} from project";
                 
                 BuildPlanButton.IsEnabled = _recipeVm.ProjectItems.Count > 0;
@@ -2563,6 +2788,11 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Updates the quick view count display in the project panel.
+    /// Note: UI-specific - updates TextBlock directly.
+    /// MVVM: Not an ICommand candidate - helper method, could be a computed property binding.
+    /// </summary>
     private void UpdateQuickViewCount()
     {
         if (_recipeVm.ProjectItems.Count <= 5)
@@ -2575,6 +2805,12 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Opens the Project Items management window.
+    /// Note: MUST REMAIN in MainWindow - creates ProjectItemsWindow, sets Owner=this,
+    ///       handles callbacks (onItemsChanged, onAddItem), updates ProjectList.ItemsSource.
+    ///       Complex window management with callbacks requires MainWindow context.
+    /// </summary>
     private void OnManageItemsClick(object sender, RoutedEventArgs e)
     {
         var planName = _currentPlan?.Name;
@@ -2605,61 +2841,33 @@ public partial class MainWindow : Window
         StatusLabel.Text = $"Project items updated: {_recipeVm.ProjectItems.Count} items";
     }
 
-    private decimal CalculateNodeCraftCost(PlanNode node)
-    {
-        if (!node.Children.Any())
-            return 0;
-        
-        decimal total = 0;
-        foreach (var child in node.Children)
-        {
-            if (child.Source == AcquisitionSource.MarketBuyNq && child.MarketPrice > 0)
-            {
-                total += child.MarketPrice * child.Quantity;
-            }
-            else if (child.Source == AcquisitionSource.MarketBuyHq && child.HqMarketPrice > 0)
-            {
-                total += child.HqMarketPrice * child.Quantity;
-            }
-            else if (child.Source == AcquisitionSource.VendorBuy && child.MarketPrice > 0)
-            {
-                total += child.MarketPrice * child.Quantity;
-            }
-            else if (child.Source == AcquisitionSource.Craft && child.Children.Any())
-            {
-                total += CalculateNodeCraftCost(child);
-            }
-            else if (child.MarketPrice > 0)
-            {
-                total += child.MarketPrice * child.Quantity;
-            }
-            else if (child.Children.Any())
-            {
-                total += CalculateNodeCraftCost(child);
-            }
-        }
-        return total;
-    }
-
-    public CraftingPlan? GetCurrentPlanForWatch()
-    {
-        if (_currentPlan != null && _currentMarketPlans.Count > 0)
-        {
-            _currentPlan.SavedMarketPlans = _currentMarketPlans;
-        }
-        return _currentPlan;
-    }
     
+    /// <summary>
+    /// Gets the currently selected data center.
+    /// Note: UI value extraction - simple property access.
+    /// MVVM: Not an ICommand candidate - helper property, could be bound in XAML.
+    /// MVVM: Not an ICommand candidate - helper property, could be bound in XAML.
+    /// </summary>
     public string? GetCurrentDataCenter()
     {
         return DcCombo.SelectedItem as string;
     }
     
+    /// <summary>
+    /// Gets the currently selected world.
+    /// Note: UI value extraction - simple property access.
+    /// MVVM: Not an ICommand candidate - helper property, could be bound in XAML.
+    /// </summary>
     public string? GetCurrentWorld()
     {
         return WorldCombo.SelectedItem as string;
     }
     
+    /// <summary>
+    /// Prompts user to reanalyze cached market data after watch state restore.
+    /// Note: UI coordination - displays informational panel.
+    /// MVVM: Not an ICommand candidate - dialog owner must be the window (this).
+    /// </summary>
     private async Task PromptToReanalyzeCachedMarketDataAsync()
     {
         if (_currentPlan?.AggregatedMaterials == null)
@@ -2682,41 +2890,10 @@ public partial class MainWindow : Window
         {
             ProcurementPanel.Children.Clear();
             
-            var infoPanel = new StackPanel 
-            { 
-                Orientation = Orientation.Vertical,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 40, 0, 0)
-            };
-            
-            infoPanel.Children.Add(new TextBlock
-            {
-                Text = "\ud83d\udce6 Market Data Available in Cache",
-                FontSize = 16,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = (SolidColorBrush)Resources["GoldAccentBrush"],
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 8)
-            });
-            
-            infoPanel.Children.Add(new TextBlock
-            {
-                Text = $"{cachedCount} of {itemIds.Count} items have cached market data.",
-                FontSize = 13,
-                Foreground = Brushes.LightGray,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 16)
-            });
-            
-            infoPanel.Children.Add(new TextBlock
-            {
-                Text = "Click 'Refresh Market Data' above to re-analyze using cached data.",
-                FontSize = 12,
-                Foreground = Brushes.Gray,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                TextWrapping = TextWrapping.Wrap,
-                TextAlignment = TextAlignment.Center
-            });
+            var infoPanel = _infoPanelBuilder.CreateCacheAvailablePanel(
+                cachedCount, 
+                itemIds.Count, 
+                "Click 'Refresh Market Data' above to re-analyze using cached data.");
             
             ProcurementPanel.Children.Add(infoPanel);
             
@@ -2724,6 +2901,11 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Restores application state from a WatchState after app restart.
+    /// Note: Uses WatchStateCoordinator - refactor successful.
+    /// MVVM: Not an ICommand candidate - internal coordination method, triggered by watch restore.
+    /// </summary>
     public async Task RestoreWatchStateAsync(WatchState state)
     {
         if (state.CurrentPlan == null)
@@ -2744,13 +2926,7 @@ public partial class MainWindow : Window
         
         _recipeVm.CurrentPlan = state.CurrentPlan;
         
-        _recipeVm.ProjectItems = new ObservableCollection<ProjectItem>(_currentPlan.RootItems.Select(r => new ProjectItem
-        {
-            Id = r.ItemId,
-            Name = r.Name,
-            Quantity = r.Quantity,
-            IsHqRequired = r.MustBeHq
-        }));
+        _recipeVm.ProjectItems = _watchStateCoordinator.RestoreProjectItemsFromPlan(state.CurrentPlan);
         
         ProjectList.ItemsSource = _recipeVm.ProjectItems.ToList();
         UpdateQuickViewCount();

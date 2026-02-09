@@ -1,5 +1,4 @@
 using FFXIVCraftArchitect.Core.Models;
-using FFXIVCraftArchitect.Models;
 
 namespace FFXIVCraftArchitect.Services.Interfaces;
 

@@ -10,6 +10,7 @@ namespace FFXIVCraftArchitect;
 public partial class SavePlanDialog : Window
 {
     private readonly IPlanPersistenceService _planPersistence;
+    private readonly IDialogService _dialogs;
     private List<PlanInfo> _plans = new();
 
     /// <summary>
@@ -27,10 +28,11 @@ public partial class SavePlanDialog : Window
     /// </summary>
     public bool IsOverwrite { get; private set; }
 
-    public SavePlanDialog(IPlanPersistenceService planPersistence, string currentName)
+    public SavePlanDialog(IPlanPersistenceService planPersistence, DialogServiceFactory dialogFactory, string currentName)
     {
         InitializeComponent();
         _planPersistence = planPersistence;
+        _dialogs = dialogFactory.CreateForWindow(this);
         PlanNameTextBox.Text = currentName;
         
         Loaded += OnLoaded;
@@ -102,7 +104,7 @@ public partial class SavePlanDialog : Window
         }
     }
 
-    private void OnSaveNew(object sender, RoutedEventArgs e)
+    private async void OnSaveNew(object sender, RoutedEventArgs e)
     {
         var name = PlanNameTextBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(name))
@@ -114,14 +116,12 @@ public partial class SavePlanDialog : Window
 
         if (existing != null)
         {
-            var result = MessageBox.Show(
+            if (!await _dialogs.ConfirmAsync(
                 $"A plan named '{name}' already exists. Overwrite it?",
-                "Confirm Overwrite",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-
-            if (result == MessageBoxResult.No)
+                "Confirm Overwrite"))
+            {
                 return;
+            }
 
             OverwritePath = existing.FilePath;
             IsOverwrite = true;
@@ -137,26 +137,24 @@ public partial class SavePlanDialog : Window
         Close();
     }
 
-    private void OnOverwrite(object sender, RoutedEventArgs e)
+    private async void OnOverwrite(object sender, RoutedEventArgs e)
     {
         var selected = PlansListBox.SelectedItem as PlanInfo;
         if (selected == null || string.IsNullOrEmpty(selected.FilePath))
             return;
 
-        var result = MessageBox.Show(
+        if (!await _dialogs.ConfirmAsync(
             $"Are you sure you want to overwrite '{selected.Name}'?",
-            "Confirm Overwrite",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning);
-
-        if (result == MessageBoxResult.Yes)
+            "Confirm Overwrite"))
         {
-            PlanName = PlanNameTextBox.Text.Trim();
-            OverwritePath = selected.FilePath;
-            IsOverwrite = true;
-            DialogResult = true;
-            Close();
+            return;
         }
+
+        PlanName = PlanNameTextBox.Text.Trim();
+        OverwritePath = selected.FilePath;
+        IsOverwrite = true;
+        DialogResult = true;
+        Close();
     }
 
     private void OnCancel(object sender, RoutedEventArgs e)

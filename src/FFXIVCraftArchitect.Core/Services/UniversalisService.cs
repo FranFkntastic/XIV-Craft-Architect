@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Net.Http;
 using System.Net.Http.Json;
 using Microsoft.Extensions.Logging;
 using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Core.Services.Interfaces;
 
 namespace FFXIVCraftArchitect.Core.Services;
 
@@ -9,7 +11,7 @@ namespace FFXIVCraftArchitect.Core.Services;
 /// Service for interacting with the Universalis API.
 /// Ported from Python: UNIVERSALIS_API constant
 /// </summary>
-public class UniversalisService
+public class UniversalisService : IUniversalisService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<UniversalisService>? _logger;
@@ -72,13 +74,11 @@ public class UniversalisService
     /// <summary>
     /// Get market data for multiple items at once.
     /// Universalis API has a limit of 100 items per request, so we chunk large requests.
-    /// By default, fetches ALL listings from all worlds in the data center.
+    /// Includes rate limiting (100ms delay between chunks) to avoid API throttling.
     /// </summary>
-    /// <param name="entries">Number of listings to return per item. 0 = all available.</param>
     public async Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkAsync(
         string worldOrDc, 
         IEnumerable<int> itemIds, 
-        int entries = 0,
         CancellationToken ct = default)
     {
         const int chunkSize = 100; // Universalis API limit
@@ -88,20 +88,15 @@ public class UniversalisService
         var itemIdList = itemIds.ToList();
         var allResults = new Dictionary<int, UniversalisResponse>();
         
-        _logger?.LogDebug("Fetching bulk market data for {Count} items (chunked by {ChunkSize}, entries={Entries})", 
-            itemIdList.Count, chunkSize, entries == 0 ? "all" : entries.ToString());
+        _logger?.LogDebug("Fetching bulk market data for {Count} items (chunked by {ChunkSize})", 
+            itemIdList.Count, chunkSize);
 
         // Process in chunks to respect API limits
         for (int i = 0; i < itemIdList.Count; i += chunkSize)
         {
             var chunk = itemIdList.Skip(i).Take(chunkSize).ToList();
             var ids = string.Join(",", chunk);
-            var baseUrl = string.Format(UniversalisApiUrl, Uri.EscapeDataString(worldOrDc), ids);
-            
-            // Add entries parameter to fetch all listings if specified
-            var url = entries > 0 
-                ? $"{baseUrl}?entries={entries}" 
-                : baseUrl;
+            var url = string.Format(UniversalisApiUrl, Uri.EscapeDataString(worldOrDc), ids);
             
             _logger?.LogDebug("Fetching chunk {ChunkIndex} ({Start}-{End} of {Total})", 
                 (i / chunkSize) + 1, i + 1, Math.Min(i + chunkSize, itemIdList.Count), itemIdList.Count);
@@ -114,7 +109,7 @@ public class UniversalisService
                 {
                     if (retry > 0)
                     {
-                        var delayMs = (int)Math.Pow(2, retry) * 500;
+                        var delayMs = (int)Math.Pow(2, retry) * 500; // 1s, 2s, 4s
                         _logger?.LogWarning("Retry {Retry}/{MaxRetries} for chunk {ChunkIndex} after {DelayMs}ms delay", 
                             retry, maxRetries, (i / chunkSize) + 1, delayMs);
                         await Task.Delay(delayMs, ct);
@@ -122,6 +117,7 @@ public class UniversalisService
 
                     var response = await _httpClient.GetAsync(url, ct);
                     
+                    // Handle rate limiting (429)
                     if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                     {
                         _logger?.LogWarning("Rate limited (429) on chunk {ChunkIndex}, will retry", (i / chunkSize) + 1);
@@ -131,23 +127,40 @@ public class UniversalisService
                     
                     response.EnsureSuccessStatusCode();
 
+                    // Single-item and multi-item responses have different structures
                     if (chunk.Count == 1)
                     {
+                        // Single item: response is direct UniversalisResponse
                         var singleResult = await response.Content.ReadFromJsonAsync<UniversalisResponse>(ct);
                         if (singleResult != null)
                         {
                             allResults[chunk[0]] = singleResult;
+                            _logger?.LogDebug("Single item response: ItemId={ItemId}, Listings={Listings}",
+                                singleResult.ItemId, singleResult.Listings?.Count ?? 0);
                         }
                     }
                     else
                     {
+                        // Multiple items: response is UniversalisBulkResponse with "items" dictionary
                         var bulkResult = await response.Content.ReadFromJsonAsync<UniversalisBulkResponse>(ct);
+                        
+                        _logger?.LogDebug("Chunk {ChunkIndex} response: Items={ItemCount}, Expected={ExpectedCount}",
+                            (i / chunkSize) + 1, bulkResult?.Items?.Count ?? 0, chunk.Count);
                         
                         if (bulkResult?.Items != null)
                         {
                             foreach (var kvp in bulkResult.Items)
                             {
+                                _logger?.LogDebug("  - Item ID {ItemId}: Listings={Listings}", 
+                                    kvp.Key, kvp.Value.Listings?.Count ?? 0);
                                 allResults[kvp.Key] = kvp.Value;
+                            }
+                            
+                            // Check for missing items
+                            var missing = chunk.Where(id => !bulkResult.Items.ContainsKey(id)).ToList();
+                            if (missing.Any())
+                            {
+                                _logger?.LogWarning("Missing from response: {MissingIds}", string.Join(", ", missing));
                             }
                         }
                     }
@@ -160,6 +173,7 @@ public class UniversalisService
                 }
             }
 
+            // Rate limiting delay between chunks (except for the last one)
             if (i + chunkSize < itemIdList.Count)
             {
                 await Task.Delay(delayBetweenChunksMs, ct);
@@ -173,31 +187,40 @@ public class UniversalisService
     }
 
     /// <summary>
-    /// Get market data for multiple items at once using parallel requests.
+    /// Get market data for multiple items at once using parallel requests for faster fetching.
+    /// Uses a semaphore to limit concurrent requests and avoid rate limiting.
     /// </summary>
+    /// <param name="worldOrDc">World or data center name</param>
+    /// <param name="itemIds">Item IDs to fetch</param>
+    /// <param name="maxConcurrency">Maximum concurrent requests (default: 3)</param>
+    /// <param name="ct">Cancellation token</param>
     public async Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkParallelAsync(
         string worldOrDc, 
         IEnumerable<int> itemIds, 
         int maxConcurrency = 3,
         CancellationToken ct = default)
     {
-        const int chunkSize = 100;
+        const int chunkSize = 100; // Universalis API limit
+        const int delayBetweenChunksMs = 50; // Small delay even in parallel mode
         const int maxRetries = 3;
         
         var itemIdList = itemIds.ToList();
         var chunks = new List<List<int>>();
         
+        // Split into chunks
         for (int i = 0; i < itemIdList.Count; i += chunkSize)
         {
             chunks.Add(itemIdList.Skip(i).Take(chunkSize).ToList());
         }
         
-        _logger?.LogInformation("Fetching bulk market data for {Count} items in {ChunkCount} parallel chunks", 
-            itemIdList.Count, chunks.Count);
+        _logger?.LogInformation("Fetching bulk market data for {Count} items in {ChunkCount} parallel chunks (max concurrency: {Concurrency})", 
+            itemIdList.Count, chunks.Count, maxConcurrency);
 
         var allResults = new ConcurrentDictionary<int, UniversalisResponse>();
         var semaphore = new SemaphoreSlim(maxConcurrency);
+        var completedChunks = 0;
 
+        // Process all chunks in parallel with limited concurrency
         var tasks = chunks.Select(async (chunk, index) =>
         {
             await semaphore.WaitAsync(ct);
@@ -207,26 +230,38 @@ public class UniversalisService
                 var ids = string.Join(",", chunk);
                 var url = string.Format(UniversalisApiUrl, Uri.EscapeDataString(worldOrDc), ids);
                 
-                for (int retry = 0; retry < maxRetries; retry++)
+                _logger?.LogDebug("[Parallel] Fetching chunk {ChunkNum}/{TotalChunks} ({ItemCount} items)", 
+                    chunkNum, chunks.Count, chunk.Count);
+
+                // Retry logic with exponential backoff
+                bool success = false;
+                Exception? lastException = null;
+                
+                for (int retry = 0; retry < maxRetries && !success; retry++)
                 {
                     try
                     {
                         if (retry > 0)
                         {
-                            var delayMs = (int)Math.Pow(2, retry) * 500;
+                            var delayMs = (int)Math.Pow(2, retry) * 500; // 1s, 2s, 4s
+                            _logger?.LogWarning("[Parallel] Retry {Retry}/{MaxRetries} for chunk {ChunkNum} after {DelayMs}ms delay", 
+                                retry, maxRetries, chunkNum, delayMs);
                             await Task.Delay(delayMs, ct);
                         }
 
                         var response = await _httpClient.GetAsync(url, ct);
                         
+                        // Handle rate limiting (429)
                         if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                         {
+                            _logger?.LogWarning("[Parallel] Rate limited (429) on chunk {ChunkNum}, will retry", chunkNum);
                             if (retry < maxRetries - 1) continue;
                             throw new HttpRequestException("Rate limited by Universalis API");
                         }
                         
                         response.EnsureSuccessStatusCode();
 
+                        // Single-item and multi-item responses have different structures
                         if (chunk.Count == 1)
                         {
                             var singleResult = await response.Content.ReadFromJsonAsync<UniversalisResponse>(ct);
@@ -248,12 +283,27 @@ public class UniversalisService
                             }
                         }
                         
-                        break;
+                        success = true;
+                        var completed = Interlocked.Increment(ref completedChunks);
+                        _logger?.LogDebug("[Parallel] Chunk {ChunkNum} completed ({Completed}/{Total})", 
+                            chunkNum, completed, chunks.Count);
                     }
-                    catch when (retry < maxRetries - 1)
+                    catch (Exception ex) when (retry < maxRetries - 1)
                     {
-                        // Will retry
+                        lastException = ex;
+                        _logger?.LogWarning(ex, "[Parallel] Chunk {ChunkNum} failed, will retry", chunkNum);
                     }
+                }
+
+                if (!success && lastException != null)
+                {
+                    _logger?.LogError(lastException, "[Parallel] Chunk {ChunkNum} failed after {MaxRetries} retries", chunkNum, maxRetries);
+                }
+
+                // Small delay even in parallel mode to be nice to the API
+                if (delayBetweenChunksMs > 0)
+                {
+                    await Task.Delay(delayBetweenChunksMs, ct);
                 }
             }
             finally
@@ -262,8 +312,12 @@ public class UniversalisService
             }
         }).ToList();
 
+        // Wait for all chunks to complete
         await Task.WhenAll(tasks);
         
+        _logger?.LogInformation("[Parallel] Fetched market data for {FetchedCount}/{RequestedCount} items in {CompletedChunks}/{TotalChunks} chunks",
+            allResults.Count, itemIdList.Count, completedChunks, chunks.Count);
+
         return new Dictionary<int, UniversalisResponse>(allResults);
     }
 
@@ -277,40 +331,35 @@ public class UniversalisService
 
         _logger?.LogDebug("Fetching world data from Universalis");
 
-        try
+        // Fetch worlds and data centers in parallel
+        var worldsTask = _httpClient.GetFromJsonAsync<List<WorldInfo>>(WorldsUrl, ct);
+        var dataCentersTask = _httpClient.GetFromJsonAsync<List<DataCenterInfo>>(DataCentersUrl, ct);
+
+        await Task.WhenAll(worldsTask, dataCentersTask);
+
+        var worlds = await worldsTask ?? new List<WorldInfo>();
+        var dataCenters = await dataCentersTask ?? new List<DataCenterInfo>();
+
+        // Build lookup dictionaries
+        var worldIdToName = worlds.ToDictionary(w => w.Id, w => w.Name);
+        var worldNameToId = worlds.ToDictionary(w => w.Name, w => w.Id);
+
+        var dcToWorlds = dataCenters.ToDictionary(
+            dc => dc.Name,
+            dc => dc.WorldIds
+                .Where(id => worldIdToName.ContainsKey(id))
+                .Select(id => worldIdToName[id])
+                .OrderBy(name => name)
+                .ToList()
+        );
+
+        _worldDataCache = new WorldData
         {
-            var worldsTask = _httpClient.GetFromJsonAsync<List<WorldInfo>>(WorldsUrl, ct);
-            var dataCentersTask = _httpClient.GetFromJsonAsync<List<DataCenterInfo>>(DataCentersUrl, ct);
+            WorldIdToName = worldIdToName,
+            DataCenterToWorlds = dcToWorlds
+        };
 
-            await Task.WhenAll(worldsTask, dataCentersTask);
-
-            var worlds = await worldsTask ?? new List<WorldInfo>();
-            var dataCenters = await dataCentersTask ?? new List<DataCenterInfo>();
-
-            var worldIdToName = worlds.ToDictionary(w => w.Id, w => w.Name);
-
-            var dcToWorlds = dataCenters.ToDictionary(
-                dc => dc.Name,
-                dc => dc.WorldIds
-                    .Where(id => worldIdToName.ContainsKey(id))
-                    .Select(id => worldIdToName[id])
-                    .OrderBy(name => name)
-                    .ToList()
-            );
-
-            _worldDataCache = new WorldData
-            {
-                WorldIdToName = worldIdToName,
-                DataCenterToWorlds = dcToWorlds
-            };
-
-            return _worldDataCache;
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger?.LogError(ex, "Failed to fetch world data from Universalis");
-            throw new InvalidOperationException($"Failed to fetch world data: {ex.Message}. This may be due to CORS restrictions in the browser.", ex);
-        }
+        return _worldDataCache;
     }
 
     /// <summary>

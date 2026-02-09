@@ -1,8 +1,12 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
+using System.Windows;
+using System.Windows.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Core.Services;
+using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.ViewModels;
 
@@ -10,7 +14,7 @@ namespace FFXIVCraftArchitect.ViewModels;
 /// ViewModel for the Market Analysis panel.
 /// Manages shopping plans, recommendations, and procurement grouping.
 /// </summary>
-public class MarketAnalysisViewModel : ViewModelBase
+public partial class MarketAnalysisViewModel : ViewModelBase
 {
     private ObservableCollection<ShoppingPlanViewModel> _shoppingPlans = new();
     private ObservableCollection<ProcurementWorldViewModel> _groupedByWorld = new();
@@ -20,9 +24,18 @@ public class MarketAnalysisViewModel : ViewModelBase
     private MarketSortOption _currentSort = MarketSortOption.RecommendedWorld;
     private RecommendationMode _recommendationMode = RecommendationMode.MinimizeTotalCost;
     private bool _searchAllNaDcs;
+    private readonly PriceCheckService _priceCheckService;
+    private readonly RecipeCalculationService _recipeCalcService;
+    private readonly ILogger<MarketAnalysisViewModel>? _logger;
 
-    public MarketAnalysisViewModel()
+    public MarketAnalysisViewModel(
+        PriceCheckService priceCheckService,
+        RecipeCalculationService recipeCalcService,
+        ILogger<MarketAnalysisViewModel>? logger = null)
     {
+        _priceCheckService = priceCheckService;
+        _recipeCalcService = recipeCalcService;
+        _logger = logger;
         _shoppingPlans.CollectionChanged += OnShoppingPlansCollectionChanged;
     }
 
@@ -178,16 +191,33 @@ public class MarketAnalysisViewModel : ViewModelBase
 
     /// <summary>
     /// Sets the shopping plans from service results.
+    /// Must be called on UI thread or will be marshaled to UI thread.
     /// </summary>
     public void SetShoppingPlans(List<DetailedShoppingPlan> plans)
     {
+        _logger?.LogInformation("[SetShoppingPlans] START - Received {Count} plans, Thread={ThreadId}", 
+            plans.Count, Environment.CurrentManagedThreadId);
+        
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher != null && !dispatcher.CheckAccess())
+        {
+            _logger?.LogInformation("[SetShoppingPlans] Marshaling to UI thread...");
+            dispatcher.Invoke(() => SetShoppingPlans(plans));
+            return;
+        }
+
+        _logger?.LogInformation("[SetShoppingPlans] Clearing existing plans and adding {Count} new plans...", plans.Count);
         _shoppingPlans.Clear();
         foreach (var plan in plans)
         {
             _shoppingPlans.Add(new ShoppingPlanViewModel(plan));
         }
+        _logger?.LogInformation("[SetShoppingPlans] Added {Count} plans, calling ApplySort...", _shoppingPlans.Count);
         ApplySort();
+        _logger?.LogInformation("[SetShoppingPlans] Firing PlansChanged event...");
         PlansChanged?.Invoke(this, EventArgs.Empty);
+        _logger?.LogInformation("[SetShoppingPlans] END - _shoppingPlans.Count={Count}, HasData={HasData}", 
+            _shoppingPlans.Count, HasData);
     }
 
     /// <summary>
@@ -211,6 +241,7 @@ public class MarketAnalysisViewModel : ViewModelBase
     /// <summary>
     /// Clears all market data.
     /// </summary>
+    [RelayCommand]
     public void Clear()
     {
         _shoppingPlans.Clear();
@@ -271,7 +302,7 @@ public class MarketAnalysisViewModel : ViewModelBase
 /// <summary>
 /// ViewModel wrapper for a DetailedShoppingPlan.
 /// </summary>
-public class ShoppingPlanViewModel : INotifyPropertyChanged
+public partial class ShoppingPlanViewModel : ObservableObject
 {
     private readonly DetailedShoppingPlan _plan;
 
@@ -292,97 +323,42 @@ public class ShoppingPlanViewModel : INotifyPropertyChanged
     public bool HasHqData => _plan.HasHqData;
     public decimal? HQAveragePrice => _plan.HQAveragePrice;
     public string? Error => _plan.Error;
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
 }
 
 /// <summary>
 /// ViewModel for procurement items grouped by world.
 /// </summary>
-public class ProcurementWorldViewModel : INotifyPropertyChanged
+public partial class ProcurementWorldViewModel : ObservableObject
 {
+    [ObservableProperty]
     private string _worldName = string.Empty;
+
+    [ObservableProperty]
     private long _totalCost;
+
+    [ObservableProperty]
     private bool _isHomeWorld;
+
+    [ObservableProperty]
     private ObservableCollection<ShoppingPlanViewModel> _items = new();
-
-    public string WorldName
-    {
-        get => _worldName;
-        set { _worldName = value; OnPropertyChanged(); }
-    }
-
-    public long TotalCost
-    {
-        get => _totalCost;
-        set { _totalCost = value; OnPropertyChanged(); }
-    }
-
-    public bool IsHomeWorld
-    {
-        get => _isHomeWorld;
-        set { _isHomeWorld = value; OnPropertyChanged(); }
-    }
-
-    public ObservableCollection<ShoppingPlanViewModel> Items
-    {
-        get => _items;
-        set { _items = value; OnPropertyChanged(); }
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
 }
 
 /// <summary>
 /// ViewModel for simple procurement items (without market data).
 /// </summary>
-public class ProcurementItemViewModel : INotifyPropertyChanged
+public partial class ProcurementItemViewModel : ObservableObject
 {
+    [ObservableProperty]
     private int _itemId;
+
+    [ObservableProperty]
     private string _name = string.Empty;
+
+    [ObservableProperty]
     private int _quantity;
+
+    [ObservableProperty]
     private bool _requiresHq;
-
-    public int ItemId
-    {
-        get => _itemId;
-        set { _itemId = value; OnPropertyChanged(); }
-    }
-
-    public string Name
-    {
-        get => _name;
-        set { _name = value; OnPropertyChanged(); }
-    }
-
-    public int Quantity
-    {
-        get => _quantity;
-        set { _quantity = value; OnPropertyChanged(); }
-    }
-
-    public bool RequiresHq
-    {
-        get => _requiresHq;
-        set { _requiresHq = value; OnPropertyChanged(); }
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
 }
 
 /// <summary>

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using FFXIVCraftArchitect.Core.Helpers;
 using FFXIVCraftArchitect.Core.Models;
 using Microsoft.Extensions.Logging;
@@ -44,20 +45,16 @@ public class RecipeCalculationService
             World = world
         };
 
-        // Clear the per-plan item cache. This is intentional - the cache is used only within
-        // a single plan build to avoid redundant API calls for the same item (e.g., when an item
-        // appears in multiple recipe branches). It is NOT meant to persist across plan builds,
-        // as different plans may be built for different patches/versions with different recipes.
         _itemCache.Clear();
 
         foreach (var (itemId, name, quantity, isHqRequired) in targetItems)
         {
             try
             {
-                var visitedItems = new HashSet<int>();
-                var node = await BuildNodeRecursiveAsync(itemId, name, quantity, null, 0, visitedItems, ct);
+                var node = await BuildNodeRecursiveAsync(itemId, name, quantity, null, 0, ct);
                 if (node != null)
                 {
+                    // Apply HQ requirement from project item settings
                     node.MustBeHq = isHqRequired;
                     plan.RootItems.Add(node);
                     _logger?.LogDebug("[RecipeCalc] Added root item: {Name} x{Qty} (HQ: {Hq})", node.Name, node.Quantity, isHqRequired);
@@ -66,20 +63,118 @@ public class RecipeCalculationService
             catch (Exception ex)
             {
                 _logger?.LogError(ex, "[RecipeCalc] Failed to build tree for item {ItemId}", itemId);
+                // Add a placeholder node so user knows something went wrong
                 plan.RootItems.Add(new PlanNode
                 {
                     ItemId = itemId,
                     Name = $"{name} (Error: {ex.Message})",
                     Quantity = quantity,
-                    IsUncraftable = true,
                     Source = AcquisitionSource.MarketBuyNq,
-                    MustBeHq = isHqRequired
+                    MustBeHq = isHqRequired,
+                    CanCraft = false  // Error case, assume not craftable
                 });
             }
         }
 
         _logger?.LogInformation("[RecipeCalc] Plan built with {Count} root items", plan.RootItems.Count);
+        
+        // Fetch vendor prices for all items in the plan
+        await FetchVendorPricesAsync(plan, ct);
+        
         return plan;
+    }
+
+    /// <summary>
+    /// Fetch vendor prices for all items in a plan.
+    /// Vendor prices are cached in-memory during the session.
+    /// </summary>
+    public async Task FetchVendorPricesAsync(CraftingPlan plan, CancellationToken ct = default)
+    {
+        if (plan?.RootItems == null || !plan.RootItems.Any())
+            return;
+
+        _logger?.LogInformation("[RecipeCalc] Fetching vendor prices for plan items");
+        
+        var vendorPriceCache = new Dictionary<int, decimal>();
+        int fetchedCount = 0;
+        int cachedCount = 0;
+
+        foreach (var root in plan.RootItems)
+        {
+            (fetchedCount, cachedCount) = await FetchVendorPricesForNodeAsync(
+                root, vendorPriceCache, fetchedCount, cachedCount, ct);
+        }
+
+        _logger?.LogInformation("[RecipeCalc] Vendor prices: {Fetched} fetched, {Cached} from cache", 
+            fetchedCount, cachedCount);
+    }
+
+    private async Task<(int fetched, int cached)> FetchVendorPricesForNodeAsync(
+        PlanNode node, 
+        Dictionary<int, decimal> cache, 
+        int fetchedCount, 
+        int cachedCount,
+        CancellationToken ct)
+    {
+        // Check in-memory cache first
+        if (cache.TryGetValue(node.ItemId, out var cachedPrice))
+        {
+            node.VendorPrice = cachedPrice;
+            node.CanBuyFromVendor = cachedPrice > 0;
+            cachedCount++;
+        }
+        else
+        {
+            // Fetch from Garland
+            try
+            {
+                var itemData = await _garlandService.GetItemAsync(node.ItemId, ct);
+                if (itemData != null)
+                {
+                    var vendorPrice = GetVendorPrice(itemData);
+                    node.VendorPrice = vendorPrice;
+                    node.CanBuyFromVendor = vendorPrice > 0;
+                    cache[node.ItemId] = vendorPrice;
+                    fetchedCount++;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "[RecipeCalc] Failed to fetch vendor price for {ItemId}", node.ItemId);
+            }
+        }
+
+        // Recurse into children
+        foreach (var child in node.Children)
+        {
+            (fetchedCount, cachedCount) = await FetchVendorPricesForNodeAsync(
+                child, cache, fetchedCount, cachedCount, ct);
+        }
+
+        return (fetchedCount, cachedCount);
+    }
+
+    /// <summary>
+    /// Extract vendor price from Garland item data.
+    /// Handles both full vendor objects and ID-only references (e.g., Ixali Vendor).
+    /// </summary>
+    private static decimal GetVendorPrice(GarlandItem? item)
+    {
+        if (item == null) return 0;
+        
+        // If we have full vendor objects with prices, use the cheapest
+        if (item.Vendors.Count > 0)
+        {
+            return item.Vendors.Min(v => v.Price);
+        }
+        
+        // If vendors are listed as IDs only (e.g., Ixali Vendor), use root-level price
+        if (item.HasVendorReferences && item.Price > 0)
+        {
+            return item.Price;
+        }
+        
+        return 0;
     }
 
     /// <summary>
@@ -91,9 +186,9 @@ public class RecipeCalculationService
         int quantity, 
         PlanNode? parent, 
         int depth, 
-        HashSet<int> visitedItems,
         CancellationToken ct)
     {
+        // Prevent infinite recursion (safety guard)
         if (depth > MaxDepth)
         {
             _logger?.LogWarning("[RecipeCalc] Max depth reached for item {ItemId}, treating as uncraftable", itemId);
@@ -102,24 +197,9 @@ public class RecipeCalculationService
                 ItemId = itemId,
                 Name = name,
                 Quantity = quantity,
-                IsUncraftable = true,
                 Source = AcquisitionSource.MarketBuyNq,
-                Parent = parent
-            };
-        }
-
-        if (visitedItems.Contains(itemId) && parent != null)
-        {
-            _logger?.LogWarning("[RecipeCalc] Circular dependency detected for item {ItemId} ({Name})", itemId, name);
-            return new PlanNode
-            {
-                ItemId = itemId,
-                Name = name, // Keep original name - don't append "(Circular)"
-                Quantity = quantity,
-                IsUncraftable = true,
-                IsCircularReference = true, // Mark as circular reference for UI indication
-                Source = AcquisitionSource.MarketBuyNq,
-                Parent = parent
+                Parent = parent,
+                CanCraft = false  // Max depth reached, can't craft
             };
         }
 
@@ -143,6 +223,10 @@ public class RecipeCalculationService
         // Determine if item can be HQ
         var canBeHq = DetermineCanBeHq(itemData, itemId);
         
+        // Check if item can be bought from vendor (has vendor objects OR vendor ID references)
+        var hasVendor = itemData?.HasVendorReferences == true;
+        
+        // Create the node
         var node = new PlanNode
         {
             ItemId = itemId,
@@ -150,34 +234,41 @@ public class RecipeCalculationService
             IconId = itemData?.IconId ?? 0,
             Quantity = quantity,
             Parent = parent,
-            CanBeHq = canBeHq
+            CanBeHq = canBeHq,
+            CanBuyFromVendor = hasVendor
         };
 
+        // Check for both traditional crafts and company crafts
         var hasCraft = itemData?.Crafts?.Any() == true;
         var hasCompanyCraft = itemData?.CompanyCrafts?.Any() == true;
         
+        // Set craftability - company crafts are also considered "craftable"
+        node.CanCraft = hasCraft || hasCompanyCraft;
+        
         if (!hasCraft && !hasCompanyCraft)
         {
-            node.IsUncraftable = true;
-            node.Source = AcquisitionSource.MarketBuyNq;
-            _logger?.LogDebug("[RecipeCalc] Item {Name} has no recipe, marked as buy", node.Name);
+            // No craft recipe - prefer vendor if available, otherwise market
+            node.Source = hasVendor ? AcquisitionSource.VendorBuy : AcquisitionSource.MarketBuyNq;
+            _logger?.LogDebug("[RecipeCalc] Item {Name} has no recipe, marked as {Source}", node.Name, node.Source);
             return node;
         }
 
-        visitedItems.Add(itemId);
-
+        // Handle company workshop recipes (airships, submarines, etc.)
         if (hasCompanyCraft)
         {
-            return await BuildCompanyCraftNodeAsync(node, itemData!.CompanyCrafts!.First(), quantity, visitedItems, ct);
+            return await BuildCompanyCraftNodeAsync(node, itemData!.CompanyCrafts!.First(), quantity, ct);
         }
 
+        // Use the first available traditional recipe
         var recipe = itemData!.Crafts!.OrderBy(r => r.RecipeLevel).First();
         node.RecipeLevel = recipe.RecipeLevel;
         node.Job = JobHelper.GetJobName(recipe.JobId);
         node.Yield = Math.Max(1, recipe.Yield);
 
+        // Calculate how many times we need to craft
         var craftCount = (int)Math.Ceiling((double)quantity / node.Yield);
 
+        // Build child nodes for ingredients
         foreach (var ingredient in recipe.Ingredients)
         {
             var ingredientQuantity = ingredient.Amount * craftCount;
@@ -187,7 +278,6 @@ public class RecipeCalculationService
                 ingredientQuantity, 
                 node, 
                 depth + 1, 
-                visitedItems,
                 ct);
             
             if (childNode != null)
@@ -196,14 +286,39 @@ public class RecipeCalculationService
             }
         }
 
-        if (ShouldDefaultToBuy(node))
+        // Smart default: determine best acquisition method
+        // But NEVER default root items (parent == null) to buy - user wants to craft project items
+        var isRootItem = parent == null;
+        
+        // Priority: Vendor > Buy > Craft (for non-root items)
+        // Vendor is cheapest and most convenient, so default to it when available
+        var shouldDefaultToVendor = !isRootItem && hasVendor;
+        var shouldDefaultToBuy = !isRootItem && !shouldDefaultToVendor && ShouldDefaultToBuy(node);
+        
+        _logger?.LogInformation("[RecipeCalc] {Name}: RecipeLevel={Level}, Children={ChildCount}, IsRoot={IsRoot}, HasVendor={HasVendor}, ShouldDefaultToVendor={ShouldVendor}, ShouldDefaultToBuy={ShouldBuy}", 
+            node.Name, node.RecipeLevel, node.Children.Count, isRootItem, hasVendor, shouldDefaultToVendor, shouldDefaultToBuy);
+        
+        if (shouldDefaultToVendor)
         {
+            _logger?.LogInformation("[RecipeCalc] {Name}: Setting Source=VendorBuy (vendor available)", node.Name);
+            node.Source = AcquisitionSource.VendorBuy;
+        }
+        else if (shouldDefaultToBuy)
+        {
+            _logger?.LogInformation("[RecipeCalc] {Name}: Setting Source=MarketBuyNq (heuristic)", node.Name);
             node.Source = AcquisitionSource.MarketBuyNq;
+        }
+        else
+        {
+            _logger?.LogInformation("[RecipeCalc] {Name}: Source remains default={Source} (crafting preferred)", node.Name, node.Source);
         }
 
         return node;
     }
 
+    /// <summary>
+    /// Determine if an item should default to "buy" mode based on its ingredients.
+    /// </summary>
     private bool ShouldDefaultToBuy(PlanNode node)
     {
         if (!node.Children.Any())
@@ -211,64 +326,114 @@ public class RecipeCalculationService
 
         if (node.RecipeLevel < 10 && node.Children.Count > 3)
             return true;
-
+        
         return false;
     }
 
+    /// <summary>
+    /// Recalculate quantities when a root item quantity changes.
+    /// </summary>
+    public void RecalculateQuantities(PlanNode rootNode, int newQuantity)
+    {
+        if (rootNode.Quantity == 0 || newQuantity == 0)
+        {
+            ScaleNodeQuantities(rootNode, newQuantity > 0 ? 100 : 0);
+            return;
+        }
+
+        var ratio = (double)newQuantity / rootNode.Quantity;
+        ScaleNodeQuantities(rootNode, ratio);
+    }
+
+    private void ScaleNodeQuantities(PlanNode node, double ratio)
+    {
+        node.Quantity = Math.Max(1, (int)(node.Quantity * ratio));
+        
+        if (node.Children.Any() && node.Yield > 0)
+        {
+            foreach (var child in node.Children)
+            {
+                ScaleNodeQuantities(child, ratio);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Set the acquisition source for an item.
+    /// </summary>
+    public void SetAcquisitionSource(PlanNode node, AcquisitionSource source)
+    {
+        node.Source = source;
+        
+        if (source == AcquisitionSource.MarketBuyHq)
+        {
+            node.MustBeHq = true;
+        }
+        
+        _logger?.LogInformation("[RecipeCalc] {ItemName} set to {Source} (MustBeHq={MustBeHq})", node.Name, source, node.MustBeHq);
+    }
+
+    /// <summary>
+    /// Build a node for company workshop recipes (airships, submarines).
+    /// </summary>
     private async Task<PlanNode> BuildCompanyCraftNodeAsync(
         PlanNode node, 
         GarlandCompanyCraft companyCraft, 
         int quantity,
-        HashSet<int> visitedItems,
         CancellationToken ct)
     {
         node.Job = "Company Workshop";
         node.RecipeLevel = 1;
         node.Yield = 1;
         
-        _logger?.LogDebug("[RecipeCalc] Building company craft node for {Name} with {PhaseCount} phases", 
-            node.Name, companyCraft.PhaseCount);
+        _logger?.LogInformation("[RecipeCalc] Building company craft: {Name} x{Quantity} with {PhaseCount} phases", 
+            node.Name, quantity, companyCraft.PhaseCount);
 
         foreach (var phase in companyCraft.Phases)
         {
-            var phaseNode = new PlanNode
-            {
-                ItemId = 0,
-                Name = $"Phase {phase.PhaseNumber + 1}",
-                Quantity = 1,
-                Source = AcquisitionSource.Craft,
-                Parent = node,
-                Job = "Phase"
-            };
+            _logger?.LogDebug("[RecipeCalc] Processing phase {PhaseNumber} with {ItemCount} items",
+                phase.PhaseNumber + 1, phase.Items.Count);
             
             foreach (var item in phase.Items)
             {
+                var ingredientQuantity = item.Amount * quantity;
+                _logger?.LogDebug("[RecipeCalc] Phase {PhaseNumber} item: {ItemName} x{Amount} = {TotalQuantity}",
+                    phase.PhaseNumber + 1, item.Name, item.Amount, ingredientQuantity);
+                
                 var childNode = await BuildNodeRecursiveAsync(
                     item.Id,
                     item.Name ?? $"Item_{item.Id}",
-                    item.Amount * quantity,
-                    phaseNode,
+                    ingredientQuantity,
+                    node,  // Parent is the company craft node, not a phase node
                     0,
-                    visitedItems,
                     ct);
                 
                 if (childNode != null)
                 {
-                    phaseNode.Children.Add(childNode);
+                    node.Children.Add(childNode);
+                    _logger?.LogDebug("[RecipeCalc] Added ingredient: {ItemName} x{Quantity}", 
+                        childNode.Name, childNode.Quantity);
+                }
+                else
+                {
+                    _logger?.LogWarning("[RecipeCalc] Failed to build node for phase ingredient: {ItemId} ({ItemName})",
+                        item.Id, item.Name);
                 }
             }
-            
-            if (phaseNode.Children.Any())
-            {
-                node.Children.Add(phaseNode);
-            }
         }
+
+        _logger?.LogInformation("[RecipeCalc] Company craft {Name} complete: {ChildCount} total ingredients, Source={Source}",
+            node.Name, node.Children.Count, node.Source);
 
         return node;
     }
 
+    /// <summary>
+    /// Determine if an item can be HQ based on its properties.
+    /// </summary>
     private static bool DetermineCanBeHq(GarlandItem? itemData, int itemId)
     {
+        // Crystals, shards, clusters cannot be HQ
         if (itemId >= 1 && itemId <= 19)
             return false;
         
@@ -285,6 +450,7 @@ public class RecipeCalculationService
                 return false;
         }
         
+        // Only items with craft recipes can be HQ
         if (itemData?.Crafts?.Any() == true)
             return true;
         
@@ -315,7 +481,7 @@ public class RecipeCalculationService
             Nodes = serializableNodes
         };
 
-        return System.Text.Json.JsonSerializer.Serialize(wrapper, new System.Text.Json.JsonSerializerOptions
+        return JsonSerializer.Serialize(wrapper, new JsonSerializerOptions
         {
             WriteIndented = true
         });
@@ -329,17 +495,16 @@ public class RecipeCalculationService
             Name = node.Name,
             IconId = node.IconId,
             Quantity = node.Quantity,
-            IsBuy = node.IsBuy,
             Source = node.Source,
-            RequiresHq = node.RequiresHq,
             MustBeHq = node.MustBeHq,
             CanBeHq = node.CanBeHq,
-            IsUncraftable = node.IsUncraftable,
+            CanBuyFromVendor = node.CanBuyFromVendor,
+            CanCraft = node.CanCraft,
             RecipeLevel = node.RecipeLevel,
             Job = node.Job,
             Yield = node.Yield,
-            MarketPrice = node.MarketPrice,
-            HqMarketPrice = node.HqMarketPrice,
+            // Market prices intentionally NOT serialized - they bloat the file 
+            // and will be refreshed from market data on load anyway
             NodeId = node.NodeId,
             ParentNodeId = parentId,
             Notes = node.Notes,
@@ -361,7 +526,7 @@ public class RecipeCalculationService
     {
         try
         {
-            var wrapper = System.Text.Json.JsonSerializer.Deserialize<PlanSerializationWrapper>(json);
+            var wrapper = JsonSerializer.Deserialize<PlanSerializationWrapper>(json);
             if (wrapper == null) return null;
 
             var nodeLookup = new Dictionary<string, PlanNode>();
@@ -373,7 +538,6 @@ public class RecipeCalculationService
                     Name = sNode.Name,
                     IconId = sNode.IconId,
                     Quantity = sNode.Quantity,
-                    IsUncraftable = sNode.IsUncraftable,
                     RecipeLevel = sNode.RecipeLevel,
                     Job = sNode.Job,
                     Yield = sNode.Yield,
@@ -387,18 +551,15 @@ public class RecipeCalculationService
                 {
                     node.Source = sNode.Source.Value;
                 }
-                else if (sNode.IsBuy)
-                {
-                    node.Source = AcquisitionSource.MarketBuyNq;
-                }
                 else
                 {
                     node.Source = AcquisitionSource.Craft;
                 }
                 
-                node.RequiresHq = sNode.RequiresHq;
                 node.MustBeHq = sNode.MustBeHq;
                 node.CanBeHq = sNode.CanBeHq;
+                node.CanBuyFromVendor = sNode.CanBuyFromVendor;
+                node.CanCraft = sNode.CanCraft;
                 node.HqMarketPrice = sNode.HqMarketPrice;
                 
                 nodeLookup[sNode.NodeId] = node;
@@ -448,4 +609,173 @@ public class RecipeCalculationService
             return null;
         }
     }
+
+    // ========================================================================
+    // Price Manipulation Methods
+    // ========================================================================
+
+    /// <summary>
+    /// Extracts all prices from a plan's nodes into a dictionary.
+    /// </summary>
+    public Dictionary<int, PriceInfo> ExtractPricesFromPlan(CraftingPlan plan)
+    {
+        var prices = new Dictionary<int, PriceInfo>();
+        
+        foreach (var root in plan.RootItems)
+        {
+            ExtractPricesFromNode(root, prices);
+        }
+        
+        return prices;
+    }
+    
+    private void ExtractPricesFromNode(PlanNode node, Dictionary<int, PriceInfo> prices)
+    {
+        if (node.MarketPrice > 0 || node.PriceSource != PriceSource.Unknown)
+        {
+            if (!prices.ContainsKey(node.ItemId))
+            {
+                prices[node.ItemId] = new PriceInfo
+                {
+                    ItemId = node.ItemId,
+                    ItemName = node.Name,
+                    UnitPrice = node.MarketPrice,
+                    Source = node.PriceSource,
+                    SourceDetails = node.PriceSourceDetails
+                };
+            }
+        }
+        
+        foreach (var child in node.Children)
+        {
+            ExtractPricesFromNode(child, prices);
+        }
+    }
+
+    /// <summary>
+    /// Updates a single node's price information.
+    /// </summary>
+    public void UpdateSingleNodePrice(List<PlanNode> nodes, int itemId, PriceInfo priceInfo)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.ItemId == itemId)
+            {
+                node.MarketPrice = priceInfo.UnitPrice;
+                if (node.CanBeHq)
+                {
+                    node.HqMarketPrice = priceInfo.HqUnitPrice > 0 ? priceInfo.HqUnitPrice : 0;
+                }
+                node.PriceSource = priceInfo.Source;
+                node.PriceSourceDetails = priceInfo.SourceDetails;
+            }
+            
+            if (node.Children?.Any() == true)
+            {
+                UpdateSingleNodePrice(node.Children, itemId, priceInfo);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Updates all nodes in a plan with price information from a dictionary.
+    /// </summary>
+    public void UpdatePlanWithPrices(List<PlanNode> nodes, Dictionary<int, PriceInfo> prices)
+    {
+        foreach (var node in nodes)
+        {
+            if (prices.TryGetValue(node.ItemId, out var priceInfo))
+            {
+                node.MarketPrice = priceInfo.UnitPrice;
+                if (node.CanBeHq)
+                {
+                    node.HqMarketPrice = priceInfo.HqUnitPrice > 0 ? priceInfo.HqUnitPrice : 0;
+                }
+                node.PriceSource = priceInfo.Source;
+                node.PriceSourceDetails = priceInfo.SourceDetails;
+            }
+
+            if (node.Children?.Any() == true)
+            {
+                UpdatePlanWithPrices(node.Children, prices);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Collects all unique items with their quantities from a list of plan nodes.
+    /// Skips children of items that are being bought (not crafted) to avoid unnecessary price fetches.
+    /// </summary>
+    public void CollectAllItemsWithQuantity(List<PlanNode> nodes, List<(int itemId, string name, int quantity)> items)
+    {
+        foreach (var node in nodes)
+        {
+            if (!items.Any(i => i.itemId == node.ItemId))
+            {
+                items.Add((node.ItemId, node.Name, node.Quantity));
+            }
+
+            // Only recurse into children if this item is being crafted
+            // If it's being bought (VendorBuy/MarketBuy), its children aren't needed
+            if (node.Children?.Any() == true && node.Source == AcquisitionSource.Craft)
+            {
+                CollectAllItemsWithQuantity(node.Children, items);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Calculates the total craft cost for a node by summing the costs of its children.
+    /// Recursively calculates costs for child craft nodes.
+    /// </summary>
+    public decimal CalculateNodeCraftCost(PlanNode node)
+    {
+        if (!node.Children.Any())
+            return 0;
+        
+        decimal total = 0;
+        foreach (var child in node.Children)
+        {
+            if (child.Source == AcquisitionSource.MarketBuyNq && child.MarketPrice > 0)
+            {
+                total += child.MarketPrice * child.Quantity;
+            }
+            else if (child.Source == AcquisitionSource.MarketBuyHq && child.HqMarketPrice > 0)
+            {
+                total += child.HqMarketPrice * child.Quantity;
+            }
+            else if (child.Source == AcquisitionSource.VendorBuy && child.MarketPrice > 0)
+            {
+                total += child.MarketPrice * child.Quantity;
+            }
+            else if (child.Source == AcquisitionSource.Craft && child.Children.Any())
+            {
+                total += CalculateNodeCraftCost(child);
+            }
+            else if (child.MarketPrice > 0)
+            {
+                total += child.MarketPrice * child.Quantity;
+            }
+            else if (child.Children.Any())
+            {
+                total += CalculateNodeCraftCost(child);
+            }
+        }
+        return total;
+    }
+}
+
+/// <summary>
+/// Helper class for JSON serialization
+/// </summary>
+public class PlanSerializationWrapper
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public DateTime ModifiedAt { get; set; }
+    public string DataCenter { get; set; } = string.Empty;
+    public string World { get; set; } = string.Empty;
+    public List<string> RootNodeIds { get; set; } = new();
+    public List<SerializablePlanNode> Nodes { get; set; } = new();
 }

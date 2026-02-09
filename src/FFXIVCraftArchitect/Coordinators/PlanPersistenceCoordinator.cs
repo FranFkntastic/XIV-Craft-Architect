@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Services;
 using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
@@ -13,13 +14,16 @@ namespace FFXIVCraftArchitect.Coordinators;
 public class PlanPersistenceCoordinator
 {
     private readonly IPlanPersistenceService _persistenceService;
+    private readonly DialogServiceFactory _dialogFactory;
     private readonly ILogger<PlanPersistenceCoordinator> _logger;
 
     public PlanPersistenceCoordinator(
         IPlanPersistenceService persistenceService,
+        DialogServiceFactory dialogFactory,
         ILogger<PlanPersistenceCoordinator> logger)
     {
         _persistenceService = persistenceService;
+        _dialogFactory = dialogFactory;
         _logger = logger;
     }
 
@@ -41,7 +45,7 @@ public class PlanPersistenceCoordinator
         string currentPlanPath)
     {
         var mainWindow = ownerWindow as MainWindow;
-        var browser = new PlanBrowserWindow(_persistenceService, mainWindow)
+        var browser = new PlanBrowserWindow(_persistenceService, _dialogFactory, mainWindow)
         {
             Owner = ownerWindow
         };
@@ -90,7 +94,7 @@ public class PlanPersistenceCoordinator
         List<ProjectItem> projectItems,
         string? currentPlanPath)
     {
-        var saveDialog = new SavePlanDialog(_persistenceService, plan.Name)
+        var saveDialog = new SavePlanDialog(_persistenceService, _dialogFactory, plan.Name)
         {
             Owner = ownerWindow
         };

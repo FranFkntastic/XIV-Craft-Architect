@@ -7,10 +7,12 @@
         {
             <!-- Parent Node: Expander -->
             <div style="border: 1px solid #444; border-radius: 4px; margin-bottom: 4px; overflow: hidden;">
-                <div @onclick="ToggleExpanded"
-                     style="background: #363636; padding: 8px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                    <span style="color: #888; font-size: 12px;">@(_isExpanded ? "▼" : "▶")</span>
-                    <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                <div style="background: #363636; padding: 8px 12px; display: flex; align-items: center; gap: 8px;">
+                    <!-- Toggle button - only this should expand/collapse -->
+                    <div @onclick="ToggleExpanded"
+                         @onclick:stopPropagation
+                         style="cursor: pointer; display: flex; align-items: center; gap: 8px; flex: 1;">
+                        <span style="color: #888; font-size: 12px;">@(_isExpanded ? "▼" : "▶")</span>
                         @RenderNodeContentCore()
                     </div>
                 </div>
@@ -133,7 +135,8 @@
         __builder.OpenElement(12, "select");
         __builder.AddAttribute(13, "value", Node.Source.ToString());
         __builder.AddAttribute(14, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, OnSourceChange));
-        __builder.AddAttribute(15, "style", "background: #2d2d2d; color: white; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer;");
+        __builder.AddEventStopPropagationAttribute(15, "onclick", true);
+        __builder.AddAttribute(16, "style", "background: #2d2d2d; color: white; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer;");
         
         foreach (var source in GetAvailableSources())
         {
@@ -183,6 +186,12 @@
             sources.Add(AcquisitionSource.MarketBuyHq);
         }
         
+        // If item can be bought from vendor
+        if (Node.CanBuyFromVendor)
+        {
+            sources.Add(AcquisitionSource.VendorBuy);
+        }
+        
         // If item has children, can craft it
         if (Node.Children.Any())
         {
@@ -210,6 +219,7 @@
             AcquisitionSource.Craft => $"{CalculateCraftCost():N0}g",
             AcquisitionSource.MarketBuyNq => Node.MarketPrice > 0 ? $"{Node.MarketPrice:N0}g" : "",
             AcquisitionSource.MarketBuyHq => Node.HqMarketPrice > 0 ? $"{Node.HqMarketPrice:N0}g" : "",
+            AcquisitionSource.VendorBuy => Node.VendorPrice > 0 ? $"{Node.VendorPrice:N0}g" : "",
             _ => ""
         };
     }

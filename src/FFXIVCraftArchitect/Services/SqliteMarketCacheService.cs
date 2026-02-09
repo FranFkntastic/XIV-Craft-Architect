@@ -11,18 +11,23 @@ namespace FFXIVCraftArchitect.Services;
 /// <summary>
 /// SQLite implementation of the market cache service for WPF desktop app.
 /// Stores compressed Universalis responses for efficient retrieval.
+/// Also acts as the orchestrator for fetching missing data from Universalis API.
 /// </summary>
 public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisposable
 {
     private readonly ILogger<SqliteMarketCacheService> _logger;
+    private readonly UniversalisService _universalisService;
     private readonly string _dbPath;
     private readonly SqliteConnection _connection;
     private readonly TimeSpan _defaultMaxAge = TimeSpan.FromHours(1);
     private readonly JsonSerializerOptions _jsonOptions;
 
-    public SqliteMarketCacheService(ILogger<SqliteMarketCacheService> logger)
+    public SqliteMarketCacheService(
+        ILogger<SqliteMarketCacheService> logger,
+        UniversalisService universalisService)
     {
         _logger = logger;
+        _universalisService = universalisService;
         _jsonOptions = new JsonSerializerOptions 
         { 
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase 
@@ -177,8 +182,55 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         };
     }
 
+    public async Task<(Core.Services.CachedMarketData? Data, bool IsStale)> GetWithStaleAsync(int itemId, string dataCenter, TimeSpan? maxAge = null)
+    {
+        var cutoff = DateTime.UtcNow - (maxAge ?? _defaultMaxAge);
+        
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT fetched_at, dc_avg_price, hq_avg_price, compressed_data
+            FROM market_data
+            WHERE item_id = @itemId AND data_center = @dataCenter
+        ";
+        cmd.Parameters.AddWithValue("@itemId", itemId);
+        cmd.Parameters.AddWithValue("@dataCenter", dataCenter);
+        
+        using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            _logger.LogDebug("[SqliteMarketCache] NO DATA for {ItemId}@{DataCenter}", itemId, dataCenter);
+            return (null, false);
+        }
+        
+        var fetchedAt = reader.GetDateTime(0);
+        var isStale = fetchedAt <= cutoff;
+        
+        var compressedData = (byte[])reader.GetValue(3);
+        var json = Decompress(compressedData);
+        var worlds = JsonSerializer.Deserialize<List<Core.Services.CachedWorldData>>(json, _jsonOptions);
+        
+        _logger.LogDebug("[SqliteMarketCache] {Status} for {ItemId}@{DataCenter} (fetched {Hours:F1}h ago)", 
+            isStale ? "STALE" : "FRESH", itemId, dataCenter, (DateTime.UtcNow - fetchedAt).TotalHours);
+        
+        var data = new Core.Services.CachedMarketData
+        {
+            ItemId = itemId,
+            DataCenter = dataCenter,
+            FetchedAt = fetchedAt,
+            DCAveragePrice = reader.GetDecimal(1),
+            HQAveragePrice = reader.IsDBNull(2) ? null : reader.GetDecimal(2),
+            Worlds = worlds ?? new List<Core.Services.CachedWorldData>()
+        };
+        
+        return (data, isStale);
+    }
+
     public async Task SetAsync(int itemId, string dataCenter, Core.Services.CachedMarketData data)
     {
+        var age = DateTime.UtcNow - data.FetchedAt;
+        _logger.LogDebug("[SqliteMarketCache] Storing {ItemId}@{DataCenter} with FetchedAt={FetchedAt} (age={Age:F1}min)", 
+            itemId, dataCenter, data.FetchedAt, age.TotalMinutes);
+        
         var json = JsonSerializer.Serialize(data.Worlds, _jsonOptions);
         var compressed = Compress(json);
         
@@ -195,8 +247,8 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         cmd.Parameters.AddWithValue("@hqAvgPrice", data.HQAveragePrice ?? (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@compressedData", compressed);
         
-        await cmd.ExecuteNonQueryAsync();
-        _logger.LogDebug("[SqliteMarketCache] Stored {ItemId}@{DataCenter}", itemId, dataCenter);
+        var rowsAffected = await cmd.ExecuteNonQueryAsync();
+        _logger.LogDebug("[SqliteMarketCache] Stored {ItemId}@{DataCenter} - {Rows} rows affected", itemId, dataCenter, rowsAffected);
     }
 
     public async Task<bool> HasValidCacheAsync(int itemId, string dataCenter, TimeSpan? maxAge = null)
@@ -209,16 +261,138 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         TimeSpan? maxAge = null)
     {
         var missing = new List<(int, string)>();
+        int checkedCount = 0;
+        int hitCount = 0;
         
         foreach (var (itemId, dataCenter) in requests)
         {
-            if (!await HasValidCacheAsync(itemId, dataCenter, maxAge))
+            checkedCount++;
+            var (data, isStale) = await GetWithStaleAsync(itemId, dataCenter, maxAge);
+            
+            if (data == null)
             {
                 missing.Add((itemId, dataCenter));
+                _logger.LogDebug("[SqliteMarketCache] MISS (no data) for {ItemId}@{DC}", itemId, dataCenter);
+            }
+            else if (isStale)
+            {
+                missing.Add((itemId, dataCenter));
+                var age = DateTime.UtcNow - data.FetchedAt;
+                _logger.LogDebug("[SqliteMarketCache] STALE ({Age:F0}min old) for {ItemId}@{DC}", 
+                    age.TotalMinutes, itemId, dataCenter);
+            }
+            else
+            {
+                hitCount++;
+                var age = DateTime.UtcNow - data.FetchedAt;
+                _logger.LogDebug("[SqliteMarketCache] HIT ({Age:F0}min old) for {ItemId}@{DC}", 
+                    age.TotalMinutes, itemId, dataCenter);
             }
         }
         
+        _logger.LogInformation("[SqliteMarketCache] Checked {Checked}, Hits {Hits}, Missing {Missing}", 
+            checkedCount, hitCount, missing.Count);
+        
         return missing;
+    }
+
+    public async Task<int> EnsurePopulatedAsync(
+        List<(int itemId, string dataCenter)> requests,
+        TimeSpan? maxAge = null,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        var effectiveMaxAge = maxAge ?? _defaultMaxAge;
+        var cutoff = DateTime.UtcNow - effectiveMaxAge;
+        
+        _logger.LogInformation("[SqliteMarketCache] EnsurePopulatedAsync START - {Count} requests, maxAge={MaxAge}, cutoff={Cutoff}", 
+            requests.Count, effectiveMaxAge, cutoff);
+        
+        if (requests.Count == 0) return 0;
+        
+        // Check what's missing from cache (using provided maxAge or default)
+        var missing = await GetMissingAsync(requests, maxAge);
+        if (missing.Count == 0)
+        {
+            _logger.LogInformation("[SqliteMarketCache] All {Count} items already in cache (maxAge={MaxAge})", 
+                requests.Count, effectiveMaxAge);
+            return 0;
+        }
+        
+        _logger.LogInformation("[SqliteMarketCache] Fetching {MissingCount}/{TotalCount} items from Universalis", 
+            missing.Count, requests.Count);
+        progress?.Report($"Fetching market data for {missing.Count} items...");
+        
+        // Group by data center for efficient bulk fetching
+        var byDataCenter = missing.GroupBy(x => x.dataCenter).ToList();
+        int fetchedCount = 0;
+        
+        foreach (var dcGroup in byDataCenter)
+        {
+            var dc = dcGroup.Key;
+            var itemIds = dcGroup.Select(x => x.itemId).ToList();
+            
+            try
+            {
+                progress?.Report($"Fetching {itemIds.Count} items from {dc}...");
+                
+                var fetchedData = await _universalisService.GetMarketDataBulkAsync(dc, itemIds, ct);
+                
+                // Store each result in cache
+                foreach (var kvp in fetchedData)
+                {
+                    var cachedData = ConvertUniversalisResponseToCachedData(kvp.Key, dc, kvp.Value);
+                    await SetAsync(kvp.Key, dc, cachedData);
+                    fetchedCount++;
+                }
+                
+                _logger.LogInformation("[SqliteMarketCache] Fetched and cached {FetchedCount}/{RequestedCount} items from {DC}",
+                    fetchedData.Count, itemIds.Count, dc);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SqliteMarketCache] Failed to fetch items from {DC}", dc);
+                // Continue with other DCs - partial failure is acceptable
+            }
+        }
+        
+        return fetchedCount;
+    }
+    
+    private Core.Services.CachedMarketData ConvertUniversalisResponseToCachedData(int itemId, string dataCenter, UniversalisResponse response)
+    {
+        _logger.LogDebug("[SqliteMarketCache] Converting response for {ItemId}@{DC} with {ListingCount} listings", 
+            itemId, dataCenter, response.Listings.Count);
+        
+        var worlds = new List<Core.Services.CachedWorldData>();
+        
+        foreach (var worldListing in response.Listings.GroupBy(l => l.WorldName))
+        {
+            worlds.Add(new Core.Services.CachedWorldData
+            {
+                WorldName = worldListing.Key ?? "Unknown",
+                Listings = worldListing.Select(l => new Core.Services.CachedListing
+                {
+                    Quantity = l.Quantity,
+                    PricePerUnit = l.PricePerUnit,
+                    RetainerName = l.RetainerName ?? "Unknown",
+                    IsHq = l.IsHq
+                }).ToList()
+            });
+        }
+        
+        var now = DateTime.UtcNow;
+        _logger.LogDebug("[SqliteMarketCache] Setting FetchedAt={Now} for {ItemId}@{DC}", now, itemId, dataCenter);
+        
+        return new Core.Services.CachedMarketData
+        {
+            ItemId = itemId,
+            DataCenter = dataCenter,
+            FetchedAt = now,
+            DCAveragePrice = (decimal)(response.AveragePriceNq > 0 ? response.AveragePriceNq : response.AveragePrice),
+            HQAveragePrice = response.AveragePriceHq > 0 ? (decimal)response.AveragePriceHq : null,
+            Worlds = worlds
+        };
     }
 
     public async Task<int> CleanupStaleAsync(TimeSpan maxAge)

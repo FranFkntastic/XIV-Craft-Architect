@@ -1,4 +1,5 @@
 @using FFXIVCraftArchitect.Web.Services
+@using FFXIVCraftArchitect.Core.Models
 @inject AppState AppState
 @inject IndexedDbService IndexedDb
 @inject ISnackbar Snackbar
@@ -56,6 +57,17 @@
     </DialogContent>
     <DialogActions>
         <div style="display: flex; gap: 8px; width: 100%; padding: 8px 16px;">
+            <!-- Save: Enabled when there are items to save -->
+            <MudButton OnClick="OnSaveCurrentPlan"
+                       Color="Color.Success"
+                       Variant="Variant.Outlined"
+                       Size="Size.Small"
+                       Disabled="@(!AppState.ProjectItems.Any())"
+                       StartIcon="@Icons.Material.Filled.Save"
+                       title="Save current plan">
+                @(AppState.CurrentPlanId != null ? "Save" : "Save As")
+            </MudButton>
+            <!-- Rename/Delete: Enabled when a plan is selected -->
             <MudButton OnClick="OnRenamePlan"
                        Color="Color.Secondary"
                        Variant="Variant.Outlined"
@@ -149,6 +161,125 @@
         if (isSelected)
             return "color: #d4a73a; font-weight: 600;";
         return "color: #fff; font-weight: 500;";
+    }
+
+    private async Task OnSaveCurrentPlan()
+    {
+        if (!AppState.ProjectItems.Any())
+        {
+            Snackbar.Add("No items to save", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            // Check if there's a current plan to potentially overwrite
+            StoredPlanSummary? currentPlan = null;
+            if (AppState.CurrentPlanId != null)
+            {
+                currentPlan = _savedPlans.FirstOrDefault(p => p.Id == AppState.CurrentPlanId);
+            }
+
+            // If there's a selected plan that's not the current one, ask if user wants to overwrite it
+            // or save as current/new
+            if (_selectedPlan != null && _selectedPlan.Id != AppState.CurrentPlanId)
+            {
+                var confirm = await DialogService.ShowMessageBox(
+                    "Save Plan",
+                    $"Overwrite '{_selectedPlan.Name}' or save as '{currentPlan?.Name ?? "current plan"}'?",
+                    yesText: $"Overwrite '{_selectedPlan.Name}'",
+                    noText: $"Save '{currentPlan?.Name ?? "current"}'",
+                    cancelText: "Save As New");
+
+                if (confirm == true)
+                {
+                    // Overwrite the selected plan
+                    await SavePlanToIdAsync(_selectedPlan.Id, _selectedPlan.Name);
+                    return;
+                }
+                else if (confirm == false && currentPlan != null)
+                {
+                    // Save to current plan
+                    await SavePlanToIdAsync(currentPlan.Id, currentPlan.Name);
+                    return;
+                }
+                // else: fall through to Save As New
+            }
+            else if (currentPlan != null)
+            {
+                // Current plan is selected or no selection - just update it
+                await SavePlanToIdAsync(currentPlan.Id, currentPlan.Name);
+                return;
+            }
+
+            // No current plan or user chose "Save As New" - show save dialog
+            var dialog = await DialogService.ShowAsync<SavePlanDialog>("Save Plan");
+            var result = await dialog.Result;
+
+            if (result?.Data is string newName && !string.IsNullOrWhiteSpace(newName))
+            {
+                await SavePlanToIdAsync(Guid.NewGuid().ToString(), newName);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task SavePlanToIdAsync(string planId, string planName)
+    {
+        try
+        {
+            // Load existing plan to preserve any extra data
+            var existingPlan = await IndexedDb.LoadPlanAsync(planId);
+
+            var planData = new StoredPlan
+            {
+                Id = planId,
+                Name = planName,
+                DataCenter = AppState.SelectedDataCenter,
+                ModifiedAt = DateTime.UtcNow,
+                SavedAt = existingPlan?.SavedAt ?? DateTime.UtcNow,
+                ProjectItems = AppState.ProjectItems.Select(p => new StoredProjectItem
+                {
+                    Id = p.Id,
+                    Name = p.Name,
+                    IconId = p.IconId,
+                    Quantity = p.Quantity,
+                    MustBeHq = p.MustBeHq
+                }).ToList(),
+                PlanJson = AppState.CurrentPlan != null
+                    ? System.Text.Json.JsonSerializer.Serialize(AppState.CurrentPlan)
+                    : existingPlan?.PlanJson,
+                MarketPlansJson = existingPlan?.MarketPlansJson,
+                SavedRecommendationMode = existingPlan?.SavedRecommendationMode ?? RecommendationMode.MinimizeTotalCost
+            };
+
+            var success = await IndexedDb.SavePlanAsync(planData);
+            if (success)
+            {
+                var action = AppState.CurrentPlanId == planId ? "Updated" : "Saved";
+                Snackbar.Add($"{action} '{planName}'", Severity.Success);
+
+                // Update current plan tracking
+                AppState.CurrentPlanId = planId;
+                AppState.CurrentPlanName = planName;
+
+                await RefreshSavedPlansListAsync();
+
+                // Select the saved plan
+                _selectedPlan = _savedPlans.FirstOrDefault(p => p.Id == planId);
+            }
+            else
+            {
+                Snackbar.Add("Failed to save plan", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
+        }
     }
     
     private async Task OnRenamePlan()

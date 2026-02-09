@@ -5,6 +5,8 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 using Microsoft.Win32;
+using FFXIVCraftArchitect.Services;
+using FFXIVCraftArchitect.Services.Interfaces;
 
 namespace FFXIVCraftArchitect;
 
@@ -17,10 +19,12 @@ public partial class LogViewerWindow : Window
     private List<LogEntry> _allEntries = new();
     private int _currentSearchIndex = -1;
     private readonly List<TextRange> _searchMatches = new();
+    private readonly IDialogService _dialogs;
 
-    public LogViewerWindow()
+    public LogViewerWindow(DialogServiceFactory dialogFactory)
     {
         InitializeComponent();
+        _dialogs = dialogFactory.CreateForWindow(this);
         LoadLogs();
     }
 
@@ -196,23 +200,27 @@ public partial class LogViewerWindow : Window
         LoadLogs();
     }
 
-    private void OnClearClick(object sender, RoutedEventArgs e)
+    private async void OnClearClick(object sender, RoutedEventArgs e)
     {
-        if (MessageBox.Show("Clear the log file? This cannot be undone.", "Confirm", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
+        if (!await _dialogs.ConfirmAsync(
+            "Clear the log file? This cannot be undone.",
+            "Confirm"))
         {
-            try
-            {
-                File.WriteAllText(App.LogFilePath, string.Empty);
-                LoadLogs();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Failed to clear log: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+            return;
+        }
+
+        try
+        {
+            File.WriteAllText(App.LogFilePath, string.Empty);
+            LoadLogs();
+        }
+        catch (Exception ex)
+        {
+            await _dialogs.ShowErrorAsync($"Failed to clear log: {ex.Message}", ex);
         }
     }
 
-    private void OnExportClick(object sender, RoutedEventArgs e)
+    private async void OnExportClick(object sender, RoutedEventArgs e)
     {
         var dialog = new SaveFileDialog
         {
@@ -228,11 +236,11 @@ public partial class LogViewerWindow : Window
                 var filtered = _allEntries.Where(entry => ShouldShowEntry(entry));
                 var lines = filtered.Select(e => $"[{e.LineNumber:D6}] {e.RawText}");
                 File.WriteAllLines(dialog.FileName, lines);
-                MessageBox.Show("Logs exported successfully!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+                await _dialogs.ShowInfoAsync("Logs exported successfully!", "Success");
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to export: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                await _dialogs.ShowErrorAsync($"Failed to export: {ex.Message}", ex);
             }
         }
     }

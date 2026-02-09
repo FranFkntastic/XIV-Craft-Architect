@@ -68,15 +68,55 @@
             }
             
             <!-- Collapsed Cards Grid -->
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(450px, 1fr)); gap: 6px; align-items: start;">
-                @foreach (var plan in GetSortedPlans())
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+                @{ 
+                    var vendorPlans = GetVendorPlans().ToList();
+                    var singleWorldPlans = GetSingleWorldPlans().ToList();
+                    var splitWorldPlans = GetSplitWorldPlans().ToList();
+                }
+                
+                <!-- Vendor Items Section -->
+                @if (vendorPlans.Any())
                 {
-                    var isSelected = _expandedPlan?.ItemId == plan.ItemId;
-                    <div @onclick="() => SelectPlan(plan)" style="cursor: pointer;">
-                        <MarketAnalysisCard @key="plan.ItemId" 
-                                           Plan="plan" 
-                                           IsCollapsed="true"
-                                           IsSelected="isSelected" />
+                    <div style="display: flex; align-items: center; gap: 6px; padding: 3px 8px; background: #2a2520; border-radius: 3px; border: 1px solid #5a4a3a;">
+                        <MudIcon Icon="@Icons.Material.Filled.Store" Color="Color.Warning" Size="Size.Small" />
+                        <span style="color: #d4a73a; font-weight: 600; font-size: 11px;">VENDOR (@vendorPlans.Count)</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 4px; align-items: start;">
+                        @foreach (var plan in vendorPlans)
+                        {
+                            var isSelected = _expandedPlan?.ItemId == plan.ItemId;
+                            <div @onclick="() => SelectPlan(plan)" style="cursor: pointer;">
+                                <MarketAnalysisCard @key="plan.ItemId" 
+                                                   Plan="plan" 
+                                                   IsCollapsed="true"
+                                                   IsSelected="isSelected" />
+                            </div>
+                        }
+                    </div>
+                }
+                
+                <!-- Market Items (single-world and split-world combined) -->
+                @{ 
+                    var allMarketPlans = GetMarketPlans().ToList();
+                }
+                @if (allMarketPlans.Any())
+                {
+                    <div style="display: flex; align-items: center; gap: 6px; padding: 3px 8px; background: #20252a; border-radius: 3px; border: 1px solid #3a4a5a; margin-top: 4px;">
+                        <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Color="Color.Info" Size="Size.Small" />
+                        <span style="color: #87ceeb; font-weight: 600; font-size: 11px;">MARKET (@allMarketPlans.Count)</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 4px; align-items: start;">
+                        @foreach (var plan in allMarketPlans)
+                        {
+                            var isSelected = _expandedPlan?.ItemId == plan.ItemId;
+                            <div @onclick="() => SelectPlan(plan)" style="cursor: pointer;">
+                                <MarketAnalysisCard @key="plan.ItemId" 
+                                                   Plan="plan" 
+                                                   IsCollapsed="true"
+                                                   IsSelected="isSelected" />
+                            </div>
+                        }
                     </div>
                 }
             </div>
@@ -171,6 +211,43 @@
                                                     .ThenBy(p => p.Name),
             _ => plans
         };
+    }
+    
+    /// <summary>
+    /// Get plans where vendor is the recommended source.
+    /// </summary>
+    private IEnumerable<DetailedShoppingPlan> GetVendorPlans()
+    {
+        return GetSortedPlans().Where(p => p.RecommendedWorld?.WorldName == "Vendor");
+    }
+    
+    /// <summary>
+    /// Get plans where market board is the recommended source.
+    /// </summary>
+    private IEnumerable<DetailedShoppingPlan> GetMarketPlans()
+    {
+        return GetSortedPlans().Where(p => p.RecommendedWorld?.WorldName != "Vendor");
+    }
+    
+    /// <summary>
+    /// Get single-world market purchase plans (non-split).
+    /// </summary>
+    private IEnumerable<DetailedShoppingPlan> GetSingleWorldPlans()
+    {
+        return GetSortedPlans().Where(p => 
+            p.RecommendedWorld?.WorldName != "Vendor" && 
+            (!p.RequiresSplitPurchase || p.RecommendedSplit?.Any() != true));
+    }
+    
+    /// <summary>
+    /// Get split-world market purchase plans.
+    /// </summary>
+    private IEnumerable<DetailedShoppingPlan> GetSplitWorldPlans()
+    {
+        return GetSortedPlans().Where(p => 
+            p.RecommendedWorld?.WorldName != "Vendor" && 
+            p.RequiresSplitPurchase && 
+            p.RecommendedSplit?.Any() == true);
     }
 
     private decimal TotalDCAverage => ShoppingPlans?.Sum(p => p.DCAveragePrice * p.QuantityNeeded) ?? 0;

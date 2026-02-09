@@ -1,11 +1,8 @@
-using System.IO;
 using System.Text;
-using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Core.Models;
-using FFXIVCraftArchitect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
-namespace FFXIVCraftArchitect.Services;
+namespace FFXIVCraftArchitect.Core.Services;
 
 /// <summary>
 /// Service for importing/exporting crafting lists to/from Teamcraft.

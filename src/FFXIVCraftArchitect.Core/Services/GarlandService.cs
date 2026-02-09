@@ -1,8 +1,10 @@
+using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using FFXIVCraftArchitect.Core.Helpers;
 using FFXIVCraftArchitect.Core.Models;
+using FFXIVCraftArchitect.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Core.Services;
@@ -11,7 +13,7 @@ namespace FFXIVCraftArchitect.Core.Services;
 /// Service for interacting with the Garland Tools API.
 /// Ported from Python: GARLAND_SEARCH and GARLAND_ITEM constants
 /// </summary>
-public class GarlandService
+public class GarlandService : IGarlandService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<GarlandService>? _logger;
@@ -45,6 +47,10 @@ public class GarlandService
 
             var rawJson = await response.Content.ReadAsStringAsync(ct);
             _logger?.LogDebug("[GarlandService] Response size: {Length} chars", rawJson.Length);
+            
+            // Log first 1000 chars of JSON for debugging
+            var preview = rawJson.Length > 1000 ? rawJson[..1000] + "..." : rawJson;
+            _logger?.LogDebug("[GarlandService] JSON Preview:\n{Preview}", preview);
 
             // Try to parse with detailed error logging
             List<GarlandSearchResult>? results;
@@ -65,35 +71,56 @@ public class GarlandService
                 _logger?.LogError("[GarlandService] Message: {Message}", ex.Message);
                 
                 // Try to extract problematic section
-                if (ex.Path?.StartsWith("$[") == true)
+                if (ex.Path?.StartsWith("$") == true)
                 {
                     var match = Regex.Match(ex.Path, @"\[(\d+)\]");
                     if (match.Success && int.TryParse(match.Groups[1].Value, out var index))
                     {
                         _logger?.LogError("[GarlandService] Problematic array index: {Index}", index);
+                        
+                        // Extract surrounding context from JSON
+                        var lines = rawJson.Split('\n');
+                        var startLine = Math.Max(0, (ex.LineNumber ?? 1) - 5);
+                        var endLine = Math.Min(lines.Length, (ex.LineNumber ?? 1) + 5);
+                        _logger?.LogError("[GarlandService] JSON context (lines {Start}-{End}):", startLine, endLine);
+                        for (var i = startLine; i < endLine; i++)
+                        {
+                            _logger?.LogError("  {LineNum}: {Content}", i + 1, lines[i]);
+                        }
                     }
                 }
                 
-                throw;
+                throw; // Re-throw to let caller handle
             }
             
             // Filter to only items (not recipes, quests, etc.)
+            // Defensive: filter out null results and results with null Type or Object
             var filteredResults = results
                 ?.Where(r => r != null && r.Type == "item" && r.Object != null)
                 .ToList() ?? new List<GarlandSearchResult>();
-            
             _logger?.LogInformation("[GarlandService] Filtered to {Count} items (type='item')", filteredResults.Count);
+            
+            // Log first few results
+            for (var i = 0; i < Math.Min(3, filteredResults.Count); i++)
+            {
+                var r = filteredResults[i];
+                _logger?.LogDebug("[GarlandService] Result[{Index}]: ID={Id}, Name='{Name}', Icon={Icon}", 
+                    i, r.Id, r.Object?.Name ?? "null", r.Object?.IconId ?? 0);
+            }
+            
             _logger?.LogInformation("[GarlandService] ===== Search Complete =====");
             return filteredResults;
         }
         catch (HttpRequestException ex)
         {
             _logger?.LogError("[GarlandService] HTTP Request failed: {Message}", ex.Message);
+            _logger?.LogError("[GarlandService] Stack trace: {Stack}", ex.StackTrace);
             throw;
         }
         catch (Exception ex)
         {
             _logger?.LogError("[GarlandService] Unexpected error: {Message}", ex.Message);
+            _logger?.LogError("[GarlandService] Stack trace: {Stack}", ex.StackTrace);
             throw;
         }
     }

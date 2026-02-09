@@ -188,7 +188,14 @@ public class GarlandItem
         var result = new List<GarlandVendor>();
         foreach (var v in rawVendors)
         {
-            // Skip integer IDs - we only want full vendor objects
+            // Handle already-parsed GarlandVendor objects (e.g., from in-memory cache or deserialization)
+            if (v is GarlandVendor garlandVendor)
+            {
+                result.Add(garlandVendor);
+                continue;
+            }
+            
+            // Handle JsonElement (from fresh JSON deserialization)
             if (v is JsonElement element)
             {
                 if (element.ValueKind == JsonValueKind.Object)
@@ -204,10 +211,41 @@ public class GarlandItem
                     }
                 }
                 // Integer vendor IDs are ignored - we can't use them without additional lookups
+                continue;
+            }
+            
+            // Handle JsonDocument (alternative JSON representation)
+            if (v is JsonDocument doc)
+            {
+                try
+                {
+                    var vendor = JsonSerializer.Deserialize<GarlandVendor>(doc.RootElement.GetRawText());
+                    if (vendor != null) result.Add(vendor);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[GarlandItem] Failed to parse JsonDocument vendor for item {itemId}. Skipping. Error: {ex.Message}");
+                }
+                continue;
             }
         }
         return result;
     }
+    
+    /// <summary>
+    /// Whether this item has any vendor references (including integer IDs).
+    /// Use this to check if item can be bought from a vendor, since some vendors
+    /// are listed as IDs only (e.g., Ixali Vendor for Walnut Lumber).
+    /// </summary>
+    [JsonIgnore]
+    public bool HasVendorReferences => VendorsRaw?.Any() == true;
+    
+    /// <summary>
+    /// Vendor price in gil (root-level price field).
+    /// This is set when the item can be purchased from vendors listed as IDs only.
+    /// </summary>
+    [JsonPropertyName("price")]
+    public int Price { get; set; }
     
     /// <summary>
     /// Whether this item can be traded on the market board (1 = true, 0 = false in JSON)
@@ -230,8 +268,12 @@ public class GarlandItem
 
 public class GarlandCraft
 {
+    /// <summary>
+    /// Recipe ID. Can be integer or string (e.g., "companyCraft_123" for workshop recipes).
+    /// </summary>
     [JsonPropertyName("id")]
-    public int Id { get; set; }
+    [JsonConverter(typeof(FlexibleStringConverter))]
+    public string? Id { get; set; }
     
     [JsonPropertyName("job")]
     public int JobId { get; set; }
@@ -341,4 +383,43 @@ public class GarlandVendor
     /// </summary>
     [JsonPropertyName("currency")]
     public string Currency { get; set; } = "gil";
+}
+
+/// <summary>
+/// JSON converter that handles both int and string values, returning them as strings.
+/// Handles Garland API where recipe IDs can be integers (regular crafts) or strings (company crafts).
+/// </summary>
+public class FlexibleStringConverter : JsonConverter<string>
+{
+    public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            return reader.GetString();
+        }
+        else if (reader.TokenType == JsonTokenType.Number)
+        {
+            // Handle integers
+            if (reader.TryGetInt32(out int intValue))
+            {
+                return intValue.ToString();
+            }
+            // Handle longs
+            if (reader.TryGetInt64(out long longValue))
+            {
+                return longValue.ToString();
+            }
+            // Handle doubles
+            if (reader.TryGetDouble(out double doubleValue))
+            {
+                return doubleValue.ToString();
+            }
+        }
+        return null;
+    }
+
+    public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(value);
+    }
 }

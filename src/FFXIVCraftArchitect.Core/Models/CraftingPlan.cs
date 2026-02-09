@@ -119,20 +119,27 @@ public class CraftingPlan
     {
         var aggregates = new Dictionary<int, MaterialAggregate>();
         
+        System.Diagnostics.Debug.WriteLine($"[AggregateMaterials] START - RootItems.Count={RootItems.Count}");
+        
         foreach (var root in RootItems)
         {
-            AggregateNode(root, aggregates);
+            System.Diagnostics.Debug.WriteLine($"[AggregateMaterials] Processing root: {root.Name} (ID:{root.ItemId}) Source={root.Source}, Children.Count={root.Children.Count}");
+            AggregateNode(root, aggregates, depth: 0);
         }
         
+        System.Diagnostics.Debug.WriteLine($"[AggregateMaterials] END - Aggregated {aggregates.Count} materials: [{string.Join(", ", aggregates.Values.Select(m => m.Name))}]");
         return aggregates.Values.OrderBy(m => m.Name).ToList();
     }
     
-    private void AggregateNode(PlanNode node, Dictionary<int, MaterialAggregate> aggregates)
+    private void AggregateNode(PlanNode node, Dictionary<int, MaterialAggregate> aggregates, int depth)
     {
+        var indent = new string(' ', depth * 2);
+        System.Diagnostics.Debug.WriteLine($"[AggregateNode] {indent}{node.Name} (ID:{node.ItemId}) Source={node.Source}, Children={node.Children.Count}");
+        
         // If buying from market (NQ or HQ), this item goes to shopping list (not its children)
         if (node.Source == AcquisitionSource.MarketBuyNq || node.Source == AcquisitionSource.MarketBuyHq)
         {
-            // Use MustBeHq property for HQ requirement (persisted with plan)
+            System.Diagnostics.Debug.WriteLine($"[AggregateNode] {indent}  -> ADDED (market buy)");
             AddToAggregation(node, aggregates, isCrafted: false, requiresHq: node.MustBeHq);
             // Don't recurse into children - we're buying the finished item
             return;
@@ -141,6 +148,7 @@ public class CraftingPlan
         // If buying from vendor, add to aggregation
         if (node.Source == AcquisitionSource.VendorBuy)
         {
+            System.Diagnostics.Debug.WriteLine($"[AggregateNode] {indent}  -> ADDED (vendor buy)");
             AddToAggregation(node, aggregates, isCrafted: false, requiresHq: node.MustBeHq);
             return;
         }
@@ -148,13 +156,18 @@ public class CraftingPlan
         // If leaf node (can't be crafted), add to aggregation
         if (!node.Children.Any())
         {
+            System.Diagnostics.Debug.WriteLine($"[AggregateNode] {indent}  -> ADDED (leaf node)");
             AddToAggregation(node, aggregates, isCrafted: false, requiresHq: node.MustBeHq);
+        }
+        else
+        {
+            System.Diagnostics.Debug.WriteLine($"[AggregateNode] {indent}  -> Recursing into {node.Children.Count} children...");
         }
         
         // Recurse into children (sub-materials needed for crafting)
         foreach (var child in node.Children)
         {
-            AggregateNode(child, aggregates);
+            AggregateNode(child, aggregates, depth + 1);
         }
     }
     
@@ -284,6 +297,11 @@ public class PlanNode
     public decimal HqMarketPrice { get; set; }
     
     /// <summary>
+    /// Vendor price per unit (if available, fetched from Garland)
+    /// </summary>
+    public decimal VendorPrice { get; set; }
+    
+    /// <summary>
     /// Whether this item can be HQ (crafted items and gathered materials can, crystals/clusters/aethersands cannot)
     /// </summary>
     public bool CanBeHq { get; set; }
@@ -333,6 +351,16 @@ public class PlanNode
     public bool IsCircularReference { get; set; }
     
     /// <summary>
+    /// If true, this item can be bought from a vendor (cheaper than market).
+    /// </summary>
+    public bool CanBuyFromVendor { get; set; }
+    
+    /// <summary>
+    /// If true, this item has a craft recipe and can be crafted.
+    /// </summary>
+    public bool CanCraft { get; set; }
+    
+    /// <summary>
     /// Deep clone this node and all children
     /// </summary>
     public PlanNode Clone()
@@ -357,7 +385,9 @@ public class PlanNode
             PriceSourceDetails = PriceSourceDetails,
             NodeId = NodeId,
             ParentNodeId = ParentNodeId,
-            Notes = Notes
+            Notes = Notes,
+            CanBuyFromVendor = CanBuyFromVendor,
+            CanCraft = CanCraft
         };
         
         foreach (var child in Children)
@@ -474,6 +504,15 @@ public class SerializablePlanNode
     
     /// <summary>HQ market price per unit.</summary>
     public decimal HqMarketPrice { get; set; }
+    
+    /// <summary>Vendor price per unit (if available).</summary>
+    public decimal VendorPrice { get; set; }
+    
+    /// <summary>If true, this item can be bought from a vendor.</summary>
+    public bool CanBuyFromVendor { get; set; }
+    
+    /// <summary>If true, this item has a craft recipe and can be crafted.</summary>
+    public bool CanCraft { get; set; }
     
     public string NodeId { get; set; } = string.Empty;
     public string? ParentNodeId { get; set; }
