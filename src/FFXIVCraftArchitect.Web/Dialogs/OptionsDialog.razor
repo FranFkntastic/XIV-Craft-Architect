@@ -65,7 +65,18 @@
                     }
                 </MudSelect>
                 
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2">
+                <MudDivider Class="my-4" />
+                
+                <!-- Auto-fetch prices on rebuild -->
+                <MudSwitch @bind-Value="_autoFetchPricesOnRebuild" 
+                           Label="Auto-fetch prices on plan import/rebuild" 
+                           Color="Color.Primary"
+                           Class="my-2" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Automatically fetch market prices after importing or rebuilding a plan. Vendor prices are always fetched.
+                </MudText>
+                
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-4">
                     These settings determine which market board prices are shown by default.
                 </MudText>
             </MudTabPanel>
@@ -124,6 +135,7 @@
     private bool _autoSaveEnabled = true;
     private string _defaultDataCenter = "Aether";
     private string _selectedRegion = "North America";
+    private bool _autoFetchPricesOnRebuild = true;
     private bool _isClearing = false;
     
     // Region to Data Centers mapping
@@ -135,11 +147,12 @@
         ["Oceania"] = new() { "Materia" }
     };
     
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         _autoSaveEnabled = AppState.IsAutoSaveEnabled;
         _defaultDataCenter = AppState.SelectedDataCenter;
         _selectedRegion = AppState.SelectedRegion ?? GetRegionForDataCenter(_defaultDataCenter);
+        _autoFetchPricesOnRebuild = await IndexedDb.LoadSettingAsync<bool>("autoFetchPricesOnRebuild", true);
     }
     
     private List<string> GetAvailableDataCenters()
@@ -187,11 +200,13 @@
         AppState.IsAutoSaveEnabled = _autoSaveEnabled;
         AppState.SelectedDataCenter = _defaultDataCenter;
         AppState.SelectedRegion = _selectedRegion;
+        AppState.AutoFetchPricesOnRebuild = _autoFetchPricesOnRebuild;
         
         // Persist settings
         _ = IndexedDb.SaveSettingAsync("autoSave", _autoSaveEnabled);
         _ = IndexedDb.SaveSettingAsync("defaultDataCenter", _defaultDataCenter);
         _ = IndexedDb.SaveSettingAsync("selectedRegion", _selectedRegion);
+        _ = IndexedDb.SaveSettingAsync("autoFetchPricesOnRebuild", _autoFetchPricesOnRebuild);
         
         Snackbar.Add("Settings saved", Severity.Success);
         MudDialog.Close(DialogResult.Ok(true));

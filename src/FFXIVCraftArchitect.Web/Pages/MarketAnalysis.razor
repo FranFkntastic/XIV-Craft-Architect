@@ -86,35 +86,9 @@
                     @if (_enableSplitWorld)
                     {
                         <div style="margin-left: 32px; margin-top: 8px;">
-                            <!-- Cost vs Travel Weight -->
-                            <div style="margin-bottom: 12px;">
-                                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                                    <span style="color: #888; font-size: 11px;">Cost vs Travel</span>
-                                    <span style="color: #aaa; font-size: 11px;">@(_costVsTravelWeight)%</span>
-                                </div>
-                                <MudSlider T="int" @bind-Value="_costVsTravelWeight" Min="0" Max="100" Color="Color.Secondary" Size="Size.Small" />
-                                <div style="display: flex; justify-content: space-between; margin-top: 2px;">
-                                    <span style="color: #666; font-size: 10px;">Less Travel</span>
-                                    <span style="color: #666; font-size: 10px;">Best Price</span>
-                                </div>
-                            </div>
-                            
-                            <!-- Min Savings Percent -->
-                            <div style="margin-bottom: 12px;">
-                                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                                    <span style="color: #888; font-size: 11px;">Min Savings for Split</span>
-                                    <span style="color: #aaa; font-size: 11px;">@(_minSplitSavings)%</span>
-                                </div>
-                                <MudSlider T="decimal" @bind-Value="_minSplitSavings" Min="0" Max="50" Step="5m" Color="Color.Secondary" Size="Size.Small" />
-                            </div>
-                            
-                            <MudCheckBox T="bool"
-                                         @bind-Value="_preferConsolidated"
-                                         Dense="true"
-                                         Color="Color.Secondary"
-                                         Style="margin-top: 8px;">
-                                <MudText Typo="Typo.caption" Style="color: #aaa;">Prefer worlds already in route</MudText>
-                            </MudCheckBox>
+                            <MudText Typo="Typo.caption" Style="color: #666;">
+                                Multi-world purchases enabled. The algorithm will automatically find the best combination of worlds.
+                            </MudText>
                         </div>
                     }
                 </div>
@@ -135,6 +109,24 @@
                 else
                 {
                     <span>Run Analysis</span>
+                }
+            </MudButton>
+            
+            <MudButton OnClick="RefreshPricesAsync"
+                       Disabled="!CanRefreshPrices() || _isRefreshingPrices"
+                       Color="Color.Secondary"
+                       Variant="Variant.Outlined"
+                       FullWidth="true"
+                       Class="mb-4"
+                       StartIcon="@(_isRefreshingPrices ? "" : Icons.Material.Filled.Refresh)">
+                @if (_isRefreshingPrices)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                    <span>Refreshing...</span>
+                }
+                else
+                {
+                    <span>Refresh Prices</span>
                 }
             </MudButton>
             
@@ -249,15 +241,13 @@
 
 @code {
     private bool _isAnalyzing = false;
+    private bool _isRefreshingPrices = false;
     private MarketSortOption _selectedSort = MarketSortOption.ByRecommended;
     private bool _searchEntireRegion = false;
     
     // Split-world configuration
     private bool _enableSplitWorld = true;
-    private int _costVsTravelWeight = 50;
-    private decimal _minSplitSavings = 10m;
-    private bool _preferConsolidated = true;
-    private int _maxWorldsPerItem = 0; // 0 = use soft limit based on tier 1
+    private int _maxWorldsPerItem = 0; // 0 = unlimited
 
     protected override void OnInitialized()
     {
@@ -310,6 +300,76 @@
     {
         return GetBuyItems().Any() && !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
     }
+    
+    private bool CanRefreshPrices()
+    {
+        return AppState.CurrentPlan != null && !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
+    }
+    
+    private async Task RefreshPricesAsync()
+    {
+        if (AppState.CurrentPlan == null) return;
+        
+        _isRefreshingPrices = true;
+        AppState.BeginOperation("Refreshing Prices", "Fetching latest market data...");
+        
+        try
+        {
+            // Step 1: Fetch vendor prices
+            await RecipeCalculationService.FetchVendorPricesAsync(AppState.CurrentPlan);
+            Snackbar.Add("Vendor prices updated", Severity.Success);
+            
+            // Step 2: Fetch market prices
+            var itemIds = AppState.CurrentPlan.GetAllItemIds().ToList();
+            if (itemIds.Any())
+            {
+                AppState.SetStatus("Fetching market prices...", busy: true);
+                var responses = await UniversalisService.GetMarketDataBulkAsync(
+                    AppState.SelectedDataCenter, 
+                    itemIds);
+                
+                // Update node prices
+                UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, responses);
+                Snackbar.Add("Market prices updated", Severity.Success);
+            }
+            
+            AppState.NotifyPlanChanged();
+            AppState.EndOperation("Prices refreshed successfully!");
+        }
+        catch (Exception ex)
+        {
+            AppState.SetStatus($"Price refresh failed: {ex.Message}");
+            Snackbar.Add($"Failed to refresh prices: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isRefreshingPrices = false;
+        }
+    }
+    
+    private void UpdateNodeMarketPrices(List<PlanNode> nodes, Dictionary<int, UniversalisResponse> responses)
+    {
+        foreach (var node in nodes)
+        {
+            if (responses.TryGetValue(node.ItemId, out var response))
+            {
+                node.MarketPrice = (decimal)response.AveragePrice;
+                
+                // Calculate HQ price if available
+                var hqListings = response.Listings.Where(l => l.IsHq).ToList();
+                if (hqListings.Any())
+                {
+                    node.HqMarketPrice = (decimal)hqListings.Average(l => l.PricePerUnit);
+                }
+            }
+            
+            // Recursively update children
+            if (node.Children?.Any() == true)
+            {
+                UpdateNodeMarketPrices(node.Children, responses);
+            }
+        }
+    }
 
     private async Task RunMarketAnalysisAsync()
     {
@@ -348,9 +408,7 @@
                 // Use split-aware calculation for single DC
                 var config = new MarketAnalysisConfig
                 {
-                    CostVsTravelWeight = _costVsTravelWeight,
-                    MinSplitSavingsPercent = _minSplitSavings,
-                    PreferConsolidatedWorlds = _preferConsolidated,
+                    EnableSplitWorld = _enableSplitWorld,
                     MaxWorldsPerItem = _maxWorldsPerItem > 0 ? _maxWorldsPerItem : null
                 };
                 

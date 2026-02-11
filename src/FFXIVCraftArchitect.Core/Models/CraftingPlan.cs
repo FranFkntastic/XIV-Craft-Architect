@@ -113,6 +113,28 @@ public class CraftingPlan
     }
     
     /// <summary>
+    /// Get all unique item IDs in the plan (including all children)
+    /// </summary>
+    public List<int> GetAllItemIds()
+    {
+        var ids = new HashSet<int>();
+        foreach (var root in RootItems)
+        {
+            CollectItemIdsRecursive(root, ids);
+        }
+        return ids.ToList();
+    }
+    
+    private void CollectItemIdsRecursive(PlanNode node, HashSet<int> ids)
+    {
+        ids.Add(node.ItemId);
+        foreach (var child in node.Children)
+        {
+            CollectItemIdsRecursive(child, ids);
+        }
+    }
+    
+    /// <summary>
     /// Aggregate all materials needed across the entire plan
     /// </summary>
     private List<MaterialAggregate> AggregateMaterials()

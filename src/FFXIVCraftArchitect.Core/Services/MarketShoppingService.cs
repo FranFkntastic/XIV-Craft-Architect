@@ -41,14 +41,19 @@ public class MarketShoppingService
     /// Calculate detailed shopping plans for market board items.
     /// Reads from cache only - callers must call IMarketCacheService.EnsurePopulatedAsync first.
     /// </summary>
+    /// <param name="blacklistedWorlds">Worlds to exclude from recommendations. Home worlds bypass this filter.</param>
     public async Task<List<DetailedShoppingPlan>> CalculateDetailedShoppingPlansAsync(
         List<MaterialAggregate> marketItems,
         string dataCenter,
         IProgress<string>? progress = null,
         CancellationToken ct = default,
-        RecommendationMode mode = RecommendationMode.MinimizeTotalCost)
+        RecommendationMode mode = RecommendationMode.MinimizeTotalCost,
+        MarketAnalysisConfig? config = null,
+        HashSet<string>? blacklistedWorlds = null)
     {
+        config ??= new MarketAnalysisConfig();  // Use defaults
         var plans = new List<DetailedShoppingPlan>();
+        blacklistedWorlds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         
         // Read all items from cache (callers must ensure cache is populated)
         foreach (var item in marketItems)
@@ -77,7 +82,9 @@ public class MarketShoppingService
                     item.ItemId,
                     item.TotalQuantity,
                     marketData,
-                    mode);
+                    mode,
+                    config,
+                    blacklistedWorlds);
                 
                 plans.Add(plan);
             }
@@ -99,20 +106,24 @@ public class MarketShoppingService
 
     /// <summary>
     /// Calculate shopping plans with multi-world split recommendations.
-    /// Two-pass algorithm: First pass builds tier 1 recommendations, second pass optimizes splits.
+    /// Single-pass algorithm: ValueScore is the single source of truth for all decisions.
     /// </summary>
+    /// <param name="blacklistedWorlds">Worlds to exclude from recommendations. Home worlds bypass this filter.</param>
     public async Task<List<DetailedShoppingPlan>> CalculateShoppingPlansWithSplitsAsync(
         List<MaterialAggregate> marketItems,
         string dataCenter,
         IProgress<string>? progress = null,
         CancellationToken ct = default,
-        MarketAnalysisConfig? config = null)
+        MarketAnalysisConfig? config = null,
+        HashSet<string>? blacklistedWorlds = null)
     {
         config ??= new MarketAnalysisConfig();
+        blacklistedWorlds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         
         // Pass 1: Calculate basic plans for all items
         progress?.Report("Calculating base recommendations...");
-        var plans = await CalculateDetailedShoppingPlansAsync(marketItems, dataCenter, progress, ct);
+        var plans = await CalculateDetailedShoppingPlansAsync(marketItems, dataCenter, progress, ct, 
+            RecommendationMode.MinimizeTotalCost, config, blacklistedWorlds);
         
         // Build world route map from tier 1 recommendations
         var worldsInRoute = new HashSet<string>();
@@ -125,21 +136,24 @@ public class MarketShoppingService
             worldsInRoute.Count, string.Join(", ", worldsInRoute));
         
         // Pass 2: Calculate splits for items that need them
-        progress?.Report("Optimizing multi-world purchases...");
-        var itemsNeedingSplit = plans.Where(p => 
-            p.RecommendedWorld == null || 
-            p.RecommendedWorld.TotalQuantityPurchased < p.QuantityNeeded).ToList();
-        
-        foreach (var plan in itemsNeedingSplit)
+        if (config.EnableSplitWorld)
         {
-            CalculateSplitPurchase(plan, config, worldsInRoute);
+            progress?.Report("Optimizing multi-world purchases...");
+            var itemsNeedingSplit = plans.Where(p => 
+                p.RecommendedWorld == null || 
+                p.RecommendedWorld.TotalQuantityPurchased < p.QuantityNeeded).ToList();
             
-            // Add split worlds to route for subsequent items
-            if (plan.RecommendedSplit != null)
+            foreach (var plan in itemsNeedingSplit)
             {
-                foreach (var split in plan.RecommendedSplit)
+                CalculateSplitPurchase(plan, config);
+                
+                // Add split worlds to route for subsequent items
+                if (plan.RecommendedSplit != null)
                 {
-                    worldsInRoute.Add(split.WorldName);
+                    foreach (var split in plan.RecommendedSplit)
+                    {
+                        worldsInRoute.Add(split.WorldName);
+                    }
                 }
             }
         }
@@ -181,8 +195,12 @@ public class MarketShoppingService
         int itemId,
         int quantityNeeded,
         UniversalisResponse marketData,
-        RecommendationMode mode = RecommendationMode.MinimizeTotalCost)
+        RecommendationMode mode = RecommendationMode.MinimizeTotalCost,
+        MarketAnalysisConfig? config = null,
+        HashSet<string>? blacklistedWorlds = null)
     {
+        blacklistedWorlds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        
         var plan = new DetailedShoppingPlan
         {
             ItemId = itemId,
@@ -212,7 +230,7 @@ public class MarketShoppingService
         // Calculate per-world summaries
         foreach (var (worldName, listings) in listingsByWorld)
         {
-            var worldSummary = CalculateWorldSummary(worldName, listings, quantityNeeded, plan.DCAveragePrice, homeWorld);
+            var worldSummary = CalculateWorldSummary(worldName, listings, quantityNeeded, plan.DCAveragePrice, homeWorld, config);
             if (worldSummary != null)
             {
                 // Skip congested worlds (except home world) if setting is enabled
@@ -222,74 +240,91 @@ public class MarketShoppingService
                     continue;
                 }
                 
+                // Skip blacklisted worlds (except home world)
+                if (blacklistedWorlds.Contains(worldName) && !worldSummary.IsHomeWorld)
+                {
+                    _logger?.LogDebug("[MarketShopping] Excluding {World} - user blacklisted", worldName);
+                    worldSummary.IsBlacklisted = true;
+                    continue;
+                }
+                
                 plan.WorldOptions.Add(worldSummary);
             }
         }
 
-        // Filter out "all around worse" worlds
-        plan.WorldOptions = FilterWorldOptions(plan.WorldOptions, mode, plan.DCAveragePrice);
-
-        // Sort based on recommendation mode
-        plan.WorldOptions = mode switch
+        // Calculate ValueScore for each world (single-world mode)
+        foreach (var world in plan.WorldOptions)
         {
-            RecommendationMode.BestUnitPrice => plan.WorldOptions
-                .OrderByDescending(w => w.IsHomeWorld)
-                .ThenBy(w => w.IsCongested && !w.IsHomeWorld)
-                .ThenBy(w => w.ValueScore)
-                .ThenBy(w => w.WorldName)
-                .ToList(),
-            RecommendationMode.MaximizeValue => plan.WorldOptions
-                .OrderByDescending(w => w.IsHomeWorld)
-                .ThenBy(w => w.IsCongested && !w.IsHomeWorld)
-                .ThenBy(w => w.ValueScore)
-                .ThenBy(w => w.TotalCost)
-                .ToList(),
-            _ => plan.WorldOptions
-                .OrderByDescending(w => w.IsHomeWorld)
-                .ThenBy(w => w.IsCongested && !w.IsHomeWorld)
-                .ThenBy(w => w.TotalCost)
-                .ThenBy(w => w.WorldName)
-                .ToList()
-        };
+            world.ValueScore = CalculateValueScore(world, quantityNeeded, splitEnabled: false);
+        }
 
-        // Set recommended option
-        plan.RecommendedWorld = plan.WorldOptions.FirstOrDefault();
+        // Simple sort by ValueScore (lower is better)
+        plan.WorldOptions = plan.WorldOptions
+            .OrderBy(w => w.ValueScore)
+            .ThenBy(w => w.WorldName)
+            .ToList();
+
+        // Set recommended option to first viable world (ValueScore < MaxValue)
+        var bestWorld = plan.WorldOptions.FirstOrDefault(w => w.ValueScore < decimal.MaxValue);
+        if (bestWorld != null)
+        {
+            plan.RecommendedWorld = bestWorld;
+        }
 
         return plan;
     }
 
-    private List<WorldShoppingSummary> FilterWorldOptions(
-        List<WorldShoppingSummary> options, 
-        RecommendationMode mode,
-        decimal dcAveragePrice)
+    /// <summary>
+    /// Calculate the mode price - the price with the highest available quantity.
+    /// This is the "most common" price point weighted by stock availability.
+    /// </summary>
+    private long CalculateModePrice(List<MarketListing> listings)
     {
-        if (options.Count <= 3)
-            return options;
+        if (listings.Count == 0) return 0;
         
-        var bestValueScore = options.Min(w => w.ValueScore);
-        
-        var filtered = options.Where(w => 
+        return listings
+            .GroupBy(l => l.PricePerUnit)
+            .Select(g => new { Price = g.Key, Quantity = g.Sum(l => l.Quantity) })
+            .OrderByDescending(x => x.Quantity)
+            .ThenBy(x => x.Price)
+            .FirstOrDefault()?.Price ?? 0;
+    }
+
+    /// <summary>
+    /// Calculate ValueScore - the single metric for world ranking.
+    /// 
+    /// Split mode: ValueScore = ModePrice / StockRatio
+    /// - Worlds with more stock relative to need get better scores
+    /// - Worlds with lower mode prices get better scores
+    /// 
+    /// Single-world mode: ValueScore = TotalCost
+    /// - Returns MaxValue (infinity) if world can't fulfill full quantity
+    /// - Lower total cost is better
+    /// </summary>
+    private decimal CalculateValueScore(
+        WorldShoppingSummary world, 
+        int quantityNeeded, 
+        bool splitEnabled)
+    {
+        if (splitEnabled)
         {
-            if (w.ValueScore <= bestValueScore * 1.2m)
-                return true;
+            // Split mode: ValueScore = ModePrice / StockRatio
+            var stockRatio = Math.Min((decimal)world.TotalQuantityPurchased / quantityNeeded, 1.0m);
+            if (stockRatio <= 0) return decimal.MaxValue;
             
-            var minTotalCost = options.Min(o => o.TotalCost);
-            if (w.TotalCost <= minTotalCost * 1.5m)
-                return true;
+            var modePrice = world.ModePricePerUnit;
+            if (modePrice <= 0) return decimal.MaxValue;
             
-            if (w.IsFullyUnderAverage)
-                return true;
-            
-            return false;
-        }).ToList();
-        
-        if (filtered.Count < 3 && options.Count >= 3)
-        {
-            var remaining = options.Except(filtered);
-            filtered.AddRange(remaining.Take(3 - filtered.Count));
+            return modePrice / stockRatio;
         }
-        
-        return filtered;
+        else
+        {
+            // Single-world mode: ValueScore = TotalCost, Infinity if can't fulfill
+            if (world.TotalQuantityPurchased < quantityNeeded)
+                return decimal.MaxValue;
+            
+            return world.TotalCost;
+        }
     }
 
     private WorldShoppingSummary? CalculateWorldSummary(
@@ -297,7 +332,8 @@ public class MarketShoppingService
         List<MarketListing> listings,
         int quantityNeeded,
         decimal dcAveragePrice,
-        string? homeWorld = null)
+        string? homeWorld = null,
+        MarketAnalysisConfig? config = null)
     {
         // Get world status (if available)
         var worldStatus = _worldStatusService?.GetWorldStatus(worldName);
@@ -309,6 +345,7 @@ public class MarketShoppingService
         {
             WorldName = worldName,
             Listings = new List<ShoppingListingEntry>(),
+            ExcludedListings = new List<ShoppingListingEntry>(),
             IsHomeWorld = isHomeWorld,
             Classification = worldStatus?.Classification ?? WorldClassification.Standard
         };
@@ -326,30 +363,40 @@ public class MarketShoppingService
             };
         }
 
+        // Calculate mode price for fraud detection threshold
+        summary.ModePricePerUnit = CalculateModePrice(listings);
+        var maxPriceThreshold = config?.MaxPriceMultiplier != null && summary.ModePricePerUnit > 0
+            ? (long)(summary.ModePricePerUnit * config.MaxPriceMultiplier.Value)
+            : long.MaxValue;
+        
         var remaining = quantityNeeded;
         long totalCost = 0;
         int listingsUsed = 0;
 
-        // For very large orders (10k+), lower the minimum stack threshold
-        // to ensure we can aggregate enough listings
-        var minStackThreshold = quantityNeeded > 10000 ? 1 : (int)(quantityNeeded * 0.20);
-        
+        // Include listings - skip fraud/gouging listings based on price threshold
+        // This prevents "desperation recommendations" with extremely overpriced listings
         foreach (var listing in listings)
         {
+            // Check if listing exceeds fraud threshold (soft filter - skip but continue scanning)
+            if (listing.PricePerUnit > maxPriceThreshold)
+            {
+                summary.ExcludedListings.Add(new ShoppingListingEntry
+                {
+                    Quantity = listing.Quantity,
+                    PricePerUnit = listing.PricePerUnit,
+                    RetainerName = listing.RetainerName,
+                    IsUnderAverage = listing.PricePerUnit <= dcAveragePrice,
+                    IsHq = listing.IsHq,
+                    IsAdditionalOption = true  // Mark as excluded/not primary
+                });
+                continue;  // Skip this listing but keep scanning
+            }
+            
             if (remaining <= 0)
                 break;
 
             var isUnderAverage = listing.PricePerUnit <= dcAveragePrice;
-            // For large orders, include any reasonably priced listing
-            // For small orders, require meaningful stack size
-            var meetsMinimumQty = quantityNeeded > 10000 
-                ? listing.Quantity >= 1  // Include any for large orders
-                : listing.Quantity >= minStackThreshold;
-            var shouldInclude = meetsMinimumQty || isUnderAverage;
-
-            if (!shouldInclude)
-                continue;
-
+            
             var fullStackCost = listing.Quantity * listing.PricePerUnit;
             totalCost += fullStackCost;
             remaining -= listing.Quantity;
@@ -387,13 +434,12 @@ public class MarketShoppingService
             });
         }
 
-        // For large orders, don't return null if we can't fulfill full quantity
-        // Let the split calculation handle combining worlds
-        if (remaining > 0 && quantityNeeded <= 10000)
+        // Never return null - always return what we can purchase from this world
+        // The split calculation will handle combining multiple worlds if needed
+        if (remaining > 0 && listingsUsed == 0)
         {
-            _logger?.LogDebug("[CalculateWorldSummary] {World} - Insufficient stock for {Quantity} (remaining: {Remaining}), returning null", 
-                worldName, quantityNeeded, remaining);
-            return null;
+            _logger?.LogDebug("[CalculateWorldSummary] {World} - No usable listings for {Quantity}", 
+                worldName, quantityNeeded);
         }
 
         summary.TotalCost = totalCost;
@@ -401,6 +447,7 @@ public class MarketShoppingService
         summary.AveragePricePerUnit = summary.TotalQuantityPurchased > 0 
             ? (decimal)totalCost / summary.TotalQuantityPurchased 
             : 0;
+        summary.ModePricePerUnit = CalculateModePrice(listings);
         summary.ListingsUsed = listingsUsed;
         summary.IsFullyUnderAverage = summary.Listings.Where(l => !l.IsAdditionalOption).All(l => l.IsUnderAverage);
         summary.ExcessQuantity = summary.TotalQuantityPurchased - quantityNeeded;
@@ -424,8 +471,10 @@ public class MarketShoppingService
         List<MaterialAggregate> marketItems,
         IProgress<string>? progress = null,
         CancellationToken ct = default,
-        RecommendationMode mode = RecommendationMode.MinimizeTotalCost)
+        RecommendationMode mode = RecommendationMode.MinimizeTotalCost,
+        MarketAnalysisConfig? config = null)
     {
+        config ??= new MarketAnalysisConfig();  // Use defaults
         var plans = new List<DetailedShoppingPlan>();
 
         foreach (var item in marketItems)
@@ -506,7 +555,8 @@ public class MarketShoppingService
                     item.ItemId,
                     item.TotalQuantity,
                     combinedData,
-                    mode);
+                    mode,
+                    config);
                 
                 plans.Add(plan);
             }
@@ -613,160 +663,76 @@ public class MarketShoppingService
 
     /// <summary>
     /// Calculates a multi-world split purchase plan for items that can't be fulfilled on a single world.
-    /// Uses a two-pass algorithm: first pass identifies tier 1 worlds, second pass optimizes splits.
+    /// Uses ValueScore as the single metric for world selection.
     /// </summary>
     public void CalculateSplitPurchase(
         DetailedShoppingPlan plan, 
-        MarketAnalysisConfig config,
-        HashSet<string>? worldsInRoute = null)
+        MarketAnalysisConfig config)
     {
-        worldsInRoute ??= new HashSet<string>();
-        
-        // Check if we already have a viable single-world option
-        if (plan.RecommendedWorld != null && plan.RecommendedWorld.TotalQuantityPurchased >= plan.QuantityNeeded)
+        // Calculate ValueScores in split mode
+        foreach (var world in plan.WorldOptions)
         {
-            _logger?.LogDebug("[CalculateSplitPurchase] {Item} - Single world option sufficient on {World}", 
-                plan.Name, plan.RecommendedWorld.WorldName);
-            return;
+            world.ValueScore = CalculateValueScore(world, plan.QuantityNeeded, splitEnabled: true);
         }
         
-        _logger?.LogInformation("[CalculateSplitPurchase] {Item} - Calculating multi-world split for {Quantity} units", 
-            plan.Name, plan.QuantityNeeded);
-        
-        // Pass 1: Get all worlds with any stock, sorted by price
+        // Get viable worlds sorted by ValueScore
         var viableWorlds = plan.WorldOptions
-            .Where(w => w.TotalQuantityPurchased > 0)
-            .OrderBy(w => w.AveragePricePerUnit)
+            .Where(w => w.ValueScore < decimal.MaxValue && w.TotalQuantityPurchased > 0)
+            .OrderBy(w => w.ValueScore)
             .ToList();
         
-        if (viableWorlds.Count < 2)
-        {
-            _logger?.LogWarning("[CalculateSplitPurchase] {Item} - Not enough worlds with stock for split", plan.Name);
-            return;
-        }
+        if (viableWorlds.Count == 0) return;
         
-        // Calculate soft limit based on tier 1 count
-        var tier1Count = viableWorlds.Count(w => w.IsFullyUnderAverage || w.ValueScore <= viableWorlds.Min(v => v.ValueScore) * 1.2m);
-        var maxWorlds = config.GetEffectiveMaxWorlds(tier1Count);
-        
-        _logger?.LogDebug("[CalculateSplitPurchase] {Item} - Tier 1 worlds: {Tier1}, Max worlds: {Max}", 
-            plan.Name, tier1Count, maxWorlds);
-        
-        // Pass 2: Greedy allocation with travel consolidation
+        // Greedy allocation
         var split = new List<SplitWorldPurchase>();
         var remaining = plan.QuantityNeeded;
-        var worldsUsed = new HashSet<string>();
         
-        // Priority 1: Worlds already in our route (consolidation)
-        if (config.PreferConsolidatedWorlds)
-        {
-            var consolidatedWorlds = viableWorlds
-                .Where(w => worldsInRoute.Contains(w.WorldName) && !worldsUsed.Contains(w.WorldName))
-                .OrderBy(w => w.AveragePricePerUnit);
-            
-            foreach (var world in consolidatedWorlds)
-            {
-                if (remaining <= 0 || worldsUsed.Count >= maxWorlds) break;
-                
-                var allocation = AllocateFromWorld(world, remaining, isConsolidated: true);
-                if (allocation.QuantityToBuy > 0)
-                {
-                    split.Add(allocation);
-                    remaining -= allocation.QuantityToBuy;
-                    worldsUsed.Add(world.WorldName);
-                }
-            }
-        }
-        
-        // Priority 2: Cheapest remaining worlds
-        var remainingWorlds = viableWorlds
-            .Where(w => !worldsUsed.Contains(w.WorldName))
-            .OrderBy(w => w.AveragePricePerUnit);
-        
-        foreach (var world in remainingWorlds)
-        {
-            if (remaining <= 0 || worldsUsed.Count >= maxWorlds) break;
-            
-            var allocation = AllocateFromWorld(world, remaining, isConsolidated: false);
-            if (allocation.QuantityToBuy > 0)
-            {
-                split.Add(allocation);
-                remaining -= allocation.QuantityToBuy;
-                worldsUsed.Add(world.WorldName);
-            }
-        }
-        
-        // Check if split is viable and cost-effective
-        if (split.Count == 0 || (remaining > 0 && worldsUsed.Count >= maxWorlds))
-        {
-            _logger?.LogWarning("[CalculateSplitPurchase] {Item} - Could not fulfill full quantity. Remaining: {Remaining}", 
-                plan.Name, remaining);
-            // Still save partial split, but mark as incomplete
-        }
-        
-        var splitCost = split.Sum(s => s.TotalCost);
-        var singleWorldCost = plan.RecommendedWorld?.TotalCost ?? long.MaxValue;
-        var savingsPercent = singleWorldCost > 0 ? (singleWorldCost - splitCost) / (decimal)singleWorldCost * 100 : 0;
-        
-        _logger?.LogInformation("[CalculateSplitPurchase] {Item} - Split cost: {SplitCost:N0}g vs Single: {SingleCost:N0}g ({Savings:F1}% savings)", 
-            plan.Name, splitCost, singleWorldCost, savingsPercent);
-        
-        // Only recommend split if it meets savings threshold OR single world failed
-        if (plan.RecommendedWorld == null || config.MeetsSavingsThreshold(savingsPercent) || remaining <= 0)
-        {
-            plan.RecommendedSplit = split;
-            _logger?.LogInformation("[CalculateSplitPurchase] {Item} - Recommending split across {Count} worlds", 
-                plan.Name, split.Count);
-        }
-        else
-        {
-            _logger?.LogInformation("[CalculateSplitPurchase] {Item} - Split savings ({Savings:F1}%) below threshold ({Threshold:F1}%), using single world", 
-                plan.Name, savingsPercent, config.MinSplitSavingsPercent);
-        }
-    }
-    
-    private SplitWorldPurchase AllocateFromWorld(WorldShoppingSummary world, int quantityNeeded, bool isConsolidated)
-    {
-        var availableFromListings = world.Listings
-            .Where(l => !l.IsAdditionalOption)
-            .Sum(l => l.Quantity);
-        
-        var toAllocate = Math.Min(quantityNeeded, availableFromListings);
-        
-        // Calculate actual cost based on listings
-        var cost = 0L;
-        var remaining = toAllocate;
-        var usedListings = new List<ShoppingListingEntry>();
-        
-        foreach (var listing in world.Listings.Where(l => !l.IsAdditionalOption).OrderBy(l => l.PricePerUnit))
+        foreach (var world in viableWorlds)
         {
             if (remaining <= 0) break;
             
-            var fromThisListing = Math.Min(remaining, listing.Quantity);
-            cost += fromThisListing * listing.PricePerUnit;
-            remaining -= fromThisListing;
+            var toAllocate = Math.Min(remaining, world.TotalQuantityPurchased);
+            if (toAllocate <= 0) continue;
             
-            usedListings.Add(new ShoppingListingEntry
+            // Calculate actual cost from listings
+            var cost = 0L;
+            var remainingFromWorld = toAllocate;
+            foreach (var listing in world.Listings.Where(l => !l.IsAdditionalOption).OrderBy(l => l.PricePerUnit))
             {
-                Quantity = listing.Quantity,
-                PricePerUnit = listing.PricePerUnit,
-                RetainerName = listing.RetainerName,
-                IsUnderAverage = listing.IsUnderAverage,
-                IsHq = listing.IsHq,
-                NeededFromStack = fromThisListing
+                if (remainingFromWorld <= 0) break;
+                var fromThis = Math.Min(remainingFromWorld, listing.Quantity);
+                cost += fromThis * listing.PricePerUnit;
+                remainingFromWorld -= fromThis;
+            }
+            
+            split.Add(new SplitWorldPurchase
+            {
+                WorldName = world.WorldName,
+                QuantityToBuy = toAllocate,
+                PricePerUnit = toAllocate > 0 ? cost / (decimal)toAllocate : world.AveragePricePerUnit,
+                IsPartial = toAllocate < world.TotalQuantityPurchased,
+                TotalCost = cost
             });
+            
+            remaining -= toAllocate;
         }
         
-        return new SplitWorldPurchase
+        if (split.Count == 0) return;
+        
+        var splitCost = split.Sum(s => s.TotalCost);
+        var singleWorldCost = plan.RecommendedWorld?.TotalCost ?? long.MaxValue;
+        
+        // Single-world contingency: prefer single if within 5%
+        if (plan.RecommendedWorld != null && 
+            plan.RecommendedWorld.HasSufficientStock &&
+            singleWorldCost <= splitCost * 1.05m)
         {
-            WorldName = world.WorldName,
-            QuantityToBuy = toAllocate,
-            PricePerUnit = toAllocate > 0 ? cost / (decimal)toAllocate : world.AveragePricePerUnit,
-            IsPartial = toAllocate < world.TotalQuantityPurchased,
-            TravelContext = isConsolidated ? "Consolidated" : (usedListings.Count > 0 ? "Primary" : "Supplemental"),
-            ExcessAvailable = availableFromListings - toAllocate,
-            Listings = usedListings
-        };
+            // Keep single-world recommendation
+            return;
+        }
+        
+        // Use split
+        plan.RecommendedSplit = split;
     }
 
     // ========================================================================

@@ -27,11 +27,19 @@ public class AppState
     public RecommendationMode RecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
     public ProcurementAnalysis? CurrentProcurementAnalysis { get; set; }
     
+    /// <summary>
+    /// Temporarily blacklisted worlds for the current session.
+    /// These worlds are excluded from procurement recommendations.
+    /// Cleared on page reload - NOT persisted.
+    /// </summary>
+    public HashSet<string> TemporarilyBlacklistedWorlds { get; set; } = new();
+    
     // Auto-expand item ID when navigating from procurement to market analysis
     public int? AutoExpandItemId { get; set; }
     
     // Persistence state
     public bool IsAutoSaveEnabled { get; set; } = true;
+    public bool AutoFetchPricesOnRebuild { get; set; } = true;
     public DateTime? LastAutoSave { get; set; }
     public List<StoredPlanSummary> SavedPlans { get; set; } = new();
     

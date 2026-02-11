@@ -449,6 +449,40 @@
                 
                 AppState.NotifyPlanChanged();
                 Snackbar.Add($"Imported native plan '{importResult.NativePlan.Name}' with {items.Count} items", Severity.Success);
+                
+                // RE-BUILD: Fetch vendor prices and initialize nodes properly
+                if (AppState.CurrentPlan != null)
+                {
+                    AppState.SetStatus("Rebuilding plan...", busy: true);
+                    try
+                    {
+                        // Always fetch vendor prices (fast, local data)
+                        await RecipeService.FetchVendorPricesAsync(AppState.CurrentPlan);
+                        Snackbar.Add("Vendor prices updated", Severity.Success);
+                        
+                        // Optionally fetch market prices based on setting
+                        if (AppState.AutoFetchPricesOnRebuild)
+                        {
+                            AppState.SetStatus("Fetching market prices...", busy: true);
+                            var responses = await UniversalisService.GetMarketDataBulkAsync(
+                                AppState.SelectedDataCenter,
+                                AppState.CurrentPlan.GetAllItemIds().ToList());
+                            
+                            UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, responses);
+                            Snackbar.Add("Market prices updated", Severity.Success);
+                        }
+                        
+                        AppState.NotifyPlanChanged();
+                    }
+                    catch (Exception ex)
+                    {
+                        Snackbar.Add($"Failed to rebuild plan: {ex.Message}", Severity.Warning);
+                    }
+                    finally
+                    {
+                        AppState.SetStatus("Ready", busy: false);
+                    }
+                }
             }
             else
             {
@@ -477,6 +511,30 @@
             {
                 // Use relative path (no leading slash) so it resolves against base href correctly
                 NavigationManager.NavigateTo("./");
+            }
+        }
+    }
+    
+    private void UpdateNodeMarketPrices(List<PlanNode> nodes, Dictionary<int, UniversalisResponse> responses)
+    {
+        foreach (var node in nodes)
+        {
+            if (responses.TryGetValue(node.ItemId, out var response))
+            {
+                node.MarketPrice = (decimal)response.AveragePrice;
+                
+                // Calculate HQ price if available
+                var hqListings = response.Listings.Where(l => l.IsHq).ToList();
+                if (hqListings.Any())
+                {
+                    node.HqMarketPrice = (decimal)hqListings.Average(l => l.PricePerUnit);
+                }
+            }
+            
+            // Recursively update children
+            if (node.Children?.Any() == true)
+            {
+                UpdateNodeMarketPrices(node.Children, responses);
             }
         }
     }
