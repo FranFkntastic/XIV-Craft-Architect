@@ -1,6 +1,11 @@
 @using FFXIVCraftArchitect.Core.Models
 @using FFXIVCraftArchitect.Core.Services
+@using FFXIVCraftArchitect.Web.Services
 @inject ISnackbar Snackbar
+@inject AppState AppState
+
+@* Type alias to avoid confusion with WorldProcurementCard component *@
+@using WorldCardModel = FFXIVCraftArchitect.Core.Models.WorldProcurementCardModel
 
 <div style="display: flex; flex-direction: column; height: 100%; gap: 8px;">
     
@@ -72,207 +77,36 @@
         }
         else if (_viewMode == ViewMode.TextList)
         {
-            <!-- Text-based Shopping List View -->
-            <div style="display: flex; flex-direction: column; gap: 12px;">
-                @{ 
-                    var vendorItems = GetVendorItems().ToList();
-                    var marketItems = GetMarketItems().ToList();
-                    var splitItems = GetSplitWorldItems().ToList();
-                    var noDataItems = GetItemsWithNoData().ToList();
-                }
-                
-                <!-- Split-World Items Section -->
-                @foreach (var splitGroup in GetSplitWorldGroups())
-                {
-                    <div style="background: #2a2020; border-radius: 6px; border: 1px solid #5a3a3a; overflow: hidden;">
-                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #3a2a2a; border-bottom: 1px solid #444;">
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <MudIcon Icon="@Icons.Material.Filled.CallSplit" Size="Size.Small" Style="color: #ff9800;" />
-                                <MudText Typo="Typo.subtitle2" Style="color: #ff9800; font-weight: 600;">Split Purchase</MudText>
-                                <MudText Typo="Typo.caption" Style="color: #888;">(@splitGroup.Worlds)</MudText>
-                            </div>
-                            <MudText Typo="Typo.body2" Style="color: #ff9800; font-weight: 600;">
-                                @splitGroup.TotalCost.ToString("N0")g
-                            </MudText>
-                        </div>
-                        <div style="padding: 6px;">
-                            <table style="width: 100%; border-collapse: collapse;">
-                                <thead>
-                                    <tr style="color: #888; font-size: 10px; text-align: left;">
-                                        <th style="padding: 4px 8px; font-weight: 500;">Item</th>
-                                        <th style="padding: 4px 8px; font-weight: 500; text-align: center; width: 50px;">Qty</th>
-                                        <th style="padding: 4px 8px; font-weight: 500; text-align: right; width: 80px;">Price</th>
-                                        <th style="padding: 4px 8px; font-weight: 500; text-align: right; width: 80px;">Total</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    @foreach (var entry in splitGroup.Entries)
-                                    {
-                                        <tr style="background: @(splitGroup.Entries.ToList().IndexOf(entry) % 2 == 0 ? "transparent" : "#333");">
-                                            <td style="padding: 6px 8px; color: #fff;">@entry.ItemName</td>
-                                            <td style="padding: 6px 8px; color: #d4a73a; text-align: center;">@entry.Quantity</td>
-                                            <td style="padding: 6px 8px; color: #aaa; text-align: right; font-size: 11px;">@entry.PricePerUnit.ToString("N0")g</td>
-                                            <td style="padding: 6px 8px; color: #4caf50; text-align: right; font-weight: 500;">@entry.TotalCost.ToString("N0")g</td>
-                                        </tr>
-                                    }
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                }
-                
-                <!-- Vendor Items Section -->
-                @if (vendorItems.Any())
-                {
-                    <div style="background: #2a2520; border-radius: 6px; border: 1px solid #5a4a3a; overflow: hidden;">
-                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #3a352a; border-bottom: 1px solid #444;">
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <MudIcon Icon="@Icons.Material.Filled.Store" Size="Size.Small" Style="color: #d4a73a;" />
-                                <MudText Typo="Typo.subtitle2" Style="color: #d4a73a; font-weight: 600;">Vendor</MudText>
-                                <MudText Typo="Typo.caption" Style="color: #888;">(@vendorItems.Count items)</MudText>
-                            </div>
-                            <MudText Typo="Typo.body2" Style="color: #d4a73a; font-weight: 600;">
-                                @vendorItems.Sum(i => GetItemTotalCost(i)).ToString("N0")g
-                            </MudText>
-                        </div>
-                        <div style="padding: 6px;">
-                            <table style="width: 100%; border-collapse: collapse;">
-                                <thead>
-                                    <tr style="color: #888; font-size: 10px; text-align: left;">
-                                        <th style="padding: 4px 8px; font-weight: 500;">Item</th>
-                                        <th style="padding: 4px 8px; font-weight: 500; text-align: center; width: 50px;">Qty</th>
-                                        <th style="padding: 4px 8px; font-weight: 500; text-align: right; width: 80px;">Unit</th>
-                                        <th style="padding: 4px 8px; font-weight: 500; text-align: right; width: 80px;">Total</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    @foreach (var item in vendorItems)
-                                    {
-                                        <tr style="background: @(vendorItems.IndexOf(item) % 2 == 0 ? "transparent" : "#333");">
-                                            <td style="padding: 6px 8px; color: #fff;">@item.Name</td>
-                                            <td style="padding: 6px 8px; color: #d4a73a; text-align: center;">@item.QuantityNeeded</td>
-                                            <td style="padding: 6px 8px; color: #aaa; text-align: right; font-size: 11px;">@GetItemUnitPrice(item).ToString("N0")g</td>
-                                            <td style="padding: 6px 8px; color: #4caf50; text-align: right; font-weight: 500;">@GetItemTotalCost(item).ToString("N0")g</td>
-                                        </tr>
-                                    }
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                }
-                
-                <!-- Market Items by World -->
-                @foreach (var worldGroup in GetMarketItemsByWorld())
-                {
-                    <div style="background: #20252a; border-radius: 6px; border: 1px solid #3a4a5a; overflow: hidden;">
-                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #2a353a; border-bottom: 1px solid #444;">
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" Style="color: #90EE90;" />
-                                <MudText Typo="Typo.subtitle2" Style="color: #fff; font-weight: 600;">@worldGroup.Key</MudText>
-                                <MudText Typo="Typo.caption" Style="color: #888;">(@worldGroup.Count() items)</MudText>
-                            </div>
-                            <MudText Typo="Typo.body2" Style="color: #d4a73a; font-weight: 600;">
-                                @worldGroup.Sum(i => GetItemTotalCost(i)).ToString("N0")g
-                            </MudText>
-                        </div>
-                        <div style="padding: 6px;">
-                            <table style="width: 100%; border-collapse: collapse;">
-                                <thead>
-                                    <tr style="color: #888; font-size: 10px; text-align: left;">
-                                        <th style="padding: 4px 8px; font-weight: 500;">Item</th>
-                                        <th style="padding: 4px 8px; font-weight: 500; text-align: center; width: 50px;">Qty</th>
-                                        <th style="padding: 4px 8px; font-weight: 500; text-align: right; width: 80px;">Unit</th>
-                                        <th style="padding: 4px 8px; font-weight: 500; text-align: right; width: 80px;">Total</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    @foreach (var item in worldGroup.OrderBy(i => i.Name))
-                                    {
-                                        <tr style="background: @(worldGroup.ToList().IndexOf(item) % 2 == 0 ? "transparent" : "#333");">
-                                            <td style="padding: 6px 8px; color: #fff;">@item.Name</td>
-                                            <td style="padding: 6px 8px; color: #d4a73a; text-align: center;">@item.QuantityNeeded</td>
-                                            <td style="padding: 6px 8px; color: #aaa; text-align: right; font-size: 11px;">@GetItemUnitPrice(item).ToString("N0")g</td>
-                                            <td style="padding: 6px 8px; color: #4caf50; text-align: right; font-weight: 500;">@GetItemTotalCost(item).ToString("N0")g</td>
-                                        </tr>
-                                    }
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                }
-                
-                <!-- No Data Items -->
-                @if (noDataItems.Any())
-                {
-                    <div style="background: #2a2a2a; border-radius: 6px; border: 1px solid #555; overflow: hidden;">
-                        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #363636; border-bottom: 1px solid #444;">
-                            <MudIcon Icon="@Icons.Material.Filled.Help" Size="Size.Small" Style="color: #666;" />
-                            <MudText Typo="Typo.subtitle2" Style="color: #888; font-weight: 600;">No Data</MudText>
-                            <MudText Typo="Typo.caption" Style="color: #888;">(@noDataItems.Count)</MudText>
-                        </div>
-                        <div style="padding: 6px;">
-                            @foreach (var item in noDataItems)
-                            {
-                                <div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px;">
-                                    <MudText Typo="Typo.body2" Style="color: #888; flex: 1;">@item.Name</MudText>
-                                    <MudText Typo="Typo.caption" Style="color: #666;">×@item.QuantityNeeded</MudText>
-                                </div>
-                            }
-                        </div>
-                    </div>
-                }
+            <!-- Text-based Shopping List View - Markdown Format -->
+            <div style="height: 100%; display: flex; flex-direction: column;">
+                <div style="flex: 1; position: relative;">
+                    <textarea readonly 
+                              style="width: 100%; height: 100%; background: #1a1a1a; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 12px; font-family: 'Consolas', 'Monaco', monospace; font-size: 13px; line-height: 1.5; resize: none; white-space: pre; overflow-wrap: normal; overflow-x: auto;"
+                              spellcheck="false">@GenerateShoppingListText()</textarea>
+                </div>
+                <MudText Typo="Typo.caption" Style="color: #666; margin-top: 8px; text-align: center;">
+                    Copy and paste this list directly into your notes
+                </MudText>
             </div>
         }
         else
         {
-            <!-- Card View -->
+            <!-- Card View - World-Centric -->
             <div style="display: flex; flex-direction: column; gap: 12px;">
                 @{ 
-                    var vendorItemsCard = GetVendorItems().ToList();
-                    var allMarketItemsCard = GetAllMarketItems().ToList();
+                    var worldCards = GetWorldCards().ToList();
                     var noDataItemsCard = GetItemsWithNoData().ToList();
                 }
                 
-                <!-- Vendor Items -->
-                @if (vendorItemsCard.Any())
+                <!-- Market & Vendor World Cards -->
+                @foreach (var worldCard in worldCards)
                 {
-                    <div>
-                        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px; padding: 3px 8px; background: #2a2520; border-radius: 3px; border: 1px solid #5a4a3a;">
-                            <MudIcon Icon="@Icons.Material.Filled.Store" Size="Size.Small" Style="color: #d4a73a;" />
-                            <MudText Typo="Typo.subtitle2" Style="color: #d4a73a; font-weight: 600;">Vendor</MudText>
-                            <MudText Typo="Typo.caption" Style="color: #888;">(@vendorItemsCard.Count)</MudText>
-                        </div>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 4px; align-items: start;">
-                            @foreach (var item in vendorItemsCard)
-                            {
-                                var isSelected = _expandedItem?.ItemId == item.ItemId;
-                                <div @onclick="() => SelectItem(item)" style="cursor: pointer;">
-                                    <ProcurementItemCard Item="item" ShoppingPlan="GetShoppingPlan(item.ItemId)" IsSelected="isSelected" />
-                                </div>
-                            }
-                        </div>
-                    </div>
-                }
-                
-                <!-- Market Items (includes single-world and split-world) -->
-                @if (allMarketItemsCard.Any())
-                {
-                    <div>
-                        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px; padding: 3px 8px; background: #20252a; border-radius: 3px; border: 1px solid #3a4a5a;">
-                            <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" Style="color: #87ceeb;" />
-                            <MudText Typo="Typo.subtitle2" Style="color: #87ceeb; font-weight: 600;">Market</MudText>
-                            <MudText Typo="Typo.caption" Style="color: #888;">(@allMarketItemsCard.Count)</MudText>
-                        </div>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 4px; align-items: start;">
-                            @foreach (var item in allMarketItemsCard)
-                            {
-                                var isSelected = _expandedItem?.ItemId == item.ItemId;
-                                <div @onclick="() => SelectItem(item)" style="cursor: pointer;">
-                                    <ProcurementItemCard Item="item" ShoppingPlan="GetShoppingPlan(item.ItemId)" IsSelected="isSelected" />
-                                </div>
-                            }
-                        </div>
-                    </div>
+                    <WorldProcurementCard 
+                        Card="worldCard" 
+                        IsExpanded="_expandedWorld == worldCard.WorldName"
+                        IsExpandedChanged="(expanded) => OnWorldExpanded(worldCard.WorldName, expanded)"
+                        OnItemSelected="OnWorldItemSelected"
+                        OnReanalyzeRequested="OnReanalyzeWithoutWorld" />
                 }
                 
                 <!-- Items with No Data -->
@@ -307,8 +141,15 @@
     [Parameter]
     public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
     
+    /// <summary>
+    /// Called when user requests re-analysis without a specific world (due to congestion).
+    /// </summary>
+    [Parameter]
+    public EventCallback<string> OnReanalyzeWithoutWorldRequested { get; set; }
+    
     private ItemProcurementAnalysis? _expandedItem;
     private ViewMode _viewMode = ViewMode.Cards;
+    private string? _expandedWorld = null;
     
     private enum ViewMode
     {
@@ -350,39 +191,6 @@
             .OrderBy(i => i.Name);
     }
     
-    private IEnumerable<ItemProcurementAnalysis> GetVendorItems()
-    {
-        return GetItemsToBuy().Where(i => {
-            var plan = GetShoppingPlan(i.ItemId);
-            return plan?.RecommendedWorld?.WorldName == "Vendor";
-        });
-    }
-    
-    private IEnumerable<ItemProcurementAnalysis> GetMarketItems()
-    {
-        return GetItemsToBuy().Where(i => {
-            var plan = GetShoppingPlan(i.ItemId);
-            return plan?.RecommendedWorld?.WorldName != "Vendor" && 
-                   !(plan?.RequiresSplitPurchase == true);
-        });
-    }
-    
-    private IEnumerable<ItemProcurementAnalysis> GetAllMarketItems()
-    {
-        return GetItemsToBuy().Where(i => {
-            var plan = GetShoppingPlan(i.ItemId);
-            return plan?.RecommendedWorld?.WorldName != "Vendor";
-        });
-    }
-    
-    private IEnumerable<ItemProcurementAnalysis> GetSplitWorldItems()
-    {
-        return GetItemsToBuy().Where(i => {
-            var plan = GetShoppingPlan(i.ItemId);
-            return plan?.RequiresSplitPurchase == true && plan.RecommendedSplit?.Any() == true;
-        });
-    }
-    
     private IEnumerable<ItemProcurementAnalysis> GetItemsWithNoData()
     {
         if (Analysis?.ItemAnalyses == null)
@@ -393,76 +201,195 @@
             .OrderBy(i => i.Name);
     }
     
-    // === TEXT LIST GROUPING ===
+    // === WORLD-CENTRIC CARD METHODS ===
     
-    private record SplitWorldGroup(string Worlds, decimal TotalCost, List<SplitWorldEntry> Entries);
-    private record SplitWorldEntry(string ItemName, int Quantity, decimal PricePerUnit, decimal TotalCost);
-    
-    private IEnumerable<SplitWorldGroup> GetSplitWorldGroups()
+    private void OnWorldExpanded(string worldName, bool expanded)
     {
-        var splitItems = GetSplitWorldItems().ToList();
-        if (!splitItems.Any()) return Enumerable.Empty<SplitWorldGroup>();
-        
-        // Group by the exact same world combination
-        var groups = splitItems
-            .Select(item =>
-            {
-                var plan = GetShoppingPlan(item.ItemId)!;
-                var worlds = string.Join("+", plan.RecommendedSplit!.Select(s => s.WorldName).OrderBy(w => w));
-                var entries = plan.RecommendedSplit.Select(s => new SplitWorldEntry(
-                    item.Name,
-                    s.QuantityToBuy,
-                    s.PricePerUnit,
-                    s.TotalCost
-                )).ToList();
-                return new { Worlds = worlds, Plan = plan, Entries = entries };
-            })
-            .GroupBy(x => x.Worlds)
-            .Select(g => new SplitWorldGroup(
-                g.Key,
-                g.SelectMany(x => x.Entries).Sum(e => e.TotalCost),
-                g.SelectMany(x => x.Entries).ToList()
-            ))
-            .OrderBy(g => g.Worlds);
-        
-        return groups;
-    }
-    
-    private IEnumerable<IGrouping<string, ItemProcurementAnalysis>> GetMarketItemsByWorld()
-    {
-        var marketItems = GetMarketItems().ToList();
-        
-        return marketItems
-            .Select(item => new
-            {
-                Item = item,
-                World = GetShoppingPlan(item.ItemId)?.RecommendedWorld?.WorldName ?? "Unknown"
-            })
-            .GroupBy(x => x.World, x => x.Item)
-            .OrderBy(g => g.Key);
-    }
-    
-    // === PRICE HELPERS ===
-    
-    private decimal GetItemUnitPrice(ItemProcurementAnalysis item)
-    {
-        var plan = GetShoppingPlan(item.ItemId);
-        if (plan?.RequiresSplitPurchase == true && plan.RecommendedSplit?.Any() == true)
+        if (expanded)
         {
-            var totalCost = plan.RecommendedSplit.Sum(s => s.TotalCost);
-            var totalQty = plan.RecommendedSplit.Sum(s => s.QuantityToBuy);
-            return totalQty > 0 ? totalCost / totalQty : 0;
+            _expandedWorld = worldName;
         }
-        return plan?.RecommendedWorld?.AveragePricePerUnit ?? item.MarketPriceNq;
+        else if (_expandedWorld == worldName)
+        {
+            _expandedWorld = null;
+        }
     }
     
-    private decimal GetItemTotalCost(ItemProcurementAnalysis item)
+    private void OnWorldItemSelected(WorldItemPurchase item)
     {
-        var plan = GetShoppingPlan(item.ItemId);
-        if (plan?.RequiresSplitPurchase == true && plan.SplitTotalCost.HasValue)
+        if (item.SourcePlan != null)
         {
-            return plan.SplitTotalCost.Value;
+            // Find the corresponding ItemProcurementAnalysis
+            var analysis = Analysis?.ItemAnalyses.FirstOrDefault(a => a.ItemId == item.ItemId);
+            if (analysis != null)
+            {
+                SelectItem(analysis);
+            }
         }
-        return plan?.RecommendedWorld?.TotalCost ?? (item.MarketPriceNq * item.QuantityNeeded);
+    }
+    
+    private async Task OnReanalyzeWithoutWorld(string worldName)
+    {
+        // Collapse all cards before re-analysis
+        _expandedWorld = null;
+        
+        // Notify parent to re-run analysis with this world blacklisted
+        await OnReanalyzeWithoutWorldRequested.InvokeAsync(worldName);
+    }
+    
+    /// <summary>
+    /// Groups procurement items by world, aggregating both single-world and split purchases.
+    /// Creates WorldProcurementCard objects for each world with all items to buy there.
+    /// </summary>
+    private IEnumerable<WorldCardModel> GetWorldCards()
+    {
+        if (Analysis?.ItemAnalyses == null || !ShoppingPlans.Any())
+            return Enumerable.Empty<WorldCardModel>();
+        
+        var worldCards = new Dictionary<string, WorldCardModel>(StringComparer.OrdinalIgnoreCase);
+        
+        foreach (var item in GetItemsToBuy())
+        {
+            var plan = GetShoppingPlan(item.ItemId);
+            if (plan == null) continue;
+            
+            // Handle split purchases
+            if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
+            {
+                foreach (var split in plan.RecommendedSplit)
+                {
+                    var worldName = split.WorldName;
+                    
+                    if (!worldCards.TryGetValue(worldName, out var card))
+                    {
+                        var worldOption = plan.WorldOptions.FirstOrDefault(w => w.WorldName == worldName);
+                        card = new WorldCardModel
+                        {
+                            WorldName = worldName,
+                            DataCenter = Analysis.DataCenter,
+                            IsCongested = worldOption?.IsCongested ?? false,
+                            Classification = worldOption?.Classification ?? WorldClassification.Standard
+                        };
+                        worldCards[worldName] = card;
+                    }
+                    
+                    card.Items.Add(new WorldItemPurchase
+                    {
+                        ItemId = item.ItemId,
+                        ItemName = item.Name,
+                        IconId = item.IconId,
+                        QuantityOnThisWorld = split.QuantityToBuy,
+                        TotalQuantityNeeded = item.QuantityNeeded,
+                        PricePerUnit = split.PricePerUnit,
+                        TotalCost = split.TotalCost,
+                        IsSplitPurchase = true,
+                        SourcePlan = plan,
+                        TravelContext = split.IsPartial ? "Supplemental" : "Primary"
+                    });
+                }
+            }
+            // Handle single-world purchases (including vendor)
+            else if (plan.RecommendedWorld != null)
+            {
+                var worldName = plan.RecommendedWorld.WorldName;
+                
+                if (!worldCards.TryGetValue(worldName, out var card))
+                {
+                    card = new WorldCardModel
+                    {
+                        WorldName = worldName,
+                        DataCenter = Analysis.DataCenter,
+                        IsCongested = plan.RecommendedWorld.IsCongested,
+                        Classification = plan.RecommendedWorld.Classification
+                    };
+                    worldCards[worldName] = card;
+                }
+                
+                card.Items.Add(new WorldItemPurchase
+                {
+                    ItemId = item.ItemId,
+                    ItemName = item.Name,
+                    IconId = item.IconId,
+                    QuantityOnThisWorld = item.QuantityNeeded,
+                    TotalQuantityNeeded = item.QuantityNeeded,
+                    PricePerUnit = plan.RecommendedWorld.AveragePricePerUnit,
+                    TotalCost = plan.RecommendedWorld.TotalCost,
+                    IsSplitPurchase = false,
+                    SourcePlan = plan,
+                    TravelContext = "Primary"
+                });
+            }
+        }
+        
+        // Sort: non-vendor worlds by cost (descending), vendor always last
+        return worldCards.Values
+            .OrderBy(w => w.IsVendor ? 1 : 0)
+            .ThenByDescending(w => w.TotalCost);
+    }
+    
+    /// <summary>
+    /// Generates a markdown-formatted shopping list grouped by world.
+    /// </summary>
+    private string GenerateShoppingListText()
+    {
+        if (Analysis?.ItemAnalyses == null || !ShoppingPlans.Any())
+            return "# Shopping List\n\nNo items to purchase.";
+        
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("# FFXIV Craft Architect - Shopping List");
+        sb.AppendLine();
+        sb.AppendLine($"**Data Center:** {Analysis.DataCenter}");
+        sb.AppendLine($"**Generated:** {DateTime.Now:yyyy-MM-dd HH:mm}");
+        sb.AppendLine();
+        
+        var worldCards = GetWorldCards().ToList();
+        var noDataItems = GetItemsWithNoData().ToList();
+        
+        if (!worldCards.Any() && !noDataItems.Any())
+        {
+            sb.AppendLine("_No items to purchase._");
+            return sb.ToString();
+        }
+        
+        // World sections
+        foreach (var world in worldCards)
+        {
+            sb.AppendLine($"## {(world.IsVendor ? "🏪 Vendor" : $"🌍 {world.WorldName}")}");
+            sb.AppendLine();
+            
+            foreach (var item in world.Items.OrderBy(i => i.ItemName))
+            {
+                var qtyDisplay = item.IsSplitPurchase 
+                    ? $"×{item.QuantityOnThisWorld} of {item.TotalQuantityNeeded}"
+                    : $"×{item.QuantityOnThisWorld}";
+                
+                sb.AppendLine($"- **{item.ItemName}** {qtyDisplay} @ {item.PricePerUnit:N0}g = **{item.TotalCost:N0}g**");
+            }
+            
+            sb.AppendLine();
+            sb.AppendLine($"**Subtotal: {world.TotalCost:N0}g**");
+            sb.AppendLine();
+        }
+        
+        // No data section
+        if (noDataItems.Any())
+        {
+            sb.AppendLine("## ⚠️ No Market Data");
+            sb.AppendLine();
+            foreach (var item in noDataItems.OrderBy(i => i.Name))
+            {
+                sb.AppendLine($"- {item.Name} ×{item.QuantityNeeded}");
+            }
+            sb.AppendLine();
+        }
+        
+        // Grand total
+        var grandTotal = worldCards.Sum(w => w.TotalCost);
+        sb.AppendLine("---");
+        sb.AppendLine($"## **Grand Total: {grandTotal:N0}g**");
+        sb.AppendLine();
+        sb.AppendLine($"_Items to buy: {worldCards.Sum(w => w.ItemCount)} | Total quantity: {worldCards.Sum(w => w.TotalQuantity)}_");
+        
+        return sb.ToString();
     }
 }

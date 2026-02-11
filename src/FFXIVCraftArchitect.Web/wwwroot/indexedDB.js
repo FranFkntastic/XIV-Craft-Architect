@@ -1,8 +1,8 @@
 // IndexedDB module for FFXIV Craft Architect Web
-// Provides persistent storage for crafting plans in the browser
+// Uses Unix timestamps (seconds since epoch) for serialization safety
 
 const DB_NAME = 'FFXIVCraftArchitect';
-const DB_VERSION = 2;  // Bumped for market cache store
+const DB_VERSION = 3;  // Bumped for Unix timestamp migration
 const STORE_PLANS = 'plans';
 const STORE_SETTINGS = 'settings';
 const STORE_MARKET_CACHE = 'marketCache';
@@ -21,6 +21,7 @@ async function initDB() {
         request.onerror = () => reject(request.error);
         request.onsuccess = () => {
             db = request.result;
+            console.log('[IndexedDB] Database opened successfully (v3 - Unix timestamps)');
             resolve(db);
         };
         
@@ -39,11 +40,15 @@ async function initDB() {
                 database.createObjectStore(STORE_SETTINGS, { keyPath: 'key' });
             }
             
-            // Market cache store (v2)
-            if (!database.objectStoreNames.contains(STORE_MARKET_CACHE)) {
-                const cacheStore = database.createObjectStore(STORE_MARKET_CACHE, { keyPath: 'key' });
-                cacheStore.createIndex('fetchedAt', 'fetchedAt', { unique: false });
+            // Market cache store - migrate to Unix timestamps (v3)
+            if (database.objectStoreNames.contains(STORE_MARKET_CACHE)) {
+                database.deleteObjectStore(STORE_MARKET_CACHE);
+                console.log('[IndexedDB] Deleted old market cache store for migration');
             }
+            
+            const cacheStore = database.createObjectStore(STORE_MARKET_CACHE, { keyPath: 'key' });
+            cacheStore.createIndex('fetchedAtUnix', 'fetchedAtUnix', { unique: false });
+            console.log('[IndexedDB] Created market cache store with Unix timestamp index');
         };
     });
 }
@@ -58,7 +63,6 @@ async function savePlan(planData) {
         const transaction = database.transaction([STORE_PLANS], 'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
         
-        // Add timestamps
         const data = {
             ...planData,
             savedAt: new Date().toISOString()
@@ -97,7 +101,7 @@ async function loadAllPlans() {
         const transaction = database.transaction([STORE_PLANS], 'readonly');
         const store = transaction.objectStore(STORE_PLANS);
         const index = store.index('modifiedAt');
-        const request = index.openCursor(null, 'prev'); // Descending order
+        const request = index.openCursor(null, 'prev');
         
         const plans = [];
         
@@ -167,7 +171,7 @@ async function loadSetting(key) {
 }
 
 /**
- * Clear all plans (nuclear option)
+ * Clear all plans
  */
 async function clearAllPlans() {
     const database = await initDB();
@@ -183,7 +187,26 @@ async function clearAllPlans() {
 }
 
 /**
- * Save market data to cache
+ * Clear entire market cache
+ */
+async function clearMarketCache() {
+    const database = await initDB();
+    
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_MARKET_CACHE], 'readwrite');
+        const store = transaction.objectStore(STORE_MARKET_CACHE);
+        const request = store.clear();
+        
+        request.onsuccess = () => {
+            console.log('[IndexedDB] Cleared entire market cache');
+            resolve(true);
+        };
+        request.onerror = () => reject(request.error);
+    });
+}
+
+/**
+ * Save market data to cache (using Unix timestamp)
  */
 async function saveMarketData(key, data) {
     const database = await initDB();
@@ -192,11 +215,12 @@ async function saveMarketData(key, data) {
         const transaction = database.transaction([STORE_MARKET_CACHE], 'readwrite');
         const store = transaction.objectStore(STORE_MARKET_CACHE);
         
+        // Use Unix timestamp (seconds since epoch) for safe serialization
         const cacheEntry = {
             key: key,
             itemId: data.itemId,
             dataCenter: data.dataCenter,
-            fetchedAt: data.fetchedAt,
+            fetchedAtUnix: data.fetchedAtUnix,  // Unix timestamp in seconds
             dcAvgPrice: data.dcAvgPrice,
             hqAvgPrice: data.hqAvgPrice,
             worlds: data.worlds
@@ -204,13 +228,20 @@ async function saveMarketData(key, data) {
         
         const request = store.put(cacheEntry);
         
-        request.onsuccess = () => resolve(true);
-        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+            console.log('[IndexedDB] Saved market data for', key, 'timestamp:', cacheEntry.fetchedAtUnix);
+            resolve(true);
+        };
+        request.onerror = () => {
+            console.error('[IndexedDB] Failed to save market data:', request.error);
+            reject(request.error);
+        };
     });
 }
 
 /**
  * Load market data from cache
+ * Normalizes old format (fetchedAt string) to new format (fetchedAtUnix number)
  */
 async function loadMarketData(key) {
     const database = await initDB();
@@ -220,45 +251,141 @@ async function loadMarketData(key) {
         const store = transaction.objectStore(STORE_MARKET_CACHE);
         const request = store.get(key);
         
-        request.onsuccess = () => resolve(request.result || null);
-        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+            const result = request.result;
+            if (result) {
+                // Normalize old format to new format
+                const unix = getFetchedAtUnix(result);
+                if (unix > 0) {
+                    result.fetchedAtUnix = unix;
+                }
+                console.log('[IndexedDB] Loaded market data for', key, 'timestamp:', result.fetchedAtUnix);
+            }
+            resolve(result || null);
+        };
+        request.onerror = () => {
+            console.error('[IndexedDB] Failed to load market data:', request.error);
+            reject(request.error);
+        };
     });
 }
 
 /**
- * Delete stale market data
+ * Helper to get Unix timestamp from entry (handles both old and new formats)
  */
-async function deleteStaleMarketData(cutoffDate) {
+function getFetchedAtUnix(entry) {
+    // New format: Unix timestamp (number)
+    if (typeof entry.fetchedAtUnix === 'number') {
+        return entry.fetchedAtUnix;
+    }
+    // Old format: ISO date string
+    if (typeof entry.fetchedAt === 'string') {
+        try {
+            return Math.floor(new Date(entry.fetchedAt).getTime() / 1000);
+        } catch (e) {
+            console.warn('[IndexedDB] Invalid date format:', entry.fetchedAt);
+            return 0;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Delete stale market data using Unix timestamp cutoff
+ * @param {number} cutoffUnix - Unix timestamp in seconds (entries older than this are deleted)
+ */
+async function deleteStaleMarketData(cutoffUnix) {
     const database = await initDB();
+    
+    console.log('[IndexedDB] Deleting stale entries older than Unix timestamp:', cutoffUnix);
     
     return new Promise((resolve, reject) => {
         const transaction = database.transaction([STORE_MARKET_CACHE], 'readwrite');
         const store = transaction.objectStore(STORE_MARKET_CACHE);
-        const index = store.index('fetchedAt');
-        const range = IDBKeyRange.upperBound(cutoffDate);
-        const request = index.openCursor(range);
+        const request = store.openCursor();
         
         let deletedCount = 0;
         
         request.onsuccess = (event) => {
             const cursor = event.target.result;
             if (cursor) {
-                store.delete(cursor.primaryKey);
-                deletedCount++;
+                const entry = cursor.value;
+                const entryUnix = getFetchedAtUnix(entry);
+                
+                // Check if this entry is stale (older than cutoff)
+                if (entryUnix <= cutoffUnix) {
+                    store.delete(cursor.primaryKey);
+                    deletedCount++;
+                }
                 cursor.continue();
             } else {
+                if (deletedCount > 0) {
+                    console.log('[IndexedDB] Deleted', deletedCount, 'stale entries');
+                }
                 resolve(deletedCount);
             }
         };
         
-        request.onerror = () => reject(request.error);
+        request.onerror = () => {
+            console.error('[IndexedDB] Failed to delete stale entries:', request.error);
+            reject(request.error);
+        };
     });
 }
 
 /**
- * Get market cache statistics
+ * Delete oldest N entries (LRU eviction)
+ * @param {number} count - Number of entries to delete
  */
-async function getMarketCacheStats(cutoffDate) {
+async function deleteOldestEntries(count) {
+    const database = await initDB();
+    
+    console.log('[IndexedDB] Deleting', count, 'oldest entries');
+    
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_MARKET_CACHE], 'readwrite');
+        const store = transaction.objectStore(STORE_MARKET_CACHE);
+        
+        // Can't use index cursor since we need to handle both old/new formats
+        // Collect all entries, sort by timestamp, delete oldest
+        const request = store.openCursor();
+        const entries = [];
+        
+        request.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+                entries.push({
+                    key: cursor.primaryKey,
+                    unix: getFetchedAtUnix(cursor.value)
+                });
+                cursor.continue();
+            } else {
+                // Sort by timestamp (oldest first)
+                entries.sort((a, b) => a.unix - b.unix);
+                
+                // Delete oldest N
+                let deletedCount = 0;
+                for (let i = 0; i < Math.min(count, entries.length); i++) {
+                    store.delete(entries[i].key);
+                    deletedCount++;
+                }
+                console.log('[IndexedDB] Deleted', deletedCount, 'oldest entries');
+                resolve(deletedCount);
+            }
+        };
+        
+        request.onerror = () => {
+            console.error('[IndexedDB] Failed to delete oldest entries:', request.error);
+            reject(request.error);
+        };
+    });
+}
+
+/**
+ * Get market cache statistics using Unix timestamps
+ * @param {number} cutoffUnix - Unix timestamp for determining staleness (entries newer than this are valid)
+ */
+async function getMarketCacheStats(cutoffUnix) {
     const database = await initDB();
     
     return new Promise((resolve, reject) => {
@@ -269,41 +396,53 @@ async function getMarketCacheStats(cutoffDate) {
         let total = 0;
         let valid = 0;
         let stale = 0;
-        let oldest = null;
-        let newest = null;
+        let oldestUnix = null;
+        let newestUnix = null;
         let totalSize = 0;
         
         request.onsuccess = (event) => {
             const cursor = event.target.result;
             if (cursor) {
                 const entry = cursor.value;
-                total++;
-                totalSize += JSON.stringify(entry).length;
+                const entryUnix = getFetchedAtUnix(entry);
                 
-                const fetchedAt = new Date(entry.fetchedAt);
-                if (fetchedAt > new Date(cutoffDate)) {
-                    valid++;
-                } else {
-                    stale++;
+                total++;
+                totalSize += JSON.stringify(entry).length * 2; // Rough byte estimate
+                
+                // Track oldest/newest
+                if (oldestUnix === null || entryUnix < oldestUnix) {
+                    oldestUnix = entryUnix;
+                }
+                if (newestUnix === null || entryUnix > newestUnix) {
+                    newestUnix = entryUnix;
                 }
                 
-                if (!oldest || fetchedAt < oldest) oldest = fetchedAt;
-                if (!newest || fetchedAt > newest) newest = fetchedAt;
+                // Check staleness using Unix timestamp comparison
+                if (entryUnix <= cutoffUnix) {
+                    stale++;
+                } else {
+                    valid++;
+                }
                 
                 cursor.continue();
             } else {
-                resolve({
+                const stats = {
                     total,
                     valid,
                     stale,
-                    oldest: oldest ? oldest.toISOString() : null,
-                    newest: newest ? newest.toISOString() : null,
+                    oldestUnix: oldestUnix || 0,
+                    newestUnix: newestUnix || 0,
                     sizeBytes: totalSize
-                });
+                };
+                console.log('[IndexedDB] Cache stats:', stats);
+                resolve(stats);
             }
         };
         
-        request.onerror = () => reject(request.error);
+        request.onerror = () => {
+            console.error('[IndexedDB] Failed to get stats:', request.error);
+            reject(request.error);
+        };
     });
 }
 
@@ -316,8 +455,12 @@ window.IndexedDB = {
     saveSetting,
     loadSetting,
     clearAllPlans,
+    clearMarketCache,
     saveMarketData,
     loadMarketData,
     deleteStaleMarketData,
+    deleteOldestEntries,
     getMarketCacheStats
 };
+
+console.log('[IndexedDB] Module loaded (v3 with Unix timestamps)');

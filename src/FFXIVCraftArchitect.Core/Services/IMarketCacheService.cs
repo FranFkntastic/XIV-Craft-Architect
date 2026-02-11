@@ -66,15 +66,42 @@ public interface IMarketCacheService
 
 /// <summary>
 /// Cached market data for a specific item and data center.
+/// Uses Unix timestamp (seconds since epoch) for FetchedAt to avoid DateTime serialization issues.
 /// </summary>
 public class CachedMarketData
 {
     public int ItemId { get; set; }
     public string DataCenter { get; set; } = string.Empty;
-    public DateTime FetchedAt { get; set; }
+    
+    /// <summary>
+    /// Unix timestamp (seconds since epoch) when data was fetched.
+    /// Store-only; use FetchedAt property for reading.
+    /// </summary>
+    public long FetchedAtUnix { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the fetch time as UTC DateTime.
+    /// Internally converts to/from Unix timestamp for safe serialization.
+    /// </summary>
+    public DateTime FetchedAt
+    {
+        get => DateTimeOffset.FromUnixTimeSeconds(FetchedAtUnix).UtcDateTime;
+        set => FetchedAtUnix = new DateTimeOffset(value).ToUnixTimeSeconds();
+    }
+    
     public decimal DCAveragePrice { get; set; }
     public decimal? HQAveragePrice { get; set; }
     public List<CachedWorldData> Worlds { get; set; } = new();
+    
+    /// <summary>
+    /// Returns the age of this cached data.
+    /// </summary>
+    public TimeSpan Age => DateTime.UtcNow - FetchedAt;
+    
+    /// <summary>
+    /// Checks if this cached data is older than the specified maximum age.
+    /// </summary>
+    public bool IsOlderThan(TimeSpan maxAge) => Age > maxAge;
 }
 
 /// <summary>

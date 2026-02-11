@@ -1,13 +1,19 @@
 @using FFXIVCraftArchitect.Core.Models
 
 @* Two-line card for market/vendor purchases *@
-<div style="background: @(IsSelected ? "#3a3a30" : "#2a2a25"); border-radius: 4px; border: 1px solid @(IsSelected ? "#d4a73a" : "#444"); overflow: hidden; min-height: 56px;">
+<div style="background: @(IsSelected ? "#3a3a30" : "#2a2a25"); border-radius: 4px; border: 1px solid @(IsSelected ? "#d4a73a" : Plan.HasSufficientStock ? "#444" : "#5a3a3a"); overflow: hidden; min-height: 56px;">
     
-    @* Line 1: Item Name (full width) *@
-    <div style="padding: 6px 10px 2px 10px; border-bottom: 1px solid #3a3a3a;">
-        <MudText Typo="Typo.body2" Style="color: #fff; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+    @* Line 1: Item Name (full width) with stock warning *@
+    <div style="padding: 6px 10px 2px 10px; border-bottom: 1px solid #3a3a3a; display: flex; align-items: center; gap: 8px;">
+        <MudText Typo="Typo.body2" Style="color: #fff; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;">
             @Plan.Name
         </MudText>
+        @if (!Plan.HasSufficientStock)
+        {
+            <span style="background: #5a3a3a; color: #ff9800; font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; white-space: nowrap;">
+                SHORT @Plan.StockShortfall
+            </span>
+        }
     </div>
     
     @* Line 2: Details row *@
@@ -38,12 +44,12 @@
             ×@(Plan.QuantityNeeded)
         </MudText>
         
-        <!-- World / Split indicator -->
+        <!-- World indicator (simplified for collapsed view) -->
         <div style="flex: 1; min-width: 0; overflow: hidden;">
             @if (Plan.RequiresSplitPurchase && Plan.RecommendedSplit?.Any() == true)
             {
                 <MudText Typo="Typo.caption" Style="color: #ff9800; font-weight: 500;">
-                    @string.Join(" + ", Plan.RecommendedSplit.Select(s => $"{s.QuantityToBuy}@{s.WorldName}"))
+                    @Plan.RecommendedSplit.Count worlds
                 </MudText>
             }
             else if (Plan.RecommendedWorld != null)
@@ -61,12 +67,6 @@
                 <MudText Typo="Typo.body2" Style="color: #ff9800; font-weight: 600;">
                     @Plan.SplitTotalCost.Value.ToString("N0")g
                 </MudText>
-                @if (Plan.RecommendedWorld != null)
-                {
-                    <MudText Typo="Typo.caption" Style="color: #666; font-size: 10px; display: block;">
-                        vs @Plan.RecommendedWorld.TotalCost.ToString("N0")g
-                    </MudText>
-                }
             }
             else if (Plan.RecommendedWorld != null)
             {

@@ -189,6 +189,22 @@ public class ProcurementAnalysisService
 
     private void AggregateNodeMaterials(PlanNode node, Dictionary<int, MaterialAggregate> materials)
     {
+        // Respect the Source property - if buying from market or vendor, 
+        // this item goes to shopping list (not its children)
+        if (node.Source == AcquisitionSource.MarketBuyNq || node.Source == AcquisitionSource.MarketBuyHq)
+        {
+            AddToAggregation(node, materials);
+            // Don't recurse into children - we're buying the finished item
+            return;
+        }
+        
+        // If buying from vendor, add to aggregation
+        if (node.Source == AcquisitionSource.VendorBuy)
+        {
+            AddToAggregation(node, materials);
+            return;
+        }
+        
         // If this node has children (craftable), recursively aggregate them
         if (node.Children?.Any() == true)
         {
@@ -200,21 +216,26 @@ public class ProcurementAnalysisService
         else
         {
             // Leaf node - add to materials list
-            if (!materials.TryGetValue(node.ItemId, out var aggregate))
-            {
-                aggregate = new MaterialAggregate
-                {
-                    ItemId = node.ItemId,
-                    Name = node.Name,
-                    IconId = node.IconId,
-                    TotalQuantity = 0,
-                    UnitPrice = 0
-                };
-                materials[node.ItemId] = aggregate;
-            }
-            
-            aggregate.TotalQuantity += node.Quantity;
+            AddToAggregation(node, materials);
         }
+    }
+    
+    private void AddToAggregation(PlanNode node, Dictionary<int, MaterialAggregate> materials)
+    {
+        if (!materials.TryGetValue(node.ItemId, out var aggregate))
+        {
+            aggregate = new MaterialAggregate
+            {
+                ItemId = node.ItemId,
+                Name = node.Name,
+                IconId = node.IconId,
+                TotalQuantity = 0,
+                UnitPrice = 0
+            };
+            materials[node.ItemId] = aggregate;
+        }
+        
+        aggregate.TotalQuantity += node.Quantity;
     }
 
     /// <summary>

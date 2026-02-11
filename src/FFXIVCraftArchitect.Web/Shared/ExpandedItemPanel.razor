@@ -32,6 +32,25 @@
         <!-- Scrollable Content -->
         <div style="flex-grow: 1; overflow-y: auto; padding: 20px;">
             
+            <!-- STOCK WARNING BANNER -->
+            @if (!Plan.HasSufficientStock)
+            {
+                <div style="background: #3a2520; border: 2px solid #ff9800; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Size="Size.Medium" />
+                        <div>
+                            <MudText Typo="Typo.subtitle1" Style="color: #ff9800; font-weight: 600;">
+                                Insufficient Market Stock
+                            </MudText>
+                            <MudText Typo="Typo.body2" Style="color: #ccc;">
+                                Only @Plan.TotalAvailableQuantity.ToString("N0") of @Plan.QuantityNeeded.ToString("N0") available across all worlds.
+                                Shortfall: <span style="color: #ff9800; font-weight: 600;">@Plan.StockShortfall.ToString("N0")</span> units.
+                            </MudText>
+                        </div>
+                    </div>
+                </div>
+            }
+            
             <!-- RECOMMENDED PURCHASE SECTION -->
             <div style="margin-bottom: 24px;">
                 <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
@@ -129,42 +148,6 @@
                 </div>
             </div>
             
-            <!-- ALTERNATIVE CONFIGURATIONS SECTION -->
-            @if (GetAlternativeConfigs().Any())
-            {
-                <div style="margin-bottom: 24px;">
-                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer;" @onclick="() => _showAlternatives = !_showAlternatives">
-                        <MudIcon Icon="@Icons.Material.Filled.AltRoute" Style="color: #87ceeb;" Size="Size.Small" />
-                        <MudText Typo="Typo.subtitle1" Style="color: #87ceeb; font-weight: 600;">Alternative Configurations</MudText>
-                        <MudIcon Icon="@(_showAlternatives ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" 
-                                 Size="Size.Small" Style="color: #666; margin-left: auto;" />
-                    </div>
-                    
-                    @if (_showAlternatives)
-                    {
-                        <div style="background: #1e2530; border-radius: 8px; border: 1px solid #3a4a5a; overflow: hidden;">
-                            @foreach (var config in GetAlternativeConfigs())
-                            {
-                                <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #2a3540;">
-                                    <div style="display: flex; align-items: center; gap: 12px;">
-                                        @if (config.IsBestSingleWorld)
-                                        {
-                                            <MudText Typo="Typo.caption" Style="color: #4caf50; background: #1a3a1a; padding: 2px 8px; border-radius: 4px;">BEST</MudText>
-                                        }
-                                        <MudText Typo="Typo.body1" Style="color: #ccc;">
-                                            @config.Description
-                                        </MudText>
-                                    </div>
-                                    <MudText Typo="Typo.subtitle1" Style="color: #d4a73a; font-weight: 600;">
-                                        @config.TotalCost.ToString("N0")g
-                                    </MudText>
-                                </div>
-                            }
-                        </div>
-                    }
-                </div>
-            }
-            
             <!-- ALL WORLDS SECTION -->
             <div>
                 <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer;" @onclick="() => _showAllWorlds = !_showAllWorlds">
@@ -201,10 +184,22 @@
                                     </div>
                                 </div>
                                 
-                                @if (isExpanded && world.Listings?.Any() == true)
+                                @if (isExpanded)
                                 {
                                     <div style="padding: 0 16px 16px 48px; background: #1a1a18; max-height: 400px; overflow-y: auto;">
-                                        @RenderListingsTable(world.Listings.Where(l => !l.IsAdditionalOption).OrderBy(l => l.PricePerUnit).ToList())
+                                        @{
+                                            var normalListings = world.Listings?.Where(l => !l.IsAdditionalOption) ?? Enumerable.Empty<ShoppingListingEntry>();
+                                            var excludedListings = world.ExcludedListings ?? Enumerable.Empty<ShoppingListingEntry>();
+                                            var allListings = normalListings.Concat(excludedListings).OrderBy(l => l.PricePerUnit).ToList();
+                                        }
+                                        @if (allListings.Any())
+                                        {
+                                            @RenderListingsTable(allListings, world.ExcludedListings, world.ModePricePerUnit)
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.body2" Style="color: #666; padding: 12px;">No listings available</MudText>
+                                        }
                                     </div>
                                 }
                             </div>
@@ -212,6 +207,43 @@
                     </div>
                 }
             </div>
+            
+            <!-- ALTERNATIVE CONFIGURATIONS SECTION -->
+            @if (GetAlternativeConfigs().Any())
+            {
+                <div style="margin-top: 24px;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer;" @onclick="() => _showAlternatives = !_showAlternatives">
+                        <MudIcon Icon="@Icons.Material.Filled.AltRoute" Style="color: #666;" Size="Size.Small" />
+                        <MudText Typo="Typo.subtitle1" Style="color: #666; font-weight: 600;">Alternative Configurations</MudText>
+                        <MudText Typo="Typo.caption" Style="color: #444; margin-left: 8px;">(deprecated)</MudText>
+                        <MudIcon Icon="@(_showAlternatives ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" 
+                                 Size="Size.Small" Style="color: #666; margin-left: auto;" />
+                    </div>
+                    
+                    @if (_showAlternatives)
+                    {
+                        <div style="background: #1e2530; border-radius: 8px; border: 1px solid #3a4a5a; overflow: hidden; opacity: 0.7;">
+                            @foreach (var config in GetAlternativeConfigs())
+                            {
+                                <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #2a3540;">
+                                    <div style="display: flex; align-items: center; gap: 12px;">
+                                        @if (config.IsBestSingleWorld)
+                                        {
+                                            <MudText Typo="Typo.caption" Style="color: #4caf50; background: #1a3a1a; padding: 2px 8px; border-radius: 4px;">BEST</MudText>
+                                        }
+                                        <MudText Typo="Typo.body1" Style="color: #888;">
+                                            @config.Description
+                                        </MudText>
+                                    </div>
+                                    <MudText Typo="Typo.subtitle1" Style="color: #d4a73a; font-weight: 600;">
+                                        @config.TotalCost.ToString("N0")g
+                                    </MudText>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
             
         </div>
     </div>
@@ -223,7 +255,7 @@
 
     private HashSet<string> _expandedWorlds = new();
     private HashSet<string> _expandedAllWorlds = new();
-    private bool _showAlternatives = true;
+    private bool _showAlternatives = false;  // Start collapsed
     private bool _showAllWorlds = false;
 
     private void ToggleWorld(string worldName)
@@ -242,29 +274,45 @@
             _expandedAllWorlds.Add(worldName);
     }
 
-    private RenderFragment RenderListingsTable(List<ShoppingListingEntry> listings)
+    private RenderFragment RenderListingsTable(List<ShoppingListingEntry> listings, List<ShoppingListingEntry>? excludedListings = null, long modePrice = 0)
     {
+        var excludedSet = excludedListings?.ToHashSet() ?? new HashSet<ShoppingListingEntry>();
         return @<div>
             <div style="display: flex; padding: 6px 8px; border-bottom: 1px solid #333; color: #666; font-size: 11px; font-weight: 600;">
                 <span style="width: 50px;">Qty</span>
                 <span style="width: 80px;">Price</span>
                 <span style="width: 80px; text-align: right;">Total</span>
                 <span style="flex: 1; text-align: right;">Retainer</span>
+                <span style="width: 100px; text-align: center;"></span>
             </div>
             @foreach (var listing in listings)
             {
                 var total = listing.Quantity * listing.PricePerUnit;
-                <div style="display: flex; padding: 6px 8px; color: #aaa; font-size: 12px; border-bottom: 1px solid #2a2a2a;">
-                    <span style="width: 50px; color: #90EE90;">×@(listing.Quantity)</span>
-                    <span style="width: 80px; color: @(listing.IsHq ? "#ffeb3b" : "#ccc");">
+                var isExcluded = excludedSet.Contains(listing);
+                var priceMultiplier = modePrice > 0 ? (decimal)listing.PricePerUnit / modePrice : 0;
+                <div style="display: flex; padding: 6px 8px; color: @(isExcluded ? "#ff6b6b" : "#aaa"); font-size: 12px; border-bottom: 1px solid #2a2a2a; @(isExcluded ? "background: rgba(255, 107, 107, 0.1);" : "")">
+                    <span style="width: 50px; color: @(isExcluded ? "#ff6b6b" : "#90EE90");">×@(listing.Quantity)</span>
+                    <span style="width: 80px; color: @(isExcluded ? "#ff6b6b" : (listing.IsHq ? "#ffeb3b" : "#ccc")); text-decoration: @(isExcluded ? "line-through" : "none");">
                         @(listing.IsHq ? "★" : "")@listing.PricePerUnit.ToString("N0")g
                     </span>
-                    <span style="width: 80px; text-align: right; color: #d4a73a;">
+                    <span style="width: 80px; text-align: right; color: @(isExcluded ? "#ff6b6b" : "#d4a73a"); text-decoration: @(isExcluded ? "line-through" : "none");">
                         @total.ToString("N0")g
                     </span>
-                    <span style="flex: 1; text-align: right; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 8px;">
+                    <span style="flex: 1; text-align: right; color: @(isExcluded ? "#ff6b6b" : "#888"); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 8px;">
                         @listing.RetainerName
                     </span>
+                    @if (isExcluded)
+                    {
+                        <span style="width: 100px; text-align: center;">
+                            <MudText Typo="Typo.caption" Style="color: #ff4444; background: rgba(255, 68, 68, 0.2); padding: 2px 8px; border-radius: 4px; font-weight: 600;">
+                                too expensive! (@(priceMultiplier.ToString("F1"))×)
+                            </MudText>
+                        </span>
+                    }
+                    else
+                    {
+                        <span style="width: 100px; text-align: center;"></span>
+                    }
                 </div>
             }
         </div>;

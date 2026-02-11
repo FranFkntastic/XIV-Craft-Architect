@@ -9,36 +9,22 @@ namespace FFXIVCraftArchitect.Core.Models;
 public class MarketAnalysisConfig
 {
     /// <summary>
-    /// Weight between fewer worlds (0) and optimal cost (100).
-    /// 0 = Minimize travel, visit as few worlds as possible
-    /// 50 = Balanced approach
-    /// 100 = Pure cost optimization, visit any world for best price
-    /// </summary>
-    public int CostVsTravelWeight { get; set; } = 50;
-    
-    /// <summary>
-    /// Minimum savings percentage required to suggest a multi-world split.
-    /// Default 10% - splits that save less than this are not recommended.
-    /// </summary>
-    public decimal MinSplitSavingsPercent { get; set; } = 10m;
-    
-    /// <summary>
     /// Maximum number of worlds to visit for a single item.
     /// Uses soft limit based on tier 1 recommendations if null.
     /// </summary>
     public int? MaxWorldsPerItem { get; set; }
     
     /// <summary>
-    /// Whether to prefer worlds that are already being visited for other items.
-    /// Enabled by default for travel consolidation.
+    /// Whether to enable multi-world split purchases.
     /// </summary>
-    public bool PreferConsolidatedWorlds { get; set; } = true;
+    public bool EnableSplitWorld { get; set; } = false;
     
     /// <summary>
-    /// How much extra weight to give consolidated worlds (0-50).
-    /// Higher values strongly prefer visiting worlds already on the route.
+    /// Maximum price multiplier for filtering out fraud/gouging listings.
+    /// Listings priced above (ModePrice × Multiplier) are excluded.
+    /// Null disables filtering. Default 2.5x.
     /// </summary>
-    public int ConsolidationBonus { get; set; } = 20;
+    public decimal? MaxPriceMultiplier { get; set; } = 2.5m;
     
     /// <summary>
     /// Creates config from settings service.
@@ -47,11 +33,8 @@ public class MarketAnalysisConfig
     {
         return new MarketAnalysisConfig
         {
-            CostVsTravelWeight = settings.Get("analysis.cost_vs_travel_weight", 50),
-            MinSplitSavingsPercent = settings.Get("analysis.min_split_savings", 10m),
             MaxWorldsPerItem = settings.Get<int?>("analysis.max_worlds_per_item", null),
-            PreferConsolidatedWorlds = settings.Get("analysis.prefer_consolidated", true),
-            ConsolidationBonus = settings.Get("analysis.consolidation_bonus", 20)
+            EnableSplitWorld = settings.Get("analysis.enable_split_world", false)
         };
     }
     
@@ -63,18 +46,8 @@ public class MarketAnalysisConfig
         if (MaxWorldsPerItem.HasValue)
             return MaxWorldsPerItem.Value;
         
-        // Soft limit: tier 1 worlds + 1 for supplemental
-        // Weight adjusts this: lower weight = tighter limit
-        var adjustment = (100 - CostVsTravelWeight) / 25; // 0 to 4
-        return Math.Max(2, tier1WorldCount + 1 - adjustment);
-    }
-    
-    /// <summary>
-    /// Checks if a split purchase meets the minimum savings threshold.
-    /// </summary>
-    public bool MeetsSavingsThreshold(decimal savingsPercent)
-    {
-        return savingsPercent >= MinSplitSavingsPercent;
+        // Default: reasonable limit based on tier 1 count
+        return Math.Max(3, tier1WorldCount + 1);
     }
 }
 
@@ -122,6 +95,27 @@ public class DetailedShoppingPlan
     public bool HasHqData => HQAveragePrice.HasValue;
 
     public bool HasOptions => WorldOptions.Count > 0;
+    
+    /// <summary>
+    /// Total quantity available across ALL worlds (for stock availability checking).
+    /// Vendors always have unlimited stock.
+    /// </summary>
+    public int TotalAvailableQuantity => 
+        RecommendedWorld?.WorldName == "Vendor" ? QuantityNeeded : WorldOptions.Sum(w => w.TotalQuantityPurchased);
+    
+    /// <summary>
+    /// Whether the total available stock across all worlds is sufficient.
+    /// Vendors always have sufficient stock.
+    /// </summary>
+    public bool HasSufficientStock => 
+        RecommendedWorld?.WorldName == "Vendor" || TotalAvailableQuantity >= QuantityNeeded;
+    
+    /// <summary>
+    /// The shortfall quantity if stock is insufficient across all worlds.
+    /// Always 0 for vendor purchases.
+    /// </summary>
+    public int StockShortfall => 
+        RecommendedWorld?.WorldName == "Vendor" ? 0 : Math.Max(0, QuantityNeeded - TotalAvailableQuantity);
     
     /// <summary>
     /// Multi-world split recommendation for items that can't be fulfilled on a single world.
@@ -177,7 +171,7 @@ public class SplitWorldPurchase
     /// <summary>
     /// Total cost for this portion (QuantityToBuy * PricePerUnit).
     /// </summary>
-    public long TotalCost => (long)(QuantityToBuy * PricePerUnit);
+    public long TotalCost { get; set; }
     
     /// <summary>
     /// Whether this is a partial world (not the primary recommendation).
@@ -214,9 +208,35 @@ public class WorldShoppingSummary
     public decimal AveragePricePerUnit { get; set; }
     public int ListingsUsed { get; set; }
     public List<ShoppingListingEntry> Listings { get; set; } = new();
+    
+    /// <summary>
+    /// Listings excluded due to excessive pricing (fraud/gouging detection).
+    /// These are priced above the configured multiplier of mode price.
+    /// </summary>
+    public List<ShoppingListingEntry> ExcludedListings { get; set; } = new();
+    
     public bool IsFullyUnderAverage { get; set; }
     public int TotalQuantityPurchased { get; set; }
     public int ExcessQuantity { get; set; }
+    
+    /// <summary>
+    /// The mode price per unit - the price with the highest available quantity.
+    /// Used for ValueScore calculation in split mode.
+    /// </summary>
+    public long ModePricePerUnit { get; set; }
+    
+    /// <summary>
+    /// Value score: lower is better. Calculated by CalculateValueScore method.
+    /// Single-world mode: ValueScore = TotalCost (Infinity if can't fulfill)
+    /// Split mode: ValueScore = ModePrice / StockRatio
+    /// </summary>
+    public decimal ValueScore { get; set; }
+    
+    /// <summary>
+    /// Whether this world has competitively priced listings.
+    /// </summary>
+    public bool IsCompetitive => BestSingleListing != null && 
+        BestSingleListing.PricePerUnit <= AveragePricePerUnit * 0.9m;
     
     /// <summary>
     /// Whether this world has sufficient stock to fulfill the full quantity needed.
@@ -232,17 +252,6 @@ public class WorldShoppingSummary
     /// The best single listing on this world (for value comparison).
     /// </summary>
     public ShoppingListingEntry? BestSingleListing { get; set; }
-    
-    /// <summary>
-    /// Value score: lower is better. Based on price per unit of cheapest listing.
-    /// </summary>
-    public decimal ValueScore => BestSingleListing?.PricePerUnit ?? AveragePricePerUnit;
-    
-    /// <summary>
-    /// Whether this world has competitively priced listings.
-    /// </summary>
-    public bool IsCompetitive => BestSingleListing != null && 
-        BestSingleListing.PricePerUnit <= AveragePricePerUnit * 0.9m;
     
     /// <summary>
     /// World classification/status (Congested, Standard, Preferred, etc.)
@@ -286,6 +295,29 @@ public class WorldShoppingSummary
     /// Whether this world has any accessibility issues (congested, blacklisted, or travel prohibited).
     /// </summary>
     public bool HasAccessibilityIssues => IsCongested || IsBlacklisted || IsTravelProhibited;
+    
+    /// <summary>
+    /// Whether any listings were excluded due to pricing.
+    /// </summary>
+    public bool HasExcludedListings => ExcludedListings?.Any() == true;
+    
+    /// <summary>
+    /// Min and max price multiplier of excluded listings compared to mode price.
+    /// </summary>
+    public (decimal Min, decimal Max)? ExcludedPriceMultipliers
+    {
+        get
+        {
+            if (!HasExcludedListings || ModePricePerUnit <= 0)
+                return null;
+                
+            var multipliers = ExcludedListings
+                .Select(l => (decimal)l.PricePerUnit / ModePricePerUnit)
+                .ToList();
+                
+            return (multipliers.Min(), multipliers.Max());
+        }
+    }
 }
 
 /// <summary>
@@ -413,4 +445,138 @@ public class PriceInfo
     public decimal HqUnitPrice { get; set; }
     public int HqQuantityAvailable { get; set; }
     public bool HasHqData => HqUnitPrice > 0;
+}
+
+/// <summary>
+/// Represents a single item purchase within a world's procurement card.
+/// Used in the world-centric procurement view.
+/// </summary>
+public class WorldItemPurchase
+{
+    /// <summary>
+    /// The item ID.
+    /// </summary>
+    public int ItemId { get; set; }
+    
+    /// <summary>
+    /// The item name.
+    /// </summary>
+    public string ItemName { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// The icon ID for the item.
+    /// </summary>
+    public int IconId { get; set; }
+    
+    /// <summary>
+    /// Quantity to purchase on this specific world.
+    /// </summary>
+    public int QuantityOnThisWorld { get; set; }
+    
+    /// <summary>
+    /// Total quantity needed across all worlds (for split purchases).
+    /// </summary>
+    public int TotalQuantityNeeded { get; set; }
+    
+    /// <summary>
+    /// Price per unit on this world.
+    /// </summary>
+    public decimal PricePerUnit { get; set; }
+    
+    /// <summary>
+    /// Total cost for this portion (QuantityOnThisWorld * PricePerUnit).
+    /// </summary>
+    public long TotalCost { get; set; }
+    
+    /// <summary>
+    /// Whether this item requires a multi-world split purchase.
+    /// </summary>
+    public bool IsSplitPurchase { get; set; }
+    
+    /// <summary>
+    /// The original DetailedShoppingPlan this item came from.
+    /// </summary>
+    public DetailedShoppingPlan? SourcePlan { get; set; }
+    
+    /// <summary>
+    /// For split purchases, indicates if this is the primary world or supplemental.
+    /// </summary>
+    public string TravelContext { get; set; } = "Primary";
+    
+    /// <summary>
+    /// Display format: "×X of Y" where X is quantity on this world, Y is total needed.
+    /// </summary>
+    public string QuantityDisplay => $"×{QuantityOnThisWorld} of {TotalQuantityNeeded}";
+}
+
+/// <summary>
+/// Represents a procurement card for a specific world.
+/// Contains all items to be purchased on that world, aggregating both single-world and split purchases.
+/// </summary>
+public class WorldProcurementCardModel
+{
+    /// <summary>
+    /// The world name (e.g., "Gilgamesh", "Vendor").
+    /// </summary>
+    public string WorldName { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// The data center this world belongs to.
+    /// </summary>
+    public string DataCenter { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Whether this is a vendor card (not a market world).
+    /// </summary>
+    public bool IsVendor => WorldName == "Vendor";
+    
+    /// <summary>
+    /// Whether this world is congested (cannot travel to).
+    /// </summary>
+    public bool IsCongested { get; set; }
+    
+    /// <summary>
+    /// Warning message for congested worlds.
+    /// </summary>
+    public string? CongestedWarning { get; set; }
+    
+    /// <summary>
+    /// The world classification (Standard, Congested, Preferred, etc.).
+    /// </summary>
+    public WorldClassification Classification { get; set; } = WorldClassification.Standard;
+    
+    /// <summary>
+    /// All items to be purchased on this world.
+    /// </summary>
+    public List<WorldItemPurchase> Items { get; set; } = new();
+    
+    /// <summary>
+    /// Total cost for all items on this world.
+    /// </summary>
+    public long TotalCost => Items.Sum(i => i.TotalCost);
+    
+    /// <summary>
+    /// Total number of items (not quantities) on this world.
+    /// </summary>
+    public int ItemCount => Items.Count;
+    
+    /// <summary>
+    /// Total quantity of all items to purchase on this world.
+    /// </summary>
+    public int TotalQuantity => Items.Sum(i => i.QuantityOnThisWorld);
+    
+    /// <summary>
+    /// Whether any items on this world are split purchases.
+    /// </summary>
+    public bool HasSplitPurchases => Items.Any(i => i.IsSplitPurchase);
+    
+    /// <summary>
+    /// Items that require multi-world split purchases.
+    /// </summary>
+    public List<WorldItemPurchase> SplitItems => Items.Where(i => i.IsSplitPurchase).ToList();
+    
+    /// <summary>
+    /// Items that are fully purchased on this world (non-split).
+    /// </summary>
+    public List<WorldItemPurchase> FullItems => Items.Where(i => !i.IsSplitPurchase).ToList();
 }

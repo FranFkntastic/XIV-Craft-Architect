@@ -186,22 +186,6 @@
         }
         else
         {
-            <!-- Refresh Prices Button -->
-            <div style="margin-bottom: 16px;">
-                <button @onclick="RefreshPricesAsync"
-                        disabled="@_isRefreshingPrices"
-                        style="padding: 8px 16px; background: #2d2d2d; color: #ccc; border: 1px solid #555; border-radius: 4px; cursor: pointer;">
-                    @if (_isRefreshingPrices)
-                    {
-                        <span>Fetching Prices...</span>
-                    }
-                    else
-                    {
-                        <span>Refresh Prices</span>
-                    }
-                </button>
-            </div>
-            
             <!-- Recipe Tree -->
             <div style="background: #2d2d2d; border-radius: 4px; border: 1px solid #444; padding: 12px;">
                 @foreach (var rootItem in AppState.CurrentPlan.RootItems)

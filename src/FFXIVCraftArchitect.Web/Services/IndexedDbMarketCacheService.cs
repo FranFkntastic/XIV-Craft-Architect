@@ -7,7 +7,8 @@ namespace FFXIVCraftArchitect.Web.Services;
 
 /// <summary>
 /// IndexedDB implementation of IMarketCacheService for Blazor WebAssembly.
-/// Mirrors the behavior of SqliteMarketCacheService but uses browser IndexedDB for persistence.
+/// Uses Unix timestamps to avoid DateTime serialization issues.
+/// Implements automatic cleanup and cache size limits.
 /// </summary>
 public class IndexedDbMarketCacheService : IMarketCacheService
 {
@@ -15,7 +16,8 @@ public class IndexedDbMarketCacheService : IMarketCacheService
     private readonly UniversalisService _universalisService;
     private readonly ILogger<IndexedDbMarketCacheService>? _logger;
     private readonly TimeSpan _defaultMaxAge = TimeSpan.FromHours(1);
-    private readonly JsonSerializerOptions _jsonOptions;
+    private const long MaxCacheSizeBytes = 500 * 1024 * 1024; // 500MB max
+    private const int MaxCacheEntries = 10000; // Max 10k items
 
     public IndexedDbMarketCacheService(
         IJSRuntime jsRuntime,
@@ -25,19 +27,33 @@ public class IndexedDbMarketCacheService : IMarketCacheService
         _jsRuntime = jsRuntime;
         _universalisService = universalisService;
         _logger = logger;
-        _jsonOptions = new JsonSerializerOptions 
-        { 
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase 
-        };
         
-        _logger?.LogInformation("[IndexedDbMarketCache] Initialized");
+        _logger?.LogInformation("[IndexedDbMarketCache] Initialized with maxSize={MaxSize}MB, maxEntries={MaxEntries}", 
+            MaxCacheSizeBytes / 1024 / 1024, MaxCacheEntries);
     }
 
     private static string GetKey(int itemId, string dataCenter) => $"{itemId}@{dataCenter}";
 
+    /// <summary>
+    /// Converts Unix timestamp to DateTimeOffset safely.
+    /// </summary>
+    private static DateTimeOffset UnixToDateTimeOffset(long unixSeconds)
+    {
+        return DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
+    }
+
+    /// <summary>
+    /// Converts DateTime to Unix timestamp safely.
+    /// </summary>
+    private static long DateTimeToUnix(DateTime dateTime)
+    {
+        return new DateTimeOffset(dateTime).ToUnixTimeSeconds();
+    }
+
     public async Task<CachedMarketData?> GetAsync(int itemId, string dataCenter, TimeSpan? maxAge = null)
     {
-        var cutoff = DateTime.UtcNow - (maxAge ?? _defaultMaxAge);
+        var maxAgeSeconds = (long)(maxAge ?? _defaultMaxAge).TotalSeconds;
+        var cutoffUnix = DateTimeToUnix(DateTime.UtcNow) - maxAgeSeconds;
         var key = GetKey(itemId, dataCenter);
         
         try
@@ -50,9 +66,12 @@ public class IndexedDbMarketCacheService : IMarketCacheService
                 return null;
             }
             
-            if (entry.FetchedAt <= cutoff)
+            // Check if stale using Unix timestamp comparison
+            if (entry.FetchedAtUnix <= cutoffUnix)
             {
-                _logger?.LogDebug("[IndexedDbMarketCache] STALE for {ItemId}@{DataCenter}", itemId, dataCenter);
+                var age = DateTime.UtcNow - UnixToDateTimeOffset(entry.FetchedAtUnix).DateTime;
+                _logger?.LogDebug("[IndexedDbMarketCache] STALE for {ItemId}@{DataCenter} (age: {Age:F1}h)", 
+                    itemId, dataCenter, age.TotalHours);
                 return null;
             }
             
@@ -62,7 +81,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService
             {
                 ItemId = itemId,
                 DataCenter = dataCenter,
-                FetchedAt = entry.FetchedAt,
+                FetchedAtUnix = entry.FetchedAtUnix,
                 DCAveragePrice = entry.DcAvgPrice,
                 HQAveragePrice = entry.HqAvgPrice,
                 Worlds = entry.Worlds ?? new List<CachedWorldData>()
@@ -77,7 +96,8 @@ public class IndexedDbMarketCacheService : IMarketCacheService
 
     public async Task<(CachedMarketData? Data, bool IsStale)> GetWithStaleAsync(int itemId, string dataCenter, TimeSpan? maxAge = null)
     {
-        var cutoff = DateTime.UtcNow - (maxAge ?? _defaultMaxAge);
+        var maxAgeSeconds = (long)(maxAge ?? _defaultMaxAge).TotalSeconds;
+        var cutoffUnix = DateTimeToUnix(DateTime.UtcNow) - maxAgeSeconds;
         var key = GetKey(itemId, dataCenter);
         
         try
@@ -90,16 +110,17 @@ public class IndexedDbMarketCacheService : IMarketCacheService
                 return (null, false);
             }
             
-            var isStale = entry.FetchedAt <= cutoff;
+            var isStale = entry.FetchedAtUnix <= cutoffUnix;
+            var age = DateTime.UtcNow - UnixToDateTimeOffset(entry.FetchedAtUnix).DateTime;
             
-            _logger?.LogDebug("[IndexedDbMarketCache] {Status} for {ItemId}@{DataCenter} (fetched {Hours:F1}h ago)", 
-                isStale ? "STALE" : "FRESH", itemId, dataCenter, (DateTime.UtcNow - entry.FetchedAt).TotalHours);
+            _logger?.LogDebug("[IndexedDbMarketCache] {Status} for {ItemId}@{DataCenter} (age: {Age:F1}h)", 
+                isStale ? "STALE" : "FRESH", itemId, dataCenter, age.TotalHours);
             
             var data = new CachedMarketData
             {
                 ItemId = itemId,
                 DataCenter = dataCenter,
-                FetchedAt = entry.FetchedAt,
+                FetchedAtUnix = entry.FetchedAtUnix,
                 DCAveragePrice = entry.DcAvgPrice,
                 HQAveragePrice = entry.HqAvgPrice,
                 Worlds = entry.Worlds ?? new List<CachedWorldData>()
@@ -117,10 +138,10 @@ public class IndexedDbMarketCacheService : IMarketCacheService
     public async Task SetAsync(int itemId, string dataCenter, CachedMarketData data)
     {
         var key = GetKey(itemId, dataCenter);
-        var age = DateTime.UtcNow - data.FetchedAt;
+        var age = data.Age;
         
-        _logger?.LogDebug("[IndexedDbMarketCache] Storing {ItemId}@{DataCenter} with FetchedAt={FetchedAt} (age={Age:F1}min)", 
-            itemId, dataCenter, data.FetchedAt, age.TotalMinutes);
+        _logger?.LogDebug("[IndexedDbMarketCache] Storing {ItemId}@{DataCenter} with FetchedAtUnix={FetchedAt} (age={Age:F1}min)", 
+            itemId, dataCenter, data.FetchedAtUnix, age.TotalMinutes);
         
         try
         {
@@ -129,7 +150,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService
                 Key = key,
                 ItemId = itemId,
                 DataCenter = dataCenter,
-                FetchedAt = data.FetchedAt,
+                FetchedAtUnix = data.FetchedAtUnix,
                 DcAvgPrice = data.DCAveragePrice,
                 HqAvgPrice = data.HQAveragePrice,
                 Worlds = data.Worlds
@@ -170,16 +191,14 @@ public class IndexedDbMarketCacheService : IMarketCacheService
             else if (isStale)
             {
                 missing.Add((itemId, dataCenter));
-                var age = DateTime.UtcNow - data.FetchedAt;
-                _logger?.LogDebug("[IndexedDbMarketCache] STALE ({Age:F0}min old) for {ItemId}@{DC}", 
-                    age.TotalMinutes, itemId, dataCenter);
+                _logger?.LogDebug("[IndexedDbMarketCache] STALE (age: {Age:F0}min) for {ItemId}@{DC}", 
+                    data.Age.TotalMinutes, itemId, dataCenter);
             }
             else
             {
                 hitCount++;
-                var age = DateTime.UtcNow - data.FetchedAt;
-                _logger?.LogDebug("[IndexedDbMarketCache] HIT ({Age:F0}min old) for {ItemId}@{DC}", 
-                    age.TotalMinutes, itemId, dataCenter);
+                _logger?.LogDebug("[IndexedDbMarketCache] HIT (age: {Age:F0}min) for {ItemId}@{DC}", 
+                    data.Age.TotalMinutes, itemId, dataCenter);
             }
         }
         
@@ -196,19 +215,45 @@ public class IndexedDbMarketCacheService : IMarketCacheService
         CancellationToken ct = default)
     {
         var effectiveMaxAge = maxAge ?? _defaultMaxAge;
-        var cutoff = DateTime.UtcNow - effectiveMaxAge;
+        var cutoffUnix = DateTimeToUnix(DateTime.UtcNow) - (long)effectiveMaxAge.TotalSeconds;
         
-        _logger?.LogInformation("[IndexedDbMarketCache] EnsurePopulatedAsync START - {Count} requests, maxAge={MaxAge}, cutoff={Cutoff}", 
-            requests.Count, effectiveMaxAge, cutoff);
+        _logger?.LogInformation("[IndexedDbMarketCache] EnsurePopulatedAsync START - {Count} requests, maxAge={MaxAge}", 
+            requests.Count, effectiveMaxAge);
         
         if (requests.Count == 0) return 0;
         
-        // Check what's missing from cache
+        // STEP 1: Clean up stale entries before fetching new data
+        progress?.Report("Cleaning up stale cache entries...");
+        var cleanedCount = await CleanupStaleAsync(effectiveMaxAge);
+        if (cleanedCount > 0)
+        {
+            _logger?.LogInformation("[IndexedDbMarketCache] Cleaned {Count} stale entries before fetch", cleanedCount);
+        }
+        
+        // STEP 2: Check cache size and enforce limits
+        var stats = await GetStatsAsync();
+        if (stats.ApproximateSizeBytes > MaxCacheSizeBytes || stats.TotalEntries > MaxCacheEntries)
+        {
+            _logger?.LogWarning("[IndexedDbMarketCache] Cache size exceeded (size={Size}MB, entries={Entries}). Running emergency cleanup...",
+                stats.ApproximateSizeBytes / 1024 / 1024, stats.TotalEntries);
+            progress?.Report("Cache size limit reached, cleaning up old entries...");
+            
+            // Aggressive cleanup - remove anything older than 30 minutes
+            await CleanupStaleAsync(TimeSpan.FromMinutes(30));
+            
+            // If still too big, clear half the cache
+            var newStats = await GetStatsAsync();
+            if (newStats.ApproximateSizeBytes > MaxCacheSizeBytes * 0.8)
+            {
+                await ClearOldestEntriesAsync(stats.TotalEntries / 2);
+            }
+        }
+        
+        // STEP 3: Check what's missing from cache
         var missing = await GetMissingAsync(requests, maxAge);
         if (missing.Count == 0)
         {
-            _logger?.LogInformation("[IndexedDbMarketCache] All {Count} items already in cache (maxAge={MaxAge})", 
-                requests.Count, effectiveMaxAge);
+            _logger?.LogInformation("[IndexedDbMarketCache] All {Count} items already in cache", requests.Count);
             return 0;
         }
         
@@ -216,9 +261,10 @@ public class IndexedDbMarketCacheService : IMarketCacheService
             missing.Count, requests.Count);
         progress?.Report($"Fetching market data for {missing.Count} items...");
         
-        // Group by data center for efficient bulk fetching
+        // STEP 4: Group by data center for efficient bulk fetching
         var byDataCenter = missing.GroupBy(x => x.dataCenter).ToList();
         int fetchedCount = 0;
+        int verifiedCount = 0;
         
         foreach (var dcGroup in byDataCenter)
         {
@@ -231,16 +277,27 @@ public class IndexedDbMarketCacheService : IMarketCacheService
                 
                 var fetchedData = await _universalisService.GetMarketDataBulkAsync(dc, itemIds, ct);
                 
-                // Store each result in cache
+                // STEP 5: Store each result in cache with verification
                 foreach (var kvp in fetchedData)
                 {
                     var cachedData = ConvertUniversalisResponseToCachedData(kvp.Key, dc, kvp.Value);
                     await SetAsync(kvp.Key, dc, cachedData);
                     fetchedCount++;
+                    
+                    // STEP 6: Verify the data was stored correctly
+                    var verified = await VerifyStoredDataAsync(kvp.Key, dc, cachedData.FetchedAtUnix);
+                    if (verified)
+                    {
+                        verifiedCount++;
+                    }
+                    else
+                    {
+                        _logger?.LogWarning("[IndexedDbMarketCache] Data verification failed for {ItemId}@{DC}", kvp.Key, dc);
+                    }
                 }
                 
-                _logger?.LogInformation("[IndexedDbMarketCache] Fetched and cached {FetchedCount}/{RequestedCount} items from {DC}",
-                    fetchedData.Count, itemIds.Count, dc);
+                _logger?.LogInformation("[IndexedDbMarketCache] Fetched and cached {FetchedCount}/{RequestedCount} items from {DC} (verified: {Verified})",
+                    fetchedData.Count, itemIds.Count, dc, verifiedCount);
             }
             catch (Exception ex)
             {
@@ -249,17 +306,58 @@ public class IndexedDbMarketCacheService : IMarketCacheService
             }
         }
         
+        _logger?.LogInformation("[IndexedDbMarketCache] EnsurePopulatedAsync COMPLETE - Fetched: {Fetched}, Verified: {Verified}",
+            fetchedCount, verifiedCount);
+        
         return fetchedCount;
+    }
+
+    /// <summary>
+    /// Verifies that data was stored correctly by reading it back.
+    /// </summary>
+    private async Task<bool> VerifyStoredDataAsync(int itemId, string dataCenter, long expectedUnixTimestamp)
+    {
+        try
+        {
+            var key = GetKey(itemId, dataCenter);
+            var entry = await _jsRuntime.InvokeAsync<IndexedDbMarketCacheEntry?>("IndexedDB.loadMarketData", key);
+            
+            if (entry == null)
+            {
+                _logger?.LogWarning("[IndexedDbMarketCache] Verification failed - entry missing for {ItemId}@{DC}", itemId, dataCenter);
+                return false;
+            }
+            
+            // Allow 1 second tolerance for timestamp comparison
+            var timestampMatch = Math.Abs(entry.FetchedAtUnix - expectedUnixTimestamp) <= 1;
+            
+            if (!timestampMatch)
+            {
+                _logger?.LogWarning("[IndexedDbMarketCache] Verification failed - timestamp mismatch for {ItemId}@{DC} (expected: {Expected}, got: {Actual})",
+                    itemId, dataCenter, expectedUnixTimestamp, entry.FetchedAtUnix);
+                return false;
+            }
+            
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[IndexedDbMarketCache] Verification error for {ItemId}@{DC}", itemId, dataCenter);
+            return false;
+        }
     }
 
     public async Task<int> CleanupStaleAsync(TimeSpan maxAge)
     {
-        var cutoff = DateTime.UtcNow - maxAge;
+        var cutoffUnix = DateTimeToUnix(DateTime.UtcNow) - (long)maxAge.TotalSeconds;
         
         try
         {
-            var deleted = await _jsRuntime.InvokeAsync<int>("IndexedDB.deleteStaleMarketData", cutoff.ToString("O"));
-            _logger?.LogInformation("[IndexedDbMarketCache] Cleaned up {Count} stale entries", deleted);
+            var deleted = await _jsRuntime.InvokeAsync<int>("IndexedDB.deleteStaleMarketData", cutoffUnix);
+            if (deleted > 0)
+            {
+                _logger?.LogInformation("[IndexedDbMarketCache] Cleaned up {Count} stale entries (older than {MaxAge})", deleted, maxAge);
+            }
             return deleted;
         }
         catch (Exception ex)
@@ -269,21 +367,39 @@ public class IndexedDbMarketCacheService : IMarketCacheService
         }
     }
 
+    /// <summary>
+    /// Clears the oldest N entries from the cache (LRU eviction).
+    /// </summary>
+    public async Task<int> ClearOldestEntriesAsync(int count)
+    {
+        try
+        {
+            var deleted = await _jsRuntime.InvokeAsync<int>("IndexedDB.deleteOldestEntries", count);
+            _logger?.LogWarning("[IndexedDbMarketCache] Emergency cleanup: removed {Deleted} oldest entries", deleted);
+            return deleted;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[IndexedDbMarketCache] Error clearing oldest entries");
+            return 0;
+        }
+    }
+
     public async Task<CacheStats> GetStatsAsync()
     {
-        var cutoff = DateTime.UtcNow.AddHours(-1).ToString("O");
+        var cutoffUnix = DateTimeToUnix(DateTime.UtcNow.AddHours(-1));
         
         try
         {
-            var stats = await _jsRuntime.InvokeAsync<IndexedDbCacheStats>("IndexedDB.getMarketCacheStats", cutoff);
+            var stats = await _jsRuntime.InvokeAsync<IndexedDbCacheStats>("IndexedDB.getMarketCacheStats", cutoffUnix);
             
             return new CacheStats
             {
                 TotalEntries = stats.Total,
                 ValidEntries = stats.Valid,
                 StaleEntries = stats.Stale,
-                OldestEntry = stats.Oldest != null ? DateTime.Parse(stats.Oldest) : null,
-                NewestEntry = stats.Newest != null ? DateTime.Parse(stats.Newest) : null,
+                OldestEntry = stats.OldestUnix > 0 ? UnixToDateTimeOffset(stats.OldestUnix).DateTime : null,
+                NewestEntry = stats.NewestUnix > 0 ? UnixToDateTimeOffset(stats.NewestUnix).DateTime : null,
                 ApproximateSizeBytes = stats.SizeBytes
             };
         }
@@ -316,14 +432,14 @@ public class IndexedDbMarketCacheService : IMarketCacheService
             });
         }
         
-        var now = DateTime.UtcNow;
-        _logger?.LogDebug("[IndexedDbMarketCache] Setting FetchedAt={Now} for {ItemId}@{DC}", now, itemId, dataCenter);
+        var nowUnix = DateTimeToUnix(DateTime.UtcNow);
+        _logger?.LogDebug("[IndexedDbMarketCache] Setting FetchedAtUnix={Now} for {ItemId}@{DC}", nowUnix, itemId, dataCenter);
         
         return new CachedMarketData
         {
             ItemId = itemId,
             DataCenter = dataCenter,
-            FetchedAt = now,
+            FetchedAtUnix = nowUnix,
             DCAveragePrice = (decimal)(response.AveragePriceNq > 0 ? response.AveragePriceNq : response.AveragePrice),
             HQAveragePrice = response.AveragePriceHq > 0 ? (decimal)response.AveragePriceHq : null,
             Worlds = worlds
@@ -333,13 +449,14 @@ public class IndexedDbMarketCacheService : IMarketCacheService
 
 /// <summary>
 /// Data structure for IndexedDB market cache entries.
+/// Uses Unix timestamp (long) instead of DateTime to avoid serialization issues.
 /// </summary>
 public class IndexedDbMarketCacheEntry
 {
     public string Key { get; set; } = string.Empty;
     public int ItemId { get; set; }
     public string DataCenter { get; set; } = string.Empty;
-    public DateTime FetchedAt { get; set; }
+    public long FetchedAtUnix { get; set; }  // Unix timestamp in seconds
     public decimal DcAvgPrice { get; set; }
     public decimal? HqAvgPrice { get; set; }
     public List<CachedWorldData> Worlds { get; set; } = new();
@@ -353,7 +470,7 @@ public class IndexedDbCacheStats
     public int Total { get; set; }
     public int Valid { get; set; }
     public int Stale { get; set; }
-    public string? Oldest { get; set; }
-    public string? Newest { get; set; }
+    public long OldestUnix { get; set; }  // Unix timestamp
+    public long NewestUnix { get; set; }  // Unix timestamp
     public long SizeBytes { get; set; }
 }
