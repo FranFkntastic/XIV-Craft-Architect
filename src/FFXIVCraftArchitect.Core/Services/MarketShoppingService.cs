@@ -276,13 +276,31 @@ public class MarketShoppingService
 
     /// <summary>
     /// Calculate the mode price - the price with the highest available quantity.
-    /// This is the "most common" price point weighted by stock availability.
+    /// Uses a two-pass approach: first find a reasonable baseline, then calculate mode
+    /// from listings within 10x of that baseline to avoid fraud skewing the mode.
     /// </summary>
     private long CalculateModePrice(List<MarketListing> listings)
     {
         if (listings.Count == 0) return 0;
         
-        return listings
+        // Pass 1: Get a fraud-resistant baseline using median of cheapest 50%
+        var sortedByPrice = listings.OrderBy(l => l.PricePerUnit).ToList();
+        var halfCount = Math.Max(1, sortedByPrice.Count / 2);
+        var cheapestHalf = sortedByPrice.Take(halfCount);
+        var baselinePrice = cheapestHalf.Any() 
+            ? cheapestHalf.Average(l => (decimal)l.PricePerUnit) 
+            : sortedByPrice.First().PricePerUnit;
+        
+        // Pass 2: Calculate mode only from listings within 10x of baseline
+        // This prevents fraudulent listings from skewing the mode
+        var reasonableListings = listings
+            .Where(l => l.PricePerUnit <= baselinePrice * 10)
+            .ToList();
+        
+        if (reasonableListings.Count == 0)
+            reasonableListings = sortedByPrice.Take(3).ToList(); // Fallback to cheapest 3
+        
+        return reasonableListings
             .GroupBy(l => l.PricePerUnit)
             .Select(g => new { Price = g.Key, Quantity = g.Sum(l => l.Quantity) })
             .OrderByDescending(x => x.Quantity)
@@ -365,13 +383,18 @@ public class MarketShoppingService
 
         // Calculate mode price for fraud detection threshold
         summary.ModePricePerUnit = CalculateModePrice(listings);
-        var maxPriceThreshold = config?.MaxPriceMultiplier != null && summary.ModePricePerUnit > 0
-            ? (long)(summary.ModePricePerUnit * config.MaxPriceMultiplier.Value)
+        var maxPriceMultiplier = config?.MaxPriceMultiplier ?? 2.5m; // Default 2.5x if not specified
+        var maxPriceThreshold = summary.ModePricePerUnit > 0
+            ? (long)(summary.ModePricePerUnit * maxPriceMultiplier)
             : long.MaxValue;
+        
+        _logger?.LogInformation("[FRAUD_CHECK] {WorldName}: ModePrice={ModePrice}, Multiplier={Multiplier}, Threshold={Threshold}, TotalListings={Count}",
+            worldName, summary.ModePricePerUnit, maxPriceMultiplier, maxPriceThreshold, listings.Count);
         
         var remaining = quantityNeeded;
         long totalCost = 0;
         int listingsUsed = 0;
+        int fraudSkipped = 0;
 
         // Include listings - skip fraud/gouging listings based on price threshold
         // This prevents "desperation recommendations" with extremely overpriced listings
@@ -380,6 +403,9 @@ public class MarketShoppingService
             // Check if listing exceeds fraud threshold (soft filter - skip but continue scanning)
             if (listing.PricePerUnit > maxPriceThreshold)
             {
+                _logger?.LogWarning("[FRAUD_DETECTED] {WorldName}: Excluding listing - Price={Price}, Threshold={Threshold}, Retainer={Retainer}",
+                    worldName, listing.PricePerUnit, maxPriceThreshold, listing.RetainerName);
+                fraudSkipped++;
                 summary.ExcludedListings.Add(new ShoppingListingEntry
                 {
                     Quantity = listing.Quantity,
@@ -454,8 +480,8 @@ public class MarketShoppingService
         summary.HasSufficientStock = remaining <= 0;
         summary.ShortfallQuantity = remaining > 0 ? remaining : 0;
 
-        _logger?.LogDebug("[CalculateWorldSummary] {World} - Purchased: {Purchased}/{Needed}, Cost: {Cost:N0}g, Sufficient: {Sufficient}", 
-            worldName, summary.TotalQuantityPurchased, quantityNeeded, totalCost, summary.HasSufficientStock);
+        _logger?.LogInformation("[CalculateWorldSummary] {World} - Purchased: {Purchased}/{Needed}, Cost: {Cost:N0}g, FraudSkipped: {Fraud}, Sufficient: {Sufficient}", 
+            worldName, summary.TotalQuantityPurchased, quantityNeeded, totalCost, fraudSkipped, summary.HasSufficientStock);
 
         return summary;
     }

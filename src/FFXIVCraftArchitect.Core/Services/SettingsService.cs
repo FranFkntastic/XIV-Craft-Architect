@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using FFXIVCraftArchitect.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIVCraftArchitect.Core.Services;
@@ -9,7 +10,7 @@ namespace FFXIVCraftArchitect.Core.Services;
 /// Service for managing application settings.
 /// Ported from Python: settings_manager.py
 /// </summary>
-public class SettingsService
+public class SettingsService : ISettingsService
 {
     private readonly string _settingsPath;
     private readonly Dictionary<string, object> _settings;
@@ -226,8 +227,13 @@ public class SettingsService
         }
 
         var oldValue = current.TryGetValue(keys[^1], out var existing) ? existing : null;
-        current[keys[^1]] = value!;
-        
+        if (value is null)
+        {
+            _logger.LogWarning("Attempted to set null value for key '{Key}', skipping", keyPath);
+            return;
+        }
+        current[keys[^1]] = value;
+
         _logger.LogDebug("Setting {Key}: {OldValue} -> {NewValue}", keyPath, oldValue, value);
         
         SaveSettings();
@@ -245,6 +251,25 @@ public class SettingsService
         }
         SaveSettings();
         _logger.LogInformation("Settings reset to defaults");
+    }
+    
+    // ISettingsService async implementations (wrapper around sync methods)
+    
+    public Task<T?> GetAsync<T>(string keyPath, T? defaultValue = default)
+    {
+        return Task.FromResult(Get(keyPath, defaultValue));
+    }
+    
+    public Task SetAsync<T>(string keyPath, T value)
+    {
+        Set(keyPath, value);
+        return Task.CompletedTask;
+    }
+    
+    public Task ResetToDefaultsAsync()
+    {
+        ResetToDefaults();
+        return Task.CompletedTask;
     }
 
     private Dictionary<string, object> LoadSettings()

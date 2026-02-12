@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using FFXIVCraftArchitect.Web;
 using FFXIVCraftArchitect.Web.Services;
 using FFXIVCraftArchitect.Core.Services;
+using FFXIVCraftArchitect.Core.Services.Interfaces;
 using MudBlazor.Services;
 
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
@@ -23,6 +24,9 @@ builder.Services.AddScoped<IMarketCacheService, IndexedDbMarketCacheService>();
 builder.Services.AddScoped<MarketShoppingService>();
 builder.Services.AddScoped<ProcurementAnalysisService>();
 builder.Services.AddScoped<IndexedDbMarketCacheService>();
+
+// Register Settings Service (Web implementation)
+builder.Services.AddScoped<ISettingsService, WebSettingsService>();
 
 // Register App State (singleton to persist across tab switches)
 builder.Services.AddSingleton<AppState>();

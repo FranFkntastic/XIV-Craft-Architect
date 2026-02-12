@@ -2,7 +2,7 @@ using System.IO;
 using System.Windows;
 using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Core.Services;
-using FFXIVCraftArchitect.Services.Interfaces;
+using FFXIVCraftArchitect.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 using ITeamcraftService = FFXIVCraftArchitect.Core.Services.ITeamcraftService;
 

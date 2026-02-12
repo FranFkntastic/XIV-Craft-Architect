@@ -146,7 +146,24 @@
     
     <!-- Middle Column: Recipe Tree -->
     <div style="padding: 16px; overflow-y: auto; border-right: 1px solid #333;" id="recipe-tree-container">
-        <div style="font-size: 16px; font-weight: 600; color: #d4a73a; margin-bottom: 16px;">Recipe Plan</div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="font-size: 16px; font-weight: 600; color: #d4a73a;">Recipe Plan</div>
+            @if (AppState.CurrentPlan != null)
+            {
+                <div style="display: flex; gap: 4px;">
+                    <button @onclick="() => AppState.ExpandAllRecipeNodes()"
+                            title="Expand All"
+                            style="padding: 4px 8px; background: #2d2d2d; color: #ccc; border: 1px solid #555; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                        + Expand All
+                    </button>
+                    <button @onclick="() => AppState.CollapseAllRecipeNodes()"
+                            title="Collapse All"
+                            style="padding: 4px 8px; background: #2d2d2d; color: #ccc; border: 1px solid #555; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                        − Collapse All
+                    </button>
+                </div>
+            }
+        </div>
         
         @if (AppState.CurrentPlan == null)
         {

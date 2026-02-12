@@ -3,8 +3,10 @@
 @using FFXIVCraftArchitect.Web.Dialogs
 @using FFXIVCraftArchitect.Core.Models
 @using FFXIVCraftArchitect.Core.Services
+@using FFXIVCraftArchitect.Core.Services.Interfaces
 @inject NavigationManager NavigationManager
 @inject AppState AppState
+@inject ISettingsService Settings
 @inject IndexedDbService IndexedDb
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
@@ -218,10 +220,15 @@
     {
         try
         {
-            var autoSave = await IndexedDb.LoadSettingAsync("autoSave", true);
-            var defaultDc = await IndexedDb.LoadSettingAsync("defaultDataCenter", "Aether");
+            var autoSave = await Settings.GetAsync("ui.auto_save_enabled", true);
+            var defaultDc = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
+            var region = await Settings.GetAsync("market.region", "North America") ?? "North America";
+            var autoFetch = await Settings.GetAsync("market.auto_fetch_prices", true);
             
             AppState.IsAutoSaveEnabled = autoSave;
+            AppState.AutoFetchPricesOnRebuild = autoFetch;
+            AppState.SelectedRegion = region;
+            
             if (string.IsNullOrEmpty(AppState.SelectedDataCenter))
             {
                 AppState.SelectedDataCenter = defaultDc;

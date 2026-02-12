@@ -1,5 +1,7 @@
 @using FFXIVCraftArchitect.Web.Services
+@using FFXIVCraftArchitect.Core.Services.Interfaces
 @inject AppState AppState
+@inject ISettingsService Settings
 @inject IndexedDbService IndexedDb
 @inject ISnackbar Snackbar
 
@@ -149,10 +151,16 @@
     
     protected override async Task OnInitializedAsync()
     {
-        _autoSaveEnabled = AppState.IsAutoSaveEnabled;
-        _defaultDataCenter = AppState.SelectedDataCenter;
-        _selectedRegion = AppState.SelectedRegion ?? GetRegionForDataCenter(_defaultDataCenter);
-        _autoFetchPricesOnRebuild = await IndexedDb.LoadSettingAsync<bool>("autoFetchPricesOnRebuild", true);
+        _autoSaveEnabled = await Settings.GetAsync("ui.auto_save_enabled", true);
+        _defaultDataCenter = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
+        _selectedRegion = await Settings.GetAsync("market.region", "North America") ?? "North America";
+        _autoFetchPricesOnRebuild = await Settings.GetAsync("market.auto_fetch_prices", true);
+        
+        // Also sync to AppState for runtime use
+        AppState.IsAutoSaveEnabled = _autoSaveEnabled;
+        AppState.SelectedDataCenter = _defaultDataCenter;
+        AppState.SelectedRegion = _selectedRegion;
+        AppState.AutoFetchPricesOnRebuild = _autoFetchPricesOnRebuild;
     }
     
     private List<string> GetAvailableDataCenters()
@@ -195,18 +203,19 @@
         }
     }
     
-    private void Save()
+    private async Task Save()
     {
+        // Update AppState for runtime use
         AppState.IsAutoSaveEnabled = _autoSaveEnabled;
         AppState.SelectedDataCenter = _defaultDataCenter;
         AppState.SelectedRegion = _selectedRegion;
         AppState.AutoFetchPricesOnRebuild = _autoFetchPricesOnRebuild;
         
-        // Persist settings
-        _ = IndexedDb.SaveSettingAsync("autoSave", _autoSaveEnabled);
-        _ = IndexedDb.SaveSettingAsync("defaultDataCenter", _defaultDataCenter);
-        _ = IndexedDb.SaveSettingAsync("selectedRegion", _selectedRegion);
-        _ = IndexedDb.SaveSettingAsync("autoFetchPricesOnRebuild", _autoFetchPricesOnRebuild);
+        // Persist settings via ISettingsService
+        await Settings.SetAsync("ui.auto_save_enabled", _autoSaveEnabled);
+        await Settings.SetAsync("market.default_datacenter", _defaultDataCenter);
+        await Settings.SetAsync("market.region", _selectedRegion);
+        await Settings.SetAsync("market.auto_fetch_prices", _autoFetchPricesOnRebuild);
         
         Snackbar.Add("Settings saved", Severity.Success);
         MudDialog.Close(DialogResult.Ok(true));

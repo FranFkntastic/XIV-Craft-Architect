@@ -1,63 +1,88 @@
-namespace FFXIVCraftArchitect.Services.Interfaces;
+namespace FFXIVCraftArchitect.Core.Services.Interfaces;
 
 /// <summary>
 /// Service for fetching and caching FFXIV world travel status from Waitingway API.
 /// Tracks which worlds currently have travel prohibited (congested worlds at capacity).
 /// </summary>
+[Obsolete("This service is disabled pending re-implementation. The current implementation is non-functional.")]
 public interface IWaitingwayTravelService
 {
     /// <summary>
     /// Gets the current travel prohibition status for all worlds.
-    /// Returns cached data if fresh, otherwise fetches from API.
     /// </summary>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Dictionary mapping world IDs to prohibition status</returns>
     Task<Dictionary<int, bool>> GetTravelProhibitionsAsync(CancellationToken ct = default);
     
     /// <summary>
     /// Checks if travel to a specific world is currently prohibited.
     /// </summary>
-    /// <param name="worldId">World ID</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>True if travel is prohibited</returns>
     Task<bool> IsTravelProhibitedAsync(int worldId, CancellationToken ct = default);
     
     /// <summary>
-    /// Checks if travel to a specific world is currently prohibited.
-    /// World name lookup requires world data to be loaded.
+    /// Checks if travel to a specific world is currently prohibited by name.
     /// </summary>
-    /// <param name="worldName">World name</param>
-    /// <param name="worldNameToId">Dictionary mapping world names to IDs</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>True if travel is prohibited</returns>
     Task<bool> IsTravelProhibitedAsync(string worldName, Dictionary<string, int> worldNameToId, CancellationToken ct = default);
     
     /// <summary>
     /// Gets the current average DC travel time in seconds.
     /// </summary>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Average travel time in seconds, or null if not available</returns>
     Task<int?> GetAverageTravelTimeAsync(CancellationToken ct = default);
     
     /// <summary>
     /// Gets the full travel status data including metadata.
     /// </summary>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Travel status data or null if not available</returns>
     Task<TravelStatusData?> GetTravelStatusDataAsync(CancellationToken ct = default);
     
     /// <summary>
     /// Forces a refresh of the travel status from the API.
     /// </summary>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>True if refresh succeeded</returns>
     Task<bool> RefreshAsync(CancellationToken ct = default);
     
     /// <summary>
-    /// Gets world status information (category, classification) from Waitingway.
-    /// This is separate from travel prohibition status.
+    /// Gets world status information from Waitingway.
     /// </summary>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>List of world status information or null if not available</returns>
     Task<List<WorldStatusInfo>?> GetWorldStatusAsync(CancellationToken ct = default);
+}
+
+/// <summary>
+/// Cached travel status data.
+/// </summary>
+public class TravelStatusData
+{
+    public Dictionary<int, bool> Prohibited { get; set; } = new();
+    public int TravelTime { get; set; }
+    public DateTime FetchedAt { get; set; }
+}
+
+/// <summary>
+/// World status information from Waitingway.
+/// </summary>
+public class WorldStatusInfo
+{
+    public int WorldId { get; set; }
+    public int Status { get; set; }
+    public int Category { get; set; }
+    public bool CanCreateCharacter { get; set; }
+    
+    /// <summary>
+    /// World category classification.
+    /// </summary>
+    public WorldCategory Classification => Category switch
+    {
+        0 => WorldCategory.Standard,
+        1 => WorldCategory.Preferred,
+        2 => WorldCategory.PreferredPlus,
+        3 => WorldCategory.Congested,
+        _ => WorldCategory.Standard
+    };
+}
+
+/// <summary>
+/// World category classification.
+/// </summary>
+public enum WorldCategory
+{
+    Standard,
+    Preferred,
+    PreferredPlus,
+    Congested
 }

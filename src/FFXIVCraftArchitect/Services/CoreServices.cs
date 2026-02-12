@@ -15,7 +15,6 @@ public class CoreServices : ICoreServices
     public PlanPersistenceService PlanPersistence { get; }
     public PriceCheckService PriceCheck { get; }
     public MarketShoppingService MarketShopping { get; }
-    public WaitingwayTravelService Waitingway { get; }
     public WorldBlacklistService Blacklist { get; }
 
     public CoreServices(
@@ -27,7 +26,6 @@ public class CoreServices : ICoreServices
         PlanPersistenceService planPersistenceService,
         PriceCheckService priceCheckService,
         MarketShoppingService marketShoppingService,
-        WaitingwayTravelService waitingwayTravelService,
         WorldBlacklistService worldBlacklistService)
     {
         Garland = garlandService;
@@ -38,7 +36,6 @@ public class CoreServices : ICoreServices
         PlanPersistence = planPersistenceService;
         PriceCheck = priceCheckService;
         MarketShopping = marketShoppingService;
-        Waitingway = waitingwayTravelService;
         Blacklist = worldBlacklistService;
     }
 }

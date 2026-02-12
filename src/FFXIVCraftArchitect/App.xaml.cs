@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Logging;
 using FFXIVCraftArchitect.Models;
 using FFXIVCraftArchitect.Services;
@@ -20,6 +21,8 @@ using TeamcraftService = FFXIVCraftArchitect.Core.Services.TeamcraftService;
 using ITeamcraftService = FFXIVCraftArchitect.Core.Services.ITeamcraftService;
 using PriceCheckService = FFXIVCraftArchitect.Core.Services.PriceCheckService;
 using WorldDataCoordinator = FFXIVCraftArchitect.Core.Services.WorldDataCoordinator;
+using CoreWorldStatusService = FFXIVCraftArchitect.Core.Services.WorldStatusService;
+using IWorldStatusService = FFXIVCraftArchitect.Core.Services.Interfaces.IWorldStatusService;
 
 namespace FFXIVCraftArchitect;
 
@@ -60,7 +63,7 @@ public partial class App : Application
         themeService.RefreshFromSettings();
         
         // Initialize world status cache (fire and forget - don't block startup)
-        var worldStatusService = Services.GetRequiredService<WorldStatusService>();
+        var worldStatusService = Services.GetRequiredService<IWorldStatusService>();
         _ = Task.Run(async () => 
         {
             if (worldStatusService.NeedsRefresh())
@@ -117,6 +120,7 @@ public partial class App : Application
         services.AddHttpClient<GarlandService>();
         services.AddHttpClient<UniversalisService>();
         services.AddHttpClient<Core.Services.ITeamcraftRecipeService, Core.Services.TeamcraftRecipeService>();
+        services.AddHttpClient<Core.Services.ArtisanService>();
         
         // Named HttpClients for services that use IHttpClientFactory
         services.AddHttpClient("Waitingway", c =>
@@ -147,13 +151,23 @@ public partial class App : Application
         services.AddSingleton<IPlanPersistenceService>(sp => sp.GetRequiredService<PlanPersistenceService>());
         services.AddSingleton<TeamcraftService>();
         services.AddSingleton<ITeamcraftService>(sp => sp.GetRequiredService<TeamcraftService>());
-        services.AddSingleton<ArtisanService>();
-        services.AddSingleton<IArtisanService>(sp => sp.GetRequiredService<ArtisanService>());
+        services.AddSingleton<Core.Services.ArtisanService>();
+        services.AddSingleton<Core.Services.Interfaces.IArtisanService>(sp => sp.GetRequiredService<Core.Services.ArtisanService>());
         services.AddSingleton<PriceCheckService>();
         services.AddSingleton<MarketShoppingService>();
-        services.AddSingleton<WorldStatusService>();
+        
+        // WorldStatusService uses IHttpClientFactory
+        services.AddSingleton<IWorldStatusService>(sp => 
+        {
+            var factory = sp.GetRequiredService<System.Net.Http.IHttpClientFactory>();
+            var logger = sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CoreWorldStatusService>>();
+            return new CoreWorldStatusService(factory, logger);
+        });
+        
+        // WaitingwayTravelService - DISABLED pending re-implementation
+        // services.AddSingleton<Core.Services.WaitingwayTravelService>();
+        
         services.AddSingleton<WorldDataCoordinator>();
-        services.AddSingleton<WaitingwayTravelService>();
         services.AddSingleton<WorldBlacklistService>();
         services.AddSingleton<DialogServiceFactory>();
         

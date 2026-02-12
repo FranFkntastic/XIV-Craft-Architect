@@ -1,4 +1,7 @@
 @using FFXIVCraftArchitect.Core.Models
+@using FFXIVCraftArchitect.Web.Services
+@inject AppState AppState
+@implements IDisposable
 
 @if (Node != null)
 {
@@ -47,8 +50,46 @@
     [Parameter] public EventCallback<PlanNode> OnHqChanged { get; set; }
 
     private bool _isExpanded = true;
+    private int _lastExpandVersion = -1;
+    private bool _isDisposed;
 
     private bool HasChildren => Node?.Children.Any() == true;
+
+    protected override void OnInitialized()
+    {
+        AppState.OnRecipeTreeExpandChanged += OnRecipeTreeExpandChanged;
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+        AppState.OnRecipeTreeExpandChanged -= OnRecipeTreeExpandChanged;
+    }
+
+    private void OnRecipeTreeExpandChanged()
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        if (_lastExpandVersion != AppState.RecipeTreeExpandVersion)
+        {
+            _isExpanded = AppState.RecipeTreeAllExpanded;
+            _lastExpandVersion = AppState.RecipeTreeExpandVersion;
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Sync with global expand state on initial render or when version changes
+        if (_lastExpandVersion != AppState.RecipeTreeExpandVersion)
+        {
+            _isExpanded = AppState.RecipeTreeAllExpanded;
+            _lastExpandVersion = AppState.RecipeTreeExpandVersion;
+        }
+    }
 
     private void ToggleExpanded()
     {

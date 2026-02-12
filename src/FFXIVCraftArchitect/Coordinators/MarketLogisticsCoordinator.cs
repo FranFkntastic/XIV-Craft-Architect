@@ -156,18 +156,28 @@ public class MarketLogisticsCoordinator
         {
             List<DetailedShoppingPlan> shoppingPlans = new();
 
+            // Create shopping plans for market items
             if (marketItems.Any())
             {
                 if (searchAllNA)
                 {
-                    shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
+                    var marketPlans = await _marketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
                         marketItems, progress, ct, mode);
+                    shoppingPlans.AddRange(marketPlans);
                 }
                 else
                 {
-                    shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
+                    var marketPlans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
                         marketItems, dataCenter, progress, ct, mode);
+                    shoppingPlans.AddRange(marketPlans);
                 }
+            }
+            
+            // Create shopping plans for vendor items
+            if (vendorItems.Any())
+            {
+                var vendorPlans = CreateVendorShoppingPlans(vendorItems, prices);
+                shoppingPlans.AddRange(vendorPlans);
             }
 
             var craftVsBuyAnalyses = _marketShoppingService.AnalyzeCraftVsBuy(plan, prices);
@@ -235,6 +245,13 @@ public class MarketLogisticsCoordinator
 
             // Use saved plans if available, otherwise empty list
             var shoppingPlans = savedPlans ?? new List<DetailedShoppingPlan>();
+            
+            // Add vendor shopping plans (these are always calculated fresh from price data)
+            if (vendorItems.Any())
+            {
+                var vendorPlans = CreateVendorShoppingPlans(vendorItems, prices);
+                shoppingPlans = shoppingPlans.Concat(vendorPlans).ToList();
+            }
 
             return new MarketLogisticsResult(
                 true,
@@ -300,6 +317,79 @@ public class MarketLogisticsCoordinator
         }
 
         return (vendorItems, marketItems, untradeableItems);
+    }
+
+    /// <summary>
+    /// Creates DetailedShoppingPlan objects for vendor-purchasable items.
+    /// Vendor items are treated as having a single "Vendor" world option with unlimited stock.
+    /// </summary>
+    /// <param name="vendorItems">Items available from vendors.</param>
+    /// <param name="prices">Price information dictionary.</param>
+    /// <returns>List of shopping plans for vendor items.</returns>
+    private List<DetailedShoppingPlan> CreateVendorShoppingPlans(
+        List<MaterialAggregate> vendorItems, 
+        Dictionary<int, PriceInfo> prices)
+    {
+        var plans = new List<DetailedShoppingPlan>();
+        
+        foreach (var item in vendorItems)
+        {
+            if (!prices.TryGetValue(item.ItemId, out var priceInfo))
+                continue;
+            
+            var unitPrice = priceInfo.UnitPrice;
+            var totalCost = (long)(unitPrice * item.TotalQuantity);
+            
+            // Create the vendor "world" summary
+            var vendorWorldSummary = new WorldShoppingSummary
+            {
+                WorldName = "Vendor",
+                WorldId = 0, // Vendor has no world ID
+                TotalCost = totalCost,
+                AveragePricePerUnit = unitPrice,
+                ListingsUsed = 1,
+                TotalQuantityPurchased = item.TotalQuantity,
+                HasSufficientStock = true, // Vendors always have unlimited stock
+                IsHomeWorld = false,
+                IsTravelProhibited = false,
+                IsBlacklisted = false,
+                Classification = WorldClassification.Standard,
+                // Vendor listings are a single virtual listing
+                Listings = new List<ShoppingListingEntry>
+                {
+                    new ShoppingListingEntry
+                    {
+                        Quantity = item.TotalQuantity,
+                        PricePerUnit = (long)unitPrice,
+                        RetainerName = "Vendor",
+                        IsUnderAverage = true, // Vendor prices are always the best
+                        IsHq = false,
+                        NeededFromStack = item.TotalQuantity,
+                        ExcessQuantity = 0
+                    }
+                }
+            };
+            
+            var plan = new DetailedShoppingPlan
+            {
+                ItemId = item.ItemId,
+                Name = item.Name,
+                QuantityNeeded = item.TotalQuantity,
+                DCAveragePrice = unitPrice, // Vendor price is the "average"
+                Vendors = priceInfo.Vendors?.ToList() ?? new List<GarlandVendor>(),
+                RecommendedWorld = vendorWorldSummary,
+                WorldOptions = new List<WorldShoppingSummary> { vendorWorldSummary },
+                Error = null
+            };
+            
+            plans.Add(plan);
+            
+            _logger.LogDebug("[CreateVendorShoppingPlans] Created plan for {ItemName} - Vendor price: {Price}g x{Quantity} = {Total}g",
+                item.Name, unitPrice, item.TotalQuantity, totalCost);
+        }
+        
+        _logger.LogInformation("[CreateVendorShoppingPlans] Created {Count} vendor shopping plans", plans.Count);
+        return plans;
     }
 
     /// <summary>

@@ -1,12 +1,11 @@
-using System.IO;
 using System.Net.Http;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using FFXIVCraftArchitect.Core.Models;
-using FFXIVCraftArchitect.Models;
-using FFXIVCraftArchitect.Services.Interfaces;
+using FFXIVCraftArchitect.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
-namespace FFXIVCraftArchitect.Services;
+namespace FFXIVCraftArchitect.Core.Services;
 
 /// <summary>
 /// Service for fetching and caching FFXIV world status from the Lodestone.
@@ -16,84 +15,107 @@ public class WorldStatusService : IWorldStatusService, IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<WorldStatusService> _logger;
-    private readonly string _cacheFilePath;
-    private WorldStatusData? _cachedData;
+    private readonly TimeSpan _cacheValidity = TimeSpan.FromHours(6);
+    private readonly bool _ownsHttpClient;
+    
+    protected readonly string? CacheFilePath;
+    protected WorldStatusData? CachedData;
     
     private const string LodestoneWorldStatusUrl = "https://na.finalfantasyxiv.com/lodestone/worldstatus/";
-    private readonly TimeSpan _cacheValidity = TimeSpan.FromHours(6); // Refresh every 6 hours
-    
-    public WorldStatusService(IHttpClientFactory httpClientFactory, ILogger<WorldStatusService> logger)
+
+    /// <summary>
+    /// Creates a new WorldStatusService with an HttpClient (owned by this service).
+    /// </summary>
+    public WorldStatusService(
+        HttpClient httpClient, 
+        ILogger<WorldStatusService> logger,
+        string? cacheFilePath = null)
     {
+        _httpClient = httpClient;
         _logger = logger;
-        _httpClient = httpClientFactory.CreateClient("WorldStatus");
+        _ownsHttpClient = true;
+        CacheFilePath = cacheFilePath ?? GetDefaultCachePath();
         
-        // Store cache in app data folder
-        var appDataPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "FFXIVCraftArchitect");
-        Directory.CreateDirectory(appDataPath);
-        _cacheFilePath = Path.Combine(appDataPath, "world_status.json");
-        
-        // Load cached data on startup
-        LoadCachedData();
+        InitializeCache();
     }
     
     /// <summary>
-    /// Disposes the HttpClient instance.
+    /// Creates a new WorldStatusService using IHttpClientFactory.
     /// </summary>
+    public WorldStatusService(
+        IHttpClientFactory httpClientFactory,
+        ILogger<WorldStatusService> logger,
+        string? cacheFilePath = null,
+        string httpClientName = "WorldStatus")
+    {
+        _httpClient = httpClientFactory.CreateClient(httpClientName);
+        _logger = logger;
+        _ownsHttpClient = false;
+        CacheFilePath = cacheFilePath ?? GetDefaultCachePath();
+        
+        InitializeCache();
+    }
+    
+    private void InitializeCache()
+    {
+        if (!string.IsNullOrEmpty(CacheFilePath))
+        {
+            var dir = Path.GetDirectoryName(CacheFilePath);
+            if (!string.IsNullOrEmpty(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+            LoadCachedData();
+        }
+    }
+    
+    /// <summary>
+    /// Gets the default cache file path. Can be overridden for different platforms.
+    /// </summary>
+    protected virtual string GetDefaultCachePath()
+    {
+        var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var dir = Path.Combine(appDataPath, "FFXIVCraftArchitect");
+        return Path.Combine(dir, "world_status.json");
+    }
+
     public void Dispose()
     {
-        _httpClient.Dispose();
+        if (_ownsHttpClient)
+        {
+            _httpClient.Dispose();
+        }
     }
-    
-    /// <summary>
-    /// Gets the status for a specific world.
-    /// </summary>
-    public Models.WorldStatus? GetWorldStatus(string worldName)
+
+    public WorldStatus? GetWorldStatus(string worldName)
     {
-        if (_cachedData?.Worlds == null) return null;
+        if (CachedData?.Worlds == null) return null;
         
-        // Case-insensitive lookup
-        var kvp = _cachedData.Worlds.FirstOrDefault(w => 
+        var kvp = CachedData.Worlds.FirstOrDefault(w => 
             w.Value.Name.Equals(worldName, StringComparison.OrdinalIgnoreCase));
         
         return kvp.Value;
     }
-    
-    /// <summary>
-    /// Checks if a world is congested.
-    /// </summary>
+
     public bool IsWorldCongested(string worldName)
     {
         var status = GetWorldStatus(worldName);
         return status?.IsCongested ?? false;
     }
-    
-    /// <summary>
-    /// Gets all world statuses.
-    /// </summary>
-    public Dictionary<string, Models.WorldStatus> GetAllWorldStatuses()
+
+    public Dictionary<string, WorldStatus> GetAllWorldStatuses()
     {
-        return _cachedData?.Worlds ?? new Dictionary<string, Models.WorldStatus>();
+        return CachedData?.Worlds ?? new Dictionary<string, WorldStatus>();
     }
-    
-    /// <summary>
-    /// Gets the last time the status was updated.
-    /// </summary>
-    public DateTime? LastUpdated => _cachedData?.LastUpdated;
-    
-    /// <summary>
-    /// Checks if the cache needs refreshing.
-    /// </summary>
+
+    public DateTime? LastUpdated => CachedData?.LastUpdated;
+
     public bool NeedsRefresh()
     {
-        if (_cachedData == null) return true;
-        return DateTime.UtcNow - _cachedData.LastUpdated > _cacheValidity;
+        if (CachedData == null) return true;
+        return DateTime.UtcNow - CachedData.LastUpdated > _cacheValidity;
     }
-    
-    /// <summary>
-    /// Fetches world status from the Lodestone and updates the cache.
-    /// </summary>
+
     public async Task<bool> RefreshStatusAsync(CancellationToken ct = default)
     {
         try
@@ -109,7 +131,7 @@ public class WorldStatusService : IWorldStatusService, IDisposable
                 return false;
             }
             
-            _cachedData = new WorldStatusData
+            CachedData = new WorldStatusData
             {
                 Worlds = worlds.ToDictionary(w => w.Name, StringComparer.OrdinalIgnoreCase),
                 LastUpdated = DateTime.UtcNow,
@@ -130,24 +152,13 @@ public class WorldStatusService : IWorldStatusService, IDisposable
             return false;
         }
     }
-    
-    /// <summary>
-    /// Parses the Lodestone HTML to extract world status information.
-    /// </summary>
-    private List<Models.WorldStatus> ParseWorldStatusHtml(string html)
+
+    protected List<WorldStatus> ParseWorldStatusHtml(string html)
     {
-        var worlds = new List<Models.WorldStatus>();
+        var worlds = new List<WorldStatus>();
         
         try
         {
-            // The HTML structure is:
-            // <div class="world-list__world_name"><p>WorldName</p></div>
-            // <div class="world-list__world_category"><p>Congested|Standard|Preferred|Preferred+</p></div>
-            // <div class="world-list__create_character">
-            //   <i class="world-ic__available ..."> or <i class="world-ic__unavailable ...">
-            
-            // Find all world list items
-            // Using a simpler approach: extract world names and their categories
             var worldItemPattern = "<li[^>]*class=\"item-list[^\"]*\"[^>]*>.*?<div class=\"world-list__world_name\">\\s*<p>([^<]+)</p>.*?<div class=\"world-list__world_category\">\\s*<p>([^<]+)</p>.*?<div class=\"world-list__create_character\">(.*?)</div>.*?</li>";
             
             var matches = Regex.Matches(html, worldItemPattern, RegexOptions.Singleline | RegexOptions.IgnoreCase);
@@ -160,17 +171,15 @@ public class WorldStatusService : IWorldStatusService, IDisposable
                     var categoryText = match.Groups[2].Value.Trim();
                     var characterCreationHtml = match.Groups[3].Value.Trim();
                     
-                    // Parse classification
                     var classification = ParseClassification(categoryText);
-                    
-                    // Check if character creation is available
                     var canCreateCharacter = characterCreationHtml.Contains("world-ic__available") &&
                                             !characterCreationHtml.Contains("world-ic__unavailable");
                     
-                    worlds.Add(new Models.WorldStatus
+                    worlds.Add(new WorldStatus
                     {
                         Name = worldName,
                         Classification = classification,
+                        Category = categoryText,
                         CanCreateCharacter = canCreateCharacter,
                         LastUpdated = DateTime.UtcNow
                     });
@@ -186,8 +195,8 @@ public class WorldStatusService : IWorldStatusService, IDisposable
         
         return worlds;
     }
-    
-    private WorldClassification ParseClassification(string text)
+
+    protected WorldClassification ParseClassification(string text)
     {
         return text.ToLowerInvariant() switch
         {
@@ -197,36 +206,39 @@ public class WorldStatusService : IWorldStatusService, IDisposable
             _ => WorldClassification.Standard
         };
     }
-    
-    private void LoadCachedData()
+
+    protected virtual void LoadCachedData()
     {
         try
         {
-            if (File.Exists(_cacheFilePath))
+            if (!string.IsNullOrEmpty(CacheFilePath) && File.Exists(CacheFilePath))
             {
-                var json = File.ReadAllText(_cacheFilePath);
-                _cachedData = System.Text.Json.JsonSerializer.Deserialize<WorldStatusData>(json);
+                var json = File.ReadAllText(CacheFilePath);
+                CachedData = JsonSerializer.Deserialize<WorldStatusData>(json);
                 _logger.LogInformation("[WorldStatus] Loaded {Count} worlds from cache", 
-                    _cachedData?.Worlds?.Count ?? 0);
+                    CachedData?.Worlds?.Count ?? 0);
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[WorldStatus] Failed to load cached data");
-            _cachedData = null;
+            CachedData = null;
         }
     }
-    
-    private void SaveCachedData()
+
+    protected virtual void SaveCachedData()
     {
         try
         {
-            var json = System.Text.Json.JsonSerializer.Serialize(_cachedData, new System.Text.Json.JsonSerializerOptions
+            if (!string.IsNullOrEmpty(CacheFilePath) && CachedData != null)
             {
-                WriteIndented = true
-            });
-            File.WriteAllText(_cacheFilePath, json);
-            _logger.LogDebug("[WorldStatus] Saved cache to {Path}", _cacheFilePath);
+                var json = JsonSerializer.Serialize(CachedData, new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+                File.WriteAllText(CacheFilePath, json);
+                _logger.LogDebug("[WorldStatus] Saved cache to {Path}", CacheFilePath);
+            }
         }
         catch (Exception ex)
         {
