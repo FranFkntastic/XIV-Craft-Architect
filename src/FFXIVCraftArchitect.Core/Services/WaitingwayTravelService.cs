@@ -1,19 +1,20 @@
 using System.Net.Http;
 using System.Net.Http.Json;
-using FFXIVCraftArchitect.Services.Interfaces;
+using FFXIVCraftArchitect.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
-namespace FFXIVCraftArchitect.Services;
+namespace FFXIVCraftArchitect.Core.Services;
 
 /// <summary>
 /// Service for fetching and caching FFXIV world travel status from Waitingway API.
 /// Tracks which worlds currently have travel prohibited (congested worlds at capacity).
 /// </summary>
+[Obsolete("This service is disabled pending re-implementation. The current implementation is non-functional.")]
 public class WaitingwayTravelService : IWaitingwayTravelService, IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<WaitingwayTravelService> _logger;
-    private readonly TimeSpan _cacheValidity = TimeSpan.FromMinutes(1); // Travel status changes frequently
+    private readonly TimeSpan _cacheValidity = TimeSpan.FromMinutes(1);
     
     private TravelStatusData? _cachedData;
     private DateTime _lastFetchTime = DateTime.MinValue;
@@ -21,89 +22,65 @@ public class WaitingwayTravelService : IWaitingwayTravelService, IDisposable
     
     private const string WaitingwayTravelApiUrl = "https://waiting.camora.dev/api/v1/travel/";
     private const string WaitingwayWorldStatusApiUrl = "https://waiting.camora.dev/api/v1/world_status/";
-    
+
     public WaitingwayTravelService(IHttpClientFactory httpClientFactory, ILogger<WaitingwayTravelService> logger)
     {
         _logger = logger;
         _httpClient = httpClientFactory.CreateClient("Waitingway");
     }
-    
-    /// <summary>
-    /// Disposes the HttpClient instance.
-    /// </summary>
+
     public void Dispose()
     {
         _httpClient.Dispose();
         _fetchLock.Dispose();
     }
-    
-    /// <summary>
-    /// Gets the current travel prohibition status for all worlds.
-    /// Returns cached data if fresh, otherwise fetches from API.
-    /// </summary>
+
     public async Task<Dictionary<int, bool>> GetTravelProhibitionsAsync(CancellationToken ct = default)
     {
-        // Return cached data if fresh
         if (_cachedData != null && DateTime.UtcNow - _lastFetchTime < _cacheValidity)
         {
-            _logger.LogDebug("[Waitingway] Returning cached travel status (age: {Age}s)", 
-                (DateTime.UtcNow - _lastFetchTime).TotalSeconds);
             return _cachedData.Prohibited;
         }
         
         await _fetchLock.WaitAsync(ct);
         try
         {
-            // Double-check after acquiring lock
             if (_cachedData != null && DateTime.UtcNow - _lastFetchTime < _cacheValidity)
             {
                 return _cachedData.Prohibited;
             }
             
-            return await FetchTravelStatusAsync(ct);
+            return await FetchTravelStatusAsync(ct) ?? new Dictionary<int, bool>();
         }
         finally
         {
             _fetchLock.Release();
         }
     }
-    
-    /// <summary>
-    /// Checks if travel to a specific world is currently prohibited.
-    /// </summary>
+
     public async Task<bool> IsTravelProhibitedAsync(int worldId, CancellationToken ct = default)
     {
         var prohibitions = await GetTravelProhibitionsAsync(ct);
         return prohibitions.TryGetValue(worldId, out var prohibited) && prohibited;
     }
-    
-    /// <summary>
-    /// Checks if travel to a specific world is currently prohibited.
-    /// World name lookup requires world data to be loaded.
-    /// </summary>
+
     public async Task<bool> IsTravelProhibitedAsync(string worldName, Dictionary<string, int> worldNameToId, CancellationToken ct = default)
     {
         if (!worldNameToId.TryGetValue(worldName, out var worldId))
         {
             _logger.LogWarning("[Waitingway] Unknown world name: {WorldName}", worldName);
-            return false; // Default to allowing travel if we can't look up
+            return false;
         }
         
         return await IsTravelProhibitedAsync(worldId, ct);
     }
-    
-    /// <summary>
-    /// Gets the current average DC travel time in seconds.
-    /// </summary>
+
     public async Task<int?> GetAverageTravelTimeAsync(CancellationToken ct = default)
     {
         var data = await GetTravelStatusDataAsync(ct);
         return data?.TravelTime;
     }
-    
-    /// <summary>
-    /// Gets the full travel status data including metadata.
-    /// </summary>
+
     public async Task<TravelStatusData?> GetTravelStatusDataAsync(CancellationToken ct = default)
     {
         if (_cachedData != null && DateTime.UtcNow - _lastFetchTime < _cacheValidity)
@@ -127,10 +104,7 @@ public class WaitingwayTravelService : IWaitingwayTravelService, IDisposable
             _fetchLock.Release();
         }
     }
-    
-    /// <summary>
-    /// Forces a refresh of the travel status from the API.
-    /// </summary>
+
     public async Task<bool> RefreshAsync(CancellationToken ct = default)
     {
         await _fetchLock.WaitAsync(ct);
@@ -148,7 +122,7 @@ public class WaitingwayTravelService : IWaitingwayTravelService, IDisposable
             _fetchLock.Release();
         }
     }
-    
+
     private async Task<Dictionary<int, bool>?> FetchTravelStatusAsync(CancellationToken ct)
     {
         try
@@ -163,7 +137,6 @@ public class WaitingwayTravelService : IWaitingwayTravelService, IDisposable
                 return null;
             }
             
-            // Convert string keys to int keys
             var prohibited = response.Prohibited.ToDictionary(
                 kvp => int.Parse(kvp.Key),
                 kvp => kvp.Value
@@ -195,11 +168,7 @@ public class WaitingwayTravelService : IWaitingwayTravelService, IDisposable
             return _cachedData?.Prohibited;
         }
     }
-    
-    /// <summary>
-    /// Gets world status information (category, classification) from Waitingway.
-    /// This is separate from travel prohibition status.
-    /// </summary>
+
     public async Task<List<WorldStatusInfo>?> GetWorldStatusAsync(CancellationToken ct = default)
     {
         try
@@ -230,68 +199,21 @@ public class WaitingwayTravelService : IWaitingwayTravelService, IDisposable
     }
 }
 
-/// <summary>
-/// Response from Waitingway travel API.
-/// </summary>
-public class WaitingwayTravelResponse
+internal class WaitingwayTravelResponse
 {
     public int TravelTime { get; set; }
     public Dictionary<string, bool> Prohibited { get; set; } = new();
 }
 
-/// <summary>
-/// Response from Waitingway world status API.
-/// </summary>
-public class WaitingwayWorldStatusResponse
+internal class WaitingwayWorldStatusResponse
 {
     public List<WaitingwayWorldStatusEntry> Value { get; set; } = new();
 }
 
-public class WaitingwayWorldStatusEntry
+internal class WaitingwayWorldStatusEntry
 {
     public int WorldId { get; set; }
     public int Status { get; set; }
     public int Category { get; set; }
     public bool CanCreate { get; set; }
-}
-
-/// <summary>
-/// Cached travel status data.
-/// </summary>
-public class TravelStatusData
-{
-    public Dictionary<int, bool> Prohibited { get; set; } = new();
-    public int TravelTime { get; set; }
-    public DateTime FetchedAt { get; set; }
-}
-
-/// <summary>
-/// World status information from Waitingway.
-/// </summary>
-public class WorldStatusInfo
-{
-    public int WorldId { get; set; }
-    public int Status { get; set; }
-    public int Category { get; set; }
-    public bool CanCreateCharacter { get; set; }
-    
-    /// <summary>
-    /// World category classification (0=Standard, 1=Preferred, 2=Preferred+, 3=Congested).
-    /// </summary>
-    public WorldCategory Classification => Category switch
-    {
-        0 => WorldCategory.Standard,
-        1 => WorldCategory.Preferred,
-        2 => WorldCategory.PreferredPlus,
-        3 => WorldCategory.Congested,
-        _ => WorldCategory.Standard
-    };
-}
-
-public enum WorldCategory
-{
-    Standard,
-    Preferred,
-    PreferredPlus,
-    Congested
 }

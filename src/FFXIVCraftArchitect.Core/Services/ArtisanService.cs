@@ -3,11 +3,10 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FFXIVCraftArchitect.Core.Models;
-using FFXIVCraftArchitect.Core.Services;
-using FFXIVCraftArchitect.Services.Interfaces;
+using FFXIVCraftArchitect.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
-namespace FFXIVCraftArchitect.Services;
+namespace FFXIVCraftArchitect.Core.Services;
 
 /// <summary>
 /// Service for importing/exporting crafting lists to/from Artisan format.
@@ -37,19 +36,6 @@ public class ArtisanService : IArtisanService
 
     #region Import FROM Artisan
 
-    /// <summary>
-    /// Import an Artisan crafting list from JSON.
-    /// Artisan exports its lists as JSON which can be pasted into the "Import List From Clipboard" feature.
-    /// 
-    /// The JSON structure has:
-    /// - ID: A random list ID (100-50000), NOT an item ID
-    /// - Recipes: Array of recipes to craft (these are RECIPE IDs, each with quantity)
-    /// - Name: The name of the crafting list
-    /// 
-    /// IMPORTANT: Artisan's Recipes array includes subcrafts. We only import the ROOT recipes
-    /// (recipes whose resulting items are not ingredients of other recipes in the list).
-    /// Subcrafts are calculated automatically by RecipeCalculationService.
-    /// </summary>
     public async Task<CraftingPlan?> ImportFromArtisanAsync(
         string artisanJson, 
         string dataCenter, 
@@ -82,7 +68,6 @@ public class ArtisanService : IArtisanService
         _logger.LogInformation("[Artisan] Importing list '{ListName}' with {RecipeCount} recipes", 
             artisanList.Name, artisanList.Recipes.Count);
 
-        // First, collect all recipe info and their ingredients
         var recipeInfos = new List<ArtisanRecipeInfo>();
         var recipeIdToItemId = new Dictionary<uint, int>();
         
@@ -109,7 +94,6 @@ public class ArtisanService : IArtisanService
             return null;
         }
 
-        // Build a set of all item IDs that are ingredients (subcrafts)
         var subcraftItemIds = new HashSet<int>();
         foreach (var recipeInfo in recipeInfos)
         {
@@ -119,7 +103,6 @@ public class ArtisanService : IArtisanService
             }
         }
 
-        // Root recipes are those whose result items are NOT ingredients of other recipes
         var rootRecipes = recipeInfos
             .Where(r => !subcraftItemIds.Contains(r.ResultItemId))
             .ToList();
@@ -129,37 +112,30 @@ public class ArtisanService : IArtisanService
 
         if (rootRecipes.Count == 0)
         {
-            // Fallback: if no roots found (circular dependency?), use all recipes
             _logger.LogWarning("[Artisan] No root recipes identified, falling back to importing all recipes");
             rootRecipes = recipeInfos;
         }
 
-        // Convert root recipes to target items
         var targetItems = rootRecipes
             .Select(r => (r.ResultItemId, r.ResultItemName, r.Quantity, r.IsHqRequired))
             .ToList();
 
-        // Use RecipeCalculationService to build complete recipe trees with all subcrafts
         var plan = await _recipeCalcService.BuildPlanAsync(
             targetItems, 
             dataCenter, 
             world, 
             ct);
 
-        // Update plan name to indicate it came from Artisan
         plan.Name = string.IsNullOrWhiteSpace(artisanList.Name) 
             ? "Imported from Artisan" 
             : $"{artisanList.Name} (Artisan)";
 
-        _logger.LogInformation("[Artisan] Successfully imported plan '{PlanName}' with {RootCount} root items and full recipe trees", 
+        _logger.LogInformation("[Artisan] Successfully imported plan '{PlanName}' with {RootCount} root items", 
             plan.Name, plan.RootItems.Count);
 
         return plan;
     }
 
-    /// <summary>
-    /// Internal class to hold recipe information for dependency analysis.
-    /// </summary>
     private class ArtisanRecipeInfo
     {
         public uint RecipeId { get; set; }
@@ -170,19 +146,14 @@ public class ArtisanService : IArtisanService
         public List<int> IngredientItemIds { get; set; } = new();
     }
 
-    /// <summary>
-    /// Get recipe information including ingredients for dependency analysis.
-    /// </summary>
     private async Task<ArtisanRecipeInfo?> GetRecipeInfoAsync(ArtisanListItem artisanItem, CancellationToken ct)
     {
         var id = (int)artisanItem.ID;
         
-        // Try to find the item for this recipe
         var itemData = await TryFindItemByRecipeIdAsync(id, ct);
         
         if (itemData == null)
         {
-            // Try direct item lookup as fallback
             itemData = await _garlandService.GetItemAsync(id, ct);
         }
         
@@ -192,11 +163,9 @@ public class ArtisanService : IArtisanService
             return null;
         }
 
-        // Find the specific craft (Id is string, compare with parsed value)
         var craft = itemData.Crafts?.FirstOrDefault(c => c.Id == id.ToString());
         if (craft == null && itemData.Crafts?.Any() == true)
         {
-            // If no exact match, use first craft
             craft = itemData.Crafts.OrderBy(c => c.RecipeLevel).First();
         }
 
@@ -207,11 +176,9 @@ public class ArtisanService : IArtisanService
             return null;
         }
 
-        // Calculate quantity based on recipe yield
         var yield = Math.Max(1, craft.Yield);
         var totalQuantity = artisanItem.Quantity * yield;
 
-        // Get ingredient item IDs
         var ingredientIds = craft.Ingredients
             .Select(i => i.Id)
             .ToList();
@@ -227,15 +194,8 @@ public class ArtisanService : IArtisanService
         };
     }
 
-    /// <summary>
-    /// Try to find an item by its recipe ID.
-    /// Uses multiple strategies in order of reliability:
-    /// 1. Teamcraft CDN (authoritative, covers all recipes including Dawntrail)
-    /// 2. XIVAPI recipe lookup (fallback)
-    /// </summary>
     private async Task<GarlandItem?> TryFindItemByRecipeIdAsync(int recipeId, CancellationToken ct)
     {
-        // Strategy 1: Use Teamcraft CDN (primary source - has all recipes including Dawntrail)
         try
         {
             _logger.LogDebug("[Artisan] Looking up recipe ID {RecipeId} via Teamcraft CDN", recipeId);
@@ -256,7 +216,6 @@ public class ArtisanService : IArtisanService
             _logger.LogDebug(ex, "[Artisan] Teamcraft CDN lookup failed for recipe ID {RecipeId}", recipeId);
         }
 
-        // Strategy 2: Use XIVAPI as fallback
         try
         {
             _logger.LogDebug("[Artisan] Falling back to XIVAPI for recipe ID {RecipeId}", recipeId);
@@ -277,21 +236,15 @@ public class ArtisanService : IArtisanService
             _logger.LogDebug(ex, "[Artisan] XIVAPI recipe lookup failed for recipe ID {RecipeId}", recipeId);
         }
         
-        _logger.LogWarning("[Artisan] Could not find item for recipe ID {RecipeId}. " +
-            "The recipe may not be available in Teamcraft CDN or XIVAPI.", recipeId);
+        _logger.LogWarning("[Artisan] Could not find item for recipe ID {RecipeId}", recipeId);
         
         return null;
     }
 
-    /// <summary>
-    /// Look up a recipe by ID using XIVAPI.
-    /// Returns the resulting item ID.
-    /// </summary>
     private async Task<XivApiRecipe?> GetXivApiRecipeAsync(int recipeId, CancellationToken ct)
     {
         try
         {
-            // Use the beta xivapi.com endpoint (v2 API)
             var url = $"https://xivapi.com/recipe/{recipeId}";
             _logger.LogDebug("[Artisan] Querying XIVAPI: {Url}", url);
             
@@ -311,23 +264,12 @@ public class ArtisanService : IArtisanService
             }
 
             var json = await response.Content.ReadAsStringAsync(ct);
-            _logger.LogDebug("[Artisan] XIVAPI response for recipe {RecipeId}: {Json}", recipeId, json[..Math.Min(200, json.Length)]);
             
             var recipe = JsonSerializer.Deserialize<XivApiRecipe>(json, new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true,
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             });
-
-            if (recipe == null)
-            {
-                _logger.LogWarning("[Artisan] Failed to deserialize XIVAPI response for recipe {RecipeId}", recipeId);
-            }
-            else if (recipe.ItemResultId == 0)
-            {
-                _logger.LogWarning("[Artisan] XIVAPI response for recipe {RecipeId} has no ItemResult (ID: {ItemResultId}, Name: {ItemResultName})", 
-                    recipeId, recipe.ItemResult?.Id ?? 0, recipe.ItemResult?.Name ?? "null");
-            }
 
             return recipe;
         }
@@ -338,10 +280,6 @@ public class ArtisanService : IArtisanService
         }
     }
 
-    /// <summary>
-    /// XIVAPI recipe response model (minimal)
-    /// Uses PascalCase properties - JsonSerializer will handle camelCase with PropertyNameCaseInsensitive
-    /// </summary>
     private class XivApiRecipe
     {
         [JsonPropertyName("ID")]
@@ -365,30 +303,10 @@ public class ArtisanService : IArtisanService
         public string? Name { get; set; }
     }
 
-    private static string GetJobName(int jobId)
-    {
-        return jobId switch
-        {
-            1 => "Carpenter",
-            2 => "Blacksmith",
-            3 => "Armorer",
-            4 => "Goldsmith",
-            5 => "Leatherworker",
-            6 => "Weaver",
-            7 => "Alchemist",
-            8 => "Culinarian",
-            _ => "Unknown"
-        };
-    }
-
     #endregion
 
     #region Export TO Artisan
 
-    /// <summary>
-    /// Export a crafting plan to Artisan JSON format.
-    /// Returns JSON that can be pasted into Artisan's "Import List From Clipboard" feature.
-    /// </summary>
     public async Task<ArtisanExportResult> ExportToArtisanAsync(CraftingPlan plan, CancellationToken ct = default)
     {
         var result = new ArtisanExportResult();
@@ -399,7 +317,6 @@ public class ArtisanService : IArtisanService
             Recipes = new List<ArtisanListItem>()
         };
 
-        // Process each root item in the plan
         foreach (var rootItem in plan.RootItems)
         {
             try
@@ -423,8 +340,6 @@ public class ArtisanService : IArtisanService
             }
         }
 
-        // Build the expanded list (required by Artisan)
-        // Each recipe ID appears 'Quantity' times in the list
         foreach (var recipe in artisanList.Recipes)
         {
             for (int i = 0; i < recipe.Quantity; i++)
@@ -433,10 +348,9 @@ public class ArtisanService : IArtisanService
             }
         }
 
-        // Serialize to JSON
         result.Json = JsonSerializer.Serialize(artisanList, new JsonSerializerOptions
         {
-            WriteIndented = false // Compact format for clipboard
+            WriteIndented = false
         });
 
         result.RecipeCount = artisanList.Recipes.Count;
@@ -447,55 +361,17 @@ public class ArtisanService : IArtisanService
         return result;
     }
 
-    /// <summary>
-    /// Export a crafting plan to Artisan JSON format (synchronous version for simple cases).
-    /// Note: This will not be able to look up recipes for items that only have ItemId without RecipeId.
-    /// </summary>
-    public ArtisanExportResult ExportToArtisanSimple(CraftingPlan plan)
-    {
-        var result = new ArtisanExportResult();
-        var artisanList = new ArtisanCraftingList
-        {
-            ID = GenerateArtisanListId(),
-            Name = string.IsNullOrWhiteSpace(plan.Name) ? "Exported Plan" : plan.Name,
-            Recipes = new List<ArtisanListItem>()
-        };
-
-        // Process each root item in the plan
-        // This simplified version assumes we can't look up recipes without async calls
-        // In practice, use ExportToArtisanAsync instead
-        foreach (var rootItem in plan.RootItems)
-        {
-            // We can't do async lookup here, so we'll add items without recipe IDs
-            // This is a limitation - the export won't work properly
-            result.MissingRecipes.Add(rootItem.Name);
-        }
-
-        result.Json = JsonSerializer.Serialize(artisanList);
-        return result;
-    }
-
-    /// <summary>
-    /// Convert a PlanNode to an ArtisanListItem.
-    /// Looks up the recipe ID from the item ID.
-    /// </summary>
     private async Task<ArtisanListItem?> ConvertToArtisanItemAsync(PlanNode node, CancellationToken ct)
     {
-        // Get item data from Garland to find the recipe ID
         var itemData = await _garlandService.GetItemAsync(node.ItemId, ct);
         
         if (itemData?.Crafts?.Any() != true)
         {
-            // No crafting recipe available for this item
             return null;
         }
 
-        // Get the first (usually lowest level) recipe
-        // Artisan expects Recipe ID, not Item ID
         var recipe = itemData.Crafts.OrderBy(r => r.RecipeLevel).First();
         
-        // Calculate quantity based on recipe yield
-        // Artisan needs the number of recipe executions, not the total item count
         var yield = Math.Max(1, recipe.Yield);
         var recipeCount = (int)Math.Ceiling((double)node.Quantity / yield);
 
@@ -505,31 +381,23 @@ public class ArtisanService : IArtisanService
             Quantity = recipeCount,
             ListItemOptions = new ArtisanListItemOptions
             {
-                // NQOnly = true for items marked as Quick Synth or non-HQ
-                NQOnly = false, // Default to allowing HQ
+                NQOnly = false,
                 Skipping = false
             }
         };
 
-        _logger.LogDebug("[Artisan] Mapped item {ItemName} (ID: {ItemId}) to recipe ID {RecipeId} with quantity {Quantity}",
-            node.Name, node.ItemId, recipe.Id, recipeCount);
+        _logger.LogDebug("[Artisan] Mapped item {ItemName} (ID: {ItemId}) to recipe ID {RecipeId}",
+            node.Name, node.ItemId, recipe.Id);
 
         return artisanItem;
     }
 
-    /// <summary>
-    /// Generate a random ID for the Artisan list.
-    /// Artisan uses IDs between 100 and 50000.
-    /// </summary>
     private int GenerateArtisanListId()
     {
         var random = new Random();
         return random.Next(100, 50000);
     }
 
-    /// <summary>
-    /// Create a summary text of the export result for display to the user.
-    /// </summary>
     public string CreateExportSummary(ArtisanExportResult result)
     {
         if (result.Success)

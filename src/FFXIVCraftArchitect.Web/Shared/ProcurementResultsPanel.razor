@@ -300,7 +300,9 @@
                         WorldName = worldName,
                         DataCenter = Analysis.DataCenter,
                         IsCongested = plan.RecommendedWorld.IsCongested,
-                        Classification = plan.RecommendedWorld.Classification
+                        Classification = plan.RecommendedWorld.Classification,
+                        // For vendor cards, aggregate vendor info from all items
+                        Vendors = worldName == "Vendor" ? GetVendorInfoForVendorCard(item.ItemId, plan) : new List<GarlandVendor>()
                     };
                     worldCards[worldName] = card;
                 }
@@ -325,6 +327,20 @@
         return worldCards.Values
             .OrderBy(w => w.IsVendor ? 1 : 0)
             .ThenByDescending(w => w.TotalCost);
+    }
+    
+    /// <summary>
+    /// Gets vendor information for a vendor card from the plan's Vendors property.
+    /// </summary>
+    private List<GarlandVendor> GetVendorInfoForVendorCard(int itemId, DetailedShoppingPlan plan)
+    {
+        // Get vendors from the plan's Vendors property (populated during market analysis)
+        if (plan.Vendors?.Any() == true)
+        {
+            return plan.Vendors.ToList();
+        }
+        
+        return new List<GarlandVendor>();
     }
     
     /// <summary>
@@ -364,6 +380,21 @@
                     : $"×{item.QuantityOnThisWorld}";
                 
                 sb.AppendLine($"- **{item.ItemName}** {qtyDisplay} @ {item.PricePerUnit:N0}g = **{item.TotalCost:N0}g**");
+                
+                // Add vendor information for vendor purchases
+                if (world.IsVendor)
+                {
+                    var plan = ShoppingPlans.FirstOrDefault(p => p.ItemId == item.ItemId);
+                    if (plan?.Vendors?.Any() == true)
+                    {
+                        var vendor = plan.Vendors.FirstOrDefault(v => v.Price == item.PricePerUnit) 
+                            ?? plan.Vendors.FirstOrDefault();
+                        if (vendor != null)
+                        {
+                            sb.AppendLine($"   📍 {vendor.Name} - {vendor.Location}");
+                        }
+                    }
+                }
             }
             
             sb.AppendLine();

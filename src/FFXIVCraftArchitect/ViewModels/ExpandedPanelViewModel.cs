@@ -68,6 +68,21 @@ public class ExpandedPanelViewModel : ViewModelBase
     public bool ShowNoData => !_plan.HasOptions && string.IsNullOrEmpty(_plan.Error);
 
     /// <summary>
+    /// Vendor information for items purchased from vendors.
+    /// </summary>
+    public List<GarlandVendor> Vendors => _plan.Vendors;
+
+    /// <summary>
+    /// Whether this item has vendor information.
+    /// </summary>
+    public bool HasVendors => _plan.Vendors?.Any() == true;
+
+    /// <summary>
+    /// Whether this is a vendor-only item (no market world options).
+    /// </summary>
+    public bool IsVendorOnly => _plan.RecommendedWorld?.WorldName == "Vendor";
+
+    /// <summary>
     /// All world options sorted by recommendation.
     /// </summary>
     public ObservableCollection<ExpandedWorldViewModel> WorldOptions

@@ -1,4 +1,5 @@
 @using FFXIVCraftArchitect.Core.Models
+@inject IJSRuntime JSRuntime
 
 @* World-centric procurement card with expandable details *@
 <div style="background: @GetBackgroundColor(); border-radius: 6px; border: 1px solid @GetBorderColor(); overflow: hidden; @(IsExpanded ? "margin-bottom: 8px;" : "")">
@@ -83,6 +84,14 @@
         </div>
     }
     
+    @* Vendor Info Display (only for vendor cards when expanded) *@
+    @if (IsExpanded && Card.IsVendor && Card.Vendors?.Any() == true)
+    {
+        <div style="padding: 0 8px 8px 8px;">
+            <VendorInfoDisplay Vendors="Card.Vendors" />
+        </div>
+    }
+    
     @* Expanded Content - Items Table *@
     @if (IsExpanded)
     {
@@ -120,7 +129,13 @@
                                     {
                                         <MudIcon Icon="@Icons.Material.Filled.CallSplit" Size="Size.Small" Style="color: #ff9800;" />
                                     }
-                                    @item.ItemName
+                                    <span style="flex: 1;">@item.ItemName</span>
+                                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" 
+                                                   Size="Size.Small" 
+                                                   Style="color: #666; padding: 2px;"
+                                                   OnClick="() => CopyItemName(item.ItemName)"
+                                                   OnClick:StopPropagation="true"
+                                                   Title="Copy item name" />
                                 </div>
                             </td>
                             <td style="padding: 6px 8px; color: #d4a73a; text-align: center;">
@@ -170,6 +185,11 @@
     private async Task OnReanalyzeWithoutWorld()
     {
         await OnReanalyzeRequested.InvokeAsync(Card.WorldName);
+    }
+    
+    private async Task CopyItemName(string itemName)
+    {
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", itemName);
     }
     
     private string GetBackgroundColor()

@@ -16,6 +16,5 @@ public interface ICoreServices
     PlanPersistenceService PlanPersistence { get; }
     PriceCheckService PriceCheck { get; }
     MarketShoppingService MarketShopping { get; }
-    WaitingwayTravelService Waitingway { get; }
     WorldBlacklistService Blacklist { get; }
 }

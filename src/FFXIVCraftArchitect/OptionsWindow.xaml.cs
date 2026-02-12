@@ -6,8 +6,10 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using FFXIVCraftArchitect.Services;
 using FFXIVCraftArchitect.Services.Interfaces;
+using FFXIVCraftArchitect.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 using SettingsService = FFXIVCraftArchitect.Core.Services.SettingsService;
+using IWorldStatusService = FFXIVCraftArchitect.Core.Services.Interfaces.IWorldStatusService;
 
 namespace FFXIVCraftArchitect;
 
@@ -18,7 +20,7 @@ public partial class OptionsWindow : Window
 {
     private readonly SettingsService _settingsService;
     private readonly ThemeService _themeService;
-    private readonly WorldStatusService _worldStatusService;
+    private readonly IWorldStatusService _worldStatusService;
     private readonly DialogServiceFactory _dialogFactory;
     private readonly IDialogService _dialogs;
     private readonly ILogger<OptionsWindow> _logger;
@@ -27,7 +29,7 @@ public partial class OptionsWindow : Window
     public OptionsWindow(
         SettingsService settingsService, 
         ThemeService themeService, 
-        WorldStatusService worldStatusService,
+        IWorldStatusService worldStatusService,
         DialogServiceFactory dialogFactory,
         ILogger<OptionsWindow> logger)
     {

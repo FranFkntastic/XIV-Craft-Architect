@@ -200,3 +200,25 @@ public class SavingsVisibilityConverter : IMultiValueConverter
         throw new NotImplementedException();
     }
 }
+
+/// <summary>
+/// Converts a string value to Visibility based on whether it equals the parameter.
+/// Used for showing elements only when a string matches a specific value.
+/// </summary>
+public class StringEqualsToVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        var valueString = value?.ToString();
+        var parameterString = parameter?.ToString();
+        
+        return string.Equals(valueString, parameterString, StringComparison.Ordinal) 
+            ? Visibility.Visible 
+            : Visibility.Collapsed;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        throw new NotImplementedException();
+    }
+}

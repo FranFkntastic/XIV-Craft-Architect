@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using FFXIVCraftArchitect.Core.Models;
-using FFXIVCraftArchitect.Services.Interfaces;
+using FFXIVCraftArchitect.Core.Services.Interfaces;
 using FFXIVCraftArchitect.ViewModels;
 using FFXIVCraftArchitect.Views;
 using Microsoft.Extensions.Logging;

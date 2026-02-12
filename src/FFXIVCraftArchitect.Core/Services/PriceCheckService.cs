@@ -98,15 +98,21 @@ public class PriceCheckService
         PriceInfo priceInfo;
         if (vendorPrice > 0 && (marketPrice <= 0 || vendorPrice <= marketPrice))
         {
+            // Get gil vendors only (filter out tomestone/other currency vendors)
+            var gilVendors = garlandItem?.Vendors
+                ?.Where(v => string.Equals(v.Currency, "gil", StringComparison.OrdinalIgnoreCase))
+                .ToList() ?? new List<GarlandVendor>();
+            
             priceInfo = new PriceInfo
             {
                 ItemId = itemId,
                 ItemName = itemName,
                 UnitPrice = vendorPrice,
                 Source = PriceSource.Vendor,
-                SourceDetails = garlandItem?.Vendors?.FirstOrDefault() != null 
-                    ? $"Vendor: {garlandItem.Vendors.First().Name}" 
+                SourceDetails = gilVendors.FirstOrDefault() != null 
+                    ? $"Vendor: {gilVendors.First().Name}" 
                     : "Vendor",
+                Vendors = gilVendors,
                 LastUpdated = DateTime.UtcNow
             };
         }
@@ -211,12 +217,18 @@ public class PriceCheckService
             // Pick the best NQ price (vendors prioritized if equal)
             if (vendorPrice > 0 && (marketPriceNq <= 0 || vendorPrice <= marketPriceNq))
             {
+                // Get gil vendors only (filter out tomestone/other currency vendors)
+                var gilVendors = garlandItem?.Vendors
+                    ?.Where(v => string.Equals(v.Currency, "gil", StringComparison.OrdinalIgnoreCase))
+                    .ToList() ?? new List<GarlandVendor>();
+                
                 priceInfo.UnitPrice = vendorPrice;
                 priceInfo.Source = PriceSource.Vendor;
-                var vendor = garlandItem?.Vendors?.FirstOrDefault();
+                var vendor = gilVendors.FirstOrDefault();
                 priceInfo.SourceDetails = vendor != null 
                     ? $"Vendor: {vendor.Name} ({vendor.Location})"
                     : "Vendor";
+                priceInfo.Vendors = gilVendors;
             }
             else if (marketPriceNq > 0)
             {

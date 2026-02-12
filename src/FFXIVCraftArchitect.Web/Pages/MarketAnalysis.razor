@@ -429,7 +429,7 @@
             }
             
             // Apply vendor price overrides for vendor-buy items
-            ApplyVendorPriceOverrides(plans);
+            await ApplyVendorPriceOverridesAsync(plans);
             
             AppState.ShoppingPlans = plans;
             AppState.NotifyShoppingListChanged();
@@ -459,8 +459,9 @@
     /// <summary>
     /// For items marked as vendor-buy, override the recommendation to show vendor price.
     /// Keeps market data visible for comparison but sets vendor as the recommended option.
+    /// Also populates vendor information for display.
     /// </summary>
-    private void ApplyVendorPriceOverrides(List<DetailedShoppingPlan> plans)
+    private async Task ApplyVendorPriceOverridesAsync(List<DetailedShoppingPlan> plans)
     {
         if (AppState.CurrentPlan == null) return;
         
@@ -483,6 +484,24 @@
                 
                 // Clear any split recommendations since vendor has unlimited stock
                 plan.RecommendedSplit = null;
+                
+                // Fetch vendor information for display
+                try
+                {
+                    var itemData = await GarlandService.GetItemAsync(plan.ItemId);
+                    if (itemData != null)
+                    {
+                        // Only include vendors that accept gil as currency
+                        plan.Vendors = itemData.Vendors
+                            .Where(v => v.Currency?.ToLower() == "gil")
+                            .OrderBy(v => v.Price)
+                            .ToList();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to fetch vendor info for {ItemName}", plan.Name);
+                }
                 
                 Logger.LogInformation("Applied vendor price override for {ItemName}: {VendorPrice}g", 
                     plan.Name, node.VendorPrice);

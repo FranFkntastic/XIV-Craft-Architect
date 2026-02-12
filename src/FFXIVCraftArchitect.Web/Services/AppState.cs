@@ -60,6 +60,21 @@ public class AppState
     public event Action? OnSavedPlansChanged;
     public event Action? OnStatusChanged;
     public event Action? OnProcurementAnalysisChanged;
+    public event Action? OnRecipeTreeExpandChanged;
+    
+    // Recipe tree expand/collapse state (incremented to trigger re-evaluation)
+    private int _recipeTreeExpandVersion = 0;
+    private bool _recipeTreeAllExpanded = true;
+    
+    /// <summary>
+    /// Current version of expand state. Components should watch this to sync.
+    /// </summary>
+    public int RecipeTreeExpandVersion => _recipeTreeExpandVersion;
+    
+    /// <summary>
+    /// Whether all nodes should be expanded (true) or collapsed (false).
+    /// </summary>
+    public bool RecipeTreeAllExpanded => _recipeTreeAllExpanded;
     
     public void NotifyPlanChanged()
     {
@@ -85,6 +100,26 @@ public class AppState
     public void NotifyProcurementAnalysisChanged()
     {
         OnProcurementAnalysisChanged?.Invoke();
+    }
+    
+    /// <summary>
+    /// Expand all nodes in the recipe tree.
+    /// </summary>
+    public void ExpandAllRecipeNodes()
+    {
+        _recipeTreeAllExpanded = true;
+        _recipeTreeExpandVersion++;
+        OnRecipeTreeExpandChanged?.Invoke();
+    }
+    
+    /// <summary>
+    /// Collapse all nodes in the recipe tree.
+    /// </summary>
+    public void CollapseAllRecipeNodes()
+    {
+        _recipeTreeAllExpanded = false;
+        _recipeTreeExpandVersion++;
+        OnRecipeTreeExpandChanged?.Invoke();
     }
     
     /// <summary>

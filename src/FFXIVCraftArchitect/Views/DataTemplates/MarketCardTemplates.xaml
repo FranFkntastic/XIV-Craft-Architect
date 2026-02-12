@@ -1,6 +1,7 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:vm="clr-namespace:FFXIVCraftArchitect.ViewModels"
+                    xmlns:core="clr-namespace:FFXIVCraftArchitect.Core.Models;assembly=FFXIVCraftArchitect.Core"
                     xmlns:local="clr-namespace:FFXIVCraftArchitect.Views.DataTemplates">
     
     <!-- ============================================================
@@ -37,6 +38,9 @@
     
     <!-- String to FontWeight Converter -->
     <local:StringToFontWeightConverter x:Key="StringToFontWeightConverter"/>
+    
+    <!-- String Equals to Visibility Converter -->
+    <local:StringEqualsToVisibilityConverter x:Key="StringEqualsToVisibilityConverter"/>
     
     <!-- ============================================================
          EXPANDABLE MARKET CARD TEMPLATE
@@ -385,10 +389,19 @@
                                         <DataTrigger Binding="{Binding RecommendedWorld.IsTravelProhibited}" Value="True">
                                             <Setter Property="Foreground" Value="{StaticResource IndianRedBrush}"/>
                                         </DataTrigger>
+                                        <DataTrigger Binding="{Binding RecommendedWorld.WorldName}" Value="Vendor">
+                                            <Setter Property="Foreground" Value="#d4e4a7"/>
+                                        </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </TextBlock.Style>
                         </TextBlock>
+                        
+                        <!-- Vendor Icon (only for Vendor) -->
+                        <TextBlock Text="🏪"
+                                   FontSize="11"
+                                   Margin="4,0,0,0"
+                                   Visibility="{Binding RecommendedWorld.WorldName, Converter={StaticResource StringEqualsToVisibilityConverter}, ConverterParameter=Vendor}"/>
                         
                         <!-- Blacklist Button -->
                         <Button Content="🚫"
@@ -644,6 +657,61 @@
                                                FontStyle="Italic"
                                                Margin="0,2,0,0"
                                                Visibility="{Binding HasMoreListings, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+            
+            <!-- Vendor Information Section (shown when HasVendors is true) -->
+            <StackPanel Visibility="{Binding HasVendors, Converter={StaticResource BoolToVisibilityConverter}}"
+                        Margin="0,12,0,8">
+                <TextBlock Text="Available from Vendors:"
+                           FontWeight="SemiBold"
+                           FontSize="11"
+                           Foreground="{StaticResource GrayBrush}"
+                           Margin="0,0,0,8"/>
+                
+                <ItemsControl ItemsSource="{Binding Vendors}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type core:GarlandVendor}">
+                            <Border Background="#3e4a2d"
+                                    CornerRadius="3"
+                                    Padding="8,6,8,6"
+                                    Margin="0,0,0,6">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <!-- Vendor Icon -->
+                                        <TextBlock Text="🏪"
+                                                   FontSize="12"
+                                                   Margin="0,0,6,0"
+                                                   VerticalAlignment="Center"/>
+                                        <!-- Vendor Name -->
+                                        <TextBlock Text="{Binding Name}"
+                                                   FontWeight="SemiBold"
+                                                   FontSize="12"
+                                                   Foreground="#d4e4a7"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    
+                                    <!-- Location -->
+                                    <TextBlock Text="{Binding Location}"
+                                               FontSize="10"
+                                               Foreground="{StaticResource GrayBrush}"
+                                               Margin="0,2,0,0"
+                                               Visibility="{Binding Location, Converter={StaticResource StringNullOrEmptyToVisibilityConverter}}"/>
+                                    
+                                    <!-- Price -->
+                                    <TextBlock FontSize="11"
+                                               Foreground="{StaticResource LightGreenBrush}"
+                                               Margin="0,2,0,0">
+                                        <TextBlock.Text>
+                                            <MultiBinding StringFormat="{}{0:N0}g each">
+                                                <Binding Path="Price"/>
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
                                 </StackPanel>
                             </Border>
                         </DataTemplate>

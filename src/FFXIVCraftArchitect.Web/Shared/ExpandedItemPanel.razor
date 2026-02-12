@@ -1,4 +1,5 @@
 @using FFXIVCraftArchitect.Core.Models
+@inject IJSRuntime JSRuntime
 
 <!-- Full Viewport Modal -->
 <div style="position: fixed; top: 64px; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); z-index: 1000; display: flex; align-items: flex-start; justify-content: center; padding: 20px;">
@@ -12,12 +13,24 @@
                            Size="Size.Medium" />
             
             <div style="flex: 1;">
-                <MudText Typo="Typo.h5" Style="color: #fff; font-weight: 600;">
-                    @Plan.Name
-                </MudText>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <MudText Typo="Typo.h5" Style="color: #fff; font-weight: 600;">
+                        @Plan.Name
+                    </MudText>
+                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                   OnClick="CopyItemName"
+                                   Style="color: #666;"
+                                   Size="Size.Small"
+                                   Title="Copy item name" />
+                </div>
                 <MudText Typo="Typo.body2" Style="color: #888;">
                     Quantity: <span style="color: #d4a73a;">×@Plan.QuantityNeeded</span>
                 </MudText>
+                @if (IsVendorItem)
+                {
+                    <VendorInfoDisplay Vendors="Plan.Vendors" 
+                                       SelectedVendorPrice="(int?)Plan.RecommendedWorld?.AveragePricePerUnit" />
+                }
             </div>
             
             <MudIconButton Icon="@Icons.Material.Filled.PushPin"
@@ -252,6 +265,13 @@
 @code {
     [Parameter] public DetailedShoppingPlan Plan { get; set; } = null!;
     [Parameter] public EventCallback OnClose { get; set; }
+    
+    private bool IsVendorItem => Plan.RecommendedWorld?.WorldName == "Vendor";
+
+    private async Task CopyItemName()
+    {
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", Plan.Name);
+    }
 
     private HashSet<string> _expandedWorlds = new();
     private HashSet<string> _expandedAllWorlds = new();

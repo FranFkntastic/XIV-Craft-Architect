@@ -93,6 +93,12 @@ public class DetailedShoppingPlan
     /// </summary>
     public decimal? HQAveragePrice { get; set; }
     public bool HasHqData => HQAveragePrice.HasValue;
+    
+    /// <summary>
+    /// Vendor information for items that can be purchased from vendors.
+    /// Only includes vendors that accept gil as currency.
+    /// </summary>
+    public List<GarlandVendor> Vendors { get; set; } = new();
 
     public bool HasOptions => WorldOptions.Count > 0;
     
@@ -445,6 +451,16 @@ public class PriceInfo
     public decimal HqUnitPrice { get; set; }
     public int HqQuantityAvailable { get; set; }
     public bool HasHqData => HqUnitPrice > 0;
+    
+    /// <summary>
+    /// Vendor information when Source is Vendor. Contains all vendors selling this item.
+    /// </summary>
+    public List<GarlandVendor> Vendors { get; set; } = new();
+    
+    /// <summary>
+    /// Whether this item has vendor information.
+    /// </summary>
+    public bool HasVendorInfo => Vendors?.Any() == true;
 }
 
 /// <summary>
@@ -579,4 +595,10 @@ public class WorldProcurementCardModel
     /// Items that are fully purchased on this world (non-split).
     /// </summary>
     public List<WorldItemPurchase> FullItems => Items.Where(i => !i.IsSplitPurchase).ToList();
+    
+    /// <summary>
+    /// Vendor information for vendor cards. Contains vendor names and locations.
+    /// Only populated when IsVendor is true.
+    /// </summary>
+    public List<GarlandVendor> Vendors { get; set; } = new();
 }

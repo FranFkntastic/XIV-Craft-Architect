@@ -62,7 +62,6 @@ public partial class MainWindow : Window
     private readonly PlanPersistenceService _planPersistence;
     private readonly PriceCheckService _priceCheckService;
     private readonly MarketShoppingService _marketShoppingService;
-    private readonly WaitingwayTravelService _waitingwayService;
     private readonly WorldBlacklistService _blacklistService;
     private readonly IDialogService _dialogs;
     private readonly Core.Services.IMarketCacheService _marketCache;
@@ -116,7 +115,6 @@ public partial class MainWindow : Window
         PlanPersistenceService planPersistence,
         PriceCheckService priceCheckService,
         MarketShoppingService marketShoppingService,
-        WaitingwayTravelService waitingwayService,
         WorldBlacklistService blacklistService,
         DialogServiceFactory dialogFactory,
         ILogger<MainWindow> logger,
@@ -142,7 +140,6 @@ public partial class MainWindow : Window
         _planPersistence = planPersistence;
         _priceCheckService = priceCheckService;
         _marketShoppingService = marketShoppingService;
-        _waitingwayService = waitingwayService;
         _blacklistService = blacklistService;
         _dialogFactory = dialogFactory;
         _dialogs = _dialogFactory.CreateForWindow(this);
