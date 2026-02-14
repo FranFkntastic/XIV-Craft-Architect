@@ -239,9 +239,15 @@ public class WorldShoppingSummary
     public decimal ValueScore { get; set; }
     
     /// <summary>
+    /// For vendor purchases: the specific vendor name and location.
+    /// Only populated when WorldName is "Vendor".
+    /// </summary>
+    public string? VendorName { get; set; }
+
+    /// <summary>
     /// Whether this world has competitively priced listings.
     /// </summary>
-    public bool IsCompetitive => BestSingleListing != null && 
+    public bool IsCompetitive => BestSingleListing != null &&
         BestSingleListing.PricePerUnit <= AveragePricePerUnit * 0.9m;
     
     /// <summary>
@@ -601,4 +607,10 @@ public class WorldProcurementCardModel
     /// Only populated when IsVendor is true.
     /// </summary>
     public List<GarlandVendor> Vendors { get; set; } = new();
+
+    /// <summary>
+    /// The specific vendor selected for this purchase (e.g., "Material Supplier - Limsa").
+    /// Only populated when IsVendor is true and a specific vendor was selected.
+    /// </summary>
+    public string? SelectedVendorName { get; set; }
 }

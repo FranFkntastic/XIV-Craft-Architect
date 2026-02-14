@@ -16,7 +16,7 @@ public class AppState
 {
     // Recipe Planner State
     public CraftingPlan? CurrentPlan { get; set; }
-    public List<PlannerProjectItem> ProjectItems { get; set; } = new();
+    public List<ProjectItem> ProjectItems { get; set; } = new();
     public List<CraftVsBuyAnalysis> CraftAnalyses { get; set; } = new();
     public string SelectedDataCenter { get; set; } = "Aether";
     public string SelectedRegion { get; set; } = "North America";
@@ -180,7 +180,7 @@ public class AppState
     /// </summary>
     public void SyncShoppingToProject()
     {
-        ProjectItems = ShoppingItems.Select(s => new PlannerProjectItem
+        ProjectItems = ShoppingItems.Select(s => new ProjectItem
         {
             Id = s.Id,
             Name = s.Name,
@@ -229,7 +229,7 @@ public class AppState
     {
         SelectedDataCenter = storedPlan.DataCenter;
         
-        ProjectItems = storedPlan.ProjectItems.Select(p => new PlannerProjectItem
+        ProjectItems = storedPlan.ProjectItems.Select(p => new ProjectItem
         {
             Id = p.Id,
             Name = p.Name,
@@ -330,14 +330,7 @@ public class AppState
     }
 }
 
-public class PlannerProjectItem
-{
-    public int Id { get; set; }
-    public string Name { get; set; } = string.Empty;
-    public int IconId { get; set; }
-    public int Quantity { get; set; }
-    public bool MustBeHq { get; set; }
-}
+// PlannerProjectItem removed - now using FFXIVCraftArchitect.Core.Models.ProjectItem
 
 public class MarketShoppingItem
 {

@@ -302,7 +302,9 @@
                         IsCongested = plan.RecommendedWorld.IsCongested,
                         Classification = plan.RecommendedWorld.Classification,
                         // For vendor cards, aggregate vendor info from all items
-                        Vendors = worldName == "Vendor" ? GetVendorInfoForVendorCard(item.ItemId, plan) : new List<GarlandVendor>()
+                        Vendors = worldName == "Vendor" ? GetVendorInfoForVendorCard(item.ItemId, plan) : new List<GarlandVendor>(),
+                        // Include the specific selected vendor name for display
+                        SelectedVendorName = worldName == "Vendor" ? plan.RecommendedWorld?.VendorName : null
                     };
                     worldCards[worldName] = card;
                 }

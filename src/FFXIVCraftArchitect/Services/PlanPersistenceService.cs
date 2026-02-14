@@ -368,6 +368,14 @@ public class PlanPersistenceService : IPlanPersistenceService
             MarketPrice = node.MarketPrice,
             HqMarketPrice = node.HqMarketPrice,
             VendorPrice = node.VendorPrice,
+            Vendors = node.VendorOptions.Select(v => new VendorInfoData
+            {
+                Name = v.Name,
+                Location = v.Location,
+                Price = v.Price,
+                Currency = v.Currency
+            }).ToList(),
+            SelectedVendorIndex = node.SelectedVendorIndex,
             PriceSource = node.PriceSource,
             PriceSourceDetails = node.PriceSourceDetails,
             Notes = node.Notes,
@@ -418,7 +426,17 @@ public class PlanPersistenceService : IPlanPersistenceService
         node.CanBuyFromVendor = fileNode.CanBuyFromVendor;
         node.CanCraft = fileNode.CanCraft;
         node.IsCircularReference = fileNode.IsCircularReference;
-        
+
+        // Restore vendor options (backward compatible - may be null in old saves)
+        node.VendorOptions = fileNode.Vendors?.Select(v => new VendorInfo
+        {
+            Name = v.Name,
+            Location = v.Location,
+            Price = v.Price,
+            Currency = v.Currency
+        }).ToList() ?? new List<VendorInfo>();
+        node.SelectedVendorIndex = fileNode.SelectedVendorIndex;
+
         return node;
     }
 
@@ -514,12 +532,30 @@ public class PlanFileNode
     public PriceSource PriceSource { get; set; }
     public string? PriceSourceDetails { get; set; }
     public string? Notes { get; set; }
+
+    /// <summary>Full vendor options for this item.</summary>
+    public List<VendorInfoData> Vendors { get; set; } = new();
+
+    /// <summary>Selected vendor index for procurement (-1 = use cheapest).</summary>
+    public int SelectedVendorIndex { get; set; } = -1;
+
     public List<PlanFileNode> Children { get; set; } = new();
-    
+
     /// <summary>
     /// If true, this node is a circular reference and should not be expanded.
     /// </summary>
     public bool IsCircularReference { get; set; }
+}
+
+/// <summary>
+/// Vendor data for persistence (equivalent to Core VendorInfo).
+/// </summary>
+public class VendorInfoData
+{
+    public string Name { get; set; } = string.Empty;
+    public string Location { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+    public string Currency { get; set; } = "gil";
 }
 
 /// <summary>

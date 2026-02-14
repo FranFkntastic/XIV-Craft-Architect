@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using FFXIVCraftArchitect.Core.Helpers;
 using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.ViewModels;
 
@@ -333,7 +334,7 @@ public class RecipeTreeUiBuilder
     {
         var dropdown = new ComboBox
         {
-            Width = 85,
+            Width = 120,
             Height = 22,
             FontSize = 10,
             Padding = new Thickness(2, 0, 0, 0),
@@ -346,44 +347,82 @@ public class RecipeTreeUiBuilder
             VerticalContentAlignment = VerticalAlignment.Center
         };
 
-        // Create items with tags for lookup
-        var craftItem = new ComboBoxItem { Content = "Craft", Tag = AcquisitionSource.Craft };
-        var buyNqItem = new ComboBoxItem { Content = "Buy NQ", Tag = AcquisitionSource.MarketBuyNq };
-        var buyHqItem = new ComboBoxItem { Content = "Buy HQ", Tag = AcquisitionSource.MarketBuyHq };
-        var vendorBuyItem = new ComboBoxItem { Content = "Vendor", Tag = AcquisitionSource.VendorBuy };
+        // Track all items by their source for selection
+        var sourceToItem = new Dictionary<AcquisitionSource, List<ComboBoxItem>>();
 
-        // Only add Craft option if item is actually craftable
+        // Add Craft option if craftable
         if (nodeVm.CanCraft)
         {
+            var craftItem = new ComboBoxItem { Content = "Craft", Tag = AcquisitionSource.Craft };
             dropdown.Items.Add(craftItem);
-        }
-        dropdown.Items.Add(buyNqItem);
-        if (nodeVm.CanBeHq)
-        {
-            dropdown.Items.Add(buyHqItem);
-        }
-        
-        // Add Vendor Buy option if item can be bought from vendor
-        if (nodeVm.CanBuyFromVendor)
-        {
-            dropdown.Items.Add(vendorBuyItem);
+            sourceToItem[AcquisitionSource.Craft] = new List<ComboBoxItem> { craftItem };
         }
 
-        // Set selected item based on source
-        dropdown.SelectedItem = nodeVm.Source switch
+        // Add Market Buy options
+        var buyNqItem = new ComboBoxItem { Content = "Buy NQ", Tag = AcquisitionSource.MarketBuyNq };
+        dropdown.Items.Add(buyNqItem);
+        sourceToItem[AcquisitionSource.MarketBuyNq] = new List<ComboBoxItem> { buyNqItem };
+
+        if (nodeVm.CanBeHq)
         {
-            AcquisitionSource.Craft when nodeVm.CanCraft => craftItem,
-            AcquisitionSource.MarketBuyNq => buyNqItem,
-            AcquisitionSource.MarketBuyHq when nodeVm.CanBeHq => buyHqItem,
-            AcquisitionSource.VendorBuy when nodeVm.CanBuyFromVendor => vendorBuyItem,
-            _ => buyNqItem  // Default to Buy NQ if Craft not available
-        };
+            var buyHqItem = new ComboBoxItem { Content = "Buy HQ", Tag = AcquisitionSource.MarketBuyHq };
+            dropdown.Items.Add(buyHqItem);
+            sourceToItem[AcquisitionSource.MarketBuyHq] = new List<ComboBoxItem> { buyHqItem };
+        }
+
+        // Add Vendor options - one per cheapest gil vendor
+        if (nodeVm.CanBuyFromVendor && nodeVm.VendorOptions?.Any() == true)
+        {
+            var gilVendors = nodeVm.VendorOptions.Where(v => v.IsGilVendor).ToList();
+            if (gilVendors.Any())
+            {
+                var minPrice = gilVendors.Min(v => v.Price);
+                var cheapestVendors = gilVendors.Where(v => v.Price == minPrice).ToList();
+
+                var vendorItems = new List<ComboBoxItem>();
+                foreach (var vendor in cheapestVendors)
+                {
+                    var vendorItem = new ComboBoxItem
+                    {
+                        Content = $"Vendor: {vendor.DisplayName}",
+                        Tag = AcquisitionSource.VendorBuy,
+                        ToolTip = $"{vendor.FullDisplayText}"
+                    };
+                    dropdown.Items.Add(vendorItem);
+                    vendorItems.Add(vendorItem);
+                }
+                sourceToItem[AcquisitionSource.VendorBuy] = vendorItems;
+            }
+        }
+
+        // Set selected item based on current source
+        ComboBoxItem? selectedItem = null;
+        if (sourceToItem.TryGetValue(nodeVm.Source, out var items) && items.Any())
+        {
+            // For vendors, use selected index if valid
+            if (nodeVm.Source == AcquisitionSource.VendorBuy && nodeVm.SelectedVendorIndex >= 0 && nodeVm.SelectedVendorIndex < items.Count)
+            {
+                selectedItem = items[nodeVm.SelectedVendorIndex];
+            }
+            else
+            {
+                selectedItem = items.First();
+            }
+        }
+        dropdown.SelectedItem = selectedItem ?? sourceToItem.GetValueOrDefault(AcquisitionSource.MarketBuyNq)?.First() ?? dropdown.Items[0];
 
         dropdown.SelectionChanged += (s, e) =>
         {
             if (dropdown.SelectedItem is ComboBoxItem item && item.Tag is AcquisitionSource newSource)
             {
+                // For vendor selection, track which vendor was selected
+                int vendorIndex = -1;
+                if (newSource == AcquisitionSource.VendorBuy && sourceToItem.TryGetValue(AcquisitionSource.VendorBuy, out var vendorItems))
+                {
+                    vendorIndex = vendorItems.IndexOf(item);
+                }
                 _onAcquisitionChanged(nodeVm.NodeId, newSource);
+                // TODO: Pass vendorIndex to callback for procurement planning
             }
         };
 
@@ -437,30 +476,18 @@ public class RecipeTreeUiBuilder
 
     private static Brush GetNodeForeground(PlanNodeViewModel node)
     {
-        return node.Source switch
+        var colorName = RecipePlanDisplayHelpers.GetSourceColorName(node.Source);
+        return colorName switch
         {
-            AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq => Brushes.LightSkyBlue,
-            AcquisitionSource.VendorBuy => Brushes.LightGreen,
+            "LightBlue" => Brushes.LightSkyBlue,
+            "LightGreen" => Brushes.LightGreen,
             _ => Brushes.White
         };
     }
 
     private static string GetJobIcon(string job)
     {
-        return job switch
-        {
-            "Carpenter" => "🪚",
-            "Blacksmith" => "⚒️",
-            "Armorer" => "🛡️",
-            "Goldsmith" => "💍",
-            "Leatherworker" => "🧵",
-            "Weaver" => "🧶",
-            "Alchemist" => "⚗️",
-            "Culinarian" => "🍳",
-            "Company Workshop" => "🏢",
-            "Phase" => "📋",
-            _ => "•"
-        };
+        return RecipePlanDisplayHelpers.GetJobIcon(job);
     }
 
     private static int GetDropdownIndexForSource(AcquisitionSource source)

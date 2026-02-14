@@ -439,7 +439,7 @@
                 AppState.CurrentPlan = importResult.NativePlan;
                 
                 // Use the plan's root items
-                AppState.ProjectItems = importResult.NativePlan.RootItems.Select(r => new PlannerProjectItem
+                AppState.ProjectItems = importResult.NativePlan.RootItems.Select(r => new ProjectItem
                 {
                     Id = r.ItemId,
                     Name = r.Name,
@@ -498,7 +498,7 @@
                 {
                     if (!AppState.ProjectItems.Any(p => p.Id == item.Id))
                     {
-                        AppState.ProjectItems.Add(new PlannerProjectItem
+                        AppState.ProjectItems.Add(new ProjectItem
                         {
                             Id = item.Id,
                             Name = item.Name,

@@ -14,9 +14,17 @@
             @if (Card.IsVendor)
             {
                 <MudIcon Icon="@Icons.Material.Filled.Store" Size="Size.Small" Style="color: #d4a73a;" />
-                <MudText Typo="Typo.body1" Style="color: #d4a73a; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                    VENDOR
-                </MudText>
+                <div style="display: flex; flex-direction: column; min-width: 0;">
+                    <MudText Typo="Typo.body1" Style="color: #d4a73a; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        VENDOR
+                    </MudText>
+                    @if (!string.IsNullOrEmpty(Card.SelectedVendorName))
+                    {
+                        <MudText Typo="Typo.caption" Style="color: #90EE90; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                            @Card.SelectedVendorName
+                        </MudText>
+                    }
+                </div>
             }
             else
             {
@@ -92,8 +100,8 @@
         </div>
     }
     
-    @* Expanded Content - Items Table *@
-    @if (IsExpanded)
+    @* Expanded Content - Items Table (ONLY for non-vendor cards) *@
+    @if (IsExpanded && !Card.IsVendor)
     {
         <div style="padding: 8px;">
             @* Congestion Warning Banner *@
@@ -151,6 +159,43 @@
                     }
                 </tbody>
             </table>
+        </div>
+    }
+    
+    @* Expanded Content - Vendor Details (ONLY for vendor cards) *@
+    @if (IsExpanded && Card.IsVendor)
+    {
+        <div style="padding: 8px;">
+            @* Items List for Vendor *@
+            <div style="margin-bottom: 12px;">
+                @foreach (var item in Card.Items)
+                {
+                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; background: @(Card.Items.IndexOf(item) % 2 == 0 ? "transparent" : "#2a2a2a"); border-radius: 4px;">
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <MudIcon Icon="@Icons.Material.Filled.Store" Size="Size.Small" Style="color: #d4a73a;" />
+                            <span style="color: #fff;">@item.ItemName</span>
+                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" 
+                                           Size="Size.Small" 
+                                           Style="color: #666; padding: 2px;"
+                                           OnClick="() => CopyItemName(item.ItemName)"
+                                           Title="Copy item name" />
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <span style="color: #d4a73a;">×@item.QuantityDisplay</span>
+                            <span style="color: #aaa; font-size: 11px;">@item.PricePerUnit.ToString("N0")g</span>
+                            <span style="color: #4caf50; font-weight: 500;">@item.TotalCost.ToString("N0")g</span>
+                        </div>
+                    </div>
+                }
+            </div>
+            
+            @* Vendor Info Notice *@
+            <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #2a2520; border-radius: 4px; border: 1px solid #5a4a3a;">
+                <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" Style="color: #d4a73a;" />
+                <MudText Typo="Typo.caption" Style="color: #90EE90; flex: 1;">
+                    Purchased from vendor. No market board listings required.
+                </MudText>
+            </div>
         </div>
     }
 </div>

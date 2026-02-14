@@ -429,7 +429,7 @@
             }
             
             // Apply vendor price overrides for vendor-buy items
-            await ApplyVendorPriceOverridesAsync(plans);
+            ApplyVendorPriceOverrides(plans);
             
             AppState.ShoppingPlans = plans;
             AppState.NotifyShoppingListChanged();
@@ -459,52 +459,54 @@
     /// <summary>
     /// For items marked as vendor-buy, override the recommendation to show vendor price.
     /// Keeps market data visible for comparison but sets vendor as the recommended option.
-    /// Also populates vendor information for display.
+    /// Uses the selected vendor from the recipe plan (respects SelectedVendorIndex).
     /// </summary>
-    private async Task ApplyVendorPriceOverridesAsync(List<DetailedShoppingPlan> plans)
+    private void ApplyVendorPriceOverrides(List<DetailedShoppingPlan> plans)
     {
         if (AppState.CurrentPlan == null) return;
-        
+
         foreach (var plan in plans)
         {
             // Find the node in the plan tree to check its source and vendor price
             var node = FindNodeInPlan(AppState.CurrentPlan, plan.ItemId);
             if (node?.Source == AcquisitionSource.VendorBuy && node.VendorPrice > 0)
             {
-                // Create a vendor "world" option as the recommendation
-                plan.RecommendedWorld = new WorldShoppingSummary
+                // Get the specific vendor selected in the recipe plan
+                var selectedVendor = node.SelectedVendor;
+                if (selectedVendor != null)
                 {
-                    WorldName = "Vendor",
-                    TotalCost = (long)(node.VendorPrice * plan.QuantityNeeded),
-                    AveragePricePerUnit = node.VendorPrice,
-                    TotalQuantityPurchased = plan.QuantityNeeded,
-                    HasSufficientStock = true,
-                    Listings = new List<ShoppingListingEntry>()
-                };
-                
-                // Clear any split recommendations since vendor has unlimited stock
-                plan.RecommendedSplit = null;
-                
-                // Fetch vendor information for display
-                try
-                {
-                    var itemData = await GarlandService.GetItemAsync(plan.ItemId);
-                    if (itemData != null)
+                    // Create a vendor "world" option as the recommendation with specific vendor info
+                    plan.RecommendedWorld = new WorldShoppingSummary
                     {
-                        // Only include vendors that accept gil as currency
-                        plan.Vendors = itemData.Vendors
-                            .Where(v => v.Currency?.ToLower() == "gil")
-                            .OrderBy(v => v.Price)
-                            .ToList();
-                    }
+                        WorldName = "Vendor",
+                        TotalCost = (long)(selectedVendor.Price * plan.QuantityNeeded),
+                        AveragePricePerUnit = selectedVendor.Price,
+                        TotalQuantityPurchased = plan.QuantityNeeded,
+                        HasSufficientStock = true,
+                        Listings = new List<ShoppingListingEntry>(),
+                        // Store the specific vendor name for display
+                        VendorName = $"{selectedVendor.Name} - {selectedVendor.Location}"
+                    };
+
+                    // Clear any split recommendations since vendor has unlimited stock
+                    plan.RecommendedSplit = null;
+
+                    // Use vendor data already stored in the node (no need to fetch again)
+                    plan.Vendors = node.VendorOptions
+                        .Where(v => v.IsGilVendor)
+                        .Select(v => new GarlandVendor
+                        {
+                            Name = v.Name,
+                            Location = v.Location,
+                            Price = (int)v.Price,
+                            Currency = v.Currency
+                        })
+                        .OrderBy(v => v.Price)
+                        .ToList();
+
+                    Logger.LogInformation("Applied vendor price override for {ItemName}: {VendorName} @ {VendorPrice}g",
+                        plan.Name, selectedVendor.Name, selectedVendor.Price);
                 }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex, "Failed to fetch vendor info for {ItemName}", plan.Name);
-                }
-                
-                Logger.LogInformation("Applied vendor price override for {ItemName}: {VendorPrice}g", 
-                    plan.Name, node.VendorPrice);
             }
         }
     }

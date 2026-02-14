@@ -25,7 +25,9 @@ public enum AcquisitionSource
     /// <summary>Buy HQ from market board</summary>
     MarketBuyHq,
     /// <summary>Buy from vendor (gil)</summary>
-    VendorBuy
+    VendorBuy,
+    /// <summary>Buy from vendor (special currency - tomestones, etc.)</summary>
+    VendorSpecialCurrency
 }
 
 /// <summary>
@@ -376,7 +378,51 @@ public class PlanNode
     /// If true, this item can be bought from a vendor (cheaper than market).
     /// </summary>
     public bool CanBuyFromVendor { get; set; }
-    
+
+    /// <summary>
+    /// Full vendor options for this item (all vendors including special currency ones).
+    /// Gil vendors are prioritized in UI display.
+    /// </summary>
+    public List<VendorInfo> VendorOptions { get; set; } = new();
+
+    /// <summary>
+    /// Gets the cheapest gil vendor option, or null if no gil vendors available.
+    /// </summary>
+    [JsonIgnore]
+    public VendorInfo? CheapestGilVendor => VendorOptions
+        .Where(v => v.IsGilVendor)
+        .OrderBy(v => v.Price)
+        .FirstOrDefault();
+
+    /// <summary>
+    /// Gets all gil vendors with the cheapest price (for display when multiple vendors have same price).
+    /// </summary>
+    [JsonIgnore]
+    public List<VendorInfo> CheapestGilVendors
+    {
+        get
+        {
+            var gilVendors = VendorOptions.Where(v => v.IsGilVendor).ToList();
+            if (!gilVendors.Any()) return new List<VendorInfo>();
+            var minPrice = gilVendors.Min(v => v.Price);
+            return gilVendors.Where(v => v.Price == minPrice).ToList();
+        }
+    }
+
+    /// <summary>
+    /// Selected vendor index for procurement plan (which vendor to buy from).
+    /// -1 means not selected or use cheapest.
+    /// </summary>
+    public int SelectedVendorIndex { get; set; } = -1;
+
+    /// <summary>
+    /// Gets the selected vendor or the cheapest gil vendor if none selected.
+    /// </summary>
+    [JsonIgnore]
+    public VendorInfo? SelectedVendor => SelectedVendorIndex >= 0 && SelectedVendorIndex < VendorOptions.Count
+        ? VendorOptions[SelectedVendorIndex]
+        : CheapestGilVendor;
+
     /// <summary>
     /// If true, this item has a craft recipe and can be crafted.
     /// </summary>
@@ -409,16 +455,27 @@ public class PlanNode
             ParentNodeId = ParentNodeId,
             Notes = Notes,
             CanBuyFromVendor = CanBuyFromVendor,
-            CanCraft = CanCraft
+            CanCraft = CanCraft,
+            VendorPrice = VendorPrice,
+            SelectedVendorIndex = SelectedVendorIndex
         };
-        
+
+        // Clone vendor options
+        clone.VendorOptions = VendorOptions.Select(v => new VendorInfo
+        {
+            Name = v.Name,
+            Location = v.Location,
+            Price = v.Price,
+            Currency = v.Currency
+        }).ToList();
+
         foreach (var child in Children)
         {
             var childClone = child.Clone();
             childClone.Parent = clone;
             clone.Children.Add(childClone);
         }
-        
+
         return clone;
     }
     
@@ -535,7 +592,13 @@ public class SerializablePlanNode
     
     /// <summary>If true, this item has a craft recipe and can be crafted.</summary>
     public bool CanCraft { get; set; }
-    
+
+    /// <summary>Full vendor options for this item.</summary>
+    public List<VendorInfo> Vendors { get; set; } = new();
+
+    /// <summary>Selected vendor index for procurement (-1 = use cheapest).</summary>
+    public int SelectedVendorIndex { get; set; } = -1;
+
     public string NodeId { get; set; } = string.Empty;
     public string? ParentNodeId { get; set; }
     public string? Notes { get; set; }
@@ -547,6 +610,13 @@ public class SerializablePlanNode
 /// </summary>
 public class PlanSerializationWrapper
 {
+    /// <summary>
+    /// Plan format version for backward compatibility.
+    /// Version 1: Initial format
+    /// Version 2: Added full vendor data support
+    /// </summary>
+    public int Version { get; set; } = 2;
+
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }

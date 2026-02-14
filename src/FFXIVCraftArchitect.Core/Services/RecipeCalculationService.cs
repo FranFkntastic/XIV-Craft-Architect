@@ -95,7 +95,7 @@ public class RecipeCalculationService
 
         _logger?.LogInformation("[RecipeCalc] Fetching vendor prices for plan items");
         
-        var vendorPriceCache = new Dictionary<int, decimal>();
+        var vendorPriceCache = new Dictionary<int, (decimal price, List<VendorInfo> vendors)>();
         int fetchedCount = 0;
         int cachedCount = 0;
 
@@ -111,16 +111,17 @@ public class RecipeCalculationService
 
     private async Task<(int fetched, int cached)> FetchVendorPricesForNodeAsync(
         PlanNode node, 
-        Dictionary<int, decimal> cache, 
+        Dictionary<int, (decimal price, List<VendorInfo> vendors)> cache, 
         int fetchedCount, 
         int cachedCount,
         CancellationToken ct)
     {
         // Check in-memory cache first
-        if (cache.TryGetValue(node.ItemId, out var cachedPrice))
+        if (cache.TryGetValue(node.ItemId, out var cachedData))
         {
-            node.VendorPrice = cachedPrice;
-            node.CanBuyFromVendor = cachedPrice > 0;
+            node.VendorPrice = cachedData.price;
+            node.VendorOptions = cachedData.vendors;
+            node.CanBuyFromVendor = cachedData.vendors.Any(v => v.IsGilVendor);
             cachedCount++;
         }
         else
@@ -131,10 +132,14 @@ public class RecipeCalculationService
                 var itemData = await _garlandService.GetItemAsync(node.ItemId, ct);
                 if (itemData != null)
                 {
-                    var vendorPrice = GetVendorPrice(itemData);
-                    node.VendorPrice = vendorPrice;
-                    node.CanBuyFromVendor = vendorPrice > 0;
-                    cache[node.ItemId] = vendorPrice;
+                    var vendors = GetVendorOptions(itemData);
+                    var gilVendors = vendors.Where(v => v.IsGilVendor).ToList();
+                    var cheapestPrice = gilVendors.Any() ? gilVendors.Min(v => v.Price) : 0;
+                    
+                    node.VendorOptions = vendors;
+                    node.VendorPrice = cheapestPrice;
+                    node.CanBuyFromVendor = cheapestPrice > 0;
+                    cache[node.ItemId] = (cheapestPrice, vendors);
                     fetchedCount++;
                 }
             }
@@ -175,6 +180,36 @@ public class RecipeCalculationService
         }
         
         return 0;
+    }
+
+    /// <summary>
+    /// Extract all vendor options from Garland item data.
+    /// Returns a list of VendorInfo for all available vendors (both gil and special currency).
+    /// </summary>
+    private static List<VendorInfo> GetVendorOptions(GarlandItem? item)
+    {
+        if (item == null) return new List<VendorInfo>();
+
+        var vendors = new List<VendorInfo>();
+
+        // If we have full vendor objects with prices, convert them
+        if (item.Vendors.Count > 0)
+        {
+            vendors = item.Vendors.Select(v => VendorInfo.FromGarlandVendor(v)).ToList();
+        }
+        // If vendors are listed as IDs only with root-level price, create a generic entry
+        else if (item.HasVendorReferences && item.Price > 0)
+        {
+            vendors.Add(new VendorInfo
+            {
+                Name = "Material Supplier",
+                Location = "Multiple Locations",
+                Price = item.Price,
+                Currency = "gil"
+            });
+        }
+
+        return vendors;
     }
 
     /// <summary>
@@ -503,6 +538,9 @@ public class RecipeCalculationService
             RecipeLevel = node.RecipeLevel,
             Job = node.Job,
             Yield = node.Yield,
+            VendorPrice = node.VendorPrice,
+            Vendors = node.VendorOptions.ToList(),
+            SelectedVendorIndex = node.SelectedVendorIndex,
             // Market prices intentionally NOT serialized - they bloat the file 
             // and will be refreshed from market data on load anyway
             NodeId = node.NodeId,
@@ -510,7 +548,7 @@ public class RecipeCalculationService
             Notes = node.Notes,
             ChildNodeIds = node.Children.Select(c => c.NodeId).ToList()
         };
-        
+
         list.Add(serializable);
 
         foreach (var child in node.Children)
@@ -561,7 +599,10 @@ public class RecipeCalculationService
                 node.CanBuyFromVendor = sNode.CanBuyFromVendor;
                 node.CanCraft = sNode.CanCraft;
                 node.HqMarketPrice = sNode.HqMarketPrice;
-                
+                node.VendorPrice = sNode.VendorPrice;
+                node.VendorOptions = sNode.Vendors?.ToList() ?? new List<VendorInfo>();
+                node.SelectedVendorIndex = sNode.SelectedVendorIndex;
+
                 nodeLookup[sNode.NodeId] = node;
             }
 

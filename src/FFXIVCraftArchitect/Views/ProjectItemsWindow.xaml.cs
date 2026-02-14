@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using FFXIVCraftArchitect.Core.Models;
 using FFXIVCraftArchitect.Services;
 using Microsoft.Extensions.Logging;
 

@@ -74,15 +74,16 @@ public class UniversalisService : IUniversalisService
     /// <summary>
     /// Get market data for multiple items at once.
     /// Universalis API has a limit of 100 items per request, so we chunk large requests.
-    /// Includes rate limiting (100ms delay between chunks) to avoid API throttling.
+    /// Uses smaller chunks (50) and longer delays to avoid 504 Gateway Timeout errors.
+    /// Includes rate limiting (500ms delay between chunks) and special handling for 504 errors.
     /// </summary>
     public async Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkAsync(
-        string worldOrDc, 
-        IEnumerable<int> itemIds, 
+        string worldOrDc,
+        IEnumerable<int> itemIds,
         CancellationToken ct = default)
     {
-        const int chunkSize = 100; // Universalis API limit
-        const int delayBetweenChunksMs = 100; // Rate limiting delay
+        const int chunkSize = 50; // Reduced from 100 to avoid 504 Gateway Timeout
+        const int delayBetweenChunksMs = 500; // Increased from 100ms for better server response
         const int maxRetries = 3;
         
         var itemIdList = itemIds.ToList();
@@ -116,15 +117,28 @@ public class UniversalisService : IUniversalisService
                     }
 
                     var response = await _httpClient.GetAsync(url, ct);
-                    
-                    // Handle rate limiting (429)
+
+                    // Handle rate limiting (429) and gateway timeout (504)
                     if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                     {
                         _logger?.LogWarning("Rate limited (429) on chunk {ChunkIndex}, will retry", (i / chunkSize) + 1);
                         if (retry < maxRetries - 1) continue;
                         throw new HttpRequestException("Rate limited by Universalis API");
                     }
-                    
+                    else if ((int)response.StatusCode == 504) // Gateway Timeout
+                    {
+                        _logger?.LogWarning("Gateway timeout (504) on chunk {ChunkIndex}, will retry with extended delay", (i / chunkSize) + 1);
+                        if (retry < maxRetries - 1)
+                        {
+                            // Use longer delays for 504 errors: 5s, 7s, 10s
+                            var gatewayTimeoutDelay = 5000 + (retry * 2000);
+                            _logger?.LogInformation("Waiting {DelayMs}ms before retry for 504 error", gatewayTimeoutDelay);
+                            await Task.Delay(gatewayTimeoutDelay, ct);
+                            continue;
+                        }
+                        throw new HttpRequestException("Gateway timeout from Universalis API - server overloaded");
+                    }
+
                     response.EnsureSuccessStatusCode();
 
                     // Single-item and multi-item responses have different structures

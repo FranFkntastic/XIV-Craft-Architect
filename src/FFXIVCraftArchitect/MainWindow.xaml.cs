@@ -37,17 +37,7 @@ using WorldDataCoordinator = FFXIVCraftArchitect.Core.Services.WorldDataCoordina
 
 namespace FFXIVCraftArchitect;
 
-/// <summary>
-/// Represents an item in the project list
-/// </summary>
-public class ProjectItem
-{
-    public int Id { get; set; }
-    public string Name { get; set; } = string.Empty;
-    public int Quantity { get; set; } = 1;
-    public bool IsHqRequired { get; set; } = false;
-    public override string ToString() => $"{Name} x{Quantity}";
-}
+// ProjectItem is now defined in FFXIVCraftArchitect.Core.Models
 
 /// <summary>
 /// Interaction logic for MainWindow.xaml

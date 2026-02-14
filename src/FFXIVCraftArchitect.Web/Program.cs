@@ -10,8 +10,12 @@ var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
 // HeadOutlet removed - add back if you need dynamic <PageTitle> support
 
-// Register HttpClient for API calls
-builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri(builder.HostEnvironment.BaseAddress) });
+// Register HttpClient for API calls with extended timeout for Universalis
+builder.Services.AddScoped(sp => new HttpClient
+{
+    BaseAddress = new Uri(builder.HostEnvironment.BaseAddress),
+    Timeout = TimeSpan.FromSeconds(60) // Extended timeout for large bulk requests
+});
 
 // Register MudBlazor
 builder.Services.AddMudServices();

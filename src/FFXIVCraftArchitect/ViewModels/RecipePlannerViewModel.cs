@@ -765,6 +765,16 @@ public partial class PlanNodeViewModel : ObservableObject
     /// </summary>
     public bool CanCraft => _node.CanCraft;
 
+    /// <summary>
+    /// Full vendor options for this item.
+    /// </summary>
+    public List<VendorInfo> VendorOptions => _node.VendorOptions;
+
+    /// <summary>
+    /// Selected vendor index for procurement.
+    /// </summary>
+    public int SelectedVendorIndex => _node.SelectedVendorIndex;
+
     [ObservableProperty]
     private bool _isExpanded = true;
 }

@@ -1,3 +1,4 @@
+@using FFXIVCraftArchitect.Core.Helpers
 @using FFXIVCraftArchitect.Core.Models
 @using FFXIVCraftArchitect.Web.Services
 @inject AppState AppState
@@ -96,15 +97,6 @@
         _isExpanded = !_isExpanded;
     }
 
-    private async Task OnSourceChange(ChangeEventArgs e)
-    {
-        if (Node != null && Enum.TryParse<AcquisitionSource>(e.Value?.ToString(), out var source))
-        {
-            Node.Source = source;
-            await OnSourceChanged.InvokeAsync(Node);
-        }
-    }
-
     private async Task OnHqToggle()
     {
         if (Node != null && Node.CanBeHq)
@@ -123,6 +115,123 @@
             await OnHqChanged.InvokeAsync(Node);
         }
     }
+
+    private List<DropdownOption> GetDropdownOptions()
+    {
+        var options = new List<DropdownOption>();
+        
+        if (Node == null) return options;
+        
+        // Always add market buy options
+        options.Add(new DropdownOption($"market_nq_{Node.NodeId}", "Buy NQ", AcquisitionSource.MarketBuyNq, -1));
+        
+        if (Node.CanBeHq)
+        {
+            options.Add(new DropdownOption($"market_hq_{Node.NodeId}", "Buy HQ", AcquisitionSource.MarketBuyHq, -1));
+        }
+        
+        // Add vendor options - gil vendors first (cheapest), then special currency vendors
+        if (Node.CanBuyFromVendor && Node.VendorOptions?.Any() == true)
+        {
+            var gilVendors = Node.VendorOptions.Where(v => v.IsGilVendor).ToList();
+            if (gilVendors.Any())
+            {
+                var minPrice = gilVendors.Min(v => v.Price);
+                var cheapestVendors = gilVendors.Where(v => v.Price == minPrice).ToList();
+
+                for (int i = 0; i < cheapestVendors.Count; i++)
+                {
+                    var vendor = cheapestVendors[i];
+                    var vendorIndex = Node.VendorOptions.IndexOf(vendor);
+                    var vendorIndexInCheapest = i;
+                    options.Add(new DropdownOption(
+                        $"vendor_{vendorIndex}_{Node.NodeId}",
+                        $"Vendor: {vendor.Name} - {vendor.Location} [{vendor.Price:N0}g]",
+                        AcquisitionSource.VendorBuy,
+                        vendorIndexInCheapest));
+                }
+            }
+
+            // Add special currency vendors (crossed out / not supported)
+            var specialCurrencyVendors = Node.VendorOptions.Where(v => !v.IsGilVendor).ToList();
+            foreach (var vendor in specialCurrencyVendors)
+            {
+                var vendorIndex = Node.VendorOptions.IndexOf(vendor);
+                options.Add(new DropdownOption(
+                    $"vendor_special_{vendorIndex}_{Node.NodeId}",
+                    $"~~{vendor.Name} - {vendor.Location} [{vendor.Price:N0} {vendor.Currency}] (not supported)~~",
+                    AcquisitionSource.VendorSpecialCurrency,
+                    vendorIndex));
+            }
+        }
+        
+        // Add craft option if craftable
+        if (Node.Children?.Any() == true)
+        {
+            options.Add(new DropdownOption($"craft_{Node.NodeId}", "Craft", AcquisitionSource.Craft, -1));
+        }
+        
+        return options;
+    }
+    
+    private string GetCurrentDropdownValue()
+    {
+        if (Node == null) return "";
+        
+        return Node.Source switch
+        {
+            AcquisitionSource.MarketBuyNq => $"market_nq_{Node.NodeId}",
+            AcquisitionSource.MarketBuyHq => $"market_hq_{Node.NodeId}",
+            AcquisitionSource.VendorBuy => GetVendorDropdownValue(),
+            AcquisitionSource.Craft => $"craft_{Node.NodeId}",
+            _ => $"market_nq_{Node.NodeId}"
+        };
+    }
+    
+    private string GetVendorDropdownValue()
+    {
+        if (Node?.VendorOptions == null || !Node.VendorOptions.Any()) return "";
+        
+        var gilVendors = Node.VendorOptions.Where(v => v.IsGilVendor).ToList();
+        if (!gilVendors.Any()) return "";
+        
+        var minPrice = gilVendors.Min(v => v.Price);
+        var cheapestVendors = gilVendors.Where(v => v.Price == minPrice).ToList();
+        
+        // Use selected vendor index if valid
+        if (Node.SelectedVendorIndex >= 0 && Node.SelectedVendorIndex < cheapestVendors.Count)
+        {
+            var vendor = cheapestVendors[Node.SelectedVendorIndex];
+            var vendorIndex = Node.VendorOptions.IndexOf(vendor);
+            return $"vendor_{vendorIndex}_{Node.NodeId}";
+        }
+        
+        // Default to first vendor
+        var firstVendor = cheapestVendors.First();
+        var firstIndex = Node.VendorOptions.IndexOf(firstVendor);
+        return $"vendor_{firstIndex}_{Node.NodeId}";
+    }
+    
+    private async Task OnDropdownChange(ChangeEventArgs e)
+    {
+        if (Node == null) return;
+        
+        var value = e.Value?.ToString() ?? "";
+        var options = GetDropdownOptions();
+        var selectedOption = options.FirstOrDefault(o => o.Value == value);
+        
+        if (selectedOption != null)
+        {
+            Node.Source = selectedOption.Source;
+            if (selectedOption.Source == AcquisitionSource.VendorBuy)
+            {
+                Node.SelectedVendorIndex = selectedOption.VendorIndex;
+            }
+            await OnSourceChanged.InvokeAsync(Node);
+        }
+    }
+    
+    private record DropdownOption(string Value, string Text, AcquisitionSource Source, int VendorIndex);
 
     private RenderFragment RenderNodeContentCore() => __builder =>
     {
@@ -172,18 +281,21 @@
             __builder.CloseElement();
         }
         
-        // Acquisition source dropdown
-        __builder.OpenElement(12, "select");
-        __builder.AddAttribute(13, "value", Node.Source.ToString());
-        __builder.AddAttribute(14, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, OnSourceChange));
-        __builder.AddEventStopPropagationAttribute(15, "onclick", true);
-        __builder.AddAttribute(16, "style", "background: #2d2d2d; color: white; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer;");
+        // Acquisition source dropdown with vendor details
+        var dropdownOptions = GetDropdownOptions();
+        var currentValue = GetCurrentDropdownValue();
         
-        foreach (var source in GetAvailableSources())
+        __builder.OpenElement(12, "select");
+        __builder.AddAttribute(13, "value", currentValue);
+        __builder.AddAttribute(14, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, OnDropdownChange));
+        __builder.AddEventStopPropagationAttribute(15, "onclick", true);
+        __builder.AddAttribute(16, "style", "background: #2d2d2d; color: white; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer; min-width: 150px;");
+        
+        foreach (var option in dropdownOptions)
         {
             __builder.OpenElement(16, "option");
-            __builder.AddAttribute(17, "value", source.ToString());
-            __builder.AddContent(18, GetSourceDisplayName(source));
+            __builder.AddAttribute(17, "value", option.Value);
+            __builder.AddContent(18, option.Text);
             __builder.CloseElement();
         }
         
@@ -203,53 +315,13 @@
     private string GetNodeColor()
     {
         if (Node == null) return "#ccc";
-        return Node.Source switch
-        {
-            AcquisitionSource.Craft => "#ffffff",
-            AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq => "#87ceeb",
-            AcquisitionSource.VendorBuy => "#ffd700",
-            _ => "#cccccc"
-        };
+        return RecipePlanDisplayHelpers.GetSourceHexColor(Node.Source);
     }
 
-    private List<AcquisitionSource> GetAvailableSources()
+    private static string GetSourceDisplayName(AcquisitionSource source)
     {
-        if (Node == null) return new List<AcquisitionSource>();
-        
-        var sources = new List<AcquisitionSource>();
-        
-        // Always can buy from market
-        sources.Add(AcquisitionSource.MarketBuyNq);
-        
-        // If item can be HQ, offer HQ option
-        if (Node.CanBeHq)
-        {
-            sources.Add(AcquisitionSource.MarketBuyHq);
-        }
-        
-        // If item can be bought from vendor
-        if (Node.CanBuyFromVendor)
-        {
-            sources.Add(AcquisitionSource.VendorBuy);
-        }
-        
-        // If item has children, can craft it
-        if (Node.Children.Any())
-        {
-            sources.Add(AcquisitionSource.Craft);
-        }
-        
-        return sources;
+        return RecipePlanDisplayHelpers.GetSourceDisplayName(source);
     }
-
-    private static string GetSourceDisplayName(AcquisitionSource source) => source switch
-    {
-        AcquisitionSource.Craft => "Craft",
-        AcquisitionSource.MarketBuyNq => "Buy (NQ)",
-        AcquisitionSource.MarketBuyHq => "Buy (HQ)",
-        AcquisitionSource.VendorBuy => "Vendor",
-        _ => source.ToString()
-    };
 
     private string GetPriceDisplay()
     {

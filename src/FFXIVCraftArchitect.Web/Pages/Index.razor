@@ -412,7 +412,7 @@
     {
         if (!AppState.ProjectItems.Any(i => i.Id == result.Id))
         {
-            AppState.ProjectItems.Add(new PlannerProjectItem
+            AppState.ProjectItems.Add(new ProjectItem
             {
                 Id = result.Id,
                 Name = result.Object.Name,
@@ -427,13 +427,13 @@
         _searchQuery = string.Empty;
     }
 
-    private void RemoveProjectItem(PlannerProjectItem item)
+    private void RemoveProjectItem(ProjectItem item)
     {
         AppState.ProjectItems.Remove(item);
         AppState.NotifyPlanChanged();
     }
 
-    private void ToggleItemHq(PlannerProjectItem item)
+    private void ToggleItemHq(ProjectItem item)
     {
         item.MustBeHq = !item.MustBeHq;
         AppState.NotifyPlanChanged();
