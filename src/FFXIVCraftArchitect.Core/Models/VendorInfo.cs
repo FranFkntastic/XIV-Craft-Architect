@@ -50,10 +50,23 @@ public class VendorInfo
     /// Full display text including price
     /// </summary>
     [JsonIgnore]
-    public string FullDisplayText => IsGilVendor 
+    public string FullDisplayText => IsGilVendor
         ? $"{DisplayName} - {Price:N0}g"
         : $"{DisplayName} - {Price:N0} {Currency}";
-    
+
+    /// <summary>
+    /// Alternate locations where this vendor can be found.
+    /// For vendors like "Material Supplier" that appear in multiple housing districts.
+    /// </summary>
+    [JsonIgnore]
+    public List<string> AlternateLocations { get; set; } = new();
+
+    /// <summary>
+    /// Whether this vendor has multiple locations available.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasMultipleLocations => AlternateLocations.Count > 0;
+
     /// <summary>
     /// Creates a VendorInfo from a GarlandVendor
     /// </summary>

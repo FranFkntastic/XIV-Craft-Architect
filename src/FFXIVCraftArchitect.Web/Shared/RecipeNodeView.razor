@@ -130,7 +130,7 @@
             options.Add(new DropdownOption($"market_hq_{Node.NodeId}", "Buy HQ", AcquisitionSource.MarketBuyHq, -1));
         }
         
-        // Add vendor options - gil vendors first (cheapest), then special currency vendors
+        // Add vendor options - create entry for each location (including alternate instances)
         if (Node.CanBuyFromVendor && Node.VendorOptions?.Any() == true)
         {
             var gilVendors = Node.VendorOptions.Where(v => v.IsGilVendor).ToList();
@@ -139,16 +139,31 @@
                 var minPrice = gilVendors.Min(v => v.Price);
                 var cheapestVendors = gilVendors.Where(v => v.Price == minPrice).ToList();
 
-                for (int i = 0; i < cheapestVendors.Count; i++)
+                // Create dropdown entries for each vendor location
+                foreach (var vendor in cheapestVendors)
                 {
-                    var vendor = cheapestVendors[i];
                     var vendorIndex = Node.VendorOptions.IndexOf(vendor);
-                    var vendorIndexInCheapest = i;
+                    
+                    // Primary location
                     options.Add(new DropdownOption(
-                        $"vendor_{vendorIndex}_{Node.NodeId}",
+                        $"vendor_{vendorIndex}_primary_{Node.NodeId}",
                         $"Vendor: {vendor.Name} - {vendor.Location} [{vendor.Price:N0}g]",
                         AcquisitionSource.VendorBuy,
-                        vendorIndexInCheapest));
+                        vendorIndex));
+                    
+                    // Alternate locations (if any)
+                    if (vendor.HasMultipleLocations)
+                    {
+                        for (int altIndex = 0; altIndex < vendor.AlternateLocations.Count; altIndex++)
+                        {
+                            var location = vendor.AlternateLocations[altIndex];
+                            options.Add(new DropdownOption(
+                                $"vendor_{vendorIndex}_alt_{altIndex}_{Node.NodeId}",
+                                $"Vendor: {vendor.Name} - {location} [{vendor.Price:N0}g]",
+                                AcquisitionSource.VendorBuy,
+                                vendorIndex));
+                        }
+                    }
                 }
             }
 
@@ -198,18 +213,18 @@
         var minPrice = gilVendors.Min(v => v.Price);
         var cheapestVendors = gilVendors.Where(v => v.Price == minPrice).ToList();
         
-        // Use selected vendor index if valid
+        // Use selected vendor index if valid - defaults to primary location
         if (Node.SelectedVendorIndex >= 0 && Node.SelectedVendorIndex < cheapestVendors.Count)
         {
             var vendor = cheapestVendors[Node.SelectedVendorIndex];
             var vendorIndex = Node.VendorOptions.IndexOf(vendor);
-            return $"vendor_{vendorIndex}_{Node.NodeId}";
+            return $"vendor_{vendorIndex}_primary_{Node.NodeId}";
         }
         
-        // Default to first vendor
+        // Default to first vendor's primary location
         var firstVendor = cheapestVendors.First();
         var firstIndex = Node.VendorOptions.IndexOf(firstVendor);
-        return $"vendor_{firstIndex}_{Node.NodeId}";
+        return $"vendor_{firstIndex}_primary_{Node.NodeId}";
     }
     
     private async Task OnDropdownChange(ChangeEventArgs e)

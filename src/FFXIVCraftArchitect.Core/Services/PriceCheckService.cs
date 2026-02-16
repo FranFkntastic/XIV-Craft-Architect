@@ -99,9 +99,18 @@ public class PriceCheckService
         if (vendorPrice > 0 && (marketPrice <= 0 || vendorPrice <= marketPrice))
         {
             // Get gil vendors only (filter out tomestone/other currency vendors)
-            var gilVendors = garlandItem?.Vendors
+            var garlandVendors = garlandItem?.Vendors
                 ?.Where(v => string.Equals(v.Currency, "gil", StringComparison.OrdinalIgnoreCase))
                 .ToList() ?? new List<GarlandVendor>();
+            
+            // Convert GarlandVendor to VendorInfo
+            var vendorInfos = garlandVendors.Select(v => new VendorInfo
+            {
+                Name = v.Name,
+                Location = v.Location,
+                Price = v.Price,
+                Currency = v.Currency?.ToLowerInvariant() ?? "gil"
+            }).ToList();
             
             priceInfo = new PriceInfo
             {
@@ -109,10 +118,10 @@ public class PriceCheckService
                 ItemName = itemName,
                 UnitPrice = vendorPrice,
                 Source = PriceSource.Vendor,
-                SourceDetails = gilVendors.FirstOrDefault() != null 
-                    ? $"Vendor: {gilVendors.First().Name}" 
+                SourceDetails = vendorInfos.FirstOrDefault() != null 
+                    ? $"Vendor: {vendorInfos.First().Name}" 
                     : "Vendor",
-                Vendors = gilVendors,
+                Vendors = vendorInfos,
                 LastUpdated = DateTime.UtcNow
             };
         }
@@ -218,17 +227,25 @@ public class PriceCheckService
             if (vendorPrice > 0 && (marketPriceNq <= 0 || vendorPrice <= marketPriceNq))
             {
                 // Get gil vendors only (filter out tomestone/other currency vendors)
-                var gilVendors = garlandItem?.Vendors
+                var garlandVendors = garlandItem?.Vendors
                     ?.Where(v => string.Equals(v.Currency, "gil", StringComparison.OrdinalIgnoreCase))
                     .ToList() ?? new List<GarlandVendor>();
                 
+                // Convert GarlandVendor to VendorInfo
+                priceInfo.Vendors = garlandVendors.Select(v => new VendorInfo
+                {
+                    Name = v.Name,
+                    Location = v.Location,
+                    Price = v.Price,
+                    Currency = v.Currency?.ToLowerInvariant() ?? "gil"
+                }).ToList();
+                
                 priceInfo.UnitPrice = vendorPrice;
                 priceInfo.Source = PriceSource.Vendor;
-                var vendor = gilVendors.FirstOrDefault();
+                var vendor = priceInfo.Vendors.FirstOrDefault();
                 priceInfo.SourceDetails = vendor != null 
                     ? $"Vendor: {vendor.Name} ({vendor.Location})"
                     : "Vendor";
-                priceInfo.Vendors = gilVendors;
             }
             else if (marketPriceNq > 0)
             {

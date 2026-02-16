@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -20,6 +21,10 @@ public class GarlandService : IGarlandService
 
     private const string GarlandSearchUrl = "https://www.garlandtools.org/api/search.php?text={0}&lang=en";
     private const string GarlandItemUrl = "https://www.garlandtools.org/db/doc/item/en/3/{0}.json";
+    private const string GarlandZoneUrl = "https://www.garlandtools.org/db/doc/zone/en/3/{0}.json";
+
+    // Cache for zone names to avoid repeated API calls
+    private static readonly ConcurrentDictionary<int, string> _zoneNameCache = new();
 
     public GarlandService(HttpClient httpClient, ILogger<GarlandService>? logger = null)
     {
@@ -143,6 +148,14 @@ public class GarlandService : IGarlandService
             var data = await response.Content.ReadFromJsonAsync<GarlandItemResponse>(ct);
             _logger?.LogInformation("[GarlandService] Item fetched: {Name} (Icon: {Icon})", 
                 data?.Item?.Name ?? "null", data?.Item?.IconId ?? 0);
+            
+            // Transfer partials from response wrapper to item for vendor location resolution
+            if (data?.Item != null && data.Partials != null)
+            {
+                data.Item.Partials = data.Partials;
+                _logger?.LogDebug("[GarlandService] Transferred {PartialCount} partials to item", data.Partials.Count);
+            }
+            
             return data?.Item;
         }
         catch (Exception ex)
@@ -185,5 +198,51 @@ public class GarlandService : IGarlandService
                 Amount = i.Amount
             }).ToList()
         };
+    }
+
+    /// <summary>
+    /// Gets the zone name from Garland Tools API.
+    /// CURRENTLY DORMANT: Hard-coded mappings in GarlandNpcPartial are used instead for performance.
+    /// Reserved for future use if dynamic zone lookup becomes necessary.
+    /// Uses a static cache to avoid repeated API calls for the same zone.
+    /// </summary>
+    public async Task<string?> GetZoneNameAsync(int zoneId, CancellationToken ct = default)
+    {
+        // Check cache first
+        if (_zoneNameCache.TryGetValue(zoneId, out var cachedName))
+        {
+            _logger?.LogDebug("[GarlandService] Zone {ZoneId} found in cache: {ZoneName}", zoneId, cachedName);
+            return cachedName;
+        }
+
+        try
+        {
+            var url = string.Format(GarlandZoneUrl, zoneId);
+            _logger?.LogDebug("[GarlandService] Fetching zone data for ID {ZoneId}: {Url}", zoneId, url);
+
+            var response = await _httpClient.GetAsync(url, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger?.LogWarning("[GarlandService] Failed to fetch zone {ZoneId}: HTTP {Status}", zoneId, response.StatusCode);
+                return null;
+            }
+
+            var zoneData = await response.Content.ReadFromJsonAsync<GarlandZoneResponse>(ct);
+            if (zoneData?.Zone?.Name != null)
+            {
+                var zoneName = zoneData.Zone.Name;
+                _zoneNameCache[zoneId] = zoneName;
+                _logger?.LogInformation("[GarlandService] Cached zone name: {ZoneId} = {ZoneName}", zoneId, zoneName);
+                return zoneName;
+            }
+
+            _logger?.LogWarning("[GarlandService] Zone {ZoneId} has no name in response", zoneId);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "[GarlandService] Error fetching zone {ZoneId}", zoneId);
+            return null;
+        }
     }
 }

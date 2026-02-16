@@ -25,7 +25,6 @@ public class AppState
     public List<MarketShoppingItem> ShoppingItems { get; set; } = new();
     public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
     public RecommendationMode RecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
-    public ProcurementAnalysis? CurrentProcurementAnalysis { get; set; }
     
     /// <summary>
     /// Temporarily blacklisted worlds for the current session.
@@ -43,6 +42,12 @@ public class AppState
     public DateTime? LastAutoSave { get; set; }
     public List<StoredPlanSummary> SavedPlans { get; set; } = new();
     
+    // Market Analysis Settings (persist across page navigations)
+    public bool EnableMultiWorldSplits { get; set; } = false;
+    public int MaxWorldsPerItem { get; set; } = 0; // 0 = unlimited
+    public bool SearchEntireRegion { get; set; } = false;
+    public MarketSortOption MarketSortPreference { get; set; } = MarketSortOption.ByRecommended;
+    
     // Current plan tracking for save-overwrite behavior
     public string? CurrentPlanId { get; set; }
     public string? CurrentPlanName { get; set; }
@@ -59,7 +64,6 @@ public class AppState
     public event Action? OnShoppingListChanged;
     public event Action? OnSavedPlansChanged;
     public event Action? OnStatusChanged;
-    public event Action? OnProcurementAnalysisChanged;
     public event Action? OnRecipeTreeExpandChanged;
     
     // Recipe tree expand/collapse state (incremented to trigger re-evaluation)
@@ -95,11 +99,6 @@ public class AppState
     {
         LastStatusUpdate = DateTime.Now;
         OnStatusChanged?.Invoke();
-    }
-    
-    public void NotifyProcurementAnalysisChanged()
-    {
-        OnProcurementAnalysisChanged?.Invoke();
     }
     
     /// <summary>

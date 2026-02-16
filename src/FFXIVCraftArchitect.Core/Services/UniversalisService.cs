@@ -82,8 +82,9 @@ public class UniversalisService : IUniversalisService
         IEnumerable<int> itemIds,
         CancellationToken ct = default)
     {
-        const int chunkSize = 50; // Reduced from 100 to avoid 504 Gateway Timeout
-        const int delayBetweenChunksMs = 500; // Increased from 100ms for better server response
+        const int chunkSize = 15; // Reduced to 15 to avoid 504 Gateway Timeout - conservative for overloaded servers
+        const int delayBetweenChunksMs = 3000; // Increased to 3000ms (3 seconds) to give server time to recover
+        const int initialDelayMs = 1000; // Initial delay before first chunk
         const int maxRetries = 3;
         
         var itemIdList = itemIds.ToList();
@@ -91,6 +92,13 @@ public class UniversalisService : IUniversalisService
         
         _logger?.LogDebug("Fetching bulk market data for {Count} items (chunked by {ChunkSize})", 
             itemIdList.Count, chunkSize);
+
+        // Initial delay before first chunk to avoid overwhelming the server
+        if (itemIdList.Count > 0)
+        {
+            _logger?.LogDebug("Waiting {InitialDelayMs}ms initial delay before first chunk", initialDelayMs);
+            await Task.Delay(initialDelayMs, ct);
+        }
 
         // Process in chunks to respect API limits
         for (int i = 0; i < itemIdList.Count; i += chunkSize)
@@ -190,6 +198,7 @@ public class UniversalisService : IUniversalisService
             // Rate limiting delay between chunks (except for the last one)
             if (i + chunkSize < itemIdList.Count)
             {
+                _logger?.LogDebug("Waiting {DelayBetweenChunksMs}ms between chunks", delayBetweenChunksMs);
                 await Task.Delay(delayBetweenChunksMs, ct);
             }
         }

@@ -6,7 +6,6 @@
 @inject UniversalisService UniversalisService
 @inject RecipeCalculationService RecipeCalculationService
 @inject MarketShoppingService MarketShoppingService
-@inject ProcurementAnalysisService ProcurementService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @inject AppState AppState
@@ -88,27 +87,21 @@
                 Market Analysis
             </MudButton>
             
-            @if (AppState.CurrentProcurementAnalysis != null)
+            @if (AppState.ShoppingPlans.Any())
             {
                 <MudDivider Class="my-4" />
                 
                 <MudPaper Elevation="2" Class="pa-3" Style="background: linear-gradient(135deg, #2d4a2d 0%, #253825 100%); border-radius: 8px;">
-                    <MudText Typo="Typo.caption" Style="color: #888;">Total Optimal Cost</MudText>
+                    <MudText Typo="Typo.caption" Style="color: #888;">Total Market Cost</MudText>
                     <MudText Typo="Typo.h6" Style="color: #d4a73a; font-weight: 700;">
-                        @AppState.CurrentProcurementAnalysis.OptimalTotalCost.ToString("N0")g
+                        @(AppState.ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0).ToString("N0"))g
                     </MudText>
                     
                     <div style="display: flex; gap: 8px; margin-top: 12px;">
-                        <div style="flex: 1; text-align: center; padding: 8px; background: rgba(33, 150, 243, 0.1); border-radius: 6px;">
-                            <MudIcon Icon="@Icons.Material.Filled.Build" Size="Size.Small" Style="color: #2196f3;" />
-                            <MudText Typo="Typo.caption" Style="color: #2196f3; display: block;">
-                                @AppState.CurrentProcurementAnalysis.ItemsToCraft
-                            </MudText>
-                        </div>
                         <div style="flex: 1; text-align: center; padding: 8px; background: rgba(76, 175, 80, 0.1); border-radius: 6px;">
                             <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" Style="color: #4caf50;" />
                             <MudText Typo="Typo.caption" Style="color: #4caf50; display: block;">
-                                @AppState.CurrentProcurementAnalysis.ItemsToBuy
+                                @AppState.ShoppingPlans.Count
                             </MudText>
                         </div>
                     </div>
@@ -118,9 +111,8 @@
         
         <!-- Right Column: Procurement Plan Results -->
         <div Class="pa-4" Style="overflow: hidden; min-width: 0;">
-            <ProcurementResultsPanel Analysis="AppState.CurrentProcurementAnalysis" 
-                                        ShoppingPlans="AppState.ShoppingPlans"
-                                        OnReanalyzeWithoutWorldRequested="ReanalyzeWithoutWorldAsync" />
+            <ProcurementResultsPanel ShoppingPlans="AppState.ShoppingPlans"
+                                     OnReanalyzeWithoutWorldRequested="ReanalyzeWithoutWorldAsync" />
         </div>
     </div>
 </MudContainer>
@@ -131,14 +123,8 @@
     protected override void OnInitialized()
     {
         // Subscribe to changes (including restoration from auto-save)
-        AppState.OnProcurementAnalysisChanged += OnProcurementAnalysisChanged;
         AppState.OnPlanChanged += OnPlanChanged;
         AppState.OnShoppingListChanged += OnShoppingListChanged;
-    }
-
-    private void OnProcurementAnalysisChanged()
-    {
-        InvokeAsync(StateHasChanged);
     }
 
     private void OnPlanChanged()
@@ -153,7 +139,6 @@
 
     public void Dispose()
     {
-        AppState.OnProcurementAnalysisChanged -= OnProcurementAnalysisChanged;
         AppState.OnPlanChanged -= OnPlanChanged;
         AppState.OnShoppingListChanged -= OnShoppingListChanged;
     }
@@ -215,19 +200,12 @@
                 AppState.NotifyShoppingListChanged();
             }
             
-            // Run procurement analysis using the market data
-            AppState.SetStatus("Running procurement analysis...", busy: true);
-            AppState.CurrentProcurementAnalysis = await ProcurementService.AnalyzePlanWithMarketDataAsync(
-                AppState.CurrentPlan!,
-                shoppingPlans,
-                AppState.SelectedDataCenter,
-                AppState.RecommendationMode,
-                progress);
+            // Shopping plans are now the primary source of procurement data
+            AppState.ShoppingPlans = shoppingPlans;
+            AppState.NotifyShoppingListChanged();
             
-            AppState.NotifyProcurementAnalysisChanged();
-            
-            AppState.EndOperation("Procurement plan generated!");
-            Snackbar.Add("Procurement plan generated successfully!", Severity.Success);
+            AppState.EndOperation("Shopping plans generated!");
+            Snackbar.Add("Shopping plans generated successfully!", Severity.Success);
         }
         catch (Exception ex)
         {

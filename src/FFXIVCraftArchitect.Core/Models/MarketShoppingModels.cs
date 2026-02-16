@@ -82,6 +82,7 @@ public class DetailedShoppingPlan
 {
     public int ItemId { get; set; }
     public string Name { get; set; } = string.Empty;
+    public int IconId { get; set; }
     public int QuantityNeeded { get; set; }
     public decimal DCAveragePrice { get; set; }
     public List<WorldShoppingSummary> WorldOptions { get; set; } = new();
@@ -98,7 +99,7 @@ public class DetailedShoppingPlan
     /// Vendor information for items that can be purchased from vendors.
     /// Only includes vendors that accept gil as currency.
     /// </summary>
-    public List<GarlandVendor> Vendors { get; set; } = new();
+    public List<VendorInfo> Vendors { get; set; } = new();
 
     public bool HasOptions => WorldOptions.Count > 0;
     
@@ -461,7 +462,7 @@ public class PriceInfo
     /// <summary>
     /// Vendor information when Source is Vendor. Contains all vendors selling this item.
     /// </summary>
-    public List<GarlandVendor> Vendors { get; set; } = new();
+    public List<VendorInfo> Vendors { get; set; } = new();
     
     /// <summary>
     /// Whether this item has vendor information.
@@ -606,7 +607,7 @@ public class WorldProcurementCardModel
     /// Vendor information for vendor cards. Contains vendor names and locations.
     /// Only populated when IsVendor is true.
     /// </summary>
-    public List<GarlandVendor> Vendors { get; set; } = new();
+    public List<VendorInfo> Vendors { get; set; } = new();
 
     /// <summary>
     /// The specific vendor selected for this purchase (e.g., "Material Supplier - Limsa").

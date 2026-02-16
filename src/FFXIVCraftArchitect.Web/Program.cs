@@ -26,7 +26,6 @@ builder.Services.AddScoped<UniversalisService>();
 builder.Services.AddScoped<RecipeCalculationService>();
 builder.Services.AddScoped<IMarketCacheService, IndexedDbMarketCacheService>();
 builder.Services.AddScoped<MarketShoppingService>();
-builder.Services.AddScoped<ProcurementAnalysisService>();
 builder.Services.AddScoped<IndexedDbMarketCacheService>();
 
 // Register Settings Service (Web implementation)

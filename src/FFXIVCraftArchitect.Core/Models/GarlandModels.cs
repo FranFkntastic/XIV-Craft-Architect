@@ -135,6 +135,13 @@ public class GarlandItemResponse
 {
     [JsonPropertyName("item")]
     public GarlandItem Item { get; set; } = new();
+
+    /// <summary>
+    /// Partial data references (NPCs, locations, etc.) that provide additional context.
+    /// Used to resolve vendor IDs to full vendor information including alternate locations.
+    /// </summary>
+    [JsonPropertyName("partials")]
+    public List<GarlandPartial>? Partials { get; set; }
 }
 
 public class GarlandItem
@@ -252,7 +259,7 @@ public class GarlandItem
     /// </summary>
     [JsonPropertyName("tradeable")]
     public object? TradeableRaw { get; set; }
-    
+
     [JsonIgnore]
     public bool Tradeable => TradeableRaw switch
     {
@@ -264,6 +271,30 @@ public class GarlandItem
         JsonElement e => e.ValueKind == JsonValueKind.True || (e.TryGetInt32(out var i) && i != 0),
         _ => true // Default to tradeable if unknown
     };
+
+    /// <summary>
+    /// Partial data references for this item (NPCs, locations, etc.).
+    /// Populated from the API response when available.
+    /// </summary>
+    [JsonIgnore]
+    public List<GarlandPartial>? Partials { get; set; }
+
+    /// <summary>
+    /// Gets all NPC partials with the given name (for finding alternate vendor locations).
+    /// Only processes partials of type "npc", skips other types (item, node, mob, leve, etc.).
+    /// </summary>
+    public List<GarlandNpcPartial> GetNpcPartialsByName(string npcName)
+    {
+        if (Partials == null) return new List<GarlandNpcPartial>();
+
+        return Partials
+            .Where(p => p.Type == "npc")
+            .Select(p => p.GetNpcObject())
+            .Where(npc => npc != null &&
+                         npc.Name.Equals(npcName, StringComparison.OrdinalIgnoreCase))
+            .Cast<GarlandNpcPartial>()
+            .ToList();
+    }
 }
 
 public class GarlandCraft
@@ -383,6 +414,234 @@ public class GarlandVendor
     /// </summary>
     [JsonPropertyName("currency")]
     public string Currency { get; set; } = "gil";
+
+    /// <summary>
+    /// List of alternate locations where this vendor can be found.
+    /// Populated from Garland API partials data.
+    /// </summary>
+    [JsonIgnore]
+    public List<string> AlternateLocations { get; set; } = new();
+}
+
+/// <summary>
+/// Partial data reference from Garland API.
+/// Contains related data like NPCs, locations, etc. that are referenced by ID in other fields.
+/// </summary>
+public class GarlandPartial
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = string.Empty;
+
+    [JsonPropertyName("id")]
+    public object? IdRaw { get; set; }
+
+    [JsonIgnore]
+    public int Id => ConvertToInt(IdRaw);
+
+    /// <summary>
+    /// Raw JSON element for the partial object.
+    /// Use GetNpcObject() to deserialize as GarlandNpcPartial (only valid when Type == "npc").
+    /// </summary>
+    [JsonPropertyName("obj")]
+    public JsonElement? ObjectRaw { get; set; }
+
+    /// <summary>
+    /// Gets the NPC object if this partial is an NPC type.
+    /// Returns null for other partial types (item, node, mob, leve, etc.).
+    /// </summary>
+    public GarlandNpcPartial? GetNpcObject()
+    {
+        if (Type != "npc" || !ObjectRaw.HasValue)
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<GarlandNpcPartial>(ObjectRaw.Value.GetRawText());
+        }
+        catch (JsonException ex)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Converts various numeric types to int. Handles JsonElement which is boxed when deserialized into object?.
+    /// Note: Boxing is inherent to System.Text.Json deserialization into object properties.
+    /// To avoid boxing entirely, properties would need to be typed as JsonElement directly.
+    /// </summary>
+    private static int ConvertToInt(object? value)
+    {
+        return value switch
+        {
+            null => 0,
+            int i => i,
+            long l => (int)l,
+            double d => (int)d,
+            string s => int.TryParse(s, out var parsed) ? parsed : 0,
+            JsonElement e => ConvertJsonElementToInt(e),
+            _ => 0
+        };
+    }
+}
+    }
+
+    private static int ConvertToInt(object? value)
+    {
+        return value switch
+        {
+            null => 0,
+            int i => i,
+            long l => (int)l,
+            double d => (int)d,
+            string s => int.TryParse(s, out var parsed) ? parsed : 0,
+            JsonElement e => ConvertJsonElementToInt(e),
+            _ => 0
+        };
+    }
+
+    private static int ConvertJsonElementToInt(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Number => element.TryGetInt32(out var i) ? i : 0,
+            JsonValueKind.String => int.TryParse(element.GetString(), out var s) ? s : 0,
+            _ => 0
+        };
+    }
+}
+
+/// <summary>
+/// NPC partial data from Garland API.
+/// Contains vendor/merchant information including location.
+/// </summary>
+public class GarlandNpcPartial
+{
+    [JsonPropertyName("i")]
+    public long Id { get; set; }
+
+    [JsonPropertyName("n")]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Location ID. Maps to specific zones/cities.
+    /// </summary>
+    [JsonPropertyName("l")]
+    public int LocationId { get; set; }
+
+    /// <summary>
+    /// Coordinates [x, y] within the location.
+    /// Garland API returns this as either numbers [11.04, 11.4] or strings ["12.5", "8.3"].
+    /// </summary>
+    [JsonPropertyName("c")]
+    [JsonConverter(typeof(FlexibleCoordinatesConverter))]
+    public List<double>? Coordinates { get; set; }
+
+    /// <summary>
+    /// Gets the readable location name from the location ID.
+    /// </summary>
+    [JsonIgnore]
+    public string LocationName => LocationIdToName(LocationId);
+
+    /// <summary>
+    /// Maps Garland location IDs to readable location names.
+    /// Hard-coded for common zones where vendors exist.
+    /// </summary>
+    private static readonly Dictionary<int, string> ZoneNameMappings = new()
+    {
+        // Housing Districts - Material Suppliers
+        [425] = "Mist",
+        [427] = "The Goblet",
+        [426] = "The Lavender Beds",
+        [2412] = "Shirogane",
+        [4139] = "Empyreum",
+
+        // Major Cities - A Realm Reborn
+        [128] = "Limsa Lominsa",
+        [130] = "Gridania",
+        [131] = "Ul'dah",
+        
+        // City Areas
+        [28] = "Limsa Lominsa Upper Decks",
+        [29] = "Limsa Lominsa Lower Decks",
+        [52] = "Limsa Lominsa Lower Decks",
+        [53] = "Old Gridania",
+        [54] = "New Gridania",
+        [40] = "Ul'dah - Steps of Nald",
+        [41] = "Ul'dah - Steps of Thal",
+        
+        // City Inns/Aetheryte Plazas
+        [129] = "The Drowning Wench (Limsa)",
+        [137] = "The Quicksand (Ul'dah)",
+        [138] = "The Roost (Gridania)",
+
+        // Heavensward (3.0)
+        [132] = "Ishgard",
+        [218] = "Foundation",
+        [2301] = "The Pillars",
+        [139] = "The Jeweled Crozier (Ishgard)",
+        [2082] = "Idyllshire",
+
+        // Stormblood (4.0)
+        [133] = "Kugane",
+        [2403] = "Rhalgr's Reach",
+        [140] = "The Shiokaze Hostelry (Kugane)",
+        [2411] = "The Azim Steppe",
+
+        // Shadowbringers (5.0)
+        [134] = "The Crystarium",
+        [141] = "The Pendants (Crystarium)",
+        [51] = "Eulmore",
+
+        // Endwalker (6.0)
+        [135] = "Old Sharlayan",
+        [142] = "The Baldesion Annex (Sharlayan)",
+        [3706] = "Old Sharlayan",
+        [3707] = "Radz-at-Han",
+        [3710] = "Garlemald",
+        [3711] = "Mare Lamentorum",
+        [3712] = "Ultima Thule",
+
+        // Dawntrail (7.0)
+        [136] = "Tuliyollal",
+        [2500] = "Solution Nine",
+        [5301] = "Urqopacha",
+        [5406] = "Shaaloani",
+        [4505] = "Urqopacha",
+        [4506] = "Kozama'uka",
+        [4507] = "Yak T'el",
+        [4508] = "Shaaloani",
+        [4509] = "Heritage Found",
+        [4510] = "Living Memory",
+
+        // A Realm Reborn Zones
+        [24] = "Mor Dhona",
+        [57] = "North Shroud",
+        [42] = "Western Thanalan",
+        [43] = "Central Thanalan",
+        [44] = "Eastern Thanalan",
+        [45] = "Southern Thanalan",
+        [46] = "Northern Thanalan",
+        [30] = "Middle La Noscea",
+        [31] = "Lower La Noscea",
+        [32] = "Eastern La Noscea",
+        [33] = "Western La Noscea",
+        [34] = "Upper La Noscea",
+        [35] = "Outer La Noscea",
+        [148] = "Central Shroud",
+        [55] = "East Shroud",
+        [56] = "South Shroud",
+    };
+
+    /// <summary>
+    /// Maps a Garland location ID to a readable zone name.
+    /// Uses hard-coded mappings for common zones, falls back to "Zone {id}" for unknown zones.
+    /// </summary>
+    public static string LocationIdToName(int locationId)
+    {
+        return ZoneNameMappings.TryGetValue(locationId, out var name) 
+            ? name 
+            : $"Zone {locationId}";
+    }
 }
 
 /// <summary>
@@ -422,4 +681,92 @@ public class FlexibleStringConverter : JsonConverter<string>
     {
         writer.WriteStringValue(value);
     }
+}
+
+/// <summary>
+/// JSON converter for coordinate arrays that handles both numeric and string formats.
+/// Garland API returns coordinates as either [11.04, 11.4] or ["12.5", "8.3"].
+/// </summary>
+public class FlexibleCoordinatesConverter : JsonConverter<List<double>?>
+{
+    public override List<double>? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null)
+        {
+            return null;
+        }
+
+        if (reader.TokenType != JsonTokenType.StartArray)
+        {
+            return null;
+        }
+
+        var coordinates = new List<double>();
+
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndArray)
+            {
+                break;
+            }
+
+            if (reader.TokenType == JsonTokenType.Number)
+            {
+                if (reader.TryGetDouble(out double value))
+                {
+                    coordinates.Add(value);
+                }
+            }
+            else if (reader.TokenType == JsonTokenType.String)
+            {
+                var stringValue = reader.GetString();
+                if (double.TryParse(stringValue, out double value))
+                {
+                    coordinates.Add(value);
+                }
+            }
+        }
+
+        return coordinates.Count > 0 ? coordinates : null;
+    }
+
+    public override void Write(Utf8JsonWriter writer, List<double>? value, JsonSerializerOptions options)
+    {
+        if (value == null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        writer.WriteStartArray();
+        foreach (var coord in value)
+        {
+            writer.WriteNumberValue(coord);
+        }
+        writer.WriteEndArray();
+    }
+}
+
+/// <summary>
+/// Response from Garland Tools zone API.
+/// </summary>
+public class GarlandZoneResponse
+{
+    [JsonPropertyName("zone")]
+    public GarlandZoneInfo? Zone { get; set; }
+}
+
+/// <summary>
+/// Zone information from Garland Tools.
+/// </summary>
+public class GarlandZoneInfo
+{
+    [JsonPropertyName("i")]
+    public int Id { get; set; }
+
+    [JsonPropertyName("n")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("l")]
+    public int? Level { get; set; }
 }

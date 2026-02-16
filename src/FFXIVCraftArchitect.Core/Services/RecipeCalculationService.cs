@@ -185,6 +185,7 @@ public class RecipeCalculationService
     /// <summary>
     /// Extract all vendor options from Garland item data.
     /// Returns a list of VendorInfo for all available vendors (both gil and special currency).
+    /// Uses partials data to resolve vendor IDs to full information including alternate locations.
     /// </summary>
     private static List<VendorInfo> GetVendorOptions(GarlandItem? item)
     {
@@ -195,15 +196,80 @@ public class RecipeCalculationService
         // If we have full vendor objects with prices, convert them
         if (item.Vendors.Count > 0)
         {
-            vendors = item.Vendors.Select(v => VendorInfo.FromGarlandVendor(v)).ToList();
+            foreach (var garlandVendor in item.Vendors)
+            {
+                var vendorInfo = VendorInfo.FromGarlandVendor(garlandVendor);
+
+                // If this vendor has a name, look up alternate locations from partials
+                if (!string.IsNullOrEmpty(garlandVendor.Name) && item.Partials != null)
+                {
+                    var npcPartials = item.GetNpcPartialsByName(garlandVendor.Name);
+                    vendorInfo.AlternateLocations = npcPartials
+                        .Select(npc => npc.LocationName)
+                        .Where(loc => !string.IsNullOrEmpty(loc))
+                        .Distinct()
+                        .ToList();
+                }
+
+                vendors.Add(vendorInfo);
+            }
         }
-        // If vendors are listed as IDs only with root-level price, create a generic entry
+        // If vendors are listed as IDs only with root-level price, try to resolve via partials
+        else if (item.HasVendorReferences && item.Price > 0 && item.Partials != null)
+        {
+            // Look for NPC partials that are vendors
+            var vendorNpcs = item.Partials
+                .Where(p => p.Type == "npc")
+                .Select(p => p.GetNpcObject())
+                .Where(npc => npc != null)
+                .Cast<GarlandNpcPartial>()
+                .ToList();
+
+            if (vendorNpcs.Any())
+            {
+                // Group by vendor name to handle vendors with multiple locations
+                var vendorGroups = vendorNpcs.GroupBy(npc => npc.Name);
+
+                foreach (var group in vendorGroups)
+                {
+                    var npcList = group.ToList();
+                    var primaryNpc = npcList.First();
+
+                    var vendorInfo = new VendorInfo
+                    {
+                        Name = primaryNpc.Name,
+                        Location = primaryNpc.LocationName,
+                        Price = item.Price,
+                        Currency = "gil",
+                        AlternateLocations = npcList
+                            .Select(npc => npc.LocationName)
+                            .Where(loc => !string.IsNullOrEmpty(loc))
+                            .Distinct()
+                            .ToList()
+                    };
+
+                    vendors.Add(vendorInfo);
+                }
+            }
+            else
+            {
+                // Fallback: create generic entry if no partials available
+                vendors.Add(new VendorInfo
+                {
+                    Name = "Material Supplier",
+                    Location = "Any",
+                    Price = item.Price,
+                    Currency = "gil"
+                });
+            }
+        }
         else if (item.HasVendorReferences && item.Price > 0)
         {
+            // Fallback when no partials available
             vendors.Add(new VendorInfo
             {
                 Name = "Material Supplier",
-                Location = "Multiple Locations",
+                Location = "Any",
                 Price = item.Price,
                 Currency = "gil"
             });

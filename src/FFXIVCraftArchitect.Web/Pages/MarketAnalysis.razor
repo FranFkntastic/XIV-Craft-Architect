@@ -42,7 +42,7 @@
             <div style="margin-bottom: 12px;">
                 <div style="color: #888; font-size: 12px; margin-bottom: 4px;">Sort</div>
                 <MudSelect T="MarketSortOption"
-                           @bind-Value="_selectedSort"
+                           @bind-Value="AppState.MarketSortPreference"
                            Variant="Variant.Outlined"
                            Dense="true"
                            Style="width: 100%;">
@@ -54,7 +54,7 @@
             <!-- Region Search Toggle -->
             <div style="margin-bottom: 16px;">
                 <MudCheckBox T="bool"
-                             @bind-Value="_searchEntireRegion"
+                             @bind-Value="AppState.SearchEntireRegion"
                              Dense="true"
                              Color="Color.Primary"
                              Style="background: #1e1e1e; border-radius: 6px; padding: 4px 8px; width: 100%;">
@@ -66,7 +66,7 @@
             </div>
             
             <!-- Split-World Configuration (only shown for single DC) -->
-            @if (!_searchEntireRegion)
+            @if (!AppState.SearchEntireRegion)
             {
                 <div style="margin-bottom: 16px; padding: 12px; background: #1e1e1e; border-radius: 8px; border: 1px solid #333;">
                     <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
@@ -76,14 +76,14 @@
                     </div>
                     
                     <MudCheckBox T="bool"
-                                 @bind-Value="_enableSplitWorld"
+                                 @bind-Value="AppState.EnableMultiWorldSplits"
                                  Dense="true"
                                  Color="Color.Secondary"
                                  Class="mb-2">
                         <MudText Typo="Typo.caption" Style="color: #aaa;">Enable multi-world splits</MudText>
                     </MudCheckBox>
                     
-                    @if (_enableSplitWorld)
+                    @if (AppState.EnableMultiWorldSplits)
                     {
                         <div style="margin-left: 32px; margin-top: 8px;">
                             <MudText Typo="Typo.caption" Style="color: #666;">
@@ -202,7 +202,7 @@
             {
                 <MarketLogisticsPanel ShoppingPlans="AppState.ShoppingPlans"
                                       CraftAnalyses="AppState.CraftAnalyses"
-                                      CurrentSort="_selectedSort"
+                                      CurrentSort="AppState.MarketSortPreference"
                                       ShowAnalysisSections="true"
                                       AutoExpandItemId="AppState.AutoExpandItemId" />
             }
@@ -242,12 +242,8 @@
 @code {
     private bool _isAnalyzing = false;
     private bool _isRefreshingPrices = false;
-    private MarketSortOption _selectedSort = MarketSortOption.ByRecommended;
-    private bool _searchEntireRegion = false;
     
-    // Split-world configuration
-    private bool _enableSplitWorld = true;
-    private int _maxWorldsPerItem = 0; // 0 = unlimited
+    // Settings now stored in AppState for persistence across page navigations
 
     protected override void OnInitialized()
     {
@@ -395,7 +391,7 @@
             // Step 2: Calculate shopping plans from cached data
             List<DetailedShoppingPlan> plans;
             
-            if (_searchEntireRegion)
+            if (AppState.SearchEntireRegion)
             {
                 // Multi-DC analysis doesn't support splits yet
                 plans = await MarketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
@@ -403,13 +399,13 @@
                     progress,
                     mode: AppState.RecommendationMode);
             }
-            else if (_enableSplitWorld)
+            else if (AppState.EnableMultiWorldSplits)
             {
                 // Use split-aware calculation for single DC
                 var config = new MarketAnalysisConfig
                 {
-                    EnableSplitWorld = _enableSplitWorld,
-                    MaxWorldsPerItem = _maxWorldsPerItem > 0 ? _maxWorldsPerItem : null
+                    EnableSplitWorld = AppState.EnableMultiWorldSplits,
+                    MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null
                 };
                 
                 plans = await MarketShoppingService.CalculateShoppingPlansWithSplitsAsync(
@@ -494,14 +490,6 @@
                     // Use vendor data already stored in the node (no need to fetch again)
                     plan.Vendors = node.VendorOptions
                         .Where(v => v.IsGilVendor)
-                        .Select(v => new GarlandVendor
-                        {
-                            Name = v.Name,
-                            Location = v.Location,
-                            Price = (int)v.Price,
-                            Currency = v.Currency
-                        })
-                        .OrderBy(v => v.Price)
                         .ToList();
 
                     Logger.LogInformation("Applied vendor price override for {ItemName}: {VendorName} @ {VendorPrice}g",

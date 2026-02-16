@@ -70,7 +70,7 @@ public class ExpandedPanelViewModel : ViewModelBase
     /// <summary>
     /// Vendor information for items purchased from vendors.
     /// </summary>
-    public List<GarlandVendor> Vendors => _plan.Vendors;
+    public List<VendorInfo> Vendors => _plan.Vendors;
 
     /// <summary>
     /// Whether this item has vendor information.

@@ -376,7 +376,7 @@ public class MarketLogisticsCoordinator
                 Name = item.Name,
                 QuantityNeeded = item.TotalQuantity,
                 DCAveragePrice = unitPrice, // Vendor price is the "average"
-                Vendors = priceInfo.Vendors?.ToList() ?? new List<GarlandVendor>(),
+                Vendors = priceInfo.Vendors?.ToList() ?? new List<VendorInfo>(),
                 RecommendedWorld = vendorWorldSummary,
                 WorldOptions = new List<WorldShoppingSummary> { vendorWorldSummary },
                 Error = null
