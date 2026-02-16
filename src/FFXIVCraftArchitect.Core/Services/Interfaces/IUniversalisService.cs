@@ -26,27 +26,16 @@ public interface IUniversalisService
     /// <summary>
     /// Get market data for multiple items at once.
     /// Universalis API has a limit of 100 items per request, so we chunk large requests.
+    /// Uses parallel fetching with adaptive backoff for optimal performance.
     /// </summary>
     /// <param name="worldOrDc">World or data center name</param>
     /// <param name="itemIds">Item IDs to fetch</param>
+    /// <param name="useParallel">Whether to use parallel fetching (default: true)</param>
     /// <param name="ct">Cancellation token</param>
     Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkAsync(
         string worldOrDc, 
         IEnumerable<int> itemIds, 
-        CancellationToken ct = default);
-    
-    /// <summary>
-    /// Get market data for multiple items at once using parallel requests.
-    /// Uses a semaphore to limit concurrent requests and avoid rate limiting.
-    /// </summary>
-    /// <param name="worldOrDc">World or data center name</param>
-    /// <param name="itemIds">Item IDs to fetch</param>
-    /// <param name="maxConcurrency">Maximum concurrent requests (default: 3)</param>
-    /// <param name="ct">Cancellation token</param>
-    Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkParallelAsync(
-        string worldOrDc, 
-        IEnumerable<int> itemIds, 
-        int maxConcurrency = 3,
+        bool useParallel = true,
         CancellationToken ct = default);
     
     /// <summary>

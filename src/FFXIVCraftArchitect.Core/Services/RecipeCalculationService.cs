@@ -10,6 +10,27 @@ namespace FFXIVCraftArchitect.Core.Services;
 /// Service for calculating hierarchical crafting recipes.
 /// Builds a tree of items with their ingredients, handling circular dependencies and aggregation.
 /// </summary>
+/// <remarks>
+/// DATA FLOW OVERVIEW:
+/// 1. BuildPlanAsync: Entry point that orchestrates plan construction
+///    - Takes target items (name, quantity, HQ requirement)
+///    - Builds recursive ingredient tree for each item
+///    - Fetches vendor prices for all items in parallel
+///    - Returns populated CraftingPlan
+/// 
+/// 2. BuildNodeRecursive: Core algorithm for tree construction
+///    - Fetches item data from Garland cache or API
+///    - Determines if item is craftable (has recipe)
+///    - Recursively builds children for each ingredient
+///    - Applies smart defaults: VendorBuy > MarketBuy > Craft
+///    - Calculates craft count: Ceiling(Quantity / Yield)
+/// 
+/// 3. AggregateMaterials: Flattens tree to shopping list
+///    - Traverses tree depth-first
+///    - Stops recursion when Source = MarketBuyNq/HQ or VendorBuy
+///    - Aggregates quantities by ItemId
+///    - Returns flat list of materials to acquire
+/// </remarks>
 public class RecipeCalculationService
 {
     private readonly GarlandService _garlandService;
@@ -85,8 +106,27 @@ public class RecipeCalculationService
     }
 
     /// <summary>
-    /// Fetch vendor prices for all items in a plan.
-    /// Vendor prices are cached in-memory during the session.
+    /// Fetch vendor prices for all items in a plan using parallel batch fetching.
+    /// 
+    /// VENDOR ACQUISITION FLOW:
+    /// 1. Collect all unique item IDs from the entire plan tree
+    /// 2. Fetch item data from Garland API in parallel batches
+    /// 3. Extract vendor information from each item:
+    ///    - Gil vendors (primary): Standard currency, cheapest price used
+    ///    - Special currency vendors: Tomestones, etc. (tracked but not used for price)
+    /// 4. Build vendor cache: Dictionary{itemId → (price, vendors)}
+    /// 5. Apply vendor data to all nodes recursively
+    /// 
+    /// GARLAND API VENDOR DATA FORMATS:
+    /// - Full vendor objects: item.Vendors list with name, location, price
+    /// - ID-only references: item.HasVendorReferences + item.Price (e.g., Ixali Vendor)
+    /// - Partials resolution: Uses item.Partials to resolve vendor IDs to full info
+    /// 
+    /// VENDOR PRIORITIZATION:
+    /// - Gil vendors are prioritized over special currency vendors
+    /// - Cheapest gil vendor price is stored in VendorPrice
+    /// - All vendors stored in VendorOptions for display
+    /// - Special currency vendors shown in UI but not used for cost calculations
     /// </summary>
     public async Task FetchVendorPricesAsync(CraftingPlan plan, CancellationToken ct = default)
     {
@@ -95,28 +135,87 @@ public class RecipeCalculationService
 
         _logger?.LogInformation("[RecipeCalc] Fetching vendor prices for plan items");
         
-        var vendorPriceCache = new Dictionary<int, (decimal price, List<VendorInfo> vendors)>();
-        int fetchedCount = 0;
-        int cachedCount = 0;
-
+        // Collect all unique item IDs from the plan
+        var allItemIds = new HashSet<int>();
         foreach (var root in plan.RootItems)
         {
-            (fetchedCount, cachedCount) = await FetchVendorPricesForNodeAsync(
-                root, vendorPriceCache, fetchedCount, cachedCount, ct);
+            CollectItemIds(root, allItemIds);
+        }
+        
+        _logger?.LogInformation("[RecipeCalc] Collected {Count} unique items to fetch", allItemIds.Count);
+        
+        // Fetch all items in parallel using batch method
+        Dictionary<int, GarlandItem> fetchedItems;
+        try
+        {
+            fetchedItems = await _garlandService.GetItemsAsync(allItemIds, useParallel: true, ct);
+            _logger?.LogInformation("[RecipeCalc] Successfully fetched {FetchedCount} items", fetchedItems.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[RecipeCalc] Failed to batch fetch items, falling back to sequential");
+            // Fallback to sequential fetching if batch fails
+            fetchedItems = new Dictionary<int, GarlandItem>();
+            foreach (var itemId in allItemIds)
+            {
+                try
+                {
+                    var item = await _garlandService.GetItemAsync(itemId, ct);
+                    if (item != null)
+                        fetchedItems[itemId] = item;
+                }
+                catch (Exception itemEx)
+                {
+                    _logger?.LogWarning(itemEx, "[RecipeCalc] Failed to fetch item {ItemId}", itemId);
+                }
+            }
+        }
+        
+        // Build vendor cache from fetched items
+        var vendorPriceCache = new Dictionary<int, (decimal price, List<VendorInfo> vendors)>();
+        foreach (var kvp in fetchedItems)
+        {
+            var vendors = GetVendorOptions(kvp.Value);
+            var gilVendors = vendors.Where(v => v.IsGilVendor).ToList();
+            var cheapestPrice = gilVendors.Any() ? gilVendors.Min(v => v.Price) : 0;
+            vendorPriceCache[kvp.Key] = (cheapestPrice, vendors);
+        }
+        
+        int cachedCount = 0;
+        int appliedCount = 0;
+        
+        // Apply vendor data to all nodes
+        foreach (var root in plan.RootItems)
+        {
+            (cachedCount, appliedCount) = ApplyVendorPricesToNode(
+                root, vendorPriceCache, cachedCount, appliedCount);
         }
 
-        _logger?.LogInformation("[RecipeCalc] Vendor prices: {Fetched} fetched, {Cached} from cache", 
-            fetchedCount, cachedCount);
+        _logger?.LogInformation("[RecipeCalc] Vendor prices: {Fetched} fetched, {Cached} from cache, {Applied} applied", 
+            fetchedItems.Count, cachedCount, appliedCount);
     }
-
-    private async Task<(int fetched, int cached)> FetchVendorPricesForNodeAsync(
-        PlanNode node, 
-        Dictionary<int, (decimal price, List<VendorInfo> vendors)> cache, 
-        int fetchedCount, 
-        int cachedCount,
-        CancellationToken ct)
+    
+    /// <summary>
+    /// Recursively collect all unique item IDs from a plan node and its children.
+    /// </summary>
+    private void CollectItemIds(PlanNode node, HashSet<int> itemIds)
     {
-        // Check in-memory cache first
+        itemIds.Add(node.ItemId);
+        foreach (var child in node.Children)
+        {
+            CollectItemIds(child, itemIds);
+        }
+    }
+    
+    /// <summary>
+    /// Apply cached vendor prices to a node and its children.
+    /// </summary>
+    private (int cached, int applied) ApplyVendorPricesToNode(
+        PlanNode node,
+        Dictionary<int, (decimal price, List<VendorInfo> vendors)> cache,
+        int cachedCount,
+        int appliedCount)
+    {
         if (cache.TryGetValue(node.ItemId, out var cachedData))
         {
             node.VendorPrice = cachedData.price;
@@ -124,39 +223,15 @@ public class RecipeCalculationService
             node.CanBuyFromVendor = cachedData.vendors.Any(v => v.IsGilVendor);
             cachedCount++;
         }
-        else
-        {
-            // Fetch from Garland
-            try
-            {
-                var itemData = await _garlandService.GetItemAsync(node.ItemId, ct);
-                if (itemData != null)
-                {
-                    var vendors = GetVendorOptions(itemData);
-                    var gilVendors = vendors.Where(v => v.IsGilVendor).ToList();
-                    var cheapestPrice = gilVendors.Any() ? gilVendors.Min(v => v.Price) : 0;
-                    
-                    node.VendorOptions = vendors;
-                    node.VendorPrice = cheapestPrice;
-                    node.CanBuyFromVendor = cheapestPrice > 0;
-                    cache[node.ItemId] = (cheapestPrice, vendors);
-                    fetchedCount++;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "[RecipeCalc] Failed to fetch vendor price for {ItemId}", node.ItemId);
-            }
-        }
+        appliedCount++;
 
         // Recurse into children
         foreach (var child in node.Children)
         {
-            (fetchedCount, cachedCount) = await FetchVendorPricesForNodeAsync(
-                child, cache, fetchedCount, cachedCount, ct);
+            (cachedCount, appliedCount) = ApplyVendorPricesToNode(child, cache, cachedCount, appliedCount);
         }
 
-        return (fetchedCount, cachedCount);
+        return (cachedCount, appliedCount);
     }
 
     /// <summary>
@@ -184,10 +259,48 @@ public class RecipeCalculationService
 
     /// <summary>
     /// Extract all vendor options from Garland item data.
-    /// Returns a list of VendorInfo for all available vendors (both gil and special currency).
-    /// Uses partials data to resolve vendor IDs to full information including alternate locations.
+    /// 
+    /// VENDOR DATA EXTRACTION LOGIC:
+    /// Garland Tools API returns vendor data in multiple formats depending on the item:
+    /// 
+    /// FORMAT 1: Full vendor objects (most common for standard vendors)
+    /// - item.Vendors contains list of GarlandVendor with name, location, price
+    /// - Example: Material Supplier in Limsa Lominsa @ 5g
+    /// - All vendor details available directly
+    /// 
+    /// FORMAT 2: ID-only references (special vendors like Ixali)
+    /// - item.HasVendorReferences = true
+    /// - item.Price set to root-level price
+    /// - item.Vendors empty or missing
+    /// - item.Partials contains NPC data that can be resolved
+    /// 
+    /// FORMAT 3: No vendor data (unavailable or unmapped)
+    /// - item.HasVendorReferences = false
+    /// - item.Vendors empty
+    /// - Returns empty list
+    /// 
+    /// GIL VENDOR PRIORITIZATION:
+    /// - Only gil vendors (Currency == "gil") are used for price calculations
+    /// - Special currency vendors (tomestones, etc.) are tracked for display
+    /// - Cheapest gil vendor price is used for VendorPrice
+    /// - All vendors stored in VendorOptions for complete UI display
+    /// 
+    /// ALTERNATE LOCATIONS:
+    /// - Some vendors (Material Supplier) appear in multiple zones
+    /// - Resolved from item.Partials (NPC data with zone information)
+    /// - Primary location shown first, alternates in tooltip/dropdown
+    /// 
+    /// ID-ONLY VENDOR RESOLUTION (Bug Fix):
+    /// When vendors are listed as IDs only (not full objects), we must filter NPC partials
+    /// by matching vendor IDs. The partials array may contain unrelated NPCs (quest givers, etc.)
+    /// so we use item.VendorIds to extract the actual vendor IDs and only include matching NPCs.
+    /// This prevents "hallucinated vendors" like Mogmul Mogbelly appearing for items he doesn't sell.
+    /// 
     /// </summary>
-    private static List<VendorInfo> GetVendorOptions(GarlandItem? item)
+    /// <param name="item">Garland item data from API</param>
+    /// <returns>List of VendorInfo for all available vendors (both gil and special currency). 
+    /// Returns empty list if no vendor data available.</returns>
+    private List<VendorInfo> GetVendorOptions(GarlandItem? item)
     {
         if (item == null) return new List<VendorInfo>();
 
@@ -199,15 +312,27 @@ public class RecipeCalculationService
             foreach (var garlandVendor in item.Vendors)
             {
                 var vendorInfo = VendorInfo.FromGarlandVendor(garlandVendor);
+                
+                // Log warning if location resolution failed (still shows "Zone {id}")
+                if (vendorInfo.Location.StartsWith("Zone ", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger?.LogWarning("[VendorInfo] Failed to resolve location for vendor '{VendorName}': RawLocation='{RawLocation}', LocationId={LocationId}, Result='{Result}'", 
+                        garlandVendor.Name, garlandVendor.Location, garlandVendor.LocationId, vendorInfo.Location);
+                }
 
                 // If this vendor has a name, look up alternate locations from partials
                 if (!string.IsNullOrEmpty(garlandVendor.Name) && item.Partials != null)
                 {
                     var npcPartials = item.GetNpcPartialsByName(garlandVendor.Name);
-                    vendorInfo.AlternateLocations = npcPartials
+                    var allLocations = npcPartials
                         .Select(npc => npc.LocationName)
                         .Where(loc => !string.IsNullOrEmpty(loc))
                         .Distinct()
+                        .ToList();
+                    
+                    // Exclude the primary location from alternate locations
+                    vendorInfo.AlternateLocations = allLocations
+                        .Where(loc => loc != vendorInfo.Location)
                         .ToList();
                 }
 
@@ -217,9 +342,13 @@ public class RecipeCalculationService
         // If vendors are listed as IDs only with root-level price, try to resolve via partials
         else if (item.HasVendorReferences && item.Price > 0 && item.Partials != null)
         {
-            // Look for NPC partials that are vendors
+            // Extract vendor IDs from VendorsRaw to filter NPC partials
+            var vendorIds = item.VendorIds;
+            
+            // Look for NPC partials that match the vendor IDs
+            // This ensures we only include actual vendors, not unrelated NPCs (quest givers, etc.)
             var vendorNpcs = item.Partials
-                .Where(p => p.Type == "npc")
+                .Where(p => p.Type == "npc" && vendorIds.Contains(p.Id))
                 .Select(p => p.GetNpcObject())
                 .Where(npc => npc != null)
                 .Cast<GarlandNpcPartial>()
@@ -279,8 +408,35 @@ public class RecipeCalculationService
     }
 
     /// <summary>
-    /// Recursively build a node and its ingredient children.
+    /// Recursively builds a PlanNode tree representing an item and all its ingredients.
+    /// 
+    /// ALGORITHM:
+    /// 1. Depth guard: Stops recursion at MaxDepth (20 levels) to prevent stack overflow
+    /// 2. Data fetch: Retrieves item data from Garland API (with caching)
+    /// 3. Craftability check: Determines if item has a recipe (Crafts or CompanyCrafts)
+    /// 4. Leaf handling: Non-craftable items default to VendorBuy (if available) or MarketBuyNq
+    /// 5. Recipe selection: Uses first available recipe (ordered by RecipeLevel)
+    /// 6. Craft count calculation: Ceiling(Quantity / Yield) - accounts for recipe yield
+    /// 7. Recursive children: Builds child nodes for each ingredient with scaled quantities
+    /// 8. Smart defaults (for non-root items only):
+    ///    - VendorBuy if vendor available (cheapest, most convenient)
+    ///    - MarketBuyNq if low-level recipe with many ingredients (heuristic)
+    ///    - Craft otherwise (default)
+    /// 
+    /// SMART DEFAULTS LOGIC:
+    /// Root items (parent == null) always default to Craft - user wants to craft project items.
+    /// For child items:
+    /// - Vendor items are prioritized (free gil from vendors is cheapest)
+    /// - Low-level items (RecipeLevel < 10) with many ingredients default to market buy
+    /// - Everything else defaults to Craft
     /// </summary>
+    /// <param name="itemId">Garland item ID</param>
+    /// <param name="name">Item name (fallback if API fails)</param>
+    /// <param name="quantity">Quantity needed (before yield calculation)</param>
+    /// <param name="parent">Parent node (null for root items)</param>
+    /// <param name="depth">Recursion depth (0 for root)</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Populated PlanNode or null on error</returns>
     private async Task<PlanNode?> BuildNodeRecursiveAsync(
         int itemId, 
         string name, 

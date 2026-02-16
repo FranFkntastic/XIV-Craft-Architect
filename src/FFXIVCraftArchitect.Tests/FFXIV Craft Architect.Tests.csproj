@@ -20,8 +20,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FFXIVCraftArchitect.Core\FFXIVCraftArchitect.Core.csproj" />
-    <ProjectReference Include="..\FFXIVCraftArchitect\FFXIVCraftArchitect.csproj" />
+    <ProjectReference Include="..\FFXIVCraftArchitect.Core\FFXIV Craft Architect.Core.csproj" />
+    <ProjectReference Include="..\FFXIVCraftArchitect\FFXIV Craft Architect.csproj" />
   </ItemGroup>
 
 </Project>

@@ -275,7 +275,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService
             {
                 progress?.Report($"Fetching {itemIds.Count} items from {dc}...");
                 
-                var fetchedData = await _universalisService.GetMarketDataBulkAsync(dc, itemIds, ct);
+                var fetchedData = await _universalisService.GetMarketDataBulkAsync(dc, itemIds, useParallel: true, ct: ct);
                 
                 // STEP 5: Store each result in cache with verification
                 foreach (var kvp in fetchedData)

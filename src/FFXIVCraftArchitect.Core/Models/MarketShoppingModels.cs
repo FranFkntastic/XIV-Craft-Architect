@@ -76,7 +76,29 @@ public enum RecommendationMode
 }
 
 /// <summary>
-/// Detailed shopping plan for a single item with world-specific options.
+/// Complete shopping analysis for a single item across all worlds.
+/// 
+/// DATA FLOW:
+/// This is the primary output of MarketShoppingService.CalculateDetailedShoppingPlansAsync.
+/// One instance is created per market item in the crafting plan.
+/// 
+/// STRUCTURE:
+/// - Item identification (ItemId, Name, IconId, QuantityNeeded)
+/// - DC-wide statistics (DCAveragePrice, HQAveragePrice)
+/// - Per-world options (WorldOptions list with full analysis)
+/// - Recommendation (RecommendedWorld - the best single world)
+/// - Multi-world split (RecommendedSplit - if single world can't fulfill)
+/// - Vendor alternative (Vendors - if available from gil vendor)
+/// 
+/// USAGE IN UI:
+/// WPF: Bound to MarketCardViewModel for display in MarketAnalysisView
+/// Web: Passed to MarketCard.razor component for display
+/// Both: Grouped by world in procurement planner views
+/// 
+/// KEY DECISIONS:
+/// - RecommendedWorld is null if no world has sufficient stock
+/// - RecommendedSplit is null if RecommendedWorld can fulfill full quantity
+/// - Error is set if market data is missing or invalid
 /// </summary>
 public class DetailedShoppingPlan
 {
@@ -96,8 +118,32 @@ public class DetailedShoppingPlan
     public bool HasHqData => HQAveragePrice.HasValue;
     
     /// <summary>
-    /// Vendor information for items that can be purchased from vendors.
-    /// Only includes vendors that accept gil as currency.
+    /// Vendor information for items that can be purchased from NPC vendors.
+    /// 
+    /// POPULATED WHEN:
+    /// - Item has PriceSource.Vendor (determined by PriceCheckService)
+    /// - Garland API returned vendor data during plan building
+    /// - Item can be bought with gil (special currency vendors excluded)
+    /// 
+    /// CONTENTS:
+    /// - Gil vendors only (special currency vendors filtered out)
+    /// - All locations for multi-location vendors (Material Supplier, etc.)
+    /// - Vendor name, location, price
+    /// 
+    /// UI DISPLAY:
+    /// - Shown in procurement plan as "Vendor" world card
+    /// - Gold background to distinguish from market worlds
+    /// - Vendor location shown for user's convenience
+    /// - Shop icon indicates vendor source
+    /// 
+    /// COST CALCULATION:
+    /// - Vendor items use fixed price (no market fluctuation)
+    /// - Price taken from cheapest gil vendor
+    /// - Always sufficient stock (unlimited vendor supply)
+    /// 
+    /// COMPARISON WITH VendorOptions (PlanNode):
+    /// - VendorOptions (on PlanNode): ALL vendors including special currency
+    /// - Vendors (on DetailedShoppingPlan): Gil vendors only, for procurement display
     /// </summary>
     public List<VendorInfo> Vendors { get; set; } = new();
 
@@ -528,8 +574,21 @@ public class WorldItemPurchase
     
     /// <summary>
     /// Display format: "×X of Y" where X is quantity on this world, Y is total needed.
+    /// For vendor items, use SimpleQuantityDisplay instead (vendors have unlimited stock).
     /// </summary>
     public string QuantityDisplay => $"×{QuantityOnThisWorld} of {TotalQuantityNeeded}";
+    
+    /// <summary>
+    /// Simple quantity display without total (e.g., "×50").
+    /// Use this for vendor items where stock is unlimited.
+    /// </summary>
+    public string SimpleQuantityDisplay => $"×{QuantityOnThisWorld}";
+    
+    /// <summary>
+    /// The vendor selling this item (only populated for vendor purchases).
+    /// Contains vendor name and location for display in procurement cards.
+    /// </summary>
+    public VendorInfo? Vendor { get; set; }
 }
 
 /// <summary>

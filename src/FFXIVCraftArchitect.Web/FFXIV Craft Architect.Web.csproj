@@ -23,7 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FFXIVCraftArchitect.Core\FFXIVCraftArchitect.Core.csproj" />
+    <ProjectReference Include="..\FFXIVCraftArchitect.Core\FFXIV Craft Architect.Core.csproj" />
   </ItemGroup>
 
   <!-- GitHub Pages deployment configuration -->

@@ -14,17 +14,9 @@
             @if (Card.IsVendor)
             {
                 <MudIcon Icon="@Icons.Material.Filled.Store" Size="Size.Small" Style="color: #d4a73a;" />
-                <div style="display: flex; flex-direction: column; min-width: 0;">
-                    <MudText Typo="Typo.body1" Style="color: #d4a73a; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                        VENDOR
-                    </MudText>
-                    @if (!string.IsNullOrEmpty(Card.SelectedVendorName))
-                    {
-                        <MudText Typo="Typo.caption" Style="color: #90EE90; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                            @Card.SelectedVendorName
-                        </MudText>
-                    }
-                </div>
+                <MudText Typo="Typo.body1" Style="color: #d4a73a; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    VENDOR
+                </MudText>
             }
             else
             {
@@ -89,14 +81,6 @@
                     Split purchases
                 </MudText>
             }
-        </div>
-    }
-    
-    @* Vendor Info Display (only for vendor cards when expanded) *@
-    @if (IsExpanded && Card.IsVendor && Card.Vendors?.Any() == true)
-    {
-        <div style="padding: 0 8px 8px 8px;">
-            <VendorInfoDisplay Vendors="Card.Vendors" />
         </div>
     }
     
@@ -170,18 +154,29 @@
             <div style="margin-bottom: 12px;">
                 @foreach (var item in Card.Items)
                 {
-                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; background: @(Card.Items.IndexOf(item) % 2 == 0 ? "transparent" : "#2a2a2a"); border-radius: 4px;">
-                        <div style="display: flex; align-items: center; gap: 6px;">
-                            <MudIcon Icon="@Icons.Material.Filled.Store" Size="Size.Small" Style="color: #d4a73a;" />
-                            <span style="color: #fff;">@item.ItemName</span>
-                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" 
-                                           Size="Size.Small" 
-                                           Style="color: #666; padding: 2px;"
-                                           OnClick="() => CopyItemName(item.ItemName)"
-                                           Title="Copy item name" />
+                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: @(Card.Items.IndexOf(item) % 2 == 0 ? "transparent" : "#2a2a2a"); border-radius: 4px;">
+                        <div style="display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0;">
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <MudIcon Icon="@Icons.Material.Filled.Store" Size="Size.Small" Style="color: #d4a73a; flex-shrink: 0;" />
+                                <span style="color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@item.ItemName</span>
+                                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" 
+                                               Size="Size.Small" 
+                                               Style="color: #666; padding: 2px; flex-shrink: 0;"
+                                               OnClick="() => CopyItemName(item.ItemName)"
+                                               Title="Copy item name" />
+                            </div>
+                            @if (item.Vendor != null)
+                            {
+                                <div style="display: flex; align-items: center; gap: 4px; margin-left: 22px;">
+                                    <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Style="color: #4caf50;" />
+                                    <MudText Typo="Typo.caption" Style="color: #90EE90;">
+                                        @item.Vendor.Name - @item.Vendor.Location
+                                    </MudText>
+                                </div>
+                            }
                         </div>
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            <span style="color: #d4a73a;">×@item.QuantityDisplay</span>
+                        <div style="display: flex; align-items: center; gap: 12px; flex-shrink: 0;">
+                            <span style="color: #d4a73a;">@item.SimpleQuantityDisplay</span>
                             <span style="color: #aaa; font-size: 11px;">@item.PricePerUnit.ToString("N0")g</span>
                             <span style="color: #4caf50; font-weight: 500;">@item.TotalCost.ToString("N0")g</span>
                         </div>

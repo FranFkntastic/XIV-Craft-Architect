@@ -24,9 +24,47 @@ public enum AcquisitionSource
     MarketBuyNq,
     /// <summary>Buy HQ from market board</summary>
     MarketBuyHq,
-    /// <summary>Buy from vendor (gil)</summary>
+    /// <summary>
+    /// Buy from NPC vendor using gil (standard currency).
+    /// 
+    /// BEHAVIOR:
+    /// - Item treated as atomic purchase (children not aggregated)
+    /// - Price is fixed from vendor data (no market lookup)
+    /// - Unlimited stock assumed
+    /// - Displayed in "Vendor" procurement group
+    /// 
+    /// UI:
+    /// - Dropdown shows vendor location(s)
+    /// - Gold background in procurement plan
+    /// - Shop icon distinguishes from market
+    /// 
+    /// PRIORITIZATION:
+    /// VendorBuy is prioritized in smart defaults because vendors offer:
+    /// - Fixed prices (no market fluctuation)
+    /// - Often cheaper than market for basic materials
+    /// - Convenient locations (main cities)
+    /// 
+    /// NOTE: Only applies to GIL vendors. Special currency vendors use VendorSpecialCurrency.
+    /// </summary>
     VendorBuy,
-    /// <summary>Buy from vendor (special currency - tomestones, etc.)</summary>
+    /// <summary>
+    /// Buy from NPC vendor using special currency (tomestones, beast tribe tokens, etc.).
+    /// 
+    /// DIFFERENCE FROM VendorBuy:
+    /// - Uses non-gil currency (Allagan Tomestones, Ixali Oaknots, etc.)
+    /// - Not used in cost calculations (currency value is subjective)
+    /// - Tracked in VendorOptions for display purposes
+    /// - User can still select, but no price comparison made
+    /// 
+    /// UI:
+    /// - Shown in vendor dropdown with currency icon
+    /// - Price shown in special currency units
+    /// - Not included in procurement plan cost totals
+    /// 
+    /// USE CASE:
+    /// Some items can only be obtained via special currency (e.g., certain housing items).
+    /// This option allows users to track these items even though no gil cost is calculated.
+    /// </summary>
     VendorSpecialCurrency
 }
 
@@ -137,8 +175,27 @@ public class CraftingPlan
     }
     
     /// <summary>
-    /// Aggregate all materials needed across the entire plan
+    /// Aggregates all materials needed across the entire plan into a flat shopping list.
+    /// 
+    /// ALGORITHM:
+    /// 1. Traverse the recipe tree depth-first starting from each root item
+    /// 2. For each node, check its AcquisitionSource to determine behavior:
+    ///    - MarketBuyNq/MarketBuyHq: Add item to aggregation, STOP recursion (don't include children)
+    ///    - VendorBuy: Add item to aggregation, STOP recursion
+    ///    - Craft: Continue recursing into children
+    /// 3. Leaf nodes (no children) are always added to aggregation
+    /// 4. Quantities are summed by ItemId to handle multiple occurrences of the same material
+    /// 
+    /// INTENDED USE:
+    /// This produces the final shopping list displayed to users. Items marked as "buy" 
+    /// or "vendor" are treated as atomic purchases - their sub-ingredients are ignored.
+    /// Items marked as "craft" contribute their sub-ingredients to the list.
+    /// 
+    /// EXAMPLE:
+    /// If Cedar Lumber is marked as "Craft", its children (Lumber, Sand, etc.) are included.
+    /// If Cedar Lumber is marked as "Buy", only Cedar Lumber appears in the list.
     /// </summary>
+    /// <returns>Flat list of materials to acquire, aggregated by ItemId</returns>
     private List<MaterialAggregate> AggregateMaterials()
     {
         var aggregates = new Dictionary<int, MaterialAggregate>();
@@ -375,18 +432,51 @@ public class PlanNode
     public bool IsCircularReference { get; set; }
     
     /// <summary>
-    /// If true, this item can be bought from a vendor (cheaper than market).
+    /// If true, this item can be bought from a vendor using gil.
+    /// Set during FetchVendorPricesAsync based on Garland API data.
+    /// 
+    /// USAGE:
+    /// - Used to show "Vendor" option in acquisition dropdown
+    /// - Used for smart defaults (VendorBuy prioritized over MarketBuy/Craft)
+    /// - Checked before displaying vendor-specific UI elements
+    /// 
+    /// NOTE: This only indicates availability of GIL vendors. Special currency vendors
+    /// (tomestones, etc.) are tracked separately in VendorOptions but don't set this flag.
     /// </summary>
     public bool CanBuyFromVendor { get; set; }
 
     /// <summary>
-    /// Full vendor options for this item (all vendors including special currency ones).
-    /// Gil vendors are prioritized in UI display.
+    /// Full vendor options for this item (ALL vendors including special currency ones).
+    /// 
+    /// CONTENTS:
+    /// - Gil vendors: Standard currency vendors (prioritized in UI)
+    /// - Special currency vendors: Tomestones, beast tribe currency, etc.
+    /// - Multiple locations: Vendors like "Material Supplier" in different zones
+    /// 
+    /// POPULATED BY:
+    /// RecipeCalculationService.FetchVendorPricesAsync() extracts vendor data
+    /// from Garland API and stores it here. Persists across save/load via
+    /// PlanSerializationWrapper (Version 2+).
+    /// 
+    /// UI DISPLAY:
+    /// - Gil vendors shown first in dropdown
+    /// - Special currency vendors shown with currency icon
+    /// - Alternate locations shown in tooltip
+    /// - SelectedVendorIndex tracks user's choice
     /// </summary>
     public List<VendorInfo> VendorOptions { get; set; } = new();
 
     /// <summary>
     /// Gets the cheapest gil vendor option, or null if no gil vendors available.
+    /// 
+    /// Used for:
+    /// - Cost calculations (vendor price vs market price comparisons)
+    /// - Default vendor selection in procurement plans
+    /// - Smart defaults during tree building (VendorBuy prioritized)
+    /// 
+    /// FILTERS:
+    /// - Only vendors with IsGilVendor == true
+    /// - Minimum price selected
     /// </summary>
     [JsonIgnore]
     public VendorInfo? CheapestGilVendor => VendorOptions
@@ -395,7 +485,18 @@ public class PlanNode
         .FirstOrDefault();
 
     /// <summary>
-    /// Gets all gil vendors with the cheapest price (for display when multiple vendors have same price).
+    /// Gets all gil vendors with the cheapest price.
+    /// 
+    /// USE CASE:
+    /// Some items (like basic materials) are sold by multiple vendors at the same price.
+    /// This property returns all vendors with the minimum price, allowing UI to:
+    /// - Show "Available from: Material Supplier, Limsa/Gridania/Ul'dah"
+    /// - Let user pick convenient location
+    /// - Display all options when prices are identical
+    /// 
+    /// EXAMPLE:
+    /// Iron Ore @ 18g from Material Suppliers in all three main cities.
+    /// Returns all three locations so user can pick nearest.
     /// </summary>
     [JsonIgnore]
     public List<VendorInfo> CheapestGilVendors
@@ -411,12 +512,27 @@ public class PlanNode
 
     /// <summary>
     /// Selected vendor index for procurement plan (which vendor to buy from).
-    /// -1 means not selected or use cheapest.
+    /// -1 means not selected (use CheapestGilVendor).
+    /// 
+    /// PERSISTENCE:
+    /// Saved with plan via SerializablePlanNode. Restored on load.
+    /// Allows users to specify preferred vendor location (e.g., "always buy from Limsa").
+    /// 
+    /// UI:
+    /// Bound to vendor dropdown in recipe tree. Changing selection updates
+    /// procurement plan display to show chosen vendor location.
     /// </summary>
     public int SelectedVendorIndex { get; set; } = -1;
 
     /// <summary>
     /// Gets the selected vendor or the cheapest gil vendor if none selected.
+    /// 
+    /// RESOLUTION ORDER:
+    /// 1. If SelectedVendorIndex >= 0: Return VendorOptions[SelectedVendorIndex]
+    /// 2. Else: Return CheapestGilVendor (first vendor with lowest price)
+    /// 3. If no gil vendors: Return null
+    /// 
+    /// Used in procurement plan display to show final vendor selection.
     /// </summary>
     [JsonIgnore]
     public VendorInfo? SelectedVendor => SelectedVendorIndex >= 0 && SelectedVendorIndex < VendorOptions.Count

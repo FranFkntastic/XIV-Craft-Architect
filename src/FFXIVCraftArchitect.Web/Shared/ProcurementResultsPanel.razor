@@ -276,6 +276,15 @@
                     worldCards[worldName] = card;
                 }
                 
+                // Find the specific vendor for this item (if it's a vendor purchase)
+                VendorInfo? itemVendor = null;
+                if (worldName == "Vendor" && plan.Vendors?.Any() == true)
+                {
+                    // Match vendor by price - the RecommendedWorld should have the vendor price
+                    itemVendor = plan.Vendors.FirstOrDefault(v => v.Price == plan.RecommendedWorld.AveragePricePerUnit)
+                        ?? plan.Vendors.FirstOrDefault();
+                }
+
                 card.Items.Add(new WorldItemPurchase
                 {
                     ItemId = plan.ItemId,
@@ -287,7 +296,8 @@
                     TotalCost = plan.RecommendedWorld.TotalCost,
                     IsSplitPurchase = false,
                     SourcePlan = plan,
-                    TravelContext = "Primary"
+                    TravelContext = "Primary",
+                    Vendor = itemVendor
                 });
             }
         }
@@ -330,25 +340,18 @@
             
             foreach (var item in world.Items.OrderBy(i => i.ItemName))
             {
-                var qtyDisplay = item.IsSplitPurchase 
-                    ? $"×{item.QuantityOnThisWorld} of {item.TotalQuantityNeeded}"
-                    : $"×{item.QuantityOnThisWorld}";
+                // For vendor items, always use simple quantity (vendors have unlimited stock)
+                // For market items, show "of total" only for split purchases
+                var qtyDisplay = world.IsVendor || !item.IsSplitPurchase
+                    ? item.SimpleQuantityDisplay
+                    : item.QuantityDisplay;
                 
                 sb.AppendLine($"- **{item.ItemName}** {qtyDisplay} @ {item.PricePerUnit:N0}g = **{item.TotalCost:N0}g**");
                 
                 // Add vendor information for vendor purchases
-                if (world.IsVendor)
+                if (world.IsVendor && item.Vendor != null)
                 {
-                    var plan = ShoppingPlans.FirstOrDefault(p => p.ItemId == item.ItemId);
-                    if (plan?.Vendors?.Any() == true)
-                    {
-                        var vendor = plan.Vendors.FirstOrDefault(v => v.Price == item.PricePerUnit) 
-                            ?? plan.Vendors.FirstOrDefault();
-                        if (vendor != null)
-                        {
-                            sb.AppendLine($"   📍 {vendor.Name} - {vendor.Location}");
-                        }
-                    }
+                    sb.AppendLine($"   📍 {item.Vendor.Name} - {item.Vendor.Location}");
                 }
             }
             

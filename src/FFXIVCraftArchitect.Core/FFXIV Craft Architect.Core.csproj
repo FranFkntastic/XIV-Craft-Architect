@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>FFXIVCraftArchitect.Core</RootNamespace>
+    <AssemblyName>FFXIVCraftArchitect.Core</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>

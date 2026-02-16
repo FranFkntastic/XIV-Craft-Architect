@@ -54,9 +54,21 @@
             }
             else if (Plan.RecommendedWorld != null)
             {
-                <MudText Typo="Typo.caption" Style="color: #90EE90; font-weight: 500;">
-                    @Plan.RecommendedWorld.WorldName
-                </MudText>
+                @if (Plan.RecommendedWorld.WorldName == "Vendor" && Plan.Vendors?.Any() == true)
+                {
+                    var primaryVendor = Plan.Vendors.First();
+                    var vendorTooltip = $"{primaryVendor.Name} - {primaryVendor.Location}";
+                    <MudText Typo="Typo.caption" Style="color: #90EE90; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+                             title="@vendorTooltip">
+                        @primaryVendor.Name (@primaryVendor.Location)
+                    </MudText>
+                }
+                else
+                {
+                    <MudText Typo="Typo.caption" Style="color: #90EE90; font-weight: 500;">
+                        @Plan.RecommendedWorld.WorldName
+                    </MudText>
+                }
             }
         </div>
         

@@ -11,8 +11,48 @@ using Microsoft.Extensions.Logging;
 namespace FFXIVCraftArchitect.ViewModels;
 
 /// <summary>
-/// ViewModel for the Market Analysis panel.
-/// Manages shopping plans, recommendations, and procurement grouping.
+/// ViewModel for the Market Analysis panel (Market Analysis tab in MainWindow).
+///
+/// DATA FLOW:
+/// 1. Input from Recipe Planner:
+///    - Receives CraftingPlan with AggregatedMaterials
+///    - Separates market items, vendor items, and untradeable items
+///    - Vendor items are displayed separately (no market lookup needed)
+///
+/// 2. Market Data Fetching (RefreshPricesAsync):
+///    - Calls MarketLogisticsCoordinator.CalculateMarketLogisticsAsync()
+///    - Coordinator handles:
+///      a. IMarketCacheService.EnsurePopulatedAsync() - fetch/cache market data
+///      b. MarketShoppingService.CalculateDetailedShoppingPlansAsync() - analyze
+///    - Returns List&lt;DetailedShoppingPlan&gt; with world recommendations
+///
+/// 3. ViewModel Wrapping:
+///    - Each DetailedShoppingPlan wrapped in ShoppingPlanViewModel
+///    - Each WorldShoppingSummary wrapped in WorldOptionViewModel
+///    - Added to ShoppingPlans ObservableCollection
+///
+/// 4. World Grouping (RegroupByWorld):
+///    - Groups ShoppingPlans by RecommendedWorld.WorldName
+///    - Creates ProcurementWorldViewModel for each world
+///    - Vendor items grouped in special "Vendor" world
+///    - Used for Procurement Planner tab display
+///
+/// 5. User Interactions:
+///    - Change sort order (Recommended, Alphabetical, Price)
+///    - Toggle search all NA DCs
+///    - Change recommendation mode (Cost vs Value)
+///    - Refresh prices (re-fetches market data)
+///
+/// UI BINDINGS:
+/// - ShoppingPlans → Market cards grid (MarketCardTemplates.xaml)
+/// - GroupedByWorld → Procurement world cards
+/// - StatusMessage → Progress/status display
+/// - IsLoading → Loading indicator
+///
+/// STATE MANAGEMENT:
+/// - ShoppingPlans persists when switching tabs
+/// - Cleared when new plan is loaded
+/// - Saved with plan via CraftingPlan.SavedMarketPlans
 /// </summary>
 public partial class MarketAnalysisViewModel : ViewModelBase
 {

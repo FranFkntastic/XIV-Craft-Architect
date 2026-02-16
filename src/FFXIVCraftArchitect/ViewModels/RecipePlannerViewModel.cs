@@ -9,8 +9,42 @@ using Microsoft.Extensions.Logging;
 namespace FFXIVCraftArchitect.ViewModels;
 
 /// <summary>
-/// ViewModel for the Recipe Planner panel.
-/// Manages project items, recipe tree state, and node interactions.
+/// ViewModel for the Recipe Planner panel (left + center columns of MainWindow).
+/// 
+/// DATA FLOW:
+/// 1. Project Items (Input):
+///    - User adds items via AddProjectItem() from search or import
+///    - Stored in ProjectItems ObservableCollection
+///    - Each item has: Id, Name, Quantity, IsHqRequired
+/// 
+/// 2. Plan Building (Processing):
+///    - OnBuildProjectPlanAsync() collects ProjectItems
+///    - Calls RecipeCalculationService.BuildPlanAsync()
+///    - Receives CraftingPlan with populated RootItems
+///    - Wraps PlanNodes in PlanNodeViewModels
+///    - Syncs to RootNodes ObservableCollection
+/// 
+/// 3. Node Interactions (User Modification):
+///    - User changes AcquisitionSource via dropdown
+///    - NodeAcquisitionChanged event bubbles up
+///    - Calls SetAcquisitionSource() on the node
+///    - Refreshes AggregatedMaterials
+///    - Triggers shopping list update
+/// 
+/// 4. Plan Persistence:
+///    - SavePlanAsync() serializes CurrentPlan via PlanPersistenceCoordinator
+///    - LoadPlan() deserializes and syncs to UI
+/// 
+/// UI BINDINGS:
+/// - ProjectItems → ProjectList ListBox (left panel)
+/// - RootNodes → RecipeTree container (center panel, via RecipeTreeUiBuilder)
+/// - CurrentPlan → ShoppingListBuilder (right panel)
+/// - StatusMessage → Status bar updates
+/// 
+/// EVENTS RAISED:
+/// - PlanChanged: When CurrentPlan is set/modified
+/// - NodeAcquisitionChanged: When user changes source (Craft/Buy/Vendor)
+/// - NodeHqChanged: When user toggles HQ requirement
 /// </summary>
 public partial class RecipePlannerViewModel : ViewModelBase
 {

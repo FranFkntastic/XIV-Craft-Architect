@@ -5,9 +5,38 @@ using Microsoft.Extensions.Logging;
 namespace FFXIVCraftArchitect.Core.Services;
 
 /// <summary>
-/// Service for calculating optimal market board shopping plans.
-/// Groups listings by world and applies intelligent filtering.
-/// Reads market data from IMarketCacheService - callers must ensure cache is populated first.
+/// Service for calculating optimal market board shopping plans from cached market data.
+/// 
+/// DATA FLOW:
+/// 1. Input: List of MaterialAggregate from CraftingPlan.AggregateMaterials
+/// 2. Filter: Separates vendor items, market items, and untradeable items
+/// 3. For each market item:
+///    - Reads from IMarketCacheService (caller must populate first)
+///    - Groups listings by world
+///    - Calculates ValueScore for each world (see below)
+///    - Recommends best world (lowest ValueScore)
+///    - Optionally calculates multi-world splits
+/// 4. Output: List of DetailedShoppingPlan with recommendations
+/// 
+/// VALUESCORE ALGORITHM:
+/// ValueScore is the primary metric for world ranking. Lower is better.
+/// - Base: Total cost for needed quantity from that world
+/// - Fraud filter: Excludes listings above (ModePrice × Multiplier) default 2.5x
+/// - Congestion penalty: Adds 20% to congested worlds (except home)
+/// - Travel penalty: Adds 15% to non-home worlds (user preference)
+/// - Stock penalty: World must have sufficient quantity or score is MaxValue
+/// 
+/// MODE PRICE CALCULATION (anti-fraud):
+/// Uses a two-pass algorithm to find the "typical" price:
+/// 1. Find median of cheapest 50% of listings (fraud-resistant baseline)
+/// 2. Calculate mode (most common price) from listings within 10x of baseline
+/// This prevents fraudulent high-price listings from skewing the mode.
+/// 
+/// MULTI-WORLD SPLITS:
+/// When EnableSplitWorld is true, the algorithm can recommend buying portions
+/// of the needed quantity from different worlds. Uses greedy allocation
+/// based on ValueScore with single-world contingency (prefers single world
+/// if within 5% of optimal split cost).
 /// </summary>
 public class MarketShoppingService
 {
@@ -39,9 +68,33 @@ public class MarketShoppingService
 
     /// <summary>
     /// Calculate detailed shopping plans for market board items.
-    /// Reads from cache only - callers must call IMarketCacheService.EnsurePopulatedAsync first.
+    /// 
+    /// ALGORITHM PER ITEM:
+    /// 1. Read cached market data for item from IMarketCacheService
+    /// 2. Group listings by world name
+    /// 3. For each world:
+    ///    - Calculate total cost for needed quantity
+    ///    - Calculate mode price (anti-fraud baseline)
+    ///    - Filter out listings above (ModePrice × MaxPriceMultiplier)
+    ///    - Calculate ValueScore (see class documentation)
+    ///    - Check world status (congested, travel prohibited)
+    ///    - Apply filters (exclude congested, respect blacklist)
+    /// 4. Sort worlds by ValueScore (ascending)
+    /// 5. Set recommended world to first viable option
+    /// 6. Return DetailedShoppingPlan with all options and recommendation
+    /// 
+    /// PREREQUISITE:
+    /// Callers MUST populate the cache first via IMarketCacheService.EnsurePopulatedAsync
+    /// before calling this method. This service reads from cache only.
     /// </summary>
+    /// <param name="marketItems">Materials to analyze (from CraftingPlan.AggregatedMaterials)</param>
+    /// <param name="dataCenter">Data center to analyze</param>
+    /// <param name="progress">Progress reporter for UI feedback (optional)</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <param name="mode">Recommendation mode (cost vs value optimization)</param>
+    /// <param name="config">Analysis configuration (fraud detection, split world, etc.)</param>
     /// <param name="blacklistedWorlds">Worlds to exclude from recommendations. Home worlds bypass this filter.</param>
+    /// <returns>List of shopping plans, one per market item</returns>
     public async Task<List<DetailedShoppingPlan>> CalculateDetailedShoppingPlansAsync(
         List<MaterialAggregate> marketItems,
         string dataCenter,
@@ -767,6 +820,35 @@ public class MarketShoppingService
 
     /// <summary>
     /// Categorizes materials by their price source (Vendor, Market, or Untradeable).
+    /// 
+    /// VENDOR ITEM HANDLING:
+    /// Vendor items are identified by PriceInfo.Source == PriceSource.Vendor.
+    /// These items are excluded from market analysis and shopping plan calculations
+    /// because they have fixed prices and unlimited stock from NPC vendors.
+    /// 
+    /// SEPARATION LOGIC:
+    /// 1. Vendor items: PriceSource.Vendor → VendorItems list
+    ///    - No market lookup needed
+    ///    - Price is fixed (from Garland data)
+    ///    - Stock is unlimited
+    ///    - Displayed separately in UI with vendor location
+    /// 
+    /// 2. Untradeable items: PriceSource.Untradeable → UntradeableItems list
+    ///    - Cannot be bought on market
+    ///    - Must be gathered or crafted
+    ///    - Shown in UI with "Untradeable" label
+    /// 
+    /// 3. Market items: PriceSource.Market or no price info → MarketItems list
+    ///    - Requires market analysis
+    ///    - Price varies by world
+    ///    - Stock limited by listings
+    ///    - Full shopping plan calculation needed
+    /// 
+    /// WHY SEPARATE VENDOR ITEMS:
+    /// - Avoids unnecessary API calls to Universalis for fixed-price items
+    /// - Allows special UI treatment (vendor location display, gold background)
+    /// - Ensures accurate cost calculations (vendor always cheapest)
+    /// - Simplifies procurement planning (always buy from vendor)
     /// </summary>
     public CategorizedMaterials CategorizeMaterials(List<MaterialAggregate> materials, Dictionary<int, PriceInfo> prices)
     {
@@ -802,11 +884,56 @@ public class MarketShoppingService
 }
 
 /// <summary>
-/// Result of categorizing materials by price source.
+/// Result of categorizing materials by their acquisition source.
+/// 
+/// Separates materials into three distinct categories for different handling:
+/// 
+/// VendorItems:
+/// - Items available from NPC vendors at fixed prices
+/// - Prices from Garland data (no market lookup needed)
+/// - Unlimited stock assumption
+/// - Displayed in "Vendor" procurement group with location info
+/// - UI: Gold background, shop icon, vendor location shown
+/// 
+/// MarketItems:
+/// - Items that must be purchased from market board
+/// - Requires Universalis API lookup
+/// - Price varies by world, limited stock
+/// - Full shopping plan with world recommendations
+/// - UI: Blue background, market board analysis shown
+/// 
+/// UntradeableItems:
+/// - Items that cannot be traded on market
+/// - Must be gathered, crafted, or obtained through other means
+/// - No price information available
+/// - UI: Gray background, "Untradeable" label
+/// 
+/// USAGE FLOW:
+/// 1. RecipePlanner aggregates materials from plan tree
+/// 2. PriceCheckService.GetBestPricesBulkAsync gets PriceInfo for each
+/// 3. CategorizeMaterials separates by PriceInfo.Source
+/// 4. VendorItems displayed separately in procurement plan
+/// 5. MarketItems sent to MarketShoppingService for analysis
+/// 6. UntradeableItems shown with warning
+/// 
 /// </summary>
 public class CategorizedMaterials
 {
+    /// <summary>
+    /// Items available from NPC vendors (fixed price, unlimited stock).
+    /// These are excluded from market analysis.
+    /// </summary>
     public List<MaterialAggregate> VendorItems { get; } = new();
+    
+    /// <summary>
+    /// Items that must be purchased from market board (variable price, limited stock).
+    /// These require full market analysis and shopping plan calculation.
+    /// </summary>
     public List<MaterialAggregate> MarketItems { get; } = new();
+    
+    /// <summary>
+    /// Items that cannot be traded on the market.
+    /// These must be gathered, crafted, or obtained through other means.
+    /// </summary>
     public List<MaterialAggregate> UntradeableItems { get; } = new();
 }

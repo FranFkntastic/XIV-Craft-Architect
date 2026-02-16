@@ -68,14 +68,37 @@ public class VendorInfo
     public bool HasMultipleLocations => AlternateLocations.Count > 0;
 
     /// <summary>
+    /// Map coordinates where the vendor is located within the zone.
+    /// Format: [x, y] as returned by Garland API. Null if coordinates unavailable.
+    /// </summary>
+    [JsonPropertyName("coordinates")]
+    public List<double>? Coordinates { get; set; }
+
+    /// <summary>
+    /// Display-friendly coordinate string (e.g., "X: 11.0, Y: 12.5").
+    /// Returns null if coordinates are not available.
+    /// </summary>
+    [JsonIgnore]
+    public string? CoordinatesDisplay => Coordinates?.Count >= 2
+        ? $"X: {Coordinates[0]:F1}, Y: {Coordinates[1]:F1}"
+        : null;
+
+    /// <summary>
+    /// Whether this vendor has coordinate information.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasCoordinates => Coordinates?.Count >= 2;
+
+    /// <summary>
     /// Creates a VendorInfo from a GarlandVendor
+    /// Uses LocationName (resolved from ID) rather than raw Location string.
     /// </summary>
     public static VendorInfo FromGarlandVendor(GarlandVendor vendor)
     {
         return new VendorInfo
         {
             Name = vendor.Name,
-            Location = vendor.Location,
+            Location = vendor.LocationName,  // Use resolved location name, not raw location ID/string
             Price = vendor.Price,
             Currency = vendor.Currency?.ToLowerInvariant() ?? "gil"
         };

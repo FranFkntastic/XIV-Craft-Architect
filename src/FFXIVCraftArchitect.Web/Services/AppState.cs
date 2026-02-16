@@ -9,8 +9,66 @@ namespace FFXIVCraftArchitect.Web.Services;
 /// </summary>
 
 /// <summary>
-/// Application-wide state service to share data between pages.
-/// Plans persist when switching between Market Logistics and Recipe Planner tabs.
+/// Singleton application state service for the Blazor WebAssembly app.
+/// Replaces WPF's ViewModel-based state management with a centralized state container.
+///
+/// PURPOSE:
+/// Unlike WPF where each ViewModel manages its own state, Blazor uses a singleton
+/// AppState that persists across page navigations. This ensures:
+/// 1. State survives when switching between Recipe Planner, Market Analysis, and Procurement Plan tabs
+/// 2. Components can subscribe to changes via events
+/// 3. Auto-save functionality can access complete application state
+///
+/// DATA FLOW:
+/// 1. Recipe Planner (Index.razor):
+///    - User adds items to ProjectItems list
+///    - User clicks "Build Plan" → RecipeCalculationService.BuildPlanAsync()
+///    - Result stored in CurrentPlan
+///    - NotifyPlanChanged() triggers UI updates
+///
+/// 2. Market Analysis (MarketAnalysis.razor):
+///    - Reads CurrentPlan.AggregatedMaterials
+///    - Calls MarketCacheService.EnsurePopulatedAsync()
+///    - Calls MarketShoppingService.CalculateDetailedShoppingPlansAsync()
+///    - Stores results in ShoppingPlans
+///    - NotifyShoppingListChanged() triggers updates
+///
+/// 3. Procurement Plan (ProcurementPlan.razor):
+///    - Reads ShoppingPlans from AppState (no re-fetch)
+///    - Groups by world for display
+///    - Can temporarily blacklist worlds (session-only)
+///
+/// 4. Auto-Save Flow:
+///    - 30-second timer in MainLayout
+///    - Calls IndexedDbService.SavePlanAsync() with complete state
+///    - Saves: CurrentPlan, ProjectItems, ShoppingPlans, settings
+///
+/// STATE CATEGORIES:
+/// - Recipe Planner: CurrentPlan, ProjectItems, CraftAnalyses
+/// - Procurement: ShoppingItems, ShoppingPlans
+/// - Settings: SelectedDataCenter, RecommendationMode, EnableMultiWorldSplits
+/// - UI State: StatusMessage, IsBusy, ProgressPercent
+/// - Session: TemporarilyBlacklistedWorlds (NOT persisted)
+///
+/// EVENTS:
+/// Components subscribe to events for reactive updates:
+/// - OnPlanChanged: Recipe tree structure modified
+/// - OnShoppingListChanged: Market analysis results updated
+/// - OnStatusChanged: Status bar needs update
+/// - OnRecipeTreeExpandChanged: Expand/collapse state changed
+///
+/// PERSISTENCE:
+/// - Auto-save: Every 30 seconds to IndexedDB
+/// - Named saves: User-triggered with custom names
+/// - Session restore: Auto-loads on app startup
+/// - What persists: Plan data, project items, shopping plans, settings
+/// - What doesn't persist: Blacklisted worlds, temporary UI state
+///
+/// WPF EQUIVALENT:
+/// This replaces multiple WPF ViewModels:
+/// - RecipePlannerViewModel → CurrentPlan, ProjectItems, OnPlanChanged
+/// - MarketAnalysisViewModel → ShoppingPlans, OnShoppingListChanged
+/// - Status is centralized here instead of separate StatusBarViewModel
 /// </summary>
 public class AppState
 {

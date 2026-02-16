@@ -248,6 +248,37 @@ public class GarlandItem
     public bool HasVendorReferences => VendorsRaw?.Any() == true;
     
     /// <summary>
+    /// Extracts vendor IDs from VendorsRaw for items where vendors are listed as integers.
+    /// Used to match vendor IDs with NPC partials.
+    /// </summary>
+    [JsonIgnore]
+    public List<int> VendorIds => ExtractVendorIds(VendorsRaw);
+    
+    private static List<int> ExtractVendorIds(List<object>? rawVendors)
+    {
+        var ids = new List<int>();
+        if (rawVendors == null) return ids;
+        
+        foreach (var v in rawVendors)
+        {
+            if (v is JsonElement element && element.ValueKind == JsonValueKind.Number)
+            {
+                if (element.TryGetInt32(out int id))
+                    ids.Add(id);
+            }
+            else if (v is int intVal)
+            {
+                ids.Add(intVal);
+            }
+            else if (v is long longVal)
+            {
+                ids.Add((int)longVal);
+            }
+        }
+        return ids;
+    }
+    
+    /// <summary>
     /// Vendor price in gil (root-level price field).
     /// This is set when the item can be purchased from vendors listed as IDs only.
     /// </summary>
@@ -400,8 +431,28 @@ public class GarlandVendor
     [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
     
+    /// <summary>
+    /// Location as a string. May be a zone name ("Limsa Lominsa") or an ID ("28").
+    /// Use LocationName property for resolved zone name.
+    /// </summary>
     [JsonPropertyName("location")]
     public string Location { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Location ID if available from the API. 0 if not provided.
+    /// </summary>
+    [JsonPropertyName("locationId")]
+    public int LocationId { get; set; }
+    
+    /// <summary>
+    /// Gets the resolved location name.
+    /// If LocationId is set, uses ZoneMappingHelper for name resolution.
+    /// Otherwise attempts to resolve the Location string (which may be an ID).
+    /// </summary>
+    [JsonIgnore]
+    public string LocationName => LocationId > 0 
+        ? ZoneMappingHelper.LocationIdToName(LocationId)
+        : ZoneMappingHelper.ResolveLocationName(Location);
     
     /// <summary>
     /// Price in gil
@@ -447,7 +498,8 @@ public class GarlandPartial
 
     /// <summary>
     /// Gets the NPC object if this partial is an NPC type.
-    /// Returns null for other partial types (item, node, mob, leve, etc.).
+    /// Returns null for other partial types (item, node, mob, leve, etc.) or if deserialization fails.
+    /// Note: This method silently returns null on errors. Callers should check for null and log appropriately.
     /// </summary>
     public GarlandNpcPartial? GetNpcObject()
     {
@@ -458,9 +510,38 @@ public class GarlandPartial
         {
             return JsonSerializer.Deserialize<GarlandNpcPartial>(ObjectRaw.Value.GetRawText());
         }
+        catch (JsonException)
+        {
+            // Deserialization failed - callers should check for null and log if needed
+            // No logger available in model class; error handling should be at call site
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Attempts to get the NPC object with error information.
+    /// Use this overload when you need to log or handle deserialization errors.
+    /// </summary>
+    public bool TryGetNpcObject(out GarlandNpcPartial? npc, out string? error)
+    {
+        npc = null;
+        error = null;
+
+        if (Type != "npc" || !ObjectRaw.HasValue)
+        {
+            error = Type != "npc" ? $"Partial type is '{Type}', not 'npc'" : "No object data available";
+            return false;
+        }
+
+        try
+        {
+            npc = JsonSerializer.Deserialize<GarlandNpcPartial>(ObjectRaw.Value.GetRawText());
+            return npc != null;
+        }
         catch (JsonException ex)
         {
-            return null;
+            error = $"Failed to deserialize NPC partial: {ex.Message}";
+            return false;
         }
     }
 
@@ -469,22 +550,6 @@ public class GarlandPartial
     /// Note: Boxing is inherent to System.Text.Json deserialization into object properties.
     /// To avoid boxing entirely, properties would need to be typed as JsonElement directly.
     /// </summary>
-    private static int ConvertToInt(object? value)
-    {
-        return value switch
-        {
-            null => 0,
-            int i => i,
-            long l => (int)l,
-            double d => (int)d,
-            string s => int.TryParse(s, out var parsed) ? parsed : 0,
-            JsonElement e => ConvertJsonElementToInt(e),
-            _ => 0
-        };
-    }
-}
-    }
-
     private static int ConvertToInt(object? value)
     {
         return value switch
@@ -538,110 +603,10 @@ public class GarlandNpcPartial
 
     /// <summary>
     /// Gets the readable location name from the location ID.
+    /// Uses the shared ZoneMappingHelper for consistent zone name resolution.
     /// </summary>
     [JsonIgnore]
-    public string LocationName => LocationIdToName(LocationId);
-
-    /// <summary>
-    /// Maps Garland location IDs to readable location names.
-    /// Hard-coded for common zones where vendors exist.
-    /// </summary>
-    private static readonly Dictionary<int, string> ZoneNameMappings = new()
-    {
-        // Housing Districts - Material Suppliers
-        [425] = "Mist",
-        [427] = "The Goblet",
-        [426] = "The Lavender Beds",
-        [2412] = "Shirogane",
-        [4139] = "Empyreum",
-
-        // Major Cities - A Realm Reborn
-        [128] = "Limsa Lominsa",
-        [130] = "Gridania",
-        [131] = "Ul'dah",
-        
-        // City Areas
-        [28] = "Limsa Lominsa Upper Decks",
-        [29] = "Limsa Lominsa Lower Decks",
-        [52] = "Limsa Lominsa Lower Decks",
-        [53] = "Old Gridania",
-        [54] = "New Gridania",
-        [40] = "Ul'dah - Steps of Nald",
-        [41] = "Ul'dah - Steps of Thal",
-        
-        // City Inns/Aetheryte Plazas
-        [129] = "The Drowning Wench (Limsa)",
-        [137] = "The Quicksand (Ul'dah)",
-        [138] = "The Roost (Gridania)",
-
-        // Heavensward (3.0)
-        [132] = "Ishgard",
-        [218] = "Foundation",
-        [2301] = "The Pillars",
-        [139] = "The Jeweled Crozier (Ishgard)",
-        [2082] = "Idyllshire",
-
-        // Stormblood (4.0)
-        [133] = "Kugane",
-        [2403] = "Rhalgr's Reach",
-        [140] = "The Shiokaze Hostelry (Kugane)",
-        [2411] = "The Azim Steppe",
-
-        // Shadowbringers (5.0)
-        [134] = "The Crystarium",
-        [141] = "The Pendants (Crystarium)",
-        [51] = "Eulmore",
-
-        // Endwalker (6.0)
-        [135] = "Old Sharlayan",
-        [142] = "The Baldesion Annex (Sharlayan)",
-        [3706] = "Old Sharlayan",
-        [3707] = "Radz-at-Han",
-        [3710] = "Garlemald",
-        [3711] = "Mare Lamentorum",
-        [3712] = "Ultima Thule",
-
-        // Dawntrail (7.0)
-        [136] = "Tuliyollal",
-        [2500] = "Solution Nine",
-        [5301] = "Urqopacha",
-        [5406] = "Shaaloani",
-        [4505] = "Urqopacha",
-        [4506] = "Kozama'uka",
-        [4507] = "Yak T'el",
-        [4508] = "Shaaloani",
-        [4509] = "Heritage Found",
-        [4510] = "Living Memory",
-
-        // A Realm Reborn Zones
-        [24] = "Mor Dhona",
-        [57] = "North Shroud",
-        [42] = "Western Thanalan",
-        [43] = "Central Thanalan",
-        [44] = "Eastern Thanalan",
-        [45] = "Southern Thanalan",
-        [46] = "Northern Thanalan",
-        [30] = "Middle La Noscea",
-        [31] = "Lower La Noscea",
-        [32] = "Eastern La Noscea",
-        [33] = "Western La Noscea",
-        [34] = "Upper La Noscea",
-        [35] = "Outer La Noscea",
-        [148] = "Central Shroud",
-        [55] = "East Shroud",
-        [56] = "South Shroud",
-    };
-
-    /// <summary>
-    /// Maps a Garland location ID to a readable zone name.
-    /// Uses hard-coded mappings for common zones, falls back to "Zone {id}" for unknown zones.
-    /// </summary>
-    public static string LocationIdToName(int locationId)
-    {
-        return ZoneNameMappings.TryGetValue(locationId, out var name) 
-            ? name 
-            : $"Zone {locationId}";
-    }
+    public string LocationName => ZoneMappingHelper.LocationIdToName(LocationId);
 }
 
 /// <summary>

@@ -162,7 +162,7 @@
         try
         {
             // Read file content
-            using var stream = file.OpenReadStream(maxAllowedSize: 1024 * 1024); // 1MB max
+            using var stream = file.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024); // 5MB max
             using var reader = new StreamReader(stream);
             _nativeJson = await reader.ReadToEndAsync();
             _uploadedFileName = file.Name;

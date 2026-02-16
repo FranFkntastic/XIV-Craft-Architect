@@ -231,8 +231,17 @@ public class GarlandService : IGarlandService
             if (zoneData?.Zone?.Name != null)
             {
                 var zoneName = zoneData.Zone.Name;
-                _zoneNameCache[zoneId] = zoneName;
-                _logger?.LogInformation("[GarlandService] Cached zone name: {ZoneId} = {ZoneName}", zoneId, zoneName);
+                // Use TryAdd to prevent race condition where another thread already added this zone
+                if (_zoneNameCache.TryAdd(zoneId, zoneName))
+                {
+                    _logger?.LogInformation("[GarlandService] Cached zone name: {ZoneId} = {ZoneName}", zoneId, zoneName);
+                }
+                else
+                {
+                    // Another thread already cached it - use their value
+                    zoneName = _zoneNameCache[zoneId];
+                    _logger?.LogDebug("[GarlandService] Using existing cached zone name for {ZoneId}: {ZoneName}", zoneId, zoneName);
+                }
                 return zoneName;
             }
 
@@ -244,5 +253,117 @@ public class GarlandService : IGarlandService
             _logger?.LogWarning(ex, "[GarlandService] Error fetching zone {ZoneId}", zoneId);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Fetch multiple items in parallel with rate limiting.
+    /// Uses conservative settings (max 2 concurrent, 200ms initial delay) to be respectful to the free API.
+    /// </summary>
+    /// <param name="itemIds">Item IDs to fetch</param>
+    /// <param name="useParallel">Whether to use parallel fetching (default: true)</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Dictionary of item ID to item data</returns>
+    public async Task<Dictionary<int, GarlandItem>> GetItemsAsync(
+        IEnumerable<int> itemIds, 
+        bool useParallel = true,
+        CancellationToken ct = default)
+    {
+        const int maxConcurrency = 2; // Conservative: only 2 concurrent requests
+        
+        var ids = itemIds.Distinct().ToList();
+        if (ids.Count == 0)
+            return new Dictionary<int, GarlandItem>();
+        
+        var results = new ConcurrentDictionary<int, GarlandItem>();
+        var delayStrategy = new AdaptiveDelayStrategy(
+            initialDelayMs: 200,  // Start conservative (200ms)
+            minDelayMs: 100,
+            maxDelayMs: 10000,    // Max 10s backoff
+            backoffMultiplier: 2.0,
+            rateLimitMultiplier: 4.0);
+        
+        _logger?.LogInformation("[GarlandService] Fetching {Count} items (parallel={UseParallel})", 
+            ids.Count, useParallel);
+
+        if (useParallel && ids.Count > 1)
+        {
+            var semaphore = new SemaphoreSlim(maxConcurrency);
+            var completedCount = 0;
+            var failedCount = 0;
+
+            var tasks = ids.Select(async id =>
+            {
+                await semaphore.WaitAsync(ct);
+                try
+                {
+                    // Apply adaptive delay before each request
+                    var delay = delayStrategy.GetDelay();
+                    if (delay > 0)
+                    {
+                        await Task.Delay(delay, ct);
+                    }
+                    
+                    var item = await GetItemAsync(id, ct);
+                    if (item != null)
+                    {
+                        results[id] = item;
+                        delayStrategy.ReportSuccess();
+                    }
+                    
+                    var completed = Interlocked.Increment(ref completedCount);
+                    _logger?.LogDebug("[GarlandService] Item {ItemId} fetched ({Completed}/{Total})", 
+                        id, completed, ids.Count);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref failedCount);
+                    delayStrategy.ReportFailure(System.Net.HttpStatusCode.BadRequest);
+                    _logger?.LogWarning(ex, "[GarlandService] Failed to fetch item {ItemId}", id);
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            }).ToList();
+
+            await Task.WhenAll(tasks);
+            
+            _logger?.LogInformation(
+                "[GarlandService] Parallel fetch complete: {Completed}/{Total} succeeded, {Failed} failed, final delay: {Delay}ms",
+                completedCount, ids.Count, failedCount, delayStrategy.GetDelay());
+        }
+        else
+        {
+            // Sequential fetching
+            foreach (var id in ids)
+            {
+                try
+                {
+                    var delay = delayStrategy.GetDelay();
+                    if (delay > 0)
+                    {
+                        await Task.Delay(delay, ct);
+                    }
+                    
+                    var item = await GetItemAsync(id, ct);
+                    if (item != null)
+                    {
+                        results[id] = item;
+                        delayStrategy.ReportSuccess();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    delayStrategy.ReportFailure(System.Net.HttpStatusCode.BadRequest);
+                    _logger?.LogWarning(ex, "[GarlandService] Failed to fetch item {ItemId}", id);
+                }
+            }
+            
+            _logger?.LogInformation(
+                "[GarlandService] Sequential fetch complete: {FetchedCount}/{TotalCount} items, final delay: {Delay}ms",
+                results.Count, ids.Count, delayStrategy.GetDelay());
+        }
+
+        return new Dictionary<int, GarlandItem>(results);
     }
 }

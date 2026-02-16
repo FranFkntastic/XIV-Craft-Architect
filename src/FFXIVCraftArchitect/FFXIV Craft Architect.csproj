@@ -9,7 +9,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <AssemblyName>FFXIV_Craft_Architect</AssemblyName>
-    <RootNamespace>FFXIVCraftArchitect</RootNamespace>
+    <RootNamespace>FFXIV_Craft_Architect</RootNamespace>
     <Version>0.1.0</Version>
     <FileVersion>0.1.0.0</FileVersion>
     <Product>FFXIV Craft Architect</Product>
@@ -53,7 +53,7 @@
 
   <ItemGroup>
     <!-- Core shared library -->
-    <ProjectReference Include="..\FFXIVCraftArchitect.Core\FFXIVCraftArchitect.Core.csproj" />
+    <ProjectReference Include="..\FFXIVCraftArchitect.Core\FFXIV Craft Architect.Core.csproj" />
   </ItemGroup>
 
 </Project>

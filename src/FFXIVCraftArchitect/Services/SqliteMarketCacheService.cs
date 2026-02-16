@@ -336,7 +336,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
             {
                 progress?.Report($"Fetching {itemIds.Count} items from {dc}...");
                 
-                var fetchedData = await _universalisService.GetMarketDataBulkAsync(dc, itemIds, ct);
+                var fetchedData = await _universalisService.GetMarketDataBulkAsync(dc, itemIds, useParallel: true, ct: ct);
                 
                 // Store each result in cache
                 foreach (var kvp in fetchedData)
