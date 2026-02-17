@@ -1,0 +1,54 @@
+@using FFXIV_Craft_Architect.Core.Models
+
+<MudCard Elevation="1" Style="background: #1e1e1e; border: 1px solid #444;">
+    <MudCardContent Class="pa-3">
+        <!-- Header Row -->
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+            <div>
+                <MudText Typo="Typo.subtitle1" Style="color: white; font-weight: 500;">
+                    @Plan.Name
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color: #888;">
+                    Need: @Plan.QuantityNeeded | DC Avg: @Plan.DCAveragePrice.ToString("N0")g
+                </MudText>
+            </div>
+            @if (Plan.HasHqData)
+            {
+                <MudTooltip Text="HQ data available">
+                    <MudIcon Icon="@Icons.Material.Filled.Star" Color="Color.Warning" Size="Size.Small" />
+                </MudTooltip>
+            }
+        </div>
+
+        @if (!string.IsNullOrEmpty(Plan.Error))
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">
+                @Plan.Error
+            </MudAlert>
+        }
+        else if (Plan.HasOptions)
+        {
+            <MudStack Spacing="1">
+                @foreach (var world in Plan.WorldOptions.Take(5))
+                {
+                    <WorldOptionRow World="world" />
+                }
+            </MudStack>
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Style="color: #888; text-align: center; padding: 16px;">
+                No market data available for this item.
+            </MudText>
+        }
+    </MudCardContent>
+</MudCard>
+
+@code {
+    [Parameter] public DetailedShoppingPlan Plan { get; set; } = default!;
+
+    protected override void OnParametersSet()
+    {
+        Plan ??= new DetailedShoppingPlan();
+    }
+}

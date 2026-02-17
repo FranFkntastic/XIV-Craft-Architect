@@ -1,17 +1,17 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.2.11415.280
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFXIV Craft Architect", "src\FFXIVCraftArchitect\FFXIV Craft Architect.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFXIV Craft Architect", "src\FFXIV Craft Architect\FFXIV Craft Architect.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFXIV Craft Architect.Core", "src\FFXIVCraftArchitect.Core\FFXIV Craft Architect.Core.csproj", "{B2C3D4E5-F6A7-8901-BCDE-F23456789012}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFXIV Craft Architect.Core", "src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj", "{B2C3D4E5-F6A7-8901-BCDE-F23456789012}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFXIV Craft Architect.Web", "src\FFXIVCraftArchitect.Web\FFXIV Craft Architect.Web.csproj", "{C3D4E5F6-A7B8-9012-CDEF-345678901234}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFXIV Craft Architect.Web", "src\FFXIV Craft Architect.Web\FFXIV Craft Architect.Web.csproj", "{C3D4E5F6-A7B8-9012-CDEF-345678901234}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFXIV Craft Architect.Tests", "src\FFXIVCraftArchitect.Tests\FFXIV Craft Architect.Tests.csproj", "{ED89D000-A3F1-4D9F-B197-77A6254C007D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFXIV Craft Architect.Tests", "src\FFXIV Craft Architect.Tests\FFXIV Craft Architect.Tests.csproj", "{ED89D000-A3F1-4D9F-B197-77A6254C007D}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

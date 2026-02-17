@@ -1,0 +1,143 @@
+@using FFXIV_Craft_Architect.Core.Models
+
+@* Vendor information display with expandable locations *@
+<div style="margin-top: 4px;">
+    @if (Vendors?.Any() == true)
+    {
+        var primaryVendor = GetPrimaryVendor();
+        var otherVendors = GetOtherVendors();
+
+        @* Inline: Primary vendor name and price *@
+        <div style="display: flex; align-items: center; gap: 6px;">
+            <MudIcon Icon="@Icons.Material.Filled.Store" Size="Size.Small" Style="color: #d4a73a;" />
+            <MudText Typo="Typo.caption" Style="color: #d4a73a;">
+                @primaryVendor?.Name
+                @if (primaryVendor?.Price > 0)
+                {
+                    <span style="color: #888;"> (@primaryVendor.Price.ToString("N0")g)</span>
+                }
+            </MudText>
+
+            @if (otherVendors.Any() ||
+                 (primaryVendor != null && !string.IsNullOrEmpty(primaryVendor.Location)) ||
+                 (primaryVendor?.HasMultipleLocations == true))
+            {
+                <MudIconButton Icon="@(IsExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                               Size="Size.Small"
+                               Style="color: #666; padding: 2px;"
+                               OnClick="ToggleExpanded" />
+            }
+        </div>
+
+        @* Expandable: All vendor locations *@
+        <MudCollapse Expanded="IsExpanded">
+            <div style="margin-left: 22px; margin-top: 4px; padding-left: 8px; border-left: 1px solid #444;">
+                @* Primary vendor location first *@
+                @if (primaryVendor != null && !string.IsNullOrEmpty(primaryVendor.Location))
+                {
+                    <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 2px;">
+                        <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Style="color: #4caf50;" />
+                        <MudText Typo="Typo.caption" Style="color: #90EE90;">
+                            @primaryVendor.Location
+                        </MudText>
+                    </div>
+                }
+
+                @* Alternate Instances section for vendors with multiple locations *@
+                @if (primaryVendor?.HasMultipleLocations == true)
+                {
+                    <div style="margin-top: 8px; margin-bottom: 8px;">
+                        <MudText Typo="Typo.caption" Style="color: #aaa; font-weight: 500;">
+                            Alternate Instances
+                        </MudText>
+                        @foreach (var location in primaryVendor.AlternateLocations)
+                        {
+                            <div style="display: flex; align-items: center; gap: 4px; margin-top: 2px;">
+                                <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Style="color: #666;" />
+                                <MudText Typo="Typo.caption" Style="color: #888;">
+                                    @location
+                                </MudText>
+                            </div>
+                        }
+                    </div>
+                }
+
+                @* Other vendors *@
+                @foreach (var vendor in otherVendors)
+                {
+                    <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 2px;">
+                        <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Style="color: #666;" />
+                        <MudText Typo="Typo.caption" Style="color: #888;">
+                            @vendor.Name
+                            @if (!string.IsNullOrEmpty(vendor.Location))
+                            {
+                                <span> - @vendor.Location</span>
+                            }
+                            @if (vendor.Price > 0 && vendor.Price != primaryVendor?.Price)
+                            {
+                                <span style="color: #666;"> (@vendor.Price.ToString("N0")g)</span>
+                            }
+                        </MudText>
+                    </div>
+
+                    @* Alternate instances for this vendor *@
+                    @if (vendor.HasMultipleLocations)
+                    {
+                        @foreach (var location in vendor.AlternateLocations)
+                        {
+                            <div style="display: flex; align-items: center; gap: 4px; margin-left: 20px; margin-bottom: 2px;">
+                                <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Style="color: #444;" />
+                                <MudText Typo="Typo.caption" Style="color: #666;">
+                                    @location
+                                </MudText>
+                            </div>
+                        }
+                    }
+                }
+            </div>
+        </MudCollapse>
+    }
+</div>
+
+@code {
+    [Parameter] public List<VendorInfo> Vendors { get; set; } = new();
+    [Parameter] public int? SelectedVendorPrice { get; set; }
+    [Parameter] public bool IsExpanded { get; set; } = false;
+    [Parameter] public EventCallback<bool> IsExpandedChanged { get; set; }
+
+    private VendorInfo? GetPrimaryVendor()
+    {
+        if (Vendors?.Any() != true) return null;
+
+        // If we have a selected price, find the vendor with that price
+        if (SelectedVendorPrice.HasValue)
+        {
+            var selected = Vendors.FirstOrDefault(v => v.Price == SelectedVendorPrice.Value);
+            if (selected != null) return selected;
+        }
+
+        // Otherwise return the cheapest
+        return Vendors.OrderBy(v => v.Price).FirstOrDefault();
+    }
+
+    private List<VendorInfo> GetOtherVendors()
+    {
+        if (Vendors?.Any() != true) return new List<VendorInfo>();
+
+        var primary = GetPrimaryVendor();
+        if (primary == null) return Vendors.ToList();
+
+        // Return all vendors except the primary, sorted by price then name
+        return Vendors
+            .Where(v => v != primary)
+            .OrderBy(v => v.Price)
+            .ThenBy(v => v.Name)
+            .ToList();
+    }
+
+    private async Task ToggleExpanded()
+    {
+        IsExpanded = !IsExpanded;
+        await IsExpandedChanged.InvokeAsync(IsExpanded);
+    }
+}

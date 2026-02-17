@@ -1,0 +1,105 @@
+@page "/about"
+
+<MudText Typo="Typo.h4" Class="mb-4">About FFXIV Craft Architect</MudText>
+
+<MudGrid>
+    <MudItem xs="12" md="6">
+        <MudCard Elevation="2">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">Web Companion</MudText>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudText Typo="Typo.body1">
+                    This web companion provides quick access to FFXIV market logistics without installing anything.
+                    Perfect for checking prices and planning shopping trips on any device.
+                </MudText>
+                <MudList T="string" Dense="true" Class="mt-3">
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
+                        No installation required
+                    </MudListItem>
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
+                        Works on mobile and desktop
+                    </MudListItem>
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
+                        Search items and get world recommendations
+                    </MudListItem>
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
+                        Export plans to desktop app
+                    </MudListItem>
+                </MudList>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <MudItem xs="12" md="6">
+        <MudCard Elevation="2">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">Desktop App</MudText>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudText Typo="Typo.body1">
+                    Get the full-featured Windows desktop application for the complete crafting experience.
+                </MudText>
+                <MudList T="string" Dense="true" Class="mt-3">
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
+                        Full recipe tree visualization
+                    </MudListItem>
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
+                        Live inventory tracking (packet capture)
+                    </MudListItem>
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
+                        Craft vs Buy analysis with savings calculations
+                    </MudListItem>
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
+                        Import from Artisan and Teamcraft
+                    </MudListItem>
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
+                        Cross-DC market analysis
+                    </MudListItem>
+                </MudList>
+                <MudButton Variant="Variant.Outlined" 
+                           Color="Color.Primary" 
+                           Href="https://github.com/yourusername/FFXIV_Craft_Architect/releases"
+                           Target="_blank"
+                           Class="mt-3"
+                           StartIcon="@Icons.Material.Filled.Download">
+                    Download Desktop App
+                </MudButton>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+</MudGrid>
+
+<MudCard Elevation="2" Class="mt-4">
+    <MudCardHeader>
+        <CardHeaderContent>
+            <MudText Typo="Typo.h6">Data Sources</MudText>
+        </CardHeaderContent>
+    </MudCardHeader>
+    <MudCardContent>
+        <MudGrid>
+            <MudItem xs="12" sm="4">
+                <MudText Typo="Typo.subtitle1">Garland Tools</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    Item data, recipes, and search
+                </MudText>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudText Typo="Typo.subtitle1">Universalis</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    Market board listings and prices
+                </MudText>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudText Typo="Typo.subtitle1">XIVAPI</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    Item icons and images
+                </MudText>
+            </MudItem>
+        </MudGrid>
+    </MudCardContent>
+</MudCard>
