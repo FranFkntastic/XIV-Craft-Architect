@@ -1,0 +1,51 @@
+@using FFXIV_Craft_Architect.Core.Models
+
+@* Error display for when acquisition source cannot be determined *@
+
+<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 60px 40px; background: #3a2520; border: 2px solid #ff6b6b; border-radius: 12px;">
+    <MudIcon Icon="@Icons.Material.Filled.ErrorOutline" Style="color: #ff6b6b;" Size="Size.Large" />
+    
+    <div style="text-align: center;">
+        <MudText Typo="Typo.h6" Style="color: #ff6b6b; font-weight: 600; margin-bottom: 8px;">
+            Could Not Determine Acquisition Source
+        </MudText>
+        
+        <MudText Typo="Typo.body1" Style="color: #ccc;">
+            @ErrorMessage
+        </MudText>
+    </div>
+    
+    <div style="background: #2a1a15; border-radius: 8px; padding: 16px 24px; border: 1px solid #4a3a35;">
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; justify-content: space-between; gap: 40px;">
+                <MudText Typo="Typo.caption" Style="color: #888;">Item Name:</MudText>
+                <MudText Typo="Typo.body2" Style="color: #fff; font-weight: 500;">@ItemName</MudText>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; gap: 40px;">
+                <MudText Typo="Typo.caption" Style="color: #888;">Item ID:</MudText>
+                <MudText Typo="Typo.body2" Style="color: #fff; font-family: monospace;">@ItemId</MudText>
+            </div>
+            
+            @if (QuantityNeeded > 0)
+            {
+                <div style="display: flex; justify-content: space-between; gap: 40px;">
+                    <MudText Typo="Typo.caption" Style="color: #888;">Quantity Needed:</MudText>
+                    <MudText Typo="Typo.body2" Style="color: #fff;">×@QuantityNeeded</MudText>
+                </div>
+            }
+        </div>
+    </div>
+    
+    <MudText Typo="Typo.caption" Style="color: #666; text-align: center; max-width: 400px;">
+        This item may not have a valid procurement method configured. 
+        Try refreshing the analysis or check if the item is available from vendors or the market board.
+    </MudText>
+</div>
+
+@code {
+    [Parameter] public string ErrorMessage { get; set; } = "The item acquisition source could not be determined.";
+    [Parameter] public string ItemName { get; set; } = "Unknown Item";
+    [Parameter] public int ItemId { get; set; }
+    [Parameter] public int QuantityNeeded { get; set; }
+}

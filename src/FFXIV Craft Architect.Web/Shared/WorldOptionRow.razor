@@ -1,0 +1,53 @@
+@using FFXIV_Craft_Architect.Core.Models
+
+<MudPaper Elevation="0" 
+          Class="pa-2"
+          Style="@GetContainerStyle()">
+    <div style="display: flex; align-items: center; gap: 8px;">
+        <MudText Typo="Typo.body2" Style="color: white; font-weight: 500;">
+            @World.WorldName
+        </MudText>
+        @if (World.IsCompetitive)
+        {
+            <MudChip T="string" 
+                     Size="Size.Small" 
+                     Color="Color.Success"
+                     Label="true"
+                     Style="height: 20px; font-size: 10px;">
+                Best Value
+            </MudChip>
+        }
+    </div>
+    <div style="text-align: right;">
+        <MudText Typo="Typo.body2" Style="color: #4caf50; font-weight: 600;">
+            @World.CostDisplay
+        </MudText>
+        <MudText Typo="Typo.caption" Style="color: #888;">
+            @(World.ListingsUsed) listing@(World.ListingsUsed != 1 ? "s" : "") | @World.ExcessQuantity excess
+        </MudText>
+    </div>
+</MudPaper>
+
+@code {
+    [Parameter] public WorldShoppingSummary World { get; set; } = default!;
+
+    protected override void OnParametersSet()
+    {
+        World ??= new WorldShoppingSummary();
+    }
+
+    private string GetContainerStyle()
+    {
+        var borderColor = GetBorderColor(World);
+        return $"background: #2d2d2d; border-left: 3px solid {borderColor}; display: flex; justify-content: space-between; align-items: center;";
+    }
+
+    private static string GetBorderColor(WorldShoppingSummary world)
+    {
+        if (world.IsCompetitive)
+            return "#4caf50"; // Green for best value
+        if (world.IsFullyUnderAverage)
+            return "#2196f3"; // Blue for under average
+        return "#666666"; // Gray for others
+    }
+}

@@ -1,0 +1,171 @@
+<Window x:Class="FFXIV_Craft_Architect.MarketDataStatusWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Market Data Population Status"
+        Width="700"
+        Height="600"
+        WindowStartupLocation="CenterOwner"
+        Background="#1e1e1e">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        
+        <!-- Header with stats -->
+        <Border Grid.Row="0" Background="#2d2d2d" Padding="12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                    <TextBlock Text="Market Data Population" 
+                               FontSize="16" FontWeight="SemiBold" 
+                               Foreground="#d4d4d4"/>
+                    <TextBlock x:Name="ProgressText" 
+                               Text=" - Starting..." 
+                               FontSize="16"
+                               Foreground="#888888"
+                               Margin="8,0,0,0"/>
+                </StackPanel>
+                
+                <Button Grid.Column="1" 
+                        x:Name="CloseButton"
+                        Content="Close" 
+                        Width="80" Height="28"
+                        Click="OnCloseClick"/>
+            </Grid>
+        </Border>
+        
+        <!-- Stats bar -->
+        <Border Grid.Row="1" Background="#252525" Padding="8">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="PendingCount" Text="⏳ Pending: 0" Foreground="#888888" Margin="0,0,16,0"/>
+                <TextBlock x:Name="FetchingCount" Text="🔄 Fetching: 0" Foreground="#4ecdc4" Margin="0,0,16,0"/>
+                <TextBlock x:Name="SuccessCount" Text="✓ Success: 0" Foreground="#4ade80" Margin="0,0,16,0"/>
+                <TextBlock x:Name="FailedCount" Text="✗ Failed: 0" Foreground="#f87171" Margin="0,0,16,0"/>
+                <TextBlock x:Name="CachedCount" Text="📋 Cached: 0" Foreground="#fbbf24" Margin="0,0,16,0"/>
+            </StackPanel>
+        </Border>
+        
+        <!-- Data Grid -->
+        <Border Grid.Row="2" Background="#1e1e1e" Margin="0">
+            <DataGrid x:Name="StatusDataGrid"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="True"
+                      GridLinesVisibility="Horizontal"
+                      HeadersVisibility="Column"
+                      Background="#1e1e1e"
+                      RowBackground="#252525"
+                      AlternatingRowBackground="#2a2a2a"
+                      BorderThickness="0"
+                      CanUserSortColumns="True">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Status" Binding="{Binding StatusText}" Width="120">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{Binding StatusColor, Converter={StaticResource StringToBrushConverter}}"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    
+                    <DataGridTextColumn Header="Item" Binding="{Binding ItemName}" Width="*">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="#d4d4d4"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    
+                    <DataGridTextColumn Header="Qty" Binding="{Binding Quantity}" Width="60">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="#888888"/>
+                                <Setter Property="HorizontalAlignment" Value="Center"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    
+                    <DataGridTextColumn Header="Price" Binding="{Binding PriceDisplay}" Width="100">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="#d4af37"/>
+                                <Setter Property="HorizontalAlignment" Value="Right"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    
+                    <DataGridTextColumn Header="Age" Binding="{Binding CacheAgeText}" Width="80">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="#888888"/>
+                                <Setter Property="FontSize" Value="10"/>
+                                <Setter Property="HorizontalAlignment" Value="Center"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                <Setter Property="FontStyle" Value="Italic"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    
+                    <DataGridTextColumn Header="Source" Binding="{Binding SourceDetails}" Width="150">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="#888888"/>
+                                <Setter Property="FontSize" Value="10"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    
+                    <DataGridTextColumn Header="Error" Binding="{Binding ErrorMessage}" Width="200">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="#f87171"/>
+                                <Setter Property="FontSize" Value="10"/>
+                                <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+        </Border>
+        
+        <!-- Action and Filter buttons -->
+        <Border Grid.Row="3" Background="#2d2d2d" Padding="8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                
+                <!-- Refresh button (left side) -->
+                <Button Grid.Column="0"
+                        Content="Refresh Market Data" 
+                        Width="130" Height="28" 
+                        Margin="0,0,16,0" 
+                        Click="OnRefreshMarketData"
+                        ToolTip="Fetch fresh market data from Universalis"/>
+                
+                <!-- Filter buttons (right side) -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <TextBlock Text="Filter:" VerticalAlignment="Center" Foreground="#888888" Margin="0,0,8,0"/>
+                    <Button Content="All" Width="60" Height="24" Margin="0,0,4,0" Click="OnFilterAll"/>
+                    <Button Content="Pending" Width="70" Height="24" Margin="0,0,4,0" Click="OnFilterPending"/>
+                    <Button Content="Failed" Width="60" Height="24" Margin="0,0,4,0" Click="OnFilterFailed"/>
+                    <Button Content="Success" Width="70" Height="24" Margin="0,0,4,0" Click="OnFilterSuccess"/>
+                    <Button Content="Export CSV" Width="80" Height="24" Margin="16,0,0,0" Click="OnExportCsv"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

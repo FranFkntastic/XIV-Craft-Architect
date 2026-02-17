@@ -1,0 +1,125 @@
+@using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
+@inject IJSRuntime JSRuntime
+
+@* Full Viewport Modal for Expanded Item Details *@
+@* Supports Market, Vendor, and Error states based on acquisition source *@
+
+<!-- Full Viewport Modal -->
+<div style="position: fixed; top: 64px; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); z-index: 1000; display: flex; align-items: flex-start; justify-content: center; padding: 20px;">
+    <div style="background: #1a1a18; border-radius: 8px; border: 2px solid #d4a73a; width: 95%; max-width: 1400px; height: calc(100vh - 104px); display: flex; flex-direction: column; overflow: hidden; margin-top: 20px;">
+        
+        @* Header - Common across all acquisition sources *@
+        <div style="display: flex; align-items: center; padding: 16px 20px; background: #2a2a25; border-bottom: 2px solid #444; flex-shrink: 0;">
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                           OnClick="OnClose"
+                           Style="color: #d4a73a; margin-right: 16px;"
+                           Size="Size.Medium" />
+            
+            <div style="flex: 1;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <MudText Typo="Typo.h5" Style="color: #fff; font-weight: 600;">
+                        @Plan.Name
+                    </MudText>
+                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                   OnClick="CopyItemName"
+                                   Style="color: #666;"
+                                   Size="Size.Small"
+                                   Title="Copy item name" />
+                </div>
+                <MudText Typo="Typo.body2" Style="color: #888;">
+                    Quantity: <span style="color: #d4a73a;">×@Plan.QuantityNeeded</span>
+                </MudText>
+            </div>
+            
+            <MudIconButton Icon="@Icons.Material.Filled.PushPin"
+                           Style="color: #888; margin-right: 8px;"
+                           Size="Size.Small" />
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           OnClick="OnClose"
+                           Style="color: #888;"
+                           Size="Size.Medium" />
+        </div>
+        
+        @* Scrollable Content - Render based on acquisition source *@
+        <div style="flex-grow: 1; overflow-y: auto; padding: 20px;">
+            @switch (DetermineAcquisitionSource())
+            {
+                case AcquisitionSource.VendorBuy:
+                    <ExpandedVendorSection Plan="Plan" />
+                    break;
+                    
+                case AcquisitionSource.MarketBuyNq:
+                case AcquisitionSource.MarketBuyHq:
+                    <ExpandedMarketSection Plan="Plan" />
+                    break;
+                    
+                case AcquisitionSource.Craft:
+                    @* Craft source detected but not displayed in market analysis *@
+                    <ExpandedErrorSection 
+                        ErrorMessage="This item is configured to be crafted. Crafting details are not available in the market analysis view."
+                        ItemName="@Plan.Name"
+                        ItemId="@Plan.ItemId"
+                        QuantityNeeded="@Plan.QuantityNeeded" />
+                    break;
+                    
+                case null:
+                default:
+                    <ExpandedErrorSection 
+                        ErrorMessage="Could not determine item acquisition source. The item may not have a valid procurement method configured."
+                        ItemName="@Plan.Name"
+                        ItemId="@Plan.ItemId"
+                        QuantityNeeded="@Plan.QuantityNeeded" />
+                    break;
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public DetailedShoppingPlan Plan { get; set; } = null!;
+    [Parameter] public EventCallback OnClose { get; set; }
+    
+    /// <summary>
+    /// Determines the acquisition source based on plan data.
+    /// Returns null if source cannot be determined.
+    /// </summary>
+    private AcquisitionSource? DetermineAcquisitionSource()
+    {
+        // Check if it's a vendor purchase
+        if (Plan.RecommendedWorld?.WorldName == "Vendor" || 
+            Plan.Vendors?.Any() == true)
+        {
+            return AcquisitionSource.VendorBuy;
+        }
+        
+        // Check if it has market options
+        if (Plan.HasOptions)
+        {
+            // For panel display purposes, we don't distinguish between NQ and HQ
+            // Both use the same market layout
+            return AcquisitionSource.MarketBuyNq;
+        }
+        
+        // Check if it has an error indicating no procurement method
+        if (!string.IsNullOrEmpty(Plan.Error))
+        {
+            return null;
+        }
+        
+        // If no vendors and no market options, but quantity needed is 0,
+        // this might be a craft-only item not properly configured
+        if (Plan.QuantityNeeded > 0 && !Plan.HasOptions && Plan.Vendors?.Any() != true)
+        {
+            return null;
+        }
+        
+        // Default fallback - should rarely happen
+        return null;
+    }
+    
+    private async Task CopyItemName()
+    {
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", Plan.Name);
+    }
+}

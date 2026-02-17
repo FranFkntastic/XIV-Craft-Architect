@@ -1,0 +1,547 @@
+@page "/market"
+@using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Web.Services
+@using static FFXIV_Craft_Architect.Core.Models.MarketSortOption
+@inject GarlandService GarlandService
+@inject UniversalisService UniversalisService
+@inject RecipeCalculationService RecipeCalculationService
+@inject MarketShoppingService MarketShoppingService
+@inject IMarketCacheService MarketCache
+@inject ILogger<MarketAnalysis> Logger
+@inject IJSRuntime JSRuntime
+@inject ISnackbar Snackbar
+@inject AppState AppState
+@inject IndexedDbService IndexedDb
+@inject NavigationManager NavigationManager
+@implements IDisposable
+
+<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0" Style="height: calc(100vh - 64px - 28px);">
+    <div style="display: grid; grid-template-columns: 280px 1fr; height: 100%; width: 100%;">
+        
+        <!-- Left Column: Controls -->
+        <div Class="pa-4" Style="border-right: 1px solid #444; overflow-y: auto; min-width: 280px; max-width: 280px;">
+            <MudText Typo="Typo.h6" Color="Color.Primary" Class="mb-4">Market Analysis</MudText>
+            
+            <!-- Mode -->
+            <div style="margin-bottom: 12px;">
+                <div style="color: #888; font-size: 12px; margin-bottom: 4px;">Mode</div>
+                <MudSelect T="RecommendationMode"
+                           Value="AppState.RecommendationMode"
+                           ValueChanged="OnModeChanged"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Style="width: 100%;">
+                    <MudSelectItem Value="@RecommendationMode.MinimizeTotalCost">Minimize Total Cost</MudSelectItem>
+                    <MudSelectItem Value="@RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
+                    <MudSelectItem Value="@RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
+                </MudSelect>
+            </div>
+            
+            <!-- Sort -->
+            <div style="margin-bottom: 12px;">
+                <div style="color: #888; font-size: 12px; margin-bottom: 4px;">Sort</div>
+                <MudSelect T="MarketSortOption"
+                           @bind-Value="AppState.MarketSortPreference"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Style="width: 100%;">
+                    <MudSelectItem Value="@MarketSortOption.ByRecommended">By Recommended</MudSelectItem>
+                    <MudSelectItem Value="@MarketSortOption.Alphabetical">Alphabetical</MudSelectItem>
+                </MudSelect>
+            </div>
+            
+            <!-- Region Search Toggle -->
+            <div style="margin-bottom: 16px;">
+                <MudCheckBox T="bool"
+                             @bind-Value="AppState.SearchEntireRegion"
+                             Dense="true"
+                             Color="Color.Primary"
+                             Style="background: #1e1e1e; border-radius: 6px; padding: 4px 8px; width: 100%;">
+                    <MudText Typo="Typo.body2" Style="color: #ccc;">Search entire region</MudText>
+                </MudCheckBox>
+                <MudText Typo="Typo.caption" Style="color: #666; display: block; margin-top: 4px; margin-left: 32px;">
+                    Slower but finds best prices across all data centers in @AppState.SelectedRegion
+                </MudText>
+            </div>
+            
+            <!-- Split-World Configuration (only shown for single DC) -->
+            @if (!AppState.SearchEntireRegion)
+            {
+                <div style="margin-bottom: 16px; padding: 12px; background: #1e1e1e; border-radius: 8px; border: 1px solid #333;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                        <MudIcon Icon="@Icons.Material.Filled.CallSplit" Color="Color.Secondary" Size="Size.Small" />
+                        <span style="color: #ccc; font-weight: 600; font-size: 13px;">Split-World Purchases</span>
+                        <span style="background: #ff9800; color: #000; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; margin-left: auto;">BETA</span>
+                    </div>
+                    
+                    <MudCheckBox T="bool"
+                                 @bind-Value="AppState.EnableMultiWorldSplits"
+                                 Dense="true"
+                                 Color="Color.Secondary"
+                                 Class="mb-2">
+                        <MudText Typo="Typo.caption" Style="color: #aaa;">Enable multi-world splits</MudText>
+                    </MudCheckBox>
+                    
+                    @if (AppState.EnableMultiWorldSplits)
+                    {
+                        <div style="margin-left: 32px; margin-top: 8px;">
+                            <MudText Typo="Typo.caption" Style="color: #666;">
+                                Multi-world purchases enabled. The algorithm will automatically find the best combination of worlds.
+                            </MudText>
+                        </div>
+                    }
+                </div>
+            }
+            
+            <MudButton OnClick="RunMarketAnalysisAsync"
+                       Disabled="!CanAnalyze() || _isAnalyzing"
+                       Color="Color.Primary"
+                       Variant="Variant.Filled"
+                       FullWidth="true"
+                       Class="mb-4"
+                       StartIcon="@(_isAnalyzing ? "" : Icons.Material.Filled.Analytics)">
+                @if (_isAnalyzing)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                    <span>Analyzing...</span>
+                }
+                else
+                {
+                    <span>Run Analysis</span>
+                }
+            </MudButton>
+            
+            <MudButton OnClick="RefreshPricesAsync"
+                       Disabled="!CanRefreshPrices() || _isRefreshingPrices"
+                       Color="Color.Secondary"
+                       Variant="Variant.Outlined"
+                       FullWidth="true"
+                       Class="mb-4"
+                       StartIcon="@(_isRefreshingPrices ? "" : Icons.Material.Filled.Refresh)">
+                @if (_isRefreshingPrices)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                    <span>Refreshing...</span>
+                }
+                else
+                {
+                    <span>Refresh Prices</span>
+                }
+            </MudButton>
+            
+            <MudDivider Class="my-4" />
+            
+            <!-- Shopping List Summary (Compact) -->
+            @if (GetBuyItems().Any())
+            {
+                <MudText Typo="Typo.subtitle2" Class="mb-2" Style="color: #d4a73a;">Items to Analyze</MudText>
+                <MudPaper Elevation="0" Class="pa-2 mb-4" Style="background: #2a2a2a; border-radius: 8px; max-height: 200px; overflow-y: auto;">
+                    <MudStack Spacing="1">
+                        @foreach (var item in GetBuyItems().Take(8))
+                        {
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; background: #1e1e1e; border-radius: 4px;">
+                                <MudText Typo="Typo.caption" Style="color: #ccc;">@item.Name</MudText>
+                                <MudText Typo="Typo.caption" Style="color: #d4a73a;">×@item.TotalQuantity</MudText>
+                            </div>
+                        }
+                        @if (GetBuyItems().Count > 8)
+                        {
+                            <MudText Typo="Typo.caption" Style="color: #888; text-align: center;">
+                                ... and @(GetBuyItems().Count - 8) more
+                            </MudText>
+                        }
+                    </MudStack>
+                </MudPaper>
+            }
+            
+            <MudButton OnClick="GoToPlanner"
+                       Color="Color.Info"
+                       Variant="Variant.Outlined"
+                       FullWidth="true"
+                       Class="mb-2"
+                       StartIcon="@Icons.Material.Filled.ArrowBack">
+                Back to Planner
+            </MudButton>
+            
+            @if (AppState.ShoppingPlans.Any())
+            {
+                <MudButton OnClick="GoToProcurement"
+                           Color="Color.Success"
+                           Variant="Variant.Outlined"
+                           FullWidth="true"
+                           EndIcon="@Icons.Material.Filled.ArrowForward">
+                    View Procurement Plan
+                </MudButton>
+            }
+        </div>
+        
+        <!-- Right Column: Market Analysis Results -->
+        <div Class="pa-4" Style="overflow: hidden; min-width: 0;">
+            @if (!GetBuyItems().Any() && !AppState.ShoppingPlans.Any())
+            {
+                <MudPaper Elevation="2" Class="pa-4" Style="background: linear-gradient(135deg, #2d2d2d 0%, #252525 100%); height: 100%; border-radius: 12px;">
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center;">
+                        <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Large" Style="color: #555; margin-bottom: 16px;" />
+                        <MudText Typo="Typo.h6" Style="color: #888; margin-bottom: 8px;">No Items to Analyze</MudText>
+                        <MudText Typo="Typo.body2" Style="color: #666; margin-bottom: 24px;">
+                            Build a plan in the Recipe Planner and mark items to buy from the market.
+                        </MudText>
+                        
+                        <MudButton OnClick="GoToPlanner"
+                                   Color="Color.Primary"
+                                   Variant="Variant.Filled"
+                                   Size="Size.Large"
+                                   StartIcon="@Icons.Material.Filled.ArrowBack">
+                            Go to Recipe Planner
+                        </MudButton>
+                    </div>
+                </MudPaper>
+            }
+            else if (AppState.ShoppingPlans.Any())
+            {
+                <MarketLogisticsPanel ShoppingPlans="AppState.ShoppingPlans"
+                                      CraftAnalyses="AppState.CraftAnalyses"
+                                      CurrentSort="AppState.MarketSortPreference"
+                                      ShowAnalysisSections="true"
+                                      AutoExpandItemId="AppState.AutoExpandItemId" />
+            }
+            else
+            {
+                <MudPaper Elevation="2" Class="pa-4" Style="background: linear-gradient(135deg, #2d2d2d 0%, #252525 100%); height: 100%; border-radius: 12px;">
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center;">
+                        <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Large" Style="color: #555; margin-bottom: 16px;" />
+                        <MudText Typo="Typo.h6" Style="color: #888; margin-bottom: 8px;">Ready to Analyze</MudText>
+                        <MudText Typo="Typo.body2" Style="color: #666; margin-bottom: 24px;">
+                            Found @(GetBuyItems().Count) items to analyze. Click "Run Analysis" to compare prices across worlds.
+                        </MudText>
+                        
+                        <MudButton OnClick="RunMarketAnalysisAsync"
+                                   Color="Color.Primary"
+                                   Variant="Variant.Filled"
+                                   Size="Size.Large"
+                                   StartIcon="@Icons.Material.Filled.Analytics"
+                                   Disabled="_isAnalyzing">
+                            @if (_isAnalyzing)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                <span>Analyzing...</span>
+                            }
+                            else
+                            {
+                                <span>Analyze Market</span>
+                            }
+                        </MudButton>
+                    </div>
+                </MudPaper>
+            }
+        </div>
+    </div>
+</MudContainer>
+
+@code {
+    private bool _isAnalyzing = false;
+    private bool _isRefreshingPrices = false;
+    
+    // Settings now stored in AppState for persistence across page navigations
+
+    protected override void OnInitialized()
+    {
+        // Subscribe to plan changes (including restoration from auto-save)
+        AppState.OnPlanChanged += OnPlanChanged;
+        AppState.OnShoppingListChanged += OnShoppingListChanged;
+    }
+    
+    protected override void OnAfterRender(bool firstRender)
+    {
+        // Clear the auto-expand item ID after the first render
+        // This ensures it doesn't persist if the user navigates away and back
+        if (firstRender && AppState.AutoExpandItemId.HasValue)
+        {
+            AppState.AutoExpandItemId = null;
+        }
+    }
+
+    private void OnPlanChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnShoppingListChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        AppState.OnPlanChanged -= OnPlanChanged;
+        AppState.OnShoppingListChanged -= OnShoppingListChanged;
+    }
+
+    /// <summary>
+    /// Get the current items marked for buying from the recipe plan.
+    /// This dynamically reflects any changes made in the recipe tree.
+    /// </summary>
+    private List<MaterialAggregate> GetBuyItems()
+    {
+        if (AppState.CurrentPlan == null)
+            return new List<MaterialAggregate>();
+        
+        return AppState.CurrentPlan.AggregatedMaterials
+            .Where(m => m.TotalQuantity > 0)
+            .ToList();
+    }
+
+    private bool CanAnalyze()
+    {
+        return GetBuyItems().Any() && !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
+    }
+    
+    private bool CanRefreshPrices()
+    {
+        return AppState.CurrentPlan != null && !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
+    }
+    
+    private async Task RefreshPricesAsync()
+    {
+        if (AppState.CurrentPlan == null) return;
+        
+        _isRefreshingPrices = true;
+        AppState.BeginOperation("Refreshing Prices", "Fetching latest market data...");
+        
+        try
+        {
+            // Step 1: Fetch vendor prices
+            await RecipeCalculationService.FetchVendorPricesAsync(AppState.CurrentPlan);
+            Snackbar.Add("Vendor prices updated", Severity.Success);
+            
+            // Step 2: Fetch market prices
+            var itemIds = AppState.CurrentPlan.GetAllItemIds().ToList();
+            if (itemIds.Any())
+            {
+                AppState.SetStatus("Fetching market prices...", busy: true);
+                var responses = await UniversalisService.GetMarketDataBulkAsync(
+                    AppState.SelectedDataCenter, 
+                    itemIds);
+                
+                // Update node prices
+                UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, responses);
+                Snackbar.Add("Market prices updated", Severity.Success);
+            }
+            
+            AppState.NotifyPlanChanged();
+            AppState.EndOperation("Prices refreshed successfully!");
+        }
+        catch (Exception ex)
+        {
+            AppState.SetStatus($"Price refresh failed: {ex.Message}");
+            Snackbar.Add($"Failed to refresh prices: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isRefreshingPrices = false;
+        }
+    }
+    
+    private void UpdateNodeMarketPrices(List<PlanNode> nodes, Dictionary<int, UniversalisResponse> responses)
+    {
+        foreach (var node in nodes)
+        {
+            if (responses.TryGetValue(node.ItemId, out var response))
+            {
+                node.MarketPrice = (decimal)response.AveragePrice;
+                
+                // Calculate HQ price if available
+                var hqListings = response.Listings.Where(l => l.IsHq).ToList();
+                if (hqListings.Any())
+                {
+                    node.HqMarketPrice = (decimal)hqListings.Average(l => l.PricePerUnit);
+                }
+            }
+            
+            // Recursively update children
+            if (node.Children?.Any() == true)
+            {
+                UpdateNodeMarketPrices(node.Children, responses);
+            }
+        }
+    }
+
+    private async Task RunMarketAnalysisAsync()
+    {
+        var materials = GetBuyItems();
+        
+        if (!materials.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+            return;
+
+        _isAnalyzing = true;
+        AppState.ShoppingPlans.Clear();
+        AppState.BeginOperation("Market Analysis", $"Analyzing {materials.Count} items on {AppState.SelectedDataCenter}...");
+
+        try
+        {
+            var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+            
+            // Step 1: Ensure cache is populated with market data (just like WPF app)
+            var cacheRequests = materials.Select(m => (m.ItemId, AppState.SelectedDataCenter)).ToList();
+            AppState.SetStatus($"Checking cache for {cacheRequests.Count} items...");
+            var fetchedCount = await MarketCache.EnsurePopulatedAsync(cacheRequests, progress: progress);
+            Logger.LogInformation("Market Analysis: {FetchedCount} items fetched from API", fetchedCount);
+            
+            // Step 2: Calculate shopping plans from cached data
+            List<DetailedShoppingPlan> plans;
+            
+            if (AppState.SearchEntireRegion)
+            {
+                // Multi-DC analysis doesn't support splits yet
+                plans = await MarketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
+                    materials,
+                    progress,
+                    mode: AppState.RecommendationMode);
+            }
+            else if (AppState.EnableMultiWorldSplits)
+            {
+                // Use split-aware calculation for single DC
+                var config = new MarketAnalysisConfig
+                {
+                    EnableSplitWorld = AppState.EnableMultiWorldSplits,
+                    MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null
+                };
+                
+                plans = await MarketShoppingService.CalculateShoppingPlansWithSplitsAsync(
+                    materials,
+                    AppState.SelectedDataCenter,
+                    progress,
+                    config: config);
+            }
+            else
+            {
+                // Standard single-world calculation
+                plans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+                    materials,
+                    AppState.SelectedDataCenter,
+                    progress,
+                    mode: AppState.RecommendationMode);
+            }
+            
+            // Apply vendor price overrides for vendor-buy items
+            ApplyVendorPriceOverrides(plans);
+            
+            AppState.ShoppingPlans = plans;
+            AppState.NotifyShoppingListChanged();
+            
+            // Save market analysis to the current plan for persistence
+            if (AppState.CurrentPlanId != null)
+            {
+                await IndexedDb.SaveMarketAnalysisAsync(AppState.CurrentPlanId, plans, AppState.RecommendationMode);
+            }
+            
+            var bestValue = AppState.ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
+            // Ensure the status message is properly set to completion
+            AppState.EndOperation($"Analysis complete! Best value: {bestValue:N0}g");
+            Snackbar.Add("Market analysis complete!", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            AppState.SetStatus($"Analysis failed: {ex.Message}");
+            Snackbar.Add($"Market analysis failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isAnalyzing = false;
+        }
+    }
+
+    /// <summary>
+    /// For items marked as vendor-buy, override the recommendation to show vendor price.
+    /// Keeps market data visible for comparison but sets vendor as the recommended option.
+    /// Uses the selected vendor from the recipe plan (respects SelectedVendorIndex).
+    /// </summary>
+    private void ApplyVendorPriceOverrides(List<DetailedShoppingPlan> plans)
+    {
+        if (AppState.CurrentPlan == null) return;
+
+        foreach (var plan in plans)
+        {
+            // Find the node in the plan tree to check its source and vendor price
+            var node = FindNodeInPlan(AppState.CurrentPlan, plan.ItemId);
+            if (node?.Source == AcquisitionSource.VendorBuy && node.VendorPrice > 0)
+            {
+                // Get the specific vendor selected in the recipe plan
+                var selectedVendor = node.SelectedVendor;
+                if (selectedVendor != null)
+                {
+                    // Create a vendor "world" option as the recommendation with specific vendor info
+                    plan.RecommendedWorld = new WorldShoppingSummary
+                    {
+                        WorldName = "Vendor",
+                        TotalCost = (long)(selectedVendor.Price * plan.QuantityNeeded),
+                        AveragePricePerUnit = selectedVendor.Price,
+                        TotalQuantityPurchased = plan.QuantityNeeded,
+                        HasSufficientStock = true,
+                        Listings = new List<ShoppingListingEntry>(),
+                        // Store the specific vendor name for display
+                        VendorName = $"{selectedVendor.Name} - {selectedVendor.Location}"
+                    };
+
+                    // Clear any split recommendations since vendor has unlimited stock
+                    plan.RecommendedSplit = null;
+
+                    // Use vendor data already stored in the node (no need to fetch again)
+                    plan.Vendors = node.VendorOptions
+                        .Where(v => v.IsGilVendor)
+                        .ToList();
+
+                    Logger.LogInformation("Applied vendor price override for {ItemName}: {VendorName} @ {VendorPrice}g",
+                        plan.Name, selectedVendor.Name, selectedVendor.Price);
+                }
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Find a node in the plan tree by item ID.
+    /// </summary>
+    private PlanNode? FindNodeInPlan(CraftingPlan plan, int itemId)
+    {
+        foreach (var root in plan.RootItems)
+        {
+            var found = FindNodeRecursive(root, itemId);
+            if (found != null) return found;
+        }
+        return null;
+    }
+    
+    private PlanNode? FindNodeRecursive(PlanNode node, int itemId)
+    {
+        if (node.ItemId == itemId) return node;
+        
+        foreach (var child in node.Children)
+        {
+            var found = FindNodeRecursive(child, itemId);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private async Task OnModeChanged(RecommendationMode mode)
+    {
+        AppState.RecommendationMode = mode;
+        if (GetBuyItems().Any() && AppState.ShoppingPlans.Any())
+        {
+            await RunMarketAnalysisAsync();
+        }
+    }
+
+    private void GoToPlanner()
+    {
+        // Use relative path (no leading slash) so it resolves against base href correctly
+        NavigationManager.NavigateTo("./");
+    }
+
+    private void GoToProcurement()
+    {
+        // Use relative path (no leading slash) so it resolves against base href correctly
+        NavigationManager.NavigateTo("procurement");
+    }
+}

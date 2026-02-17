@@ -1,0 +1,384 @@
+@using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Web.Services
+@inject ISnackbar Snackbar
+@inject AppState AppState
+
+@* Type alias to avoid confusion with WorldProcurementCard component *@
+@using WorldCardModel = FFXIV_Craft_Architect.Core.Models.WorldProcurementCardModel
+
+<div style="display: flex; flex-direction: column; height: 100%; gap: 8px;">
+    
+    <!-- Header Summary Card -->
+    <div style="flex-shrink: 0;">
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #2a3a2a; border-radius: 6px; border: 1px solid #3a5a3a;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <MudIcon Icon="@Icons.Material.Filled.Assignment" Color="Color.Success" Size="Size.Medium" />
+                <div>
+                    <MudText Typo="Typo.subtitle1" Style="color: #90EE90; font-weight: 600;">Shopping Plans</MudText>
+                    @if (ShoppingPlans.Any())
+                    {
+                        <MudText Typo="Typo.caption" Style="color: #888;">
+                            @AppState.SelectedDataCenter · @ShoppingPlans.Count items
+                        </MudText>
+                    }
+                </div>
+            </div>
+            @if (ShoppingPlans.Any())
+            {
+                <div style="text-align: right;">
+                    <MudText Typo="Typo.h6" Style="color: #d4a73a; font-weight: 700;">@(GetTotalCost().ToString("N0"))g</MudText>
+                    <MudText Typo="Typo.caption" Style="color: #888;">total cost</MudText>
+                </div>
+            }
+        </div>
+    </div>
+    
+    <!-- View Toggle -->
+    @if (ShoppingPlans.Any())
+    {
+        <div style="flex-shrink: 0; display: flex; gap: 6px;">
+            <MudButton OnClick="() => _viewMode = ViewMode.Cards" 
+                       Color="@(_viewMode == ViewMode.Cards ? Color.Primary : Color.Default)"
+                       Variant="Variant.Outlined" 
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.GridView">
+                Cards
+            </MudButton>
+            <MudButton OnClick="() => _viewMode = ViewMode.TextList" 
+                       Color="@(_viewMode == ViewMode.TextList ? Color.Primary : Color.Default)"
+                       Variant="Variant.Outlined" 
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.List">
+                Shopping List
+            </MudButton>
+        </div>
+    }
+    
+    <!-- Content Area -->
+    <div style="flex-grow: 1; overflow-y: auto; min-height: 0;">
+        @if (!ShoppingPlans.Any())
+        {
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 40px; text-align: center; background: #252525; border-radius: 8px;">
+                <MudIcon Icon="@Icons.Material.Filled.Assignment" Size="Size.Large" Style="color: #555; margin-bottom: 16px;" />
+                <MudText Typo="Typo.body1" Style="color: #888;">No shopping plans available</MudText>
+                <MudText Typo="Typo.caption" Style="color: #666; margin-top: 8px;">
+                    Run market analysis to generate shopping plans
+                </MudText>
+            </div>
+        }
+        else if (_viewMode == ViewMode.TextList)
+        {
+            <!-- Text-based Shopping List View - Markdown Format -->
+            <div style="height: 100%; display: flex; flex-direction: column;">
+                <div style="flex: 1; position: relative;">
+                    <textarea readonly 
+                              style="width: 100%; height: 100%; background: #1a1a1a; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 12px; font-family: 'Consolas', 'Monaco', monospace; font-size: 13px; line-height: 1.5; resize: none; white-space: pre; overflow-wrap: normal; overflow-x: auto;"
+                              spellcheck="false">@GenerateShoppingListText()</textarea>
+                </div>
+                <MudText Typo="Typo.caption" Style="color: #666; margin-top: 8px; text-align: center;">
+                    Copy and paste this list directly into your notes
+                </MudText>
+            </div>
+        }
+        else
+        {
+            <!-- Card View - World-Centric -->
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+                @{ 
+                    var worldCards = GetWorldCards().ToList();
+                    var errorItems = GetItemsWithErrors().ToList();
+                }
+                
+                <!-- Market & Vendor World Cards -->
+                @foreach (var worldCard in worldCards)
+                {
+                    <WorldProcurementCard 
+                        Card="worldCard" 
+                        IsExpanded="_expandedWorld == worldCard.WorldName"
+                        IsExpandedChanged="(expanded) => OnWorldExpanded(worldCard.WorldName, expanded)"
+                        OnItemSelected="OnWorldItemSelected"
+                        OnReanalyzeRequested="OnReanalyzeWithoutWorld" />
+                }
+                
+                <!-- Items with Errors -->
+                @if (errorItems.Any())
+                {
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px; padding: 3px 8px; background: #2a2a2a; border-radius: 3px; border: 1px solid #555;">
+                            <MudIcon Icon="@Icons.Material.Filled.Error" Size="Size.Small" Style="color: #f44336;" />
+                            <MudText Typo="Typo.subtitle2" Style="color: #f44336; font-weight: 600;">Errors</MudText>
+                            <MudText Typo="Typo.caption" Style="color: #888;">(@errorItems.Count)</MudText>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 4px; align-items: start;">
+                            @foreach (var plan in errorItems)
+                            {
+                                <div style="padding: 12px; background: #2a2a2a; border-radius: 4px; border: 1px solid #f44336;">
+                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                        <img src="https://xivapi.com/img/ui/000000/000000.tex" 
+                                             style="width: 32px; height: 32px; opacity: 0.5;"
+                                             alt="" />
+                                        <div style="flex: 1;">
+                                            <MudText Typo="Typo.body2" Style="color: #e0e0e0;">@plan.Name</MudText>
+                                            <MudText Typo="Typo.caption" Style="color: #f44336;">@plan.Error</MudText>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    
+    /// <summary>
+    /// Called when user requests re-analysis without a specific world (due to congestion).
+    /// </summary>
+    [Parameter]
+    public EventCallback<string> OnReanalyzeWithoutWorldRequested { get; set; }
+    
+    private DetailedShoppingPlan? _expandedItem;
+    private ViewMode _viewMode = ViewMode.Cards;
+    private string? _expandedWorld = null;
+    
+    private enum ViewMode
+    {
+        Cards,
+        TextList
+    }
+    
+    private void SelectItem(DetailedShoppingPlan plan)
+    {
+        if (_expandedItem?.ItemId == plan.ItemId)
+        {
+            _expandedItem = null;
+        }
+        else
+        {
+            _expandedItem = plan;
+        }
+    }
+    
+    private decimal GetTotalCost()
+    {
+        return ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
+    }
+    
+    // === FILTER METHODS ===
+    
+    private IEnumerable<DetailedShoppingPlan> GetItemsWithErrors()
+    {
+        return ShoppingPlans.Where(p => !string.IsNullOrEmpty(p.Error));
+    }
+    
+    // === WORLD-CENTRIC CARD METHODS ===
+    
+    private void OnWorldExpanded(string worldName, bool expanded)
+    {
+        if (expanded)
+        {
+            _expandedWorld = worldName;
+        }
+        else if (_expandedWorld == worldName)
+        {
+            _expandedWorld = null;
+        }
+    }
+    
+    private void OnWorldItemSelected(WorldItemPurchase item)
+    {
+        // Find the plan for this item
+        var plan = ShoppingPlans.FirstOrDefault(p => p.ItemId == item.ItemId);
+        if (plan != null)
+        {
+            SelectItem(plan);
+        }
+    }
+    
+    private async Task OnReanalyzeWithoutWorld(string worldName)
+    {
+        // Collapse all cards before re-analysis
+        _expandedWorld = null;
+        
+        // Notify parent to re-run analysis with this world blacklisted
+        await OnReanalyzeWithoutWorldRequested.InvokeAsync(worldName);
+    }
+    
+    /// <summary>
+    /// Groups shopping plans by world, aggregating both single-world and split purchases.
+    /// </summary>
+    private IEnumerable<WorldCardModel> GetWorldCards()
+    {
+        if (!ShoppingPlans.Any())
+            return Enumerable.Empty<WorldCardModel>();
+        
+        var worldCards = new Dictionary<string, WorldCardModel>(StringComparer.OrdinalIgnoreCase);
+        
+        foreach (var plan in ShoppingPlans.Where(p => string.IsNullOrEmpty(p.Error)))
+        {
+            // Handle split purchases
+            if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
+            {
+                foreach (var split in plan.RecommendedSplit)
+                {
+                    var worldName = split.WorldName;
+                    
+                    if (!worldCards.TryGetValue(worldName, out var card))
+                    {
+                        var worldOption = plan.WorldOptions.FirstOrDefault(w => w.WorldName == worldName);
+                        card = new WorldCardModel
+                        {
+                            WorldName = worldName,
+                            DataCenter = AppState.SelectedDataCenter,
+                            IsCongested = worldOption?.IsCongested ?? false,
+                            Classification = worldOption?.Classification ?? WorldClassification.Standard
+                        };
+                        worldCards[worldName] = card;
+                    }
+                    
+                    card.Items.Add(new WorldItemPurchase
+                    {
+                        ItemId = plan.ItemId,
+                        ItemName = plan.Name,
+                        IconId = plan.IconId,
+                        QuantityOnThisWorld = split.QuantityToBuy,
+                        TotalQuantityNeeded = plan.QuantityNeeded,
+                        PricePerUnit = split.PricePerUnit,
+                        TotalCost = split.TotalCost,
+                        IsSplitPurchase = true,
+                        SourcePlan = plan,
+                        TravelContext = split.IsPartial ? "Supplemental" : "Primary"
+                    });
+                }
+            }
+            // Handle single-world purchases (including vendor)
+            else if (plan.RecommendedWorld != null)
+            {
+                var worldName = plan.RecommendedWorld.WorldName;
+                
+                if (!worldCards.TryGetValue(worldName, out var card))
+                {
+                    card = new WorldCardModel
+                    {
+                        WorldName = worldName,
+                        DataCenter = AppState.SelectedDataCenter,
+                        IsCongested = plan.RecommendedWorld.IsCongested,
+                        Classification = plan.RecommendedWorld.Classification,
+                        Vendors = worldName == "Vendor" ? plan.Vendors?.ToList() ?? new List<VendorInfo>() : new List<VendorInfo>(),
+                        SelectedVendorName = worldName == "Vendor" ? plan.RecommendedWorld?.VendorName : null
+                    };
+                    worldCards[worldName] = card;
+                }
+                
+                // Find the specific vendor for this item (if it's a vendor purchase)
+                VendorInfo? itemVendor = null;
+                if (worldName == "Vendor" && plan.Vendors?.Any() == true)
+                {
+                    // Match vendor by price - the RecommendedWorld should have the vendor price
+                    itemVendor = plan.Vendors.FirstOrDefault(v => v.Price == plan.RecommendedWorld.AveragePricePerUnit)
+                        ?? plan.Vendors.FirstOrDefault();
+                }
+
+                card.Items.Add(new WorldItemPurchase
+                {
+                    ItemId = plan.ItemId,
+                    ItemName = plan.Name,
+                    IconId = plan.IconId,
+                    QuantityOnThisWorld = plan.QuantityNeeded,
+                    TotalQuantityNeeded = plan.QuantityNeeded,
+                    PricePerUnit = plan.RecommendedWorld.AveragePricePerUnit,
+                    TotalCost = plan.RecommendedWorld.TotalCost,
+                    IsSplitPurchase = false,
+                    SourcePlan = plan,
+                    TravelContext = "Primary",
+                    Vendor = itemVendor
+                });
+            }
+        }
+        
+        // Sort: non-vendor worlds by cost (descending), vendor always last
+        return worldCards.Values
+            .OrderBy(w => w.IsVendor ? 1 : 0)
+            .ThenByDescending(w => w.TotalCost);
+    }
+    
+    /// <summary>
+    /// Generates a markdown-formatted shopping list grouped by world.
+    /// </summary>
+    private string GenerateShoppingListText()
+    {
+        if (!ShoppingPlans.Any())
+            return "# Shopping List\n\nNo items to purchase.";
+        
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("# FFXIV Craft Architect - Shopping List");
+        sb.AppendLine();
+        sb.AppendLine($"**Data Center:** {AppState.SelectedDataCenter}");
+        sb.AppendLine($"**Generated:** {DateTime.Now:yyyy-MM-dd HH:mm}");
+        sb.AppendLine();
+        
+        var worldCards = GetWorldCards().ToList();
+        var errorItems = GetItemsWithErrors().ToList();
+        
+        if (!worldCards.Any() && !errorItems.Any())
+        {
+            sb.AppendLine("_No items to purchase._");
+            return sb.ToString();
+        }
+        
+        // World sections
+        foreach (var world in worldCards)
+        {
+            sb.AppendLine($"## {(world.IsVendor ? "🏪 Vendor" : $"🌍 {world.WorldName}")}");
+            sb.AppendLine();
+            
+            foreach (var item in world.Items.OrderBy(i => i.ItemName))
+            {
+                // For vendor items, always use simple quantity (vendors have unlimited stock)
+                // For market items, show "of total" only for split purchases
+                var qtyDisplay = world.IsVendor || !item.IsSplitPurchase
+                    ? item.SimpleQuantityDisplay
+                    : item.QuantityDisplay;
+                
+                sb.AppendLine($"- **{item.ItemName}** {qtyDisplay} @ {item.PricePerUnit:N0}g = **{item.TotalCost:N0}g**");
+                
+                // Add vendor information for vendor purchases
+                if (world.IsVendor && item.Vendor != null)
+                {
+                    sb.AppendLine($"   📍 {item.Vendor.Name} - {item.Vendor.Location}");
+                }
+            }
+            
+            sb.AppendLine();
+            sb.AppendLine($"**Subtotal: {world.TotalCost:N0}g**");
+            sb.AppendLine();
+        }
+        
+        // Error section
+        if (errorItems.Any())
+        {
+            sb.AppendLine("## ⚠️ Errors");
+            sb.AppendLine();
+            foreach (var plan in errorItems.OrderBy(p => p.Name))
+            {
+                sb.AppendLine($"- {plan.Name} ×{plan.QuantityNeeded} - {plan.Error}");
+            }
+            sb.AppendLine();
+        }
+        
+        // Grand total
+        var grandTotal = worldCards.Sum(w => w.TotalCost);
+        sb.AppendLine("---");
+        sb.AppendLine($"## **Grand Total: {grandTotal:N0}g**");
+        sb.AppendLine();
+        sb.AppendLine($"_Items: {worldCards.Sum(w => w.ItemCount)} | Total quantity: {worldCards.Sum(w => w.TotalQuantity)}_");
+        
+        return sb.ToString();
+    }
+}
