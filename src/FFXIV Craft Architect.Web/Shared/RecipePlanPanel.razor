@@ -1,0 +1,80 @@
+@using FFXIV_Craft_Architect.Web.Services
+
+<div class="mp-column" id="recipe-tree-container">
+    <div class="mp-header-row">
+        <div class="mp-title">Recipe Plan</div>
+    </div>
+
+    @if (CurrentPlan != null)
+    {
+        <div class="mp-control-bar">
+            <div class="mp-tree-actions">
+                <button @onclick="OnExpandAllRequested" title="Expand All" class="mp-tree-action-btn">
+                    + Expand All
+                </button>
+                <button @onclick="OnCollapseAllRequested" title="Collapse All" class="mp-tree-action-btn">
+                    - Collapse All
+                </button>
+            </div>
+        </div>
+    }
+
+    @if (CurrentPlan == null)
+    {
+        <div class="mp-empty-state">
+            <div class="mp-empty-title">No Plan Built Yet</div>
+            <div class="mp-empty-subtitle">Add items to your project and click "Build Project Plan" to see the recipe tree.</div>
+
+            @if (SavedPlans.Any())
+            {
+                <div class="mp-saved-section">
+                    <div class="mp-saved-title">Saved Plans:</div>
+                    @foreach (var plan in SavedPlans)
+                    {
+                        <div class="mp-saved-plan-row">
+                            <div>
+                                <div class="mp-saved-plan-name">@plan.Name</div>
+                                <div class="mp-saved-plan-meta">
+                                    @plan.DataCenter • @plan.ItemCount items • @plan.SavedAt.ToString("MMM dd, HH:mm")
+                                </div>
+                            </div>
+                            <div class="mp-saved-actions">
+                                <button @onclick="() => OnLoadPlanRequested.InvokeAsync(plan.Id)" class="mp-load-btn">
+                                    Load
+                                </button>
+                                <button @onclick="() => OnDeletePlanRequested.InvokeAsync(plan.Id)" class="mp-delete-btn">
+                                    ×
+                                </button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="mp-tree-panel">
+            @foreach (var rootItem in CurrentPlan.RootItems)
+            {
+                <RecipeNodeView Node="rootItem"
+                                Depth="0"
+                                OnSourceChanged="OnNodeSourceChanged"
+                                OnHqChanged="OnNodeHqChanged" />
+            }
+        </div>
+
+    }
+</div>
+
+@code {
+    [Parameter] public CraftingPlan? CurrentPlan { get; set; }
+    [Parameter] public IReadOnlyList<StoredPlanSummary> SavedPlans { get; set; } = Array.Empty<StoredPlanSummary>();
+
+    [Parameter] public EventCallback OnExpandAllRequested { get; set; }
+    [Parameter] public EventCallback OnCollapseAllRequested { get; set; }
+    [Parameter] public EventCallback<string> OnLoadPlanRequested { get; set; }
+    [Parameter] public EventCallback<string> OnDeletePlanRequested { get; set; }
+    [Parameter] public EventCallback<PlanNode> OnNodeSourceChanged { get; set; }
+    [Parameter] public EventCallback<PlanNode> OnNodeHqChanged { get; set; }
+}

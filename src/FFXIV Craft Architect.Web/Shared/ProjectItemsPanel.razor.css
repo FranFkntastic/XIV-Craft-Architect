@@ -1,0 +1,184 @@
+.lp-column {
+    padding: 16px;
+    overflow-y: auto;
+    border-right: 1px solid #333;
+}
+
+.lp-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #d4a73a;
+    margin-bottom: 16px;
+}
+
+.lp-add-section {
+    margin-bottom: 16px;
+}
+
+.lp-label {
+    color: #cccccc;
+    font-size: 14px;
+    margin-bottom: 4px;
+}
+
+.lp-input {
+    width: 100%;
+    padding: 8px;
+    background: #2d2d2d;
+    color: white;
+    border: 1px solid #444;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+.lp-search-btn {
+    width: 100%;
+    padding: 8px;
+    margin-top: 8px;
+    background: #d4a73a;
+    color: #1a1a1a;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.lp-search-results {
+    margin-top: 8px;
+    background: #2d2d2d;
+    border-radius: 4px;
+    border: 1px solid #d4a73a;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.lp-search-result-item {
+    padding: 8px;
+    cursor: pointer;
+    border-bottom: 1px solid #444;
+}
+
+.lp-search-result-name {
+    color: white;
+}
+
+.lp-search-result-meta {
+    color: #888;
+    font-size: 12px;
+}
+
+.lp-targets-panel {
+    background: #2d2d2d;
+    border-radius: 4px;
+    border: 1px solid #444;
+}
+
+.lp-targets-header {
+    background: #363636;
+    padding: 12px;
+    border-bottom: 1px solid #444;
+}
+
+.lp-targets-header-text {
+    color: #cccccc;
+    font-weight: 500;
+}
+
+.lp-targets-body {
+    padding: 8px;
+}
+
+.lp-empty-targets {
+    color: #888;
+    text-align: center;
+    padding: 24px;
+    font-size: 14px;
+}
+
+.lp-target-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    background: #1e1e1e;
+    border-radius: 4px;
+    margin-bottom: 8px;
+}
+
+.lp-hq-toggle {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0;
+    width: 20px;
+}
+
+.lp-item-name {
+    flex: 1;
+}
+
+.lp-qty-input {
+    width: 60px;
+    padding: 4px;
+    background: #2d2d2d;
+    color: white;
+    border: 1px solid #444;
+    border-radius: 4px;
+    text-align: center;
+}
+
+.lp-remove-btn {
+    background: transparent;
+    border: none;
+    color: #ff6b6b;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.lp-build-wrap {
+    padding: 12px;
+    border-top: 1px solid #444;
+}
+
+.lp-build-btn {
+    width: 100%;
+    padding: 10px;
+    background: #d4a73a;
+    color: #1a1a1a;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.lp-plan-actions {
+    margin-top: 16px;
+    display: flex;
+    gap: 8px;
+}
+
+.lp-plan-btn {
+    flex: 1;
+    padding: 8px;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.lp-plan-btn-save {
+    background: #4caf50;
+}
+
+.lp-plan-btn-export {
+    background: #2196f3;
+}
+
+.lp-autosave-meta {
+    color: #888;
+    font-size: 11px;
+    text-align: center;
+    margin-top: 8px;
+}

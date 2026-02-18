@@ -1,0 +1,10 @@
+.ma-page-container {
+    height: 100%;
+}
+
+.ma-grid-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    height: 100%;
+    width: 100%;
+}

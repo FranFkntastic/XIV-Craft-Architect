@@ -4,8 +4,8 @@ on:
   push:
     branches: [ main, master ]
     paths:
-      - 'src/FFXIVCraftArchitect.Web/**'
-      - 'src/FFXIVCraftArchitect.Core/**'
+      - 'src/FFXIV Craft Architect.Web/**'
+      - 'src/FFXIV Craft Architect.Core/**'
       - '.github/workflows/deploy-web.yml'
   workflow_dispatch:
 
@@ -31,10 +31,10 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore dependencies
-        run: dotnet restore src/FFXIVCraftArchitect.Web/FFXIVCraftArchitect.Web.csproj
+        run: dotnet restore "src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"
 
       - name: Publish
-        run: dotnet publish src/FFXIVCraftArchitect.Web/FFXIVCraftArchitect.Web.csproj -c Release -o dist/web
+        run: dotnet publish "src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj" -c Release -o dist/web
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

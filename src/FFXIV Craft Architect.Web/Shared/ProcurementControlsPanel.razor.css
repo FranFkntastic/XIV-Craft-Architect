@@ -1,0 +1,58 @@
+.pp-controls-column {
+    padding: 16px;
+    border-right: 1px solid #444;
+    overflow-y: auto;
+    min-width: 280px;
+    max-width: 280px;
+}
+
+.pp-field-block {
+    margin-bottom: 12px;
+}
+
+.pp-field-label {
+    color: #888;
+    font-size: 12px;
+    margin-bottom: 4px;
+}
+
+.pp-full-width {
+    width: 100%;
+}
+
+.pp-summary-paper {
+    background: linear-gradient(135deg, #2d4a2d 0%, #253825 100%);
+    border-radius: 8px;
+}
+
+.pp-summary-label {
+    color: #888;
+}
+
+.pp-summary-value {
+    color: #d4a73a;
+    font-weight: 700;
+}
+
+.pp-summary-stat-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.pp-summary-stat {
+    flex: 1;
+    text-align: center;
+    padding: 8px;
+    background: rgba(76, 175, 80, 0.1);
+    border-radius: 6px;
+}
+
+.pp-summary-stat-icon,
+.pp-summary-stat-text {
+    color: #4caf50;
+}
+
+.pp-summary-stat-text {
+    display: block;
+}

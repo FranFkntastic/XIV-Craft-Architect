@@ -1,0 +1,5 @@
+.pp-results-column {
+    padding: 16px;
+    overflow: hidden;
+    min-width: 0;
+}

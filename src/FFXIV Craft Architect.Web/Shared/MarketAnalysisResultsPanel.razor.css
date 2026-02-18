@@ -1,0 +1,35 @@
+.ma-results-column {
+    padding: 16px;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.ma-state-paper {
+    background: linear-gradient(135deg, #2d2d2d 0%, #252525 100%);
+    height: 100%;
+    border-radius: 12px;
+}
+
+.ma-state-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    text-align: center;
+}
+
+.ma-state-icon {
+    color: #555;
+    margin-bottom: 16px;
+}
+
+.ma-state-title {
+    color: #888;
+    margin-bottom: 8px;
+}
+
+.ma-state-body {
+    color: #666;
+    margin-bottom: 24px;
+}

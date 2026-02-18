@@ -1,0 +1,144 @@
+@using Microsoft.AspNetCore.Components.Web
+
+<div class="lp-column">
+    <div class="lp-title">Project Items</div>
+
+    <div class="lp-add-section">
+        <div class="lp-label">Item Name:</div>
+        <input type="text"
+               value="@SearchQuery"
+               @oninput="OnSearchInput"
+               @onkeyup="OnSearchKeyUp"
+               placeholder="Enter item..."
+               class="lp-input" />
+
+        <button type="button"
+                @onclick="OnSearchRequested"
+                disabled="@IsSearching"
+                class="lp-search-btn">
+            @if (IsSearching)
+            {
+                <span>Searching...</span>
+            }
+            else
+            {
+                <span>Search</span>
+            }
+        </button>
+
+        @if (SearchResults.Any())
+        {
+            <div class="lp-search-results">
+                @foreach (var result in SearchResults)
+                {
+                    <div @onclick="() => OnAddProjectItem.InvokeAsync(result)"
+                         class="lp-search-result-item"
+                         onmouseover="this.style.backgroundColor='#3d3d3d'"
+                         onmouseout="this.style.backgroundColor='transparent'">
+                        <div class="lp-search-result-name">@result.Object.Name</div>
+                        <div class="lp-search-result-meta">ID: @result.Id</div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    <div class="lp-targets-panel">
+        <div class="lp-targets-header">
+            <span class="lp-targets-header-text">Target Items</span>
+        </div>
+        <div class="lp-targets-body">
+            @if (!ProjectItems.Any())
+            {
+                <div class="lp-empty-targets">
+                    Search for items to add to your project.
+                </div>
+            }
+            else
+            {
+                @foreach (var item in ProjectItems)
+                {
+                    <div class="lp-target-row">
+                        <button @onclick="() => OnToggleItemHq.InvokeAsync(item)"
+                                class="lp-hq-toggle"
+                                style="color: @(item.MustBeHq ? "#d4a73a" : "#666");">
+                            ★
+                        </button>
+                        <div class="lp-item-name" style="color: @(item.MustBeHq ? "#d4a73a" : "white");">
+                            @item.Name
+                        </div>
+                        <input type="number"
+                               @bind="item.Quantity"
+                               min="1"
+                               max="9999"
+                               class="lp-qty-input" />
+                        <button @onclick="() => OnRemoveProjectItem.InvokeAsync(item)"
+                                class="lp-remove-btn">
+                            ×
+                        </button>
+                    </div>
+                }
+            }
+        </div>
+
+        <div class="lp-build-wrap">
+            <button @onclick="OnBuildPlanRequested"
+                    disabled="@(!ProjectItems.Any() || IsBuildingPlan)"
+                    class="lp-build-btn">
+                @if (IsBuildingPlan)
+                {
+                    <span>Building...</span>
+                }
+                else
+                {
+                    <span>Build Project Plan</span>
+                }
+            </button>
+        </div>
+    </div>
+
+    @if (ShowPlanActions)
+    {
+        <div class="lp-plan-actions">
+            <button @onclick="OnSavePlanRequested" class="lp-plan-btn lp-plan-btn-save">
+                Save
+            </button>
+            <button @onclick="OnExportPlanRequested" class="lp-plan-btn lp-plan-btn-export">
+                Export
+            </button>
+        </div>
+
+        @if (LastAutoSave.HasValue)
+        {
+            <div class="lp-autosave-meta">
+                Auto-saved: @LastAutoSave.Value.ToString("HH:mm:ss")
+            </div>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public string SearchQuery { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> SearchQueryChanged { get; set; }
+    [Parameter] public EventCallback<KeyboardEventArgs> OnSearchKeyUp { get; set; }
+    [Parameter] public bool IsSearching { get; set; }
+    [Parameter] public bool IsBuildingPlan { get; set; }
+    [Parameter] public bool ShowPlanActions { get; set; }
+    [Parameter] public DateTime? LastAutoSave { get; set; }
+
+    [Parameter] public IReadOnlyList<GarlandSearchResult> SearchResults { get; set; } = Array.Empty<GarlandSearchResult>();
+    [Parameter] public IList<ProjectItem> ProjectItems { get; set; } = new List<ProjectItem>();
+
+    [Parameter] public EventCallback OnSearchRequested { get; set; }
+    [Parameter] public EventCallback<GarlandSearchResult> OnAddProjectItem { get; set; }
+    [Parameter] public EventCallback<ProjectItem> OnToggleItemHq { get; set; }
+    [Parameter] public EventCallback<ProjectItem> OnRemoveProjectItem { get; set; }
+    [Parameter] public EventCallback OnBuildPlanRequested { get; set; }
+    [Parameter] public EventCallback OnSavePlanRequested { get; set; }
+    [Parameter] public EventCallback OnExportPlanRequested { get; set; }
+
+    private Task OnSearchInput(ChangeEventArgs e)
+    {
+        return SearchQueryChanged.InvokeAsync(e.Value?.ToString() ?? string.Empty);
+    }
+}
