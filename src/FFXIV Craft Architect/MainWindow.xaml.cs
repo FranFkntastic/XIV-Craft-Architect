@@ -44,6 +44,27 @@ namespace FFXIV_Craft_Architect;
 /// </summary>
 public partial class MainWindow : Window
 {
+    private Border RecipePlannerContent => RecipePlannerModule.RecipePlannerContent;
+    private Border MarketAnalysisContent => MarketAnalysisModule.MarketAnalysisContent;
+    private Border ProcurementPlannerContent => ProcurementPlannerModule.ProcurementPlannerContent;
+    private StackPanel RecipePlanPanel => RecipePlannerModule.RecipePlanPanel;
+    private Button ExpandAllButton => RecipePlannerModule.ExpandAllButton;
+    private Button CollapseAllButton => RecipePlannerModule.CollapseAllButton;
+    private Wpf.Ui.Controls.Button ProcurementRefreshButton => MarketAnalysisModule.ProcurementRefreshButton;
+    private Wpf.Ui.Controls.Button RebuildFromCacheButton => MarketAnalysisModule.RebuildFromCacheButton;
+    private ComboBox DcCombo => MarketAnalysisModule.DcCombo;
+    private ComboBox WorldCombo => MarketAnalysisModule.WorldCombo;
+    private ComboBox ProcurementSortCombo => MarketAnalysisModule.ProcurementSortCombo;
+    private ComboBox ProcurementModeCombo => MarketAnalysisModule.ProcurementModeCombo;
+    private CheckBox ProcurementSearchAllNaCheck => MarketAnalysisModule.ProcurementSearchAllNaCheck;
+    private ScrollViewer LegacyProcurementScrollViewer => MarketAnalysisModule.LegacyProcurementScrollViewer;
+    private StackPanel ProcurementPanel => MarketAnalysisModule.ProcurementPanel;
+    private Grid SplitPaneMarketView => MarketAnalysisModule.SplitPaneMarketView;
+    private Border SplitPaneExpandedPanel => MarketAnalysisModule.SplitPaneExpandedPanel;
+    private StackPanel SplitPaneExpandedContent => MarketAnalysisModule.SplitPaneExpandedContent;
+    private WrapPanel SplitPaneCardsGrid => MarketAnalysisModule.SplitPaneCardsGrid;
+    private StackPanel ProcurementPlanPanel => ProcurementPlannerModule.ProcurementPlanPanel;
+
     private readonly GarlandService _garlandService;
     private readonly UniversalisService _universalisService;
     private readonly SettingsService _settingsService;
@@ -152,6 +173,14 @@ public partial class MainWindow : Window
         _infoPanelBuilder = infoPanelBuilder;
         
         InitializeComponent();
+
+        ExpandAllButton.Click += OnExpandAll;
+        CollapseAllButton.Click += OnCollapseAll;
+        ProcurementRefreshButton.Click += OnFetchPrices;
+        RebuildFromCacheButton.Click += OnRebuildFromCache;
+        DcCombo.SelectionChanged += OnDataCenterSelected;
+        ProcurementSortCombo.SelectionChanged += OnProcurementSortChanged;
+        ProcurementModeCombo.SelectionChanged += OnProcurementModeChanged;
         
         // Initialize ProcurementBuilder after InitializeComponent (UI elements exist)
         _procurementBuilder = new ProcurementPanelBuilder(

@@ -1,0 +1,61 @@
+<UserControl x:Class="FFXIV_Craft_Architect.Views.Modules.RecipePlannerView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:helpers="clr-namespace:FFXIV_Craft_Architect.Helpers">
+    <Border x:Name="RecipePlannerContent"
+            Background="Transparent"
+            Padding="8,8,16,16">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0"
+                        Orientation="Horizontal"
+                        Margin="0,0,0,6">
+                <TextBlock Text="Recipe Plan"
+                           FontSize="16"
+                           FontWeight="SemiBold"
+                           Foreground="{StaticResource GoldAccentBrush}"
+                           VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <Border Grid.Row="1"
+                    Background="{StaticResource Brush.Surface.Panel}"
+                    BorderBrush="{StaticResource Brush.Border.Default}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="8,6"
+                    Margin="0,0,0,8">
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Right">
+                    <ui:Button x:Name="ExpandAllButton"
+                               Content="Expand All"
+                               Appearance="Secondary"
+                               Margin="0,0,4,0"
+                               IsEnabled="False"
+                               ToolTip="Expand all recipe nodes"/>
+
+                    <ui:Button x:Name="CollapseAllButton"
+                               Content="Collapse All"
+                               Appearance="Secondary"
+                               IsEnabled="False"
+                               ToolTip="Collapse all recipe nodes"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2"
+                    Background="{StaticResource CardBackgroundBrush}"
+                    CornerRadius="4"
+                    Padding="12">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="RecipePlanPanel">
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+    </Border>
+</UserControl>
