@@ -13,7 +13,7 @@ public class ThemeService
 {
     private readonly SettingsService _settingsService;
     private readonly ILogger<ThemeService> _logger;
-    private string _currentAccentColor = "#d4af37";
+    private string _currentAccentColor = "#d4a73a";
 
     /// <summary>
     /// Event fired when the accent color changes.
@@ -26,7 +26,7 @@ public class ThemeService
         _logger = logger;
         
         // Load initial accent color
-        _currentAccentColor = _settingsService.Get<string>("ui.accent_color", "#d4af37") ?? "#d4af37";
+        _currentAccentColor = _settingsService.Get<string>("ui.accent_color", "#d4a73a") ?? "#d4a73a";
         
         // Initialize application resources
         UpdateApplicationResources(_currentAccentColor);
@@ -76,7 +76,7 @@ public class ThemeService
     /// </summary>
     public void RefreshFromSettings()
     {
-        var colorFromSettings = _settingsService.Get<string>("ui.accent_color", "#d4af37") ?? "#d4af37";
+        var colorFromSettings = _settingsService.Get<string>("ui.accent_color", "#d4a73a") ?? "#d4a73a";
         if (!colorFromSettings.Equals(_currentAccentColor, StringComparison.OrdinalIgnoreCase))
         {
             SetAccentColor(colorFromSettings);
@@ -96,15 +96,20 @@ public class ThemeService
             brush.Freeze(); // Make it thread-safe
 
             // Update or add the accent color resource
+            Application.Current.Resources["Color.Accent.Primary"] = color;
+            Application.Current.Resources["Brush.Accent.Primary"] = brush;
             Application.Current.Resources["AccentColor"] = color;
             Application.Current.Resources["AccentBrush"] = brush;
             
             // Also add a faded version for backgrounds
             var fadedColor = Color.FromArgb(30, color.R, color.G, color.B);
+            Application.Current.Resources["Color.Accent.Primary.Faded"] = fadedColor;
+            Application.Current.Resources["Brush.Accent.Primary.Faded"] = new SolidColorBrush(fadedColor);
             Application.Current.Resources["AccentColorFaded"] = fadedColor;
             Application.Current.Resources["AccentBrushFaded"] = new SolidColorBrush(fadedColor);
             
             // Update border brush
+            Application.Current.Resources["Brush.Border.Accent"] = brush;
             Application.Current.Resources["AccentBorderBrush"] = brush;
         }
         catch (Exception ex)

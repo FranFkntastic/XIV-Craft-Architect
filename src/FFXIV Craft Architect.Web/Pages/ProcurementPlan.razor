@@ -12,108 +12,19 @@
 @inject NavigationManager NavigationManager
 @implements IDisposable
 
-<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0" Style="height: calc(100vh - 64px - 28px);">
-    <div style="display: grid; grid-template-columns: 280px 1fr; height: 100%; width: 100%;">
-        
-        <!-- Left Column: Controls -->
-        <div Class="pa-4" Style="border-right: 1px solid #444; overflow-y: auto; min-width: 280px; max-width: 280px;">
-            <MudText Typo="Typo.h6" Color="Color.Primary" Class="mb-4">Procurement Plan</MudText>
-            
-            <div style="margin-bottom: 12px;">
-                <div style="color: #888; font-size: 12px; margin-bottom: 4px;">Mode</div>
-                <MudSelect T="RecommendationMode"
-                           @bind-Value="AppState.RecommendationMode"
-                           Variant="Variant.Outlined"
-                           Dense="true"
-                           Style="width: 100%;">
-                    <MudSelectItem Value="@RecommendationMode.MinimizeTotalCost">Minimize Total Cost</MudSelectItem>
-                    <MudSelectItem Value="@RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
-                    <MudSelectItem Value="@RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
-                </MudSelect>
-            </div>
-            
-            <MudButton OnClick="RunAnalysisAsync"
-                       Disabled="!CanAnalyze() || _isAnalyzing"
-                       Color="Color.Primary"
-                       Variant="Variant.Filled"
-                       FullWidth="true"
-                       Class="mb-4"
-                       StartIcon="@(_isAnalyzing ? "" : Icons.Material.Filled.Assignment)">
-                @if (_isAnalyzing)
-                {
-                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                    <span>Analyzing...</span>
-                }
-                else
-                {
-                    <span>Generate Plan</span>
-                }
-            </MudButton>
-            
-            <MudDivider Class="my-4" />
-            
-            <!-- Status Info -->
-            @if (AppState.ShoppingPlans.Any())
-            {
-                <MudAlert Severity="Severity.Info" Class="mb-4" Dense="true">
-                    <MudText Typo="Typo.caption">
-                        Using market data from @(AppState.ShoppingPlans.Count) analyzed items.
-                    </MudText>
-                </MudAlert>
-            }
-            else
-            {
-                <MudAlert Severity="Severity.Warning" Class="mb-4" Dense="true">
-                    <MudText Typo="Typo.caption">
-                        No market analysis found. Run Market Analysis first for accurate results.
-                    </MudText>
-                </MudAlert>
-            }
-            
-            <MudButton OnClick="GoToPlanner"
-                       Color="Color.Info"
-                       Variant="Variant.Outlined"
-                       FullWidth="true"
-                       Class="mb-2"
-                       StartIcon="@Icons.Material.Filled.ArrowBack">
-                Back to Planner
-            </MudButton>
-            
-            <MudButton OnClick="GoToMarketAnalysis"
-                       Color="Color.Warning"
-                       Variant="Variant.Outlined"
-                       FullWidth="true"
-                       StartIcon="@Icons.Material.Filled.Analytics">
-                Market Analysis
-            </MudButton>
-            
-            @if (AppState.ShoppingPlans.Any())
-            {
-                <MudDivider Class="my-4" />
-                
-                <MudPaper Elevation="2" Class="pa-3" Style="background: linear-gradient(135deg, #2d4a2d 0%, #253825 100%); border-radius: 8px;">
-                    <MudText Typo="Typo.caption" Style="color: #888;">Total Market Cost</MudText>
-                    <MudText Typo="Typo.h6" Style="color: #d4a73a; font-weight: 700;">
-                        @(AppState.ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0).ToString("N0"))g
-                    </MudText>
-                    
-                    <div style="display: flex; gap: 8px; margin-top: 12px;">
-                        <div style="flex: 1; text-align: center; padding: 8px; background: rgba(76, 175, 80, 0.1); border-radius: 6px;">
-                            <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" Style="color: #4caf50;" />
-                            <MudText Typo="Typo.caption" Style="color: #4caf50; display: block;">
-                                @AppState.ShoppingPlans.Count
-                            </MudText>
-                        </div>
-                    </div>
-                </MudPaper>
-            }
-        </div>
-        
-        <!-- Right Column: Procurement Plan Results -->
-        <div Class="pa-4" Style="overflow: hidden; min-width: 0;">
-            <ProcurementResultsPanel ShoppingPlans="AppState.ShoppingPlans"
-                                     OnReanalyzeWithoutWorldRequested="ReanalyzeWithoutWorldAsync" />
-        </div>
+<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 pp-page-container">
+    <div class="pp-grid-layout">
+        <ProcurementControlsPanel
+            AppState="AppState"
+            IsAnalyzing="_isAnalyzing"
+            CanAnalyze="CanAnalyze()"
+            OnRunAnalysisRequested="RunAnalysisAsync"
+            OnGoToPlannerRequested="GoToPlanner"
+            OnGoToMarketAnalysisRequested="GoToMarketAnalysis" />
+
+        <ProcurementResultsShell
+            ShoppingPlans="AppState.ShoppingPlans"
+            OnReanalyzeWithoutWorldRequested="ReanalyzeWithoutWorldAsync" />
     </div>
 </MudContainer>
 

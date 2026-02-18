@@ -35,7 +35,8 @@
     
     <!-- MudBlazor CSS -->
     <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" rel="stylesheet" />
-    <link href="mudblazor.css" rel="stylesheet" />
+    <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <link href="FFXIV_Craft_Architect.Web.styles.css" rel="stylesheet" />
     
     <style>
         /* Fallback CSS variables in case MudThemeProvider doesn't initialize */
@@ -138,7 +139,7 @@
             // Try to find the mudblazor stylesheet by checking all stylesheets
             let mudblazorSheet = null;
             for (let sheet of document.styleSheets) {
-                if (sheet.href && sheet.href.includes('mudblazor')) {
+                if (sheet.href && sheet.href.toLowerCase().includes('mudblazor')) {
                     mudblazorSheet = sheet;
                     break;
                 }
@@ -170,7 +171,7 @@
     </script>
 
     <script src="_framework/blazor.webassembly.js" onload="console.log('[DIAG] blazor.webassembly.js loaded')" onerror="console.error('[DIAG] blazor.webassembly.js FAILED')"></script>
-    <script src="mudblazor.js" onload="console.log('[DIAG] mudblazor.js loaded')" onerror="console.error('[DIAG] mudblazor.js FAILED')"></script>
+    <script src="_content/MudBlazor/MudBlazor.min.js" onload="console.log('[DIAG] mudblazor.js loaded')" onerror="console.error('[DIAG] mudblazor.js FAILED')"></script>
     
     <!-- IndexedDB storage for plans and settings -->
     <script src="indexedDB.js?v=3" onload="console.log('[DIAG] indexedDB.js loaded')" onerror="console.error('[DIAG] indexedDB.js FAILED')"></script>

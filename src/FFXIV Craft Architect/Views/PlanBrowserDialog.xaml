@@ -5,18 +5,8 @@
         Width="700"
         Height="600"
         WindowStartupLocation="CenterOwner"
-        Background="#1e1e1e"
+        Background="{StaticResource Brush.Surface.Window}"
         ResizeMode="CanResize">
-
-    <Window.Resources>
-        <SolidColorBrush x:Key="GoldAccentBrush" Color="#d4a73a"/>
-        <SolidColorBrush x:Key="CardBackgroundBrush" Color="#2d2d2d"/>
-        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#ffffff"/>
-        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#aaaaaa"/>
-        <SolidColorBrush x:Key="HoverBrush" Color="#3d3d3d"/>
-        <SolidColorBrush x:Key="SuccessBrush" Color="#4caf50"/>
-        <SolidColorBrush x:Key="DangerBrush" Color="#ff6b6b"/>
-    </Window.Resources>
 
     <Grid Margin="16">
         <Grid.RowDefinitions>
@@ -31,16 +21,16 @@
             <TextBlock Text="Plan Browser" 
                        FontSize="20" 
                        FontWeight="Bold"
-                       Foreground="{StaticResource GoldAccentBrush}"/>
+                       Foreground="{StaticResource Brush.Accent.Primary}"/>
             <TextBlock Text="Manage root items in your crafting plan. Drag items to reorder."
                        FontSize="12"
-                       Foreground="{StaticResource TextSecondaryBrush}"
+                       Foreground="{StaticResource Brush.Text.Secondary}"
                        Margin="0,4,0,0"/>
         </StackPanel>
 
         <!-- Toolbar -->
         <Border Grid.Row="1" 
-                Background="{StaticResource CardBackgroundBrush}"
+                Background="{StaticResource Brush.Surface.Card}"
                 CornerRadius="4"
                 Padding="8"
                 Margin="0,0,0,8">
@@ -50,8 +40,8 @@
                         Padding="12,6"
                         Margin="0,0,8,0"
                         Background="Transparent"
-                        Foreground="{StaticResource TextPrimaryBrush}"
-                        BorderBrush="{StaticResource GoldAccentBrush}"
+                        Foreground="{StaticResource Brush.Text.Primary}"
+                        BorderBrush="{StaticResource Brush.Accent.Primary}"
                         BorderThickness="1"
                         Click="OnMoveUp"
                         IsEnabled="False"/>
@@ -60,8 +50,8 @@
                         Padding="12,6"
                         Margin="0,0,8,0"
                         Background="Transparent"
-                        Foreground="{StaticResource TextPrimaryBrush}"
-                        BorderBrush="{StaticResource GoldAccentBrush}"
+                        Foreground="{StaticResource Brush.Text.Primary}"
+                        BorderBrush="{StaticResource Brush.Accent.Primary}"
                         BorderThickness="1"
                         Click="OnMoveDown"
                         IsEnabled="False"/>
@@ -71,8 +61,8 @@
                         Padding="12,6"
                         Margin="8,0,0,0"
                         Background="Transparent"
-                        Foreground="{StaticResource DangerBrush}"
-                        BorderBrush="{StaticResource DangerBrush}"
+                        Foreground="{StaticResource Brush.Status.Error}"
+                        BorderBrush="{StaticResource Brush.Status.Error}"
                         BorderThickness="1"
                         Click="OnRemoveSelected"
                         IsEnabled="False"/>
@@ -81,13 +71,13 @@
                            Text="0 items"
                            VerticalAlignment="Center"
                            Margin="16,0,0,0"
-                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                           Foreground="{StaticResource Brush.Text.Secondary}"/>
             </StackPanel>
         </Border>
 
         <!-- Items List -->
         <Border Grid.Row="2" 
-                Background="{StaticResource CardBackgroundBrush}"
+                Background="{StaticResource Brush.Surface.Card}"
                 CornerRadius="4">
             <DataGrid x:Name="RootItemsGrid"
                       AutoGenerateColumns="False"
@@ -124,7 +114,7 @@
                                         IsReadOnly="True">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Brush.Text.Primary}"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                                 <Setter Property="Padding" Value="8,4"/>
                             </Style>
@@ -137,16 +127,16 @@
                                         Width="80">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Brush.Text.Primary}"/>
                                 <Setter Property="HorizontalAlignment" Value="Center"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                         <DataGridTextColumn.EditingElementStyle>
                             <Style TargetType="TextBox">
-                                <Setter Property="Background" Value="#1e1e1e"/>
-                                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-                                <Setter Property="BorderBrush" Value="{StaticResource GoldAccentBrush}"/>
+                                <Setter Property="Background" Value="{StaticResource Brush.Surface.Window}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Brush.Text.Primary}"/>
+                                <Setter Property="BorderBrush" Value="{StaticResource Brush.Accent.Primary}"/>
                                 <Setter Property="HorizontalAlignment" Value="Stretch"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                                 <Setter Property="HorizontalContentAlignment" Value="Center"/>
@@ -174,8 +164,8 @@
                                 <Button Content="Remove"
                                         Padding="8,4"
                                         Background="Transparent"
-                                        Foreground="{StaticResource DangerBrush}"
-                                        BorderBrush="{StaticResource DangerBrush}"
+                                        Foreground="{StaticResource Brush.Status.Error}"
+                                        BorderBrush="{StaticResource Brush.Status.Error}"
                                         BorderThickness="1"
                                         Click="OnRemoveItem"/>
                             </DataTemplate>
@@ -186,16 +176,16 @@
                 <DataGrid.RowStyle>
                     <Style TargetType="DataGridRow">
                         <Setter Property="Background" Value="Transparent"/>
-                        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                        <Setter Property="Foreground" Value="{StaticResource Brush.Text.Primary}"/>
                         <Setter Property="BorderThickness" Value="0,0,0,1"/>
                         <Setter Property="BorderBrush" Value="#3d3d3d"/>
                         <Style.Triggers>
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter Property="Background" Value="#4d4d4d"/>
-                                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Brush.Text.Primary}"/>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="{StaticResource HoverBrush}"/>
+                                <Setter Property="Background" Value="{StaticResource Brush.Surface.Card.Summary}"/>
                             </Trigger>
                         </Style.Triggers>
                     </Style>
@@ -204,7 +194,7 @@
                 <DataGrid.ColumnHeaderStyle>
                     <Style TargetType="DataGridColumnHeader">
                         <Setter Property="Background" Value="#3d3d3d"/>
-                        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                        <Setter Property="Foreground" Value="{StaticResource Brush.Text.Primary}"/>
                         <Setter Property="Padding" Value="8,6"/>
                         <Setter Property="BorderThickness" Value="0,0,1,1"/>
                         <Setter Property="BorderBrush" Value="#4d4d4d"/>
@@ -223,24 +213,24 @@
                     Padding="16,8"
                     Margin="0,0,8,0"
                     Background="Transparent"
-                    Foreground="{StaticResource SuccessBrush}"
-                    BorderBrush="{StaticResource SuccessBrush}"
+                    Foreground="{StaticResource Brush.Status.Success}"
+                    BorderBrush="{StaticResource Brush.Status.Success}"
                     BorderThickness="1"
                     Click="OnAddNewItem"/>
             <Separator Margin="8,0" Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}"/>
             <Button Content="OK"
                     Padding="24,8"
                     Margin="0,0,8,0"
-                    Background="{StaticResource GoldAccentBrush}"
-                    Foreground="#1a1a1a"
+                    Background="{StaticResource Brush.Accent.Primary}"
+                    Foreground="{StaticResource Brush.Text.OnAccent}"
                     FontWeight="SemiBold"
                     BorderThickness="0"
                     Click="OnOK"/>
             <Button Content="Cancel"
                     Padding="16,8"
                     Background="Transparent"
-                    Foreground="{StaticResource TextSecondaryBrush}"
-                    BorderBrush="{StaticResource TextSecondaryBrush}"
+                    Foreground="{StaticResource Brush.Text.Secondary}"
+                    BorderBrush="{StaticResource Brush.Text.Secondary}"
                     BorderThickness="1"
                     Click="OnCancel"/>
         </StackPanel>

@@ -1,0 +1,63 @@
+<div class="rp-column">
+    <div class="rp-title">Procurement Details</div>
+
+    @if (CurrentPlan == null)
+    {
+        <div class="rp-empty-state">
+            Build a recipe plan to view procurement guidance.
+        </div>
+    }
+    else
+    {
+        var materials = CurrentPlan.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList();
+        var hqMaterials = materials.Count(m => m.RequiresHq);
+        var pricedMaterials = materials.Count(m => m.UnitPrice > 0);
+        var unpricedMaterials = materials.Count - pricedMaterials;
+
+        <div class="rp-panel">
+            <div class="rp-panel-header">
+                <div class="rp-header-title">Plan Snapshot</div>
+            </div>
+
+            <div class="rp-details-wrap">
+                <div class="rp-detail-row">
+                    <span class="rp-detail-label">Target items</span>
+                    <span class="rp-detail-value">@CurrentPlan.RootItems.Count</span>
+                </div>
+                <div class="rp-detail-row">
+                    <span class="rp-detail-label">Material entries</span>
+                    <span class="rp-detail-value">@materials.Count</span>
+                </div>
+                <div class="rp-detail-row">
+                    <span class="rp-detail-label">HQ-required</span>
+                    <span class="rp-detail-value">@hqMaterials</span>
+                </div>
+                <div class="rp-detail-row">
+                    <span class="rp-detail-label">Priced materials</span>
+                    <span class="rp-detail-value">@pricedMaterials</span>
+                </div>
+                <div class="rp-detail-row">
+                    <span class="rp-detail-label">Missing prices</span>
+                    <span class="rp-detail-value">@unpricedMaterials</span>
+                </div>
+            </div>
+        </div>
+
+        @if (!materials.Any())
+        {
+            <div class="rp-info-block">
+                No aggregated materials were produced for this plan yet.
+            </div>
+        }
+        else
+        {
+            <div class="rp-info-block">
+                Use the Recipe Plan tree to choose item sources (Craft, Market, Vendor). Then switch to Market Analysis to compare world prices and build procurement routes.
+            </div>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public CraftingPlan? CurrentPlan { get; set; }
+}

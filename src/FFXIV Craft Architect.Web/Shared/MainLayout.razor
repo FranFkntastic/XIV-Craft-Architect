@@ -542,9 +542,7 @@
                         AppState.CurrentPlan = newPlan;
                         AppState.NotifyPlanChanged();
                         
-                        // Fetch market prices for all materials (matches manual plan build flow)
-                        await RefreshPricesAsync();
-                        
+                        // Market prices will be fetched when user navigates to the planner page
                         Snackbar.Add("Plan rebuilt from imported items", Severity.Success);
                     }
                     catch (Exception ex)

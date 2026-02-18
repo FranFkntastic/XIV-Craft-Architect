@@ -1,0 +1,103 @@
+@using FFXIV_Craft_Architect.Web.Services
+
+<div class="pp-controls-column">
+    <MudText Typo="Typo.h6" Color="Color.Primary" Class="mb-4">Procurement Plan</MudText>
+
+    <div class="pp-field-block">
+        <div class="pp-field-label">Mode</div>
+        <MudSelect T="RecommendationMode"
+                   @bind-Value="AppState.RecommendationMode"
+                   Variant="Variant.Outlined"
+                   Dense="true"
+                   Class="pp-full-width">
+            <MudSelectItem Value="@RecommendationMode.MinimizeTotalCost">Minimize Total Cost</MudSelectItem>
+            <MudSelectItem Value="@RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
+            <MudSelectItem Value="@RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
+        </MudSelect>
+    </div>
+
+    <MudButton OnClick="OnRunAnalysisRequested"
+               Disabled="@(!CanAnalyze || IsAnalyzing)"
+               Color="Color.Primary"
+               Variant="Variant.Filled"
+               FullWidth="true"
+               Class="mb-4"
+               StartIcon="@(IsAnalyzing ? "" : Icons.Material.Filled.Assignment)">
+        @if (IsAnalyzing)
+        {
+            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            <span>Analyzing...</span>
+        }
+        else
+        {
+            <span>Generate Plan</span>
+        }
+    </MudButton>
+
+    <MudDivider Class="my-4" />
+
+    @if (AppState.ShoppingPlans.Any())
+    {
+        <MudAlert Severity="Severity.Info" Class="mb-4" Dense="true">
+            <MudText Typo="Typo.caption">
+                Using market data from @AppState.ShoppingPlans.Count analyzed items.
+            </MudText>
+        </MudAlert>
+    }
+    else
+    {
+        <MudAlert Severity="Severity.Warning" Class="mb-4" Dense="true">
+            <MudText Typo="Typo.caption">
+                No market analysis found. Run Market Analysis first for accurate results.
+            </MudText>
+        </MudAlert>
+    }
+
+    <MudButton OnClick="OnGoToPlannerRequested"
+               Color="Color.Info"
+               Variant="Variant.Outlined"
+               FullWidth="true"
+               Class="mb-2"
+               StartIcon="@Icons.Material.Filled.ArrowBack">
+        Back to Planner
+    </MudButton>
+
+    <MudButton OnClick="OnGoToMarketAnalysisRequested"
+               Color="Color.Warning"
+               Variant="Variant.Outlined"
+               FullWidth="true"
+               StartIcon="@Icons.Material.Filled.Analytics">
+        Market Analysis
+    </MudButton>
+
+    @if (AppState.ShoppingPlans.Any())
+    {
+        <MudDivider Class="my-4" />
+
+        <MudPaper Elevation="2" Class="pa-3 pp-summary-paper">
+            <MudText Typo="Typo.caption" Class="pp-summary-label">Total Market Cost</MudText>
+            <MudText Typo="Typo.h6" Class="pp-summary-value">
+                @(AppState.ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0).ToString("N0"))g
+            </MudText>
+
+            <div class="pp-summary-stat-row">
+                <div class="pp-summary-stat">
+                    <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" Class="pp-summary-stat-icon" />
+                    <MudText Typo="Typo.caption" Class="pp-summary-stat-text">
+                        @AppState.ShoppingPlans.Count
+                    </MudText>
+                </div>
+            </div>
+        </MudPaper>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public AppState AppState { get; set; } = default!;
+    [Parameter] public bool IsAnalyzing { get; set; }
+    [Parameter] public bool CanAnalyze { get; set; }
+
+    [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
+    [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
+    [Parameter] public EventCallback OnGoToMarketAnalysisRequested { get; set; }
+}

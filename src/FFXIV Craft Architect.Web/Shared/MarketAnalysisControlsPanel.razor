@@ -1,0 +1,167 @@
+@using FFXIV_Craft_Architect.Web.Services
+
+<div class="ma-controls-column">
+    <MudText Typo="Typo.h6" Color="Color.Primary" Class="mb-4">Market Analysis</MudText>
+
+    <div class="ma-field-block">
+        <div class="ma-field-label">Mode</div>
+        <MudSelect T="RecommendationMode"
+                   Value="AppState.RecommendationMode"
+                   ValueChanged="OnModeChangedRequested"
+                   Variant="Variant.Outlined"
+                   Dense="true"
+                   Class="ma-full-width">
+            <MudSelectItem Value="@RecommendationMode.MinimizeTotalCost">Minimize Total Cost</MudSelectItem>
+            <MudSelectItem Value="@RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
+            <MudSelectItem Value="@RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
+        </MudSelect>
+    </div>
+
+    <div class="ma-field-block">
+        <div class="ma-field-label">Sort</div>
+        <MudSelect T="MarketSortOption"
+                   @bind-Value="AppState.MarketSortPreference"
+                   Variant="Variant.Outlined"
+                   Dense="true"
+                   Class="ma-full-width">
+            <MudSelectItem Value="@MarketSortOption.ByRecommended">By Recommended</MudSelectItem>
+            <MudSelectItem Value="@MarketSortOption.Alphabetical">Alphabetical</MudSelectItem>
+        </MudSelect>
+    </div>
+
+    <div class="ma-region-toggle-block">
+        <MudCheckBox T="bool"
+                     @bind-Value="AppState.SearchEntireRegion"
+                     Dense="true"
+                     Color="Color.Primary"
+                     Class="ma-region-toggle">
+            <MudText Typo="Typo.body2" Class="ma-region-toggle-text">Search entire region</MudText>
+        </MudCheckBox>
+        <MudText Typo="Typo.caption" Class="ma-region-toggle-caption">
+            Slower but finds best prices across all data centers in @AppState.SelectedRegion
+        </MudText>
+    </div>
+
+    @if (!AppState.SearchEntireRegion)
+    {
+        <div class="ma-split-config">
+            <div class="ma-split-header-row">
+                <MudIcon Icon="@Icons.Material.Filled.CallSplit" Color="Color.Secondary" Size="Size.Small" />
+                <span class="ma-split-title">Split-World Purchases</span>
+                <span class="ma-beta-badge">BETA</span>
+            </div>
+
+            <MudCheckBox T="bool"
+                         @bind-Value="AppState.EnableMultiWorldSplits"
+                         Dense="true"
+                         Color="Color.Secondary"
+                         Class="mb-2">
+                <MudText Typo="Typo.caption" Class="ma-split-toggle-text">Enable multi-world splits</MudText>
+            </MudCheckBox>
+
+            @if (AppState.EnableMultiWorldSplits)
+            {
+                <div class="ma-split-help-wrap">
+                    <MudText Typo="Typo.caption" Class="ma-split-help-text">
+                        Multi-world purchases enabled. The algorithm will automatically find the best combination of worlds.
+                    </MudText>
+                </div>
+            }
+        </div>
+    }
+
+    <MudButton OnClick="OnRunAnalysisRequested"
+               Disabled="@(!CanAnalyze || IsAnalyzing)"
+               Color="Color.Primary"
+               Variant="Variant.Filled"
+               FullWidth="true"
+               Class="mb-4"
+               StartIcon="@(IsAnalyzing ? "" : Icons.Material.Filled.Analytics)">
+        @if (IsAnalyzing)
+        {
+            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            <span>Analyzing...</span>
+        }
+        else
+        {
+            <span>Run Analysis</span>
+        }
+    </MudButton>
+
+    <MudButton OnClick="OnRefreshPricesRequested"
+               Disabled="@(!CanRefreshPrices || IsRefreshingPrices)"
+               Color="Color.Secondary"
+               Variant="Variant.Outlined"
+               FullWidth="true"
+               Class="mb-4"
+               StartIcon="@(IsRefreshingPrices ? "" : Icons.Material.Filled.Refresh)">
+        @if (IsRefreshingPrices)
+        {
+            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            <span>Refreshing...</span>
+        }
+        else
+        {
+            <span>Refresh Prices</span>
+        }
+    </MudButton>
+
+    <MudDivider Class="my-4" />
+
+    @if (BuyItems.Any())
+    {
+        <MudText Typo="Typo.subtitle2" Class="mb-2 ma-items-title">Items to Analyze</MudText>
+        <MudPaper Elevation="0" Class="pa-2 mb-4 ma-items-summary-paper">
+            <MudStack Spacing="1">
+                @foreach (var item in BuyItems.Take(8))
+                {
+                    <div class="ma-item-summary-row">
+                        <MudText Typo="Typo.caption" Class="ma-item-summary-name">@item.Name</MudText>
+                        <MudText Typo="Typo.caption" Class="ma-item-summary-qty">×@item.TotalQuantity</MudText>
+                    </div>
+                }
+                @if (BuyItems.Count > 8)
+                {
+                    <MudText Typo="Typo.caption" Class="ma-item-summary-more">
+                        ... and @(BuyItems.Count - 8) more
+                    </MudText>
+                }
+            </MudStack>
+        </MudPaper>
+    }
+
+    <MudButton OnClick="OnGoToPlannerRequested"
+               Color="Color.Info"
+               Variant="Variant.Outlined"
+               FullWidth="true"
+               Class="mb-2"
+               StartIcon="@Icons.Material.Filled.ArrowBack">
+        Back to Planner
+    </MudButton>
+
+    @if (AppState.ShoppingPlans.Any())
+    {
+        <MudButton OnClick="OnGoToProcurementRequested"
+                   Color="Color.Success"
+                   Variant="Variant.Outlined"
+                   FullWidth="true"
+                   EndIcon="@Icons.Material.Filled.ArrowForward">
+            View Procurement Plan
+        </MudButton>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public AppState AppState { get; set; } = default!;
+    [Parameter] public List<MaterialAggregate> BuyItems { get; set; } = new();
+    [Parameter] public bool IsAnalyzing { get; set; }
+    [Parameter] public bool IsRefreshingPrices { get; set; }
+    [Parameter] public bool CanAnalyze { get; set; }
+    [Parameter] public bool CanRefreshPrices { get; set; }
+
+    [Parameter] public EventCallback<RecommendationMode> OnModeChangedRequested { get; set; }
+    [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
+    [Parameter] public EventCallback OnRefreshPricesRequested { get; set; }
+    [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
+    [Parameter] public EventCallback OnGoToProcurementRequested { get; set; }
+}

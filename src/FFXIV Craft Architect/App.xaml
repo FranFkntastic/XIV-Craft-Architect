@@ -12,12 +12,19 @@
                 <ResourceDictionary Source="Resources/ThemeColors.xaml" />
             </ResourceDictionary.MergedDictionaries>
             
-            <!-- Default accent color resources - updated dynamically by ThemeService -->
-            <Color x:Key="AccentColor">#d4af37</Color>
-            <SolidColorBrush x:Key="AccentBrush" Color="#d4af37"/>
-            <Color x:Key="AccentColorFaded">#1ed4af37</Color>
-            <SolidColorBrush x:Key="AccentBrushFaded" Color="#1ed4af37"/>
-            <SolidColorBrush x:Key="AccentBorderBrush" Color="#d4af37"/>
+            <!-- Default accent resources - updated dynamically by ThemeService -->
+            <Color x:Key="Color.Accent.Primary">#d4a73a</Color>
+            <SolidColorBrush x:Key="Brush.Accent.Primary" Color="#d4a73a"/>
+            <Color x:Key="Color.Accent.Primary.Faded">#1ed4a73a</Color>
+            <SolidColorBrush x:Key="Brush.Accent.Primary.Faded" Color="#1ed4a73a"/>
+            <SolidColorBrush x:Key="Brush.Border.Accent" Color="#d4a73a"/>
+
+            <!-- Back-compat resources -->
+            <Color x:Key="AccentColor">#d4a73a</Color>
+            <SolidColorBrush x:Key="AccentBrush" Color="#d4a73a"/>
+            <Color x:Key="AccentColorFaded">#1ed4a73a</Color>
+            <SolidColorBrush x:Key="AccentBrushFaded" Color="#1ed4a73a"/>
+            <SolidColorBrush x:Key="AccentBorderBrush" Color="#d4a73a"/>
             
             <!-- Converters -->
             <local:StringToBrushConverter x:Key="StringToBrushConverter"/>

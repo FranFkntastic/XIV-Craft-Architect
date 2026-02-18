@@ -1,0 +1,69 @@
+<div class="ma-results-column">
+    @if (!BuyItems.Any() && !ShoppingPlans.Any())
+    {
+        <MudPaper Elevation="2" Class="pa-4 ma-state-paper">
+            <div class="ma-state-inner">
+                <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Large" Class="ma-state-icon" />
+                <MudText Typo="Typo.h6" Class="ma-state-title">No Items to Analyze</MudText>
+                <MudText Typo="Typo.body2" Class="ma-state-body">
+                    Build a plan in the Recipe Planner and mark items to buy from the market.
+                </MudText>
+
+                <MudButton OnClick="OnGoToPlannerRequested"
+                           Color="Color.Primary"
+                           Variant="Variant.Filled"
+                           Size="Size.Large"
+                           StartIcon="@Icons.Material.Filled.ArrowBack">
+                    Go to Recipe Planner
+                </MudButton>
+            </div>
+        </MudPaper>
+    }
+    else if (ShoppingPlans.Any())
+    {
+        <MarketLogisticsPanel ShoppingPlans="ShoppingPlans"
+                              CurrentSort="CurrentSort"
+                              ShowAnalysisSections="true"
+                              AutoExpandItemId="AutoExpandItemId" />
+    }
+    else
+    {
+        <MudPaper Elevation="2" Class="pa-4 ma-state-paper">
+            <div class="ma-state-inner">
+                <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Large" Class="ma-state-icon" />
+                <MudText Typo="Typo.h6" Class="ma-state-title">Ready to Analyze</MudText>
+                <MudText Typo="Typo.body2" Class="ma-state-body">
+                    Found @BuyItems.Count items to analyze. Click "Run Analysis" to compare prices across worlds.
+                </MudText>
+
+                <MudButton OnClick="OnRunAnalysisRequested"
+                           Color="Color.Primary"
+                           Variant="Variant.Filled"
+                           Size="Size.Large"
+                           StartIcon="@Icons.Material.Filled.Analytics"
+                           Disabled="IsAnalyzing">
+                    @if (IsAnalyzing)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                        <span>Analyzing...</span>
+                    }
+                    else
+                    {
+                        <span>Analyze Market</span>
+                    }
+                </MudButton>
+            </div>
+        </MudPaper>
+    }
+</div>
+
+@code {
+    [Parameter] public List<MaterialAggregate> BuyItems { get; set; } = new();
+    [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    [Parameter] public MarketSortOption CurrentSort { get; set; }
+    [Parameter] public int? AutoExpandItemId { get; set; }
+    [Parameter] public bool IsAnalyzing { get; set; }
+
+    [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
+    [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
+}

@@ -41,38 +41,10 @@
     <div style="flex-grow: 1; overflow-y: auto; min-height: 0;">
         @if (ShoppingPlans?.Any() == true)
         {
-            <!-- Craft vs Buy Analysis (collapsible, full width) -->
-            @if (ShowAnalysisSections && CraftAnalyses?.Any() == true)
-            {
-                <div style="margin-bottom: 8px; background: #2a2a25; border-radius: 4px; border: 1px solid #444; overflow: hidden;">
-                    <div @onclick="ToggleCraftAnalysis"
-                         style="background: #363630; padding: 8px 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <MudIcon Icon="@Icons.Material.Filled.Assessment" Color="Color.Success" Size="Size.Small" />
-                            <span style="color: #90EE90; font-weight: 600; font-size: 13px;">Craft vs Buy Analysis</span>
-                            @if (!string.IsNullOrEmpty(CraftAnalysisSummary))
-                            {
-                                <span style="color: #aaa; background: #1e1e1e; padding: 2px 8px; border-radius: 10px; font-size: 11px;">@CraftAnalysisSummary</span>
-                            }
-                        </div>
-                        <MudIcon Icon="@(_craftAnalysisExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" 
-                                 Color="Color.Secondary" Size="Size.Small" />
-                    </div>
-                    @if (_craftAnalysisExpanded)
-                    {
-                        <div style="background: #1e1e1a; padding: 8px;">
-                            <CraftAnalysisPanel Analyses="CraftAnalyses" />
-                        </div>
-                    }
-                </div>
-            }
-            
             <!-- Collapsed Cards Grid -->
             <div style="display: flex; flex-direction: column; gap: 4px;">
                 @{ 
                     var vendorPlans = GetVendorPlans().ToList();
-                    var singleWorldPlans = GetSingleWorldPlans().ToList();
-                    var splitWorldPlans = GetSplitWorldPlans().ToList();
                 }
                 
                 <!-- Vendor Items Section -->
@@ -138,8 +110,6 @@
 
 @code {
     [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
-    [Parameter] public List<CraftVsBuyAnalysis> CraftAnalyses { get; set; } = new();
-    [Parameter] public string? CraftAnalysisSummary { get; set; }
     [Parameter] public string? PurchaseSummaryText { get; set; }
     [Parameter] public RecommendationMode InitialMode { get; set; } = RecommendationMode.MinimizeTotalCost;
     [Parameter] public EventCallback OnRefreshMarketData { get; set; }
@@ -151,14 +121,12 @@
     [Parameter] public MarketSortOption CurrentSort { get; set; } = MarketSortOption.ByRecommended;
     [Parameter] public int? AutoExpandItemId { get; set; }
 
-    private bool _craftAnalysisExpanded = false;
     private DetailedShoppingPlan? _expandedPlan;
     private bool _autoExpandProcessed = false;
 
     protected override void OnParametersSet()
     {
         ShoppingPlans ??= new List<DetailedShoppingPlan>();
-        CraftAnalyses ??= new List<CraftVsBuyAnalysis>();
         
         // Handle auto-expand once when the parameter is set
         if (!_autoExpandProcessed && AutoExpandItemId.HasValue && ShoppingPlans.Any())
@@ -175,11 +143,6 @@
             // Reset when no auto-expand is requested
             _autoExpandProcessed = false;
         }
-    }
-
-    private void ToggleCraftAnalysis()
-    {
-        _craftAnalysisExpanded = !_craftAnalysisExpanded;
     }
 
     private void SelectPlan(DetailedShoppingPlan plan)
@@ -229,27 +192,6 @@
         return GetSortedPlans().Where(p => p.RecommendedWorld?.WorldName != "Vendor");
     }
     
-    /// <summary>
-    /// Get single-world market purchase plans (non-split).
-    /// </summary>
-    private IEnumerable<DetailedShoppingPlan> GetSingleWorldPlans()
-    {
-        return GetSortedPlans().Where(p => 
-            p.RecommendedWorld?.WorldName != "Vendor" && 
-            (!p.RequiresSplitPurchase || p.RecommendedSplit?.Any() != true));
-    }
-    
-    /// <summary>
-    /// Get split-world market purchase plans.
-    /// </summary>
-    private IEnumerable<DetailedShoppingPlan> GetSplitWorldPlans()
-    {
-        return GetSortedPlans().Where(p => 
-            p.RecommendedWorld?.WorldName != "Vendor" && 
-            p.RequiresSplitPurchase && 
-            p.RecommendedSplit?.Any() == true);
-    }
-
     private decimal TotalDCAverage => ShoppingPlans?.Sum(p => p.DCAveragePrice * p.QuantityNeeded) ?? 0;
     
     private decimal TotalBestValue => ShoppingPlans?.Sum(p => 

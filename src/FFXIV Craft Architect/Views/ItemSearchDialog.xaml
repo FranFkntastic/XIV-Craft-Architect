@@ -5,14 +5,7 @@
         Width="500"
         Height="400"
         WindowStartupLocation="CenterOwner"
-        Background="#1e1e1e">
-
-    <Window.Resources>
-        <SolidColorBrush x:Key="GoldAccentBrush" Color="#d4a73a"/>
-        <SolidColorBrush x:Key="CardBackgroundBrush" Color="#2d2d2d"/>
-        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#ffffff"/>
-        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#aaaaaa"/>
-    </Window.Resources>
+        Background="{StaticResource Brush.Surface.Window}">
 
     <Grid Margin="16">
         <Grid.RowDefinitions>
@@ -27,13 +20,13 @@
                    Text="Add Item to Plan"
                    FontSize="18"
                    FontWeight="Bold"
-                   Foreground="{StaticResource GoldAccentBrush}"
+                   Foreground="{StaticResource Brush.Accent.Primary}"
                    Margin="0,0,0,12"/>
 
         <!-- Search Box -->
         <StackPanel Grid.Row="1" Margin="0,0,0,12">
             <TextBlock Text="Item Name:" 
-                       Foreground="{StaticResource TextSecondaryBrush}"
+                       Foreground="{StaticResource Brush.Text.Secondary}"
                        Margin="0,0,0,4"/>
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -43,16 +36,16 @@
                 <TextBox x:Name="SearchTextBox"
                          Grid.Column="0"
                          Padding="8"
-                         Background="#2d2d2d"
-                         Foreground="{StaticResource TextPrimaryBrush}"
+                         Background="{StaticResource Brush.Surface.Card}"
+                         Foreground="{StaticResource Brush.Text.Primary}"
                          BorderBrush="#4d4d4d"
                          KeyDown="OnSearchKeyDown"/>
                 <Button Grid.Column="1"
                         Content="Search"
                         Padding="16,8"
                         Margin="8,0,0,0"
-                        Background="{StaticResource GoldAccentBrush}"
-                        Foreground="#1a1a1a"
+                        Background="{StaticResource Brush.Accent.Primary}"
+                        Foreground="{StaticResource Brush.Text.OnAccent}"
                         FontWeight="SemiBold"
                         BorderThickness="0"
                         Click="OnSearch"/>
@@ -61,7 +54,7 @@
 
         <!-- Results -->
         <Border Grid.Row="2" 
-                Background="{StaticResource CardBackgroundBrush}"
+                Background="{StaticResource Brush.Surface.Card}"
                 CornerRadius="4"
                 Padding="8">
             <Grid>
@@ -73,7 +66,7 @@
                 <TextBlock Grid.Row="0"
                            Text="Search Results"
                            FontWeight="SemiBold"
-                           Foreground="{StaticResource GoldAccentBrush}"
+                           Foreground="{StaticResource Brush.Accent.Primary}"
                            Margin="0,0,0,8"/>
                 
                 <ListBox Grid.Row="1"
@@ -96,7 +89,7 @@
                                            Text="{Binding Name}"
                                            VerticalAlignment="Center"
                                            Margin="8,0,0,0"
-                                           Foreground="{StaticResource TextPrimaryBrush}"/>
+                                           Foreground="{StaticResource Brush.Text.Primary}"/>
                             </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
@@ -112,8 +105,8 @@
             <Button Content="Add Selected"
                     Padding="16,8"
                     Margin="0,0,8,0"
-                    Background="{StaticResource GoldAccentBrush}"
-                    Foreground="#1a1a1a"
+                    Background="{StaticResource Brush.Accent.Primary}"
+                    Foreground="{StaticResource Brush.Text.OnAccent}"
                     FontWeight="SemiBold"
                     BorderThickness="0"
                     Click="OnAddSelected"
@@ -122,8 +115,8 @@
             <Button Content="Cancel"
                     Padding="16,8"
                     Background="Transparent"
-                    Foreground="{StaticResource TextSecondaryBrush}"
-                    BorderBrush="{StaticResource TextSecondaryBrush}"
+                    Foreground="{StaticResource Brush.Text.Secondary}"
+                    BorderBrush="{StaticResource Brush.Text.Secondary}"
                     BorderThickness="1"
                     Click="OnCancel"/>
         </StackPanel>

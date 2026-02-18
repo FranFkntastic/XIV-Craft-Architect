@@ -6,6 +6,48 @@ using Microsoft.Extensions.Logging;
 
 namespace FFXIV_Craft_Architect.Core.Services;
 
+#region Progress and Exception Types
+
+/// <summary>
+/// Progress information for tree building
+/// </summary>
+public class TreeBuildProgress
+{
+    public int CurrentLevel { get; set; }
+    public int TotalLevels { get; set; }
+    public int CurrentBatch { get; set; }
+    public int TotalBatches { get; set; }
+    public int ItemsFetched { get; set; }
+    public int TotalItems { get; set; }
+    public string CurrentItemName { get; set; } = "";
+    public string Stage { get; set; } = "";  // "Discovering", "Fetching", "Building"
+}
+
+/// <summary>
+/// Exception thrown when tree calculation fails at a specific level
+/// </summary>
+public class TreeCalculationException : Exception
+{
+    public int FailedLevel { get; }
+    public List<int> FailedItemIds { get; }
+    public TimeSpan ElapsedTime { get; }
+
+    public TreeCalculationException(
+        string message,
+        int level,
+        List<int> itemIds,
+        TimeSpan elapsed,
+        Exception? inner = null)
+        : base(message, inner)
+    {
+        FailedLevel = level;
+        FailedItemIds = itemIds;
+        ElapsedTime = elapsed;
+    }
+}
+
+#endregion
+
 /// <summary>
 /// Service for calculating hierarchical crafting recipes.
 /// Builds a tree of items with their ingredients, handling circular dependencies and aggregation.
@@ -42,6 +84,38 @@ public class RecipeCalculationService
     // Maximum recursion depth to prevent stack overflow
     private const int MaxDepth = 20;
 
+    #region Breadth-First Tree Building Types
+
+    /// <summary>
+    /// Represents a node pending tree construction
+    /// </summary>
+    private record PendingNode(
+        int ItemId,
+        string Name,
+        int Quantity,
+        int Depth,
+        PlanNode? Parent);
+
+    /// <summary>
+    /// Information about one level of the tree
+    /// </summary>
+    private record LevelInfo(
+        int Depth,
+        List<int> ItemIds,
+        Dictionary<int, int> QuantityByItemId);
+
+    /// <summary>
+    /// Result of tree discovery phase
+    /// </summary>
+    private class TreeDiscoveryResult
+    {
+        public List<LevelInfo> Levels { get; } = new();
+        public HashSet<int> AllItemIds { get; } = new();
+        public int MaxDepth { get; set; }
+    }
+
+    #endregion
+
     public RecipeCalculationService(GarlandService garlandService, ILogger<RecipeCalculationService>? logger = null)
     {
         _garlandService = garlandService;
@@ -68,40 +142,86 @@ public class RecipeCalculationService
 
         _itemCache.Clear();
 
-        foreach (var (itemId, name, quantity, isHqRequired) in targetItems)
+        try
         {
-            try
+            // Phase 1: Discover tree structure (breadth-first)
+            _logger?.LogInformation("[RecipeCalc] Phase 1: Discovering tree structure");
+            var discovery = await DiscoverTreeLevelsAsync(targetItems, ct);
+            
+            // Phase 2: Fetch all levels in batches
+            _logger?.LogInformation("[RecipeCalc] Phase 2: Fetching {TotalItems} items across {Levels} levels", 
+                discovery.AllItemIds.Count, discovery.Levels.Count);
+            
+            var itemCache = new Dictionary<int, GarlandItem>();
+            
+            // Default settings (can be made configurable)
+            const int batchSize = 5;
+            const int maxConcurrent = 2;
+            const int timeoutSeconds = 120;
+            
+            for (int i = 0; i < discovery.Levels.Count; i++)
             {
-                var node = await BuildNodeRecursiveAsync(itemId, name, quantity, null, 0, ct);
-                if (node != null)
+                var level = discovery.Levels[i];
+                _logger?.LogInformation("[RecipeCalc] Fetching level {Level} ({Current}/{Total})", 
+                    level.Depth, i + 1, discovery.Levels.Count);
+                
+                var levelItems = await FetchLevelBatchesAsync(
+                    level, batchSize, maxConcurrent, timeoutSeconds, null, ct);
+                
+                foreach (var kvp in levelItems)
                 {
-                    // Apply HQ requirement from project item settings
-                    node.MustBeHq = isHqRequired;
-                    plan.RootItems.Add(node);
-                    _logger?.LogDebug("[RecipeCalc] Added root item: {Name} x{Qty} (HQ: {Hq})", node.Name, node.Quantity, isHqRequired);
+                    itemCache[kvp.Key] = kvp.Value;
                 }
             }
-            catch (Exception ex)
+            
+            // Phase 3: Build tree from cache
+            _logger?.LogInformation("[RecipeCalc] Phase 3: Building tree from cache");
+            var nodeCache = new Dictionary<int, PlanNode>();
+            
+            foreach (var (itemId, name, quantity, isHqRequired) in targetItems)
             {
-                _logger?.LogError(ex, "[RecipeCalc] Failed to build tree for item {ItemId}", itemId);
-                // Add a placeholder node so user knows something went wrong
-                plan.RootItems.Add(new PlanNode
+                try
                 {
-                    ItemId = itemId,
-                    Name = $"{name} (Error: {ex.Message})",
-                    Quantity = quantity,
-                    Source = AcquisitionSource.MarketBuyNq,
-                    MustBeHq = isHqRequired,
-                    CanCraft = false  // Error case, assume not craftable
-                });
+                    var node = BuildTreeFromCache(itemId, quantity, 0, isHqRequired, itemCache, nodeCache);
+                    if (node != null)
+                    {
+                        plan.RootItems.Add(node);
+                        _logger?.LogDebug("[RecipeCalc] Added root item: {Name} x{Qty} (HQ: {Hq})", 
+                            node.Name, node.Quantity, isHqRequired);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "[RecipeCalc] Failed to build tree from cache for item {ItemId}", itemId);
+                    plan.RootItems.Add(new PlanNode
+                    {
+                        ItemId = itemId,
+                        Name = $"{name} (Error: {ex.Message})",
+                        Quantity = quantity,
+                        Source = AcquisitionSource.MarketBuyNq,
+                        MustBeHq = isHqRequired,
+                        CanCraft = false
+                    });
+                }
             }
+            
+            // Apply vendor prices (data is already in cache from Phase 2)
+            _logger?.LogInformation("[RecipeCalc] Applying vendor prices from cache");
+            await ApplyVendorPricesFromCacheAsync(plan, itemCache, ct);
+        }
+        catch (TreeCalculationException tex)
+        {
+            _logger?.LogError(tex, "[RecipeCalc] Tree calculation failed at level {Level} after {Elapsed}", 
+                tex.FailedLevel, tex.ElapsedTime);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[RecipeCalc] Unexpected error during tree building");
+            throw;
         }
 
         _logger?.LogInformation("[RecipeCalc] Plan built with {Count} root items", plan.RootItems.Count);
-        
-        // Fetch vendor prices for all items in the plan
-        await FetchVendorPricesAsync(plan, ct);
-        
         return plan;
     }
 
@@ -193,6 +313,45 @@ public class RecipeCalculationService
 
         _logger?.LogInformation("[RecipeCalc] Vendor prices: {Fetched} fetched, {Cached} from cache, {Applied} applied", 
             fetchedItems.Count, cachedCount, appliedCount);
+    }
+    
+    /// <summary>
+    /// Apply vendor prices from already-fetched cache to plan nodes.
+    /// Used after breadth-first tree building when items are already in cache.
+    /// </summary>
+    private async Task ApplyVendorPricesFromCacheAsync(
+        CraftingPlan plan, 
+        Dictionary<int, GarlandItem> itemCache, 
+        CancellationToken ct)
+    {
+        if (plan?.RootItems == null || !plan.RootItems.Any())
+            return;
+        
+        _logger?.LogInformation("[RecipeCalc] Applying vendor prices from cache to {Count} root items", 
+            plan.RootItems.Count);
+        
+        // Build vendor cache from already-fetched items
+        var vendorPriceCache = new Dictionary<int, (decimal price, List<VendorInfo> vendors)>();
+        foreach (var kvp in itemCache)
+        {
+            var vendors = GetVendorOptions(kvp.Value);
+            var gilVendors = vendors.Where(v => v.IsGilVendor).ToList();
+            var cheapestPrice = gilVendors.Any() ? gilVendors.Min(v => v.Price) : 0;
+            vendorPriceCache[kvp.Key] = (cheapestPrice, vendors);
+        }
+        
+        int cachedCount = 0;
+        int appliedCount = 0;
+        
+        // Apply vendor data to all nodes
+        foreach (var root in plan.RootItems)
+        {
+            (cachedCount, appliedCount) = ApplyVendorPricesToNode(
+                root, vendorPriceCache, cachedCount, appliedCount);
+        }
+        
+        _logger?.LogInformation("[RecipeCalc] Vendor prices applied: {Applied} nodes, {Cached} with vendor data", 
+            appliedCount, cachedCount);
     }
     
     /// <summary>
@@ -1035,6 +1194,344 @@ public class RecipeCalculationService
         
         return total;
     }
+
+    #region Breadth-First Tree Building Methods
+
+    /// <summary>
+    /// Phase 1: Discover tree structure level by level.
+    /// Fetches minimal data to discover ingredients, building a skeleton structure.
+    /// </summary>
+    private async Task<TreeDiscoveryResult> DiscoverTreeLevelsAsync(
+        List<(int itemId, string name, int quantity, bool isHqRequired)> targetItems,
+        CancellationToken ct)
+    {
+        var result = new TreeDiscoveryResult();
+        var currentLevel = new Queue<PendingNode>();
+        var discoveredIds = new HashSet<int>();
+        int depth = 0;
+
+        // Initialize Level 0 with target items
+        foreach (var (itemId, name, quantity, _) in targetItems)
+        {
+            if (discoveredIds.Add(itemId))
+            {
+                currentLevel.Enqueue(new PendingNode(itemId, name, quantity, 0, null));
+            }
+        }
+
+        while (currentLevel.Count > 0 && depth < MaxDepth)
+        {
+            var levelItemIds = currentLevel.Select(n => n.ItemId).Distinct().ToList();
+            var quantityByItemId = currentLevel
+                .GroupBy(n => n.ItemId)
+                .ToDictionary(g => g.Key, g => g.Sum(n => n.Quantity));
+
+            result.Levels.Add(new LevelInfo(depth, levelItemIds, quantityByItemId));
+            result.AllItemIds.UnionWith(levelItemIds);
+
+            _logger?.LogDebug("[RecipeCalc] Discovered level {Depth}: {Count} items", depth, levelItemIds.Count);
+
+            // Discover next level
+            var nextLevel = new Queue<PendingNode>();
+            var levelTasks = currentLevel.Select(async pendingNode =>
+            {
+                try
+                {
+                    var itemData = await _garlandService.GetItemAsync(pendingNode.ItemId, ct);
+                    if (itemData?.Crafts?.Any() != true) return;
+
+                    var recipe = itemData.Crafts.OrderBy(r => r.RecipeLevel).First();
+                    var yield = Math.Max(1, recipe.Yield);
+                    var craftCount = (int)Math.Ceiling((double)pendingNode.Quantity / yield);
+
+                    foreach (var ingredient in recipe.Ingredients)
+                    {
+                        var ingredientQty = ingredient.Amount * craftCount;
+                        if (discoveredIds.Add(ingredient.Id))
+                        {
+                            nextLevel.Enqueue(new PendingNode(
+                                ingredient.Id,
+                                ingredient.Name ?? $"Item_{ingredient.Id}",
+                                ingredientQty,
+                                depth + 1,
+                                null));
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "[RecipeCalc] Failed to discover ingredients for item {ItemId}", pendingNode.ItemId);
+                }
+            }).ToList();
+
+            await Task.WhenAll(levelTasks);
+            currentLevel = nextLevel;
+            depth++;
+        }
+
+        result.MaxDepth = depth;
+        _logger?.LogInformation("[RecipeCalc] Tree discovery complete: {Levels} levels, {Items} unique items",
+            result.Levels.Count, result.AllItemIds.Count);
+
+        return result;
+    }
+
+    /// <summary>
+    /// Phase 2: Fetch all items for a level in batches with retry logic.
+    /// </summary>
+    private async Task<Dictionary<int, GarlandItem>> FetchLevelBatchesAsync(
+        LevelInfo level,
+        int batchSize,
+        int maxConcurrent,
+        int timeoutSeconds,
+        IProgress<TreeBuildProgress>? progress,
+        CancellationToken ct)
+    {
+        var results = new Dictionary<int, GarlandItem>();
+        var batches = level.ItemIds.Chunk(batchSize).ToList();
+        var totalItems = level.ItemIds.Count;
+        var fetchedCount = 0;
+
+        _logger?.LogInformation("[RecipeCalc] Fetching level {Level}: {Items} items in {Batches} batches",
+            level.Depth, totalItems, batches.Count);
+
+        for (int batchIndex = 0; batchIndex < batches.Count; batchIndex++)
+        {
+            var batch = batches[batchIndex].ToList();
+            progress?.Report(new TreeBuildProgress
+            {
+                Stage = "Fetching",
+                CurrentLevel = level.Depth,
+                CurrentBatch = batchIndex + 1,
+                TotalBatches = batches.Count,
+                ItemsFetched = fetchedCount,
+                TotalItems = totalItems
+            });
+
+            var batchResults = await FetchBatchWithRetryAsync(
+                batch, level.Depth, batchIndex + 1, 10, 1000, 30000, timeoutSeconds, ct);
+
+            foreach (var kvp in batchResults)
+            {
+                results[kvp.Key] = kvp.Value;
+                _itemCache[kvp.Key] = kvp.Value;
+                fetchedCount++;
+            }
+        }
+
+        _logger?.LogInformation("[RecipeCalc] Level {Level} fetch complete: {Success}/{Total}",
+            level.Depth, results.Count, totalItems);
+
+        return results;
+    }
+
+    /// <summary>
+    /// Fetch a single batch with exponential backoff retry.
+    /// Only retries missing items on partial success.
+    /// </summary>
+    private async Task<Dictionary<int, GarlandItem>> FetchBatchWithRetryAsync(
+        List<int> itemIds,
+        int level,
+        int batchNumber,
+        int maxRetries,
+        int baseDelayMs,
+        int maxDelayMs,
+        int timeoutSeconds,
+        CancellationToken ct)
+    {
+        var results = new Dictionary<int, GarlandItem>();
+        var remainingIds = new List<int>(itemIds);
+        var startTime = DateTime.UtcNow;
+        var retryCount = 0;
+
+        while (remainingIds.Count > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if ((DateTime.UtcNow - startTime).TotalSeconds > timeoutSeconds)
+            {
+                throw new TreeCalculationException(
+                    $"Batch fetch timeout after {timeoutSeconds}s. Failed to fetch {remainingIds.Count} items: {string.Join(", ", remainingIds)}",
+                    level, remainingIds, DateTime.UtcNow - startTime);
+            }
+
+            try
+            {
+                _logger?.LogDebug("[RecipeCalc] Level {Level} Batch {Batch}: Fetching {Count} items (attempt {Attempt})",
+                    level, batchNumber, remainingIds.Count, retryCount + 1);
+
+                var batchResults = await _garlandService.GetItemsAsync(remainingIds, useParallel: true, ct);
+
+                foreach (var kvp in batchResults)
+                {
+                    results[kvp.Key] = kvp.Value;
+                }
+
+                var fetchedIds = batchResults.Keys.ToHashSet();
+                var missingIds = remainingIds.Where(id => !fetchedIds.Contains(id)).ToList();
+
+                if (missingIds.Count == 0)
+                {
+                    return results;
+                }
+
+                _logger?.LogWarning("[RecipeCalc] Level {Level} Batch {Batch}: Partial success - {Success}/{Total}, retrying {Missing}",
+                    level, batchNumber, results.Count, itemIds.Count, missingIds.Count);
+
+                remainingIds = missingIds;
+                retryCount++;
+
+                if (retryCount >= maxRetries)
+                {
+                    throw new TreeCalculationException(
+                        $"Max retries ({maxRetries}) exceeded for batch. Failed items: {string.Join(", ", remainingIds)}",
+                        level, remainingIds, DateTime.UtcNow - startTime);
+                }
+
+                var delayMs = (int)Math.Min(baseDelayMs * Math.Pow(2, retryCount - 1), maxDelayMs);
+                await Task.Delay(delayMs, ct);
+            }
+            catch (TreeCalculationException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                retryCount++;
+
+                if (retryCount >= maxRetries)
+                {
+                    throw new TreeCalculationException(
+                        $"Max retries ({maxRetries}) exceeded. Last error: {ex.Message}",
+                        level, remainingIds, DateTime.UtcNow - startTime, ex);
+                }
+
+                var delayMs = (int)Math.Min(baseDelayMs * Math.Pow(2, retryCount - 1), maxDelayMs);
+                _logger?.LogWarning(ex, "[RecipeCalc] Level {Level} Batch {Batch}: Error on attempt {Attempt}, retrying in {Delay}ms",
+                    level, batchNumber, retryCount, delayMs);
+
+                await Task.Delay(delayMs, ct);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Phase 3: Build complete tree from cached item data.
+    /// No API calls - everything comes from cache.
+    /// </summary>
+    private PlanNode? BuildTreeFromCache(
+        int itemId,
+        int quantity,
+        int depth,
+        bool isHqRequired,
+        Dictionary<int, GarlandItem> itemCache,
+        Dictionary<int, PlanNode> nodeCache)
+    {
+        // Prevent infinite recursion
+        if (depth > MaxDepth)
+        {
+            _logger?.LogWarning("[RecipeCalc] Max depth reached for item {ItemId}", itemId);
+            return new PlanNode
+            {
+                ItemId = itemId,
+                Name = $"Item_{itemId} (Max Depth)",
+                Quantity = quantity,
+                Source = AcquisitionSource.MarketBuyNq,
+                CanCraft = false
+            };
+        }
+
+        // Return cached node if already built
+        if (nodeCache.TryGetValue(itemId, out var cachedNode))
+        {
+            // Create a copy with updated quantity
+            return new PlanNode
+            {
+                ItemId = cachedNode.ItemId,
+                Name = cachedNode.Name,
+                IconId = cachedNode.IconId,
+                Quantity = quantity,
+                Source = cachedNode.Source,
+                MustBeHq = isHqRequired,
+                CanBeHq = cachedNode.CanBeHq,
+                CanBuyFromVendor = cachedNode.CanBuyFromVendor,
+                CanCraft = cachedNode.CanCraft,
+                RecipeLevel = cachedNode.RecipeLevel,
+                Job = cachedNode.Job,
+                Yield = cachedNode.Yield,
+                VendorPrice = cachedNode.VendorPrice,
+                VendorOptions = cachedNode.VendorOptions,
+                Children = cachedNode.Children.Select(c => BuildTreeFromCache(
+                    c.ItemId, c.Quantity, depth + 1, c.MustBeHq, itemCache, nodeCache)).ToList()
+            };
+        }
+
+        if (!itemCache.TryGetValue(itemId, out var itemData))
+        {
+            _logger?.LogError("[RecipeCalc] Item {ItemId} not found in cache", itemId);
+            return null;
+        }
+
+        var hasVendor = itemData?.HasVendorReferences == true;
+        var hasCraft = itemData?.Crafts?.Any() == true;
+
+        var node = new PlanNode
+        {
+            ItemId = itemId,
+            Name = itemData?.Name ?? $"Item_{itemId}",
+            IconId = itemData?.IconId ?? 0,
+            Quantity = quantity,
+            MustBeHq = isHqRequired,
+            CanBeHq = DetermineCanBeHq(itemData, itemId),
+            CanBuyFromVendor = hasVendor,
+            CanCraft = hasCraft
+        };
+
+        if (!hasCraft)
+        {
+            node.Source = hasVendor ? AcquisitionSource.VendorBuy : AcquisitionSource.MarketBuyNq;
+            nodeCache[itemId] = node;
+            return node;
+        }
+
+        var recipe = itemData!.Crafts!.OrderBy(r => r.RecipeLevel).First();
+        node.RecipeLevel = recipe.RecipeLevel;
+        node.Job = JobHelper.GetJobName(recipe.JobId);
+        node.Yield = Math.Max(1, recipe.Yield);
+
+        var craftCount = (int)Math.Ceiling((double)quantity / node.Yield);
+
+        foreach (var ingredient in recipe.Ingredients)
+        {
+            var childQuantity = ingredient.Amount * craftCount;
+            var childNode = BuildTreeFromCache(ingredient.Id, childQuantity, depth + 1, false, itemCache, nodeCache);
+            if (childNode != null)
+            {
+                node.Children.Add(childNode);
+            }
+        }
+
+        // Apply smart defaults
+        if (hasVendor)
+        {
+            node.Source = AcquisitionSource.VendorBuy;
+        }
+        else if (ShouldDefaultToBuy(node))
+        {
+            node.Source = AcquisitionSource.MarketBuyNq;
+        }
+        else
+        {
+            node.Source = AcquisitionSource.Craft;
+        }
+
+        nodeCache[itemId] = node;
+        return node;
+    }
+
+    #endregion
 }
 
 /// <summary>

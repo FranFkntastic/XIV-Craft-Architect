@@ -44,7 +44,7 @@ namespace FFXIV_Craft_Architect.Web.Services;
 ///    - Saves: CurrentPlan, ProjectItems, ShoppingPlans, settings
 ///
 /// STATE CATEGORIES:
-/// - Recipe Planner: CurrentPlan, ProjectItems, CraftAnalyses
+/// - Recipe Planner: CurrentPlan, ProjectItems
 /// - Procurement: ShoppingItems, ShoppingPlans
 /// - Settings: SelectedDataCenter, RecommendationMode, EnableMultiWorldSplits
 /// - UI State: StatusMessage, IsBusy, ProgressPercent
@@ -75,7 +75,6 @@ public class AppState
     // Recipe Planner State
     public CraftingPlan? CurrentPlan { get; set; }
     public List<ProjectItem> ProjectItems { get; set; } = new();
-    public List<CraftVsBuyAnalysis> CraftAnalyses { get; set; } = new();
     public string SelectedDataCenter { get; set; } = "Aether";
     public string SelectedRegion { get; set; } = "North America";
     
@@ -270,7 +269,6 @@ public class AppState
     {
         CurrentPlan = null;
         ProjectItems.Clear();
-        CraftAnalyses.Clear();
         ShoppingItems.Clear();
         ShoppingPlans.Clear();
         CurrentPlanId = null;  // Reset plan ID for new plan

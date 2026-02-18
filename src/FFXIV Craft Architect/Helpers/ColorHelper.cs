@@ -13,12 +13,11 @@ public static class ColorHelper
     /// </summary>
     public static Color GetAccentColor()
     {
-        // Try GoldAccentBrush first (defined in MainWindow.xaml), then AccentBrush, then fallback
-        if (Application.Current?.TryFindResource("GoldAccentBrush") is SolidColorBrush goldBrush)
-            return goldBrush.Color;
+        if (Application.Current?.TryFindResource("Brush.Accent.Primary") is SolidColorBrush semanticBrush)
+            return semanticBrush.Color;
         if (Application.Current?.TryFindResource("AccentBrush") is SolidColorBrush brush)
             return brush.Color;
-        // Fallback to gold color (#d4a73a)
+        // Fallback to default accent color.
         return (Color)ColorConverter.ConvertFromString("#d4a73a")!;
     }
 
@@ -27,12 +26,11 @@ public static class ColorHelper
     /// </summary>
     public static Brush GetAccentBrush()
     {
-        // Try GoldAccentBrush first (defined in MainWindow.xaml), then AccentBrush, then fallback
-        if (Application.Current?.TryFindResource("GoldAccentBrush") is Brush goldBrush)
-            return goldBrush;
+        if (Application.Current?.TryFindResource("Brush.Accent.Primary") is Brush semanticBrush)
+            return semanticBrush;
         if (Application.Current?.TryFindResource("AccentBrush") is Brush brush)
             return brush;
-        // Fallback to gold color
+        // Fallback to default accent color.
         return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#d4a73a")!);
     }
 

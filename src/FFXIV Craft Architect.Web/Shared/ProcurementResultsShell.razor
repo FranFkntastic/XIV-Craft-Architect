@@ -1,0 +1,9 @@
+<div class="pp-results-column">
+    <ProcurementResultsPanel ShoppingPlans="ShoppingPlans"
+                             OnReanalyzeWithoutWorldRequested="OnReanalyzeWithoutWorldRequested" />
+</div>
+
+@code {
+    [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    [Parameter] public EventCallback<string> OnReanalyzeWithoutWorldRequested { get; set; }
+}
