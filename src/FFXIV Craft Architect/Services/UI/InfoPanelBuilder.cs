@@ -107,10 +107,10 @@ public class InfoPanelBuilder
 
         block.Foreground = style switch
         {
-            InfoPanelTitleStyle.AccentGold => TryFindBrush("GoldAccentBrush", Brushes.Gold),
-            InfoPanelTitleStyle.Accent => TryFindBrush("AccentBrush", Brushes.LightBlue),
-            InfoPanelTitleStyle.Gray => Brushes.Gray,
-            _ => Brushes.Gray
+            InfoPanelTitleStyle.AccentGold => TryFindBrush("Brush.Accent.Primary", Brushes.Gold),
+            InfoPanelTitleStyle.Accent => TryFindBrush("Brush.Accent.Primary", Brushes.LightBlue),
+            InfoPanelTitleStyle.Gray => TryFindBrush("Brush.Text.Muted", Brushes.Gray),
+            _ => TryFindBrush("Brush.Text.Muted", Brushes.Gray)
         };
 
         return block;
@@ -122,7 +122,7 @@ public class InfoPanelBuilder
         {
             Text = text,
             FontSize = 13,
-            Foreground = Brushes.LightGray,
+            Foreground = TryFindBrush("Brush.Text.Secondary", Brushes.LightGray),
             HorizontalAlignment = HorizontalAlignment.Center,
             Margin = new Thickness(0, 0, 0, 16)
         };
@@ -134,7 +134,7 @@ public class InfoPanelBuilder
         {
             Text = text,
             FontSize = 12,
-            Foreground = Brushes.Gray,
+            Foreground = TryFindBrush("Brush.Text.Muted", Brushes.Gray),
             HorizontalAlignment = HorizontalAlignment.Center,
             TextWrapping = TextWrapping.Wrap,
             TextAlignment = TextAlignment.Center

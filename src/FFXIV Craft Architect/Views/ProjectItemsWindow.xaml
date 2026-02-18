@@ -6,7 +6,7 @@
         Width="500"
         Height="600"
         WindowStartupLocation="CenterOwner"
-        Background="#1e1e1e"
+        Background="{StaticResource Brush.Surface.Window}"
         ResizeMode="CanResize">
 
     <Grid>
@@ -19,7 +19,7 @@
 
         <!-- Header -->
         <Border Grid.Row="0" 
-                Background="#252525" 
+                Background="{StaticResource Brush.Surface.Panel}" 
                 Padding="12,8">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -32,11 +32,11 @@
                                Text="Project Items"
                                FontSize="16"
                                FontWeight="SemiBold"
-                               Foreground="#d4af37"/>
+                               Foreground="{StaticResource Brush.Accent.Primary}"/>
                     <TextBlock x:Name="ItemCountText"
                                Text="0 items"
                                FontSize="11"
-                               Foreground="#888888"
+                               Foreground="{StaticResource Brush.Text.Muted}"
                                Margin="0,2,0,0"/>
                 </StackPanel>
                 
@@ -50,9 +50,9 @@
 
         <!-- Toolbar -->
         <Border Grid.Row="1"
-                Background="#2a2a2a"
+                Background="{StaticResource Brush.Surface.Card.Alt}"
                 Padding="8,4"
-                BorderBrush="#333333"
+                BorderBrush="{StaticResource Brush.Border.Default}"
                 BorderThickness="0,0,0,1">
             <StackPanel Orientation="Horizontal">
                 <ui:Button x:Name="ClearAllButton"
@@ -68,17 +68,17 @@
                 <TextBlock Text="Total:"
                            VerticalAlignment="Center"
                            Margin="8,0,4,0"
-                           Foreground="#888888"/>
+                           Foreground="{StaticResource Brush.Text.Muted}"/>
                 <TextBlock x:Name="TotalQuantityText"
                            Text="0"
                            VerticalAlignment="Center"
-                           Foreground="#cccccc"
+                           Foreground="{StaticResource Brush.Text.Secondary}"
                            FontWeight="SemiBold"/>
                 
                 <TextBlock Text="| HQ Required:"
                            VerticalAlignment="Center"
                            Margin="16,0,4,0"
-                           Foreground="#888888"/>
+                           Foreground="{StaticResource Brush.Text.Muted}"/>
                 <TextBlock x:Name="HqCountText"
                            Text="0"
                            VerticalAlignment="Center"
@@ -97,10 +97,10 @@
                   CanUserResizeColumns="True"
                   CanUserSortColumns="True"
                   GridLinesVisibility="Horizontal"
-                  HorizontalGridLinesBrush="#333333"
-                  Background="#1e1e1e"
-                  RowBackground="#252525"
-                  AlternatingRowBackground="#2a2a2a"
+                  HorizontalGridLinesBrush="{StaticResource Brush.Border.Default}"
+                  Background="{StaticResource Brush.Surface.Window}"
+                  RowBackground="{StaticResource Brush.Surface.Panel}"
+                  AlternatingRowBackground="{StaticResource Brush.Surface.Card.Alt}"
                   BorderThickness="0"
                   HeadersVisibility="Column"
                   ColumnHeaderHeight="32"
@@ -110,11 +110,11 @@
             
             <DataGrid.ColumnHeaderStyle>
                 <Style TargetType="DataGridColumnHeader">
-                    <Setter Property="Background" Value="#2a2a2a"/>
-                    <Setter Property="Foreground" Value="#cccccc"/>
+                    <Setter Property="Background" Value="{StaticResource Brush.Surface.Card.Alt}"/>
+                    <Setter Property="Foreground" Value="{StaticResource Brush.Text.Secondary}"/>
                     <Setter Property="FontWeight" Value="SemiBold"/>
                     <Setter Property="Padding" Value="8,4"/>
-                    <Setter Property="BorderBrush" Value="#333333"/>
+                    <Setter Property="BorderBrush" Value="{StaticResource Brush.Border.Default}"/>
                     <Setter Property="BorderThickness" Value="0,0,1,1"/>
                 </Style>
             </DataGrid.ColumnHeaderStyle>
@@ -146,7 +146,7 @@
                         <Style TargetType="TextBlock">
                             <Setter Property="VerticalAlignment" Value="Center"/>
                             <Setter Property="Padding" Value="8,0"/>
-                            <Setter Property="Foreground" Value="#ffffff"/>
+                            <Setter Property="Foreground" Value="{StaticResource Brush.Text.Primary}"/>
                         </Style>
                     </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>
@@ -171,16 +171,16 @@
                         <Style TargetType="TextBlock">
                             <Setter Property="HorizontalAlignment" Value="Center"/>
                             <Setter Property="VerticalAlignment" Value="Center"/>
-                            <Setter Property="Foreground" Value="#cccccc"/>
+                            <Setter Property="Foreground" Value="{StaticResource Brush.Text.Secondary}"/>
                         </Style>
                     </DataGridTextColumn.ElementStyle>
                     <DataGridTextColumn.EditingElementStyle>
                         <Style TargetType="TextBox">
                             <Setter Property="HorizontalAlignment" Value="Center"/>
                             <Setter Property="VerticalAlignment" Value="Center"/>
-                            <Setter Property="Background" Value="#333333"/>
-                            <Setter Property="Foreground" Value="#ffffff"/>
-                            <Setter Property="BorderBrush" Value="#555555"/>
+                            <Setter Property="Background" Value="{StaticResource Brush.Surface.Card.Alt}"/>
+                            <Setter Property="Foreground" Value="{StaticResource Brush.Text.Primary}"/>
+                            <Setter Property="BorderBrush" Value="{StaticResource Brush.Border.Default}"/>
                             <Setter Property="Padding" Value="4,2"/>
                         </Style>
                     </DataGridTextColumn.EditingElementStyle>
@@ -190,9 +190,9 @@
 
         <!-- Footer -->
         <Border Grid.Row="3"
-                Background="#252525"
+                Background="{StaticResource Brush.Surface.Panel}"
                 Padding="12,8"
-                BorderBrush="#333333"
+                BorderBrush="{StaticResource Brush.Border.Default}"
                 BorderThickness="0,1,0,0">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -203,7 +203,7 @@
                 <TextBlock Grid.Column="0"
                            Text="Double-click a row to edit. Click column headers to sort."
                            FontSize="11"
-                           Foreground="#666666"
+                           Foreground="{StaticResource Brush.Text.Muted}"
                            VerticalAlignment="Center"/>
                 
                 <ui:Button Grid.Column="1"

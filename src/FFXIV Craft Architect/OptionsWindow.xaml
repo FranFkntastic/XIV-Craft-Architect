@@ -7,7 +7,7 @@
         Width="600"
         Height="500"
         WindowStartupLocation="CenterOwner"
-        Background="#1e1e1e"
+        Background="{StaticResource Brush.Surface.Window}"
         ResizeMode="NoResize">
 
     <Grid Margin="16">
@@ -23,11 +23,11 @@
                    FontSize="20"
                    FontWeight="SemiBold"
                    Margin="0,0,0,16"
-                   Foreground="#d4af37"/>
+                   Foreground="{StaticResource Brush.Accent.Primary}"/>
 
         <!-- Settings Tabs -->
         <ui:TabView Grid.Row="1" 
-                    Background="#252525"
+                    Background="{StaticResource Brush.Surface.Panel}"
                     Padding="8">
             
             <!-- UI Tab -->
@@ -37,10 +37,10 @@
                         <TextBlock Text="Accent Color"
                                    FontWeight="SemiBold"
                                    Margin="0,8,0,4"
-                                   Foreground="#cccccc"/>
+                                   Foreground="{StaticResource Brush.Text.Secondary}"/>
                         <TextBlock Text="Choose your accent color (hex format like #d4af37)"
                                    FontSize="11"
-                                   Foreground="#888888"
+                                   Foreground="{StaticResource Brush.Text.Muted}"
                                    Margin="0,0,0,8"/>
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -54,66 +54,66 @@
                                      MaxLength="7"/>
                             <Border Grid.Column="2"
                                     x:Name="AccentColorPreview"
-                                    Width="32"
-                                    Height="32"
-                                    Background="#d4af37"
-                                    CornerRadius="4"
-                                    BorderBrush="#555555"
-                                    BorderThickness="1"/>
+                                     Width="32"
+                                     Height="32"
+                                     Background="#d4af37"
+                                     CornerRadius="4"
+                                     BorderBrush="{StaticResource Brush.Border.Default}"
+                                     BorderThickness="1"/>
                         </Grid>
 
                         <TextBlock Text="Preset Colors"
                                    FontSize="11"
-                                   Foreground="#888888"
+                                   Foreground="{StaticResource Brush.Text.Muted}"
                                    Margin="0,16,0,8"/>
                         <WrapPanel x:Name="PresetColorsPanel">
                             <Button Width="32" 
                                     Height="32" 
                                     Margin="4"
                                     Background="#d4af37"
-                                    BorderBrush="#666666"
+                                    BorderBrush="{StaticResource Brush.Border.Default}"
                                     Click="OnPresetColorClick"/>
                             <Button Width="32" 
                                     Height="32" 
                                     Margin="4"
                                     Background="#4ecdc4"
-                                    BorderBrush="#666666"
+                                    BorderBrush="{StaticResource Brush.Border.Default}"
                                     Click="OnPresetColorClick"/>
                             <Button Width="32" 
                                     Height="32" 
                                     Margin="4"
                                     Background="#ff6b6b"
-                                    BorderBrush="#666666"
+                                    BorderBrush="{StaticResource Brush.Border.Default}"
                                     Click="OnPresetColorClick"/>
                             <Button Width="32" 
                                     Height="32" 
                                     Margin="4"
                                     Background="#95e1d3"
-                                    BorderBrush="#666666"
+                                    BorderBrush="{StaticResource Brush.Border.Default}"
                                     Click="OnPresetColorClick"/>
                             <Button Width="32" 
                                     Height="32" 
                                     Margin="4"
                                     Background="#f38181"
-                                    BorderBrush="#666666"
+                                    BorderBrush="{StaticResource Brush.Border.Default}"
                                     Click="OnPresetColorClick"/>
                             <Button Width="32" 
                                     Height="32" 
                                     Margin="4"
                                     Background="#aa96da"
-                                    BorderBrush="#666666"
+                                    BorderBrush="{StaticResource Brush.Border.Default}"
                                     Click="OnPresetColorClick"/>
                             <Button Width="32" 
                                     Height="32" 
                                     Margin="4"
                                     Background="#fcbad3"
-                                    BorderBrush="#666666"
+                                    BorderBrush="{StaticResource Brush.Border.Default}"
                                     Click="OnPresetColorClick"/>
                             <Button Width="32" 
                                     Height="32" 
                                     Margin="4"
                                     Background="#a8d8ea"
-                                    BorderBrush="#666666"
+                                    BorderBrush="{StaticResource Brush.Border.Default}"
                                     Click="OnPresetColorClick"/>
                         </WrapPanel>
 
