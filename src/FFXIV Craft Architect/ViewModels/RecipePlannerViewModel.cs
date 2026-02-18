@@ -289,14 +289,33 @@ public partial class RecipePlannerViewModel : ViewModelBase
     /// <summary>
     /// Sets the acquisition source for a node (internal method).
     /// </summary>
-    public void SetNodeAcquisition(string nodeId, AcquisitionSource source)
+    public void SetNodeAcquisition(string nodeId, AcquisitionSource source, int? selectedVendorIndex = null)
     {
         var node = FindNodeById(nodeId);
-        if (node != null && node.Source != source)
+        if (node == null)
         {
-            node.Source = source;
-            NodeAcquisitionChanged?.Invoke(this, new NodeChangedEventArgs(nodeId, node));
+            return;
         }
+
+        var sourceChanged = node.Source != source;
+        var vendorChanged = source == AcquisitionSource.VendorBuy
+            && selectedVendorIndex.HasValue
+            && selectedVendorIndex.Value >= 0
+            && node.SelectedVendorIndex != selectedVendorIndex.Value;
+
+        if (!sourceChanged && !vendorChanged)
+        {
+            return;
+        }
+
+        node.Source = source;
+
+        if (source == AcquisitionSource.VendorBuy && selectedVendorIndex.HasValue && selectedVendorIndex.Value >= 0)
+        {
+            node.SelectedVendorIndex = selectedVendorIndex.Value;
+        }
+
+        NodeAcquisitionChanged?.Invoke(this, new NodeChangedEventArgs(nodeId, node));
     }
 
     /// <summary>

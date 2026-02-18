@@ -80,8 +80,8 @@ public partial class CacheDiagnosticsWindow : Window
                 if (reader.Read())
                 {
                     totalCount = reader.GetInt32(0);
-                    if (!reader.IsDBNull(1)) oldest = reader.GetDateTime(1);
-                    if (!reader.IsDBNull(2)) newest = reader.GetDateTime(2);
+                    if (!reader.IsDBNull(1)) oldest = CacheTimeHelper.ParseFetchedAt(reader.GetValue(1));
+                    if (!reader.IsDBNull(2)) newest = CacheTimeHelper.ParseFetchedAt(reader.GetValue(2));
                 }
             }
             
@@ -95,7 +95,7 @@ public partial class CacheDiagnosticsWindow : Window
                 {
                     var itemId = reader.GetInt32(0);
                     var dataCenter = reader.GetString(1);
-                    var fetchedAt = reader.GetDateTime(2);
+                    var fetchedAt = CacheTimeHelper.ParseFetchedAt(reader.GetValue(2));
                     var dcAvgPrice = reader.GetDecimal(3);
                     var hqAvgPrice = reader.IsDBNull(4) ? (decimal?)null : reader.GetDecimal(4);
                     var compressedData = (byte[])reader.GetValue(5);
@@ -119,7 +119,7 @@ public partial class CacheDiagnosticsWindow : Window
                         worldsCount = -1;
                     }
                     
-                    var age = DateTime.UtcNow - fetchedAt;
+                    var age = CacheTimeHelper.GetAge(fetchedAt);
                     
                     _currentEntries.Add(new CacheEntryViewModel
                     {
@@ -127,10 +127,7 @@ public partial class CacheDiagnosticsWindow : Window
                         DataCenter = dataCenter,
                         FetchedAt = fetchedAt.ToLocalTime().ToString("g"),
                         FetchedAtRaw = fetchedAt,
-                        AgeText = age.TotalMinutes < 1 ? "just now" : 
-                                  age.TotalHours < 1 ? $"{(int)age.TotalMinutes}m ago" :
-                                  age.TotalDays < 1 ? $"{(int)age.TotalHours}h {(int)age.TotalMinutes % 60}m ago" :
-                                  $"{(int)age.TotalDays}d ago",
+                        AgeText = CacheTimeHelper.FormatAge(age),
                         AgeMinutes = age.TotalMinutes,
                         DCAveragePrice = dcAvgPrice,
                         HQAveragePrice = hqAvgPrice?.ToString() ?? "-",
@@ -149,8 +146,8 @@ public partial class CacheDiagnosticsWindow : Window
             EntriesCount.Text = $"Entries: {totalCount:N0}";
             DbSizeText.Text = $"DB: {FormatBytes(dbSize)}";
             WalSizeText.Text = $"WAL: {FormatBytes(walSize)}";
-            OldestText.Text = oldest.HasValue ? $"Oldest: {(DateTime.UtcNow - oldest.Value).TotalHours:F0}h ago" : "Oldest: -";
-            NewestText.Text = newest.HasValue ? $"Newest: {(DateTime.UtcNow - newest.Value).TotalHours:F0}h ago" : "Newest: -";
+            OldestText.Text = oldest.HasValue ? $"Oldest: {CacheTimeHelper.FormatAgeShort(CacheTimeHelper.GetAge(oldest.Value))}" : "Oldest: -";
+            NewestText.Text = newest.HasValue ? $"Newest: {CacheTimeHelper.FormatAgeShort(CacheTimeHelper.GetAge(newest.Value))}" : "Newest: -";
             
             CacheDataGrid.ItemsSource = _currentEntries;
         }

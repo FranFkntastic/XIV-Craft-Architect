@@ -669,7 +669,8 @@
                                 <ScrollViewer Grid.Row="1"
                                               VerticalScrollBarVisibility="Auto">
                                     <WrapPanel x:Name="SplitPaneCardsGrid"
-                                               Orientation="Horizontal">
+                                               Orientation="Horizontal"
+                                               HorizontalAlignment="Center">
                                         <!-- Collapsed cards populated dynamically -->
                                     </WrapPanel>
                                 </ScrollViewer>

@@ -13,6 +13,9 @@ public class MarketDataStatusItem : INotifyPropertyChanged
     private decimal _unitPrice;
     private string _errorMessage = "";
     private string _sourceDetails = "";
+    private string _dataScopeText = "";
+    private string _retrievalSourceText = "";
+    private string _dataTypeText = "";
 
     public int ItemId { get; set; }
     public string ItemName { get; set; } = "";
@@ -61,6 +64,36 @@ public class MarketDataStatusItem : INotifyPropertyChanged
         }
     }
 
+    public string DataScopeText
+    {
+        get => _dataScopeText;
+        set
+        {
+            _dataScopeText = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string RetrievalSourceText
+    {
+        get => _retrievalSourceText;
+        set
+        {
+            _retrievalSourceText = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string DataTypeText
+    {
+        get => _dataTypeText;
+        set
+        {
+            _dataTypeText = value;
+            OnPropertyChanged();
+        }
+    }
+
     private DateTime _cacheTimestamp;
     
     /// <summary>
@@ -103,6 +136,7 @@ public class MarketDataStatusItem : INotifyPropertyChanged
         MarketDataFetchStatus.Fetching => "🔄 Fetching...",
         MarketDataFetchStatus.Success => "✓ Success",
         MarketDataFetchStatus.Failed => "✗ Failed",
+        MarketDataFetchStatus.Skipped => "↷ Skipped",
         MarketDataFetchStatus.Cached => $"📋 Cached ({CacheAgeText})",
         _ => "Unknown"
     };
@@ -113,6 +147,7 @@ public class MarketDataStatusItem : INotifyPropertyChanged
         MarketDataFetchStatus.Fetching => "#4ecdc4",
         MarketDataFetchStatus.Success => "#4ade80",
         MarketDataFetchStatus.Failed => "#f87171",
+        MarketDataFetchStatus.Skipped => "#94a3b8",
         MarketDataFetchStatus.Cached => "#fbbf24",
         _ => "#888888"
     };
@@ -133,5 +168,6 @@ public enum MarketDataFetchStatus
     Fetching,
     Success,
     Failed,
+    Skipped,
     Cached
 }

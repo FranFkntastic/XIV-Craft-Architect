@@ -86,7 +86,7 @@ public class CachedMarketData
     public DateTime FetchedAt
     {
         get => DateTimeOffset.FromUnixTimeSeconds(FetchedAtUnix).UtcDateTime;
-        set => FetchedAtUnix = new DateTimeOffset(value).ToUnixTimeSeconds();
+        set => FetchedAtUnix = new DateTimeOffset(CacheTimeHelper.NormalizeToUtc(value)).ToUnixTimeSeconds();
     }
     
     public decimal DCAveragePrice { get; set; }
@@ -96,12 +96,12 @@ public class CachedMarketData
     /// <summary>
     /// Returns the age of this cached data.
     /// </summary>
-    public TimeSpan Age => DateTime.UtcNow - FetchedAt;
+    public TimeSpan Age => CacheTimeHelper.GetAge(FetchedAt);
     
     /// <summary>
     /// Checks if this cached data is older than the specified maximum age.
     /// </summary>
-    public bool IsOlderThan(TimeSpan maxAge) => Age > maxAge;
+    public bool IsOlderThan(TimeSpan maxAge) => CacheTimeHelper.IsStale(FetchedAt, maxAge);
 }
 
 /// <summary>

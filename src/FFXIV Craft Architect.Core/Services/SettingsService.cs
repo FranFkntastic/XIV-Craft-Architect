@@ -43,7 +43,9 @@ public class SettingsService : ISettingsService
             ["auto_fetch_prices"] = true,
             ["exclude_congested_worlds"] = true,
             ["exclude_blacklisted_worlds"] = true,
-            ["parallel_api_requests"] = true
+            ["parallel_api_requests"] = true,
+            ["cache_ttl_hours"] = 3.0,
+            ["warm_cache_for_crafted_items"] = false
         },
         ["ui"] = new Dictionary<string, object>
         {

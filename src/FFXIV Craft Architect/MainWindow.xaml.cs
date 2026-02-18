@@ -15,6 +15,7 @@ using FFXIV_Craft_Architect.Services.UI;
 using FFXIV_Craft_Architect.UIBuilders;
 using FFXIV_Craft_Architect.ViewModels;
 using FFXIV_Craft_Architect.Views;
+using FFXIV_Craft_Architect.Models;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Window = System.Windows.Window;
@@ -78,6 +79,7 @@ public partial class MainWindow : Window
     
     // Market data status window for real-time fetch visualization
     private MarketDataStatusWindow? _marketDataStatusWindow;
+    private readonly MarketDataStatusSession _marketDataStatusSession = new();
     
     // Backwards compatibility properties (using Core.Models types)
     private Core.Models.CraftingPlan? _currentPlan => _recipeVm?.CurrentPlan;
@@ -187,7 +189,7 @@ public partial class MainWindow : Window
 
         // Initialize UI builder with ViewModel callbacks
         _recipeTreeBuilder = new RecipeTreeUiBuilder(
-            onAcquisitionChanged: (nodeId, source) => _recipeVm.SetNodeAcquisition(nodeId, source),
+            onAcquisitionChanged: (nodeId, source, vendorIndex) => _recipeVm.SetNodeAcquisition(nodeId, source, vendorIndex),
             onHqChanged: (nodeId, isHq, mode) => _recipeVm.SetNodeHq(nodeId, isHq, mode)
         );
     }
@@ -311,7 +313,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnNodeAcquisitionChanged(object? sender, NodeChangedEventArgs e)
     {
-        _recipeTreeBuilder?.UpdateNodeAcquisition(e.NodeId, e.Node.Source);
+        _recipeTreeBuilder?.UpdateNodeAcquisition(e.NodeId, e.Node.Source, e.Node.SelectedVendorIndex);
         PopulateShoppingList();
         
         if (IsMarketViewVisible())
@@ -1041,7 +1043,8 @@ public partial class MainWindow : Window
             {
                 var allItems = new List<(int itemId, string name, int quantity)>();
                 _recipeCalcService.CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
-                _marketDataStatusWindow.InitializeItems(allItems);
+                _marketDataStatusSession.InitializeItems(allItems);
+                _marketDataStatusWindow.RefreshView();
             }
         }
         
@@ -1075,7 +1078,7 @@ public partial class MainWindow : Window
 
         if (_marketDataStatusWindow == null || !_marketDataStatusWindow.IsVisible)
         {
-            _marketDataStatusWindow = new MarketDataStatusWindow(_dialogFactory);
+            _marketDataStatusWindow = new MarketDataStatusWindow(_dialogFactory, _marketDataStatusSession);
             _marketDataStatusWindow.Owner = this;
             _marketDataStatusWindow.RefreshMarketDataRequested += OnMarketDataStatusRefreshRequested;
         }
@@ -1094,7 +1097,8 @@ public partial class MainWindow : Window
                 string.Join(", ", _currentPlan.AggregatedMaterials.Select(m => $"{m.Name}({m.ItemId})x{m.TotalQuantity}")));
         }
         
-        _marketDataStatusWindow.InitializeItems(allItems);
+        _marketDataStatusSession.InitializeItems(allItems);
+        _marketDataStatusWindow.RefreshView();
         _marketDataStatusWindow.Show();
         _marketDataStatusWindow.Activate();
 
@@ -1121,7 +1125,8 @@ public partial class MainWindow : Window
                     var item = allItems.FirstOrDefault(i => i.name == p.itemName);
                     if (item.itemId > 0)
                     {
-                        _marketDataStatusWindow.SetItemFetching(item.itemId);
+                        _marketDataStatusSession.SetItemFetching(item.itemId);
+                        _marketDataStatusWindow.RefreshView();
                     }
                 }
             });
@@ -1133,12 +1138,25 @@ public partial class MainWindow : Window
             
             _logger.LogInformation("[OnFetchPricesAsync] Using unified fetch approach - cache orchestrates all API calls");
             
-            // Step 1: Ensure cache is populated with all market items
-            // The cache service fetches missing data in bulk and stores it
+            // Step 1: Ensure cache is populated for configured market-warming scope.
+            // Categorization (market/vendor/untradeable) happens after prices are resolved.
             var allMaterials = _currentPlan?.AggregatedMaterials ?? new List<MaterialAggregate>();
-            var marketItems = allMaterials.Where(m => m.UnitPrice > 0).ToList();
+            var warmCacheForCraftedItems = _settingsService.Get("market.warm_cache_for_crafted_items", false);
+            var cacheCandidateItemIds = warmCacheForCraftedItems
+                ? allItems.Select(i => i.itemId).Distinct().ToHashSet()
+                : allMaterials.Where(m => m.TotalQuantity > 0).Select(m => m.ItemId).ToHashSet();
             
-            if (marketItems.Count > 0)
+            _logger.LogInformation("[OnFetchPricesAsync] Cache warm mode: {Mode}. Candidate item count: {Count}",
+                warmCacheForCraftedItems ? "all plan nodes" : "buy-relevant materials only",
+                cacheCandidateItemIds.Count);
+             
+            var scopeDataCenters = searchAllNA
+                ? new[] { "Aether", "Primal", "Crystal", "Dynamis" }
+                : new[] { dc };
+            var fetchedThisRunKeys = new HashSet<(int itemId, string dataCenter)>();
+            var dataScopeByItemId = new Dictionary<int, (int CachedDataCenterCount, int CachedWorldCount)>();
+
+            if (cacheCandidateItemIds.Count > 0)
             {
                 var cacheProgress = new Progress<string>(msg =>
                 {
@@ -1150,17 +1168,17 @@ public partial class MainWindow : Window
                 if (searchAllNA)
                 {
                     var naDCs = new[] { "Aether", "Primal", "Crystal", "Dynamis" };
-                    foreach (var item in marketItems)
+                    foreach (var itemId in cacheCandidateItemIds)
                     {
                         foreach (var itemDc in naDCs)
                         {
-                            cacheRequests.Add((item.ItemId, itemDc));
+                            cacheRequests.Add((itemId, itemDc));
                         }
                     }
                 }
                 else
                 {
-                    cacheRequests = marketItems.Select(m => (m.ItemId, dc)).ToList();
+                    cacheRequests = cacheCandidateItemIds.Select(itemId => (itemId, dc)).ToList();
                 }
                 
                 _logger.LogInformation("[OnFetchPricesAsync] Ensuring cache is populated for {Count} item/DC combinations...", 
@@ -1168,45 +1186,33 @@ public partial class MainWindow : Window
                 
                 // Use same TTL as PriceCheckService (from settings, default 3 hours)
                 var cacheTtl = TimeSpan.FromHours(_settingsService.Get("market.cache_ttl_hours", 3.0));
+                var missingBeforePopulate = await _marketCache.GetMissingAsync(cacheRequests, cacheTtl);
+                fetchedThisRunKeys = missingBeforePopulate.ToHashSet();
                 var fetchedCount = await _marketCache.EnsurePopulatedAsync(cacheRequests, cacheTtl, cacheProgress, default);
                 _logger.LogInformation("[OnFetchPricesAsync] Cache populated - {FetchedCount} items fetched from API", fetchedCount);
-            }
-            
-            // Step 2: Calculate detailed shopping plans (reads from cache only)
-            List<DetailedShoppingPlan> shoppingPlans;
-            if (marketItems.Count > 0)
-            {
-                var marketProgress = new Progress<string>(msg =>
+
+                foreach (var itemId in cacheCandidateItemIds)
                 {
-                    StatusLabel.Text = $"Analyzing market: {msg}";
-                });
-                
-                if (searchAllNA)
-                {
-                    shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
-                        marketItems, marketProgress, mode: GetCurrentRecommendationMode());
+                    int cachedDataCenterCount = 0;
+                    int cachedWorldCount = 0;
+
+                    foreach (var itemDc in scopeDataCenters)
+                    {
+                        var (cachedData, _) = await _marketCache.GetWithStaleAsync(itemId, itemDc, cacheTtl);
+                        if (cachedData == null)
+                        {
+                            continue;
+                        }
+
+                        cachedDataCenterCount++;
+                        cachedWorldCount += cachedData.Worlds.Count;
+                    }
+
+                    dataScopeByItemId[itemId] = (cachedDataCenterCount, cachedWorldCount);
                 }
-                else
-                {
-                    shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
-                        marketItems, dc, marketProgress, mode: GetCurrentRecommendationMode());
-                }
-                
-                _logger.LogInformation("[OnFetchPricesAsync] Got {Count} detailed shopping plans", shoppingPlans.Count);
-                
-                _marketVm.SetShoppingPlans(shoppingPlans);
-            if (_currentPlan != null)
-            {
-                _currentPlan.SavedMarketPlans = shoppingPlans;
             }
-            }
-            else
-            {
-                shoppingPlans = new List<DetailedShoppingPlan>();
-                _marketVm.SetShoppingPlans(shoppingPlans);
-            }
-            
-            // Step 3: Get recipe tree prices (reads from cache only)
+             
+            // Step 2: Get recipe tree prices (reads from cache only)
             _logger.LogInformation("[OnFetchPricesAsync] Getting recipe tree prices from cache...");
             Dictionary<int, PriceInfo> prices;
             if (searchAllNA)
@@ -1230,6 +1236,7 @@ public partial class MainWindow : Window
 
             int successCount = 0;
             int failedCount = 0;
+            int skippedCount = 0;
             int cachedCount = 0;
             
             foreach (var kvp in prices)
@@ -1239,35 +1246,101 @@ public partial class MainWindow : Window
                 
                 if (priceInfo.Source == PriceSource.Unknown)
                 {
-                    _marketDataStatusWindow.SetItemFailed(itemId, priceInfo.SourceDetails);
-                    failedCount++;
+                    if (!warmCacheForCraftedItems && !cacheCandidateItemIds.Contains(itemId))
+                    {
+                        _marketDataStatusSession.SetItemSkipped(itemId, "Skipped (crafted item; market warming disabled)");
+                        skippedCount++;
+                    }
+                    else
+                    {
+                        _marketDataStatusSession.SetItemFailed(itemId, priceInfo.SourceDetails, dataTypeText: "Unknown");
+                        failedCount++;
+                    }
                 }
-                else if (priceInfo.Source == PriceSource.Vendor || priceInfo.Source == PriceSource.Market)
+                else if (priceInfo.Source == PriceSource.Market)
                 {
-                    _marketDataStatusWindow.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails);
+                    var isFetchedThisRun = scopeDataCenters.Any(itemDc => fetchedThisRunKeys.Contains((itemId, itemDc)));
+                    var dataScopeText = BuildMarketDataScopeText(itemId, dataScopeByItemId, scopeDataCenters.Length);
+                    
+                    if (isFetchedThisRun)
+                    {
+                        _marketDataStatusSession.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, dataScopeText, "Universalis (this run)", "Market");
+                        successCount++;
+                    }
+                    else
+                    {
+                        _marketDataStatusSession.SetItemCached(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, dataScopeText, "Market", priceInfo.LastUpdated);
+                        cachedCount++;
+                    }
+                }
+                else if (priceInfo.Source == PriceSource.Vendor)
+                {
+                    _marketDataStatusSession.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, "N/A", "Garland", "Vendor");
+                    successCount++;
+                }
+                else if (priceInfo.Source == PriceSource.Untradeable)
+                {
+                    _marketDataStatusSession.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, "N/A", "N/A", "Untradeable");
                     successCount++;
                 }
                 else
                 {
-                    _marketDataStatusWindow.SetItemCached(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, priceInfo.LastUpdated);
+                    _marketDataStatusSession.SetItemCached(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, "N/A", GetDataTypeText(priceInfo.Source), priceInfo.LastUpdated);
                     cachedCount++;
                 }
 
                 _recipeCalcService.UpdateSingleNodePrice(_currentPlan?.RootItems, itemId, priceInfo);
             }
 
-            _logger.LogInformation("[OnFetchPricesAsync] Price results: Success={Success}, Failed={Failed}, Cached={Cached}", 
-                successCount, failedCount, cachedCount);
+            _marketDataStatusWindow?.RefreshView();
+
+            _logger.LogInformation("[OnFetchPricesAsync] Price results: Success={Success}, Failed={Failed}, Skipped={Skipped}, Cached={Cached}", 
+                successCount, failedCount, skippedCount, cachedCount);
             
             if (_currentPlan != null)
             {
                 DisplayPlanInTreeView(_currentPlan);
             }
             
-            // Step 3: Display market analysis (using data from step 1, no second fetch)
+            // Step 3: Categorize by resolved price source and compute shopping plans.
             _logger.LogInformation("[OnFetchPricesAsync] Displaying market analysis...");
             ClearMarketLogisticsPanels();
             var categorized = _marketShoppingService.CategorizeMaterials(_currentPlan?.AggregatedMaterials ?? new(), prices);
+
+            List<DetailedShoppingPlan> shoppingPlans;
+            if (categorized.MarketItems.Any())
+            {
+                var marketProgress = new Progress<string>(msg =>
+                {
+                    StatusLabel.Text = $"Analyzing market: {msg}";
+                });
+
+                if (searchAllNA)
+                {
+                    shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
+                        categorized.MarketItems, marketProgress, mode: GetCurrentRecommendationMode());
+                }
+                else
+                {
+                    shoppingPlans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
+                        categorized.MarketItems, dc, marketProgress, mode: GetCurrentRecommendationMode());
+                }
+
+                _logger.LogInformation("[OnFetchPricesAsync] Got {Count} detailed shopping plans", shoppingPlans.Count);
+                _marketShoppingService.ApplyVendorPurchaseOverrides(_currentPlan, shoppingPlans);
+                _marketVm.SetShoppingPlans(shoppingPlans);
+            }
+            else
+            {
+                shoppingPlans = new List<DetailedShoppingPlan>();
+                _marketVm.SetShoppingPlans(shoppingPlans);
+            }
+
+            if (_currentPlan != null)
+            {
+                _currentPlan.SavedMarketPlans = shoppingPlans;
+            }
+
             UpdateMarketSummaryCard(categorized.VendorItems, categorized.MarketItems, categorized.UntradeableItems, prices);
             if (categorized.VendorItems.Any())
             {
@@ -1298,11 +1371,11 @@ public partial class MainWindow : Window
             }
             else if (failedCount > 0)
             {
-                StatusLabel.Text = $"Prices updated! Total: {totalCost:N0}g ({successCount} success, {failedCount} failed, {cachedCount} cached)";
+                StatusLabel.Text = $"Prices updated! Total: {totalCost:N0}g ({successCount} success, {failedCount} failed, {skippedCount} skipped, {cachedCount} cached)";
             }
             else
             {
-                StatusLabel.Text = $"Prices fetched! Total: {totalCost:N0}g ({successCount} items)";
+                StatusLabel.Text = $"Prices fetched! Total: {totalCost:N0}g ({successCount} success, {skippedCount} skipped, {cachedCount} cached)";
             }
         }
         catch (Exception ex)
@@ -1312,8 +1385,9 @@ public partial class MainWindow : Window
             
             foreach (var item in allItems)
             {
-                _marketDataStatusWindow.SetItemFailed(item.itemId, ex.Message);
+                _marketDataStatusSession.SetItemFailed(item.itemId, ex.Message, dataTypeText: "Unknown");
             }
+            _marketDataStatusWindow?.RefreshView();
         }
         
         _logger.LogInformation("[OnFetchPricesAsync] END");
@@ -1459,15 +1533,19 @@ public partial class MainWindow : Window
 
         if (_marketDataStatusWindow == null || !_marketDataStatusWindow.IsVisible)
         {
-            _marketDataStatusWindow = new MarketDataStatusWindow(_dialogFactory);
+            _marketDataStatusWindow = new MarketDataStatusWindow(_dialogFactory, _marketDataStatusSession);
             _marketDataStatusWindow.Owner = this;
             _marketDataStatusWindow.RefreshMarketDataRequested += OnMarketDataStatusRefreshRequested;
-            
-            var allItems = new List<(int itemId, string name, int quantity)>();
-            _recipeCalcService.CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
-            _marketDataStatusWindow.InitializeItems(allItems);
-            
-            MarkExistingPricesInStatusWindow(_currentPlan.RootItems);
+
+            if (_marketDataStatusSession.TotalCount == 0)
+            {
+                var allItems = new List<(int itemId, string name, int quantity)>();
+                _recipeCalcService.CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
+                _marketDataStatusSession.InitializeItems(allItems);
+                MarkExistingPricesInStatusWindow(_currentPlan.RootItems);
+            }
+
+            _marketDataStatusWindow.RefreshView();
         }
         
         _marketDataStatusWindow.Show();
@@ -1485,7 +1563,7 @@ public partial class MainWindow : Window
         {
             if (node.MarketPrice > 0)
             {
-                _marketDataStatusWindow?.SetItemCached(node.ItemId, node.MarketPrice, node.PriceSourceDetails);
+                _marketDataStatusSession.SetItemCached(node.ItemId, node.MarketPrice, node.PriceSourceDetails, "-", "Market");
             }
             
             if (node.Children?.Any() == true)
@@ -1493,6 +1571,31 @@ public partial class MainWindow : Window
                 MarkExistingPricesInStatusWindow(node.Children);
             }
         }
+    }
+
+    private static string BuildMarketDataScopeText(
+        int itemId,
+        IReadOnlyDictionary<int, (int CachedDataCenterCount, int CachedWorldCount)> scopeByItemId,
+        int totalDataCenterCount)
+    {
+        if (!scopeByItemId.TryGetValue(itemId, out var scope) || scope.CachedDataCenterCount == 0)
+        {
+            return $"0/{totalDataCenterCount} DC / 0 worlds";
+        }
+
+        return $"{scope.CachedDataCenterCount}/{totalDataCenterCount} DC / {scope.CachedWorldCount} worlds";
+    }
+
+    private static string GetDataTypeText(PriceSource source)
+    {
+        return source switch
+        {
+            PriceSource.Market => "Market",
+            PriceSource.Vendor => "Vendor",
+            PriceSource.Untradeable => "Untradeable",
+            PriceSource.Unknown => "Unknown",
+            _ => source.ToString()
+        };
     }
 
     /// <summary>
@@ -1863,7 +1966,11 @@ public partial class MainWindow : Window
         
         var border = new Border
         {
-            Background = ColorHelper.GetMutedAccentBrush(),
+            Background = TryFindResource("Brush.Surface.Card") as Brush
+                ?? TryFindResource("CardBackgroundBrush") as Brush
+                ?? ColorHelper.GetMutedAccentBrush(),
+            BorderBrush = TryFindResource("Brush.Border.Default") as Brush,
+            BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(3),
             Padding = new Thickness(0),
             Margin = new Thickness(0, 0, 0, 4),

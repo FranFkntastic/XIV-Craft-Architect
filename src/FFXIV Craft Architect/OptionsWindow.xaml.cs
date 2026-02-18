@@ -87,6 +87,10 @@ public partial class OptionsWindow : Window
             _logger.LogInformation("[OptionsWindow.LoadSettings] market.parallel_api_requests = {Value}", parallelApi);
             ParallelApiRequestsToggle.IsChecked = parallelApi;
 
+            var warmCrafted = _settingsService.Get<bool>("market.warm_cache_for_crafted_items", false);
+            _logger.LogInformation("[OptionsWindow.LoadSettings] market.warm_cache_for_crafted_items = {Value}", warmCrafted);
+            WarmCacheForCraftedItemsToggle.IsChecked = warmCrafted;
+
             // Planning Settings
             var defaultMode = _settingsService.Get<string>("planning.default_recommendation_mode", "MinimizeTotalCost");
             _logger.LogInformation("[OptionsWindow.LoadSettings] planning.default_recommendation_mode = '{Value}'", defaultMode);
@@ -218,6 +222,7 @@ public partial class OptionsWindow : Window
             _settingsService.Set("market.include_cross_world", IncludeCrossWorldToggle.IsChecked == true);
             _settingsService.Set("market.exclude_congested_worlds", ExcludeCongestedWorldsToggle.IsChecked == true);
             _settingsService.Set("market.parallel_api_requests", ParallelApiRequestsToggle.IsChecked == true);
+            _settingsService.Set("market.warm_cache_for_crafted_items", WarmCacheForCraftedItemsToggle.IsChecked == true);
 
             // Save Planning Settings
             var selectedMode = DefaultRecommendationModeCombo.SelectedIndex == 1 ? "MaximizeValue" : "MinimizeTotalCost";

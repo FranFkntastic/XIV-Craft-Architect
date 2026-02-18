@@ -825,6 +825,109 @@ public class MarketShoppingService
         plan.RecommendedSplit = split;
     }
 
+    /// <summary>
+    /// Applies hard-lock vendor overrides for items explicitly marked as VendorBuy in the crafting plan.
+    ///
+    /// This keeps existing market world options for comparison, but forces the recommended purchase source
+    /// to a synthetic "Vendor" world using the selected vendor (or cheapest gil vendor fallback).
+    /// </summary>
+    public void ApplyVendorPurchaseOverrides(CraftingPlan? plan, List<DetailedShoppingPlan> plans)
+    {
+        if (plan == null || plans == null || plans.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var shoppingPlan in plans)
+        {
+            var vendorNode = FindVendorBuyNodeByItemId(plan.RootItems, shoppingPlan.ItemId);
+            if (vendorNode == null)
+            {
+                continue;
+            }
+
+            var gilVendors = vendorNode.VendorOptions.Where(v => v.IsGilVendor).ToList();
+            if (gilVendors.Count == 0)
+            {
+                continue;
+            }
+
+            var selectedVendor = vendorNode.SelectedVendor;
+            if (selectedVendor == null || !selectedVendor.IsGilVendor)
+            {
+                selectedVendor = gilVendors.OrderBy(v => v.Price).First();
+            }
+
+            var unitPrice = selectedVendor.Price;
+            if (unitPrice <= 0)
+            {
+                continue;
+            }
+
+            var vendorWorldSummary = new WorldShoppingSummary
+            {
+                WorldName = "Vendor",
+                WorldId = 0,
+                TotalCost = (long)(unitPrice * shoppingPlan.QuantityNeeded),
+                AveragePricePerUnit = unitPrice,
+                ListingsUsed = 1,
+                TotalQuantityPurchased = shoppingPlan.QuantityNeeded,
+                HasSufficientStock = true,
+                IsHomeWorld = false,
+                IsTravelProhibited = false,
+                IsBlacklisted = false,
+                Classification = WorldClassification.Standard,
+                VendorName = selectedVendor.DisplayName,
+                Listings = new List<ShoppingListingEntry>
+                {
+                    new()
+                    {
+                        Quantity = shoppingPlan.QuantityNeeded,
+                        PricePerUnit = (long)unitPrice,
+                        RetainerName = "Vendor",
+                        IsUnderAverage = true,
+                        IsHq = false,
+                        NeededFromStack = shoppingPlan.QuantityNeeded,
+                        ExcessQuantity = 0
+                    }
+                }
+            };
+
+            shoppingPlan.RecommendedWorld = vendorWorldSummary;
+            shoppingPlan.RecommendedSplit = null;
+            shoppingPlan.Vendors = gilVendors;
+
+            if (shoppingPlan.WorldOptions.All(w => !string.Equals(w.WorldName, "Vendor", StringComparison.OrdinalIgnoreCase)))
+            {
+                shoppingPlan.WorldOptions.Insert(0, vendorWorldSummary);
+            }
+        }
+    }
+
+    private static PlanNode? FindVendorBuyNodeByItemId(IEnumerable<PlanNode> nodes, int itemId)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.ItemId == itemId && node.Source == AcquisitionSource.VendorBuy)
+            {
+                return node;
+            }
+
+            if (node.Children.Count == 0)
+            {
+                continue;
+            }
+
+            var childMatch = FindVendorBuyNodeByItemId(node.Children, itemId);
+            if (childMatch != null)
+            {
+                return childMatch;
+            }
+        }
+
+        return null;
+    }
+
     // ========================================================================
     // Item Categorization
     // ========================================================================

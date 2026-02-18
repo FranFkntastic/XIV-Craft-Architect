@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using FFXIV_Craft_Architect.Services;
 using FFXIV_Craft_Architect.Services.Interfaces;
@@ -20,11 +21,78 @@ public partial class LogViewerWindow : Window
     private int _currentSearchIndex = -1;
     private readonly List<TextRange> _searchMatches = new();
     private readonly IDialogService _dialogs;
+    private readonly DispatcherTimer _autoRefreshTimer;
+    private FileSystemWatcher? _logWatcher;
+    private bool _pendingAutoRefresh;
 
     public LogViewerWindow(DialogServiceFactory dialogFactory)
     {
         InitializeComponent();
         _dialogs = dialogFactory.CreateForWindow(this);
+
+        _autoRefreshTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(350)
+        };
+        _autoRefreshTimer.Tick += OnAutoRefreshTick;
+
+        LoadLogs();
+        SetupLogWatcher();
+    }
+
+    private void SetupLogWatcher()
+    {
+        try
+        {
+            var logDirectory = Path.GetDirectoryName(App.LogFilePath);
+            var logFileName = Path.GetFileName(App.LogFilePath);
+
+            if (string.IsNullOrWhiteSpace(logDirectory) ||
+                string.IsNullOrWhiteSpace(logFileName) ||
+                !Directory.Exists(logDirectory))
+            {
+                return;
+            }
+
+            _logWatcher = new FileSystemWatcher(logDirectory, logFileName)
+            {
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
+                IncludeSubdirectories = false,
+                EnableRaisingEvents = true
+            };
+
+            _logWatcher.Changed += OnLogFileChanged;
+            _logWatcher.Created += OnLogFileChanged;
+            _logWatcher.Renamed += OnLogFileChanged;
+        }
+        catch
+        {
+            // If watcher setup fails, manual refresh remains available.
+        }
+    }
+
+    private void OnLogFileChanged(object sender, FileSystemEventArgs e)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            _pendingAutoRefresh = true;
+            if (!_autoRefreshTimer.IsEnabled)
+            {
+                _autoRefreshTimer.Start();
+            }
+        });
+    }
+
+    private void OnAutoRefreshTick(object? sender, EventArgs e)
+    {
+        _autoRefreshTimer.Stop();
+
+        if (!_pendingAutoRefresh || !IsVisible)
+        {
+            return;
+        }
+
+        _pendingAutoRefresh = false;
         LoadLogs();
     }
 
@@ -513,5 +581,22 @@ public partial class LogViewerWindow : Window
         Info,
         Warning,
         Error
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _autoRefreshTimer.Stop();
+
+        if (_logWatcher != null)
+        {
+            _logWatcher.EnableRaisingEvents = false;
+            _logWatcher.Changed -= OnLogFileChanged;
+            _logWatcher.Created -= OnLogFileChanged;
+            _logWatcher.Renamed -= OnLogFileChanged;
+            _logWatcher.Dispose();
+            _logWatcher = null;
+        }
+
+        base.OnClosed(e);
     }
 }

@@ -227,8 +227,8 @@
                     mode: AppState.RecommendationMode);
             }
             
-            // Apply vendor price overrides for vendor-buy items
-            ApplyVendorPriceOverrides(plans);
+            // Apply hard-lock vendor overrides for vendor-buy items
+            MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, plans);
             
             AppState.ShoppingPlans = plans;
             AppState.NotifyShoppingListChanged();
@@ -253,78 +253,6 @@
         {
             _isAnalyzing = false;
         }
-    }
-
-    /// <summary>
-    /// For items marked as vendor-buy, override the recommendation to show vendor price.
-    /// Keeps market data visible for comparison but sets vendor as the recommended option.
-    /// Uses the selected vendor from the recipe plan (respects SelectedVendorIndex).
-    /// </summary>
-    private void ApplyVendorPriceOverrides(List<DetailedShoppingPlan> plans)
-    {
-        if (AppState.CurrentPlan == null) return;
-
-        foreach (var plan in plans)
-        {
-            // Find the node in the plan tree to check its source and vendor price
-            var node = FindNodeInPlan(AppState.CurrentPlan, plan.ItemId);
-            if (node?.Source == AcquisitionSource.VendorBuy && node.VendorPrice > 0)
-            {
-                // Get the specific vendor selected in the recipe plan
-                var selectedVendor = node.SelectedVendor;
-                if (selectedVendor != null)
-                {
-                    // Create a vendor "world" option as the recommendation with specific vendor info
-                    plan.RecommendedWorld = new WorldShoppingSummary
-                    {
-                        WorldName = "Vendor",
-                        TotalCost = (long)(selectedVendor.Price * plan.QuantityNeeded),
-                        AveragePricePerUnit = selectedVendor.Price,
-                        TotalQuantityPurchased = plan.QuantityNeeded,
-                        HasSufficientStock = true,
-                        Listings = new List<ShoppingListingEntry>(),
-                        // Store the specific vendor name for display
-                        VendorName = $"{selectedVendor.Name} - {selectedVendor.Location}"
-                    };
-
-                    // Clear any split recommendations since vendor has unlimited stock
-                    plan.RecommendedSplit = null;
-
-                    // Use vendor data already stored in the node (no need to fetch again)
-                    plan.Vendors = node.VendorOptions
-                        .Where(v => v.IsGilVendor)
-                        .ToList();
-
-                    Logger.LogInformation("Applied vendor price override for {ItemName}: {VendorName} @ {VendorPrice}g",
-                        plan.Name, selectedVendor.Name, selectedVendor.Price);
-                }
-            }
-        }
-    }
-    
-    /// <summary>
-    /// Find a node in the plan tree by item ID.
-    /// </summary>
-    private PlanNode? FindNodeInPlan(CraftingPlan plan, int itemId)
-    {
-        foreach (var root in plan.RootItems)
-        {
-            var found = FindNodeRecursive(root, itemId);
-            if (found != null) return found;
-        }
-        return null;
-    }
-    
-    private PlanNode? FindNodeRecursive(PlanNode node, int itemId)
-    {
-        if (node.ItemId == itemId) return node;
-        
-        foreach (var child in node.Children)
-        {
-            var found = FindNodeRecursive(child, itemId);
-            if (found != null) return found;
-        }
-        return null;
     }
 
     private async Task OnModeChanged(RecommendationMode mode)

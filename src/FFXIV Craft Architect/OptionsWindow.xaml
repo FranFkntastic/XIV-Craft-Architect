@@ -187,6 +187,11 @@
                                          Margin="0,8"
                                          ToolTip="Fetch multiple chunks of market data simultaneously for faster loading on large lists. Automatically disabled for small lists."/>
 
+                        <ui:ToggleSwitch x:Name="WarmCacheForCraftedItemsToggle"
+                                         Content="Warm cache for crafted items"
+                                         Margin="0,8"
+                                         ToolTip="When enabled, fetch market data for all plan nodes (including crafted intermediates) to fully warm cache and status display. Disabled by default to reduce API calls."/>
+
                         <Separator Margin="0,16"/>
 
                         <!-- World Status Section -->

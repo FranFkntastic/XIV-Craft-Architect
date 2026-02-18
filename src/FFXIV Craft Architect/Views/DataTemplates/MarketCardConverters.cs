@@ -149,11 +149,11 @@ public class StringToBrushConverter : IValueConverter
             }
             catch
             {
-                // Return default brush if conversion fails
-                return Brushes.Transparent;
+                return GetFallbackBrush();
             }
         }
-        return Brushes.Transparent;
+
+        return GetFallbackBrush();
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
@@ -163,6 +163,21 @@ public class StringToBrushConverter : IValueConverter
             return brush.Color.ToString();
         }
         return null!;
+    }
+
+    private static Brush GetFallbackBrush()
+    {
+        if (Application.Current?.TryFindResource("Brush.Surface.Card") is Brush semanticCard)
+        {
+            return semanticCard;
+        }
+
+        if (Application.Current?.TryFindResource("CardBackgroundBrush") is Brush legacyCard)
+        {
+            return legacyCard;
+        }
+
+        return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#2d2d2d"));
     }
 }
 

@@ -16,11 +16,13 @@ namespace FFXIV_Craft_Architect.UIBuilders;
 public class RecipeTreeUiBuilder
 {
     private readonly Dictionary<string, NodeUiElements> _nodeUiRegistry = new();
-    private readonly Action<string, AcquisitionSource> _onAcquisitionChanged;
+    private readonly Action<string, AcquisitionSource, int?> _onAcquisitionChanged;
     private readonly Action<string, bool, HqPropagationMode> _onHqChanged;
 
+    private sealed record AcquisitionSelection(AcquisitionSource Source, int VendorIndex = -1);
+
     public RecipeTreeUiBuilder(
-        Action<string, AcquisitionSource> onAcquisitionChanged,
+        Action<string, AcquisitionSource, int?> onAcquisitionChanged,
         Action<string, bool, HqPropagationMode> onHqChanged)
     {
         _onAcquisitionChanged = onAcquisitionChanged;
@@ -66,16 +68,26 @@ public class RecipeTreeUiBuilder
     /// Updates the acquisition source display for a node.
     /// Finds the dropdown item by Tag rather than index to handle dynamic dropdown content.
     /// </summary>
-    public void UpdateNodeAcquisition(string nodeId, AcquisitionSource source)
+    public void UpdateNodeAcquisition(string nodeId, AcquisitionSource source, int selectedVendorIndex = -1)
     {
         if (_nodeUiRegistry.TryGetValue(nodeId, out var elements))
         {
             if (elements.Dropdown != null)
             {
-                // Find the item with matching Tag instead of using fixed index
-                var matchingItem = elements.Dropdown.Items
+                ComboBoxItem? matchingItem = null;
+
+                if (source == AcquisitionSource.VendorBuy && selectedVendorIndex >= 0)
+                {
+                    matchingItem = elements.Dropdown.Items
+                        .OfType<ComboBoxItem>()
+                        .FirstOrDefault(item => item.Tag is AcquisitionSelection selection
+                            && selection.Source == source
+                            && selection.VendorIndex == selectedVendorIndex);
+                }
+
+                matchingItem ??= elements.Dropdown.Items
                     .OfType<ComboBoxItem>()
-                    .FirstOrDefault(item => item.Tag is AcquisitionSource s && s == source);
+                    .FirstOrDefault(item => item.Tag is AcquisitionSelection selection && selection.Source == source);
                 
                 if (matchingItem != null)
                 {
@@ -453,19 +465,19 @@ public class RecipeTreeUiBuilder
         // Add Craft option if craftable
         if (nodeVm.CanCraft)
         {
-            var craftItem = new ComboBoxItem { Content = "Craft", Tag = AcquisitionSource.Craft };
+            var craftItem = new ComboBoxItem { Content = "Craft", Tag = new AcquisitionSelection(AcquisitionSource.Craft) };
             dropdown.Items.Add(craftItem);
             sourceToItem[AcquisitionSource.Craft] = new List<ComboBoxItem> { craftItem };
         }
 
         // Add Market Buy options
-        var buyNqItem = new ComboBoxItem { Content = "Buy NQ", Tag = AcquisitionSource.MarketBuyNq };
+        var buyNqItem = new ComboBoxItem { Content = "Buy NQ", Tag = new AcquisitionSelection(AcquisitionSource.MarketBuyNq) };
         dropdown.Items.Add(buyNqItem);
         sourceToItem[AcquisitionSource.MarketBuyNq] = new List<ComboBoxItem> { buyNqItem };
 
         if (nodeVm.CanBeHq)
         {
-            var buyHqItem = new ComboBoxItem { Content = "Buy HQ", Tag = AcquisitionSource.MarketBuyHq };
+            var buyHqItem = new ComboBoxItem { Content = "Buy HQ", Tag = new AcquisitionSelection(AcquisitionSource.MarketBuyHq) };
             dropdown.Items.Add(buyHqItem);
             sourceToItem[AcquisitionSource.MarketBuyHq] = new List<ComboBoxItem> { buyHqItem };
         }
@@ -482,10 +494,11 @@ public class RecipeTreeUiBuilder
                 var vendorItems = new List<ComboBoxItem>();
                 foreach (var vendor in cheapestVendors)
                 {
+                    var vendorIndex = nodeVm.VendorOptions.IndexOf(vendor);
                     var vendorItem = new ComboBoxItem
                     {
                         Content = $"Vendor: {vendor.DisplayName}",
-                        Tag = AcquisitionSource.VendorBuy,
+                        Tag = new AcquisitionSelection(AcquisitionSource.VendorBuy, vendorIndex),
                         ToolTip = $"{vendor.FullDisplayText}"
                     };
                     dropdown.Items.Add(vendorItem);
@@ -499,12 +512,15 @@ public class RecipeTreeUiBuilder
         ComboBoxItem? selectedItem = null;
         if (sourceToItem.TryGetValue(nodeVm.Source, out var items) && items.Any())
         {
-            // For vendors, use selected index if valid
-            if (nodeVm.Source == AcquisitionSource.VendorBuy && nodeVm.SelectedVendorIndex >= 0 && nodeVm.SelectedVendorIndex < items.Count)
+            if (nodeVm.Source == AcquisitionSource.VendorBuy && nodeVm.SelectedVendorIndex >= 0)
             {
-                selectedItem = items[nodeVm.SelectedVendorIndex];
+                selectedItem = items.FirstOrDefault(i =>
+                    i.Tag is AcquisitionSelection selection &&
+                    selection.Source == AcquisitionSource.VendorBuy &&
+                    selection.VendorIndex == nodeVm.SelectedVendorIndex);
             }
-            else
+
+            if (selectedItem == null)
             {
                 selectedItem = items.First();
             }
@@ -513,16 +529,13 @@ public class RecipeTreeUiBuilder
 
         dropdown.SelectionChanged += (s, e) =>
         {
-            if (dropdown.SelectedItem is ComboBoxItem item && item.Tag is AcquisitionSource newSource)
+            if (dropdown.SelectedItem is ComboBoxItem item && item.Tag is AcquisitionSelection selection)
             {
-                // For vendor selection, track which vendor was selected
-                int vendorIndex = -1;
-                if (newSource == AcquisitionSource.VendorBuy && sourceToItem.TryGetValue(AcquisitionSource.VendorBuy, out var vendorItems))
-                {
-                    vendorIndex = vendorItems.IndexOf(item);
-                }
-                _onAcquisitionChanged(nodeVm.NodeId, newSource);
-                // TODO: Pass vendorIndex to callback for procurement planning
+                int? vendorIndex = selection.Source == AcquisitionSource.VendorBuy
+                    ? selection.VendorIndex
+                    : null;
+
+                _onAcquisitionChanged(nodeVm.NodeId, selection.Source, vendorIndex);
             }
         };
 

@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
@@ -16,7 +15,7 @@ namespace FFXIV_Craft_Architect;
 /// </summary>
 public partial class MarketDataStatusWindow : Window
 {
-    public ObservableCollection<MarketDataStatusItem> StatusItems { get; } = new();
+    private readonly MarketDataStatusSession _session;
     private ICollectionView? _filteredView;
     private readonly IDialogService _dialogs;
 
@@ -25,152 +24,56 @@ public partial class MarketDataStatusWindow : Window
     /// </summary>
     public event EventHandler? RefreshMarketDataRequested;
 
-    public MarketDataStatusWindow(DialogServiceFactory dialogFactory)
+    public MarketDataStatusWindow(DialogServiceFactory dialogFactory, MarketDataStatusSession session)
     {
         InitializeComponent();
+        _session = session;
         _dialogs = dialogFactory.CreateForWindow(this);
         SetupDataGrid();
     }
 
     private void SetupDataGrid()
     {
-        _filteredView = CollectionViewSource.GetDefaultView(StatusItems);
+        _filteredView = CollectionViewSource.GetDefaultView(_session.Items);
         StatusDataGrid.ItemsSource = _filteredView;
         UpdateStats();
     }
 
-    /// <summary>
-    /// Initialize with a list of items to track.
-    /// </summary>
-    public void InitializeItems(IEnumerable<(int itemId, string name, int quantity)> items)
+    public void RefreshView()
     {
-        StatusItems.Clear();
-        
-        foreach (var (itemId, name, quantity) in items)
-        {
-            StatusItems.Add(new MarketDataStatusItem
-            {
-                ItemId = itemId,
-                ItemName = name,
-                Quantity = quantity,
-                Status = MarketDataFetchStatus.Pending
-            });
-        }
-        
-        UpdateStats();
-    }
-
-    /// <summary>
-    /// Update the status of a specific item.
-    /// </summary>
-    public void UpdateItemStatus(int itemId, MarketDataFetchStatus status, decimal price = 0, string sourceDetails = "", string errorMessage = "")
-    {
-        var item = StatusItems.FirstOrDefault(i => i.ItemId == itemId);
-        if (item != null)
-        {
-            Dispatcher.Invoke(() =>
-            {
-                item.Status = status;
-                if (price > 0) item.UnitPrice = price;
-                if (!string.IsNullOrEmpty(sourceDetails)) item.SourceDetails = sourceDetails;
-                if (!string.IsNullOrEmpty(errorMessage)) item.ErrorMessage = errorMessage;
-                UpdateStats();
-            });
-        }
-    }
-
-    /// <summary>
-    /// Mark all pending items as fetching.
-    /// </summary>
-    public void SetAllFetching()
-    {
-        Dispatcher.Invoke(() =>
-        {
-            foreach (var item in StatusItems.Where(i => i.Status == MarketDataFetchStatus.Pending))
-            {
-                item.Status = MarketDataFetchStatus.Fetching;
-            }
-            UpdateStats();
-        });
-    }
-
-    /// <summary>
-    /// Mark a specific item as currently being fetched.
-    /// </summary>
-    public void SetItemFetching(int itemId)
-    {
-        UpdateItemStatus(itemId, MarketDataFetchStatus.Fetching);
-    }
-
-    /// <summary>
-    /// Mark a specific item as successfully fetched.
-    /// </summary>
-    public void SetItemSuccess(int itemId, decimal price, string sourceDetails)
-    {
-        UpdateItemStatus(itemId, MarketDataFetchStatus.Success, price, sourceDetails);
-        
-        // Record timestamp for cache age tracking
-        var item = StatusItems.FirstOrDefault(i => i.ItemId == itemId);
-        if (item != null)
-        {
-            item.CacheTimestamp = DateTime.Now;
-        }
-    }
-
-    /// <summary>
-    /// Mark a specific item as failed.
-    /// </summary>
-    public void SetItemFailed(int itemId, string errorMessage)
-    {
-        UpdateItemStatus(itemId, MarketDataFetchStatus.Failed, errorMessage: errorMessage);
-    }
-
-    /// <summary>
-    /// Mark a specific item as using cached data.
-    /// </summary>
-    public void SetItemCached(int itemId, decimal price, string sourceDetails, DateTime? fetchedAt = null)
-    {
-        UpdateItemStatus(itemId, MarketDataFetchStatus.Cached, price, sourceDetails);
-        
-        var item = StatusItems.FirstOrDefault(i => i.ItemId == itemId);
-        if (item != null)
-        {
-            // Use the actual fetch timestamp from cache, or assume now if not provided
-            item.CacheTimestamp = fetchedAt?.ToLocalTime() ?? DateTime.Now;
-        }
+        Dispatcher.Invoke(UpdateStats);
     }
 
     private void UpdateStats()
     {
-        Dispatcher.Invoke(() =>
+        var pending = _session.PendingCount;
+        var fetching = _session.FetchingCount;
+        var success = _session.SuccessCount;
+        var failed = _session.FailedCount;
+        var skipped = _session.SkippedCount;
+        var cached = _session.CachedCount;
+        var total = _session.TotalCount;
+        var completed = _session.CompletedCount;
+
+        PendingCount.Text = $"⏳ Pending: {pending}";
+        FetchingCount.Text = $"🔄 Fetching: {fetching}";
+        SuccessCount.Text = $"✓ Success: {success}";
+        FailedCount.Text = $"✗ Failed: {failed}";
+        SkippedCount.Text = $"↷ Skipped: {skipped}";
+        CachedCount.Text = $"📋 Cached: {cached}";
+
+        if (completed >= total)
         {
-            var pending = StatusItems.Count(i => i.Status == MarketDataFetchStatus.Pending);
-            var fetching = StatusItems.Count(i => i.Status == MarketDataFetchStatus.Fetching);
-            var success = StatusItems.Count(i => i.Status == MarketDataFetchStatus.Success);
-            var failed = StatusItems.Count(i => i.Status == MarketDataFetchStatus.Failed);
-            var cached = StatusItems.Count(i => i.Status == MarketDataFetchStatus.Cached);
-            var total = StatusItems.Count;
-            var completed = success + failed + cached;
-
-            PendingCount.Text = $"⏳ Pending: {pending}";
-            FetchingCount.Text = $"🔄 Fetching: {fetching}";
-            SuccessCount.Text = $"✓ Success: {success}";
-            FailedCount.Text = $"✗ Failed: {failed}";
-            CachedCount.Text = $"📋 Cached: {cached}";
-
-            if (completed >= total)
-            {
-                ProgressText.Text = $" - Complete ({completed}/{total})";
-                ProgressText.Foreground = failed > 0 
-                    ? System.Windows.Media.Brushes.Orange 
-                    : System.Windows.Media.Brushes.LightGreen;
-            }
-            else
-            {
-                ProgressText.Text = $" - In Progress ({completed}/{total})";
-                ProgressText.Foreground = System.Windows.Media.Brushes.LightBlue;
-            }
-        });
+            ProgressText.Text = $" - Complete ({completed}/{total})";
+            ProgressText.Foreground = failed > 0
+                ? System.Windows.Media.Brushes.Orange
+                : System.Windows.Media.Brushes.LightGreen;
+        }
+        else
+        {
+            ProgressText.Text = $" - In Progress ({completed}/{total})";
+            ProgressText.Foreground = System.Windows.Media.Brushes.LightBlue;
+        }
     }
 
     #region Event Handlers
@@ -235,12 +138,12 @@ public partial class MarketDataStatusWindow : Window
             {
                 var lines = new List<string>
                 {
-                    "ItemId,ItemName,Quantity,Status,UnitPrice,SourceDetails,ErrorMessage"
+                    "ItemId,ItemName,Quantity,Status,UnitPrice,DataScope,RetrievalSource,DataType,Details,ErrorMessage"
                 };
 
-                foreach (var item in StatusItems)
+                foreach (var item in _session.Items)
                 {
-                    lines.Add($"{item.ItemId},\"{item.ItemName.Replace("\"", "\"\"")}\",{item.Quantity},{item.Status},{item.UnitPrice},\"{item.SourceDetails.Replace("\"", "\"\"")}\",\"{item.ErrorMessage.Replace("\"", "\"\"")}\"");
+                    lines.Add($"{item.ItemId},\"{item.ItemName.Replace("\"", "\"\"")}\",{item.Quantity},{item.Status},{item.UnitPrice},\"{item.DataScopeText.Replace("\"", "\"\"")}\",\"{item.RetrievalSourceText.Replace("\"", "\"\"")}\",\"{item.DataTypeText.Replace("\"", "\"\"")}\",\"{item.SourceDetails.Replace("\"", "\"\"")}\",\"{item.ErrorMessage.Replace("\"", "\"\"")}\"");
                 }
 
                 File.WriteAllLines(dialog.FileName, lines);

@@ -1,6 +1,7 @@
 <Window x:Class="FFXIV_Craft_Architect.LogViewerWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         Title="Debug Log Viewer"
         Width="900"
         Height="700"
@@ -40,17 +41,18 @@
                          Padding="4"
                          KeyDown="OnSearchKeyDown"/>
                 
-                <Button Grid.Column="4"
-                        Content="Find"
-                        MinWidth="60"
-                        Height="26"
-                        Click="OnFindClick"/>
-                
-                <Button Grid.Column="6"
-                        Content="Clear"
-                        MinWidth="60"
-                        Height="26"
-                        Click="OnClearClick"/>
+                <ui:Button Grid.Column="4"
+                           Content="Find"
+                           MinWidth="60"
+                           Appearance="Primary"
+                           Padding="12,4"
+                           Click="OnFindClick"/>
+                 
+                <ui:Button Grid.Column="6"
+                           Content="Clear"
+                           MinWidth="60"
+                           Padding="12,4"
+                           Click="OnClearClick"/>
             </Grid>
         </Border>
         
@@ -112,24 +114,28 @@
                          ToolTip="Go to line number (Ctrl+G)"
                          KeyDown="OnGoToLineKeyDown"/>
                 
-                <Button Grid.Column="3"
-                        Content="Go"
-                        MinWidth="40"
-                        Height="22"
-                        Click="OnGoToLineClick"
-                        ToolTip="Jump to line number"/>
-                
-                <Button Grid.Column="5"
-                        Content="Export"
-                        MinWidth="80"
-                        Height="26"
-                        Click="OnExportClick"/>
-                
-                <Button Grid.Column="7"
-                        Content="Refresh"
-                        MinWidth="80"
-                        Height="26"
-                        Click="OnRefresh"/>
+                 <ui:Button Grid.Column="3"
+                            Content="Go"
+                            MinWidth="40"
+                            MinHeight="24"
+                            Appearance="Secondary"
+                            Padding="10,2"
+                            Click="OnGoToLineClick"
+                            ToolTip="Jump to line number"/>
+                 
+                 <ui:Button Grid.Column="5"
+                            Content="Export"
+                            MinWidth="80"
+                            Appearance="Secondary"
+                            Padding="12,4"
+                            Click="OnExportClick"/>
+                 
+                 <ui:Button Grid.Column="7"
+                            Content="Refresh"
+                            MinWidth="80"
+                            Appearance="Secondary"
+                            Padding="12,4"
+                            Click="OnRefresh"/>
             </Grid>
         </Border>
     </Grid>

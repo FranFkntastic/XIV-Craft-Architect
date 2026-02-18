@@ -19,7 +19,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
     private readonly UniversalisService _universalisService;
     private readonly string _dbPath;
     private readonly SqliteConnection _connection;
-    private readonly TimeSpan _defaultMaxAge = TimeSpan.FromHours(1);
+    private readonly TimeSpan _defaultMaxAge = TimeSpan.FromHours(3);
     private readonly JsonSerializerOptions _jsonOptions;
 
     public SqliteMarketCacheService(
@@ -175,7 +175,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         {
             ItemId = itemId,
             DataCenter = dataCenter,
-            FetchedAt = reader.GetDateTime(0),
+            FetchedAt = CacheTimeHelper.ParseFetchedAt(reader.GetValue(0)),
             DCAveragePrice = reader.GetDecimal(1),
             HQAveragePrice = reader.IsDBNull(2) ? null : reader.GetDecimal(2),
             Worlds = worlds ?? new List<Core.Services.CachedWorldData>()
@@ -202,7 +202,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
             return (null, false);
         }
         
-        var fetchedAt = reader.GetDateTime(0);
+        var fetchedAt = CacheTimeHelper.ParseFetchedAt(reader.GetValue(0));
         var isStale = fetchedAt <= cutoff;
         
         var compressedData = (byte[])reader.GetValue(3);
@@ -242,7 +242,8 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         ";
         cmd.Parameters.AddWithValue("@itemId", itemId);
         cmd.Parameters.AddWithValue("@dataCenter", dataCenter);
-        cmd.Parameters.AddWithValue("@fetchedAt", data.FetchedAt.ToString("O"));
+        var fetchedAtUtc = CacheTimeHelper.NormalizeToUtc(data.FetchedAt);
+        cmd.Parameters.AddWithValue("@fetchedAt", fetchedAtUtc.ToString("O"));
         cmd.Parameters.AddWithValue("@dcAvgPrice", data.DCAveragePrice);
         cmd.Parameters.AddWithValue("@hqAvgPrice", data.HQAveragePrice ?? (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@compressedData", compressed);
@@ -430,7 +431,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
                 SUM(LENGTH(compressed_data)) as size
             FROM market_data
         ";
-        cmd.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.AddHours(-1).ToString("O"));
+        cmd.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.Subtract(_defaultMaxAge).ToString("O"));
         
         using var reader = await cmd.ExecuteReaderAsync();
         await reader.ReadAsync();
