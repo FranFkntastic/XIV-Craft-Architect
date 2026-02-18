@@ -166,10 +166,12 @@ public class MarketPlansRenderer : IMarketPlansRenderer
 
         var border = new Border
         {
-            Background = Application.Current?.TryFindResource("Brush.Surface.Card") as Brush
+            Background = Application.Current?.TryFindResource("Brush.Surface.Card.Market") as Brush
+                ?? Application.Current?.TryFindResource("Brush.Surface.Card") as Brush
                 ?? Application.Current?.TryFindResource("CardBackgroundBrush") as Brush
                 ?? ColorHelper.GetMutedAccentBrush(),
-            BorderBrush = Application.Current?.TryFindResource("Brush.Border.Default") as Brush,
+            BorderBrush = Application.Current?.TryFindResource("Brush.Border.Card.Market") as Brush
+                ?? Application.Current?.TryFindResource("Brush.Border.Default") as Brush,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(3),
             Padding = new Thickness(0),

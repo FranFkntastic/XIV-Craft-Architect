@@ -130,6 +130,27 @@ public class ShoppingOptimizationCoordinator : IShoppingOptimizationCoordinator
         }
     }
 
+    /// <inheritdoc />
+    public List<DetailedShoppingPlan> SortPlans(
+        IEnumerable<DetailedShoppingPlan> plans,
+        ShoppingPlanSortMode sortMode)
+    {
+        return sortMode switch
+        {
+            ShoppingPlanSortMode.Alphabetical => plans
+                .OrderBy(p => p.Name)
+                .ToList(),
+            ShoppingPlanSortMode.PriceHighToLow => plans
+                .OrderByDescending(p => p.RecommendedWorld?.TotalCost ?? 0)
+                .ThenBy(p => p.Name)
+                .ToList(),
+            _ => plans
+                .OrderBy(p => p.RecommendedWorld?.WorldName ?? "ZZZ")
+                .ThenBy(p => p.Name)
+                .ToList()
+        };
+    }
+
     /// <summary>
     /// Categorizes materials by their price source (vendor, market, or untradeable).
     /// </summary>

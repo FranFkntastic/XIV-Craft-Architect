@@ -22,7 +22,6 @@ public class SettingsService : ISettingsService
     {
         ["application"] = new Dictionary<string, object>
         {
-            ["version"] = "0.1.0",
             ["auto_check_updates"] = false
         },
         ["live_mode"] = new Dictionary<string, object>

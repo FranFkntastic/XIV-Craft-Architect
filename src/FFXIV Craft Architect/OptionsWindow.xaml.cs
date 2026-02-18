@@ -363,7 +363,9 @@ public partial class OptionsWindow : Window
             if (!File.Exists(settingsPath))
             {
                 // Save current settings to create the file
-                _settingsService.Set("application.version", "0.1.0");
+                _settingsService.Set(
+                    "application.auto_check_updates",
+                    _settingsService.Get("application.auto_check_updates", false));
             }
             
             // Open with default editor

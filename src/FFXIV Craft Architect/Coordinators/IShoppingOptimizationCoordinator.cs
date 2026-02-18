@@ -25,6 +25,26 @@ public interface IShoppingOptimizationCoordinator
         bool searchAllNa,
         IProgress<string>? progress = null,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Sorts shopping plans for presentation.
+    /// </summary>
+    /// <param name="plans">Plans to sort.</param>
+    /// <param name="sortMode">Sort strategy.</param>
+    /// <returns>Sorted plan list.</returns>
+    List<DetailedShoppingPlan> SortPlans(
+        IEnumerable<DetailedShoppingPlan> plans,
+        ShoppingPlanSortMode sortMode);
+}
+
+/// <summary>
+/// Presentation sort modes for shopping plans.
+/// </summary>
+public enum ShoppingPlanSortMode
+{
+    RecommendedWorld,
+    Alphabetical,
+    PriceHighToLow
 }
 
 /// <summary>

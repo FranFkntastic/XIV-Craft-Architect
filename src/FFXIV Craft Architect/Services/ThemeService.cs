@@ -95,6 +95,17 @@ public class ThemeService
             var brush = new SolidColorBrush(color);
             brush.Freeze(); // Make it thread-safe
 
+            var marketCardColor = MixWithBackground(color, 45, 45, 45, 0.20);
+            var marketHeaderColor = MixWithBackground(color, 62, 62, 62, 0.25);
+            var marketBorderColor = MixWithBackground(color, 77, 77, 77, 0.35);
+
+            var marketCardBrush = new SolidColorBrush(marketCardColor);
+            marketCardBrush.Freeze();
+            var marketHeaderBrush = new SolidColorBrush(marketHeaderColor);
+            marketHeaderBrush.Freeze();
+            var marketBorderBrush = new SolidColorBrush(marketBorderColor);
+            marketBorderBrush.Freeze();
+
             // Update or add the accent color resource
             Application.Current.Resources["Color.Accent.Primary"] = color;
             Application.Current.Resources["Brush.Accent.Primary"] = brush;
@@ -111,11 +122,29 @@ public class ThemeService
             // Update border brush
             Application.Current.Resources["Brush.Border.Accent"] = brush;
             Application.Current.Resources["AccentBorderBrush"] = brush;
+
+            // Update market card palette derived from current accent color
+            Application.Current.Resources["Brush.Surface.Card.Market"] = marketCardBrush;
+            Application.Current.Resources["Brush.Surface.Card.Market.Header"] = marketHeaderBrush;
+
+            // Back-compat resources used by some templates/services
+            Application.Current.Resources["MutedAccentBrush"] = marketCardBrush;
+            Application.Current.Resources["MutedAccentLightBrush"] = marketHeaderBrush;
+            Application.Current.Resources["Brush.Border.Card.Market"] = marketBorderBrush;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to update application resources with accent color {Color}", colorHex);
         }
+    }
+
+    private static Color MixWithBackground(Color color, byte backgroundR, byte backgroundG, byte backgroundB, double colorRatio)
+    {
+        var bgRatio = 1.0 - colorRatio;
+        return Color.FromRgb(
+            (byte)((color.R * colorRatio) + (backgroundR * bgRatio)),
+            (byte)((color.G * colorRatio) + (backgroundG * bgRatio)),
+            (byte)((color.B * colorRatio) + (backgroundB * bgRatio)));
     }
 
     private static bool IsValidHexColor(string text)

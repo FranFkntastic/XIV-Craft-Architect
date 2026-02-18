@@ -47,15 +47,15 @@
          Main template for the expandable market card in Market Logistics
          ============================================================ -->
     <DataTemplate DataType="{x:Type vm:MarketCardViewModel}">
-        <Border Background="{StaticResource Brush.Surface.Card}"
-                BorderBrush="{StaticResource Brush.Border.Default}"
+        <Border Background="{DynamicResource Brush.Surface.Card.Market}"
+                BorderBrush="{DynamicResource Brush.Border.Card.Market}"
                 BorderThickness="1"
                 CornerRadius="3"
                 Padding="0"
                 Margin="0,0,0,4">
             <StackPanel>
                 <!-- Clickable Header -->
-                <Border Background="{StaticResource Brush.Surface.Card.Summary}"
+                <Border Background="{DynamicResource Brush.Surface.Card.Market.Header}"
                         CornerRadius="3"
                         Padding="8,6,8,6"
                         Cursor="Hand">
@@ -342,8 +342,8 @@
          Compact card for split-pane view
          ============================================================ -->
     <DataTemplate x:Key="CollapsedMarketCardTemplate" DataType="{x:Type vm:MarketCardViewModel}">
-        <Border Background="{StaticResource Brush.Surface.Card}"
-                BorderBrush="{StaticResource Brush.Border.Default}"
+        <Border Background="{DynamicResource Brush.Surface.Card.Market}"
+                BorderBrush="{DynamicResource Brush.Border.Card.Market}"
                 BorderThickness="1"
                 CornerRadius="4"
                 Padding="10,8,10,8"

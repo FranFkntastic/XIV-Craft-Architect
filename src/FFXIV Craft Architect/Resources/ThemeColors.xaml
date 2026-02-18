@@ -26,6 +26,7 @@
     <SolidColorBrush x:Key="Brush.Surface.Card.Alt" Color="#333333"/>
     <SolidColorBrush x:Key="Brush.Surface.Card.Vendor" Color="#3e4a2d"/>
     <SolidColorBrush x:Key="Brush.Surface.Card.Market" Color="#2d3d4a"/>
+    <SolidColorBrush x:Key="Brush.Surface.Card.Market.Header" Color="#3a3f3d"/>
     <SolidColorBrush x:Key="Brush.Surface.Card.Untradeable" Color="#4a3d2d"/>
     <SolidColorBrush x:Key="Brush.Surface.Card.Error" Color="#4a2d2d"/>
     <SolidColorBrush x:Key="Brush.Surface.Card.Placeholder" Color="#3d3e2d"/>
@@ -46,6 +47,7 @@
     <!-- Border -->
     <SolidColorBrush x:Key="Brush.Border.Default" Color="#4d4d4d"/>
     <SolidColorBrush x:Key="Brush.Border.Accent" Color="{StaticResource Color.Accent.Primary}"/>
+    <SolidColorBrush x:Key="Brush.Border.Card.Market" Color="#505050"/>
 
     <!-- Legacy compatibility keys (existing code path, migrate progressively) -->
     <SolidColorBrush x:Key="CardBackgroundBrush" Color="#2d2d2d"/>

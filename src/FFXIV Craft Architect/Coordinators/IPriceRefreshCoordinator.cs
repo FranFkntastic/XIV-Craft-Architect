@@ -36,7 +36,37 @@ public interface IPriceRefreshCoordinator
         string itemName,
         string worldOrDc,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Fetches and prepares price data for an entire plan, including cache scope metadata.
+    /// </summary>
+    /// <param name="plan">The plan to fetch prices for.</param>
+    /// <param name="dataCenter">Active data center.</param>
+    /// <param name="worldOrDc">Selected world or data center target.</param>
+    /// <param name="searchAllNa">Whether to search all NA data centers.</param>
+    /// <param name="progress">Optional progress reporter.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Prepared refresh context used by UI orchestration.</returns>
+    Task<PlanPriceRefreshContext> FetchPlanPricesAsync(
+        CraftingPlan plan,
+        string dataCenter,
+        string worldOrDc,
+        bool searchAllNa,
+        IProgress<PriceRefreshProgress>? progress = null,
+        CancellationToken ct = default);
 }
+
+/// <summary>
+/// Prepared data returned by plan-level price refresh orchestration.
+/// </summary>
+public record PlanPriceRefreshContext(
+    List<(int itemId, string name, int quantity)> AllItems,
+    Dictionary<int, PriceInfo> Prices,
+    HashSet<int> CacheCandidateItemIds,
+    bool WarmCacheForCraftedItems,
+    HashSet<(int itemId, string dataCenter)> FetchedThisRunKeys,
+    Dictionary<int, (int CachedDataCenterCount, int CachedWorldCount)> DataScopeByItemId,
+    IReadOnlyList<string> ScopeDataCenters);
 
 /// <summary>
 /// Result of a price refresh operation.

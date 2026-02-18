@@ -33,7 +33,6 @@ using SettingsService = FFXIV_Craft_Architect.Core.Services.SettingsService;
 using GarlandService = FFXIV_Craft_Architect.Core.Services.GarlandService;
 using UniversalisService = FFXIV_Craft_Architect.Core.Services.UniversalisService;
 using PriceCheckService = FFXIV_Craft_Architect.Core.Services.PriceCheckService;
-using static FFXIV_Craft_Architect.Core.Services.PriceCheckService;
 using WorldDataCoordinator = FFXIV_Craft_Architect.Core.Services.WorldDataCoordinator;
 
 namespace FFXIV_Craft_Architect;
@@ -51,11 +50,9 @@ public partial class MainWindow : Window
     private readonly ItemCacheService _itemCache;
     private readonly RecipeCalculationService _recipeCalcService;
     private readonly PlanPersistenceService _planPersistence;
-    private readonly PriceCheckService _priceCheckService;
     private readonly MarketShoppingService _marketShoppingService;
     private readonly WorldBlacklistService _blacklistService;
     private readonly IDialogService _dialogs;
-    private readonly Core.Services.IMarketCacheService _marketCache;
     private readonly ILogger<MainWindow> _logger;
     private readonly DialogServiceFactory _dialogFactory;
 
@@ -94,6 +91,8 @@ public partial class MainWindow : Window
     private readonly PlanPersistenceCoordinator _planCoordinator;
     private readonly WatchStateCoordinator _watchStateCoordinator;
     private readonly WorldDataCoordinator _worldDataCoordinator;
+    private readonly IPriceRefreshCoordinator _priceRefreshCoordinator;
+    private readonly IShoppingOptimizationCoordinator _shoppingOptimizationCoordinator;
 
     public MainWindow(
         GarlandService garlandService,
@@ -102,7 +101,6 @@ public partial class MainWindow : Window
         ItemCacheService itemCache,
         RecipeCalculationService recipeCalcService,
         PlanPersistenceService planPersistence,
-        PriceCheckService priceCheckService,
         MarketShoppingService marketShoppingService,
         WorldBlacklistService blacklistService,
         DialogServiceFactory dialogFactory,
@@ -113,12 +111,13 @@ public partial class MainWindow : Window
         PlanPersistenceCoordinator planCoordinator,
         WatchStateCoordinator watchStateCoordinator,
         WorldDataCoordinator worldDataCoordinator,
+        IPriceRefreshCoordinator priceRefreshCoordinator,
+        IShoppingOptimizationCoordinator shoppingOptimizationCoordinator,
         ICardFactory cardFactory,
         RecipePlannerViewModel recipeVm,
         MarketAnalysisViewModel marketVm,
         MainViewModel mainVm,
-        InfoPanelBuilder infoPanelBuilder,
-        Core.Services.IMarketCacheService marketCache)
+        InfoPanelBuilder infoPanelBuilder)
     {
         // Services (injected via DI)
         _garlandService = garlandService;
@@ -127,12 +126,10 @@ public partial class MainWindow : Window
         _itemCache = itemCache;
         _recipeCalcService = recipeCalcService;
         _planPersistence = planPersistence;
-        _priceCheckService = priceCheckService;
         _marketShoppingService = marketShoppingService;
         _blacklistService = blacklistService;
         _dialogFactory = dialogFactory;
         _dialogs = _dialogFactory.CreateForWindow(this);
-        _marketCache = marketCache;
         _logger = logger;
         
         // Coordinators (injected via DI)
@@ -141,6 +138,8 @@ public partial class MainWindow : Window
         _planCoordinator = planCoordinator;
         _watchStateCoordinator = watchStateCoordinator;
         _worldDataCoordinator = worldDataCoordinator;
+        _priceRefreshCoordinator = priceRefreshCoordinator;
+        _shoppingOptimizationCoordinator = shoppingOptimizationCoordinator;
         _cardFactory = cardFactory;
         
         // ViewModels (injected via DI as singletons)
@@ -1106,23 +1105,24 @@ public partial class MainWindow : Window
 
         try
         {
-            var progress = new Progress<(int current, int total, string itemName, PriceFetchStage stage, string message)>(p =>
+            var progress = new Progress<PriceRefreshProgress>(p =>
             {
-                var statusText = p.message ?? p.stage switch
+                var statusText = p.Message ?? p.Stage switch
                 {
-                    PriceFetchStage.CheckingCache => $"Checking cache... {p.current}/{p.total}",
-                    PriceFetchStage.FetchingGarlandData => $"Loading item data: {p.itemName} ({p.current}/{p.total})",
-                    PriceFetchStage.FetchingMarketData => $"Fetching market prices... {p.current}/{p.total}",
-                    PriceFetchStage.ProcessingResults => $"Processing results... {p.current}/{p.total}",
-                    PriceFetchStage.Complete => $"Complete! ({p.total} items)",
-                    _ => $"Fetching prices... {p.current}/{p.total}"
+                    PriceRefreshStage.Starting => $"Checking cache... {p.Current}/{p.Total}",
+                    PriceRefreshStage.Fetching => string.IsNullOrWhiteSpace(p.ItemName)
+                        ? $"Fetching market prices... {p.Current}/{p.Total}"
+                        : $"Loading item data: {p.ItemName} ({p.Current}/{p.Total})",
+                    PriceRefreshStage.Updating => $"Processing results... {p.Current}/{p.Total}",
+                    PriceRefreshStage.Complete => $"Complete! ({p.Total} items)",
+                    _ => $"Fetching prices... {p.Current}/{p.Total}"
                 };
-                
+
                 StatusLabel.Text = statusText;
-                
-                if (p.stage == PriceFetchStage.FetchingGarlandData && !string.IsNullOrEmpty(p.itemName))
+
+                if (p.Stage == PriceRefreshStage.Fetching && !string.IsNullOrEmpty(p.ItemName))
                 {
-                    var item = allItems.FirstOrDefault(i => i.name == p.itemName);
+                    var item = allItems.FirstOrDefault(i => i.name == p.ItemName);
                     if (item.itemId > 0)
                     {
                         _marketDataStatusSession.SetItemFetching(item.itemId);
@@ -1131,107 +1131,23 @@ public partial class MainWindow : Window
                 }
             });
 
-            // UNIFIED FETCH APPROACH:
-            // 1. Cache service ensures all data is populated (fetches missing items from API)
-            // 2. MarketShoppingService and PriceCheckService read from cache only
-            // This ensures only ONE API call per item and clean separation of concerns
-            
-            _logger.LogInformation("[OnFetchPricesAsync] Using unified fetch approach - cache orchestrates all API calls");
-            
-            // Step 1: Ensure cache is populated for configured market-warming scope.
-            // Categorization (market/vendor/untradeable) happens after prices are resolved.
-            var allMaterials = _currentPlan?.AggregatedMaterials ?? new List<MaterialAggregate>();
-            var warmCacheForCraftedItems = _settingsService.Get("market.warm_cache_for_crafted_items", false);
-            var cacheCandidateItemIds = warmCacheForCraftedItems
-                ? allItems.Select(i => i.itemId).Distinct().ToHashSet()
-                : allMaterials.Where(m => m.TotalQuantity > 0).Select(m => m.ItemId).ToHashSet();
-            
-            _logger.LogInformation("[OnFetchPricesAsync] Cache warm mode: {Mode}. Candidate item count: {Count}",
-                warmCacheForCraftedItems ? "all plan nodes" : "buy-relevant materials only",
-                cacheCandidateItemIds.Count);
-             
-            var scopeDataCenters = searchAllNA
-                ? new[] { "Aether", "Primal", "Crystal", "Dynamis" }
-                : new[] { dc };
-            var fetchedThisRunKeys = new HashSet<(int itemId, string dataCenter)>();
-            var dataScopeByItemId = new Dictionary<int, (int CachedDataCenterCount, int CachedWorldCount)>();
+            _logger.LogInformation("[OnFetchPricesAsync] Fetching plan prices via PriceRefreshCoordinator");
+            var refreshContext = await _priceRefreshCoordinator.FetchPlanPricesAsync(
+                _currentPlan,
+                dc,
+                worldOrDc,
+                searchAllNA,
+                progress,
+                default);
 
-            if (cacheCandidateItemIds.Count > 0)
-            {
-                var cacheProgress = new Progress<string>(msg =>
-                {
-                    StatusLabel.Text = $"Fetching market data: {msg}";
-                });
-                
-                // Build list of (itemId, dataCenter) to ensure in cache
-                var cacheRequests = new List<(int itemId, string dataCenter)>();
-                if (searchAllNA)
-                {
-                    var naDCs = new[] { "Aether", "Primal", "Crystal", "Dynamis" };
-                    foreach (var itemId in cacheCandidateItemIds)
-                    {
-                        foreach (var itemDc in naDCs)
-                        {
-                            cacheRequests.Add((itemId, itemDc));
-                        }
-                    }
-                }
-                else
-                {
-                    cacheRequests = cacheCandidateItemIds.Select(itemId => (itemId, dc)).ToList();
-                }
-                
-                _logger.LogInformation("[OnFetchPricesAsync] Ensuring cache is populated for {Count} item/DC combinations...", 
-                    cacheRequests.Count);
-                
-                // Use same TTL as PriceCheckService (from settings, default 3 hours)
-                var cacheTtl = TimeSpan.FromHours(_settingsService.Get("market.cache_ttl_hours", 3.0));
-                var missingBeforePopulate = await _marketCache.GetMissingAsync(cacheRequests, cacheTtl);
-                fetchedThisRunKeys = missingBeforePopulate.ToHashSet();
-                var fetchedCount = await _marketCache.EnsurePopulatedAsync(cacheRequests, cacheTtl, cacheProgress, default);
-                _logger.LogInformation("[OnFetchPricesAsync] Cache populated - {FetchedCount} items fetched from API", fetchedCount);
+            allItems = refreshContext.AllItems;
+            var prices = refreshContext.Prices;
+            var cacheCandidateItemIds = refreshContext.CacheCandidateItemIds;
+            var warmCacheForCraftedItems = refreshContext.WarmCacheForCraftedItems;
+            var fetchedThisRunKeys = refreshContext.FetchedThisRunKeys;
+            var dataScopeByItemId = refreshContext.DataScopeByItemId;
+            var scopeDataCenters = refreshContext.ScopeDataCenters;
 
-                foreach (var itemId in cacheCandidateItemIds)
-                {
-                    int cachedDataCenterCount = 0;
-                    int cachedWorldCount = 0;
-
-                    foreach (var itemDc in scopeDataCenters)
-                    {
-                        var (cachedData, _) = await _marketCache.GetWithStaleAsync(itemId, itemDc, cacheTtl);
-                        if (cachedData == null)
-                        {
-                            continue;
-                        }
-
-                        cachedDataCenterCount++;
-                        cachedWorldCount += cachedData.Worlds.Count;
-                    }
-
-                    dataScopeByItemId[itemId] = (cachedDataCenterCount, cachedWorldCount);
-                }
-            }
-             
-            // Step 2: Get recipe tree prices (reads from cache only)
-            _logger.LogInformation("[OnFetchPricesAsync] Getting recipe tree prices from cache...");
-            Dictionary<int, PriceInfo> prices;
-            if (searchAllNA)
-            {
-                prices = await _priceCheckService.GetBestPricesMultiDCAsync(
-                    allItems.Select(i => (i.itemId, i.name)).ToList(), 
-                    default, 
-                    progress,
-                    forceRefresh: false);
-            }
-            else
-            {
-                prices = await _priceCheckService.GetBestPricesBulkAsync(
-                    allItems.Select(i => (i.itemId, i.name)).ToList(), 
-                    worldOrDc, 
-                    default, 
-                    progress,
-                    forceRefresh: false);
-            }
             _logger.LogInformation("[OnFetchPricesAsync] Got {Count} prices from cache", prices.Count);
 
             int successCount = 0;
@@ -1260,7 +1176,7 @@ public partial class MainWindow : Window
                 else if (priceInfo.Source == PriceSource.Market)
                 {
                     var isFetchedThisRun = scopeDataCenters.Any(itemDc => fetchedThisRunKeys.Contains((itemId, itemDc)));
-                    var dataScopeText = BuildMarketDataScopeText(itemId, dataScopeByItemId, scopeDataCenters.Length);
+                    var dataScopeText = BuildMarketDataScopeText(itemId, dataScopeByItemId, scopeDataCenters.Count);
                     
                     if (isFetchedThisRun)
                     {
@@ -1927,20 +1843,12 @@ public partial class MainWindow : Window
         
         var insertIndex = MarketCards.Children.Count;
         
-        IEnumerable<DetailedShoppingPlan> sortedPlans = _currentMarketPlans;
-        var sortIndex = MarketSortCombo?.SelectedIndex ?? 0;
-        
-        switch (sortIndex)
+        var sortMode = (MarketSortCombo?.SelectedIndex ?? 0) switch
         {
-            case 0:
-                sortedPlans = _currentMarketPlans
-                    .OrderBy(p => p.RecommendedWorld?.WorldName ?? "ZZZ")
-                    .ThenBy(p => p.Name);
-                break;
-            case 1:
-                sortedPlans = _currentMarketPlans.OrderBy(p => p.Name);
-                break;
-        }
+            1 => ShoppingPlanSortMode.Alphabetical,
+            _ => ShoppingPlanSortMode.RecommendedWorld
+        };
+        var sortedPlans = _shoppingOptimizationCoordinator.SortPlans(_currentMarketPlans, sortMode);
         
         foreach (var plan in sortedPlans)
         {
@@ -1966,10 +1874,12 @@ public partial class MainWindow : Window
         
         var border = new Border
         {
-            Background = TryFindResource("Brush.Surface.Card") as Brush
+            Background = TryFindResource("Brush.Surface.Card.Market") as Brush
+                ?? TryFindResource("Brush.Surface.Card") as Brush
                 ?? TryFindResource("CardBackgroundBrush") as Brush
                 ?? ColorHelper.GetMutedAccentBrush(),
-            BorderBrush = TryFindResource("Brush.Border.Default") as Brush,
+            BorderBrush = TryFindResource("Brush.Border.Card.Market") as Brush
+                ?? TryFindResource("Brush.Border.Default") as Brush,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(3),
             Padding = new Thickness(0),
@@ -2518,25 +2428,13 @@ public partial class MainWindow : Window
             _procurementBuilder?.LegacyPanel.Children.Add(summaryPanel);
         }
         
-        var sortIndex = ProcurementSortCombo?.SelectedIndex ?? 0;
-        IEnumerable<DetailedShoppingPlan> sortedPlans = _currentMarketPlans;
-        
-        switch (sortIndex)
+        var sortMode = (ProcurementSortCombo?.SelectedIndex ?? 0) switch
         {
-            case 0:
-                sortedPlans = _currentMarketPlans
-                    .OrderBy(p => p.RecommendedWorld?.WorldName ?? "ZZZ")
-                    .ThenBy(p => p.Name);
-                break;
-            case 1:
-                sortedPlans = _currentMarketPlans.OrderBy(p => p.Name);
-                break;
-            case 2:
-                sortedPlans = _currentMarketPlans
-                    .OrderByDescending(p => p.RecommendedWorld?.TotalCost ?? 0)
-                    .ThenBy(p => p.Name);
-                break;
-        }
+            1 => ShoppingPlanSortMode.Alphabetical,
+            2 => ShoppingPlanSortMode.PriceHighToLow,
+            _ => ShoppingPlanSortMode.RecommendedWorld
+        };
+        var sortedPlans = _shoppingOptimizationCoordinator.SortPlans(_currentMarketPlans, sortMode);
         
         foreach (var plan in sortedPlans)
         {
@@ -2584,25 +2482,13 @@ public partial class MainWindow : Window
         
         _procurementBuilder?.UpdateSplitPaneTotal(grandTotal, itemsWithOptions);
         
-        var sortIndex = ProcurementSortCombo?.SelectedIndex ?? 0;
-        IEnumerable<DetailedShoppingPlan> sortedPlans = _currentMarketPlans;
-        
-        switch (sortIndex)
+        var sortMode = (ProcurementSortCombo?.SelectedIndex ?? 0) switch
         {
-            case 0:
-                sortedPlans = _currentMarketPlans
-                    .OrderBy(p => p.RecommendedWorld?.WorldName ?? "ZZZ")
-                    .ThenBy(p => p.Name);
-                break;
-            case 1:
-                sortedPlans = _currentMarketPlans.OrderBy(p => p.Name);
-                break;
-            case 2:
-                sortedPlans = _currentMarketPlans
-                    .OrderByDescending(p => p.RecommendedWorld?.TotalCost ?? 0)
-                    .ThenBy(p => p.Name);
-                break;
-        }
+            1 => ShoppingPlanSortMode.Alphabetical,
+            2 => ShoppingPlanSortMode.PriceHighToLow,
+            _ => ShoppingPlanSortMode.RecommendedWorld
+        };
+        var sortedPlans = _shoppingOptimizationCoordinator.SortPlans(_currentMarketPlans, sortMode);
         
         foreach (var plan in sortedPlans)
         {

@@ -1,6 +1,7 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using Microsoft.Extensions.Logging;
+using SettingsService = FFXIV_Craft_Architect.Core.Services.SettingsService;
 using PriceInfo = FFXIV_Craft_Architect.Core.Models.PriceInfo;
 using PriceCheckService = FFXIV_Craft_Architect.Core.Services.PriceCheckService;
 
@@ -13,13 +14,19 @@ namespace FFXIV_Craft_Architect.Coordinators;
 public class PriceRefreshCoordinator : IPriceRefreshCoordinator
 {
     private readonly PriceCheckService _priceCheckService;
+    private readonly Core.Services.IMarketCacheService _marketCache;
+    private readonly SettingsService _settingsService;
     private readonly ILogger<PriceRefreshCoordinator> _logger;
 
     public PriceRefreshCoordinator(
         PriceCheckService priceCheckService,
+        Core.Services.IMarketCacheService marketCache,
+        SettingsService settingsService,
         ILogger<PriceRefreshCoordinator> logger)
     {
         _priceCheckService = priceCheckService;
+        _marketCache = marketCache;
+        _settingsService = settingsService;
         _logger = logger;
     }
 
@@ -163,15 +170,150 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
         }
     }
 
+    /// <inheritdoc />
+    public async Task<PlanPriceRefreshContext> FetchPlanPricesAsync(
+        CraftingPlan plan,
+        string dataCenter,
+        string worldOrDc,
+        bool searchAllNa,
+        IProgress<PriceRefreshProgress>? progress = null,
+        CancellationToken ct = default)
+    {
+        if (plan == null || plan.RootItems.Count == 0)
+        {
+            return new PlanPriceRefreshContext(
+                new List<(int itemId, string name, int quantity)>(),
+                new Dictionary<int, PriceInfo>(),
+                new HashSet<int>(),
+                false,
+                new HashSet<(int itemId, string dataCenter)>(),
+                new Dictionary<int, (int CachedDataCenterCount, int CachedWorldCount)>(),
+                Array.Empty<string>());
+        }
+
+        var allItems = new List<(int itemId, string name, int quantity)>();
+        CollectAllItemsWithQuantity(plan.RootItems, allItems);
+
+        progress?.Report(new PriceRefreshProgress(
+            0,
+            allItems.Count,
+            string.Empty,
+            PriceRefreshStage.Starting,
+            $"Fetching prices for {allItems.Count} items..."));
+
+        var allMaterials = plan.AggregatedMaterials ?? new List<MaterialAggregate>();
+        var warmCacheForCraftedItems = _settingsService.Get("market.warm_cache_for_crafted_items", false);
+        var cacheCandidateItemIds = warmCacheForCraftedItems
+            ? allItems.Select(i => i.itemId).Distinct().ToHashSet()
+            : allMaterials.Where(m => m.TotalQuantity > 0).Select(m => m.ItemId).ToHashSet();
+
+        var scopeDataCenters = searchAllNa
+            ? new[] { "Aether", "Primal", "Crystal", "Dynamis" }
+            : new[] { dataCenter };
+
+        var fetchedThisRunKeys = new HashSet<(int itemId, string dataCenter)>();
+        var dataScopeByItemId = new Dictionary<int, (int CachedDataCenterCount, int CachedWorldCount)>();
+
+        if (cacheCandidateItemIds.Count > 0)
+        {
+            var cacheProgress = new Progress<string>(msg =>
+            {
+                progress?.Report(new PriceRefreshProgress(
+                    0,
+                    cacheCandidateItemIds.Count,
+                    string.Empty,
+                    PriceRefreshStage.Fetching,
+                    $"Fetching market data: {msg}"));
+            });
+
+            var cacheRequests = new List<(int itemId, string dataCenter)>();
+            if (searchAllNa)
+            {
+                var naDataCenters = new[] { "Aether", "Primal", "Crystal", "Dynamis" };
+                foreach (var itemId in cacheCandidateItemIds)
+                {
+                    foreach (var itemDc in naDataCenters)
+                    {
+                        cacheRequests.Add((itemId, itemDc));
+                    }
+                }
+            }
+            else
+            {
+                cacheRequests = cacheCandidateItemIds.Select(itemId => (itemId, dataCenter)).ToList();
+            }
+
+            var cacheTtl = TimeSpan.FromHours(_settingsService.Get("market.cache_ttl_hours", 3.0));
+            var missingBeforePopulate = await _marketCache.GetMissingAsync(cacheRequests, cacheTtl);
+            fetchedThisRunKeys = missingBeforePopulate.ToHashSet();
+            await _marketCache.EnsurePopulatedAsync(cacheRequests, cacheTtl, cacheProgress, ct);
+
+            foreach (var itemId in cacheCandidateItemIds)
+            {
+                int cachedDataCenterCount = 0;
+                int cachedWorldCount = 0;
+
+                foreach (var itemDc in scopeDataCenters)
+                {
+                    var (cachedData, _) = await _marketCache.GetWithStaleAsync(itemId, itemDc, cacheTtl);
+                    if (cachedData == null)
+                    {
+                        continue;
+                    }
+
+                    cachedDataCenterCount++;
+                    cachedWorldCount += cachedData.Worlds.Count;
+                }
+
+                dataScopeByItemId[itemId] = (cachedDataCenterCount, cachedWorldCount);
+            }
+        }
+
+        Dictionary<int, PriceInfo> prices;
+        if (searchAllNa)
+        {
+            prices = await _priceCheckService.GetBestPricesMultiDCAsync(
+                allItems.Select(i => (i.itemId, i.name)).ToList(),
+                ct,
+                CreateInternalProgress(progress, allItems.Count),
+                forceRefresh: false);
+        }
+        else
+        {
+            prices = await _priceCheckService.GetBestPricesBulkAsync(
+                allItems.Select(i => (i.itemId, i.name)).ToList(),
+                worldOrDc,
+                ct,
+                CreateInternalProgress(progress, allItems.Count),
+                forceRefresh: false);
+        }
+
+        progress?.Report(new PriceRefreshProgress(
+            allItems.Count,
+            allItems.Count,
+            string.Empty,
+            PriceRefreshStage.Complete,
+            "Price refresh complete"));
+
+        return new PlanPriceRefreshContext(
+            allItems,
+            prices,
+            cacheCandidateItemIds,
+            warmCacheForCraftedItems,
+            fetchedThisRunKeys,
+            dataScopeByItemId,
+            scopeDataCenters);
+    }
+
     /// <summary>
     /// Creates an adapter to convert internal PriceCheckService progress to PriceRefreshProgress.
     /// </summary>
-    private IProgress<(int current, int total, string itemName, PriceFetchStage stage, string? message)>?
+    private IProgress<(int completed, int total, string currentItem, PriceFetchStage stage, string message)>?
         CreateInternalProgress(IProgress<PriceRefreshProgress>? progress, int totalItems)
     {
         if (progress == null) return null;
 
-        return new Progress<(int current, int total, string itemName, PriceFetchStage stage, string? message)>(p =>
+        return new Progress<(int completed, int total, string currentItem, PriceFetchStage stage, string message)>(p =>
         {
             var stage = p.stage switch
             {
@@ -183,7 +325,7 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
                 _ => PriceRefreshStage.Fetching
             };
 
-            progress.Report(new PriceRefreshProgress(p.current, p.total, p.itemName, stage, p.message));
+            progress.Report(new PriceRefreshProgress(p.completed, p.total, p.currentItem, stage, p.message));
         });
     }
 
