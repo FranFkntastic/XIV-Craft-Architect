@@ -44,13 +44,6 @@ namespace FFXIV_Craft_Architect;
 /// </summary>
 public partial class MainWindow : Window
 {
-    private enum MainTab
-    {
-        RecipePlanner,
-        MarketAnalysis,
-        ProcurementPlanner
-    }
-
     private StackPanel RecipePlannerLeftPanel => RecipePlannerSidebarModule.RecipePlannerLeftPanel;
     private StackPanel MarketAnalysisLeftPanel => MarketAnalysisSidebarModule.MarketAnalysisLeftPanel;
     private StackPanel ProcurementPlannerLeftPanel => ProcurementPlannerSidebarModule.ProcurementPlannerLeftPanel;
@@ -128,7 +121,6 @@ public partial class MainWindow : Window
     
     // Split-pane view state
     private DetailedShoppingPlan? _expandedSplitPanePlan;
-    private MainTab _activeTab = MainTab.RecipePlanner;
     
     // Coordinators
     private readonly ImportCoordinator _importCoordinator;
@@ -2147,124 +2139,6 @@ public partial class MainWindow : Window
     }
     
     /// <summary>
-    /// Switches to the Recipe Planner tab.
-    /// Note: UI-specific tab management - must remain in MainWindow.
-    /// MVVM: ICommand candidate - SwitchTabCommand with "RecipePlanner" parameter.
-    /// </summary>
-    private void OnRecipePlannerTabClick(object sender, MouseButtonEventArgs e)
-    {
-        ActivateTab(MainTab.RecipePlanner);
-    }
-    
-    /// <summary>
-    /// Switches to the Market Analysis tab.
-    /// Note: UI-specific tab management - must remain in MainWindow.
-    /// MVVM: ICommand candidate - SwitchTabCommand with "MarketAnalysis" parameter.
-    /// </summary>
-    private void OnMarketAnalysisTabClick(object sender, MouseButtonEventArgs e)
-    {
-        ActivateTab(MainTab.MarketAnalysis);
-    }
-    
-    /// <summary>
-    /// Switches to the Procurement Planner tab.
-    /// Note: UI-specific tab management - must remain in MainWindow.
-    /// MVVM: ICommand candidate - SwitchTabCommand with "ProcurementPlanner" parameter.
-    /// </summary>
-    private void OnProcurementPlannerTabClick(object sender, MouseButtonEventArgs e)
-    {
-        ActivateTab(MainTab.ProcurementPlanner);
-    }
-
-    /// <summary>
-    /// Centralized tab activation for shell navigation and side-panel visibility.
-    /// </summary>
-    private void ActivateTab(MainTab tab)
-    {
-        _activeTab = tab;
-
-        SetTabActiveState(RecipePlannerTab, tab == MainTab.RecipePlanner);
-        SetTabActiveState(MarketAnalysisTab, tab == MainTab.MarketAnalysis);
-        SetTabActiveState(ProcurementPlannerTab, tab == MainTab.ProcurementPlanner);
-
-        RecipePlannerContent.Visibility = tab == MainTab.RecipePlanner ? Visibility.Visible : Visibility.Collapsed;
-        MarketAnalysisContent.Visibility = tab == MainTab.MarketAnalysis ? Visibility.Visible : Visibility.Collapsed;
-        ProcurementPlannerContent.Visibility = tab == MainTab.ProcurementPlanner ? Visibility.Visible : Visibility.Collapsed;
-
-        RecipePlannerLeftPanel.Visibility = tab == MainTab.RecipePlanner ? Visibility.Visible : Visibility.Collapsed;
-        MarketAnalysisLeftPanel.Visibility = tab == MainTab.MarketAnalysis ? Visibility.Visible : Visibility.Collapsed;
-        ProcurementPlannerLeftPanel.Visibility = tab == MainTab.ProcurementPlanner ? Visibility.Visible : Visibility.Collapsed;
-
-        switch (tab)
-        {
-            case MainTab.RecipePlanner:
-                MarketTotalCostText.Text = string.Empty;
-                StatusLabel.Text = "Recipe Planner";
-                break;
-            case MainTab.MarketAnalysis:
-                if (_currentPlan != null)
-                {
-                    PopulateProcurementPanel();
-                }
-
-                StatusLabel.Text = "Market Analysis";
-                break;
-            case MainTab.ProcurementPlanner:
-                MarketTotalCostText.Text = string.Empty;
-                if (_currentPlan != null)
-                {
-                    PopulateProcurementPlanSummary();
-                }
-
-                StatusLabel.Text = "Procurement Plan";
-                break;
-        }
-    }
-    
-    /// <summary>
-    /// Sets visual active state for a tab.
-    /// Note: UI helper - could be a style trigger in XAML.
-    /// MVVM: Not an ICommand candidate - internal helper method, not directly triggered by user.
-    /// </summary>
-    private void SetTabActive(Border tab)
-    {
-        tab.Background = (Brush)FindResource("Brush.Accent.Primary");
-        ((TextBlock)tab.Child).Foreground = (Brush)FindResource("Brush.Text.OnAccent");
-    }
-    
-    /// <summary>
-    /// Sets visual inactive state for a tab.
-    /// Note: UI helper - could be a style trigger in XAML.
-    /// MVVM: Not an ICommand candidate - internal helper method, not directly triggered by user.
-    /// </summary>
-    private void SetTabInactive(Border tab)
-    {
-        tab.Background = Brushes.Transparent;
-        ((TextBlock)tab.Child).Foreground = (Brush)FindResource("Brush.Accent.Primary");
-    }
-
-    private void SetTabActiveState(Border tab, bool isActive)
-    {
-        if (isActive)
-        {
-            SetTabActive(tab);
-            return;
-        }
-
-        SetTabInactive(tab);
-    }
-    
-    /// <summary>
-    /// Checks if Market Analysis or Procurement Planner tab is visible.
-    /// Note: UI state check - must remain in MainWindow.
-    /// MVVM: Not an ICommand candidate - helper property, could be bound in XAML.
-    /// </summary>
-    private bool IsMarketViewVisible()
-    {
-        return _activeTab is MainTab.MarketAnalysis or MainTab.ProcurementPlanner;
-    }
-    
-    /// <summary>
     /// Populates the procurement panel based on current view mode (split-pane or legacy).
     /// Delegates to view-specific methods which use ProcurementPanelBuilder for UI construction.
     /// Coordinates between _procurementBuilder state and appropriate population method.
@@ -2700,46 +2574,6 @@ public partial class MainWindow : Window
         }
     }
     
-    /// <summary>
-    /// Handles procurement sort selection change.
-    /// Note: Event handler - triggers panel refresh.
-    /// MVVM: Not an ICommand candidate - SelectionChanged event, but could be replaced with binding.
-    /// </summary>
-    private void OnProcurementSortChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_currentPlan == null)
-            return;
-            
-        if (IsMarketViewVisible() && _currentMarketPlans?.Any() == true)
-        {
-            PopulateProcurementPanel();
-        }
-    }
-    
-    /// <summary>
-    /// Handles procurement mode (MinimizeTotalCost/MaximizeValue) change.
-    /// Note: Event handler - saves setting and refreshes panel.
-    /// MVVM: Not an ICommand candidate - SelectionChanged event, but could be replaced with binding.
-    /// </summary>
-    private void OnProcurementModeChanged(object sender, SelectionChangedEventArgs e)
-    {
-        // Skip if service not ready or if this is initial load (AddedItems is empty during programmatic set)
-        if (_settingsService == null || e.AddedItems.Count == 0)
-            return;
-            
-        if (ProcurementModeCombo.SelectedIndex >= 0)
-        {
-            var mode = ProcurementModeCombo.SelectedIndex == 1 ? "MaximizeValue" : "MinimizeTotalCost";
-            _logger.LogInformation("[OnProcurementModeChanged] User changed mode to '{Mode}', saving setting", mode);
-            _settingsService.Set("planning.default_recommendation_mode", mode);
-            
-            if (IsMarketViewVisible() && _currentPlan != null)
-            {
-                PopulateProcurementPanel();
-            }
-        }
-    }
-
     /// <summary>
     /// Resets the application state for a new plan.
     /// Note: UI coordination - delegates to RecipePlannerViewModel.ClearCommand.
