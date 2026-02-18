@@ -15,17 +15,17 @@
                        Text="Procurement Plan"
                        FontSize="16"
                        FontWeight="SemiBold"
-                       Foreground="{StaticResource GoldAccentBrush}"
+                       Foreground="{StaticResource Brush.Accent.Primary}"
                        Margin="0,0,0,8"/>
 
             <Border Grid.Row="1"
-                    Background="{StaticResource CardBackgroundBrush}"
+                    Background="{StaticResource Brush.Surface.Card}"
                     CornerRadius="4"
                     Padding="12">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel x:Name="ProcurementPlanPanel">
                         <TextBlock Text="No procurement plan available - fetch market data to generate actionable plan"
-                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   Foreground="{StaticResource Brush.Text.Secondary}"
                                    FontSize="12"
                                    TextWrapping="Wrap"/>
                     </StackPanel>

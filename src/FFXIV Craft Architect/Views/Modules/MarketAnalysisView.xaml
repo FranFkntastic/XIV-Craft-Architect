@@ -19,7 +19,7 @@
                 <TextBlock Text="Market Analysis"
                            FontSize="16"
                            FontWeight="SemiBold"
-                           Foreground="{StaticResource GoldAccentBrush}"
+                           Foreground="{StaticResource Brush.Accent.Primary}"
                            VerticalAlignment="Center"/>
 
                 <ui:Button x:Name="ProcurementRefreshButton"
@@ -37,13 +37,13 @@
             </StackPanel>
 
             <Border Grid.Row="1"
-                    Background="{StaticResource CardBackgroundBrush}"
+                    Background="{StaticResource Brush.Surface.Card}"
                     CornerRadius="4"
                     Padding="12"
                     Margin="0,0,0,8">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="Data Center:"
-                               Foreground="{StaticResource TextSecondaryBrush}"
+                               Foreground="{StaticResource Brush.Text.Secondary}"
                                VerticalAlignment="Center"
                                Margin="0,0,6,0"/>
                     <ComboBox x:Name="DcCombo"
@@ -52,7 +52,7 @@
                               Margin="0,0,16,0"/>
 
                     <TextBlock Text="World:"
-                               Foreground="{StaticResource TextSecondaryBrush}"
+                               Foreground="{StaticResource Brush.Text.Secondary}"
                                VerticalAlignment="Center"
                                Margin="0,0,6,0"/>
                     <ComboBox x:Name="WorldCombo"
@@ -61,7 +61,7 @@
                               Margin="0,0,24,0"/>
 
                     <TextBlock Text="Sort by:"
-                               Foreground="{StaticResource TextSecondaryBrush}"
+                               Foreground="{StaticResource Brush.Text.Secondary}"
                                VerticalAlignment="Center"
                                Margin="0,0,8,0"/>
                     <ComboBox x:Name="ProcurementSortCombo"
@@ -73,7 +73,7 @@
                     </ComboBox>
 
                     <TextBlock Text="Mode:"
-                               Foreground="{StaticResource TextSecondaryBrush}"
+                               Foreground="{StaticResource Brush.Text.Secondary}"
                                VerticalAlignment="Center"
                                Margin="24,0,8,0"/>
                     <ComboBox x:Name="ProcurementModeCombo"
@@ -84,14 +84,14 @@
 
                     <CheckBox x:Name="ProcurementSearchAllNaCheck"
                               Content="Search all NA DCs"
-                              Foreground="{StaticResource TextSecondaryBrush}"
+                              Foreground="{StaticResource Brush.Text.Secondary}"
                               Margin="24,0,0,0"
                               VerticalAlignment="Center"/>
                 </StackPanel>
             </Border>
 
             <Border Grid.Row="2"
-                    Background="{StaticResource CardBackgroundBrush}"
+                    Background="{StaticResource Brush.Surface.Card}"
                     CornerRadius="4"
                     Padding="12">
                 <Grid>
@@ -99,7 +99,7 @@
                                   VerticalScrollBarVisibility="Auto">
                         <StackPanel x:Name="ProcurementPanel">
                             <TextBlock Text="Build a plan to see market analysis"
-                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       Foreground="{StaticResource Brush.Text.Secondary}"
                                        HorizontalAlignment="Center"
                                        Margin="0,40"
                                        FontSize="14"/>

@@ -19,7 +19,7 @@
                 <TextBlock Text="Recipe Plan"
                            FontSize="16"
                            FontWeight="SemiBold"
-                           Foreground="{StaticResource GoldAccentBrush}"
+                           Foreground="{StaticResource Brush.Accent.Primary}"
                            VerticalAlignment="Center"/>
             </StackPanel>
 
@@ -48,7 +48,7 @@
             </Border>
 
             <Border Grid.Row="2"
-                    Background="{StaticResource CardBackgroundBrush}"
+                    Background="{StaticResource Brush.Surface.Card}"
                     CornerRadius="4"
                     Padding="12">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
