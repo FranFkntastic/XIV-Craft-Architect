@@ -467,40 +467,50 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
                     <!-- Recipe Plan Header -->
                     <StackPanel Grid.Row="0" 
                                 Orientation="Horizontal"
-                                Margin="0,0,0,8">
+                                Margin="0,0,0,6">
                         <TextBlock Text="Recipe Plan" 
                                    FontSize="16"
                                    FontWeight="SemiBold"
                                    Foreground="{StaticResource GoldAccentBrush}"
                                    VerticalAlignment="Center"/>
-                        
-
-                        
-                        <ui:Button x:Name="ExpandAllButton"
-                                   Content="Expand All"
-                                   Appearance="Secondary"
-                                   Margin="8,0,0,0"
-                                   Command="{Binding RecipePlanner.ExpandAllCommand}"
-                                   IsEnabled="False"
-                                   ToolTip="Expand all recipe nodes"/>
-                        
-                        <ui:Button x:Name="CollapseAllButton"
-                                   Content="Collapse All"
-                                   Appearance="Secondary"
-                                   Margin="4,0,0,0"
-                                   Command="{Binding RecipePlanner.CollapseAllCommand}"
-                                   IsEnabled="False"
-                                   ToolTip="Collapse all recipe nodes"/>
                     </StackPanel>
 
-                    <!-- Recipe Tree Content -->
+                    <!-- Recipe Tree Control Bar -->
                     <Border Grid.Row="1"
+                            Background="{StaticResource Brush.Surface.Panel}"
+                            BorderBrush="{StaticResource Brush.Border.Default}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="8,6"
+                            Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal"
+                                    HorizontalAlignment="Right">
+                            <ui:Button x:Name="ExpandAllButton"
+                                       Content="Expand All"
+                                       Appearance="Secondary"
+                                       Margin="0,0,4,0"
+                                       Click="OnExpandAll"
+                                       IsEnabled="False"
+                                       ToolTip="Expand all recipe nodes"/>
+
+                            <ui:Button x:Name="CollapseAllButton"
+                                       Content="Collapse All"
+                                       Appearance="Secondary"
+                                       Click="OnCollapseAll"
+                                       IsEnabled="False"
+                                       ToolTip="Collapse all recipe nodes"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Recipe Tree Content -->
+                    <Border Grid.Row="2"
                             Background="{StaticResource CardBackgroundBrush}"
                             CornerRadius="4"
                             Padding="12">

@@ -96,15 +96,14 @@ public class RecipeTreeUiBuilder
 
     private UIElement CreateParentNode(PlanNodeViewModel nodeVm, int depth)
     {
-        var headerPanel = CreateNodeHeader(nodeVm, showDropdown: true);
-        
+        Button? collapseMaterialsButton = null;
+
         var backgroundBrush = depth == 0 
             ? new SolidColorBrush((Color)ColorConverter.ConvertFromString("#252525"))
             : Brushes.Transparent;
 
         var expander = new Expander
         {
-            Header = headerPanel,
             IsExpanded = nodeVm.IsExpanded,
             Background = backgroundBrush,
             Padding = new Thickness(depth == 0 ? 8 : 0),
@@ -112,11 +111,30 @@ public class RecipeTreeUiBuilder
             Tag = nodeVm
         };
 
+        var headerPanel = CreateNodeHeader(
+            nodeVm,
+            showDropdown: true,
+            showCollapseMaterialsButton: true,
+            onCollapseMaterials: () => CollapseDescendantExpanders(expander),
+            onCollapseButtonCreated: button => collapseMaterialsButton = button);
+
+        expander.Header = headerPanel;
+
         expander.Resources["ExpanderHeaderStyle"] = CreateExpanderHeaderStyle();
 
         // Bind expansion state
-        expander.Expanded += (s, e) => nodeVm.IsExpanded = true;
-        expander.Collapsed += (s, e) => nodeVm.IsExpanded = false;
+        expander.Expanded += (s, e) =>
+        {
+            nodeVm.IsExpanded = true;
+            SetCollapseMaterialsButtonVisibility(collapseMaterialsButton, isExpanded: true);
+        };
+        expander.Collapsed += (s, e) =>
+        {
+            nodeVm.IsExpanded = false;
+            SetCollapseMaterialsButtonVisibility(collapseMaterialsButton, isExpanded: false);
+        };
+
+        SetCollapseMaterialsButtonVisibility(collapseMaterialsButton, expander.IsExpanded);
 
         // Add children
         var childrenPanel = new StackPanel { Margin = new Thickness(16, 4, 0, 0) };
@@ -134,11 +152,14 @@ public class RecipeTreeUiBuilder
 
     private UIElement CreateLeafNode(PlanNodeViewModel nodeVm, int depth)
     {
-        var panel = new DockPanel
+        var panel = new Grid
         {
             Margin = new Thickness(depth * 16, 2, 0, 2),
             Background = Brushes.Transparent
         };
+
+        panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        panel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         // Left side: Icon + HQ toggle + Name
         var leftPanel = new StackPanel 
@@ -210,7 +231,7 @@ public class RecipeTreeUiBuilder
             leftPanel.Children.Add(circularIndicator);
         }
 
-        DockPanel.SetDock(leftPanel, Dock.Left);
+        Grid.SetColumn(leftPanel, 0);
         panel.Children.Add(leftPanel);
 
         // Right side: Dropdown only
@@ -227,7 +248,7 @@ public class RecipeTreeUiBuilder
             rightPanel.Children.Add(dropdown);
         }
 
-        DockPanel.SetDock(rightPanel, Dock.Right);
+        Grid.SetColumn(rightPanel, 1);
         panel.Children.Add(rightPanel);
 
         // Register for updates
@@ -236,9 +257,22 @@ public class RecipeTreeUiBuilder
         return panel;
     }
 
-    private StackPanel CreateNodeHeader(PlanNodeViewModel nodeVm, bool showDropdown)
+    private Grid CreateNodeHeader(
+        PlanNodeViewModel nodeVm,
+        bool showDropdown,
+        bool showCollapseMaterialsButton = false,
+        Action? onCollapseMaterials = null,
+        Action<Button>? onCollapseButtonCreated = null)
     {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        var panel = new Grid();
+        panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        panel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var leftPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center
+        };
 
         // Job icon
         var jobIcon = new TextBlock
@@ -251,7 +285,7 @@ public class RecipeTreeUiBuilder
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 4, 0)
         };
-        panel.Children.Add(jobIcon);
+        leftPanel.Children.Add(jobIcon);
 
         // Level indicator
         if (nodeVm.RecipeLevel > 0)
@@ -264,19 +298,19 @@ public class RecipeTreeUiBuilder
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 4, 0)
             };
-            panel.Children.Add(levelBlock);
+            leftPanel.Children.Add(levelBlock);
         }
 
         // HQ toggle button (if item can be HQ) - now next to the name
         if (nodeVm.CanBeHq)
         {
             var hqButton = CreateHqToggleButton(nodeVm);
-            panel.Children.Add(hqButton);
+            leftPanel.Children.Add(hqButton);
         }
         else
         {
             // Add spacer for alignment when no HQ toggle
-            panel.Children.Add(new FrameworkElement { Width = 24 });
+            leftPanel.Children.Add(new FrameworkElement { Width = 24 });
         }
 
         // Item name with quantity
@@ -287,7 +321,7 @@ public class RecipeTreeUiBuilder
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(4, 0, 0, 0)
         };
-        panel.Children.Add(nameBlock);
+        leftPanel.Children.Add(nameBlock);
 
         // HQ indicator text (shows [HQ] when enabled)
         var hqIndicator = new TextBlock
@@ -299,7 +333,7 @@ public class RecipeTreeUiBuilder
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(2, 0, 0, 0)
         };
-        panel.Children.Add(hqIndicator);
+        leftPanel.Children.Add(hqIndicator);
 
         // Circular reference indicator
         if (nodeVm.IsCircularReference)
@@ -313,24 +347,87 @@ public class RecipeTreeUiBuilder
                 Margin = new Thickness(4, 0, 0, 0),
                 ToolTip = "This item is already being crafted higher up in the recipe chain.\nTo avoid infinite loops, purchase this from the market instead."
             };
-            panel.Children.Add(circularIndicator);
+            leftPanel.Children.Add(circularIndicator);
         }
 
-        // Spacer
-        panel.Children.Add(new FrameworkElement { Width = 8 });
+        Grid.SetColumn(leftPanel, 0);
+        panel.Children.Add(leftPanel);
 
-        // Right-side controls: Dropdown only
+        var rightPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        if (showCollapseMaterialsButton && onCollapseMaterials != null)
+        {
+            var collapseMaterialsButton = new Button
+            {
+                Content = "Collapse Materials",
+                Height = 22,
+                FontSize = 10,
+                Padding = new Thickness(6, 0, 6, 0),
+                Margin = new Thickness(0, 0, 4, 0),
+                Background = Brushes.Transparent,
+                Foreground = Brushes.LightGray,
+                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#555555")),
+                BorderThickness = new Thickness(1),
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = "Collapse all child material nodes",
+                Visibility = nodeVm.IsExpanded ? Visibility.Visible : Visibility.Collapsed
+            };
+
+            collapseMaterialsButton.Click += (s, e) =>
+            {
+                onCollapseMaterials();
+                e.Handled = true;
+            };
+
+            onCollapseButtonCreated?.Invoke(collapseMaterialsButton);
+
+            rightPanel.Children.Add(collapseMaterialsButton);
+        }
+
+        // Right-side controls
         if (showDropdown)
         {
             // Acquisition dropdown
             var dropdown = CreateAcquisitionDropdown(nodeVm);
             if (dropdown != null)
             {
-                panel.Children.Add(dropdown);
+                rightPanel.Children.Add(dropdown);
             }
         }
 
+        Grid.SetColumn(rightPanel, 1);
+        panel.Children.Add(rightPanel);
+
         return panel;
+    }
+
+    private static void CollapseDescendantExpanders(Expander parentExpander)
+    {
+        if (parentExpander.Content is not Panel panel)
+        {
+            return;
+        }
+
+        foreach (var childExpander in panel.Children.OfType<Expander>())
+        {
+            childExpander.IsExpanded = false;
+            CollapseDescendantExpanders(childExpander);
+        }
+    }
+
+    private static void SetCollapseMaterialsButtonVisibility(Button? button, bool isExpanded)
+    {
+        if (button == null)
+        {
+            return;
+        }
+
+        button.Visibility = isExpanded ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private ComboBox? CreateAcquisitionDropdown(PlanNodeViewModel nodeVm)

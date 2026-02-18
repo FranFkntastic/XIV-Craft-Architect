@@ -1392,6 +1392,7 @@ public partial class MainWindow : Window
     private void OnExpandAll(object sender, RoutedEventArgs e)
     {
         _recipeVm.ExpandAllCommand.Execute(null);
+        SetAllExpandersState(true);
     }
     
     /// <summary>
@@ -1401,6 +1402,7 @@ public partial class MainWindow : Window
     private void OnCollapseAll(object sender, RoutedEventArgs e)
     {
         _recipeVm.CollapseAllCommand.Execute(null);
+        SetAllExpandersState(false);
     }
     
     /// <summary>
@@ -2146,8 +2148,8 @@ public partial class MainWindow : Window
     /// </summary>
     private void SetTabActive(Border tab)
     {
-        tab.Background = (SolidColorBrush)FindResource("GoldAccentBrush");
-        ((TextBlock)tab.Child).Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1a1a1a"));
+        tab.Background = (Brush)FindResource("Brush.Accent.Primary");
+        ((TextBlock)tab.Child).Foreground = (Brush)FindResource("Brush.Text.OnAccent");
     }
     
     /// <summary>
@@ -2158,7 +2160,7 @@ public partial class MainWindow : Window
     private void SetTabInactive(Border tab)
     {
         tab.Background = Brushes.Transparent;
-        ((TextBlock)tab.Child).Foreground = (SolidColorBrush)FindResource("GoldAccentBrush");
+        ((TextBlock)tab.Child).Foreground = (Brush)FindResource("Brush.Accent.Primary");
     }
     
     /// <summary>
