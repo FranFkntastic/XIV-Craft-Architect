@@ -182,25 +182,6 @@
             </Grid>
         </Border>
 
-        <!-- Hidden controls for backward compatibility (STILL USED BY CODE-BEHIND) -->
-        <Border Grid.Row="1" Visibility="Collapsed">
-            <StackPanel>
-                <Border x:Name="RecipePlanTab"/>
-                <Border x:Name="MarketLogisticsTab"/>
-                <ComboBox x:Name="MarketSortCombo"/>
-                <ComboBox x:Name="MarketModeCombo"/>
-                <CheckBox x:Name="SearchAllNACheck"/>
-                <ui:Button x:Name="ViewMarketStatusButton"/>
-                <ui:Button x:Name="RefreshMarketButton"/>
-                <Border x:Name="RecipePlanContent"/>
-                <Border x:Name="MarketLogisticsContent"/>
-                <StackPanel x:Name="MarketCards"/>
-                <Expander x:Name="MarketSummaryExpander"/>
-                <StackPanel x:Name="MarketSummaryContent"/>
-                <TextBlock x:Name="MarketSummaryHeaderText"/>
-            </StackPanel>
-        </Border>
-
         <!-- Main Content Area -->
         <Grid Grid.Row="2" Margin="0,8,0,0">
             <Grid.ColumnDefinitions>

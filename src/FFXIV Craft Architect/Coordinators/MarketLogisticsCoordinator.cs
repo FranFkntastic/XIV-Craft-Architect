@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Services;
 using FFXIV_Craft_Architect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
@@ -29,9 +30,9 @@ public record MarketSummaryData(
 /// Coordinates market logistics calculations and UI state for the Market Logistics tab.
 /// Separates market logistics logic from MainWindow.
 /// </summary>
-public class MarketLogisticsCoordinator
+public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
 {
-    private readonly IMarketShoppingService _marketShoppingService;
+    private readonly MarketShoppingService _marketShoppingService;
     private readonly ICardFactory _cardFactory;
     private readonly ILogger<MarketLogisticsCoordinator> _logger;
 
@@ -42,7 +43,7 @@ public class MarketLogisticsCoordinator
     /// <param name="cardFactory">Factory for creating UI card elements.</param>
     /// <param name="logger">Logger instance.</param>
     public MarketLogisticsCoordinator(
-        IMarketShoppingService marketShoppingService,
+        MarketShoppingService marketShoppingService,
         ICardFactory cardFactory,
         ILogger<MarketLogisticsCoordinator> logger)
     {

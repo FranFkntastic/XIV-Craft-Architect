@@ -94,47 +94,33 @@
                     Background="{StaticResource Brush.Surface.Card}"
                     CornerRadius="4"
                     Padding="12">
-                <Grid>
-                    <ScrollViewer x:Name="LegacyProcurementScrollViewer"
-                                  VerticalScrollBarVisibility="Auto">
-                        <StackPanel x:Name="ProcurementPanel">
-                            <TextBlock Text="Build a plan to see market analysis"
-                                       Foreground="{StaticResource Brush.Text.Secondary}"
-                                       HorizontalAlignment="Center"
-                                       Margin="0,40"
-                                       FontSize="14"/>
-                        </StackPanel>
-                    </ScrollViewer>
+                <Grid x:Name="SplitPaneMarketView">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
 
-                    <Grid x:Name="SplitPaneMarketView"
-                          Visibility="Collapsed">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
-
-                        <Border x:Name="SplitPaneExpandedPanel"
-                                Grid.Row="0"
-                                Background="#252525"
-                                CornerRadius="4"
-                                Margin="0,0,0,8"
-                                Visibility="Collapsed"
-                                MaxHeight="300">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                          Padding="12">
-                                <StackPanel x:Name="SplitPaneExpandedContent">
-                                </StackPanel>
-                            </ScrollViewer>
-                        </Border>
-
-                        <ScrollViewer Grid.Row="1"
-                                      VerticalScrollBarVisibility="Auto">
-                            <WrapPanel x:Name="SplitPaneCardsGrid"
-                                       Orientation="Horizontal"
-                                       HorizontalAlignment="Center">
-                            </WrapPanel>
+                    <Border x:Name="SplitPaneExpandedPanel"
+                            Grid.Row="0"
+                            Background="#252525"
+                            CornerRadius="4"
+                            Margin="0,0,0,8"
+                            Visibility="Collapsed"
+                            MaxHeight="300">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      Padding="12">
+                            <StackPanel x:Name="SplitPaneExpandedContent">
+                            </StackPanel>
                         </ScrollViewer>
-                    </Grid>
+                    </Border>
+
+                    <ScrollViewer Grid.Row="1"
+                                  VerticalScrollBarVisibility="Auto">
+                        <WrapPanel x:Name="SplitPaneCardsGrid"
+                                   Orientation="Horizontal"
+                                   HorizontalAlignment="Center">
+                        </WrapPanel>
+                    </ScrollViewer>
                 </Grid>
             </Border>
         </Grid>

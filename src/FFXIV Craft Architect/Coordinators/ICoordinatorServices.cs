@@ -9,7 +9,7 @@ public interface ICoordinatorServices
     ImportCoordinator Import { get; }
     ExportCoordinator Export { get; }
     PlanPersistenceCoordinator Plans { get; }
-    MarketLogisticsCoordinator Market { get; }
+    IMarketLogisticsCoordinator Market { get; }
     IPriceRefreshCoordinator Prices { get; }
     IShoppingOptimizationCoordinator Optimization { get; }
     IWatchListCoordinator Watch { get; }

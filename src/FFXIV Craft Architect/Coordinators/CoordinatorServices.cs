@@ -8,7 +8,7 @@ public class CoordinatorServices : ICoordinatorServices
     public ImportCoordinator Import { get; }
     public ExportCoordinator Export { get; }
     public PlanPersistenceCoordinator Plans { get; }
-    public MarketLogisticsCoordinator Market { get; }
+    public IMarketLogisticsCoordinator Market { get; }
     public IPriceRefreshCoordinator Prices { get; }
     public IShoppingOptimizationCoordinator Optimization { get; }
     public IWatchListCoordinator Watch { get; }
@@ -17,7 +17,7 @@ public class CoordinatorServices : ICoordinatorServices
         ImportCoordinator importCoordinator,
         ExportCoordinator exportCoordinator,
         PlanPersistenceCoordinator planPersistenceCoordinator,
-        MarketLogisticsCoordinator marketLogisticsCoordinator,
+        IMarketLogisticsCoordinator marketLogisticsCoordinator,
         IPriceRefreshCoordinator priceRefreshCoordinator,
         IShoppingOptimizationCoordinator shoppingOptimizationCoordinator,
         IWatchListCoordinator watchListCoordinator)

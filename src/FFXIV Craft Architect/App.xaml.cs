@@ -177,6 +177,7 @@ public partial class App : Application
         // Coordinators
         services.AddSingleton<IPriceRefreshCoordinator, PriceRefreshCoordinator>();
         services.AddSingleton<IShoppingOptimizationCoordinator, ShoppingOptimizationCoordinator>();
+        services.AddSingleton<IMarketLogisticsCoordinator, MarketLogisticsCoordinator>();
         services.AddSingleton<IWatchListCoordinator, WatchListCoordinator>();
         services.AddTransient<ExportCoordinator>();
         services.AddTransient<ImportCoordinator>();
