@@ -44,6 +44,22 @@ namespace FFXIV_Craft_Architect;
 /// </summary>
 public partial class MainWindow : Window
 {
+    private StackPanel RecipePlannerLeftPanel => RecipePlannerSidebarModule.RecipePlannerLeftPanel;
+    private StackPanel MarketAnalysisLeftPanel => MarketAnalysisSidebarModule.MarketAnalysisLeftPanel;
+    private StackPanel ProcurementPlannerLeftPanel => ProcurementPlannerSidebarModule.ProcurementPlannerLeftPanel;
+    private Wpf.Ui.Controls.TextBox ItemSearch => RecipePlannerSidebarModule.ItemSearchControl;
+    private Border SearchResultsPanel => RecipePlannerSidebarModule.SearchResultsPanelControl;
+    private ListBox SearchResults => RecipePlannerSidebarModule.SearchResultsControl;
+    private Wpf.Ui.Controls.Button AddToProjectButton => RecipePlannerSidebarModule.AddToProjectButtonControl;
+    private ListBox ProjectList => RecipePlannerSidebarModule.ProjectListControl;
+    private TextBlock QuickViewCountText => RecipePlannerSidebarModule.QuickViewCountTextControl;
+    private Wpf.Ui.Controls.Button BuildPlanButton => RecipePlannerSidebarModule.BuildPlanButtonControl;
+    private Wpf.Ui.Controls.Button BrowsePlanButton => RecipePlannerSidebarModule.BrowsePlanButtonControl;
+    private Wpf.Ui.Controls.Button LeftPanelConductAnalysisButton => MarketAnalysisSidebarModule.LeftPanelConductAnalysisButtonControl;
+    private Wpf.Ui.Controls.Button LeftPanelViewMarketStatusButton => MarketAnalysisSidebarModule.LeftPanelViewMarketStatusButtonControl;
+    private ComboBox LeftPanelProcurementSortCombo => ProcurementPlannerSidebarModule.LeftPanelProcurementSortComboControl;
+    private Wpf.Ui.Controls.Button LeftPanelProcurementAnalysisButton => ProcurementPlannerSidebarModule.LeftPanelProcurementAnalysisButtonControl;
+
     private Border RecipePlannerContent => RecipePlannerModule.RecipePlannerContent;
     private Border MarketAnalysisContent => MarketAnalysisModule.MarketAnalysisContent;
     private Border ProcurementPlannerContent => ProcurementPlannerModule.ProcurementPlannerContent;
@@ -173,6 +189,24 @@ public partial class MainWindow : Window
         _infoPanelBuilder = infoPanelBuilder;
         
         InitializeComponent();
+
+        RecipePlannerSidebarModule.ItemSearchKeyDownForwarded += OnItemSearchKeyDown;
+        RecipePlannerSidebarModule.SearchClicked += OnSearchItem;
+        RecipePlannerSidebarModule.ItemSelected += OnItemSelected;
+        RecipePlannerSidebarModule.AddToProjectClicked += OnAddToProject;
+        RecipePlannerSidebarModule.ProjectItemSelected += OnProjectItemSelected;
+        RecipePlannerSidebarModule.QuantityGotFocusForwarded += OnQuantityGotFocus;
+        RecipePlannerSidebarModule.QuantityPreviewTextInputForwarded += OnQuantityPreviewTextInput;
+        RecipePlannerSidebarModule.QuantityChangedForwarded += OnQuantityChanged;
+        RecipePlannerSidebarModule.RemoveProjectItemClicked += OnRemoveProjectItem;
+        RecipePlannerSidebarModule.BuildProjectPlanClicked += OnBuildProjectPlan;
+        RecipePlannerSidebarModule.BrowsePlanClicked += OnBrowsePlan;
+
+        MarketAnalysisSidebarModule.ConductAnalysisClicked += OnConductAnalysis;
+        MarketAnalysisSidebarModule.ViewMarketStatusClicked += OnViewMarketStatus;
+
+        ProcurementPlannerSidebarModule.ProcurementSortChanged += OnProcurementSortChanged;
+        ProcurementPlannerSidebarModule.ConductAnalysisClicked += OnConductAnalysis;
 
         ExpandAllButton.Click += OnExpandAll;
         CollapseAllButton.Click += OnCollapseAll;

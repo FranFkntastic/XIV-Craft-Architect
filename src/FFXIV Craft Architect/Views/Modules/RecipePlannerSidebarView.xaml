@@ -1,0 +1,173 @@
+<UserControl x:Class="FFXIV_Craft_Architect.Views.Modules.RecipePlannerSidebarView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:helpers="clr-namespace:FFXIV_Craft_Architect.Helpers">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel x:Name="RecipePlannerLeftPanel">
+            <TextBlock Text="Project Items"
+                       FontSize="16"
+                       FontWeight="SemiBold"
+                       Foreground="{StaticResource Brush.Accent.Primary}"
+                       Margin="0,0,0,16"/>
+
+            <TextBlock Text="Item Name:"
+                       Margin="0,0,0,4"
+                       Foreground="{StaticResource Brush.Text.Secondary}"/>
+            <ui:TextBox x:Name="ItemSearchTextBox"
+                        PlaceholderText="Enter item..."
+                        KeyDown="OnItemSearchKeyDown"
+                        Margin="0,0,0,8"/>
+
+            <ui:Button x:Name="SearchButton"
+                       Content="Search"
+                       Appearance="Primary"
+                       Margin="0,0,0,20"
+                       HorizontalAlignment="Stretch"
+                       Click="OnSearchItem"
+                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
+
+            <Border x:Name="SearchResultsPanel"
+                    Background="{StaticResource Brush.Surface.Card}"
+                    CornerRadius="4"
+                    Padding="8"
+                    Margin="0,0,0,12"
+                    Visibility="Collapsed">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="Search Results"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,8"
+                               Foreground="{StaticResource Brush.Accent.Primary}"/>
+                    <ListBox Grid.Row="1"
+                             x:Name="SearchResults"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             MaxHeight="150"
+                             SelectionChanged="OnItemSelected"/>
+                    <ui:Button Grid.Row="2"
+                               x:Name="AddToProjectButton"
+                               Content="Add to Project"
+                               Appearance="Primary"
+                               Margin="0,8,0,0"
+                               HorizontalAlignment="Stretch"
+                               IsEnabled="False"
+                               Click="OnAddToProject"/>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="Planned Acquisitions"
+                       FontSize="12"
+                       FontWeight="SemiBold"
+                       Foreground="{StaticResource Brush.Text.Secondary}"
+                       Margin="0,0,0,8"/>
+
+            <Border Background="{StaticResource Brush.Surface.Card}"
+                    CornerRadius="4"
+                    Padding="4,4,4,4"
+                    Margin="0,0,0,8"
+                    MinHeight="60">
+                <ListBox x:Name="ProjectList"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         SelectionChanged="OnProjectItemSelected">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border Padding="2,1" Margin="0" BorderBrush="#3d3d3d" BorderThickness="0,0,0,1">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="44" />
+                                        <ColumnDefinition Width="20" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding Name}"
+                                               VerticalAlignment="Center"
+                                               TextWrapping="Wrap"
+                                               MaxHeight="32"
+                                               FontSize="11"
+                                               LineHeight="14"
+                                               Margin="0,0,4,0"/>
+                                    <TextBox Grid.Column="1"
+                                             Text="{Binding Quantity, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                             VerticalAlignment="Center"
+                                             HorizontalContentAlignment="Center"
+                                             FontSize="11"
+                                             Height="18"
+                                             Padding="0"
+                                             GotFocus="OnQuantityGotFocus"
+                                             PreviewTextInput="OnQuantityPreviewTextInput"
+                                             LostFocus="OnQuantityChanged"/>
+                                    <Button Grid.Column="2"
+                                            Content="x"
+                                            Width="16"
+                                            Height="16"
+                                            FontSize="12"
+                                            Padding="0"
+                                            Margin="2,0,0,0"
+                                            Foreground="#ff6b6b"
+                                            Background="Transparent"
+                                            BorderThickness="0"
+                                            Click="OnRemoveProjectItem"
+                                            ToolTip="Remove item"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Border>
+
+            <TextBlock x:Name="QuickViewCountText"
+                       Text=""
+                       FontSize="10"
+                       Foreground="{StaticResource Brush.Text.Muted}"
+                       HorizontalAlignment="Right"
+                       Margin="0,-4,0,8"/>
+
+            <ui:Button x:Name="BuildPlanButton"
+                       Content="Build Project Plan"
+                       Appearance="Primary"
+                       Margin="0,8,0,8"
+                       HorizontalAlignment="Stretch"
+                       IsEnabled="False"
+                       Click="OnBuildProjectPlan"
+                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
+
+            <ui:Button x:Name="BrowsePlanButton"
+                       Content="Browse Plan..."
+                       Appearance="Secondary"
+                       Margin="0,0,0,16"
+                       HorizontalAlignment="Stretch"
+                       IsEnabled="False"
+                       Click="OnBrowsePlan"
+                       ToolTip="Open plan browser to manage root items"
+                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
+
+            <Grid Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="8" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <ui:Button Grid.Column="0"
+                           Content="Save"
+                           Appearance="Success"
+                           HorizontalAlignment="Stretch"
+                           Command="{Binding RecipePlanner.SavePlanCommand}"
+                           helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
+
+                <ui:Button Grid.Column="2"
+                           Content="Export"
+                           Appearance="Info"
+                           HorizontalAlignment="Stretch"
+                           Command="{Binding RecipePlanner.ExportToPlainTextCommand}"
+                           helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
