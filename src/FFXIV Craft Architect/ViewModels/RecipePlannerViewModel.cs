@@ -38,7 +38,7 @@ namespace FFXIV_Craft_Architect.ViewModels;
 /// UI BINDINGS:
 /// - ProjectItems → ProjectList ListBox (left panel)
 /// - RootNodes → RecipeTree container (center panel, via RecipeTreeUiBuilder)
-/// - CurrentPlan → ShoppingListBuilder (right panel)
+/// - CurrentPlan → Recipe/procurement UI refresh in MainWindow
 /// - StatusMessage → Status bar updates
 /// 
 /// EVENTS RAISED:

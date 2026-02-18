@@ -100,7 +100,6 @@ public partial class MainWindow
             DisplayPlanInTreeView(_currentPlan);
         }
         UpdateBuildPlanButtonText();
-        PopulateShoppingList();
         ProcurementRefreshButton.IsEnabled = true;
 
         StatusLabel.Text = "[Watch] State restored from reload";

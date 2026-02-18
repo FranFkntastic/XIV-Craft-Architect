@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows.Input;
+using CommunityToolkit.Mvvm.Input;
 using FFXIV_Craft_Architect.Core.Models;
-using FFXIV_Craft_Architect.Infrastructure.Commands;
 
 namespace FFXIV_Craft_Architect.ViewModels;
 

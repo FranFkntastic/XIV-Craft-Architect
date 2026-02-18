@@ -96,7 +96,6 @@ public partial class MainWindow : Window
     
     // UI Builders
     private RecipeTreeUiBuilder? _recipeTreeBuilder;
-    private readonly ShoppingListBuilder _shoppingListBuilder;
     private ProcurementPanelBuilder? _procurementBuilder;
     private readonly InfoPanelBuilder _infoPanelBuilder;
     
@@ -173,7 +172,6 @@ public partial class MainWindow : Window
         _mainVm = mainVm;
         
         // Create UI Builders (ProcurementBuilder deferred until InitializeComponent)
-        _shoppingListBuilder = new ShoppingListBuilder(loggerFactory?.CreateLogger<ShoppingListBuilder>());
         _infoPanelBuilder = infoPanelBuilder;
         
         InitializeComponent();
@@ -302,7 +300,6 @@ public partial class MainWindow : Window
                 if (_recipeVm.CurrentPlan != null)
                 {
                     _recipeTreeBuilder?.BuildTree(_recipeVm.RootNodes, RecipePlanPanel);
-                    PopulateShoppingList();
                     ProcurementRefreshButton.IsEnabled = true;
                     RebuildFromCacheButton.IsEnabled = true;
                     ExpandAllButton.IsEnabled = true;
@@ -361,7 +358,6 @@ public partial class MainWindow : Window
     private void OnNodeAcquisitionChanged(object? sender, NodeChangedEventArgs e)
     {
         _recipeTreeBuilder?.UpdateNodeAcquisition(e.NodeId, e.Node.Source, e.Node.SelectedVendorIndex);
-        PopulateShoppingList();
         
         if (IsMarketViewVisible())
         {
@@ -378,7 +374,6 @@ public partial class MainWindow : Window
     private void OnNodeHqChanged(object? sender, NodeChangedEventArgs e)
     {
         _recipeTreeBuilder?.UpdateNodeHqIndicator(e.NodeId, e.Node.MustBeHq);
-        PopulateShoppingList();
     }
     
     /// <summary>
@@ -594,8 +589,6 @@ public partial class MainWindow : Window
             }
             UpdateBuildPlanButtonText();
             
-            PopulateShoppingList();
-            
             ProcurementRefreshButton.IsEnabled = true;
             RebuildFromCacheButton.IsEnabled = true;
             
@@ -650,25 +643,6 @@ public partial class MainWindow : Window
             UpdateBuildPlanButtonText();
             
             StatusLabel.Text = $"Plan updated: {_recipeVm.ProjectItems.Count} root items";
-        }
-    }
-
-    /// <summary>
-    /// Populates the shopping list panel using ShoppingListBuilder.
-    /// Note: Uses ShoppingListBuilder - refactor successful, UI-specific coordination only.
-    /// MVVM: Not an ICommand candidate - internal coordination method, triggered by plan changes.
-    /// </summary>
-    private void PopulateShoppingList()
-    {
-        if (_currentPlan?.AggregatedMaterials == null || ShoppingListPanel == null)
-            return;
-
-        _shoppingListBuilder.PopulatePanel(ShoppingListPanel, _currentPlan.AggregatedMaterials);
-        
-        if (TotalCostText != null)
-        {
-            var totalCost = _shoppingListBuilder.CalculateTotalCost(_currentPlan.AggregatedMaterials);
-            TotalCostText.Text = $"{totalCost:N0}g";
         }
     }
 
