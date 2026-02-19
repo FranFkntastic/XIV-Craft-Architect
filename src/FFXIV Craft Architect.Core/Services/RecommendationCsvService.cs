@@ -2,11 +2,10 @@ using System.Globalization;
 using System.IO;
 using CsvHelper;
 using CsvHelper.Configuration;
-using FFXIV_Craft_Architect.Models;
 using FFXIV_Craft_Architect.Core.Models;
 using Microsoft.Extensions.Logging;
 
-namespace FFXIV_Craft_Architect.Services;
+namespace FFXIV_Craft_Architect.Core.Services;
 
 /// <summary>
 /// Service for saving and loading plan-specific shopping recommendations as CSV files.

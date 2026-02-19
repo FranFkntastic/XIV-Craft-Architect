@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 using Task = System.Threading.Tasks.Task;
 using CancellationToken = System.Threading.CancellationToken;
 
-namespace FFXIV_Craft_Architect.Services;
+namespace FFXIV_Craft_Architect.Core.Services;
 
 /// <summary>
 /// Local cache for item names and icons to avoid repeated API calls.

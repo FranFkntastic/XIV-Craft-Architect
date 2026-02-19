@@ -3,12 +3,11 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Timers;
-using FFXIV_Craft_Architect.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 using Timer = System.Timers.Timer;
-using SettingsService = FFXIV_Craft_Architect.Core.Services.SettingsService;
 
-namespace FFXIV_Craft_Architect.Coordinators;
+namespace FFXIV_Craft_Architect.Core.Coordinators;
 
 /// <summary>
 /// Coordinates the watch list functionality.
@@ -17,7 +16,7 @@ namespace FFXIV_Craft_Architect.Coordinators;
 public class WatchListCoordinator : IWatchListCoordinator, IDisposable
 {
     private readonly IPriceRefreshCoordinator _priceRefreshCoordinator;
-    private readonly SettingsService _settingsService;
+    private readonly ISettingsService _settingsService;
     private readonly ILogger<WatchListCoordinator> _logger;
 
     private readonly ObservableCollection<WatchItem> _watchedItems;
@@ -54,7 +53,7 @@ public class WatchListCoordinator : IWatchListCoordinator, IDisposable
     /// <param name="logger">Logger instance.</param>
     public WatchListCoordinator(
         IPriceRefreshCoordinator priceRefreshCoordinator,
-        SettingsService settingsService,
+        ISettingsService settingsService,
         ILogger<WatchListCoordinator> logger)
     {
         _priceRefreshCoordinator = priceRefreshCoordinator;

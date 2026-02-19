@@ -1,6 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 
-namespace FFXIV_Craft_Architect.Coordinators;
+namespace FFXIV_Craft_Architect.Core.Coordinators;
 
 /// <summary>
 /// Defines the contract for coordinating shopping optimization operations.

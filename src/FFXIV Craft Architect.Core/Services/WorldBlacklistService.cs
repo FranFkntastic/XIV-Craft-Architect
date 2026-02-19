@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 
-namespace FFXIV_Craft_Architect.Services;
+namespace FFXIV_Craft_Architect.Core.Services;
 
 /// <summary>
 /// Service for managing a temporary blacklist of worlds that are unavailable for travel.

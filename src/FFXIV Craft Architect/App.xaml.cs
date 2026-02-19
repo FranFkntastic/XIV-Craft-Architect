@@ -3,25 +3,28 @@ using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Logging;
+using FFXIV_Craft_Architect.Core.Coordinators;
+using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Models;
 using FFXIV_Craft_Architect.Services;
 using FFXIV_Craft_Architect.Services.Interfaces;
 using FFXIV_Craft_Architect.Services.UI;
 using FFXIV_Craft_Architect.ViewModels;
 using FFXIV_Craft_Architect.Coordinators;
-using SettingsService = FFXIV_Craft_Architect.Core.Services.SettingsService;
-using GarlandService = FFXIV_Craft_Architect.Core.Services.GarlandService;
-using IGarlandService = FFXIV_Craft_Architect.Core.Services.Interfaces.IGarlandService;
-using UniversalisService = FFXIV_Craft_Architect.Core.Services.UniversalisService;
-using IUniversalisService = FFXIV_Craft_Architect.Core.Services.Interfaces.IUniversalisService;
-using RecipeCalculationService = FFXIV_Craft_Architect.Core.Services.RecipeCalculationService;
-using MarketShoppingService = FFXIV_Craft_Architect.Core.Services.MarketShoppingService;
-using TeamcraftService = FFXIV_Craft_Architect.Core.Services.TeamcraftService;
-using ITeamcraftService = FFXIV_Craft_Architect.Core.Services.ITeamcraftService;
-using PriceCheckService = FFXIV_Craft_Architect.Core.Services.PriceCheckService;
-using WorldDataCoordinator = FFXIV_Craft_Architect.Core.Services.WorldDataCoordinator;
-using CoreWorldStatusService = FFXIV_Craft_Architect.Core.Services.WorldStatusService;
-using IWorldStatusService = FFXIV_Craft_Architect.Core.Services.Interfaces.IWorldStatusService;
+using CoreIGarlandService = FFXIV_Craft_Architect.Core.Services.Interfaces.IGarlandService;
+using CoreIUniversalisService = FFXIV_Craft_Architect.Core.Services.Interfaces.IUniversalisService;
+using CoreIPlanPersistenceService = FFXIV_Craft_Architect.Core.Services.Interfaces.IPlanPersistenceService;
+using CoreItemCacheService = FFXIV_Craft_Architect.Core.Services.ItemCacheService;
+using CoreRecommendationCsvService = FFXIV_Craft_Architect.Core.Services.RecommendationCsvService;
+using CorePlanPersistenceService = FFXIV_Craft_Architect.Core.Services.PlanPersistenceService;
+using CoreWorldBlacklistService = FFXIV_Craft_Architect.Core.Services.WorldBlacklistService;
+using CoreIPriceRefreshCoordinator = FFXIV_Craft_Architect.Core.Coordinators.IPriceRefreshCoordinator;
+using CorePriceRefreshCoordinator = FFXIV_Craft_Architect.Core.Coordinators.PriceRefreshCoordinator;
+using CoreIShoppingOptimizationCoordinator = FFXIV_Craft_Architect.Core.Coordinators.IShoppingOptimizationCoordinator;
+using CoreShoppingOptimizationCoordinator = FFXIV_Craft_Architect.Core.Coordinators.ShoppingOptimizationCoordinator;
+using CoreIWatchListCoordinator = FFXIV_Craft_Architect.Core.Coordinators.IWatchListCoordinator;
+using CoreWatchListCoordinator = FFXIV_Craft_Architect.Core.Coordinators.WatchListCoordinator;
 
 namespace FFXIV_Craft_Architect;
 
@@ -97,7 +100,7 @@ public partial class App : Application
         // SQLite cache auto-saves, just dispose properly
         try
         {
-            var cacheService = Services.GetRequiredService<Core.Services.IMarketCacheService>() as IDisposable;
+            var cacheService = Services.GetRequiredService<IMarketCacheService>() as IDisposable;
             cacheService?.Dispose();
         }
         catch { }
@@ -118,8 +121,8 @@ public partial class App : Application
         // HTTP clients for API services
         services.AddHttpClient<GarlandService>();
         services.AddHttpClient<UniversalisService>();
-        services.AddHttpClient<Core.Services.ITeamcraftRecipeService, Core.Services.TeamcraftRecipeService>();
-        services.AddHttpClient<Core.Services.ArtisanService>();
+        services.AddHttpClient<ITeamcraftRecipeService, TeamcraftRecipeService>();
+        services.AddHttpClient<ArtisanService>();
         
         // Named HttpClients for services that use IHttpClientFactory
         services.AddHttpClient("Waitingway", c =>
@@ -137,21 +140,22 @@ public partial class App : Application
         
         // Services
         services.AddSingleton<SettingsService>();
+        services.AddSingleton<ISettingsService>(sp => sp.GetRequiredService<SettingsService>());
         services.AddSingleton<ThemeService>();
         services.AddSingleton<GarlandService>();
-        services.AddSingleton<IGarlandService>(sp => sp.GetRequiredService<GarlandService>());
+        services.AddSingleton<CoreIGarlandService>(sp => sp.GetRequiredService<GarlandService>());
         services.AddSingleton<UniversalisService>();
-        services.AddSingleton<IUniversalisService>(sp => sp.GetRequiredService<UniversalisService>());
-        services.AddSingleton<ItemCacheService>();
-        services.AddSingleton<Core.Services.IMarketCacheService, SqliteMarketCacheService>();
-        services.AddSingleton<RecommendationCsvService>();
+        services.AddSingleton<CoreIUniversalisService>(sp => sp.GetRequiredService<UniversalisService>());
+        services.AddSingleton<CoreItemCacheService>();
+        services.AddSingleton<IMarketCacheService, SqliteMarketCacheService>();
+        services.AddSingleton<CoreRecommendationCsvService>();
         services.AddSingleton<RecipeCalculationService>();
-        services.AddSingleton<PlanPersistenceService>();
-        services.AddSingleton<IPlanPersistenceService>(sp => sp.GetRequiredService<PlanPersistenceService>());
+        services.AddSingleton<CorePlanPersistenceService>();
+        services.AddSingleton<CoreIPlanPersistenceService>(sp => sp.GetRequiredService<CorePlanPersistenceService>());
         services.AddSingleton<TeamcraftService>();
         services.AddSingleton<ITeamcraftService>(sp => sp.GetRequiredService<TeamcraftService>());
-        services.AddSingleton<Core.Services.ArtisanService>();
-        services.AddSingleton<Core.Services.Interfaces.IArtisanService>(sp => sp.GetRequiredService<Core.Services.ArtisanService>());
+        services.AddSingleton<ArtisanService>();
+        services.AddSingleton<IArtisanService>(sp => sp.GetRequiredService<ArtisanService>());
         services.AddSingleton<PriceCheckService>();
         services.AddSingleton<MarketShoppingService>();
         
@@ -159,15 +163,15 @@ public partial class App : Application
         services.AddSingleton<IWorldStatusService>(sp => 
         {
             var factory = sp.GetRequiredService<System.Net.Http.IHttpClientFactory>();
-            var logger = sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CoreWorldStatusService>>();
-            return new CoreWorldStatusService(factory, logger);
+            var logger = sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<WorldStatusService>>();
+            return new WorldStatusService(factory, logger);
         });
         
         // WaitingwayTravelService - DISABLED pending re-implementation
         // services.AddSingleton<Core.Services.WaitingwayTravelService>();
         
         services.AddSingleton<WorldDataCoordinator>();
-        services.AddSingleton<WorldBlacklistService>();
+        services.AddSingleton<CoreWorldBlacklistService>();
         services.AddSingleton<DialogServiceFactory>();
         
         // UI Builders
@@ -175,15 +179,14 @@ public partial class App : Application
         services.AddSingleton<ICardFactory, CardFactory>();
 
         // Coordinators
-        services.AddSingleton<IPriceRefreshCoordinator, PriceRefreshCoordinator>();
-        services.AddSingleton<IShoppingOptimizationCoordinator, ShoppingOptimizationCoordinator>();
+        services.AddSingleton<CoreIPriceRefreshCoordinator, CorePriceRefreshCoordinator>();
+        services.AddSingleton<CoreIShoppingOptimizationCoordinator, CoreShoppingOptimizationCoordinator>();
         services.AddSingleton<IMarketLogisticsCoordinator, MarketLogisticsCoordinator>();
-        services.AddSingleton<IWatchListCoordinator, WatchListCoordinator>();
+        services.AddSingleton<CoreIWatchListCoordinator, CoreWatchListCoordinator>();
         services.AddTransient<ExportCoordinator>();
         services.AddTransient<ImportCoordinator>();
         services.AddTransient<PlanPersistenceCoordinator>();
         services.AddTransient<WatchStateCoordinator>();
-        services.AddSingleton<ICoordinatorServices, CoordinatorServices>();
         
         // ViewModels
         services.AddSingleton<MarketAnalysisViewModel>();

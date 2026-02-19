@@ -1,7 +1,5 @@
 using System.Text.Json;
-using FFXIV_Craft_Architect.Core.Helpers;
 using FFXIV_Craft_Architect.Core.Models;
-using Xunit;
 
 namespace FFXIV_Craft_Architect.Tests;
 
@@ -10,71 +8,28 @@ namespace FFXIV_Craft_Architect.Tests;
 /// </summary>
 public class GarlandModelsTests
 {
-    [Theory]
-    [InlineData(42, 42)]
-    [InlineData(42L, 42)]
-    [InlineData(42.5, 42)]
-    [InlineData("42", 42)]
-    [InlineData("not a number", 0)]
-    [InlineData(null, 0)]
-    public void ConvertToInt_HandlesVariousTypes(object? input, int expected)
+    [Fact]
+    public void GarlandPartial_Id_FromNumber_IsParsed()
     {
-        // Test ConvertToInt with various input types
-        // Note: JsonElement values are tested separately since they require JSON parsing
-        
-        if (input is double d)
-        {
-            // Test double directly (not via JsonElement)
-            var result = InvokeConvertToInt(d);
-            Assert.Equal(expected, result);
-        }
-        else if (input is string s)
-        {
-            var element = JsonDocument.Parse($"\"{s}\"").RootElement;
-            var result = InvokeConvertToInt(element);
-            Assert.Equal(expected, result);
-        }
-        else if (input is long l)
-        {
-            var element = JsonDocument.Parse(l.ToString()).RootElement;
-            var result = InvokeConvertToInt(element);
-            Assert.Equal(expected, result);
-        }
-        else if (input is int i)
-        {
-            var element = JsonDocument.Parse(i.ToString()).RootElement;
-            var result = InvokeConvertToInt(element);
-            Assert.Equal(expected, result);
-        }
-        else
-        {
-            var result = InvokeConvertToInt(input);
-            Assert.Equal(expected, result);
-        }
+        var partial = JsonSerializer.Deserialize<GarlandPartial>("{\"type\":\"npc\",\"id\":123}");
+        Assert.NotNull(partial);
+        Assert.Equal(123, partial.Id);
     }
 
     [Fact]
-    public void ConvertToInt_HandlesJsonElementNumber()
+    public void GarlandPartial_Id_FromStringNumber_IsParsed()
     {
-        var element = JsonDocument.Parse("123").RootElement;
-        var result = InvokeConvertToInt(element);
-        Assert.Equal(123, result);
+        var partial = JsonSerializer.Deserialize<GarlandPartial>("{\"type\":\"npc\",\"id\":\"456\"}");
+        Assert.NotNull(partial);
+        Assert.Equal(456, partial.Id);
     }
 
     [Fact]
-    public void ConvertToInt_HandlesJsonElementString()
+    public void GarlandPartial_Id_FromInvalidString_ReturnsZero()
     {
-        var element = JsonDocument.Parse("\"456\"").RootElement;
-        var result = InvokeConvertToInt(element);
-        Assert.Equal(456, result);
-    }
-
-    [Fact]
-    public void ConvertToInt_HandlesJsonElementInvalidString()
-    {
-        var element = JsonDocument.Parse("\"invalid\"").RootElement;
-        var result = InvokeConvertToInt(element);
-        Assert.Equal(0, result);
+        var partial = JsonSerializer.Deserialize<GarlandPartial>("{\"type\":\"npc\",\"id\":\"invalid\"}");
+        Assert.NotNull(partial);
+        Assert.Equal(0, partial.Id);
     }
 
     [Fact]
@@ -102,6 +57,7 @@ public class GarlandModelsTests
         Assert.Equal(123, npc.Id);
         Assert.Equal("Test NPC", npc.Name);
         Assert.Equal(456, npc.LocationId);
+        Assert.NotNull(npc.Coordinates);
         Assert.Equal(100, npc.Coordinates[0]);
         Assert.Equal(200, npc.Coordinates[1]);
     }
@@ -248,12 +204,4 @@ public class GarlandModelsTests
         Assert.NotEqual(zone54, zone148);
     }
 
-    // Helper method to invoke private ConvertToInt via reflection
-    private static int InvokeConvertToInt(object? value)
-    {
-        var method = typeof(GarlandPartial).GetMethod("ConvertToInt", 
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        Assert.NotNull(method);
-        return (int)method.Invoke(null, new[] { value })!;
-    }
 }

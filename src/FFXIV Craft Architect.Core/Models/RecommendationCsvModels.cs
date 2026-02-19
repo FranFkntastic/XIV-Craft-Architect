@@ -1,7 +1,7 @@
 using CsvHelper.Configuration;
 using FFXIV_Craft_Architect.Core.Models;
 
-namespace FFXIV_Craft_Architect.Models;
+namespace FFXIV_Craft_Architect.Core.Models;
 
 /// <summary>
 /// Plan-specific shopping recommendations stored in CSV format.

@@ -34,6 +34,10 @@ using GarlandService = FFXIV_Craft_Architect.Core.Services.GarlandService;
 using UniversalisService = FFXIV_Craft_Architect.Core.Services.UniversalisService;
 using PriceCheckService = FFXIV_Craft_Architect.Core.Services.PriceCheckService;
 using WorldDataCoordinator = FFXIV_Craft_Architect.Core.Services.WorldDataCoordinator;
+using ItemCacheService = FFXIV_Craft_Architect.Core.Services.ItemCacheService;
+using WorldBlacklistService = FFXIV_Craft_Architect.Core.Services.WorldBlacklistService;
+using WorldBlacklistEventArgs = FFXIV_Craft_Architect.Core.Services.WorldBlacklistEventArgs;
+using IShoppingOptimizationCoordinator = FFXIV_Craft_Architect.Core.Coordinators.IShoppingOptimizationCoordinator;
 
 namespace FFXIV_Craft_Architect;
 
@@ -106,10 +110,6 @@ public partial class MainWindow : Window
     private List<GarlandSearchResult> _currentSearchResults = new();
     private GarlandSearchResult? _selectedSearchResult;
     
-    // Market data status window for real-time fetch visualization
-    private MarketDataStatusWindow? _marketDataStatusWindow;
-    private readonly MarketDataStatusSession _marketDataStatusSession = new();
-    
     // Backwards compatibility properties (using Core.Models types)
     private Core.Models.CraftingPlan? _currentPlan => _recipeVm?.CurrentPlan;
     private List<Core.Models.DetailedShoppingPlan> _currentMarketPlans => _marketVm?.ShoppingPlans.Select(vm => vm.Plan).ToList() ?? new List<Core.Models.DetailedShoppingPlan>();
@@ -120,7 +120,6 @@ public partial class MainWindow : Window
     // Coordinators
     private readonly WatchStateCoordinator _watchStateCoordinator;
     private readonly WorldDataCoordinator _worldDataCoordinator;
-    private readonly IPriceRefreshCoordinator _priceRefreshCoordinator;
     private readonly IShoppingOptimizationCoordinator _shoppingOptimizationCoordinator;
     private readonly IMarketLogisticsCoordinator _marketLogisticsCoordinator;
 
@@ -137,7 +136,6 @@ public partial class MainWindow : Window
         ILoggerFactory loggerFactory,
         WatchStateCoordinator watchStateCoordinator,
         WorldDataCoordinator worldDataCoordinator,
-        IPriceRefreshCoordinator priceRefreshCoordinator,
         IShoppingOptimizationCoordinator shoppingOptimizationCoordinator,
         IMarketLogisticsCoordinator marketLogisticsCoordinator,
         ICardFactory cardFactory,
@@ -161,7 +159,6 @@ public partial class MainWindow : Window
         // Coordinators (injected via DI)
         _watchStateCoordinator = watchStateCoordinator;
         _worldDataCoordinator = worldDataCoordinator;
-        _priceRefreshCoordinator = priceRefreshCoordinator;
         _shoppingOptimizationCoordinator = shoppingOptimizationCoordinator;
         _marketLogisticsCoordinator = marketLogisticsCoordinator;
         _cardFactory = cardFactory;
@@ -1024,328 +1021,6 @@ public partial class MainWindow : Window
         _recipeVm.ExportToCsvCommand.Execute(null);
         if (!string.IsNullOrEmpty(_recipeVm.StatusMessage))
             StatusLabel.Text = _recipeVm.StatusMessage;
-    }
-
-    /// <summary>
-    /// Initiates fetching market prices for all items in the plan.
-    /// Note: MUST REMAIN in MainWindow - creates/shows MarketDataStatusWindow, reads DcCombo/WorldCombo,
-    ///       coordinates with MarketAnalysisContent visibility, updates multiple UI elements.
-    ///       Requires direct window ownership and UI control access.
-    /// </summary>
-    private void OnFetchPrices(object sender, RoutedEventArgs e)
-    {
-        OnFetchPricesAsync(forceRefresh: true).SafeFireAndForget(OnAsyncError);
-    }
-
-    /// <summary>
-    /// Conducts market analysis using cached data (fetches only if needed).
-    /// Note: MUST REMAIN in MainWindow - uses cache-first approach for faster analysis.
-    /// </summary>
-    private void OnConductAnalysis(object sender, RoutedEventArgs e)
-    {
-        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
-        {
-            StatusLabel.Text = "No plan - build a plan first";
-            return;
-        }
-
-        OnFetchPricesAsync(forceRefresh: false).SafeFireAndForget(OnAsyncError);
-    }
-
-    /// <summary>
-    /// Handles refresh request from MarketDataStatusWindow.
-    /// Performs a force refresh of all market data.
-    /// </summary>
-    private void OnMarketDataStatusRefreshRequested(object? sender, EventArgs e)
-    {
-        if (_marketDataStatusWindow != null && _marketDataStatusWindow.IsVisible)
-        {
-            // Re-initialize the status window and do a force refresh
-            if (_currentPlan != null && _currentPlan.RootItems.Count > 0)
-            {
-                var allItems = new List<(int itemId, string name, int quantity)>();
-                _recipeCalcService.CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
-                _marketDataStatusSession.InitializeItems(allItems);
-                _marketDataStatusWindow.RefreshView();
-            }
-        }
-        
-        OnFetchPricesAsync(forceRefresh: true).SafeFireAndForget(OnAsyncError);
-    }
-
-    /// <summary>
-    /// Fetches market prices via PriceCheckService and updates the plan.
-    /// Note: MUST REMAIN in MainWindow - manages MarketDataStatusWindow lifecycle (Show/Activate),
-    ///       handles progress updates to StatusLabel, updates recipe tree, procurement panel,
-    ///       and multiple button enablement states. Heavy UI coordination unsuitable for ViewModel.
-    /// </summary>
-    private async Task OnFetchPricesAsync(bool forceRefresh = false)
-    {
-        _logger.LogInformation("[OnFetchPricesAsync] START - forceRefresh={ForceRefresh}", forceRefresh);
-        
-        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
-        {
-            _logger.LogWarning("[OnFetchPricesAsync] ABORT - No plan available");
-            StatusLabel.Text = "No plan - build a plan first";
-            return;
-        }
-
-        var dc = DcCombo.SelectedItem as string ?? "Aether";
-        var world = WorldCombo.SelectedItem as string ?? "";
-        var worldOrDc = string.IsNullOrEmpty(world) || world == "Entire Data Center" ? dc : world;
-        var searchAllNA = ProcurementSearchAllNaCheck?.IsChecked ?? false;
-
-        _logger.LogInformation("[OnFetchPricesAsync] DC={DC}, World={World}, SearchAllNA={SearchAllNA}, PlanItems={ItemCount}", 
-            dc, world, searchAllNA, _currentPlan.RootItems.Count);
-
-        if (_marketDataStatusWindow == null || !_marketDataStatusWindow.IsVisible)
-        {
-            _marketDataStatusWindow = new MarketDataStatusWindow(_dialogFactory, _marketDataStatusSession);
-            _marketDataStatusWindow.Owner = this;
-            _marketDataStatusWindow.RefreshMarketDataRequested += OnMarketDataStatusRefreshRequested;
-        }
-
-        var allItems = new List<(int itemId, string name, int quantity)>();
-        _recipeCalcService.CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
-        
-        _logger.LogInformation("[OnFetchPricesAsync] RootItems.Count={RootCount}, AggregatedMaterials.Count={AggCount}",
-            _currentPlan.RootItems.Count, _currentPlan.AggregatedMaterials?.Count ?? 0);
-        _logger.LogInformation("[OnFetchPricesAsync] Collected {Count} items for price check: [{Items}]",
-            allItems.Count, string.Join(", ", allItems.Select(i => $"{i.name}({i.itemId})x{i.quantity}")));
-        
-        if (_currentPlan.AggregatedMaterials?.Any() == true)
-        {
-            _logger.LogInformation("[OnFetchPricesAsync] AggregatedMaterials: [{Materials}]",
-                string.Join(", ", _currentPlan.AggregatedMaterials.Select(m => $"{m.Name}({m.ItemId})x{m.TotalQuantity}")));
-        }
-        
-        _marketDataStatusSession.InitializeItems(allItems);
-        _marketDataStatusWindow.RefreshView();
-        _marketDataStatusWindow.Show();
-        _marketDataStatusWindow.Activate();
-
-        StatusLabel.Text = $"Fetching prices for {allItems.Count} items...";
-
-        try
-        {
-            var progress = new Progress<PriceRefreshProgress>(p =>
-            {
-                var statusText = p.Message ?? p.Stage switch
-                {
-                    PriceRefreshStage.Starting => $"Checking cache... {p.Current}/{p.Total}",
-                    PriceRefreshStage.Fetching => string.IsNullOrWhiteSpace(p.ItemName)
-                        ? $"Fetching market prices... {p.Current}/{p.Total}"
-                        : $"Loading item data: {p.ItemName} ({p.Current}/{p.Total})",
-                    PriceRefreshStage.Updating => $"Processing results... {p.Current}/{p.Total}",
-                    PriceRefreshStage.Complete => $"Complete! ({p.Total} items)",
-                    _ => $"Fetching prices... {p.Current}/{p.Total}"
-                };
-
-                StatusLabel.Text = statusText;
-
-                if (p.Stage == PriceRefreshStage.Fetching && !string.IsNullOrEmpty(p.ItemName))
-                {
-                    var item = allItems.FirstOrDefault(i => i.name == p.ItemName);
-                    if (item.itemId > 0)
-                    {
-                        _marketDataStatusSession.SetItemFetching(item.itemId);
-                        _marketDataStatusWindow.RefreshView();
-                    }
-                }
-            });
-
-            _logger.LogInformation("[OnFetchPricesAsync] Fetching plan prices via PriceRefreshCoordinator");
-            var refreshContext = await _priceRefreshCoordinator.FetchPlanPricesAsync(
-                _currentPlan,
-                dc,
-                worldOrDc,
-                searchAllNA,
-                progress,
-                default);
-
-            allItems = refreshContext.AllItems;
-            var prices = refreshContext.Prices;
-            var cacheCandidateItemIds = refreshContext.CacheCandidateItemIds;
-            var warmCacheForCraftedItems = refreshContext.WarmCacheForCraftedItems;
-            var fetchedThisRunKeys = refreshContext.FetchedThisRunKeys;
-            var dataScopeByItemId = refreshContext.DataScopeByItemId;
-            var scopeDataCenters = refreshContext.ScopeDataCenters;
-
-            _logger.LogInformation("[OnFetchPricesAsync] Got {Count} prices from cache", prices.Count);
-
-            int successCount = 0;
-            int failedCount = 0;
-            int skippedCount = 0;
-            int cachedCount = 0;
-            
-            foreach (var kvp in prices)
-            {
-                int itemId = kvp.Key;
-                var priceInfo = kvp.Value;
-                
-                if (priceInfo.Source == PriceSource.Unknown)
-                {
-                    if (!warmCacheForCraftedItems && !cacheCandidateItemIds.Contains(itemId))
-                    {
-                        _marketDataStatusSession.SetItemSkipped(itemId, "Skipped (crafted item; market warming disabled)");
-                        skippedCount++;
-                    }
-                    else
-                    {
-                        _marketDataStatusSession.SetItemFailed(itemId, priceInfo.SourceDetails, dataTypeText: "Unknown");
-                        failedCount++;
-                    }
-                }
-                else if (priceInfo.Source == PriceSource.Market)
-                {
-                    var isFetchedThisRun = scopeDataCenters.Any(itemDc => fetchedThisRunKeys.Contains((itemId, itemDc)));
-                    var dataScopeText = BuildMarketDataScopeText(itemId, dataScopeByItemId, scopeDataCenters.Count);
-                    
-                    if (isFetchedThisRun)
-                    {
-                        _marketDataStatusSession.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, dataScopeText, "Universalis (this run)", "Market");
-                        successCount++;
-                    }
-                    else
-                    {
-                        _marketDataStatusSession.SetItemCached(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, dataScopeText, "Market", priceInfo.LastUpdated);
-                        cachedCount++;
-                    }
-                }
-                else if (priceInfo.Source == PriceSource.Vendor)
-                {
-                    _marketDataStatusSession.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, "N/A", "Garland", "Vendor");
-                    successCount++;
-                }
-                else if (priceInfo.Source == PriceSource.Untradeable)
-                {
-                    _marketDataStatusSession.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, "N/A", "N/A", "Untradeable");
-                    successCount++;
-                }
-                else
-                {
-                    _marketDataStatusSession.SetItemCached(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, "N/A", GetDataTypeText(priceInfo.Source), priceInfo.LastUpdated);
-                    cachedCount++;
-                }
-
-                _recipeCalcService.UpdateSingleNodePrice(_currentPlan?.RootItems, itemId, priceInfo);
-            }
-
-            _marketDataStatusWindow?.RefreshView();
-
-            _logger.LogInformation("[OnFetchPricesAsync] Price results: Success={Success}, Failed={Failed}, Skipped={Skipped}, Cached={Cached}", 
-                successCount, failedCount, skippedCount, cachedCount);
-            
-            if (_currentPlan != null)
-            {
-                DisplayPlanInTreeView(_currentPlan);
-            }
-            
-            _logger.LogInformation("[OnFetchPricesAsync] Updating market logistics from refreshed prices...");
-            await UpdateMarketLogisticsAsync(prices, useCachedData: false, searchAllNA: searchAllNA);
-            _logger.LogInformation("[OnFetchPricesAsync] Market logistics update complete. _currentMarketPlans.Count={Count}", _currentMarketPlans?.Count ?? 0);
-            
-            // Always populate procurement panel after analysis so data is ready when user switches to market view
-            _logger.LogInformation("[OnFetchPricesAsync] Calling PopulateProcurementPanel...");
-            PopulateProcurementPanel();
-            _logger.LogInformation("[OnFetchPricesAsync] PopulateProcurementPanel complete");
-            
-            RebuildFromCacheButton.IsEnabled = true;
-
-            var totalCost = _currentPlan.AggregatedMaterials.Sum(m => m.TotalCost);
-
-            if (failedCount > 0 && successCount == 0)
-            {
-                StatusLabel.Text = $"Price fetch failed! Using cached prices. Total: {totalCost:N0}g";
-            }
-            else if (failedCount > 0)
-            {
-                StatusLabel.Text = $"Prices updated! Total: {totalCost:N0}g ({successCount} success, {failedCount} failed, {skippedCount} skipped, {cachedCount} cached)";
-            }
-            else
-            {
-                StatusLabel.Text = $"Prices fetched! Total: {totalCost:N0}g ({successCount} success, {skippedCount} skipped, {cachedCount} cached)";
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[OnFetchPricesAsync] FAILED - Exception: {Message}\nStackTrace: {StackTrace}", ex.Message, ex.StackTrace);
-            StatusLabel.Text = $"Failed to fetch prices: {ex.Message}. Cached prices preserved.";
-            
-            foreach (var item in allItems)
-            {
-                _marketDataStatusSession.SetItemFailed(item.itemId, ex.Message, dataTypeText: "Unknown");
-            }
-            _marketDataStatusWindow?.RefreshView();
-        }
-        
-        _logger.LogInformation("[OnFetchPricesAsync] END");
-    }
-
-    /// <summary>
-    /// Rebuilds market analysis from cached prices without fetching new data.
-    /// Note: MUST REMAIN in MainWindow - updates RebuildFromCacheButton state, calls DisplayPlanInTreeView,
-    ///       and updates StatusLabel. UI coordination requires MainWindow context.
-    /// </summary>
-    private void OnRebuildFromCache(object sender, RoutedEventArgs e)
-    {
-        OnRebuildFromCacheAsync().SafeFireAndForget(OnAsyncError);
-    }
-
-    /// <summary>
-    /// Performs cache-based rebuild of market analysis.
-    /// Note: MUST REMAIN in MainWindow - updates StatusLabel, RebuildFromCacheButton.IsEnabled,
-    ///       calls DisplayPlanInTreeView and UpdateMarketLogisticsAsync. UI coordination pattern.
-    /// </summary>
-    private async Task OnRebuildFromCacheAsync()
-    {
-        _logger.LogInformation("[OnRebuildFromCacheAsync] START");
-        
-        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
-        {
-            _logger.LogWarning("[OnRebuildFromCacheAsync] ABORT - No plan available");
-            StatusLabel.Text = "No plan - build a plan first";
-            return;
-        }
-
-        var cachedPrices = _recipeCalcService.ExtractPricesFromPlan(_currentPlan);
-        _logger.LogInformation("[OnRebuildFromCacheAsync] Extracted {Count} cached prices from plan", cachedPrices.Count);
-        
-        if (cachedPrices.Count == 0)
-        {
-            _logger.LogWarning("[OnRebuildFromCacheAsync] ABORT - No cached prices available");
-            StatusLabel.Text = "No cached prices available. Click 'Refresh Market Data' to fetch prices.";
-            return;
-        }
-
-        StatusLabel.Text = $"Rebuilding market analysis from {cachedPrices.Count} cached prices...";
-        RebuildFromCacheButton.IsEnabled = false;
-        
-        try
-        {
-            _logger.LogInformation("[OnRebuildFromCacheAsync] Calling UpdateMarketLogisticsAsync...");
-            await UpdateMarketLogisticsAsync(cachedPrices, useCachedData: true);
-            _logger.LogInformation("[OnRebuildFromCacheAsync] UpdateMarketLogisticsAsync complete. _currentMarketPlans.Count={Count}", _currentMarketPlans?.Count ?? 0);
-            
-            DisplayPlanInTreeView(_currentPlan);
-            
-            // Populate procurement panel after rebuilding from cache
-            _logger.LogInformation("[OnRebuildFromCacheAsync] Calling PopulateProcurementPanel...");
-            PopulateProcurementPanel();
-            _logger.LogInformation("[OnRebuildFromCacheAsync] PopulateProcurementPanel complete");
-            
-            StatusLabel.Text = $"Market analysis rebuilt from {cachedPrices.Count} cached prices.";
-            _logger.LogInformation("[OnRebuildFromCacheAsync] SUCCESS - Rebuilt market analysis from {Count} cached prices", cachedPrices.Count);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[OnRebuildFromCacheAsync] FAILED - Exception: {Message}", ex.Message);
-            StatusLabel.Text = $"Failed to rebuild from cache: {ex.Message}";
-        }
-        finally
-        {
-            RebuildFromCacheButton.IsEnabled = true;
-        }
     }
 
     /// <summary>

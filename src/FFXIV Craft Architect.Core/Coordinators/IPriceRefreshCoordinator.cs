@@ -1,7 +1,7 @@
 using FFXIV_Craft_Architect.Core.Models;
 using PriceInfo = FFXIV_Craft_Architect.Core.Models.PriceInfo;
 
-namespace FFXIV_Craft_Architect.Coordinators;
+namespace FFXIV_Craft_Architect.Core.Coordinators;
 
 /// <summary>
 /// Defines the contract for coordinating price refresh operations.

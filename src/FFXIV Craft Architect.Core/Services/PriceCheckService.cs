@@ -16,7 +16,7 @@ public class PriceCheckService
 {
     private readonly IGarlandService _garlandService;
     private readonly IUniversalisService _universalisService;
-    private readonly SettingsService _settingsService;
+    private readonly ISettingsService _settingsService;
     private readonly IMarketCacheService _marketCache;
     private readonly ILogger<PriceCheckService> _logger;
     
@@ -26,7 +26,7 @@ public class PriceCheckService
     public PriceCheckService(
         IGarlandService garlandService,
         IUniversalisService universalisService,
-        SettingsService settingsService,
+        ISettingsService settingsService,
         IMarketCacheService marketCache,
         ILogger<PriceCheckService> logger)
     {

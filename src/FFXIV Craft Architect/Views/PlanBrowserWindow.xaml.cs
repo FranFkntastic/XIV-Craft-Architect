@@ -1,6 +1,8 @@
 using System.Windows;
+using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Services;
 using FFXIV_Craft_Architect.Services.Interfaces;
+using IPlanPersistenceService = FFXIV_Craft_Architect.Core.Services.Interfaces.IPlanPersistenceService;
 
 namespace FFXIV_Craft_Architect;
 

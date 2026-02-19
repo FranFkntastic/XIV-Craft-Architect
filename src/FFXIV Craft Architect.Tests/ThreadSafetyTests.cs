@@ -1,8 +1,9 @@
 using System.Collections.Concurrent;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Models;
-using FFXIV_Craft_Architect.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 
 namespace FFXIV_Craft_Architect.Tests;
 
@@ -12,41 +13,64 @@ namespace FFXIV_Craft_Architect.Tests;
 /// </summary>
 public class ThreadSafetyTests
 {
-    #region PriceCheckService - ConcurrentDictionary Tests
+    #region PriceCheckService - Concurrency Tests
 
     [Fact]
-    public async Task ConcurrentDictionary_TryGetValue_ConcurrentAccess_DoesNotThrow()
+    public async Task PriceCheckService_GetBestPriceAsync_ConcurrentAccess_DoesNotThrow()
     {
         // Arrange
-        var dict = new ConcurrentDictionary<int, PriceInfo>();
-        dict[1] = new PriceInfo { ItemId = 1, ItemName = "Test Item" };
-        
+        var garland = new Mock<IGarlandService>();
+        var universalis = new Mock<IUniversalisService>();
+        var settings = new Mock<ISettingsService>();
+        var marketCache = new Mock<IMarketCacheService>();
+
+        settings.Setup(s => s.Get("market.cache_ttl_hours", It.IsAny<double>())).Returns(3.0);
+
+        var itemId = 1;
+        var itemName = "Test Item";
+        var worldOrDc = "Aether";
+
+        garland
+            .Setup(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GarlandItem
+            {
+                Id = itemId,
+                Name = itemName,
+                TradeableRaw = true,
+                VendorsRaw = new List<object>()
+            });
+
+        marketCache
+            .Setup(c => c.GetWithStaleAsync(itemId, worldOrDc, It.IsAny<TimeSpan>()))
+            .ReturnsAsync((new CachedMarketData
+            {
+                ItemId = itemId,
+                DataCenter = worldOrDc,
+                FetchedAt = DateTime.UtcNow,
+                DCAveragePrice = 1234m,
+                Worlds = new List<CachedWorldData>()
+            }, false));
+
+        var service = new PriceCheckService(
+            garland.Object,
+            universalis.Object,
+            settings.Object,
+            marketCache.Object,
+            new NullLogger<PriceCheckService>());
+
         var tasks = new List<Task>();
         var exceptions = new ConcurrentBag<Exception>();
+        var results = new ConcurrentBag<PriceInfo>();
         
         // Act - Simulate concurrent access
         for (int i = 0; i < 100; i++)
         {
-            var taskNum = i;
-            tasks.Add(Task.Run(() =>
+            tasks.Add(Task.Run(async () =>
             {
                 try
                 {
-                    if (taskNum % 3 == 0)
-                    {
-                        // Read operation
-                        dict.TryGetValue(1, out _);
-                    }
-                    else if (taskNum % 3 == 1)
-                    {
-                        // Write operation
-                        dict[taskNum] = new PriceInfo { ItemId = taskNum, ItemName = $"Item {taskNum}" };
-                    }
-                    else
-                    {
-                        // Enumeration
-                        _ = dict.Count;
-                    }
+                    var result = await service.GetBestPriceAsync(itemId, itemName, worldOrDc);
+                    results.Add(result);
                 }
                 catch (Exception ex)
                 {
@@ -59,6 +83,13 @@ public class ThreadSafetyTests
         
         // Assert
         Assert.Empty(exceptions);
+        Assert.Equal(100, results.Count);
+        Assert.All(results, r =>
+        {
+            Assert.Equal(itemId, r.ItemId);
+            Assert.Equal(1234m, r.UnitPrice);
+            Assert.Equal(PriceSource.Market, r.Source);
+        });
     }
 
     #endregion
@@ -239,27 +270,4 @@ public class ThreadSafetyTests
 
     #endregion
 
-    #region RecipeCalculationService - Caching Strategy Tests
-
-    [Fact]
-    public void RecipeCalculationService_ItemCache_IsClearedPerPlan()
-    {
-        // This test verifies that the _itemCache.Clear() is called at the start of BuildPlanAsync
-        // to ensure per-plan isolation
-        
-        // Arrange
-        var serviceType = typeof(FFXIV_Craft_Architect.Core.Services.RecipeCalculationService);
-        var buildPlanMethod = serviceType.GetMethod("BuildPlanAsync");
-        
-        // Assert - Method exists
-        Assert.NotNull(buildPlanMethod);
-        
-        // Verify the method signature includes CancellationToken with default value
-        var parameters = buildPlanMethod.GetParameters();
-        Assert.Equal(4, parameters.Length);
-        Assert.Equal(typeof(CancellationToken), parameters[3].ParameterType);
-        Assert.True(parameters[3].IsOptional);
-    }
-
-    #endregion
 }

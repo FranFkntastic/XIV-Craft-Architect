@@ -2,7 +2,6 @@ using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -15,7 +14,7 @@ public class PriceCheckServiceTests
 {
     private readonly Mock<IGarlandService> _mockGarlandService;
     private readonly Mock<IUniversalisService> _mockUniversalisService;
-    private readonly Mock<SettingsService> _mockSettingsService;
+    private readonly Mock<ISettingsService> _mockSettingsService;
     private readonly Mock<IMarketCacheService> _mockCacheService;
     private readonly PriceCheckService _service;
 
@@ -27,7 +26,7 @@ public class PriceCheckServiceTests
         // Mock dependencies
         _mockGarlandService = new Mock<IGarlandService>();
         _mockUniversalisService = new Mock<IUniversalisService>();
-        _mockSettingsService = new Mock<SettingsService>(logger as ILogger<SettingsService> ?? new NullLogger<SettingsService>());
+        _mockSettingsService = new Mock<ISettingsService>();
         _mockCacheService = new Mock<IMarketCacheService>();
         
         // Default TTL setting
@@ -44,7 +43,7 @@ public class PriceCheckServiceTests
     }
 
     [Fact]
-    public async Task GetBestPriceAsync_CacheHitValid_ReturnsCachedDataWithoutCallingApi()
+    public async Task GetBestPriceAsync_CacheHitValid_ReturnsCachedMarketPrice()
     {
         // Arrange
         var itemId = 123;
@@ -62,6 +61,17 @@ public class PriceCheckServiceTests
         _mockCacheService
             .Setup(c => c.GetWithStaleAsync(itemId, worldOrDc, It.IsAny<TimeSpan>()))
             .ReturnsAsync((cachedData, false)); // Valid, not stale
+
+        var garlandItem = new GarlandItem
+        {
+            Id = itemId,
+            Name = itemName,
+            TradeableRaw = true,
+            VendorsRaw = new List<object>()
+        };
+        _mockGarlandService
+            .Setup(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(garlandItem);
         
         // Act
         var result = await _service.GetBestPriceAsync(itemId, itemName, worldOrDc);
@@ -72,14 +82,14 @@ public class PriceCheckServiceTests
         Assert.Equal(itemName, result.ItemName);
         Assert.Equal(1000m, result.UnitPrice);
         Assert.Equal(PriceSource.Market, result.Source);
-        
-        // Verify API was NOT called
-        _mockGarlandService.Verify(g => g.GetItemAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+
+        // Garland is consulted for vendor data; Universalis is not called in cache-read path.
+        _mockGarlandService.Verify(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()), Times.Once);
         _mockUniversalisService.Verify(u => u.GetMarketDataAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
-    public async Task GetBestPriceAsync_CacheMiss_CallsApiAndSavesToCache()
+    public async Task GetBestPriceAsync_CacheMiss_ReturnsUnknownWhenNoVendorPrice()
     {
         // Arrange
         var itemId = 456;
@@ -103,38 +113,21 @@ public class PriceCheckServiceTests
             .Setup(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(garlandItem);
         
-        // Mock Universalis response
-        var marketData = new UniversalisResponse
-        {
-            ItemId = itemId,
-            Listings = new List<MarketListing>
-            {
-                new MarketListing { PricePerUnit = 500, Quantity = 1, WorldName = "Leviathan", IsHq = false }
-            },
-            AveragePrice = 500
-        };
-        _mockUniversalisService
-            .Setup(u => u.GetMarketDataAsync(worldOrDc, itemId, It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(marketData);
-        
         // Act
         var result = await _service.GetBestPriceAsync(itemId, itemName, worldOrDc);
         
         // Assert
         Assert.NotNull(result);
         Assert.Equal(itemId, result.ItemId);
-        Assert.Equal(500m, result.UnitPrice); // Market price
-        
-        // Verify API WAS called
+        Assert.Equal(0m, result.UnitPrice);
+        Assert.Equal(PriceSource.Unknown, result.Source);
+
         _mockGarlandService.Verify(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()), Times.Once);
-        _mockUniversalisService.Verify(u => u.GetMarketDataAsync(worldOrDc, itemId, It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
-        
-        // Verify cache save was attempted
-        _mockCacheService.Verify(c => c.SetAsync(itemId, worldOrDc, It.IsAny<CachedMarketData>()), Times.Once);
+        _mockUniversalisService.Verify(u => u.GetMarketDataAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
-    public async Task GetBestPriceAsync_CacheStale_CallsApiAndUpdatesCache()
+    public async Task GetBestPriceAsync_CacheStale_ReturnsStaleCachedPrice()
     {
         // Arrange
         var itemId = 789;
@@ -165,7 +158,50 @@ public class PriceCheckServiceTests
             .Setup(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(garlandItem);
         
-        // Mock Universalis response with NEW price
+        // Act
+        var result = await _service.GetBestPriceAsync(itemId, itemName, worldOrDc);
+        
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(2000m, result.UnitPrice);
+        Assert.Equal(PriceSource.Market, result.Source);
+        Assert.Contains("stale", result.SourceDetails, StringComparison.OrdinalIgnoreCase);
+
+        _mockGarlandService.Verify(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()), Times.Once);
+        _mockUniversalisService.Verify(u => u.GetMarketDataAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task GetPriceAsync_StaleAndNotAllowed_FetchesFreshMarketData()
+    {
+        // Arrange
+        var itemId = 790;
+        var itemName = "Fresh Fetch Item";
+        var worldOrDc = "Crystal";
+        var staleData = new CachedMarketData
+        {
+            ItemId = itemId,
+            DataCenter = worldOrDc,
+            FetchedAt = DateTime.UtcNow.AddHours(-4),
+            DCAveragePrice = 2000m,
+            Worlds = new List<CachedWorldData>()
+        };
+
+        _mockCacheService
+            .Setup(c => c.GetWithStaleAsync(itemId, worldOrDc, It.IsAny<TimeSpan>()))
+            .ReturnsAsync((staleData, true));
+
+        var garlandItem = new GarlandItem
+        {
+            Id = itemId,
+            Name = itemName,
+            TradeableRaw = true,
+            VendorsRaw = new List<object>()
+        };
+        _mockGarlandService
+            .Setup(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(garlandItem);
+
         var marketData = new UniversalisResponse
         {
             ItemId = itemId,
@@ -178,17 +214,15 @@ public class PriceCheckServiceTests
         _mockUniversalisService
             .Setup(u => u.GetMarketDataAsync(worldOrDc, itemId, It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(marketData);
-        
+
         // Act
-        var result = await _service.GetBestPriceAsync(itemId, itemName, worldOrDc);
-        
+        var result = await _service.GetPriceAsync(itemId, itemName, worldOrDc, allowStale: false);
+
         // Assert
         Assert.NotNull(result);
-        Assert.Equal(1500m, result.UnitPrice); // New price, not stale cached price
-        
-        // Verify API was called (stale = fetch fresh)
-        _mockGarlandService.Verify(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()), Times.Once);
-        _mockCacheService.Verify(c => c.SetAsync(itemId, worldOrDc, It.IsAny<CachedMarketData>()), Times.Once);
+        Assert.Equal(1500m, result.UnitPrice);
+        Assert.Equal(PriceSource.Market, result.Source);
+        _mockUniversalisService.Verify(u => u.GetMarketDataAsync(worldOrDc, itemId, It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

@@ -1,9 +1,6 @@
-using System.Collections.ObjectModel;
-using System.Timers;
 using FFXIV_Craft_Architect.Core.Models;
-using FFXIV_Craft_Architect.Services;
 
-namespace FFXIV_Craft_Architect.Coordinators;
+namespace FFXIV_Craft_Architect.Core.Coordinators;
 
 /// <summary>
 /// State of a watched item.

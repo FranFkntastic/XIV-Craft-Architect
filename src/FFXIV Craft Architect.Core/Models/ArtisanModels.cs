@@ -115,8 +115,12 @@ public class ArtisanExportResult
 /// </summary>
 public class PlanInfo
 {
+    public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public string FilePath { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
     public DateTime ModifiedAt { get; set; }
     public int ItemCount { get; set; }
+
+    public override string ToString() => $"{Name} ({ItemCount} items) - {ModifiedAt:yyyy-MM-dd HH:mm}";
 }

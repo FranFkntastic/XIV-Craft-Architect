@@ -2,7 +2,7 @@ using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using Microsoft.Extensions.Logging;
 
-namespace FFXIV_Craft_Architect.Coordinators;
+namespace FFXIV_Craft_Architect.Core.Coordinators;
 
 /// <summary>
 /// Coordinates shopping optimization operations for crafting plans.

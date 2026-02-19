@@ -5,6 +5,7 @@ using FFXIV_Craft_Architect.Coordinators;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.ViewModels;
 using Microsoft.Extensions.Logging;
+using ShoppingPlanSortMode = FFXIV_Craft_Architect.Core.Coordinators.ShoppingPlanSortMode;
 
 namespace FFXIV_Craft_Architect;
 

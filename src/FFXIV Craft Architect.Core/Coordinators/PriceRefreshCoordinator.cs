@@ -1,11 +1,10 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
-using SettingsService = FFXIV_Craft_Architect.Core.Services.SettingsService;
 using PriceInfo = FFXIV_Craft_Architect.Core.Models.PriceInfo;
-using PriceCheckService = FFXIV_Craft_Architect.Core.Services.PriceCheckService;
 
-namespace FFXIV_Craft_Architect.Coordinators;
+namespace FFXIV_Craft_Architect.Core.Coordinators;
 
 /// <summary>
 /// Coordinates price refresh operations for crafting plans.
@@ -14,14 +13,14 @@ namespace FFXIV_Craft_Architect.Coordinators;
 public class PriceRefreshCoordinator : IPriceRefreshCoordinator
 {
     private readonly PriceCheckService _priceCheckService;
-    private readonly Core.Services.IMarketCacheService _marketCache;
-    private readonly SettingsService _settingsService;
+    private readonly IMarketCacheService _marketCache;
+    private readonly ISettingsService _settingsService;
     private readonly ILogger<PriceRefreshCoordinator> _logger;
 
     public PriceRefreshCoordinator(
         PriceCheckService priceCheckService,
-        Core.Services.IMarketCacheService marketCache,
-        SettingsService settingsService,
+        IMarketCacheService marketCache,
+        ISettingsService settingsService,
         ILogger<PriceRefreshCoordinator> logger)
     {
         _priceCheckService = priceCheckService;
