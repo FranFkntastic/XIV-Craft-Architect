@@ -11,11 +11,16 @@ public interface IUniversalisService
     /// <summary>
     /// Get market board listings for an item.
     /// </summary>
+    /// <remarks>
+    /// DEPRECATED: This method is to be subsumed by GetMarketDataBulkAsync.
+    /// Use GetMarketDataBulkAsync with a single-item list for new code.
+    /// </remarks>
     /// <param name="worldOrDc">World or data center name</param>
     /// <param name="itemId">Item ID</param>
     /// <param name="hqOnly">If true, only return HQ listings</param>
     /// <param name="entries">Number of listings to return (default 10, 0 = all)</param>
     /// <param name="ct">Cancellation token</param>
+    [Obsolete("Use GetMarketDataBulkAsync instead. This method will be removed in a future version.")]
     Task<UniversalisResponse> GetMarketDataAsync(
         string worldOrDc, 
         int itemId, 

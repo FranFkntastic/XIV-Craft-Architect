@@ -175,6 +175,7 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
         string dataCenter,
         string worldOrDc,
         bool searchAllNa,
+        bool forceRefresh = false,
         IProgress<PriceRefreshProgress>? progress = null,
         CancellationToken ct = default)
     {
@@ -242,10 +243,12 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
                 cacheRequests = cacheCandidateItemIds.Select(itemId => (itemId, dataCenter)).ToList();
             }
 
-            var cacheTtl = TimeSpan.FromHours(_settingsService.Get("market.cache_ttl_hours", 3.0));
-            var missingBeforePopulate = await _marketCache.GetMissingAsync(cacheRequests, cacheTtl);
+            var effectiveCacheTtl = forceRefresh
+                ? TimeSpan.Zero
+                : TimeSpan.FromHours(_settingsService.Get("market.cache_ttl_hours", 3.0));
+            var missingBeforePopulate = await _marketCache.GetMissingAsync(cacheRequests, effectiveCacheTtl);
             fetchedThisRunKeys = missingBeforePopulate.ToHashSet();
-            await _marketCache.EnsurePopulatedAsync(cacheRequests, cacheTtl, cacheProgress, ct);
+            await _marketCache.EnsurePopulatedAsync(cacheRequests, effectiveCacheTtl, cacheProgress, ct);
 
             foreach (var itemId in cacheCandidateItemIds)
             {
@@ -254,7 +257,7 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
 
                 foreach (var itemDc in scopeDataCenters)
                 {
-                    var (cachedData, _) = await _marketCache.GetWithStaleAsync(itemId, itemDc, cacheTtl);
+                    var (cachedData, _) = await _marketCache.GetWithStaleAsync(itemId, itemDc, effectiveCacheTtl);
                     if (cachedData == null)
                     {
                         continue;
@@ -301,6 +304,89 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
             warmCacheForCraftedItems,
             fetchedThisRunKeys,
             dataScopeByItemId,
+            scopeDataCenters);
+    }
+
+    /// <inheritdoc />
+    public async Task<PlanCacheInspectionContext> InspectPlanCacheAsync(
+        CraftingPlan plan,
+        string dataCenter,
+        bool searchAllNa,
+        CancellationToken ct = default)
+    {
+        if (plan == null || plan.RootItems.Count == 0)
+        {
+            return new PlanCacheInspectionContext(
+                new List<(int itemId, string name, int quantity)>(),
+                new HashSet<int>(),
+                new Dictionary<int, ItemCacheInspectionResult>(),
+                Array.Empty<string>());
+        }
+
+        var allItems = new List<(int itemId, string name, int quantity)>();
+        CollectAllItemsWithQuantity(plan.RootItems, allItems);
+
+        var allMaterials = plan.AggregatedMaterials ?? new List<MaterialAggregate>();
+        var warmCacheForCraftedItems = _settingsService.Get("market.warm_cache_for_crafted_items", false);
+        var cacheCandidateItemIds = warmCacheForCraftedItems
+            ? allItems.Select(i => i.itemId).Distinct().ToHashSet()
+            : allMaterials.Where(m => m.TotalQuantity > 0).Select(m => m.ItemId).ToHashSet();
+
+        var scopeDataCenters = searchAllNa
+            ? new[] { "Aether", "Primal", "Crystal", "Dynamis" }
+            : new[] { dataCenter };
+
+        var cacheTtl = TimeSpan.FromHours(_settingsService.Get("market.cache_ttl_hours", 3.0));
+        var itemCacheByItemId = new Dictionary<int, ItemCacheInspectionResult>();
+
+        foreach (var itemId in cacheCandidateItemIds)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            int cachedDataCenterCount = 0;
+            int cachedWorldCount = 0;
+            bool hasFreshCache = false;
+            DateTime? latestFetchedAtUtc = null;
+            decimal cachedUnitPrice = 0;
+
+            foreach (var itemDc in scopeDataCenters)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var (cachedData, isStale) = await _marketCache.GetWithStaleAsync(itemId, itemDc, cacheTtl);
+                if (cachedData == null)
+                {
+                    continue;
+                }
+
+                cachedDataCenterCount++;
+                cachedWorldCount += cachedData.Worlds.Count;
+
+                if (!isStale)
+                {
+                    hasFreshCache = true;
+                }
+
+                if (!latestFetchedAtUtc.HasValue || cachedData.FetchedAt > latestFetchedAtUtc.Value)
+                {
+                    latestFetchedAtUtc = cachedData.FetchedAt;
+                    cachedUnitPrice = cachedData.DCAveragePrice;
+                }
+            }
+
+            itemCacheByItemId[itemId] = new ItemCacheInspectionResult(
+                HasCache: cachedDataCenterCount > 0,
+                HasFreshCache: hasFreshCache,
+                LatestFetchedAtUtc: latestFetchedAtUtc,
+                CachedUnitPrice: cachedUnitPrice,
+                CachedDataCenterCount: cachedDataCenterCount,
+                CachedWorldCount: cachedWorldCount);
+        }
+
+        return new PlanCacheInspectionContext(
+            allItems,
+            cacheCandidateItemIds,
+            itemCacheByItemId,
             scopeDataCenters);
     }
 

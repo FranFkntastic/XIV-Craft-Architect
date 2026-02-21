@@ -44,6 +44,7 @@ public interface IPriceRefreshCoordinator
     /// <param name="dataCenter">Active data center.</param>
     /// <param name="worldOrDc">Selected world or data center target.</param>
     /// <param name="searchAllNa">Whether to search all NA data centers.</param>
+    /// <param name="forceRefresh">If true, bypasses cache and fetches fresh data from API.</param>
     /// <param name="progress">Optional progress reporter.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Prepared refresh context used by UI orchestration.</returns>
@@ -52,7 +53,22 @@ public interface IPriceRefreshCoordinator
         string dataCenter,
         string worldOrDc,
         bool searchAllNa,
+        bool forceRefresh = false,
         IProgress<PriceRefreshProgress>? progress = null,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Inspects cache coverage for a plan without fetching from external APIs.
+    /// </summary>
+    /// <param name="plan">The plan to inspect.</param>
+    /// <param name="dataCenter">Active data center.</param>
+    /// <param name="searchAllNa">Whether to inspect all NA data centers.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Cache inspection context used by status UI.</returns>
+    Task<PlanCacheInspectionContext> InspectPlanCacheAsync(
+        CraftingPlan plan,
+        string dataCenter,
+        bool searchAllNa,
         CancellationToken ct = default);
 }
 
@@ -67,6 +83,26 @@ public record PlanPriceRefreshContext(
     HashSet<(int itemId, string dataCenter)> FetchedThisRunKeys,
     Dictionary<int, (int CachedDataCenterCount, int CachedWorldCount)> DataScopeByItemId,
     IReadOnlyList<string> ScopeDataCenters);
+
+/// <summary>
+/// Cache inspection data returned without performing network fetches.
+/// </summary>
+public record PlanCacheInspectionContext(
+    List<(int itemId, string name, int quantity)> AllItems,
+    HashSet<int> CacheCandidateItemIds,
+    Dictionary<int, ItemCacheInspectionResult> ItemCacheByItemId,
+    IReadOnlyList<string> ScopeDataCenters);
+
+/// <summary>
+/// Cache status for a single item.
+/// </summary>
+public record ItemCacheInspectionResult(
+    bool HasCache,
+    bool HasFreshCache,
+    DateTime? LatestFetchedAtUtc,
+    decimal CachedUnitPrice,
+    int CachedDataCenterCount,
+    int CachedWorldCount);
 
 /// <summary>
 /// Result of a price refresh operation.
