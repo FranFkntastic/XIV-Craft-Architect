@@ -11,13 +11,14 @@ public class MarketDataStatusSession
     public ObservableCollection<MarketDataStatusItem> Items { get; } = new();
 
     public int PendingCount => Items.Count(i => i.Status == MarketDataFetchStatus.Pending);
+    public int NoCacheCount => Items.Count(i => i.Status == MarketDataFetchStatus.NoCache);
     public int FetchingCount => Items.Count(i => i.Status == MarketDataFetchStatus.Fetching);
     public int SuccessCount => Items.Count(i => i.Status == MarketDataFetchStatus.Success);
     public int FailedCount => Items.Count(i => i.Status == MarketDataFetchStatus.Failed);
     public int SkippedCount => Items.Count(i => i.Status == MarketDataFetchStatus.Skipped);
     public int CachedCount => Items.Count(i => i.Status == MarketDataFetchStatus.Cached);
     public int TotalCount => Items.Count;
-    public int CompletedCount => SuccessCount + FailedCount + SkippedCount + CachedCount;
+    public int CompletedCount => SuccessCount + FailedCount + SkippedCount + CachedCount + NoCacheCount;
 
     public void InitializeItems(IEnumerable<(int itemId, string name, int quantity)> items)
     {
@@ -41,6 +42,17 @@ public class MarketDataStatusSession
     public void SetItemFetching(int itemId)
     {
         UpdateItemStatus(itemId, MarketDataFetchStatus.Fetching, retrievalSourceText: "Resolving", dataTypeText: "Resolving");
+    }
+
+    public void SetItemNoCache(int itemId, string sourceDetails)
+    {
+        UpdateItemStatus(
+            itemId,
+            MarketDataFetchStatus.NoCache,
+            sourceDetails: sourceDetails,
+            dataScopeText: "-",
+            retrievalSourceText: "Cache Check",
+            dataTypeText: "No Cache");
     }
 
     public void SetItemSuccess(int itemId, decimal price, string sourceDetails, string dataScopeText, string retrievalSourceText, string dataTypeText)

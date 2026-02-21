@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel x:Name="MarketAnalysisLeftPanel" Visibility="Collapsed">
+        <StackPanel x:Name="MarketAnalysisLeftPanel">
             <TextBlock Text="Market Analysis"
                        FontSize="16"
                        FontWeight="SemiBold"
@@ -15,19 +15,88 @@
                        TextWrapping="Wrap"
                        Margin="0,0,0,16"/>
 
-            <ui:Button Content="Conduct Analysis"
-                       x:Name="LeftPanelConductAnalysisButton"
-                       Appearance="Primary"
-                       Margin="0,0,0,8"
-                       HorizontalAlignment="Stretch"
-                       Click="OnConductAnalysis"
-                       IsEnabled="True"
-                       ToolTip="Analyze using cached market data (fetch if needed)"/>
+            <Border Background="{StaticResource Brush.Surface.Card}"
+                    CornerRadius="4"
+                    Padding="12"
+                    Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="Search Configuration"
+                               Foreground="{StaticResource Brush.Text.Secondary}"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Data Center"
+                               Foreground="{StaticResource Brush.Text.Secondary}"
+                               Margin="0,0,0,4"/>
+                    <ComboBox x:Name="DcCombo"
+                              Margin="0,0,0,8"
+                              IsEditable="False"/>
+
+                    <TextBlock Text="World"
+                               Foreground="{StaticResource Brush.Text.Secondary}"
+                               Margin="0,0,0,4"/>
+                    <ComboBox x:Name="WorldCombo"
+                              Margin="0,0,0,8"
+                              IsEditable="False"/>
+
+                    <TextBlock Text="Sort By"
+                               Foreground="{StaticResource Brush.Text.Secondary}"
+                               Margin="0,0,0,4"/>
+                    <ComboBox x:Name="ProcurementSortCombo"
+                              Margin="0,0,0,8"
+                              SelectedIndex="0">
+                        <ComboBoxItem Content="Recommended World"/>
+                        <ComboBoxItem Content="Alphabetical"/>
+                        <ComboBoxItem Content="Price (High to Low)"/>
+                    </ComboBox>
+
+                    <TextBlock Text="Mode"
+                               Foreground="{StaticResource Brush.Text.Secondary}"
+                               Margin="0,0,0,4"/>
+                    <ComboBox x:Name="ProcurementModeCombo"
+                              Margin="0,0,0,8">
+                        <ComboBoxItem Content="Minimize Total Cost"/>
+                        <ComboBoxItem Content="Maximize Value"/>
+                    </ComboBox>
+
+                    <CheckBox x:Name="ProcurementSearchAllNaCheck"
+                              Content="Search all NA DCs"
+                              Foreground="{StaticResource Brush.Text.Secondary}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Background="{StaticResource Brush.Surface.Card}"
+                    CornerRadius="4"
+                    Padding="12"
+                    Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="Analysis"
+                               Foreground="{StaticResource Brush.Text.Secondary}"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,10"/>
+
+                    <CheckBox x:Name="ForceRefetchCheckBox"
+                              Content="Force Refetch"
+                              Foreground="{StaticResource Brush.Text.Secondary}"
+                              Margin="0,0,0,8"
+                              Checked="OnForceRefetchChanged"
+                              Unchecked="OnForceRefetchChanged"
+                              ToolTip="When checked, bypasses cache and fetches fresh prices from the API"/>
+
+                    <ui:Button Content="Conduct Analysis"
+                               x:Name="LeftPanelConductAnalysisButton"
+                               Appearance="Primary"
+                               HorizontalAlignment="Stretch"
+                               Click="OnConductAnalysis"
+                               IsEnabled="True"
+                               ToolTip="Analyze using cached market data (fetch if needed)"/>
+                </StackPanel>
+            </Border>
 
             <ui:Button Content="View Market Status"
                        x:Name="LeftPanelViewMarketStatusButton"
                        Appearance="Secondary"
-                       Margin="0,0,0,8"
+                       Margin="0,4,0,8"
                        HorizontalAlignment="Stretch"
                        Click="OnViewMarketStatus"
                        IsEnabled="True"

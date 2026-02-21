@@ -14,24 +14,21 @@ namespace FFXIV_Craft_Architect.ViewModels;
 
 /// <summary>
 /// ViewModel for market analysis and shopping plan management.
-/// Owns price refresh orchestration, cache rebuild logic, and live market analysis.
+/// Owns price refresh orchestration and live market analysis.
 ///
 /// RESPONSIBILITIES:
 /// 1. Price Refresh Orchestration:
 ///    - RefreshPlanPricesAsync: Fetches current market prices via IPriceRefreshCoordinator
 ///    - Mutates CraftingPlan with updated prices via RecipeCalculationService
 ///    - Reports progress via PriceRefreshProgressReported event
+///    - Supports forceRefresh to bypass cache and fetch fresh data
 ///
-/// 2. Cache Rebuild:
-///    - RebuildFromCacheAsync: Rebuilds market analysis from cached plan prices
-///    - Used when user wants to recalculate without network calls
-///
-/// 3. Live Market Analysis:
+/// 2. Live Market Analysis:
 ///    - AnalyzeLiveMarketDataAsync: Calculates shopping plans from market data
 ///    - Delegates to MarketShoppingService for single-DC or multi-DC searches
 ///    - Updates ShoppingPlans collection with results
 ///
-/// 4. ViewModel Wrapping & Presentation:
+/// 3. ViewModel Wrapping & Presentation:
 ///    - Wraps DetailedShoppingPlan in ShoppingPlanViewModel
 ///    - Groups plans by world via GroupedByWorld
 ///    - Applies user-selected sort order
@@ -345,6 +342,7 @@ public partial class MarketAnalysisViewModel : ViewModelBase
                 dataCenter,
                 worldOrDc,
                 searchAllNa,
+                forceRefresh,
                 progress,
                 ct);
 
@@ -426,36 +424,24 @@ public partial class MarketAnalysisViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Rebuilds market analysis from cached prices stored in the plan.
-    /// Does not make network calls - extracts prices already present in plan nodes.
+    /// Inspects market cache coverage for a plan without fetching from external APIs.
     /// </summary>
-    /// <param name="plan">The crafting plan containing cached price data. Modified in-place.</param>
-    /// <returns>
-    /// A <see cref="CacheRebuildResult"/> indicating success and containing extracted prices.
-    /// Returns failure if plan is null, empty, or has no cached prices.
-    /// </returns>
-    public Task<CacheRebuildResult> RebuildFromCacheAsync(CraftingPlan? plan)
+    public Task<PlanCacheInspectionContext> InspectPlanCacheAsync(
+        CraftingPlan? plan,
+        string dataCenter,
+        bool searchAllNa,
+        CancellationToken ct = default)
     {
         if (plan == null || plan.RootItems.Count == 0)
         {
-            StatusMessage = "No plan - build a plan first";
-            return Task.FromResult(CacheRebuildResult.NoPlan(StatusMessage));
+            return Task.FromResult(new PlanCacheInspectionContext(
+                new List<(int itemId, string name, int quantity)>(),
+                new HashSet<int>(),
+                new Dictionary<int, ItemCacheInspectionResult>(),
+                Array.Empty<string>()));
         }
 
-        var cachedPrices = _recipeCalcService.ExtractPricesFromPlan(plan);
-        if (cachedPrices.Count == 0)
-        {
-            StatusMessage = "No cached prices available. Click 'Refresh Market Data' to fetch prices.";
-            return Task.FromResult(CacheRebuildResult.Failed(StatusMessage));
-        }
-
-        foreach (var kvp in cachedPrices)
-        {
-            _recipeCalcService.UpdateSingleNodePrice(plan.RootItems, kvp.Key, kvp.Value);
-        }
-
-        StatusMessage = $"Market analysis rebuilt from {cachedPrices.Count} cached prices.";
-        return Task.FromResult(new CacheRebuildResult(true, StatusMessage, cachedPrices));
+        return _priceRefreshCoordinator.InspectPlanCacheAsync(plan, dataCenter, searchAllNa, ct);
     }
 
     /// <summary>
@@ -672,25 +658,6 @@ public record PlanPriceRefreshResult(
             Array.Empty<string>());
 
     public static PlanPriceRefreshResult Failed(string message) => NoPlan(message);
-}
-
-/// <summary>
-/// Result of a cache rebuild operation.
-/// Contains extracted prices from cached plan data.
-/// </summary>
-/// <param name="Success">Whether the rebuild completed successfully.</param>
-/// <param name="Message">Human-readable status message.</param>
-/// <param name="CachedPrices">Prices extracted from plan, indexed by item ID.</param>
-public record CacheRebuildResult(
-    bool Success,
-    string Message,
-    Dictionary<int, PriceInfo> CachedPrices)
-{
-    public static CacheRebuildResult NoPlan(string message) =>
-        new(false, message, new Dictionary<int, PriceInfo>());
-
-    public static CacheRebuildResult Failed(string message) =>
-        new(false, message, new Dictionary<int, PriceInfo>());
 }
 
 /// <summary>

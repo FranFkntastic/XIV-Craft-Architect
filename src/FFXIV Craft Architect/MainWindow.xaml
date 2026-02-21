@@ -163,7 +163,7 @@
                     </MenuItem>
 
                     <MenuItem Header="Tools">
-                        <MenuItem Header="Fetch Prices" Click="OnFetchPrices"/>
+                        <MenuItem Header="Conduct Analysis" Click="OnConductAnalysis"/>
                         <MenuItem Header="View Plan Market Data" Click="OnViewMarketStatus" IsEnabled="False" x:Name="MenuViewMarketStatus"/>
                         <Separator/>
                         <MenuItem Header="View Blacklisted Worlds" Click="OnViewBlacklistedWorlds" ToolTip="View and manage temporarily blacklisted worlds"/>
@@ -196,9 +196,9 @@
                     Background="Transparent"
                     Padding="16,8,16,16">
                 <Grid>
-                    <modules:RecipePlannerSidebarView x:Name="RecipePlannerSidebarModule"/>
-                    <modules:MarketAnalysisSidebarView x:Name="MarketAnalysisSidebarModule"/>
-                    <modules:ProcurementPlannerSidebarView x:Name="ProcurementPlannerSidebarModule"/>
+                    <modules:RecipePlannerSidebarView x:Name="RecipePlannerSidebarModule" Visibility="Visible"/>
+                    <modules:MarketAnalysisSidebarView x:Name="MarketAnalysisSidebarModule" Visibility="Collapsed"/>
+                    <modules:ProcurementPlannerSidebarView x:Name="ProcurementPlannerSidebarModule" Visibility="Collapsed"/>
                 </Grid>
             </Border>
 

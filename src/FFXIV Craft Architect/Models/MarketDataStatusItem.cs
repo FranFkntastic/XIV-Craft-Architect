@@ -133,6 +133,7 @@ public class MarketDataStatusItem : INotifyPropertyChanged
     public string StatusText => Status switch
     {
         MarketDataFetchStatus.Pending => "⏳ Waiting...",
+        MarketDataFetchStatus.NoCache => "∅ No Cache",
         MarketDataFetchStatus.Fetching => "🔄 Fetching...",
         MarketDataFetchStatus.Success => "✓ Success",
         MarketDataFetchStatus.Failed => "✗ Failed",
@@ -144,6 +145,7 @@ public class MarketDataStatusItem : INotifyPropertyChanged
     public string StatusColor => Status switch
     {
         MarketDataFetchStatus.Pending => "#888888",
+        MarketDataFetchStatus.NoCache => "#f59e0b",
         MarketDataFetchStatus.Fetching => "#4ecdc4",
         MarketDataFetchStatus.Success => "#4ade80",
         MarketDataFetchStatus.Failed => "#f87171",
@@ -165,6 +167,7 @@ public class MarketDataStatusItem : INotifyPropertyChanged
 public enum MarketDataFetchStatus
 {
     Pending,
+    NoCache,
     Fetching,
     Success,
     Failed,

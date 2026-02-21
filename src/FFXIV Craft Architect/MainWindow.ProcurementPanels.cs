@@ -37,7 +37,7 @@ public partial class MainWindow
         _procurementBuilder?.ProcurementPlanPanel.Children.Clear();
         ProcurementPlanPanel.Children.Add(new TextBlock
         {
-            Text = "Click 'Refresh Market Data' to generate an actionable procurement plan with world recommendations",
+            Text = "Run Conduct Analysis in Market Analysis to generate an actionable procurement plan with world recommendations",
             Foreground = Brushes.Gray,
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap
@@ -50,6 +50,13 @@ public partial class MainWindow
 
         if (_currentMarketPlans?.Any() != true)
         {
+            ProcurementPlanPanel.Children.Add(new TextBlock
+            {
+                Text = "No market analysis data found. Run Conduct Analysis in Market Analysis first.",
+                Foreground = Brushes.Gray,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap
+            });
             return;
         }
 
@@ -147,7 +154,7 @@ public partial class MainWindow
 
         _procurementBuilder?.UpdateSplitPaneTotal(grandTotal, itemsWithOptions);
 
-        var sortMode = (ProcurementSortCombo?.SelectedIndex ?? 0) switch
+        var sortMode = (GetActiveProcurementSortIndex()) switch
         {
             1 => ShoppingPlanSortMode.Alphabetical,
             2 => ShoppingPlanSortMode.PriceHighToLow,
@@ -265,5 +272,27 @@ public partial class MainWindow
         {
             PopulateProcurementPanel();
         }
+    }
+
+    private int GetActiveProcurementSortIndex()
+    {
+        return _activeTab == MainTab.ProcurementPlanner
+            ? (ProcurementPlannerSortCombo?.SelectedIndex ?? 0)
+            : (MarketAnalysisProcurementSortCombo?.SelectedIndex ?? 0);
+    }
+
+    private void OnBuildProcurementPlan(object sender, RoutedEventArgs e)
+    {
+        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        {
+            StatusLabel.Text = "No plan - build a plan first";
+            return;
+        }
+
+        PopulateProcurementPlanSummary();
+
+        StatusLabel.Text = _currentMarketPlans.Any()
+            ? "Procurement plan built from existing market analysis data"
+            : "No market analysis data found. Run Conduct Analysis in Market Analysis first.";
     }
 }

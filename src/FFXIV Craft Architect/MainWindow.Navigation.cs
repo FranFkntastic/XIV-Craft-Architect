@@ -57,9 +57,9 @@ public partial class MainWindow
         MarketAnalysisContent.Visibility = tab == MainTab.MarketAnalysis ? Visibility.Visible : Visibility.Collapsed;
         ProcurementPlannerContent.Visibility = tab == MainTab.ProcurementPlanner ? Visibility.Visible : Visibility.Collapsed;
 
-        RecipePlannerLeftPanel.Visibility = tab == MainTab.RecipePlanner ? Visibility.Visible : Visibility.Collapsed;
-        MarketAnalysisLeftPanel.Visibility = tab == MainTab.MarketAnalysis ? Visibility.Visible : Visibility.Collapsed;
-        ProcurementPlannerLeftPanel.Visibility = tab == MainTab.ProcurementPlanner ? Visibility.Visible : Visibility.Collapsed;
+        RecipePlannerSidebarModule.Visibility = tab == MainTab.RecipePlanner ? Visibility.Visible : Visibility.Collapsed;
+        MarketAnalysisSidebarModule.Visibility = tab == MainTab.MarketAnalysis ? Visibility.Visible : Visibility.Collapsed;
+        ProcurementPlannerSidebarModule.Visibility = tab == MainTab.ProcurementPlanner ? Visibility.Visible : Visibility.Collapsed;
 
         switch (tab)
         {

@@ -6,7 +6,7 @@ namespace FFXIV_Craft_Architect.Views.Modules;
 public partial class ProcurementPlannerSidebarView : UserControl
 {
     public event SelectionChangedEventHandler? ProcurementSortChanged;
-    public event RoutedEventHandler? ConductAnalysisClicked;
+    public event RoutedEventHandler? BuildProcurementPlanClicked;
 
     public ProcurementPlannerSidebarView()
     {
@@ -17,5 +17,5 @@ public partial class ProcurementPlannerSidebarView : UserControl
     public Wpf.Ui.Controls.Button LeftPanelProcurementAnalysisButtonControl => LeftPanelProcurementAnalysisButton;
 
     private void OnProcurementSortChanged(object sender, SelectionChangedEventArgs e) => ProcurementSortChanged?.Invoke(sender, e);
-    private void OnConductAnalysis(object sender, RoutedEventArgs e) => ConductAnalysisClicked?.Invoke(sender, e);
+    private void OnBuildProcurementPlan(object sender, RoutedEventArgs e) => BuildProcurementPlanClicked?.Invoke(sender, e);
 }

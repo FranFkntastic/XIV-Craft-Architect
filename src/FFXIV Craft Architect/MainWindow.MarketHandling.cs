@@ -9,6 +9,7 @@ using FFXIV_Craft_Architect.Models;
 using FFXIV_Craft_Architect.Services.Interfaces;
 using FFXIV_Craft_Architect.ViewModels;
 using Microsoft.Extensions.Logging;
+using DialogChoice = FFXIV_Craft_Architect.Services.Interfaces.DialogResult;
 
 namespace FFXIV_Craft_Architect;
 
@@ -33,25 +34,18 @@ public partial class MainWindow
             _marketDataStatusWindow = new MarketDataStatusWindow(_dialogFactory, _marketDataStatusSession);
             _marketDataStatusWindow.Owner = this;
             _marketDataStatusWindow.RefreshMarketDataRequested += OnMarketDataStatusRefreshRequested;
-
-            if (_marketDataStatusSession.TotalCount == 0)
-            {
-                var allItems = new List<(int itemId, string name, int quantity)>();
-                _recipeCalcService.CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
-                _marketDataStatusSession.InitializeItems(allItems);
-                MarkExistingPricesInStatusWindow(_currentPlan.RootItems);
-            }
-
-            _marketDataStatusWindow.RefreshView();
+            _marketDataStatusWindow.CacheCheckRequested += OnMarketDataStatusCacheCheckRequested;
         }
+
+        var initialItems = new List<(int itemId, string name, int quantity)>();
+        _recipeCalcService.CollectAllItemsWithQuantity(_currentPlan.RootItems, initialItems);
+        _marketDataStatusSession.InitializeItems(initialItems);
+        _marketDataStatusWindow.RefreshView();
 
         _marketDataStatusWindow.Show();
         _marketDataStatusWindow.Activate();
-    }
 
-    private void OnFetchPrices(object sender, RoutedEventArgs e)
-    {
-        OnFetchPricesAsync(forceRefresh: true).SafeFireAndForget(OnAsyncError);
+        OnCheckMarketCacheAsync().SafeFireAndForget(OnAsyncError);
     }
 
     private void OnConductAnalysis(object sender, RoutedEventArgs e)
@@ -62,7 +56,60 @@ public partial class MainWindow
             return;
         }
 
-        OnFetchPricesAsync(forceRefresh: false).SafeFireAndForget(OnAsyncError);
+        var forceRefresh = MarketAnalysisSidebarModule.ForceRefetch;
+        OnConductAnalysisAsync(forceRefresh).SafeFireAndForget(OnAsyncError);
+    }
+
+    private async Task OnConductAnalysisAsync(bool forceRefresh)
+    {
+        if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
+        {
+            StatusLabel.Text = "No plan - build a plan first";
+            return;
+        }
+
+        var dc = DcCombo.SelectedItem as string ?? "Aether";
+        var searchAllNA = ProcurementSearchAllNaCheck?.IsChecked ?? false;
+
+        if (forceRefresh)
+        {
+            StatusLabel.Text = "Force refetch enabled - fetching market data before analysis...";
+            await OnFetchPricesAsync(forceRefresh: true);
+            await RunMarketAnalysisFromCacheAsync(searchAllNA);
+            return;
+        }
+
+        var inspection = await _marketVm.InspectPlanCacheAsync(_currentPlan, dc, searchAllNA);
+        var missingCount = inspection.CacheCandidateItemIds.Count(itemId =>
+            !inspection.ItemCacheByItemId.TryGetValue(itemId, out var snapshot) || !snapshot.HasCache);
+
+        if (missingCount > 0)
+        {
+            var availableCount = inspection.CacheCandidateItemIds.Count - missingCount;
+            var choice = await _dialogs.YesNoCancelAsync(
+                $"Market cache is incomplete for this plan.\n\n" +
+                $"Cached items: {availableCount}\n" +
+                $"Missing items: {missingCount}\n\n" +
+                "Choose how to continue:\n" +
+                "- Yes: Proceed with partial analysis\n" +
+                "- No: Fetch market data now, then continue analysis\n" +
+                "- Cancel: Stop analysis",
+                "Incomplete Market Cache");
+
+            if (choice == DialogChoice.Cancel)
+            {
+                StatusLabel.Text = "Analysis canceled (incomplete cache)";
+                return;
+            }
+
+            if (choice == DialogChoice.No)
+            {
+                StatusLabel.Text = "Fetching missing market data before analysis...";
+                await OnFetchPricesAsync(forceRefresh: false);
+            }
+        }
+
+        await RunMarketAnalysisFromCacheAsync(searchAllNA);
     }
 
     private void OnMarketDataStatusRefreshRequested(object? sender, EventArgs e)
@@ -79,6 +126,11 @@ public partial class MainWindow
         }
 
         OnFetchPricesAsync(forceRefresh: true).SafeFireAndForget(OnAsyncError);
+    }
+
+    private void OnMarketDataStatusCacheCheckRequested(object? sender, EventArgs e)
+    {
+        OnCheckMarketCacheAsync().SafeFireAndForget(OnAsyncError);
     }
 
     private async Task OnFetchPricesAsync(bool forceRefresh = false)
@@ -111,6 +163,7 @@ public partial class MainWindow
                 Owner = this
             };
             _marketDataStatusWindow.RefreshMarketDataRequested += OnMarketDataStatusRefreshRequested;
+            _marketDataStatusWindow.CacheCheckRequested += OnMarketDataStatusCacheCheckRequested;
         }
 
         var allItems = new List<(int itemId, string name, int quantity)>();
@@ -228,16 +281,7 @@ public partial class MainWindow
                 DisplayPlanInTreeView(_currentPlan);
             }
 
-            _logger.LogInformation("[OnFetchPricesAsync] Updating market logistics from refreshed prices...");
-            await UpdateMarketLogisticsAsync(prices, useCachedData: false, searchAllNA: searchAllNA);
-            _logger.LogInformation("[OnFetchPricesAsync] Market logistics update complete. _currentMarketPlans.Count={Count}", _currentMarketPlans?.Count ?? 0);
-
-            _logger.LogInformation("[OnFetchPricesAsync] Calling PopulateProcurementPanel...");
-            PopulateProcurementPanel();
-            _logger.LogInformation("[OnFetchPricesAsync] PopulateProcurementPanel complete");
-
-            RebuildFromCacheButton.IsEnabled = true;
-            StatusLabel.Text = refreshResult.Message;
+            StatusLabel.Text = $"{refreshResult.Message} Run Conduct Analysis to update market recommendations.";
         }
         catch (Exception ex)
         {
@@ -258,73 +302,76 @@ public partial class MainWindow
         _logger.LogInformation("[OnFetchPricesAsync] END");
     }
 
-    private void OnRebuildFromCache(object sender, RoutedEventArgs e)
+    private async Task RunMarketAnalysisFromCacheAsync(bool searchAllNA)
     {
-        OnRebuildFromCacheAsync().SafeFireAndForget(OnAsyncError);
+        if (_currentPlan == null)
+        {
+            return;
+        }
+
+        StatusLabel.Text = "Running market analysis from cached data...";
+
+        var prices = _recipeCalcService.ExtractPricesFromPlan(_currentPlan);
+        await UpdateMarketLogisticsAsync(prices, useCachedData: false, searchAllNA: searchAllNA);
+
+        StatusLabel.Text = $"Market analysis complete. {_currentMarketPlans.Count} recommendation entries updated.";
     }
 
-    private async Task OnRebuildFromCacheAsync()
+    private async Task OnCheckMarketCacheAsync()
     {
-        _logger.LogInformation("[OnRebuildFromCacheAsync] START");
-
         if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
         {
-            _logger.LogWarning("[OnRebuildFromCacheAsync] ABORT - No plan available");
             StatusLabel.Text = "No plan - build a plan first";
             return;
         }
 
-        RebuildFromCacheButton.IsEnabled = false;
+        var dc = DcCombo.SelectedItem as string ?? "Aether";
+        var searchAllNA = ProcurementSearchAllNaCheck?.IsChecked ?? false;
 
-        try
-        {
-            var rebuildResult = await _marketVm.RebuildFromCacheAsync(_currentPlan);
-            if (!rebuildResult.Success)
-            {
-                StatusLabel.Text = rebuildResult.Message;
-                return;
-            }
+        StatusLabel.Text = "Checking cache coverage...";
 
-            _logger.LogInformation("[OnRebuildFromCacheAsync] Calling UpdateMarketLogisticsAsync...");
-            await UpdateMarketLogisticsAsync(rebuildResult.CachedPrices, useCachedData: true);
-            _logger.LogInformation("[OnRebuildFromCacheAsync] UpdateMarketLogisticsAsync complete. _currentMarketPlans.Count={Count}", _currentMarketPlans?.Count ?? 0);
+        var inspection = await _marketVm.InspectPlanCacheAsync(_currentPlan, dc, searchAllNA);
+        _marketDataStatusSession.InitializeItems(inspection.AllItems);
+        PopulateStatusSessionFromCacheInspection(inspection);
+        _marketDataStatusWindow?.RefreshView();
 
-            DisplayPlanInTreeView(_currentPlan);
+        var cachedFreshCount = inspection.ItemCacheByItemId.Values.Count(v => v.HasFreshCache);
+        var cachedStaleCount = inspection.ItemCacheByItemId.Values.Count(v => v.HasCache && !v.HasFreshCache);
+        var cacheMissingCount = inspection.CacheCandidateItemIds.Count(v =>
+            !inspection.ItemCacheByItemId.TryGetValue(v, out var snapshot) || !snapshot.HasCache);
 
-            _logger.LogInformation("[OnRebuildFromCacheAsync] Calling PopulateProcurementPanel...");
-            PopulateProcurementPanel();
-            _logger.LogInformation("[OnRebuildFromCacheAsync] PopulateProcurementPanel complete");
-
-            StatusLabel.Text = rebuildResult.Message;
-            _logger.LogInformation("[OnRebuildFromCacheAsync] SUCCESS - Rebuilt market analysis from cached prices");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[OnRebuildFromCacheAsync] FAILED - Exception: {Message}", ex.Message);
-            StatusLabel.Text = $"Failed to rebuild from cache: {ex.Message}";
-        }
-        finally
-        {
-            RebuildFromCacheButton.IsEnabled = true;
-        }
+        StatusLabel.Text =
+            $"Cache check complete: {cachedFreshCount} fresh, {cachedStaleCount} stale, {cacheMissingCount} missing";
     }
 
-    /// <summary>
-    /// Marks items with existing prices in the status window.
-    /// </summary>
-    private void MarkExistingPricesInStatusWindow(List<PlanNode> nodes)
+    private void PopulateStatusSessionFromCacheInspection(PlanCacheInspectionContext inspection)
     {
-        foreach (var node in nodes)
+        foreach (var (itemId, _, _) in inspection.AllItems)
         {
-            if (node.MarketPrice > 0)
+            if (!inspection.CacheCandidateItemIds.Contains(itemId))
             {
-                _marketDataStatusSession.SetItemCached(node.ItemId, node.MarketPrice, node.PriceSourceDetails, "-", "Market");
+                _marketDataStatusSession.SetItemSkipped(itemId, "Not in market cache scope");
+                continue;
             }
 
-            if (node.Children?.Any() == true)
+            if (!inspection.ItemCacheByItemId.TryGetValue(itemId, out var cacheSnapshot) || !cacheSnapshot.HasCache)
             {
-                MarkExistingPricesInStatusWindow(node.Children);
+                _marketDataStatusSession.SetItemNoCache(itemId, "No cache entry for selected scope");
+                continue;
             }
+
+            var dataScopeText =
+                $"{cacheSnapshot.CachedDataCenterCount}/{inspection.ScopeDataCenters.Count} DC / {cacheSnapshot.CachedWorldCount} worlds";
+            var sourceDetails = cacheSnapshot.HasFreshCache ? "Fresh cache entry" : "Stale cache entry";
+            var dataTypeText = cacheSnapshot.HasFreshCache ? "Market" : "Market (stale)";
+
+            _marketDataStatusSession.SetItemCached(
+                itemId,
+                cacheSnapshot.CachedUnitPrice,
+                sourceDetails,
+                dataScopeText,
+                dataTypeText,
+                cacheSnapshot.LatestFetchedAtUtc);
         }
     }
 
@@ -360,7 +407,6 @@ public partial class MainWindow
     {
         ProcurementPanel.Children.Clear();
         var hasPlan = _currentPlan?.RootItems.Count > 0;
-        ProcurementRefreshButton.IsEnabled = hasPlan;
         LeftPanelConductAnalysisButton.IsEnabled = hasPlan;
 
         var placeholderCard = _marketLogisticsCoordinator.CreatePlaceholderCard();
@@ -475,9 +521,7 @@ public partial class MainWindow
             CardType.Cached);
         ProcurementPanel.Children.Add(cachedCard);
 
-        ProcurementRefreshButton.IsEnabled = true;
         LeftPanelConductAnalysisButton.IsEnabled = true;
-        RebuildFromCacheButton.IsEnabled = true;
         LeftPanelViewMarketStatusButton.IsEnabled = true;
         MenuViewMarketStatus.IsEnabled = true;
     }
@@ -492,7 +536,6 @@ public partial class MainWindow
         var loadingCard = _marketLogisticsCoordinator.CreateLoadingState(dc, marketItems.Count, searchAllNA);
         ProcurementPanel.Children.Add(loadingCard);
 
-        ProcurementRefreshButton.IsEnabled = false;
         LeftPanelConductAnalysisButton.IsEnabled = false;
         LeftPanelViewMarketStatusButton.IsEnabled = false;
         MenuViewMarketStatus.IsEnabled = false;
@@ -535,7 +578,6 @@ public partial class MainWindow
         }
         finally
         {
-            ProcurementRefreshButton.IsEnabled = true;
             LeftPanelConductAnalysisButton.IsEnabled = true;
             LeftPanelViewMarketStatusButton.IsEnabled = true;
             MenuViewMarketStatus.IsEnabled = true;

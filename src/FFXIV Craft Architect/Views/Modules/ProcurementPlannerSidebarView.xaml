@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel x:Name="ProcurementPlannerLeftPanel" Visibility="Collapsed">
+        <StackPanel x:Name="ProcurementPlannerLeftPanel">
             <TextBlock Text="Procurement Plan"
                        FontSize="16"
                        FontWeight="SemiBold"
@@ -26,14 +26,14 @@
                 <ComboBoxItem Content="By Cost (High to Low)"/>
             </ComboBox>
 
-            <ui:Button Content="Conduct Analysis"
+            <ui:Button Content="Build Procurement Plan"
                        x:Name="LeftPanelProcurementAnalysisButton"
                        Appearance="Primary"
                        Margin="0,0,0,8"
                        HorizontalAlignment="Stretch"
-                       Click="OnConductAnalysis"
+                       Click="OnBuildProcurementPlan"
                        IsEnabled="True"
-                       ToolTip="Analyze using cached market data (fetch if needed)"/>
+                       ToolTip="Build procurement summary from existing market analysis data"/>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

@@ -11,7 +11,7 @@ namespace FFXIV_Craft_Architect;
 
 /// <summary>
 /// Window for visualizing real-time market data population status.
-/// Shows each item's fetch status: Pending, Fetching, Success, Failed, or Cached.
+/// Shows each item's fetch/cache status: Pending, NoCache, Fetching, Success, Failed, or Cached.
 /// </summary>
 public partial class MarketDataStatusWindow : Window
 {
@@ -23,6 +23,11 @@ public partial class MarketDataStatusWindow : Window
     /// Event raised when the user requests a fresh fetch of market data.
     /// </summary>
     public event EventHandler? RefreshMarketDataRequested;
+
+    /// <summary>
+    /// Event raised when the user requests cache inspection without fetching.
+    /// </summary>
+    public event EventHandler? CacheCheckRequested;
 
     public MarketDataStatusWindow(DialogServiceFactory dialogFactory, MarketDataStatusSession session)
     {
@@ -47,6 +52,7 @@ public partial class MarketDataStatusWindow : Window
     private void UpdateStats()
     {
         var pending = _session.PendingCount;
+        var noCache = _session.NoCacheCount;
         var fetching = _session.FetchingCount;
         var success = _session.SuccessCount;
         var failed = _session.FailedCount;
@@ -56,6 +62,7 @@ public partial class MarketDataStatusWindow : Window
         var completed = _session.CompletedCount;
 
         PendingCount.Text = $"⏳ Pending: {pending}";
+        NoCacheCount.Text = $"∅ No Cache: {noCache}";
         FetchingCount.Text = $"🔄 Fetching: {fetching}";
         SuccessCount.Text = $"✓ Success: {success}";
         FailedCount.Text = $"✗ Failed: {failed}";
@@ -95,8 +102,15 @@ public partial class MarketDataStatusWindow : Window
     {
         if (_filteredView != null)
         {
-            _filteredView.Filter = obj => obj is MarketDataStatusItem item && 
-                (item.Status == MarketDataFetchStatus.Pending || item.Status == MarketDataFetchStatus.Fetching);
+            _filteredView.Filter = obj => obj is MarketDataStatusItem item && item.Status == MarketDataFetchStatus.Pending;
+        }
+    }
+
+    private void OnFilterFetching(object sender, RoutedEventArgs e)
+    {
+        if (_filteredView != null)
+        {
+            _filteredView.Filter = obj => obj is MarketDataStatusItem item && item.Status == MarketDataFetchStatus.Fetching;
         }
     }
 
@@ -121,6 +135,11 @@ public partial class MarketDataStatusWindow : Window
     {
         // Raise event to notify MainWindow to perform a force refresh
         RefreshMarketDataRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnCheckCache(object sender, RoutedEventArgs e)
+    {
+        CacheCheckRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private async void OnExportCsv(object sender, RoutedEventArgs e)

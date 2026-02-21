@@ -68,13 +68,12 @@ public partial class MainWindow : Window
     private StackPanel RecipePlanPanel => RecipePlannerModule.RecipePlanPanel;
     private Button ExpandAllButton => RecipePlannerModule.ExpandAllButton;
     private Button CollapseAllButton => RecipePlannerModule.CollapseAllButton;
-    private Wpf.Ui.Controls.Button ProcurementRefreshButton => MarketAnalysisModule.ProcurementRefreshButton;
-    private Wpf.Ui.Controls.Button RebuildFromCacheButton => MarketAnalysisModule.RebuildFromCacheButton;
-    private ComboBox DcCombo => MarketAnalysisModule.DcCombo;
-    private ComboBox WorldCombo => MarketAnalysisModule.WorldCombo;
-    private ComboBox ProcurementSortCombo => MarketAnalysisModule.ProcurementSortCombo;
-    private ComboBox ProcurementModeCombo => MarketAnalysisModule.ProcurementModeCombo;
-    private CheckBox ProcurementSearchAllNaCheck => MarketAnalysisModule.ProcurementSearchAllNaCheck;
+    private ComboBox DcCombo => MarketAnalysisSidebarModule.DcComboControl;
+    private ComboBox WorldCombo => MarketAnalysisSidebarModule.WorldComboControl;
+    private ComboBox MarketAnalysisProcurementSortCombo => MarketAnalysisSidebarModule.ProcurementSortComboControl;
+    private ComboBox ProcurementPlannerSortCombo => ProcurementPlannerSidebarModule.LeftPanelProcurementSortComboControl;
+    private ComboBox ProcurementModeCombo => MarketAnalysisSidebarModule.ProcurementModeComboControl;
+    private CheckBox ProcurementSearchAllNaCheck => MarketAnalysisSidebarModule.ProcurementSearchAllNaCheckControl;
     private Panel ProcurementPanel => MarketAnalysisModule.SplitPaneCardsGrid;
     private Grid SplitPaneMarketView => MarketAnalysisModule.SplitPaneMarketView;
     private Border SplitPaneExpandedPanel => MarketAnalysisModule.SplitPaneExpandedPanel;
@@ -189,14 +188,12 @@ public partial class MainWindow : Window
         MarketAnalysisSidebarModule.ViewMarketStatusClicked += OnViewMarketStatus;
 
         ProcurementPlannerSidebarModule.ProcurementSortChanged += OnProcurementSortChanged;
-        ProcurementPlannerSidebarModule.ConductAnalysisClicked += OnConductAnalysis;
+        ProcurementPlannerSidebarModule.BuildProcurementPlanClicked += OnBuildProcurementPlan;
 
         ExpandAllButton.Click += OnExpandAll;
         CollapseAllButton.Click += OnCollapseAll;
-        ProcurementRefreshButton.Click += OnFetchPrices;
-        RebuildFromCacheButton.Click += OnRebuildFromCache;
         DcCombo.SelectionChanged += OnDataCenterSelected;
-        ProcurementSortCombo.SelectionChanged += OnProcurementSortChanged;
+        MarketAnalysisProcurementSortCombo.SelectionChanged += OnProcurementSortChanged;
         ProcurementModeCombo.SelectionChanged += OnProcurementModeChanged;
         
         // Initialize ProcurementBuilder after InitializeComponent (UI elements exist)
@@ -297,15 +294,11 @@ public partial class MainWindow : Window
                 if (_recipeVm.CurrentPlan != null)
                 {
                     _recipeTreeBuilder?.BuildTree(_recipeVm.RootNodes, RecipePlanPanel);
-                    ProcurementRefreshButton.IsEnabled = true;
-                    RebuildFromCacheButton.IsEnabled = true;
                     ExpandAllButton.IsEnabled = true;
                     CollapseAllButton.IsEnabled = true;
                 }
                 else
                 {
-                    ProcurementRefreshButton.IsEnabled = false;
-                    RebuildFromCacheButton.IsEnabled = false;
                     ExpandAllButton.IsEnabled = false;
                     CollapseAllButton.IsEnabled = false;
                 }
@@ -557,8 +550,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Builds the crafting plan by calling RecipeCalculationService.
     /// Note: MUST REMAIN in MainWindow - extensive UI coordination: BuildPlanButton/BrowsePlanButton state,
-    ///       ProcurementRefreshButton/RebuildFromCacheButton enablement, auto-fetch prices trigger,
-    ///       StatusLabel updates, and tree view display. Too UI-heavy for ViewModel.
+    ///       auto-fetch prices trigger, StatusLabel updates, and tree view display. Too UI-heavy for ViewModel.
     /// </summary>
     private async Task OnBuildProjectPlanAsync()
     {
@@ -585,13 +577,10 @@ public partial class MainWindow : Window
                 DisplayPlanInTreeView(_currentPlan);
             }
             UpdateBuildPlanButtonText();
-            
-            ProcurementRefreshButton.IsEnabled = true;
-            RebuildFromCacheButton.IsEnabled = true;
-            
+
             StatusLabel.Text = $"Plan built: {_currentPlan.RootItems.Count} root items, " +
                                $"{_currentPlan.AggregatedMaterials.Count} unique materials";
-            
+
             var autoFetch = _settingsService.Get<bool>("market.auto_fetch_prices", true);
             _logger.LogInformation("[OnBuildProjectPlan] market.auto_fetch_prices = {Value}", autoFetch);
             if (autoFetch)
@@ -600,7 +589,7 @@ public partial class MainWindow : Window
                 await Dispatcher.InvokeAsync(async () =>
                 {
                     await Task.Delay(100);
-                    OnFetchPrices(this, new RoutedEventArgs());
+                    await OnFetchPricesAsync(forceRefresh: false);
                 });
             }
         }
@@ -777,18 +766,16 @@ public partial class MainWindow : Window
     private async Task DisplayPlanWithCachedPrices(CraftingPlan plan)
     {
         DisplayPlanInTreeView(plan);
-        
+
         if (plan.SavedMarketPlans?.Count > 0 == true)
         {
             _marketVm.SetShoppingPlans(plan.SavedMarketPlans);
             PopulateProcurementPanel();
-            
-            ProcurementRefreshButton.IsEnabled = true;
+
             LeftPanelConductAnalysisButton.IsEnabled = true;
-            RebuildFromCacheButton.IsEnabled = true;
             LeftPanelViewMarketStatusButton.IsEnabled = true;
             MenuViewMarketStatus.IsEnabled = true;
-            
+
             var savedPrices = _recipeCalcService.ExtractPricesFromPlan(plan);
             if (savedPrices.Count > 0)
             {
@@ -804,8 +791,6 @@ public partial class MainWindow : Window
             var savedPrices = _recipeCalcService.ExtractPricesFromPlan(plan);
             await UpdateMarketLogisticsAsync(savedPrices, useCachedData: true);
             StatusLabel.Text = $"Loaded plan with {savedPrices.Count} cached prices.";
-            
-            RebuildFromCacheButton.IsEnabled = true;
         }
         else
         {

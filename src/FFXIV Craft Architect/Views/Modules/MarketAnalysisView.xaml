@@ -9,7 +9,6 @@
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
@@ -21,76 +20,9 @@
                            FontWeight="SemiBold"
                            Foreground="{StaticResource Brush.Accent.Primary}"
                            VerticalAlignment="Center"/>
-
-                <ui:Button x:Name="ProcurementRefreshButton"
-                           Content="Refresh Prices"
-                           Appearance="Secondary"
-                           Margin="16,0,0,0"
-                           IsEnabled="False"/>
-
-                <ui:Button x:Name="RebuildFromCacheButton"
-                           Content="Rebuild from Cache"
-                           Appearance="Secondary"
-                           Margin="8,0,0,0"
-                           IsEnabled="False"
-                           ToolTip="Rebuild market analysis using cached prices without calling API"/>
             </StackPanel>
 
             <Border Grid.Row="1"
-                    Background="{StaticResource Brush.Surface.Card}"
-                    CornerRadius="4"
-                    Padding="12"
-                    Margin="0,0,0,8">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="Data Center:"
-                               Foreground="{StaticResource Brush.Text.Secondary}"
-                               VerticalAlignment="Center"
-                               Margin="0,0,6,0"/>
-                    <ComboBox x:Name="DcCombo"
-                              Width="100"
-                              IsEditable="False"
-                              Margin="0,0,16,0"/>
-
-                    <TextBlock Text="World:"
-                               Foreground="{StaticResource Brush.Text.Secondary}"
-                               VerticalAlignment="Center"
-                               Margin="0,0,6,0"/>
-                    <ComboBox x:Name="WorldCombo"
-                              Width="120"
-                              IsEditable="False"
-                              Margin="0,0,24,0"/>
-
-                    <TextBlock Text="Sort by:"
-                               Foreground="{StaticResource Brush.Text.Secondary}"
-                               VerticalAlignment="Center"
-                               Margin="0,0,8,0"/>
-                    <ComboBox x:Name="ProcurementSortCombo"
-                              Width="170"
-                              SelectedIndex="0">
-                        <ComboBoxItem Content="Recommended World"/>
-                        <ComboBoxItem Content="Alphabetical"/>
-                        <ComboBoxItem Content="Price (High to Low)"/>
-                    </ComboBox>
-
-                    <TextBlock Text="Mode:"
-                               Foreground="{StaticResource Brush.Text.Secondary}"
-                               VerticalAlignment="Center"
-                               Margin="24,0,8,0"/>
-                    <ComboBox x:Name="ProcurementModeCombo"
-                              Width="170">
-                        <ComboBoxItem Content="Minimize Total Cost"/>
-                        <ComboBoxItem Content="Maximize Value"/>
-                    </ComboBox>
-
-                    <CheckBox x:Name="ProcurementSearchAllNaCheck"
-                              Content="Search all NA DCs"
-                              Foreground="{StaticResource Brush.Text.Secondary}"
-                              Margin="24,0,0,0"
-                              VerticalAlignment="Center"/>
-                </StackPanel>
-            </Border>
-
-            <Border Grid.Row="2"
                     Background="{StaticResource Brush.Surface.Card}"
                     CornerRadius="4"
                     Padding="12">
