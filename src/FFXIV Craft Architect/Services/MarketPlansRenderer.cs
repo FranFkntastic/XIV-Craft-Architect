@@ -17,12 +17,10 @@ namespace FFXIV_Craft_Architect.Services;
 public class MarketPlansRenderer : IMarketPlansRenderer
 {
     private readonly ILogger<MarketPlansRenderer> _logger;
-    private readonly ICardFactory _cardFactory;
 
-    public MarketPlansRenderer(ILogger<MarketPlansRenderer> logger, ICardFactory cardFactory)
+    public MarketPlansRenderer(ILogger<MarketPlansRenderer> logger)
     {
         _logger = logger;
-        _cardFactory = cardFactory;
     }
 
     /// <inheritdoc />
@@ -198,14 +196,36 @@ public class MarketPlansRenderer : IMarketPlansRenderer
         Func<string, object>? findResource)
     {
         var isExpanded = expandedItemId == plan.ItemId;
-        var viewModel = new MarketCardViewModel(plan);
+        var viewModel = new MarketCardViewModel(plan)
+        {
+            IsSelected = isExpanded
+        };
 
-        // Use CardFactory for consistent styling
-        var border = _cardFactory.CreateCollapsedMarketCard(
-            viewModel,
-            isExpanded,
-            () => { if (onCardClick != null) onCardClick(plan); },
-            findResource);
+        if (onCardClick != null)
+        {
+            viewModel.Selected += _ => onCardClick(plan);
+        }
+
+        var resourceLookup = findResource ?? (key => Application.Current.MainWindow.FindResource(key));
+        DataTemplate? template = null;
+        try
+        {
+            template = (DataTemplate?)resourceLookup("CollapsedMarketCardTemplate");
+        }
+        catch (ResourceReferenceKeyNotFoundException)
+        {
+            // Template not found - implicit DataTemplate can still render content.
+        }
+
+        var border = new Border
+        {
+            Background = Brushes.Transparent,
+            Child = new ContentControl
+            {
+                Content = viewModel,
+                ContentTemplate = template
+            }
+        };
 
         border.Tag = plan;
         return border;

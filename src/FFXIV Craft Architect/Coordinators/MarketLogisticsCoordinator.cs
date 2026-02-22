@@ -3,8 +3,6 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
-using FFXIV_Craft_Architect.Services;
-using FFXIV_Craft_Architect.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 using PriceInfo = FFXIV_Craft_Architect.Core.Models.PriceInfo;
 
@@ -33,23 +31,42 @@ public record MarketSummaryData(
 public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
 {
     private readonly MarketShoppingService _marketShoppingService;
-    private readonly ICardFactory _cardFactory;
     private readonly ILogger<MarketLogisticsCoordinator> _logger;
+    private int? _expandedSplitPaneItemId;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MarketLogisticsCoordinator"/> class.
     /// </summary>
     /// <param name="marketShoppingService">Service for calculating shopping plans.</param>
-    /// <param name="cardFactory">Factory for creating UI card elements.</param>
     /// <param name="logger">Logger instance.</param>
     public MarketLogisticsCoordinator(
         MarketShoppingService marketShoppingService,
-        ICardFactory cardFactory,
         ILogger<MarketLogisticsCoordinator> logger)
     {
         _marketShoppingService = marketShoppingService;
-        _cardFactory = cardFactory;
         _logger = logger;
+    }
+
+    /// <inheritdoc />
+    public int? ExpandedSplitPaneItemId => _expandedSplitPaneItemId;
+
+    /// <inheritdoc />
+    public bool ToggleExpandedSplitPaneItem(int itemId)
+    {
+        if (_expandedSplitPaneItemId == itemId)
+        {
+            _expandedSplitPaneItemId = null;
+            return false;
+        }
+
+        _expandedSplitPaneItemId = itemId;
+        return true;
+    }
+
+    /// <inheritdoc />
+    public void ClearExpandedSplitPaneItem()
+    {
+        _expandedSplitPaneItemId = null;
     }
 
     /// <summary>
@@ -436,26 +453,4 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
             untradeableItems.Count);
     }
 
-    /// <summary>
-    /// Creates a placeholder card for the "no data" state.
-    /// Delegates to ICardFactory for actual UI creation.
-    /// </summary>
-    /// <returns>A configured Border element representing the placeholder.</returns>
-    public Border CreatePlaceholderCard()
-    {
-        return _cardFactory.CreatePlaceholder(
-            "Market Board Items",
-            "Click 'Fetch Market Data' to get current market board prices and shopping recommendations.");
-    }
-
-    /// <summary>
-    /// Creates an error card for displaying error messages.
-    /// Delegates to ICardFactory for actual UI creation.
-    /// </summary>
-    /// <param name="errorMessage">The error message to display.</param>
-    /// <returns>A configured Border element representing the error card.</returns>
-    public Border CreateErrorCard(string errorMessage)
-    {
-        return _cardFactory.CreateErrorCard("Error", errorMessage);
-    }
 }

@@ -11,6 +11,12 @@ public interface IMarketLogisticsCoordinator
 {
     Border CreateLoadingState(string dataCenter, int itemCount, bool searchAllNA);
 
+    int? ExpandedSplitPaneItemId { get; }
+
+    bool ToggleExpandedSplitPaneItem(int itemId);
+
+    void ClearExpandedSplitPaneItem();
+
     Task<MarketLogisticsCoordinator.MarketLogisticsResult> CalculateMarketLogisticsAsync(
         CraftingPlan plan,
         Dictionary<int, PriceInfo> prices,
@@ -26,8 +32,4 @@ public interface IMarketLogisticsCoordinator
         List<DetailedShoppingPlan>? savedPlans);
 
     MarketSummaryData CalculateSummaryData(CraftingPlan plan, Dictionary<int, PriceInfo> prices);
-
-    Border CreatePlaceholderCard();
-
-    Border CreateErrorCard(string errorMessage);
 }

@@ -21,6 +21,7 @@ public partial class MainWindow
 
         if (_currentPlan == null)
         {
+            _marketLogisticsCoordinator.ClearExpandedSplitPaneItem();
             _procurementBuilder?.ShowNoPlanPlaceholderSplitPane();
             return;
         }
@@ -168,16 +169,17 @@ public partial class MainWindow
             _procurementBuilder?.SplitPaneCardsGrid.Children.Add(card);
         }
 
-        if (_expandedSplitPanePlan != null)
+        var expandedItemId = _marketLogisticsCoordinator.ExpandedSplitPaneItemId;
+        if (expandedItemId.HasValue)
         {
-            var planToExpand = _currentMarketPlans.FirstOrDefault(p => p.ItemId == _expandedSplitPanePlan.ItemId);
+            var planToExpand = _currentMarketPlans.FirstOrDefault(p => p.ItemId == expandedItemId.Value);
             if (planToExpand != null)
             {
                 BuildExpandedPanel(planToExpand);
             }
             else
             {
-                _expandedSplitPanePlan = null;
+                _marketLogisticsCoordinator.ClearExpandedSplitPaneItem();
                 _procurementBuilder?.SetExpandedPanelVisibility(false);
             }
         }
@@ -185,6 +187,7 @@ public partial class MainWindow
 
     private void PopulateSplitPaneWithSimpleMaterials()
     {
+        _marketLogisticsCoordinator.ClearExpandedSplitPaneItem();
         _procurementBuilder?.ClearExpandedPanel();
         _procurementBuilder?.SetExpandedPanelVisibility(false);
 
@@ -205,27 +208,34 @@ public partial class MainWindow
         _procurementBuilder?.ShowRefreshNeededPlaceholderSplitPane(materials.Count);
     }
 
-    private Border CreateCollapsedCardFromTemplate(DetailedShoppingPlan plan)
+    private FrameworkElement CreateCollapsedCardFromTemplate(DetailedShoppingPlan plan)
     {
-        var isExpanded = _expandedSplitPanePlan?.ItemId == plan.ItemId;
-        var viewModel = new MarketCardViewModel(plan);
+        var isExpanded = _marketLogisticsCoordinator.ExpandedSplitPaneItemId == plan.ItemId;
+        var viewModel = new MarketCardViewModel(plan)
+        {
+            IsSelected = isExpanded
+        };
 
-        return _cardFactory.CreateCollapsedMarketCard(
-            viewModel,
-            isExpanded,
-            () => OnCollapsedCardClick(plan));
+        viewModel.Selected += _ => OnCollapsedCardClick(plan);
+
+        return new ContentControl
+        {
+            Content = viewModel,
+            ContentTemplate = FindResource("CollapsedMarketCardTemplate") as DataTemplate,
+            Tag = plan
+        };
     }
 
     private void OnCollapsedCardClick(DetailedShoppingPlan plan)
     {
-        if (_expandedSplitPanePlan?.ItemId == plan.ItemId)
+        var expanded = _marketLogisticsCoordinator.ToggleExpandedSplitPaneItem(plan.ItemId);
+
+        if (!expanded)
         {
-            _expandedSplitPanePlan = null;
             SplitPaneExpandedPanel.Visibility = Visibility.Collapsed;
         }
         else
         {
-            _expandedSplitPanePlan = plan;
             BuildExpandedPanel(plan);
         }
 
@@ -240,7 +250,7 @@ public partial class MainWindow
         var viewModel = new ExpandedPanelViewModel(plan);
         viewModel.CloseRequested += () =>
         {
-            _expandedSplitPanePlan = null;
+            _marketLogisticsCoordinator.ClearExpandedSplitPaneItem();
             _procurementBuilder?.SetExpandedPanelVisibility(false);
             PopulateSplitPaneWithMarketPlans();
         };

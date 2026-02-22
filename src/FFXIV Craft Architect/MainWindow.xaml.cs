@@ -102,9 +102,6 @@ public partial class MainWindow : Window
     private ProcurementPanelBuilder? _procurementBuilder;
     private readonly InfoPanelBuilder _infoPanelBuilder;
     
-    // Factories
-    private readonly ICardFactory _cardFactory;
-    
     // Search state
     private List<GarlandSearchResult> _currentSearchResults = new();
     private GarlandSearchResult? _selectedSearchResult;
@@ -112,9 +109,6 @@ public partial class MainWindow : Window
     // Backwards compatibility properties (using Core.Models types)
     private Core.Models.CraftingPlan? _currentPlan => _recipeVm?.CurrentPlan;
     private List<Core.Models.DetailedShoppingPlan> _currentMarketPlans => _marketVm?.ShoppingPlans.Select(vm => vm.Plan).ToList() ?? new List<Core.Models.DetailedShoppingPlan>();
-    
-    // Split-pane view state
-    private DetailedShoppingPlan? _expandedSplitPanePlan;
     
     // Coordinators
     private readonly WatchStateCoordinator _watchStateCoordinator;
@@ -137,7 +131,6 @@ public partial class MainWindow : Window
         WorldDataCoordinator worldDataCoordinator,
         IShoppingOptimizationCoordinator shoppingOptimizationCoordinator,
         IMarketLogisticsCoordinator marketLogisticsCoordinator,
-        ICardFactory cardFactory,
         RecipePlannerViewModel recipeVm,
         MarketAnalysisViewModel marketVm,
         MainViewModel mainVm,
@@ -160,7 +153,6 @@ public partial class MainWindow : Window
         _worldDataCoordinator = worldDataCoordinator;
         _shoppingOptimizationCoordinator = shoppingOptimizationCoordinator;
         _marketLogisticsCoordinator = marketLogisticsCoordinator;
-        _cardFactory = cardFactory;
         
         // ViewModels (injected via DI as singletons)
         _recipeVm = recipeVm;

@@ -409,7 +409,10 @@ public partial class MainWindow
         var hasPlan = _currentPlan?.RootItems.Count > 0;
         LeftPanelConductAnalysisButton.IsEnabled = hasPlan;
 
-        var placeholderCard = _marketLogisticsCoordinator.CreatePlaceholderCard();
+        var placeholderCard = CreateMarketInfoCard(
+            "Market Board Items",
+            "Click 'Fetch Market Data' to get current market board prices and shopping recommendations.",
+            MarketInfoCardKind.Neutral);
         ProcurementPanel.Children.Add(placeholderCard);
     }
 
@@ -503,22 +506,22 @@ public partial class MainWindow
             vendorText.AppendLine($"• {item.Name} x{item.TotalQuantity} = {item.TotalCost:N0}g ({source})");
         }
 
-        var vendorCard = _cardFactory.CreateInfoCard(
+        var vendorCard = CreateMarketInfoCard(
             $"Vendor Items ({vendorItems.Count})",
             vendorText.ToString(),
-            CardType.Vendor);
+            MarketInfoCardKind.Vendor);
         ProcurementPanel.Children.Add(vendorCard);
     }
 
     private void AddCachedMarketDataCard(List<MaterialAggregate> marketItems, Dictionary<int, PriceInfo> prices)
     {
-        var cachedCard = _cardFactory.CreateInfoCard(
+        var cachedCard = CreateMarketInfoCard(
             $"Market Board Items ({marketItems.Count})",
             "Using saved prices. Click 'Refresh Market Data' to fetch current listings.\n\n" +
             "Items to purchase:\n" +
             string.Join("\n", marketItems.Select(m =>
                 $"• {m.Name} x{m.TotalQuantity} = {m.TotalCost:N0}g ({prices[m.ItemId].SourceDetails})")),
-            CardType.Cached);
+            MarketInfoCardKind.Cached);
         ProcurementPanel.Children.Add(cachedCard);
 
         LeftPanelConductAnalysisButton.IsEnabled = true;
@@ -553,7 +556,7 @@ public partial class MainWindow
             if (!result.Success)
             {
                 ProcurementPanel.Children.Remove(loadingCard);
-                var errorCard = _marketLogisticsCoordinator.CreateErrorCard(result.Message);
+                var errorCard = CreateMarketInfoCard("Error", result.Message, MarketInfoCardKind.Error);
                 ProcurementPanel.Children.Add(errorCard);
                 StatusLabel.Text = result.Message;
                 return;
@@ -573,7 +576,7 @@ public partial class MainWindow
         {
             _logger.LogError(ex, "[FetchAndDisplayLiveMarketDataAsync] FAILED - Exception: {Message}", ex.Message);
             ProcurementPanel.Children.Remove(loadingCard);
-            var errorCard = _marketLogisticsCoordinator.CreateErrorCard($"Error fetching listings: {ex.Message}");
+            var errorCard = CreateMarketInfoCard("Error", $"Error fetching listings: {ex.Message}", MarketInfoCardKind.Error);
             ProcurementPanel.Children.Add(errorCard);
         }
         finally
@@ -594,11 +597,19 @@ public partial class MainWindow
             untradeText.AppendLine($"• {item.Name} x{item.TotalQuantity}");
         }
 
-        var untradeCard = _cardFactory.CreateInfoCard(
+        var untradeCard = CreateMarketInfoCard(
             $"Untradeable Items ({untradeableItems.Count})",
             untradeText.ToString(),
-            CardType.Untradeable);
+            MarketInfoCardKind.Untradeable);
         ProcurementPanel.Children.Add(untradeCard);
+    }
+
+    private static ContentControl CreateMarketInfoCard(string title, string content, MarketInfoCardKind kind)
+    {
+        return new ContentControl
+        {
+            Content = new MarketInfoCardViewModel(title, content, kind)
+        };
     }
 
     private void UpdateMarketSummaryCard(List<MaterialAggregate> vendorItems, List<MaterialAggregate> marketItems,

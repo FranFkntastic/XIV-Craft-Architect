@@ -343,31 +343,45 @@
          ============================================================ -->
     <DataTemplate x:Key="CollapsedMarketCardTemplate" DataType="{x:Type vm:MarketCardViewModel}">
         <Border Background="{DynamicResource Brush.Surface.Card.Market}"
-                BorderBrush="{DynamicResource Brush.Border.Card.Market}"
-                BorderThickness="1"
                 CornerRadius="4"
-                Padding="10,8,10,8"
-                Margin="0,0,8,8"
-                Width="320"
+                Padding="{DynamicResource Layout.MarketCard.Collapsed.Padding}"
+                Margin="{DynamicResource Layout.MarketCard.Collapsed.Margin}"
+                Width="{DynamicResource Layout.MarketCard.Collapsed.Width}"
                 Cursor="Hand">
+            <Border.InputBindings>
+                <MouseBinding MouseAction="LeftClick" Command="{Binding SelectCommand}"/>
+            </Border.InputBindings>
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border.Card.Market}"/>
+                    <Setter Property="BorderThickness" Value="1"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                            <Setter Property="BorderBrush" Value="{DynamicResource Brush.Accent.Primary}"/>
+                            <Setter Property="BorderThickness" Value="2"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
             <StackPanel>
                 <!-- Top Row: Item name and quantity -->
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="{Binding Name}"
                                FontWeight="SemiBold"
                                FontSize="12"
+                               Foreground="{StaticResource Brush.Text.Primary}"
                                TextTrimming="CharacterEllipsis"
-                               MaxWidth="220"/>
+                               MaxWidth="{DynamicResource Layout.MarketCard.Collapsed.ItemNameMaxWidth}"/>
                     <TextBlock Text="{Binding QuantityNeeded, StringFormat=' ×{0}'}"
                                FontSize="12"
-                               Foreground="{StaticResource LightGrayBrush}"
+                               Foreground="{StaticResource Brush.Text.Secondary}"
                                Margin="4,0,0,0"/>
                 </StackPanel>
                 
                 <!-- Second Row: DC Average -->
                 <TextBlock Text="{Binding DCAveragePrice, StringFormat='DC Avg: {0:N0}g'}"
                            FontSize="10"
-                           Foreground="{StaticResource GrayBrush}"
+                           Foreground="{StaticResource Brush.Text.Muted}"
                            Margin="0,2,0,0"/>
                 
                 <!-- Third Row: Error or Recommended World -->

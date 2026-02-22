@@ -11,6 +11,7 @@ namespace FFXIV_Craft_Architect.ViewModels;
 public class MarketCardViewModel : ViewModelBase
 {
     private bool _isExpanded = true;
+    private bool _isSelected;
     private ObservableCollection<WorldOptionViewModel> _worldOptions = new();
     private readonly DetailedShoppingPlan _plan;
 
@@ -18,6 +19,7 @@ public class MarketCardViewModel : ViewModelBase
     {
         _plan = plan;
         ToggleExpandCommand = new RelayCommand(() => IsExpanded = !IsExpanded);
+        SelectCommand = new RelayCommand(() => Selected?.Invoke(this));
         
         // Initialize world options
         RefreshWorldOptions();
@@ -58,6 +60,15 @@ public class MarketCardViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Whether the card is selected in split-pane mode.
+    /// </summary>
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => SetProperty(ref _isSelected, value);
+    }
+
+    /// <summary>
     /// Error message if any.
     /// </summary>
     public string? Error => _plan.Error;
@@ -93,6 +104,16 @@ public class MarketCardViewModel : ViewModelBase
     /// Command to toggle expand/collapse state.
     /// </summary>
     public ICommand ToggleExpandCommand { get; }
+
+    /// <summary>
+    /// Command to select this card in split-pane mode.
+    /// </summary>
+    public ICommand SelectCommand { get; }
+
+    /// <summary>
+    /// Raised when this card is selected in split-pane mode.
+    /// </summary>
+    public event Action<MarketCardViewModel>? Selected;
 
     /// <summary>
     /// Refreshes the world options collection from the underlying plan.

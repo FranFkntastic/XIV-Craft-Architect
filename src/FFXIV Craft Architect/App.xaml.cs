@@ -176,7 +176,6 @@ public partial class App : Application
         
         // UI Builders
         services.AddSingleton<InfoPanelBuilder>();
-        services.AddSingleton<ICardFactory, CardFactory>();
 
         // Coordinators
         services.AddSingleton<CoreIPriceRefreshCoordinator, CorePriceRefreshCoordinator>();

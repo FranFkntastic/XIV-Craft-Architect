@@ -16,6 +16,7 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="Resources/ThemeColors.xaml"/>
                 <ResourceDictionary Source="Views/DataTemplates/MarketCardTemplates.xaml"/>
+                <ResourceDictionary Source="Views/DataTemplates/MarketInfoCardTemplates.xaml"/>
             </ResourceDictionary.MergedDictionaries>
             
             <!-- Local Window Resources -->

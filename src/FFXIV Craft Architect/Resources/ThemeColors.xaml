@@ -1,5 +1,6 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
 
     <!--
       Canonical design-language resources.
@@ -25,8 +26,8 @@
     <SolidColorBrush x:Key="Brush.Surface.Card" Color="#2d2d2d"/>
     <SolidColorBrush x:Key="Brush.Surface.Card.Alt" Color="#333333"/>
     <SolidColorBrush x:Key="Brush.Surface.Card.Vendor" Color="#3e4a2d"/>
-    <SolidColorBrush x:Key="Brush.Surface.Card.Market" Color="#2d3d4a"/>
-    <SolidColorBrush x:Key="Brush.Surface.Card.Market.Header" Color="#3a3f3d"/>
+    <SolidColorBrush x:Key="Brush.Surface.Card.Market" Color="#2c3238"/>
+    <SolidColorBrush x:Key="Brush.Surface.Card.Market.Header" Color="#353a3f"/>
     <SolidColorBrush x:Key="Brush.Surface.Card.Untradeable" Color="#4a3d2d"/>
     <SolidColorBrush x:Key="Brush.Surface.Card.Error" Color="#4a2d2d"/>
     <SolidColorBrush x:Key="Brush.Surface.Card.Placeholder" Color="#3d3e2d"/>
@@ -47,13 +48,13 @@
     <!-- Border -->
     <SolidColorBrush x:Key="Brush.Border.Default" Color="#4d4d4d"/>
     <SolidColorBrush x:Key="Brush.Border.Accent" Color="{StaticResource Color.Accent.Primary}"/>
-    <SolidColorBrush x:Key="Brush.Border.Card.Market" Color="#505050"/>
+    <SolidColorBrush x:Key="Brush.Border.Card.Market" Color="#4f5963"/>
 
     <!-- Legacy compatibility keys (existing code path, migrate progressively) -->
     <SolidColorBrush x:Key="CardBackgroundBrush" Color="#2d2d2d"/>
     <SolidColorBrush x:Key="CardBackgroundAltBrush" Color="#333333"/>
     <SolidColorBrush x:Key="CardBackgroundVendorBrush" Color="#3e4a2d"/>
-    <SolidColorBrush x:Key="CardBackgroundMarketBrush" Color="#2d3d4a"/>
+    <SolidColorBrush x:Key="CardBackgroundMarketBrush" Color="#2c3238"/>
     <SolidColorBrush x:Key="CardBackgroundErrorBrush" Color="#4a2d2d"/>
     <SolidColorBrush x:Key="CardBackgroundUntradeableBrush" Color="#4a3d2d"/>
     <SolidColorBrush x:Key="CardBackgroundPlaceholderBrush" Color="#3d3e2d"/>
@@ -93,6 +94,12 @@
 
     <SolidColorBrush x:Key="ButtonActiveBackgroundBrush" Color="#3d3d3d"/>
     <SolidColorBrush x:Key="ButtonTransparentBrush" Color="#00000000"/>
+
+    <!-- Layout metrics -->
+    <sys:Double x:Key="Layout.MarketCard.Collapsed.Width">280</sys:Double>
+    <sys:Double x:Key="Layout.MarketCard.Collapsed.ItemNameMaxWidth">190</sys:Double>
+    <Thickness x:Key="Layout.MarketCard.Collapsed.Padding">8,6,8,6</Thickness>
+    <Thickness x:Key="Layout.MarketCard.Collapsed.Margin">0,0,6,6</Thickness>
 
     <SolidColorBrush x:Key="SystemWhiteBrush" Color="#ffffff"/>
     <SolidColorBrush x:Key="SystemBlackBrush" Color="#000000"/>
