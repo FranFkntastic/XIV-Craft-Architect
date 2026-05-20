@@ -621,7 +621,7 @@ public partial class RecipePlannerViewModel : ViewModelBase
     /// Exports the current plan to Teamcraft format.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanExport))]
-    private async Task ExportToTeamcraftAsync()
+    private void ExportToTeamcraft()
     {
         if (_currentPlan == null) return;
         
@@ -633,14 +633,11 @@ public partial class RecipePlannerViewModel : ViewModelBase
             return;
         }
         
-        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
-        {
-            StatusMessage = result.Message;
-        }
-        else
-        {
-            StatusMessage = "Failed to copy - clipboard may be in use.";
-        }
+        _exportCoordinator.ShowExportResultDialog(
+            "Teamcraft Export",
+            result.Content ?? string.Empty,
+            "Open this URL in your browser to import into Teamcraft:");
+        StatusMessage = "Teamcraft URL generated";
     }
 
     /// <summary>
@@ -661,21 +658,18 @@ public partial class RecipePlannerViewModel : ViewModelBase
             return;
         }
         
-        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
-        {
-            StatusMessage = result.Message;
-        }
-        else
-        {
-            StatusMessage = "Failed to copy - clipboard may be in use.";
-        }
+        _exportCoordinator.ShowExportResultDialog(
+            "Artisan Export",
+            result.Content ?? string.Empty,
+            "Copy this JSON to import into Artisan:");
+        StatusMessage = "Artisan JSON generated";
     }
 
     /// <summary>
     /// Exports the current plan to plain text.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanExport))]
-    private async Task ExportToPlainTextAsync()
+    private void ExportToPlainText()
     {
         if (_currentPlan == null) return;
         
@@ -687,21 +681,18 @@ public partial class RecipePlannerViewModel : ViewModelBase
             return;
         }
         
-        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
-        {
-            StatusMessage = result.Message;
-        }
-        else
-        {
-            StatusMessage = "Failed to copy - clipboard may be in use.";
-        }
+        _exportCoordinator.ShowExportResultDialog(
+            "Plain Text Export",
+            result.Content ?? string.Empty,
+            "Copy this text to share or save:");
+        StatusMessage = "Plain text generated";
     }
 
     /// <summary>
     /// Exports the current plan to CSV.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanExport))]
-    private async Task ExportToCsvAsync()
+    private void ExportToCsv()
     {
         if (_currentPlan == null) return;
         
@@ -713,14 +704,11 @@ public partial class RecipePlannerViewModel : ViewModelBase
             return;
         }
         
-        if (await _exportCoordinator.TrySetClipboardAsync(result.Content))
-        {
-            StatusMessage = result.Message;
-        }
-        else
-        {
-            StatusMessage = "Failed to copy - clipboard may be in use.";
-        }
+        _exportCoordinator.ShowExportResultDialog(
+            "CSV Export",
+            result.Content ?? string.Empty,
+            "Copy this CSV to use in a spreadsheet:");
+        StatusMessage = "CSV generated";
     }
 
     /// <summary>
@@ -751,9 +739,9 @@ public partial class RecipePlannerViewModel : ViewModelBase
     /// Imports a plan from Artisan format.
     /// </summary>
     [RelayCommand]
-    private async Task ImportFromArtisanAsync()
+    private void ImportFromArtisan()
     {
-        var result = await _importCoordinator.ImportFromArtisanAsync("Aether", "");
+        var result = _importCoordinator.ImportFromArtisan(null!, "Aether", "");
         
         if (result.Success && result.Plan != null)
         {

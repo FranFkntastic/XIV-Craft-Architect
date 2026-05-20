@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Media;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Models;
 using FFXIV_Craft_Architect.Services.Interfaces;
@@ -36,12 +37,12 @@ public partial class TeamcraftImportWindow : Window
         if (string.IsNullOrWhiteSpace(precraftText) && string.IsNullOrWhiteSpace(finalItemsText))
         {
             StatusText.Text = "Please enter items to import";
-            StatusText.Foreground = System.Windows.Media.Brushes.Orange;
+            StatusText.Foreground = ResolveBrush("WarningOrangeBrush", Brushes.Orange);
             return;
         }
 
         StatusText.Text = "Importing...";
-        StatusText.Foreground = System.Windows.Media.Brushes.LightGray;
+        StatusText.Foreground = ResolveBrush("LightGrayBrush", Brushes.LightGray);
         
         try
         {
@@ -61,13 +62,13 @@ public partial class TeamcraftImportWindow : Window
             else
             {
                 StatusText.Text = "No items found or could not be imported";
-                StatusText.Foreground = System.Windows.Media.Brushes.Red;
+                StatusText.Foreground = ResolveBrush("ErrorRedBrush", Brushes.Red);
             }
         }
         catch (Exception ex)
         {
             StatusText.Text = $"Import failed: {ex.Message}";
-            StatusText.Foreground = System.Windows.Media.Brushes.Red;
+            StatusText.Foreground = ResolveBrush("ErrorRedBrush", Brushes.Red);
         }
     }
 
@@ -75,5 +76,10 @@ public partial class TeamcraftImportWindow : Window
     {
         DialogResult = false;
         Close();
+    }
+
+    private static Brush ResolveBrush(string resourceKey, Brush fallback)
+    {
+        return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
     }
 }
