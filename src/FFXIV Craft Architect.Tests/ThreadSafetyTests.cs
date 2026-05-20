@@ -20,6 +20,7 @@ public class ThreadSafetyTests
     {
         // Arrange
         var garland = new Mock<IGarlandService>();
+        var vendorCache = new Mock<IVendorCacheService>();
         var universalis = new Mock<IUniversalisService>();
         var settings = new Mock<ISettingsService>();
         var marketCache = new Mock<IMarketCacheService>();
@@ -53,6 +54,7 @@ public class ThreadSafetyTests
 
         var service = new PriceCheckService(
             garland.Object,
+            vendorCache.Object,
             universalis.Object,
             settings.Object,
             marketCache.Object,

@@ -13,6 +13,7 @@ namespace FFXIV_Craft_Architect.Tests;
 public class PriceCheckServiceTests
 {
     private readonly Mock<IGarlandService> _mockGarlandService;
+    private readonly Mock<IVendorCacheService> _mockVendorCacheService;
     private readonly Mock<IUniversalisService> _mockUniversalisService;
     private readonly Mock<ISettingsService> _mockSettingsService;
     private readonly Mock<IMarketCacheService> _mockCacheService;
@@ -25,6 +26,7 @@ public class PriceCheckServiceTests
         
         // Mock dependencies
         _mockGarlandService = new Mock<IGarlandService>();
+        _mockVendorCacheService = new Mock<IVendorCacheService>();
         _mockUniversalisService = new Mock<IUniversalisService>();
         _mockSettingsService = new Mock<ISettingsService>();
         _mockCacheService = new Mock<IMarketCacheService>();
@@ -36,6 +38,7 @@ public class PriceCheckServiceTests
         
         _service = new PriceCheckService(
             _mockGarlandService.Object,
+            _mockVendorCacheService.Object,
             _mockUniversalisService.Object,
             _mockSettingsService.Object,
             _mockCacheService.Object,
@@ -345,6 +348,23 @@ public class PriceCheckServiceTests
         _mockGarlandService
             .Setup(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(garlandItem);
+
+        _mockVendorCacheService
+            .Setup(v => v.GetOrFetchAsync(itemId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new VendorCacheEntry(
+                itemId,
+                new List<VendorInfo>
+                {
+                    new()
+                    {
+                        Name = "Test Vendor",
+                        Location = "Limsa",
+                        Price = 100,
+                        Currency = "gil"
+                    }
+                },
+                100m,
+                DateTime.UtcNow));
         
         // Market price is higher than vendor
         var marketData = new UniversalisResponse

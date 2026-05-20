@@ -8,13 +8,14 @@ namespace FFXIV_Craft_Architect.Core.Services;
 /// <summary>
 /// Service for checking item prices from multiple sources:
 /// - SQLite cache (persistent, survives restarts)
-/// - Garland Tools (vendor prices)
+/// - Garland Tools (vendor prices via VendorCacheService)
 /// - Universalis (market board prices)
 /// Automatically picks the cheapest option, prioritizing vendors when equal.
 /// </summary>
 public class PriceCheckService
 {
     private readonly IGarlandService _garlandService;
+    private readonly IVendorCacheService _vendorCacheService;
     private readonly IUniversalisService _universalisService;
     private readonly ISettingsService _settingsService;
     private readonly IMarketCacheService _marketCache;
@@ -25,12 +26,14 @@ public class PriceCheckService
 
     public PriceCheckService(
         IGarlandService garlandService,
+        IVendorCacheService vendorCacheService,
         IUniversalisService universalisService,
         ISettingsService settingsService,
         IMarketCacheService marketCache,
         ILogger<PriceCheckService> logger)
     {
         _garlandService = garlandService;
+        _vendorCacheService = vendorCacheService;
         _universalisService = universalisService;
         _settingsService = settingsService;
         _marketCache = marketCache;
@@ -63,11 +66,12 @@ public class PriceCheckService
             return memCached;
         }
         
-        // Fetch vendor price from Garland (cheap, individual call is OK)
-        var garlandItem = await _garlandService.GetItemAsync(itemId, ct);
-        var vendorPrice = GetVendorPrice(garlandItem);
+        // Get vendor data from cache (uses persisted cache, only fetches on miss)
+        var vendorEntry = await _vendorCacheService.GetOrFetchAsync(itemId, ct);
+        var vendorPrice = vendorEntry?.CheapestGilPrice ?? 0;
         
-        // Check if item is untradeable
+        // Check if item is untradeable (need Garland data for this check)
+        var garlandItem = await _garlandService.GetItemAsync(itemId, ct);
         if (garlandItem?.Tradeable == false)
         {
             var untradeableInfo = new PriceInfo
@@ -98,19 +102,8 @@ public class PriceCheckService
         PriceInfo priceInfo;
         if (vendorPrice > 0 && (marketPrice <= 0 || vendorPrice <= marketPrice))
         {
-            // Get gil vendors only (filter out tomestone/other currency vendors)
-            var garlandVendors = garlandItem?.Vendors
-                ?.Where(v => string.Equals(v.Currency, "gil", StringComparison.OrdinalIgnoreCase))
-                .ToList() ?? new List<GarlandVendor>();
-            
-            // Convert GarlandVendor to VendorInfo
-            var vendorInfos = garlandVendors.Select(v => new VendorInfo
-            {
-                Name = v.Name,
-                Location = v.Location,
-                Price = v.Price,
-                Currency = v.Currency?.ToLowerInvariant() ?? "gil"
-            }).ToList();
+            // Use gil vendors from cache entry
+            var vendorInfos = vendorEntry?.GilVendors ?? new List<VendorInfo>();
             
             priceInfo = new PriceInfo
             {
@@ -231,13 +224,35 @@ public class PriceCheckService
                     ?.Where(v => string.Equals(v.Currency, "gil", StringComparison.OrdinalIgnoreCase))
                     .ToList() ?? new List<GarlandVendor>();
                 
-                // Convert GarlandVendor to VendorInfo
-                priceInfo.Vendors = garlandVendors.Select(v => new VendorInfo
+                // Convert GarlandVendor to VendorInfo and enrich with partial data when available
+                priceInfo.Vendors = garlandVendors.Select(v =>
                 {
-                    Name = v.Name,
-                    Location = v.Location,
-                    Price = v.Price,
-                    Currency = v.Currency?.ToLowerInvariant() ?? "gil"
+                    var vendorInfo = VendorInfo.FromGarlandVendor(v);
+
+                    if (garlandItem?.Partials != null && !string.IsNullOrWhiteSpace(v.Name))
+                    {
+                        var npcPartials = garlandItem.GetNpcPartialsByName(v.Name);
+                        var primaryNpc = npcPartials.FirstOrDefault(npc =>
+                            string.Equals(npc.LocationName, vendorInfo.Location, StringComparison.OrdinalIgnoreCase))
+                            ?? npcPartials.FirstOrDefault();
+
+                        if (primaryNpc?.Coordinates?.Count >= 2)
+                        {
+                            vendorInfo.Coordinates = new List<double> { primaryNpc.Coordinates[0], primaryNpc.Coordinates[1] };
+                        }
+
+                        var allLocations = npcPartials
+                            .Select(npc => npc.LocationName)
+                            .Where(loc => !string.IsNullOrWhiteSpace(loc))
+                            .Distinct()
+                            .ToList();
+
+                        vendorInfo.AlternateLocations = allLocations
+                            .Where(loc => !string.Equals(loc, vendorInfo.Location, StringComparison.OrdinalIgnoreCase))
+                            .ToList();
+                    }
+
+                    return vendorInfo;
                 }).ToList();
                 
                 priceInfo.UnitPrice = vendorPrice;

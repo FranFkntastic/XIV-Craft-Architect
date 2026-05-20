@@ -100,7 +100,11 @@ public class VendorInfo
             Name = vendor.Name,
             Location = vendor.LocationName,  // Use resolved location name, not raw location ID/string
             Price = vendor.Price,
-            Currency = vendor.Currency?.ToLowerInvariant() ?? "gil"
+            Currency = vendor.Currency?.ToLowerInvariant() ?? "gil",
+            AlternateLocations = vendor.AlternateLocations
+                .Where(loc => !string.IsNullOrWhiteSpace(loc) && !string.Equals(loc, vendor.LocationName, StringComparison.OrdinalIgnoreCase))
+                .Distinct()
+                .ToList()
         };
     }
 }

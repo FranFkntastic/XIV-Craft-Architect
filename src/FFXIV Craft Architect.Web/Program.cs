@@ -22,8 +22,12 @@ builder.Services.AddMudServices();
 
 // Register Core Services
 builder.Services.AddScoped<GarlandService>();
+builder.Services.AddScoped<IGarlandService>(sp => sp.GetRequiredService<GarlandService>());
 builder.Services.AddScoped<UniversalisService>();
 builder.Services.AddScoped<RecipeCalculationService>();
+builder.Services.AddScoped<IVendorCacheService, VendorCacheService>();
+builder.Services.AddScoped<ITeamcraftRecipeService, TeamcraftRecipeService>();
+builder.Services.AddScoped<IArtisanService, ArtisanService>();
 builder.Services.AddScoped<IMarketCacheService, IndexedDbMarketCacheService>();
 builder.Services.AddScoped<MarketShoppingService>();
 builder.Services.AddScoped<IndexedDbMarketCacheService>();
