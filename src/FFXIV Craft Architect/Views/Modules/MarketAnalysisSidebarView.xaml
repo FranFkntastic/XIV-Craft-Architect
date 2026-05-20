@@ -59,11 +59,32 @@
                         <ComboBoxItem Content="Maximize Value"/>
                     </ComboBox>
 
-                    <CheckBox x:Name="ProcurementSearchAllNaCheck"
-                              Content="Search all NA DCs"
-                              Foreground="{StaticResource Brush.Text.Secondary}"/>
-                </StackPanel>
-            </Border>
+                     <CheckBox x:Name="ProcurementSearchAllNaCheck"
+                               Content="Search all NA DCs"
+                               Foreground="{StaticResource Brush.Text.Secondary}"/>
+
+                     <Separator Margin="0,12"/>
+
+                     <TextBlock Text="Split-World Purchases"
+                                Foreground="{StaticResource Brush.Text.Secondary}"
+                                FontWeight="SemiBold"
+                                Margin="0,0,0,8"/>
+
+                     <CheckBox x:Name="EnableSplitWorldCheck"
+                               Content="Enable multi-world splits"
+                               Foreground="{StaticResource Brush.Text.Secondary}"
+                               Margin="0,0,0,4"
+                               Checked="OnEnableSplitWorldChanged"
+                               Unchecked="OnEnableSplitWorldChanged"
+                               ToolTip="Automatically find the best combination of worlds when a single world can't fulfill the quantity"/>
+
+                     <TextBlock Text="May recommend purchases across multiple worlds for optimal value."
+                                Foreground="{StaticResource Brush.Text.Muted}"
+                                FontSize="10"
+                                TextWrapping="Wrap"
+                                Margin="20,0,0,0"/>
+                 </StackPanel>
+             </Border>
 
             <Border Background="{StaticResource Brush.Surface.Card}"
                     CornerRadius="4"

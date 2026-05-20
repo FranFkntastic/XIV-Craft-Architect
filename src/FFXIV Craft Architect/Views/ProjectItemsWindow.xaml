@@ -59,11 +59,11 @@
                            Content="Clear All"
                            Click="OnClearAllClick"
                            Margin="0,0,8,0"
-                           Background="#3d2d2d"/>
+                           Background="{StaticResource Brush.World.Congested}"/>
                 
                 <Rectangle Width="1"
                            Margin="4,2"
-                           Fill="#444444"/>
+                           Fill="{StaticResource MutedAccentLightBrush}"/>
                 
                 <TextBlock Text="Total:"
                            VerticalAlignment="Center"

@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using FFXIV_Craft_Architect.Coordinators;
 using FFXIV_Craft_Architect.Core.Coordinators;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
@@ -33,11 +35,16 @@ namespace FFXIV_Craft_Architect.ViewModels;
 ///    - Groups plans by world via GroupedByWorld
 ///    - Applies user-selected sort order
 ///
+/// 4. Selection State (MVVM Binding):
+///    - SelectedExpandedPanel: Bindable property for the expanded panel ContentControl
+///    - Delegates to IMarketLogisticsCoordinator for actual selection management
+///
 /// UI BINDINGS:
 /// - ShoppingPlans → Market cards grid
 /// - GroupedByWorld → Procurement world cards
 /// - StatusMessage → Progress/status display
 /// - IsLoading → Loading indicator
+/// - SelectedExpandedPanel → Expanded panel ContentControl
 ///
 /// STATE MANAGEMENT:
 /// - ShoppingPlans persists when switching tabs
@@ -57,20 +64,53 @@ public partial class MarketAnalysisViewModel : ViewModelBase
     private readonly MarketShoppingService _marketShoppingService;
     private readonly RecipeCalculationService _recipeCalcService;
     private readonly IPriceRefreshCoordinator _priceRefreshCoordinator;
+    private readonly IMarketLogisticsCoordinator? _marketLogisticsCoordinator;
     private readonly ILogger<MarketAnalysisViewModel>? _logger;
 
     public MarketAnalysisViewModel(
         MarketShoppingService marketShoppingService,
         IPriceRefreshCoordinator priceRefreshCoordinator,
         RecipeCalculationService recipeCalcService,
+        IMarketLogisticsCoordinator? marketLogisticsCoordinator = null,
         ILogger<MarketAnalysisViewModel>? logger = null)
     {
         _marketShoppingService = marketShoppingService;
         _priceRefreshCoordinator = priceRefreshCoordinator;
         _recipeCalcService = recipeCalcService;
+        _marketLogisticsCoordinator = marketLogisticsCoordinator;
         _logger = logger;
         _shoppingPlans.CollectionChanged += OnShoppingPlansCollectionChanged;
+        
+        // Forward property changes from coordinator
+        if (_marketLogisticsCoordinator is INotifyPropertyChanged notifier)
+        {
+            notifier.PropertyChanged += (s, e) =>
+            {
+                if (e.PropertyName == nameof(IMarketLogisticsCoordinator.SelectedExpandedPanel) ||
+                    e.PropertyName == nameof(IMarketLogisticsCoordinator.SelectedItemId))
+                {
+                    OnPropertyChanged(nameof(SelectedExpandedPanel));
+                    OnPropertyChanged(nameof(SelectedItemId));
+                    OnPropertyChanged(nameof(IsStripMode));
+                    OnPropertyChanged(nameof(IsExpandedMode));
+                    RefreshTopPaneHeight();
+                }
+            };
+        }
     }
+    
+    /// <summary>
+    /// The ViewModel for the currently selected expanded panel.
+    /// Bind ContentControl.Content to this property for the split-pane view.
+    /// Returns null when nothing is selected (triggers placeholder display).
+    /// </summary>
+    public ExpandedPanelViewModel? SelectedExpandedPanel => _marketLogisticsCoordinator?.SelectedExpandedPanel;
+    
+    /// <summary>
+    /// The ItemId of the currently selected card, or null if nothing is selected.
+    /// Used for card highlighting in the collapsed cards grid.
+    /// </summary>
+    public int? SelectedItemId => _marketLogisticsCoordinator?.SelectedItemId;
 
     /// <summary>
     /// Raised whenever plan price refresh progress updates.
@@ -221,6 +261,48 @@ public partial class MarketAnalysisViewModel : ViewModelBase
             _searchAllNaDcs = value;
             OnPropertyChanged();
         }
+    }
+
+    [ObservableProperty]
+    private bool _enableSplitWorld;
+
+    private double _topPaneHeight = 34;
+    private double _availableContainerHeight = 600;
+
+    public double TopPaneHeight
+    {
+        get => _topPaneHeight;
+        private set
+        {
+            if (SetProperty(ref _topPaneHeight, value))
+            {
+                OnPropertyChanged(nameof(IsStripMode));
+                OnPropertyChanged(nameof(IsExpandedMode));
+            }
+        }
+    }
+
+    public bool IsStripMode => SelectedExpandedPanel == null;
+    public bool IsExpandedMode => SelectedExpandedPanel != null;
+
+    public void RecalculateTopPaneHeight(double availableHeight)
+    {
+        _availableContainerHeight = availableHeight;
+
+        if (SelectedExpandedPanel == null)
+        {
+            TopPaneHeight = 34;
+        }
+        else
+        {
+            var expandedHeight = Math.Max(200, availableHeight * 0.6);
+            TopPaneHeight = expandedHeight;
+        }
+    }
+
+    private void RefreshTopPaneHeight()
+    {
+        RecalculateTopPaneHeight(_availableContainerHeight);
     }
 
     /// <summary>
@@ -493,6 +575,21 @@ public partial class MarketAnalysisViewModel : ViewModelBase
                     progress,
                     ct,
                     mode);
+            }
+            else if (EnableSplitWorld)
+            {
+                var config = new MarketAnalysisConfig
+                {
+                    EnableSplitWorld = true,
+                    MaxWorldsPerItem = null
+                };
+                
+                shoppingPlans = await _marketShoppingService.CalculateShoppingPlansWithSplitsAsync(
+                    marketItems,
+                    dataCenter,
+                    progress,
+                    ct,
+                    config: config);
             }
             else
             {

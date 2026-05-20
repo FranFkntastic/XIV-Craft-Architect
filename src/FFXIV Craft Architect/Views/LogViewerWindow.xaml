@@ -6,7 +6,7 @@
         Width="900"
         Height="700"
         WindowStartupLocation="CenterOwner"
-        Background="#1e1e1e">
+        Background="{StaticResource WindowBackgroundBrush}">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -16,7 +16,7 @@
         </Grid.RowDefinitions>
         
         <!-- Toolbar -->
-        <Border Grid.Row="0" Background="#2d2d2d" Padding="8">
+        <Border Grid.Row="0" Background="{StaticResource CardBackgroundBrush}" Padding="8">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -31,13 +31,13 @@
                 <TextBlock Grid.Column="0" 
                            Text="Search:" 
                            VerticalAlignment="Center"
-                           Foreground="#d4d4d4"/>
+                           Foreground="{StaticResource TextPrimaryBrush}"/>
                 
                 <TextBox Grid.Column="2"
                          x:Name="SearchTextBox"
-                         Background="#1e1e1e"
-                         Foreground="#d4d4d4"
-                         BorderBrush="#555555"
+                         Background="{StaticResource WindowBackgroundBrush}"
+                         Foreground="{StaticResource TextPrimaryBrush}"
+                         BorderBrush="{StaticResource MutedAccentLightBrush}"
                          Padding="4"
                          KeyDown="OnSearchKeyDown"/>
                 
@@ -57,25 +57,25 @@
         </Border>
         
         <!-- Filter Options -->
-        <Border Grid.Row="1" Background="#252525" Padding="8">
+        <Border Grid.Row="1" Background="{StaticResource PanelBackgroundBrush}" Padding="8">
             <StackPanel Orientation="Horizontal">
-                <TextBlock Text="Show:" VerticalAlignment="Center" Foreground="#888888" Margin="0,0,8,0"/>
-                <CheckBox x:Name="ShowDebugCheck" Content="Debug" IsChecked="True" Foreground="#888888" Margin="0,0,12,0" Click="OnFilterChanged"/>
-                <CheckBox x:Name="ShowInfoCheck" Content="Info" IsChecked="True" Foreground="#4ecdc4" Margin="0,0,12,0" Click="OnFilterChanged"/>
-                <CheckBox x:Name="ShowWarningCheck" Content="Warning" IsChecked="True" Foreground="#f38181" Margin="0,0,12,0" Click="OnFilterChanged"/>
-                <CheckBox x:Name="ShowErrorCheck" Content="Error" IsChecked="True" Foreground="#ff6b6b" Margin="0,0,24,0" Click="OnFilterChanged"/>
-                <CheckBox x:Name="AutoScrollCheck" Content="Auto-scroll" IsChecked="True" Foreground="#888888" Margin="0,0,12,0"/>
-                <CheckBox x:Name="WordWrapCheck" Content="Wrap" IsChecked="True" Foreground="#888888" Click="OnWordWrapChanged"/>
+                <TextBlock Text="Show:" VerticalAlignment="Center" Foreground="{StaticResource GrayBrush}" Margin="0,0,8,0"/>
+                <CheckBox x:Name="ShowDebugCheck" Content="Debug" IsChecked="True" Foreground="{StaticResource GrayBrush}" Margin="0,0,12,0" Click="OnFilterChanged"/>
+                <CheckBox x:Name="ShowInfoCheck" Content="Info" IsChecked="True" Foreground="{StaticResource Brush.Status.Info}" Margin="0,0,12,0" Click="OnFilterChanged"/>
+                <CheckBox x:Name="ShowWarningCheck" Content="Warning" IsChecked="True" Foreground="{StaticResource WarningOrangeBrush}" Margin="0,0,12,0" Click="OnFilterChanged"/>
+                <CheckBox x:Name="ShowErrorCheck" Content="Error" IsChecked="True" Foreground="{StaticResource ErrorRedBrush}" Margin="0,0,24,0" Click="OnFilterChanged"/>
+                <CheckBox x:Name="AutoScrollCheck" Content="Auto-scroll" IsChecked="True" Foreground="{StaticResource GrayBrush}" Margin="0,0,12,0"/>
+                <CheckBox x:Name="WordWrapCheck" Content="Wrap" IsChecked="True" Foreground="{StaticResource GrayBrush}" Click="OnWordWrapChanged"/>
             </StackPanel>
         </Border>
         
         <!-- Log Content -->
-        <Border Grid.Row="2" Background="#1e1e1e" Margin="0">
+        <Border Grid.Row="2" Background="{StaticResource WindowBackgroundBrush}" Margin="0">
             <RichTextBox x:Name="LogRichTextBox"
                         FontFamily="Consolas"
                         FontSize="11"
-                        Background="#1e1e1e"
-                        Foreground="#d4d4d4"
+                        Background="{StaticResource WindowBackgroundBrush}"
+                        Foreground="{StaticResource TextPrimaryBrush}"
                         BorderThickness="0"
                         Padding="10"
                         IsReadOnly="True"
@@ -85,7 +85,7 @@
         </Border>
         
         <!-- Status Bar -->
-        <Border Grid.Row="3" Background="#2d2d2d" Padding="8">
+        <Border Grid.Row="3" Background="{StaticResource CardBackgroundBrush}" Padding="8">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -101,16 +101,16 @@
                 <TextBlock Grid.Column="0"
                           x:Name="StatusTextBlock"
                           Text="Ready"
-                          Foreground="#888888"
+                          Foreground="{StaticResource GrayBrush}"
                           VerticalAlignment="Center"/>
                 
                 <TextBox Grid.Column="1"
                          x:Name="GoToLineTextBox"
                          Width="60"
                          Height="22"
-                         Background="#1e1e1e"
-                         Foreground="#d4d4d4"
-                         BorderBrush="#555555"
+                         Background="{StaticResource WindowBackgroundBrush}"
+                         Foreground="{StaticResource TextPrimaryBrush}"
+                         BorderBrush="{StaticResource MutedAccentLightBrush}"
                          ToolTip="Go to line number (Ctrl+G)"
                          KeyDown="OnGoToLineKeyDown"/>
                 

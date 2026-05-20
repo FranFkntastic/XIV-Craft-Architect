@@ -162,4 +162,16 @@ public partial class MainWindow
             }
         }
     }
+
+    /// <summary>
+    /// Handles EnableSplitWorld checkbox change.
+    /// </summary>
+    private void OnEnableSplitWorldChanged(object sender, RoutedEventArgs e)
+    {
+        if (_marketVm == null) return;
+
+        var enabled = EnableSplitWorldCheck.IsChecked == true;
+        _marketVm.EnableSplitWorld = enabled;
+        _logger.LogInformation("[OnEnableSplitWorldChanged] User changed split-world to '{Enabled}'", enabled);
+    }
 }

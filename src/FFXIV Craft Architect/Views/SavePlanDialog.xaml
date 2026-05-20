@@ -6,7 +6,7 @@
         Width="550"
         Height="500"
         WindowStartupLocation="CenterOwner"
-        Background="#1e1e1e"
+        Background="{StaticResource WindowBackgroundBrush}"
         MinWidth="450"
         MinHeight="350">
 
@@ -44,7 +44,7 @@
 
         <!-- Existing Plans -->
         <Border Grid.Row="2"
-                Background="#2d2d2d"
+                Background="{StaticResource CardBackgroundBrush}"
                 CornerRadius="4"
                 Padding="8">
             <Grid>

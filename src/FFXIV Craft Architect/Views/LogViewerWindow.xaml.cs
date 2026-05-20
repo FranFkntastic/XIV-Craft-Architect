@@ -208,7 +208,7 @@ public partial class LogViewerWindow : Window
             // Add line number prefix (padded to 6 digits)
             var lineNumberRun = new Run($"[{entry.LineNumber:D6}] ")
             {
-                Foreground = Brushes.DarkGray,
+                Foreground = ResolveBrush("DarkGrayBrush", Brushes.DarkGray),
                 FontSize = 10
             };
             paragraph.Inlines.Add(lineNumberRun);
@@ -248,11 +248,11 @@ public partial class LogViewerWindow : Window
     {
         return level switch
         {
-            LogLevel.Debug => new SolidColorBrush(Color.FromRgb(136, 136, 136)),   // Gray
-            LogLevel.Info => new SolidColorBrush(Color.FromRgb(78, 205, 196)),      // Teal
-            LogLevel.Warning => new SolidColorBrush(Color.FromRgb(243, 129, 129)),  // Light red/orange
-            LogLevel.Error => new SolidColorBrush(Color.FromRgb(255, 107, 107)),    // Red
-            _ => Brushes.LightGray
+            LogLevel.Debug => ResolveBrush("GrayBrush", Brushes.Gray),
+            LogLevel.Info => ResolveBrush("Brush.Status.Info", Brushes.LightBlue),
+            LogLevel.Warning => ResolveBrush("WarningOrangeBrush", Brushes.Orange),
+            LogLevel.Error => ResolveBrush("ErrorRedBrush", Brushes.Red),
+            _ => ResolveBrush("LightGrayBrush", Brushes.LightGray)
         };
     }
 
@@ -452,11 +452,11 @@ public partial class LogViewerWindow : Window
     {
         // Clear previous highlights
         var docRange = new TextRange(LogRichTextBox.Document.ContentStart, LogRichTextBox.Document.ContentEnd);
-        docRange.ApplyPropertyValue(TextElement.BackgroundProperty, Brushes.Transparent);
+        docRange.ApplyPropertyValue(TextElement.BackgroundProperty, ResolveBrush("SystemTransparentBrush", Brushes.Transparent));
 
         // Highlight new match
-        range.ApplyPropertyValue(TextElement.BackgroundProperty, Brushes.Yellow);
-        range.ApplyPropertyValue(TextElement.ForegroundProperty, Brushes.Black);
+        range.ApplyPropertyValue(TextElement.BackgroundProperty, ResolveBrush("WarningOrangeBrush", Brushes.Yellow));
+        range.ApplyPropertyValue(TextElement.ForegroundProperty, ResolveBrush("SystemBlackBrush", Brushes.Black));
 
         // Scroll to match
         LogRichTextBox.ScrollToVerticalOffset(range.Start.GetCharacterRect(LogicalDirection.Forward).Top);
@@ -552,11 +552,11 @@ public partial class LogViewerWindow : Window
                     
                     // Clear previous highlights
                     var docRange = new TextRange(LogRichTextBox.Document.ContentStart, LogRichTextBox.Document.ContentEnd);
-                    docRange.ApplyPropertyValue(TextElement.BackgroundProperty, Brushes.Transparent);
+                    docRange.ApplyPropertyValue(TextElement.BackgroundProperty, ResolveBrush("SystemTransparentBrush", Brushes.Transparent));
                     
                     // Apply highlight
-                    range.ApplyPropertyValue(TextElement.BackgroundProperty, Brushes.Yellow);
-                    range.ApplyPropertyValue(TextElement.ForegroundProperty, Brushes.Black);
+                    range.ApplyPropertyValue(TextElement.BackgroundProperty, ResolveBrush("WarningOrangeBrush", Brushes.Yellow));
+                    range.ApplyPropertyValue(TextElement.ForegroundProperty, ResolveBrush("SystemBlackBrush", Brushes.Black));
                 }
             }
         }
@@ -598,5 +598,10 @@ public partial class LogViewerWindow : Window
         }
 
         base.OnClosed(e);
+    }
+
+    private static Brush ResolveBrush(string resourceKey, Brush fallback)
+    {
+        return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
     }
 }

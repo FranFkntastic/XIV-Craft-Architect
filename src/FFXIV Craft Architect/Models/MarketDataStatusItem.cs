@@ -3,6 +3,17 @@ using System.Runtime.CompilerServices;
 
 namespace FFXIV_Craft_Architect.Models;
 
+internal static class MarketDataStatusColorHex
+{
+    internal const string Pending = "#888888";
+    internal const string NoCache = "#f59e0b";
+    internal const string Fetching = "#4ecdc4";
+    internal const string Success = "#4ade80";
+    internal const string Failed = "#f87171";
+    internal const string Skipped = "#94a3b8";
+    internal const string Cached = "#fbbf24";
+}
+
 /// <summary>
 /// Represents the status of a single item's market data fetch operation.
 /// Used for real-time visualization in the Market Data Status window.
@@ -144,14 +155,14 @@ public class MarketDataStatusItem : INotifyPropertyChanged
 
     public string StatusColor => Status switch
     {
-        MarketDataFetchStatus.Pending => "#888888",
-        MarketDataFetchStatus.NoCache => "#f59e0b",
-        MarketDataFetchStatus.Fetching => "#4ecdc4",
-        MarketDataFetchStatus.Success => "#4ade80",
-        MarketDataFetchStatus.Failed => "#f87171",
-        MarketDataFetchStatus.Skipped => "#94a3b8",
-        MarketDataFetchStatus.Cached => "#fbbf24",
-        _ => "#888888"
+        MarketDataFetchStatus.Pending => MarketDataStatusColorHex.Pending,
+        MarketDataFetchStatus.NoCache => MarketDataStatusColorHex.NoCache,
+        MarketDataFetchStatus.Fetching => MarketDataStatusColorHex.Fetching,
+        MarketDataFetchStatus.Success => MarketDataStatusColorHex.Success,
+        MarketDataFetchStatus.Failed => MarketDataStatusColorHex.Failed,
+        MarketDataFetchStatus.Skipped => MarketDataStatusColorHex.Skipped,
+        MarketDataFetchStatus.Cached => MarketDataStatusColorHex.Cached,
+        _ => MarketDataStatusColorHex.Pending
     };
 
     public string PriceDisplay => UnitPrice > 0 ? $"{UnitPrice:N0}g" : "-";

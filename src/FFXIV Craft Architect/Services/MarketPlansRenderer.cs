@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using FFXIV_Craft_Architect.Coordinators;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Helpers;
 using FFXIV_Craft_Architect.Models;
@@ -17,10 +18,14 @@ namespace FFXIV_Craft_Architect.Services;
 public class MarketPlansRenderer : IMarketPlansRenderer
 {
     private readonly ILogger<MarketPlansRenderer> _logger;
+    private readonly IMarketLogisticsCoordinator? _coordinator;
 
-    public MarketPlansRenderer(ILogger<MarketPlansRenderer> logger)
+    public MarketPlansRenderer(
+        ILogger<MarketPlansRenderer> logger,
+        IMarketLogisticsCoordinator? coordinator = null)
     {
         _logger = logger;
+        _coordinator = coordinator;
     }
 
     /// <inheritdoc />
@@ -73,7 +78,7 @@ public class MarketPlansRenderer : IMarketPlansRenderer
 
         var summaryPanel = new Border
         {
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3d3d3d")),
+            Background = ResolveBrush("Brush.Surface.Card.Summary", Brushes.DimGray),
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(12, 8, 12, 8),
             Margin = new Thickness(0, 0, 0, 12)
@@ -88,7 +93,7 @@ public class MarketPlansRenderer : IMarketPlansRenderer
             Text = $"Total: {grandTotal:N0}g",
             FontSize = 16,
             FontWeight = FontWeights.Bold,
-            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4caf50")),
+            Foreground = ResolveBrush("Brush.Status.Success", Brushes.LightGreen),
             VerticalAlignment = VerticalAlignment.Center
         };
         Grid.SetColumn(costText, 0);
@@ -97,7 +102,7 @@ public class MarketPlansRenderer : IMarketPlansRenderer
         var statsText = new TextBlock
         {
             Text = $"{itemsWithOptions} items with data  \u2022  {itemsWithoutOptions} need fetch",
-            Foreground = Brushes.Gray,
+            Foreground = ResolveBrush("GrayBrush", Brushes.Gray),
             FontSize = 11,
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center
@@ -196,15 +201,10 @@ public class MarketPlansRenderer : IMarketPlansRenderer
         Func<string, object>? findResource)
     {
         var isExpanded = expandedItemId == plan.ItemId;
-        var viewModel = new MarketCardViewModel(plan)
+        var viewModel = new MarketCardViewModel(plan, _coordinator)
         {
             IsSelected = isExpanded
         };
-
-        if (onCardClick != null)
-        {
-            viewModel.Selected += _ => onCardClick(plan);
-        }
 
         var resourceLookup = findResource ?? (key => Application.Current.MainWindow.FindResource(key));
         DataTemplate? template = null;
@@ -231,16 +231,17 @@ public class MarketPlansRenderer : IMarketPlansRenderer
         return border;
     }
 
+    private static Brush ResolveBrush(string resourceKey, Brush fallback)
+    {
+        return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
+    }
+
     /// <inheritdoc />
     public void BuildExpandedPanel(Panel target, DetailedShoppingPlan plan, Action onClose)
     {
         target.Children.Clear();
         
-        var viewModel = new ExpandedPanelViewModel(plan);
-        viewModel.CloseRequested += () =>
-        {
-            onClose();
-        };
+        var viewModel = new ExpandedPanelViewModel(plan, _coordinator);
         
         var contentControl = new ContentControl
         {

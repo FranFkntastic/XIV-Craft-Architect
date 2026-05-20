@@ -262,14 +262,14 @@ public partial class OptionsWindow : Window
             if (worlds.Count == 0)
             {
                 WorldStatusText.Text = "No world status data loaded";
-                WorldStatusText.Foreground = Brushes.IndianRed;
+                WorldStatusText.Foreground = ResolveBrush("IndianRedBrush", Brushes.IndianRed);
                 WorldStatusLastUpdated.Text = "";
             }
             else
             {
                 var congestedCount = worlds.Count(w => w.Value.IsCongested);
                 WorldStatusText.Text = $"{worlds.Count} worlds loaded ({congestedCount} congested)";
-                WorldStatusText.Foreground = Brushes.LightGreen;
+                WorldStatusText.Foreground = ResolveBrush("LightGreenBrush", Brushes.LightGreen);
                 
                 if (lastUpdated.HasValue)
                 {
@@ -286,7 +286,7 @@ public partial class OptionsWindow : Window
         {
             _logger.LogError(ex, "Failed to update world status UI");
             WorldStatusText.Text = "Error loading status";
-            WorldStatusText.Foreground = Brushes.IndianRed;
+            WorldStatusText.Foreground = ResolveBrush("IndianRedBrush", Brushes.IndianRed);
         }
     }
     
@@ -300,7 +300,7 @@ public partial class OptionsWindow : Window
             RefreshWorldStatusButton.IsEnabled = false;
             RefreshWorldStatusButton.Content = "Refreshing...";
             WorldStatusText.Text = "Fetching from Lodestone...";
-            WorldStatusText.Foreground = Brushes.LightGray;
+            WorldStatusText.Foreground = ResolveBrush("LightGrayBrush", Brushes.LightGray);
             
             var success = await _worldStatusService.RefreshStatusAsync();
             
@@ -312,14 +312,14 @@ public partial class OptionsWindow : Window
             else
             {
                 WorldStatusText.Text = "Failed to refresh - check logs";
-                WorldStatusText.Foreground = Brushes.IndianRed;
+                WorldStatusText.Foreground = ResolveBrush("IndianRedBrush", Brushes.IndianRed);
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to refresh world status");
             WorldStatusText.Text = $"Error: {ex.Message}";
-            WorldStatusText.Foreground = Brushes.IndianRed;
+            WorldStatusText.Foreground = ResolveBrush("IndianRedBrush", Brushes.IndianRed);
         }
         finally
         {
@@ -385,5 +385,10 @@ public partial class OptionsWindow : Window
                 ex,
                 "Error");
         }
+    }
+
+    private static Brush ResolveBrush(string resourceKey, Brush fallback)
+    {
+        return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
     }
 }

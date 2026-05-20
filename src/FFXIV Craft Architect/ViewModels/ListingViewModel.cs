@@ -82,10 +82,10 @@ public class ListingViewModel : ViewModelBase
         get
         {
             if (_listing.IsAdditionalOption)
-                return "#696969";  // DarkGray
+                return UiColorHex.TextMutedStrong;
             if (_listing.ExcessQuantity > 0)
-                return "#ffa500";  // Orange
-            return "#d3d3d3";      // LightGray
+                return UiColorHex.Warning;
+            return UiColorHex.TextSecondary;
         }
     }
 
@@ -97,7 +97,7 @@ public class ListingViewModel : ViewModelBase
     /// <summary>
     /// Foreground color for the price text.
     /// </summary>
-    public string PriceForeground => _listing.IsUnderAverage ? "#90ee90" : "#ffffff";  // LightGreen : White
+    public string PriceForeground => _listing.IsUnderAverage ? UiColorHex.PriceUnderAverage : UiColorHex.TextPrimary;
 
     /// <summary>
     /// Font weight for the price text.
@@ -107,7 +107,7 @@ public class ListingViewModel : ViewModelBase
     /// <summary>
     /// Foreground color for the subtotal text.
     /// </summary>
-    public string SubtotalForeground => _listing.IsAdditionalOption ? "#696969" : "#808080";  // DarkGray : Gray
+    public string SubtotalForeground => _listing.IsAdditionalOption ? UiColorHex.TextMutedStrong : UiColorHex.TextMuted;
 
     /// <summary>
     /// Foreground color for the retainer text.
@@ -117,10 +117,10 @@ public class ListingViewModel : ViewModelBase
         get
         {
             if (_listing.IsAdditionalOption)
-                return "#696969";  // DarkGray
+                return UiColorHex.TextMutedStrong;
             if (_listing.IsHq)
-                return "#ffd700";  // Gold
-            return "#808080";      // Gray
+                return UiColorHex.WorldHomeBorder;
+            return UiColorHex.TextMuted;
         }
     }
 

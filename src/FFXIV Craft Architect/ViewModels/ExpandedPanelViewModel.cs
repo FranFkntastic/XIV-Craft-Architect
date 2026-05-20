@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.Input;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Coordinators;
 
 namespace FFXIV_Craft_Architect.ViewModels;
 
@@ -10,15 +12,27 @@ namespace FFXIV_Craft_Architect.ViewModels;
 /// </summary>
 public class ExpandedPanelViewModel : ViewModelBase
 {
+    private static readonly PurchaseSummaryService _summaryService = new();
+    
     private readonly DetailedShoppingPlan _plan;
+    private readonly PurchaseSummary _summary;
+    private readonly IMarketLogisticsCoordinator? _coordinator;
     private ObservableCollection<ExpandedWorldViewModel> _worldOptions = new();
+    private ObservableCollection<ExpandedSplitWorldViewModel> _splitWorlds = new();
 
-    public ExpandedPanelViewModel(DetailedShoppingPlan plan)
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ExpandedPanelViewModel"/> class.
+    /// </summary>
+    /// <param name="plan">The shopping plan to display.</param>
+    /// <param name="coordinator">Optional coordinator for selection management. If provided, close button will call ClearSelection().</param>
+    public ExpandedPanelViewModel(DetailedShoppingPlan plan, IMarketLogisticsCoordinator? coordinator = null)
     {
         _plan = plan;
+        _summary = _summaryService.CreateSummary(plan);
+        _coordinator = coordinator;
         CloseCommand = new RelayCommand(OnClose);
+        OpenDetailsCommand = new RelayCommand(OnOpenDetails);
         
-        // Initialize world options with proper sorting
         RefreshWorldOptions();
     }
 
@@ -26,16 +40,55 @@ public class ExpandedPanelViewModel : ViewModelBase
     /// The underlying shopping plan.
     /// </summary>
     public DetailedShoppingPlan Plan => _plan;
+    
+    /// <summary>
+    /// Centralized purchase summary with actual quantities.
+    /// </summary>
+    public PurchaseSummary Summary => _summary;
 
     /// <summary>
-    /// Plan name with quantity.
+    /// Plan name with actual purchase quantity.
     /// </summary>
-    public string HeaderText => $"{_plan.Name} ×{_plan.QuantityNeeded}";
+    public string HeaderText => _summary.DisplayText;
+    
+    /// <summary>
+    /// Quantity needed for crafting (idealized).
+    /// </summary>
+    public int QuantityNeeded => _plan.QuantityNeeded;
+    
+    /// <summary>
+    /// Actual quantity to purchase (from listings).
+    /// </summary>
+    public int QuantityToPurchase => _summary.QuantityToPurchase;
+    
+    /// <summary>
+    /// Excess items due to full stacks.
+    /// </summary>
+    public int ExcessQuantity => _summary.ExcessQuantity;
+    
+    /// <summary>
+    /// Whether there are excess items.
+    /// </summary>
+    public bool HasExcess => _summary.HasExcess;
 
     /// <summary>
     /// DC Average price display.
     /// </summary>
-    public string DCAverageText => $"Data Center Average: {_plan.DCAveragePrice:N0}g";
+    public string DCAverageText => IsVendorMode
+        ? $"Fixed Vendor Price: {(_plan.RecommendedWorld?.AveragePricePerUnit ?? _plan.DCAveragePrice):N0}g"
+        : $"Data Center Average: {_plan.DCAveragePrice:N0}g";
+
+    public bool IsVendorMode => _plan.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName;
+
+    public string VendorPricingText
+    {
+        get
+        {
+            var unitPrice = _plan.RecommendedWorld?.AveragePricePerUnit ?? _plan.DCAveragePrice;
+            var total = _plan.RecommendedWorld?.TotalCost ?? 0;
+            return $"{unitPrice:N0}g each  •  {total:N0}g total";
+        }
+    }
 
     /// <summary>
     /// Whether the plan has world options.
@@ -48,9 +101,35 @@ public class ExpandedPanelViewModel : ViewModelBase
     public int WorldOptionsCount => _plan.WorldOptions.Count;
 
     /// <summary>
+    /// Whether this item is using a split-world recommendation.
+    /// </summary>
+    public bool RequiresSplitPurchase => _plan.RequiresSplitPurchase;
+
+    /// <summary>
+    /// Split-world recommendations for this item.
+    /// </summary>
+    public ObservableCollection<ExpandedSplitWorldViewModel> SplitWorlds
+    {
+        get => _splitWorlds;
+        private set => SetProperty(ref _splitWorlds, value);
+    }
+
+    /// <summary>
+    /// True when split-world recommendations should be shown.
+    /// </summary>
+    public bool HasSplitWorldOptions => RequiresSplitPurchase && _splitWorlds.Count > 0;
+
+    /// <summary>
+    /// True when the standard all-world comparison should be shown.
+    /// </summary>
+    public bool ShowSingleWorldOptions => HasOptions && !RequiresSplitPurchase && !IsVendorMode;
+
+    /// <summary>
     /// Options header text.
     /// </summary>
-    public string OptionsHeaderText => $"All Worlds ({_plan.WorldOptions.Count} options):";
+    public string OptionsHeaderText => RequiresSplitPurchase
+        ? $"Split Purchase Worlds ({_splitWorlds.Count} {Pluralize(_splitWorlds.Count, "world")}):"
+        : $"World Purchase Options ({_plan.WorldOptions.Count} {Pluralize(_plan.WorldOptions.Count, "option")}):";
 
     /// <summary>
     /// Error message if any.
@@ -72,6 +151,12 @@ public class ExpandedPanelViewModel : ViewModelBase
     /// </summary>
     public List<VendorInfo> Vendors => _plan.Vendors;
 
+    public VendorInfo? PrimaryVendor => GetOrderedVendors().FirstOrDefault();
+
+    public List<VendorInfo> AlternativeVendors => GetOrderedVendors().Skip(1).ToList();
+
+    public bool HasAlternativeVendors => AlternativeVendors.Count > 0;
+
     /// <summary>
     /// Whether this item has vendor information.
     /// </summary>
@@ -80,7 +165,7 @@ public class ExpandedPanelViewModel : ViewModelBase
     /// <summary>
     /// Whether this is a vendor-only item (no market world options).
     /// </summary>
-    public bool IsVendorOnly => _plan.RecommendedWorld?.WorldName == "Vendor";
+    public bool IsVendorOnly => _plan.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName;
 
     /// <summary>
     /// All world options sorted by recommendation.
@@ -97,13 +182,18 @@ public class ExpandedPanelViewModel : ViewModelBase
     public ICommand CloseCommand { get; }
 
     /// <summary>
-    /// Event raised when the panel should be closed.
+    /// Command to open the full details window.
     /// </summary>
-    public event Action? CloseRequested;
+    public ICommand OpenDetailsCommand { get; }
 
     private void OnClose()
     {
-        CloseRequested?.Invoke();
+        _coordinator?.ClearSelection();
+    }
+
+    private void OnOpenDetails()
+    {
+        _coordinator?.OpenDetailsWindow(_plan);
     }
 
     /// <summary>
@@ -111,6 +201,7 @@ public class ExpandedPanelViewModel : ViewModelBase
     /// </summary>
     private void RefreshWorldOptions()
     {
+        _splitWorlds.Clear();
         var sortedWorlds = _plan.WorldOptions
             .OrderByDescending(w => w.IsHomeWorld)
             .ThenBy(w => w.IsBlacklisted && !w.IsHomeWorld)
@@ -120,11 +211,57 @@ public class ExpandedPanelViewModel : ViewModelBase
             .ToList();
 
         _worldOptions.Clear();
-        foreach (var world in sortedWorlds)
+
+        if (RequiresSplitPurchase && _plan.RecommendedSplit?.Any() == true)
         {
-            var isRecommended = world == _plan.RecommendedWorld;
-            _worldOptions.Add(new ExpandedWorldViewModel(world, isRecommended));
+            foreach (var split in _plan.RecommendedSplit)
+            {
+                var worldData = sortedWorlds.FirstOrDefault(w => string.Equals(w.WorldName, split.WorldName, StringComparison.OrdinalIgnoreCase));
+                _splitWorlds.Add(new ExpandedSplitWorldViewModel(split, worldData, _plan.QuantityNeeded));
+            }
         }
+        else
+        {
+            foreach (var world in sortedWorlds)
+            {
+                var isRecommended = world == _plan.RecommendedWorld;
+                _worldOptions.Add(new ExpandedWorldViewModel(world, isRecommended));
+            }
+        }
+
+        OnPropertyChanged(nameof(HasSplitWorldOptions));
+        OnPropertyChanged(nameof(ShowSingleWorldOptions));
+        OnPropertyChanged(nameof(OptionsHeaderText));
+    }
+
+    private List<VendorInfo> GetOrderedVendors()
+    {
+        if (_plan.Vendors?.Any() != true)
+        {
+            return new List<VendorInfo>();
+        }
+
+        var gilVendors = _plan.Vendors.Where(v => v.IsGilVendor).ToList();
+        var candidates = gilVendors.Count > 0 ? gilVendors : _plan.Vendors;
+
+        var preferredName = _plan.RecommendedWorld?.VendorName;
+        var primary = candidates.FirstOrDefault(v =>
+            !string.IsNullOrWhiteSpace(preferredName) &&
+            string.Equals(v.DisplayName, preferredName, StringComparison.OrdinalIgnoreCase));
+
+        primary ??= candidates
+            .OrderBy(v => v.Price)
+            .ThenBy(v => v.Name)
+            .First();
+
+        return new[] { primary }
+            .Concat(candidates.Where(v => !ReferenceEquals(v, primary)).OrderBy(v => v.Price).ThenBy(v => v.Name))
+            .ToList();
+    }
+
+    private static string Pluralize(int count, string singular)
+    {
+        return count == 1 ? singular : $"{singular}s";
     }
 }
 
@@ -135,11 +272,14 @@ public class ExpandedWorldViewModel : ViewModelBase
 {
     private readonly WorldShoppingSummary _world;
     private readonly bool _isRecommended;
+    private bool _isExpanded;
 
     public ExpandedWorldViewModel(WorldShoppingSummary world, bool isRecommended)
     {
         _world = world;
         _isRecommended = isRecommended;
+        _isExpanded = isRecommended;
+        ToggleExpandCommand = new RelayCommand(() => IsExpanded = !IsExpanded);
     }
 
     /// <summary>
@@ -178,6 +318,20 @@ public class ExpandedWorldViewModel : ViewModelBase
     public bool IsRecommended => _isRecommended;
 
     /// <summary>
+    /// Whether listing details for this world are expanded.
+    /// </summary>
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set => SetProperty(ref _isExpanded, value);
+    }
+
+    /// <summary>
+    /// Command to toggle world listing expansion.
+    /// </summary>
+    public ICommand ToggleExpandCommand { get; }
+
+    /// <summary>
     /// Background color for this world option.
     /// </summary>
     public string BackgroundColor
@@ -185,12 +339,12 @@ public class ExpandedWorldViewModel : ViewModelBase
         get
         {
             if (_world.IsCongested)
-                return "#3d2d2d";  // Muted reddish for congested
+                return UiColorHex.WorldCongestedBackground;
             if (_world.IsHomeWorld)
-                return "#3d3520";  // Gold-tinted for home world
+                return UiColorHex.WorldHomeBackground;
             if (_isRecommended)
-                return "#2d4a3e";  // Greenish for recommended
-            return "#2d2d2d";      // Default gray
+                return UiColorHex.WorldRecommendedBackground;
+            return UiColorHex.WorldDefaultBackground;
         }
     }
 
@@ -202,11 +356,11 @@ public class ExpandedWorldViewModel : ViewModelBase
         get
         {
             if (_world.IsHomeWorld)
-                return "#ffd700";  // Gold border for home world
+                return UiColorHex.WorldHomeBorder;
             if (_world.IsCongested)
-                return "#cd5c5c";  // IndianRed for congested
+                return UiColorHex.WorldCongestedBorder;
             if (_isRecommended)
-                return "#d4a73a";  // Gold for recommended
+                return UiColorHex.WorldRecommendedBorder;
             return null;
         }
     }
@@ -229,10 +383,10 @@ public class ExpandedWorldViewModel : ViewModelBase
         get
         {
             if (_world.IsHomeWorld)
-                return "#ffd700";  // Gold
+                return UiColorHex.WorldHomeBorder;
             if (_world.IsCongested)
-                return "#cd5c5c";  // IndianRed
-            return "#ffffff";      // White
+                return UiColorHex.WorldCongestedBorder;
+            return UiColorHex.TextPrimary;
         }
     }
 
@@ -306,20 +460,20 @@ public class ExpandedWorldViewModel : ViewModelBase
     public string? CostTooltip => _world.HasExcess ? "FFXIV requires buying full stacks. You'll have excess items." : null;
 
     /// <summary>
-    /// Listings for this world (limited to 5).
+    /// Listings for this world.
     /// </summary>
-    public List<ExpandedListingViewModel> DisplayListings => 
-        _world.Listings.Take(5).Select(l => new ExpandedListingViewModel(l)).ToList();
+    public List<ExpandedListingViewModel> DisplayListings =>
+        _world.Listings.Select(l => new ExpandedListingViewModel(l)).ToList();
 
     /// <summary>
     /// Whether there are more listings than shown.
     /// </summary>
-    public bool HasMoreListings => _world.Listings.Count > 5;
+    public bool HasMoreListings => false;
 
     /// <summary>
     /// Text for additional listings.
     /// </summary>
-    public string MoreListingsText => $"... and {_world.Listings.Count - 5} more listings";
+    public string MoreListingsText => string.Empty;
 }
 
 /// <summary>
@@ -357,10 +511,10 @@ public class ExpandedListingViewModel
         get
         {
             if (_listing.IsAdditionalOption)
-                return "#696969";  // DarkGray
+                return UiColorHex.TextMutedStrong;
             if (_listing.ExcessQuantity > 0)
-                return "#ffa500";  // Orange
-            return "#d3d3d3";      // LightGray
+                return UiColorHex.Warning;
+            return UiColorHex.TextSecondary;
         }
     }
 
@@ -377,7 +531,7 @@ public class ExpandedListingViewModel
     /// <summary>
     /// Foreground color for the price text.
     /// </summary>
-    public string PriceForeground => _listing.IsUnderAverage ? "#90ee90" : "#ffffff";  // LightGreen : White
+    public string PriceForeground => _listing.IsUnderAverage ? UiColorHex.PriceUnderAverage : UiColorHex.TextPrimary;
 
     /// <summary>
     /// Font weight for the price text.
@@ -392,7 +546,7 @@ public class ExpandedListingViewModel
     /// <summary>
     /// Foreground color for the subtotal text.
     /// </summary>
-    public string SubtotalForeground => _listing.IsAdditionalOption ? "#696969" : "#808080";  // DarkGray : Gray
+    public string SubtotalForeground => _listing.IsAdditionalOption ? UiColorHex.TextMutedStrong : UiColorHex.TextMuted;
 
     /// <summary>
     /// Retainer display text (includes HQ indicator if applicable).
@@ -415,10 +569,10 @@ public class ExpandedListingViewModel
         get
         {
             if (_listing.IsAdditionalOption)
-                return "#696969";  // DarkGray
+                return UiColorHex.TextMutedStrong;
             if (_listing.IsHq)
-                return "#ffd700";  // Gold
-            return "#808080";      // Gray
+                return UiColorHex.WorldHomeBorder;
+            return UiColorHex.TextMuted;
         }
     }
 }

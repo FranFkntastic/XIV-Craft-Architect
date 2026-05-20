@@ -8,7 +8,7 @@
         MinWidth="350"
         MinHeight="180"
         WindowStartupLocation="CenterOwner"
-        Background="#1e1e1e">
+        Background="{StaticResource WindowBackgroundBrush}">
 
     <Grid Margin="16">
         <Grid.RowDefinitions>

@@ -7,7 +7,7 @@
         Width="900"
         Height="700"
         WindowStartupLocation="CenterOwner"
-        Background="#1e1e1e">
+        Background="{StaticResource WindowBackgroundBrush}">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -17,7 +17,7 @@
         </Grid.RowDefinitions>
         
         <!-- Header -->
-        <Border Grid.Row="0" Background="#2d2d2d" Padding="12">
+        <Border Grid.Row="0" Background="{StaticResource CardBackgroundBrush}" Padding="12">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -27,7 +27,7 @@
                 <TextBlock Grid.Column="0" 
                            Text="Market Cache Diagnostics" 
                            FontSize="16" FontWeight="SemiBold" 
-                           Foreground="#d4d4d4"/>
+                           Foreground="{StaticResource TextPrimaryBrush}"/>
                 
                 <ui:Button Grid.Column="1"
                            Content="Close"
@@ -41,26 +41,26 @@
         </Border>
         
         <!-- Stats bar -->
-        <Border Grid.Row="1" Background="#252525" Padding="8">
+        <Border Grid.Row="1" Background="{StaticResource PanelBackgroundBrush}" Padding="8">
             <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="EntriesCount" Text="Entries: 0" Foreground="#888888" Margin="0,0,16,0"/>
-                <TextBlock x:Name="DbSizeText" Text="DB: 0 bytes" Foreground="#888888" Margin="0,0,16,0"/>
-                <TextBlock x:Name="WalSizeText" Text="WAL: 0 bytes" Foreground="#fbbf24" Margin="0,0,16,0"/>
-                <TextBlock x:Name="OldestText" Text="Oldest: -" Foreground="#888888" Margin="0,0,16,0"/>
-                <TextBlock x:Name="NewestText" Text="Newest: -" Foreground="#888888"/>
+                <TextBlock x:Name="EntriesCount" Text="Entries: 0" Foreground="{StaticResource GrayBrush}" Margin="0,0,16,0"/>
+                <TextBlock x:Name="DbSizeText" Text="DB: 0 bytes" Foreground="{StaticResource GrayBrush}" Margin="0,0,16,0"/>
+                <TextBlock x:Name="WalSizeText" Text="WAL: 0 bytes" Foreground="{StaticResource AccentGoldBrush}" Margin="0,0,16,0"/>
+                <TextBlock x:Name="OldestText" Text="Oldest: -" Foreground="{StaticResource GrayBrush}" Margin="0,0,16,0"/>
+                <TextBlock x:Name="NewestText" Text="Newest: -" Foreground="{StaticResource GrayBrush}"/>
             </StackPanel>
         </Border>
         
         <!-- Data Grid -->
-        <Border Grid.Row="2" Background="#1e1e1e" Margin="0">
+        <Border Grid.Row="2" Background="{StaticResource WindowBackgroundBrush}" Margin="0">
             <DataGrid x:Name="CacheDataGrid"
                       AutoGenerateColumns="False"
                       IsReadOnly="True"
                       GridLinesVisibility="Horizontal"
                       HeadersVisibility="Column"
-                      Background="#1e1e1e"
-                      RowBackground="#252525"
-                      AlternatingRowBackground="#2a2a2a"
+                      Background="{StaticResource WindowBackgroundBrush}"
+                      RowBackground="{StaticResource PanelBackgroundBrush}"
+                      AlternatingRowBackground="{StaticResource CardBackgroundAltBrush}"
                       BorderThickness="0"
                       CanUserSortColumns="True"
                       SelectionChanged="OnSelectionChanged">
@@ -68,7 +68,7 @@
                     <DataGridTextColumn Header="Item ID" Binding="{Binding ItemId}" Width="80">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#d4d4d4"/>
+                                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
                         </DataGridTextColumn.ElementStyle>
@@ -77,7 +77,7 @@
                     <DataGridTextColumn Header="DC" Binding="{Binding DataCenter}" Width="80">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#888888"/>
+                                <Setter Property="Foreground" Value="{StaticResource GrayBrush}"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
                         </DataGridTextColumn.ElementStyle>
@@ -86,7 +86,7 @@
                     <DataGridTextColumn Header="Fetched" Binding="{Binding FetchedAt}" Width="130">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#888888"/>
+                                <Setter Property="Foreground" Value="{StaticResource GrayBrush}"/>
                                 <Setter Property="FontSize" Value="10"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
@@ -96,7 +96,7 @@
                     <DataGridTextColumn Header="Age" Binding="{Binding AgeText}" Width="80">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#4ecdc4"/>
+                                <Setter Property="Foreground" Value="{StaticResource Brush.Status.Info}"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
                         </DataGridTextColumn.ElementStyle>
@@ -105,7 +105,7 @@
                     <DataGridTextColumn Header="DC Avg" Binding="{Binding DCAveragePrice}" Width="90">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#d4af37"/>
+                                <Setter Property="Foreground" Value="{StaticResource AccentGoldBrush}"/>
                                 <Setter Property="HorizontalAlignment" Value="Right"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
@@ -115,7 +115,7 @@
                     <DataGridTextColumn Header="Worlds" Binding="{Binding WorldsCount}" Width="60">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#888888"/>
+                                <Setter Property="Foreground" Value="{StaticResource GrayBrush}"/>
                                 <Setter Property="HorizontalAlignment" Value="Center"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
@@ -125,7 +125,7 @@
                     <DataGridTextColumn Header="Listings" Binding="{Binding ListingsCount}" Width="60">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#888888"/>
+                                <Setter Property="Foreground" Value="{StaticResource GrayBrush}"/>
                                 <Setter Property="HorizontalAlignment" Value="Center"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
@@ -135,7 +135,7 @@
                     <DataGridTextColumn Header="Size" Binding="{Binding DataSizeText}" Width="70">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#888888"/>
+                                <Setter Property="Foreground" Value="{StaticResource GrayBrush}"/>
                                 <Setter Property="FontSize" Value="10"/>
                                 <Setter Property="HorizontalAlignment" Value="Right"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
@@ -154,7 +154,7 @@
             </Grid.ColumnDefinitions>
             
             <!-- Details Panel -->
-            <Border Grid.Column="0" Background="#252525" BorderBrush="#3d3d3d" BorderThickness="0,1,1,0">
+            <Border Grid.Column="0" Background="{StaticResource PanelBackgroundBrush}" BorderBrush="{StaticResource MutedAccentBrush}" BorderThickness="0,1,1,0">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -164,27 +164,27 @@
                                x:Name="DetailsHeader"
                                Text="Entry Details (select an item)" 
                                FontWeight="SemiBold" 
-                               Foreground="#d4d4d4"
+                               Foreground="{StaticResource TextPrimaryBrush}"
                                Padding="8,4"
-                               Background="#2d2d2d"/>
+                               Background="{StaticResource CardBackgroundBrush}"/>
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="8">
                         <TextBlock x:Name="DetailsText" 
                                    FontFamily="Consolas" 
                                    FontSize="11"
                                    TextWrapping="Wrap" 
-                                   Foreground="#d4d4d4"
+                                   Foreground="{StaticResource TextPrimaryBrush}"
                                    Text="No item selected"/>
                     </ScrollViewer>
                 </Grid>
             </Border>
             
             <!-- Actions Panel -->
-            <Border Grid.Column="1" Background="#2d2d2d" BorderBrush="#3d3d3d" BorderThickness="0,1,0,0" Padding="12">
+            <Border Grid.Column="1" Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource MutedAccentBrush}" BorderThickness="0,1,0,0" Padding="12">
                 <StackPanel>
-                    <TextBlock Text="Database Path:" Foreground="#888888" FontSize="10" Margin="0,0,0,4"/>
-                    <TextBlock x:Name="DbPathText" Text="-" Foreground="#d4d4d4" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                    <TextBlock Text="Database Path:" Foreground="{StaticResource GrayBrush}" FontSize="10" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="DbPathText" Text="-" Foreground="{StaticResource TextPrimaryBrush}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,12"/>
                     
-                    <TextBlock Text="Actions:" Foreground="#888888" FontSize="10" Margin="0,0,0,8"/>
+                    <TextBlock Text="Actions:" Foreground="{StaticResource GrayBrush}" FontSize="10" Margin="0,0,0,8"/>
                     
                     <ui:Button Content="Refresh" MinHeight="28" Appearance="Secondary" Padding="12,4" Margin="0,0,0,8" Click="OnRefreshClick" helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
                     <ui:Button Content="Force Checkpoint (WAL)" MinHeight="28" Appearance="Secondary" Padding="12,4" Margin="0,0,0,8" Click="OnCheckpointClick" helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>

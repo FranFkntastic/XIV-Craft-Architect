@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using FFXIV_Craft_Architect.Services.UI;
 using Microsoft.Extensions.Logging;
 
@@ -11,24 +12,18 @@ public class ProcurementPanelBuilder
     private readonly ILogger<ProcurementPanelBuilder>? _logger;
 
     private readonly Panel _splitPaneCardsGrid;
-    private readonly Panel _splitPaneExpandedContent;
-    private readonly UIElement _splitPaneExpandedPanel;
     private readonly TextBlock _marketTotalCostText;
     private readonly Panel _procurementPlanPanel;
 
     public ProcurementPanelBuilder(
         InfoPanelBuilder infoPanelBuilder,
         Panel splitPaneCardsGrid,
-        Panel splitPaneExpandedContent,
-        UIElement splitPaneExpandedPanel,
         TextBlock marketTotalCostText,
         Panel procurementPlanPanel,
         ILogger<ProcurementPanelBuilder>? logger = null)
     {
         _infoPanelBuilder = infoPanelBuilder;
         _splitPaneCardsGrid = splitPaneCardsGrid;
-        _splitPaneExpandedContent = splitPaneExpandedContent;
-        _splitPaneExpandedPanel = splitPaneExpandedPanel;
         _marketTotalCostText = marketTotalCostText;
         _procurementPlanPanel = procurementPlanPanel;
         _logger = logger;
@@ -37,7 +32,6 @@ public class ProcurementPanelBuilder
     public void ClearPanels()
     {
         _splitPaneCardsGrid.Children.Clear();
-        _splitPaneExpandedContent.Children.Clear();
         _procurementPlanPanel.Children.Clear();
     }
 
@@ -52,7 +46,7 @@ public class ProcurementPanelBuilder
         _procurementPlanPanel.Children.Add(new TextBlock
         {
             Text = "Click 'Refresh Market Data' to generate an actionable procurement plan with world recommendations",
-            Foreground = System.Windows.Media.Brushes.Gray,
+            Foreground = ResolveBrush("GrayBrush", Brushes.Gray),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap
         });
@@ -72,7 +66,7 @@ public class ProcurementPanelBuilder
         _procurementPlanPanel.Children.Add(new TextBlock
         {
             Text = "Click 'Refresh Market Data' to generate an actionable procurement plan with world recommendations",
-            Foreground = System.Windows.Media.Brushes.Gray,
+            Foreground = ResolveBrush("GrayBrush", Brushes.Gray),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap
         });
@@ -83,22 +77,12 @@ public class ProcurementPanelBuilder
         _marketTotalCostText.Text = $"Total: {grandTotal:N0}g  -  {itemsWithOptions} items";
     }
 
-    public void ClearExpandedPanel()
-    {
-        _splitPaneExpandedContent.Children.Clear();
-    }
-
-    public void SetExpandedPanelVisibility(bool visible)
-    {
-        _splitPaneExpandedPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    public void AddToExpandedPanel(UIElement element)
-    {
-        _splitPaneExpandedContent.Children.Add(element);
-    }
-
     public Panel SplitPaneCardsGrid => _splitPaneCardsGrid;
 
     public Panel ProcurementPlanPanel => _procurementPlanPanel;
+
+    private static Brush ResolveBrush(string resourceKey, Brush fallback)
+    {
+        return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
+    }
 }

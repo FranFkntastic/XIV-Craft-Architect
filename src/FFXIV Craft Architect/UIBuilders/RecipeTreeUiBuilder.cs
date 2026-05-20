@@ -59,7 +59,9 @@ public class RecipeTreeUiBuilder
             if (elements.HqIndicator != null)
             {
                 elements.HqIndicator.Text = isHq ? " [HQ]" : "";
-                elements.HqIndicator.Foreground = isHq ? Brushes.Gold : Brushes.Transparent;
+                elements.HqIndicator.Foreground = isHq
+                    ? ResolveBrush("AccentGoldBrush", Brushes.Gold)
+                    : ResolveBrush("SystemTransparentBrush", Brushes.Transparent);
             }
         }
     }
@@ -111,8 +113,8 @@ public class RecipeTreeUiBuilder
         Button? collapseMaterialsButton = null;
 
         var backgroundBrush = depth == 0 
-            ? new SolidColorBrush((Color)ColorConverter.ConvertFromString("#252525"))
-            : Brushes.Transparent;
+            ? ResolveBrush("NodeBackgroundRootBrush", Brushes.Transparent)
+            : ResolveBrush("SystemTransparentBrush", Brushes.Transparent);
 
         var expander = new Expander
         {
@@ -221,7 +223,9 @@ public class RecipeTreeUiBuilder
         {
             Name = "HqIndicator",
             Text = nodeVm.MustBeHq ? " [HQ]" : "",
-            Foreground = nodeVm.MustBeHq ? Brushes.Gold : Brushes.Transparent,
+            Foreground = nodeVm.MustBeHq
+                ? ResolveBrush("AccentGoldBrush", Brushes.Gold)
+                : ResolveBrush("SystemTransparentBrush", Brushes.Transparent),
             FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(2, 0, 0, 0)
@@ -234,7 +238,7 @@ public class RecipeTreeUiBuilder
             var circularIndicator = new TextBlock
             {
                 Text = " ↻ circular",
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#ff9800")),
+                Foreground = ResolveBrush("WarningOrangeBrush", Brushes.Orange),
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(4, 0, 0, 0),
@@ -305,7 +309,7 @@ public class RecipeTreeUiBuilder
             var levelBlock = new TextBlock
             {
                 Text = $"Lv.{nodeVm.RecipeLevel} ",
-                Foreground = Brushes.Gray,
+                Foreground = ResolveBrush("GrayBrush", Brushes.Gray),
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 4, 0)
@@ -340,7 +344,9 @@ public class RecipeTreeUiBuilder
         {
             Name = "HqIndicator",
             Text = nodeVm.MustBeHq ? " [HQ]" : "",
-            Foreground = nodeVm.MustBeHq ? Brushes.Gold : Brushes.Transparent,
+            Foreground = nodeVm.MustBeHq
+                ? ResolveBrush("AccentGoldBrush", Brushes.Gold)
+                : ResolveBrush("SystemTransparentBrush", Brushes.Transparent),
             FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(2, 0, 0, 0)
@@ -353,7 +359,7 @@ public class RecipeTreeUiBuilder
             var circularIndicator = new TextBlock
             {
                 Text = " ↻ circular",
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#ff9800")),
+                Foreground = ResolveBrush("WarningOrangeBrush", Brushes.Orange),
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(4, 0, 0, 0),
@@ -382,8 +388,8 @@ public class RecipeTreeUiBuilder
                 Padding = new Thickness(6, 0, 6, 0),
                 Margin = new Thickness(0, 0, 4, 0),
                 Background = Brushes.Transparent,
-                Foreground = Brushes.LightGray,
-                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#555555")),
+                Foreground = ResolveBrush("LightGrayBrush", Brushes.LightGray),
+                BorderBrush = ResolveBrush("MutedAccentLightBrush", Brushes.Gray),
                 BorderThickness = new Thickness(1),
                 VerticalAlignment = VerticalAlignment.Center,
                 ToolTip = "Collapse all child material nodes",
@@ -450,9 +456,9 @@ public class RecipeTreeUiBuilder
             Height = 22,
             FontSize = 10,
             Padding = new Thickness(2, 0, 0, 0),
-            Foreground = Brushes.White,
-            Background = Brushes.Transparent,
-            BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#555555")),
+            Foreground = ResolveBrush("TextPrimaryBrush", Brushes.White),
+            Background = ResolveBrush("SystemTransparentBrush", Brushes.Transparent),
+            BorderBrush = ResolveBrush("MutedAccentLightBrush", Brushes.Gray),
             BorderThickness = new Thickness(1),
             Margin = new Thickness(4, 0, 4, 0),
             VerticalAlignment = VerticalAlignment.Center,
@@ -581,10 +587,12 @@ public class RecipeTreeUiBuilder
 
     private static void UpdateHqButtonStyle(Button button, bool isHq)
     {
-        button.Foreground = isHq ? Brushes.Gold : Brushes.Gray;
+        button.Foreground = isHq
+            ? ResolveBrush("AccentGoldBrush", Brushes.Gold)
+            : ResolveBrush("GrayBrush", Brushes.Gray);
         button.Background = isHq 
-            ? new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3d3d3d"))
-            : Brushes.Transparent;
+            ? ResolveBrush("MutedAccentBrush", Brushes.DimGray)
+            : ResolveBrush("SystemTransparentBrush", Brushes.Transparent);
     }
 
     private static Brush GetNodeForeground(PlanNodeViewModel node)
@@ -592,10 +600,15 @@ public class RecipeTreeUiBuilder
         var colorName = RecipePlanDisplayHelpers.GetSourceColorName(node.Source);
         return colorName switch
         {
-            "LightBlue" => Brushes.LightSkyBlue,
-            "LightGreen" => Brushes.LightGreen,
-            _ => Brushes.White
+            "LightBlue" => ResolveBrush("LightSkyBlueBrush", Brushes.LightSkyBlue),
+            "LightGreen" => ResolveBrush("LightGreenBrush", Brushes.LightGreen),
+            _ => ResolveBrush("TextPrimaryBrush", Brushes.White)
         };
+    }
+
+    private static Brush ResolveBrush(string resourceKey, Brush fallback)
+    {
+        return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
     }
 
     private static string GetJobIcon(string job)

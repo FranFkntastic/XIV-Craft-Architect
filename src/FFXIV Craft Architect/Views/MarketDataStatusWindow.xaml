@@ -7,7 +7,7 @@
         Width="980"
         Height="600"
         WindowStartupLocation="CenterOwner"
-        Background="#1e1e1e">
+        Background="{StaticResource WindowBackgroundBrush}">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -17,7 +17,7 @@
         </Grid.RowDefinitions>
         
         <!-- Header with stats -->
-        <Border Grid.Row="0" Background="#2d2d2d" Padding="12">
+        <Border Grid.Row="0" Background="{StaticResource CardBackgroundBrush}" Padding="12">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -27,11 +27,11 @@
                 <StackPanel Grid.Column="0" Orientation="Horizontal">
                     <TextBlock Text="Market Data Population" 
                                FontSize="16" FontWeight="SemiBold" 
-                               Foreground="#d4d4d4"/>
+                               Foreground="{StaticResource TextPrimaryBrush}"/>
                     <TextBlock x:Name="ProgressText" 
                                Text=" - Starting..." 
                                FontSize="16"
-                               Foreground="#888888"
+                               Foreground="{StaticResource GrayBrush}"
                                Margin="8,0,0,0"/>
                 </StackPanel>
                 
@@ -48,28 +48,28 @@
         </Border>
         
         <!-- Stats bar -->
-        <Border Grid.Row="1" Background="#252525" Padding="8">
+        <Border Grid.Row="1" Background="{StaticResource PanelBackgroundBrush}" Padding="8">
             <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="PendingCount" Text="⏳ Pending: 0" Foreground="#888888" Margin="0,0,16,0"/>
-                <TextBlock x:Name="NoCacheCount" Text="∅ No Cache: 0" Foreground="#f59e0b" Margin="0,0,16,0"/>
-                <TextBlock x:Name="FetchingCount" Text="🔄 Fetching: 0" Foreground="#4ecdc4" Margin="0,0,16,0"/>
-                <TextBlock x:Name="SuccessCount" Text="✓ Success: 0" Foreground="#4ade80" Margin="0,0,16,0"/>
-                <TextBlock x:Name="FailedCount" Text="✗ Failed: 0" Foreground="#f87171" Margin="0,0,16,0"/>
-                <TextBlock x:Name="SkippedCount" Text="↷ Skipped: 0" Foreground="#94a3b8" Margin="0,0,16,0"/>
-                <TextBlock x:Name="CachedCount" Text="📋 Cached: 0" Foreground="#fbbf24" Margin="0,0,16,0"/>
+                <TextBlock x:Name="PendingCount" Text="⏳ Pending: 0" Foreground="{StaticResource GrayBrush}" Margin="0,0,16,0"/>
+                <TextBlock x:Name="NoCacheCount" Text="∅ No Cache: 0" Foreground="{StaticResource WarningOrangeBrush}" Margin="0,0,16,0"/>
+                <TextBlock x:Name="FetchingCount" Text="🔄 Fetching: 0" Foreground="{StaticResource Brush.Status.Info}" Margin="0,0,16,0"/>
+                <TextBlock x:Name="SuccessCount" Text="✓ Success: 0" Foreground="{StaticResource SuccessGreenBrush}" Margin="0,0,16,0"/>
+                <TextBlock x:Name="FailedCount" Text="✗ Failed: 0" Foreground="{StaticResource ErrorRedBrush}" Margin="0,0,16,0"/>
+                <TextBlock x:Name="SkippedCount" Text="↷ Skipped: 0" Foreground="{StaticResource LightSkyBlueBrush}" Margin="0,0,16,0"/>
+                <TextBlock x:Name="CachedCount" Text="📋 Cached: 0" Foreground="{StaticResource AccentGoldBrush}" Margin="0,0,16,0"/>
             </StackPanel>
         </Border>
         
         <!-- Data Grid -->
-        <Border Grid.Row="2" Background="#1e1e1e" Margin="0">
+        <Border Grid.Row="2" Background="{StaticResource WindowBackgroundBrush}" Margin="0">
             <DataGrid x:Name="StatusDataGrid"
                       AutoGenerateColumns="False"
                       IsReadOnly="True"
                       GridLinesVisibility="Horizontal"
                       HeadersVisibility="Column"
-                      Background="#1e1e1e"
-                      RowBackground="#252525"
-                      AlternatingRowBackground="#2a2a2a"
+                      Background="{StaticResource WindowBackgroundBrush}"
+                      RowBackground="{StaticResource PanelBackgroundBrush}"
+                      AlternatingRowBackground="{StaticResource CardBackgroundAltBrush}"
                       BorderThickness="0"
                       CanUserSortColumns="True">
                 <DataGrid.Columns>
@@ -86,7 +86,7 @@
                     <DataGridTextColumn Header="Item" Binding="{Binding ItemName}" Width="*">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#d4d4d4"/>
+                                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
                         </DataGridTextColumn.ElementStyle>
@@ -95,7 +95,7 @@
                     <DataGridTextColumn Header="Qty" Binding="{Binding Quantity}" Width="60">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#888888"/>
+                                <Setter Property="Foreground" Value="{StaticResource GrayBrush}"/>
                                 <Setter Property="HorizontalAlignment" Value="Center"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
@@ -105,7 +105,7 @@
                     <DataGridTextColumn Header="Price" Binding="{Binding PriceDisplay}" Width="100">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#d4af37"/>
+                                <Setter Property="Foreground" Value="{StaticResource AccentGoldBrush}"/>
                                 <Setter Property="HorizontalAlignment" Value="Right"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
@@ -115,7 +115,7 @@
                     <DataGridTextColumn Header="Age" Binding="{Binding CacheAgeText}" Width="80">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#888888"/>
+                                <Setter Property="Foreground" Value="{StaticResource GrayBrush}"/>
                                 <Setter Property="FontSize" Value="10"/>
                                 <Setter Property="HorizontalAlignment" Value="Center"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
@@ -127,7 +127,7 @@
                     <DataGridTextColumn Header="Data Scope" Binding="{Binding DataScopeText}" Width="170">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#888888"/>
+                                <Setter Property="Foreground" Value="{StaticResource GrayBrush}"/>
                                 <Setter Property="FontSize" Value="10"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
@@ -137,7 +137,7 @@
                     <DataGridTextColumn Header="Retrieval" Binding="{Binding RetrievalSourceText}" Width="130">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#9ad0f5"/>
+                                <Setter Property="Foreground" Value="{StaticResource Brush.Status.Info}"/>
                                 <Setter Property="FontSize" Value="10"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
@@ -147,7 +147,7 @@
                     <DataGridTextColumn Header="Data Type" Binding="{Binding DataTypeText}" Width="100">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#cbd5e1"/>
+                                <Setter Property="Foreground" Value="{StaticResource LightGrayBrush}"/>
                                 <Setter Property="FontSize" Value="10"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
@@ -157,7 +157,7 @@
                     <DataGridTextColumn Header="Error" Binding="{Binding ErrorMessage}" Width="200">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#f87171"/>
+                                <Setter Property="Foreground" Value="{StaticResource ErrorRedBrush}"/>
                                 <Setter Property="FontSize" Value="10"/>
                                 <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
@@ -169,7 +169,7 @@
         </Border>
         
         <!-- Action and Filter buttons -->
-        <Border Grid.Row="3" Background="#2d2d2d" Padding="8">
+        <Border Grid.Row="3" Background="{StaticResource CardBackgroundBrush}" Padding="8">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -200,7 +200,7 @@
                 
                 <!-- Filter buttons (right side) -->
                 <WrapPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <TextBlock Text="Filter:" VerticalAlignment="Center" Foreground="#888888" Margin="0,0,8,0"/>
+                    <TextBlock Text="Filter:" VerticalAlignment="Center" Foreground="{StaticResource GrayBrush}" Margin="0,0,8,0"/>
                     <ui:Button Content="All" MinWidth="64" MinHeight="28" Appearance="Secondary" Padding="10,4" Margin="0,0,4,0" Click="OnFilterAll" helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
                     <ui:Button Content="Pending" MinWidth="76" MinHeight="28" Appearance="Secondary" Padding="10,4" Margin="0,0,4,0" Click="OnFilterPending" helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
                     <ui:Button Content="Fetching" MinWidth="82" MinHeight="28" Appearance="Secondary" Padding="10,4" Margin="0,0,4,0" Click="OnFilterFetching" helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>

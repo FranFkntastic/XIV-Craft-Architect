@@ -122,10 +122,10 @@
                         <TextBlock Text="Market Analysis Layout"
                                    FontWeight="SemiBold"
                                    Margin="0,8,0,4"
-                                   Foreground="#cccccc"/>
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
                         <TextBlock Text="Choose between the modern split-pane view (like the web app) or the legacy card-based view."
                                    FontSize="11"
-                                   Foreground="#888888"
+                                   Foreground="{StaticResource GrayBrush}"
                                    Margin="0,0,0,8"
                                    TextWrapping="Wrap"/>
                         <ui:ToggleSwitch x:Name="UseSplitPaneMarketViewToggle"
@@ -143,7 +143,7 @@
                         <TextBlock Text="Default Data Center"
                                    FontWeight="SemiBold"
                                    Margin="0,8,0,4"
-                                   Foreground="#cccccc"/>
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
                         <ComboBox x:Name="DefaultDataCenterCombo"
                                   Margin="0,0,0,8"
                                   helpers:ComboBoxAutoWidthBehavior.EnableAutoWidth="True">
@@ -162,10 +162,10 @@
                         <TextBlock Text="Home World"
                                    FontWeight="SemiBold"
                                    Margin="0,8,0,4"
-                                   Foreground="#cccccc"/>
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
                         <TextBlock Text="Your character's home world (optional). Home worlds bypass congested world restrictions in recommendations."
                                    FontSize="11"
-                                   Foreground="#888888"
+                                   Foreground="{StaticResource GrayBrush}"
                                    Margin="0,0,0,8"/>
                         <TextBox x:Name="HomeWorldTextBox"
                                  Margin="0,0,0,16"
@@ -198,11 +198,11 @@
                         <TextBlock Text="World Status"
                                    FontWeight="SemiBold"
                                    Margin="0,8,0,4"
-                                   Foreground="#cccccc"/>
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
                         <TextBlock x:Name="WorldStatusText"
                                    Text="Status unknown - refresh to load"
                                    FontSize="11"
-                                   Foreground="#888888"
+                                   Foreground="{StaticResource GrayBrush}"
                                    Margin="0,0,0,8"/>
                         <StackPanel Orientation="Horizontal">
                             <ui:Button x:Name="RefreshWorldStatusButton"
@@ -212,12 +212,12 @@
                             <TextBlock x:Name="WorldStatusLastUpdated"
                                        Text=""
                                        FontSize="11"
-                                       Foreground="#888888"
+                                        Foreground="{StaticResource GrayBrush}"
                                        VerticalAlignment="Center"/>
                         </StackPanel>
                         <TextBlock Text="Fetches current world congestion data from the Lodestone. Congested worlds are marked in market recommendations."
                                    FontSize="10"
-                                   Foreground="#666666"
+                                   Foreground="{StaticResource DarkGrayBrush}"
                                    Margin="0,4,0,0"
                                    TextWrapping="Wrap"/>
 
@@ -238,7 +238,7 @@
                         <TextBlock Text="Default Recommendation Mode"
                                    FontWeight="SemiBold"
                                    Margin="0,8,0,4"
-                                   Foreground="#cccccc"/>
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
                         <ComboBox x:Name="DefaultRecommendationModeCombo"
                                   Margin="0,0,0,16"
                                   helpers:ComboBoxAutoWidthBehavior.EnableAutoWidth="True">
@@ -256,10 +256,10 @@
                         <TextBlock Text="Diagnostic Logging"
                                    FontWeight="SemiBold"
                                    Margin="0,8,0,4"
-                                   Foreground="#cccccc"/>
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
                         <TextBlock Text="Enable detailed diagnostic output for troubleshooting. Changes take effect immediately."
                                    FontSize="11"
-                                   Foreground="#888888"
+                                   Foreground="{StaticResource GrayBrush}"
                                    Margin="0,0,0,8"/>
                         
                         <ui:ToggleSwitch x:Name="EnableDiagnosticLoggingToggle"
@@ -272,10 +272,10 @@
                         <TextBlock Text="Log Level"
                                    FontWeight="SemiBold"
                                    Margin="0,8,0,4"
-                                   Foreground="#cccccc"/>
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
                         <TextBlock Text="Minimum log level to write to debug.log. Debug produces the most output, Error the least."
                                    FontSize="11"
-                                   Foreground="#888888"
+                                   Foreground="{StaticResource GrayBrush}"
                                    Margin="0,0,0,8"/>
                         <ComboBox x:Name="LogLevelCombo"
                                   Margin="0,0,0,16"
@@ -291,14 +291,14 @@
                         <TextBlock Text="Debug Tools"
                                    FontWeight="SemiBold"
                                    Margin="0,8,0,4"
-                                   Foreground="#cccccc"/>
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
                         <ui:Button Content="View Logs"
                                    Click="OnViewLogsClick"
                                    Margin="0,8"
                                    ToolTip="Open the log viewer window"/>
                         <TextBlock Text="Opens debug.log in the log viewer for troubleshooting."
                                    FontSize="11"
-                                   Foreground="#888888"
+                                   Foreground="{StaticResource GrayBrush}"
                                    Margin="0,0,0,8"/>
                     </StackPanel>
                 </ScrollViewer>

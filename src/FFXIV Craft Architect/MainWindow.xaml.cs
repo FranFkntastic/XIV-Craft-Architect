@@ -48,9 +48,6 @@ namespace FFXIV_Craft_Architect;
 /// </summary>
 public partial class MainWindow : Window
 {
-    private StackPanel RecipePlannerLeftPanel => RecipePlannerSidebarModule.RecipePlannerLeftPanel;
-    private StackPanel MarketAnalysisLeftPanel => MarketAnalysisSidebarModule.MarketAnalysisLeftPanel;
-    private StackPanel ProcurementPlannerLeftPanel => ProcurementPlannerSidebarModule.ProcurementPlannerLeftPanel;
     private Wpf.Ui.Controls.TextBox ItemSearch => RecipePlannerSidebarModule.ItemSearchControl;
     private Border SearchResultsPanel => RecipePlannerSidebarModule.SearchResultsPanelControl;
     private ListBox SearchResults => RecipePlannerSidebarModule.SearchResultsControl;
@@ -74,11 +71,9 @@ public partial class MainWindow : Window
     private ComboBox ProcurementPlannerSortCombo => ProcurementPlannerSidebarModule.LeftPanelProcurementSortComboControl;
     private ComboBox ProcurementModeCombo => MarketAnalysisSidebarModule.ProcurementModeComboControl;
     private CheckBox ProcurementSearchAllNaCheck => MarketAnalysisSidebarModule.ProcurementSearchAllNaCheckControl;
+    private CheckBox EnableSplitWorldCheck => MarketAnalysisSidebarModule.EnableSplitWorldCheckControl;
     private Panel ProcurementPanel => MarketAnalysisModule.SplitPaneCardsGrid;
-    private Grid SplitPaneMarketView => MarketAnalysisModule.SplitPaneMarketView;
-    private Border SplitPaneExpandedPanel => MarketAnalysisModule.SplitPaneExpandedPanel;
-    private StackPanel SplitPaneExpandedContent => MarketAnalysisModule.SplitPaneExpandedContent;
-    private WrapPanel SplitPaneCardsGrid => MarketAnalysisModule.SplitPaneCardsGrid;
+    private Panel SplitPaneCardsGrid => MarketAnalysisModule.SplitPaneCardsGrid;
     private StackPanel ProcurementPlanPanel => ProcurementPlannerModule.ProcurementPlanPanel;
 
     private readonly GarlandService _garlandService;
@@ -178,6 +173,7 @@ public partial class MainWindow : Window
 
         MarketAnalysisSidebarModule.ConductAnalysisClicked += OnConductAnalysis;
         MarketAnalysisSidebarModule.ViewMarketStatusClicked += OnViewMarketStatus;
+        MarketAnalysisSidebarModule.EnableSplitWorldChanged += OnEnableSplitWorldChanged;
 
         ProcurementPlannerSidebarModule.ProcurementSortChanged += OnProcurementSortChanged;
         ProcurementPlannerSidebarModule.BuildProcurementPlanClicked += OnBuildProcurementPlan;
@@ -192,8 +188,6 @@ public partial class MainWindow : Window
         _procurementBuilder = new ProcurementPanelBuilder(
             _infoPanelBuilder,
             SplitPaneCardsGrid,
-            SplitPaneExpandedContent,
-            SplitPaneExpandedPanel,
             MarketTotalCostText,
             ProcurementPlanPanel,
             loggerFactory?.CreateLogger<ProcurementPanelBuilder>());
@@ -563,6 +557,13 @@ public partial class MainWindow : Window
         {
             var targets = _recipeVm.ProjectItems.Select(p => (p.Id, p.Name, p.Quantity, p.IsHqRequired)).ToList();
             _recipeVm.CurrentPlan = await _recipeCalcService.BuildPlanAsync(targets, dc, world);
+            
+            // Populate vendor options for all items in the plan
+            // This is separate from market data fetch - vendor data comes from Garland cache
+            if (_currentPlan != null)
+            {
+                await _recipeCalcService.FetchVendorPricesAsync(_currentPlan);
+            }
              
             if (_currentPlan != null)
             {
@@ -722,13 +723,13 @@ public partial class MainWindow : Window
     /// </summary>
     private Brush GetNodeForeground(PlanNode node) => node.Source switch
     {
-        AcquisitionSource.Craft => Brushes.White,
-        AcquisitionSource.MarketBuyNq => Brushes.LightSkyBlue,
-        AcquisitionSource.MarketBuyHq => Brushes.LightGreen,
-        AcquisitionSource.VendorBuy => Brushes.LightYellow,
-        _ => Brushes.LightGray
+        AcquisitionSource.Craft => ResolveBrush("TextPrimaryBrush", Brushes.White),
+        AcquisitionSource.MarketBuyNq => ResolveBrush("LightSkyBlueBrush", Brushes.LightSkyBlue),
+        AcquisitionSource.MarketBuyHq => ResolveBrush("LightGreenBrush", Brushes.LightGreen),
+        AcquisitionSource.VendorBuy => ResolveBrush("LightYellowBrush", Brushes.LightYellow),
+        _ => ResolveBrush("LightGrayBrush", Brushes.LightGray)
     };
-    
+
     /// <summary>
     /// Gets the price display text for a node.
     /// Note: Uses RecipeCalculationService.CalculateNodeCraftCost - business logic extracted.

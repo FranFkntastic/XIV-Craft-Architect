@@ -1,8 +1,10 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using CommunityToolkit.Mvvm.ComponentModel;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.ViewModels;
 using Microsoft.Extensions.Logging;
 using PriceInfo = FFXIV_Craft_Architect.Core.Models.PriceInfo;
 
@@ -27,13 +29,14 @@ public record MarketSummaryData(
 /// <summary>
 /// Coordinates market logistics calculations and UI state for the Market Logistics tab.
 /// Separates market logistics logic from MainWindow.
+/// Implements INotifyPropertyChanged for MVVM binding to selection state.
 /// </summary>
-public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
+public partial class MarketLogisticsCoordinator : ObservableObject, IMarketLogisticsCoordinator
 {
     private readonly MarketShoppingService _marketShoppingService;
     private readonly ILogger<MarketLogisticsCoordinator> _logger;
-    private int? _expandedSplitPaneItemId;
-
+    private IReadOnlyList<DetailedShoppingPlan> _availablePlans = [];
+    
     /// <summary>
     /// Initializes a new instance of the <see cref="MarketLogisticsCoordinator"/> class.
     /// </summary>
@@ -46,28 +49,84 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
         _marketShoppingService = marketShoppingService;
         _logger = logger;
     }
-
+    
+    #region Selection State (MVVM Binding)
+    
+    [ObservableProperty]
+    private ExpandedPanelViewModel? _selectedExpandedPanel;
+    
+    [ObservableProperty]
+    private int? _selectedItemId;
+    
     /// <inheritdoc />
-    public int? ExpandedSplitPaneItemId => _expandedSplitPaneItemId;
-
-    /// <inheritdoc />
-    public bool ToggleExpandedSplitPaneItem(int itemId)
+    public void SetAvailablePlans(IReadOnlyList<DetailedShoppingPlan> plans)
     {
-        if (_expandedSplitPaneItemId == itemId)
+        _availablePlans = plans ?? [];
+        
+        if (SelectedItemId.HasValue)
         {
-            _expandedSplitPaneItemId = null;
-            return false;
+            var stillExists = _availablePlans.Any(p => p.ItemId == SelectedItemId.Value);
+            if (!stillExists)
+            {
+                ClearSelection();
+            }
         }
-
-        _expandedSplitPaneItemId = itemId;
-        return true;
+    }
+    
+    /// <inheritdoc />
+    public void SelectItem(int itemId)
+    {
+        var plan = _availablePlans.FirstOrDefault(p => p.ItemId == itemId);
+        if (plan == null)
+        {
+            _logger.LogWarning("[SelectItem] Item {ItemId} not found in available plans", itemId);
+            return;
+        }
+        
+        if (SelectedItemId == itemId)
+        {
+            ClearSelection();
+            return;
+        }
+        
+        SelectedItemId = itemId;
+        SelectedExpandedPanel = new ExpandedPanelViewModel(plan, this);
+        
+        _logger.LogDebug("[SelectItem] Selected item {ItemId} - {Name}", itemId, plan.Name);
+    }
+    
+    /// <inheritdoc />
+    public void ClearSelection()
+    {
+        SelectedItemId = null;
+        SelectedExpandedPanel = null;
+        
+        _logger.LogDebug("[ClearSelection] Selection cleared");
     }
 
     /// <inheritdoc />
-    public void ClearExpandedSplitPaneItem()
+    public void OpenDetailsWindow(DetailedShoppingPlan plan)
     {
-        _expandedSplitPaneItemId = null;
+        var viewModel = new SplitWorldWindowViewModel(plan);
+        var window = new Views.SplitWorldRecommendationWindow(viewModel)
+        {
+            Owner = null,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen
+        };
+
+        viewModel.RequestClose += (_, _) => window.Close();
+        window.Show();
+
+        _logger.LogDebug("[OpenDetailsWindow] Opened details window for {Name} (split={Split})", plan.Name, plan.RequiresSplitPurchase);
     }
+
+    /// <inheritdoc />
+    public void OpenSplitWorldWindow(DetailedShoppingPlan plan)
+    {
+        OpenDetailsWindow(plan);
+    }
+    
+    #endregion
 
     /// <summary>
     /// Result of a market logistics calculation.
@@ -104,7 +163,7 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
 
         var border = new Border
         {
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3d3e2d")),
+            Background = ResolveBrush("Brush.Surface.Card.Placeholder", Brushes.DimGray),
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(16),
             Margin = new Thickness(0, 0, 0, 12)
@@ -115,7 +174,7 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
         var header = new TextBlock
         {
             Text = "Market Board Items",
-            Foreground = Brushes.White,
+            Foreground = ResolveBrush("TextPrimaryBrush", Brushes.White),
             FontWeight = FontWeights.Bold,
             FontSize = 14,
             Margin = new Thickness(0, 0, 0, 8)
@@ -124,7 +183,7 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
         var content = new TextBlock
         {
             Text = message,
-            Foreground = Brushes.LightGray,
+            Foreground = ResolveBrush("LightGrayBrush", Brushes.LightGray),
             TextWrapping = TextWrapping.Wrap
         };
         
@@ -197,6 +256,10 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
                 var vendorPlans = CreateVendorShoppingPlans(vendorItems, prices);
                 shoppingPlans.AddRange(vendorPlans);
             }
+
+            // Apply hard-lock vendor overrides for items explicitly marked as VendorBuy in the plan tree
+            // This ensures user's vendor dropdown selection is respected
+            _marketShoppingService.ApplyVendorPurchaseOverrides(plan, shoppingPlans);
 
             var craftVsBuyAnalyses = _marketShoppingService.AnalyzeCraftVsBuy(plan, prices);
 
@@ -271,6 +334,10 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
                 shoppingPlans = shoppingPlans.Concat(vendorPlans).ToList();
             }
 
+            // Apply hard-lock vendor overrides for items explicitly marked as VendorBuy in the plan tree
+            // This ensures user's vendor dropdown selection is respected
+            _marketShoppingService.ApplyVendorPurchaseOverrides(plan, shoppingPlans);
+
             return new MarketLogisticsResult(
                 true,
                 $"Market analysis rebuilt from {prices.Count} cached prices.",
@@ -298,6 +365,8 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
 
     /// <summary>
     /// Categorizes materials by their price source (vendor, market, or untradeable).
+    /// Checks both PriceSource (from price data) AND AcquisitionSource (from user selection in plan tree).
+    /// Items marked as VendorBuy in the plan tree are always treated as vendor items.
     /// </summary>
     /// <param name="plan">The crafting plan containing materials.</param>
     /// <param name="prices">Dictionary of price information.</param>
@@ -309,13 +378,29 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
         var marketItems = new List<MaterialAggregate>();
         var untradeableItems = new List<MaterialAggregate>();
 
+        // Collect items explicitly marked as VendorBuy in the plan tree
+        var vendorBuyItemIds = new HashSet<int>();
+        CollectVendorBuyItemIds(plan.RootItems, vendorBuyItemIds);
+        
+        _logger.LogDebug("[CategorizeMaterials] Found {Count} items marked as VendorBuy in plan tree", 
+            vendorBuyItemIds.Count);
+
         foreach (var material in plan.AggregatedMaterials)
         {
+            // Check if user explicitly selected VendorBuy in recipe tree
+            if (vendorBuyItemIds.Contains(material.ItemId))
+            {
+                _logger.LogDebug("[CategorizeMaterials] {Name} marked as vendor (VendorBuy in plan)", material.Name);
+                vendorItems.Add(material);
+                continue;
+            }
+            
             if (prices.TryGetValue(material.ItemId, out var priceInfo))
             {
                 switch (priceInfo.Source)
                 {
                     case PriceSource.Vendor:
+                        _logger.LogDebug("[CategorizeMaterials] {Name} marked as vendor (PriceSource.Vendor)", material.Name);
                         vendorItems.Add(material);
                         break;
                     case PriceSource.Untradeable:
@@ -334,7 +419,29 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
             }
         }
 
+        _logger.LogInformation("[CategorizeMaterials] Categorized: {VendorCount} vendor, {MarketCount} market, {UntradeableCount} untradeable",
+            vendorItems.Count, marketItems.Count, untradeableItems.Count);
+
         return (vendorItems, marketItems, untradeableItems);
+    }
+
+    /// <summary>
+    /// Recursively collects item IDs that are marked as VendorBuy in the plan tree.
+    /// </summary>
+    private static void CollectVendorBuyItemIds(List<PlanNode> nodes, HashSet<int> itemIds)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Source == AcquisitionSource.VendorBuy)
+            {
+                itemIds.Add(node.ItemId);
+            }
+            
+            if (node.Children.Count > 0)
+            {
+                CollectVendorBuyItemIds(node.Children, itemIds);
+            }
+        }
     }
 
     /// <summary>
@@ -361,7 +468,7 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
             // Create the vendor "world" summary
             var vendorWorldSummary = new WorldShoppingSummary
             {
-                WorldName = "Vendor",
+                WorldName = MarketShoppingConstants.VendorWorldName,
                 WorldId = 0, // Vendor has no world ID
                 TotalCost = totalCost,
                 AveragePricePerUnit = unitPrice,
@@ -379,7 +486,7 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
                     {
                         Quantity = item.TotalQuantity,
                         PricePerUnit = (long)unitPrice,
-                        RetainerName = "Vendor",
+                        RetainerName = MarketShoppingConstants.VendorWorldName,
                         IsUnderAverage = true, // Vendor prices are always the best
                         IsHq = false,
                         NeededFromStack = item.TotalQuantity,
@@ -405,9 +512,14 @@ public class MarketLogisticsCoordinator : IMarketLogisticsCoordinator
             _logger.LogDebug("[CreateVendorShoppingPlans] Created plan for {ItemName} - Vendor price: {Price}g x{Quantity} = {Total}g",
                 item.Name, unitPrice, item.TotalQuantity, totalCost);
         }
-        
+
         _logger.LogInformation("[CreateVendorShoppingPlans] Created {Count} vendor shopping plans", plans.Count);
         return plans;
+    }
+
+    private static Brush ResolveBrush(string resourceKey, Brush fallback)
+    {
+        return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
     }
 
     /// <summary>

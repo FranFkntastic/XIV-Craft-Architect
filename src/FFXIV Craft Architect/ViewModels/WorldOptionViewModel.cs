@@ -142,12 +142,12 @@ public class WorldOptionViewModel : ViewModelBase
         get
         {
             if (_world.IsCongested)
-                return "#3d2d2d";  // Muted reddish for congested
+                return UiColorHex.WorldCongestedBackground;
             if (_world.IsHomeWorld)
-                return "#3d3520";  // Gold-tinted for home world
+                return UiColorHex.WorldHomeBackground;
             if (_isRecommended)
-                return "#2d4a3e";  // Greenish for recommended
-            return "#2d2d2d";      // Default gray
+                return UiColorHex.WorldRecommendedBackground;
+            return UiColorHex.WorldDefaultBackground;
         }
     }
 
@@ -159,11 +159,11 @@ public class WorldOptionViewModel : ViewModelBase
         get
         {
             if (_world.IsHomeWorld)
-                return "#ffd700";  // Gold border for home world
+                return UiColorHex.WorldHomeBorder;
             if (_world.IsCongested)
-                return "#cd5c5c";  // IndianRed for congested
+                return UiColorHex.WorldCongestedBorder;
             if (_isRecommended)
-                return "#d4a73a";  // Gold for recommended
+                return UiColorHex.WorldRecommendedBorder;
             return null;
         }
     }
@@ -186,10 +186,10 @@ public class WorldOptionViewModel : ViewModelBase
         get
         {
             if (_world.IsHomeWorld)
-                return "#ffd700";  // Gold
+                return UiColorHex.WorldHomeBorder;
             if (_world.IsCongested)
-                return "#cd5c5c";  // IndianRed
-            return "#ffffff";      // White
+                return UiColorHex.WorldCongestedBorder;
+            return UiColorHex.TextPrimary;
         }
     }
 

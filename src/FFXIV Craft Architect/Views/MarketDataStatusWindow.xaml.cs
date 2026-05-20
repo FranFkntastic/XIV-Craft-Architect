@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Data;
+using System.Windows.Media;
 using FFXIV_Craft_Architect.Models;
 using FFXIV_Craft_Architect.Services;
 using FFXIV_Craft_Architect.Services.Interfaces;
@@ -73,13 +74,13 @@ public partial class MarketDataStatusWindow : Window
         {
             ProgressText.Text = $" - Complete ({completed}/{total})";
             ProgressText.Foreground = failed > 0
-                ? System.Windows.Media.Brushes.Orange
-                : System.Windows.Media.Brushes.LightGreen;
+                ? ResolveBrush("WarningOrangeBrush", Brushes.Orange)
+                : ResolveBrush("LightGreenBrush", Brushes.LightGreen);
         }
         else
         {
             ProgressText.Text = $" - In Progress ({completed}/{total})";
-            ProgressText.Foreground = System.Windows.Media.Brushes.LightBlue;
+            ProgressText.Foreground = ResolveBrush("Brush.Status.Info", Brushes.LightBlue);
         }
     }
 
@@ -176,6 +177,11 @@ public partial class MarketDataStatusWindow : Window
     }
 
     #endregion
+
+    private static Brush ResolveBrush(string resourceKey, Brush fallback)
+    {
+        return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
+    }
 }
 
 /// <summary>
@@ -194,10 +200,10 @@ public class StringToBrushConverter : System.Windows.Data.IValueConverter
             }
             catch
             {
-                return System.Windows.Media.Brushes.Gray;
+                return Application.Current?.TryFindResource("GrayBrush") as Brush ?? Brushes.Gray;
             }
         }
-        return System.Windows.Media.Brushes.Gray;
+        return Application.Current?.TryFindResource("GrayBrush") as Brush ?? Brushes.Gray;
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)

@@ -177,7 +177,12 @@ public class StringToBrushConverter : IValueConverter
             return legacyCard;
         }
 
-        return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#2d2d2d"));
+        if (Application.Current?.TryFindResource("CardBackgroundBrush") is Brush card)
+        {
+            return card;
+        }
+
+        return Brushes.DimGray;
     }
 }
 

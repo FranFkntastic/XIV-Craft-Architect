@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Services;
@@ -11,6 +12,8 @@ namespace FFXIV_Craft_Architect.Services;
 /// </summary>
 public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
 {
+    private static readonly PurchaseSummaryService _summaryService = new();
+    
     /// <inheritdoc />
     public void BuildSummary(Panel targetPanel, IEnumerable<DetailedShoppingPlan> shoppingPlans)
     {
@@ -20,9 +23,11 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
         if (plans?.Any() != true)
             return;
         
-        var itemsByWorld = plans
-            .Where(p => p.RecommendedWorld != null)
-            .GroupBy(p => p.RecommendedWorld!.WorldName)
+        var summaries = _summaryService.CreateSummaries(plans);
+        
+        var itemsByWorld = summaries
+            .Where(s => s.RecommendedWorld != null)
+            .GroupBy(s => s.RecommendedWorld!.WorldName)
             .OrderBy(g => g.Key)
             .ToList();
         
@@ -31,7 +36,7 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
             targetPanel.Children.Add(new TextBlock 
             { 
                 Text = "No viable market listings found",
-                Foreground = Brushes.Gray,
+                Foreground = ResolveBrush("GrayBrush", Brushes.Gray),
                 FontSize = 12
             });
             return;
@@ -41,7 +46,7 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
         {
             var worldName = worldGroup.Key;
             var items = worldGroup.ToList();
-            var worldTotal = items.Sum(i => i.RecommendedWorld?.TotalCost ?? 0);
+            var worldTotal = items.Sum(i => i.TotalCost);
             var isHomeWorld = items.First().RecommendedWorld?.IsHomeWorld ?? false;
             
             var worldHeader = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
@@ -51,7 +56,9 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
                 Text = worldName,
                 FontWeight = FontWeights.SemiBold,
                 FontSize = 12,
-                Foreground = isHomeWorld ? Brushes.Gold : Brushes.White
+                Foreground = isHomeWorld
+                    ? ResolveBrush("AccentGoldBrush", Brushes.Gold)
+                    : ResolveBrush("TextPrimaryBrush", Brushes.White)
             };
             worldHeader.Children.Add(worldText);
             
@@ -60,7 +67,7 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
                 worldHeader.Children.Add(new TextBlock
                 {
                     Text = " \u2605 HOME",
-                    Foreground = Brushes.Gold,
+                    Foreground = ResolveBrush("AccentGoldBrush", Brushes.Gold),
                     FontSize = 10,
                     FontWeight = FontWeights.Bold,
                     Margin = new Thickness(4, 0, 0, 0)
@@ -70,7 +77,7 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
             worldHeader.Children.Add(new TextBlock
             {
                 Text = $" - {items.Count} items, {worldTotal:N0}g total",
-                Foreground = Brushes.Gray,
+                Foreground = ResolveBrush("GrayBrush", Brushes.Gray),
                 FontSize = 11,
                 Margin = new Thickness(8, 0, 0, 0)
             });
@@ -81,9 +88,9 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
             {
                 var itemText = new TextBlock
                 {
-                    Text = $"  \u2022 {item.Name} \u00d7{item.QuantityNeeded} = {item.RecommendedWorld?.TotalCost:N0}g",
+                    Text = $"  \u2022 {item.ShortDisplayText} = {item.TotalCost:N0}g",
                     FontSize = 11,
-                    Foreground = Brushes.LightGray,
+                    Foreground = ResolveBrush("LightGrayBrush", Brushes.LightGray),
                     TextWrapping = TextWrapping.Wrap,
                     Margin = new Thickness(0, 0, 0, 2)
                 };
@@ -93,15 +100,20 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
             targetPanel.Children.Add(new Border { Height = 12 });
         }
         
-        var grandTotal = plans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
+        var grandTotal = summaries.Sum(s => s.TotalCost);
         var totalText = new TextBlock
         {
             Text = $"Grand Total: {grandTotal:N0}g",
             FontWeight = FontWeights.Bold,
             FontSize = 12,
-            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4caf50")),
+            Foreground = ResolveBrush("Brush.Status.Success", Brushes.LightGreen),
             Margin = new Thickness(0, 8, 0, 0)
         };
         targetPanel.Children.Add(totalText);
+    }
+
+    private static Brush ResolveBrush(string resourceKey, Brush fallback)
+    {
+        return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
     }
 }

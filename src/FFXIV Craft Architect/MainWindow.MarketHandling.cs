@@ -262,7 +262,7 @@ public partial class MainWindow
                 }
                 else if (priceInfo.Source == PriceSource.Vendor)
                 {
-                    _marketDataStatusSession.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, "N/A", "Garland", "Vendor");
+                    _marketDataStatusSession.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, "N/A", "Garland", MarketShoppingConstants.VendorWorldName);
                 }
                 else if (priceInfo.Source == PriceSource.Untradeable)
                 {
@@ -311,7 +311,20 @@ public partial class MainWindow
 
         StatusLabel.Text = "Running market analysis from cached data...";
 
+        _logger.LogInformation("[RunMarketAnalysisFromCacheAsync] Extracting prices from plan...");
         var prices = _recipeCalcService.ExtractPricesFromPlan(_currentPlan);
+        _logger.LogInformation("[RunMarketAnalysisFromCacheAsync] Extracted {Count} prices. Keys: [{Keys}]",
+            prices.Count, string.Join(", ", prices.Keys));
+
+        // Log which items are in AggregatedMaterials but NOT in prices
+        var aggMaterials = _currentPlan.AggregatedMaterials ?? new List<MaterialAggregate>();
+        var missingPrices = aggMaterials.Where(m => !prices.ContainsKey(m.ItemId)).ToList();
+        if (missingPrices.Any())
+        {
+            _logger.LogWarning("[RunMarketAnalysisFromCacheAsync] {Count} items in AggregatedMaterials have no price data: [{Items}]",
+                missingPrices.Count, string.Join(", ", missingPrices.Select(m => $"{m.Name}({m.ItemId})")));
+        }
+
         await UpdateMarketLogisticsAsync(prices, useCachedData: false, searchAllNA: searchAllNA);
 
         StatusLabel.Text = $"Market analysis complete. {_currentMarketPlans.Count} recommendation entries updated.";
@@ -429,18 +442,24 @@ public partial class MainWindow
         _logger.LogInformation("[UpdateMarketLogisticsAsync] AggregatedMaterials.Count={Count}, Items=[{Items}]",
             aggMaterials.Count, string.Join(", ", aggMaterials.Select(m => $"{m.Name}({m.ItemId})x{m.TotalQuantity}")));
 
-        var categorized = _marketShoppingService.CategorizeMaterials(aggMaterials, prices);
+        // Pass plan to check for VendorBuy acquisition source in addition to PriceSource
+        var categorized = _marketShoppingService.CategorizeMaterials(aggMaterials, prices, _currentPlan);
 
         _logger.LogInformation("[UpdateMarketLogisticsAsync] Categorized: Vendor={VendorCount}, Market={MarketCount}, Untradeable={UntradeableCount}",
             categorized.VendorItems.Count, categorized.MarketItems.Count, categorized.UntradeableItems.Count);
 
         UpdateMarketSummaryCard(categorized.VendorItems, categorized.MarketItems, categorized.UntradeableItems, prices);
 
+        // Create vendor plans for split-pane view
+        List<DetailedShoppingPlan> vendorPlans = new();
         if (categorized.VendorItems.Any())
         {
             AddVendorItemsCard(categorized.VendorItems, prices);
+            vendorPlans = CreateVendorShoppingPlansForViewModel(categorized.VendorItems, prices);
         }
 
+        // Handle market items
+        List<DetailedShoppingPlan> marketPlans = new();
         if (categorized.MarketItems.Any())
         {
             if (useCachedData)
@@ -461,32 +480,36 @@ public partial class MainWindow
                             .Select(item => item.ItemId)
                             .ToHashSet();
 
-                        var marketPlans = cachedResult.ShoppingPlans
+                        marketPlans = cachedResult.ShoppingPlans
                             .Where(plan => marketItemIds.Contains(plan.ItemId))
                             .ToList();
-
-                        _marketVm.SetShoppingPlans(marketPlans);
                     }
                 }
             }
             else
             {
                 _logger.LogInformation("[UpdateMarketLogisticsAsync] Fetching live market data for {Count} items (SearchAllNA={SearchAllNA})", categorized.MarketItems.Count, searchAllNA);
-                await FetchAndDisplayLiveMarketDataAsync(categorized.MarketItems, searchAllNA);
+                marketPlans = await FetchAndDisplayLiveMarketDataForPlansAsync(categorized.MarketItems, searchAllNA);
             }
         }
         else
         {
-            _logger.LogWarning("[UpdateMarketLogisticsAsync] No market items to fetch - setting empty shopping plans");
-            _marketVm.SetShoppingPlans(new List<DetailedShoppingPlan>());
+            _logger.LogInformation("[UpdateMarketLogisticsAsync] No market items - vendor-only or empty");
         }
+
+        // Combine vendor and market plans for split-pane view
+        var allPlans = new List<DetailedShoppingPlan>();
+        allPlans.AddRange(vendorPlans);
+        allPlans.AddRange(marketPlans);
+        _marketVm.SetShoppingPlans(allPlans);
 
         if (categorized.UntradeableItems.Any())
         {
             AddUntradeableItemsCard(categorized.UntradeableItems);
         }
 
-        _logger.LogInformation("[UpdateMarketLogisticsAsync] END - _marketVm.ShoppingPlans.Count={Count}", _marketVm.ShoppingPlans.Count);
+        _logger.LogInformation("[UpdateMarketLogisticsAsync] END - _marketVm.ShoppingPlans.Count={Count} (Vendor={Vendor}, Market={Market})", 
+            _marketVm.ShoppingPlans.Count, vendorPlans.Count, marketPlans.Count);
     }
 
     private void ClearMarketLogisticsPanels()
@@ -497,12 +520,24 @@ public partial class MainWindow
 
     private void AddVendorItemsCard(List<MaterialAggregate> vendorItems, Dictionary<int, PriceInfo> prices)
     {
+        _logger.LogInformation("[AddVendorItemsCard] START - {Count} vendor items, Prices has {PriceCount} entries",
+            vendorItems.Count, prices.Count);
+
         var vendorText = new System.Text.StringBuilder();
         vendorText.AppendLine("Buy these from vendors (cheapest option):");
         vendorText.AppendLine();
+
         foreach (var item in vendorItems.OrderByDescending(i => i.TotalCost))
         {
-            var source = prices[item.ItemId].SourceDetails;
+            _logger.LogDebug("[AddVendorItemsCard] Processing {Name} (ItemId={ItemId})", item.Name, item.ItemId);
+
+            if (!prices.TryGetValue(item.ItemId, out var priceInfo))
+            {
+                _logger.LogWarning("[AddVendorItemsCard] No price info for {Name} (ItemId={ItemId}) - skipping", item.Name, item.ItemId);
+                continue;
+            }
+
+            var source = priceInfo.SourceDetails;
             vendorText.AppendLine($"• {item.Name} x{item.TotalQuantity} = {item.TotalCost:N0}g ({source})");
         }
 
@@ -511,27 +546,143 @@ public partial class MainWindow
             vendorText.ToString(),
             MarketInfoCardKind.Vendor);
         ProcurementPanel.Children.Add(vendorCard);
+
+        _logger.LogInformation("[AddVendorItemsCard] END - card added to ProcurementPanel");
+    }
+
+    /// <summary>
+    /// Creates DetailedShoppingPlan objects for vendor items suitable for display in the split-pane view.
+    /// These plans have WorldName = "Vendor" and include vendor information.
+    /// </summary>
+    private List<DetailedShoppingPlan> CreateVendorShoppingPlansForViewModel(
+        List<MaterialAggregate> vendorItems,
+        Dictionary<int, PriceInfo> prices)
+    {
+        _logger.LogInformation("[CreateVendorShoppingPlansForViewModel] START - {Count} vendor items, Prices has {PriceCount} entries",
+            vendorItems.Count, prices.Count);
+
+        var plans = new List<DetailedShoppingPlan>();
+
+        foreach (var item in vendorItems)
+        {
+            _logger.LogDebug("[CreateVendorShoppingPlansForViewModel] Processing {Name} (ItemId={ItemId})",
+                item.Name, item.ItemId);
+
+            if (!prices.TryGetValue(item.ItemId, out var priceInfo))
+            {
+                _logger.LogWarning("[CreateVendorShoppingPlansForViewModel] No price info for {Name} (ItemId={ItemId}) - skipping",
+                    item.Name, item.ItemId);
+                continue;
+            }
+
+            var unitPrice = priceInfo.UnitPrice;
+            var totalCost = (long)(unitPrice * item.TotalQuantity);
+            var selectedVendor = priceInfo.Vendors?
+                .Where(v => v.IsGilVendor)
+                .OrderBy(v => Math.Abs(v.Price - unitPrice))
+                .ThenBy(v => v.Name)
+                .FirstOrDefault();
+
+            _logger.LogDebug("[CreateVendorShoppingPlansForViewModel] {Name}: UnitPrice={UnitPrice}, TotalCost={TotalCost}, Vendors={VendorCount}",
+                item.Name, unitPrice, totalCost, priceInfo.Vendors?.Count ?? 0);
+
+            var vendorWorldSummary = new WorldShoppingSummary
+            {
+                WorldName = MarketShoppingConstants.VendorWorldName,
+                WorldId = 0,
+                TotalCost = totalCost,
+                AveragePricePerUnit = unitPrice,
+                ListingsUsed = 1,
+                TotalQuantityPurchased = item.TotalQuantity,
+                HasSufficientStock = true,
+                IsHomeWorld = false,
+                IsTravelProhibited = false,
+                IsBlacklisted = false,
+                Classification = WorldClassification.Standard,
+                VendorName = selectedVendor?.DisplayName ?? MarketShoppingConstants.VendorWorldName,
+                Listings = new List<ShoppingListingEntry>
+                {
+                    new()
+                    {
+                        Quantity = item.TotalQuantity,
+                        PricePerUnit = (long)unitPrice,
+                        RetainerName = MarketShoppingConstants.VendorWorldName,
+                        IsUnderAverage = true,
+                        IsHq = false,
+                        NeededFromStack = item.TotalQuantity,
+                        ExcessQuantity = 0
+                    }
+                }
+            };
+
+            var plan = new DetailedShoppingPlan
+            {
+                ItemId = item.ItemId,
+                Name = item.Name,
+                IconId = item.IconId,
+                QuantityNeeded = item.TotalQuantity,
+                DCAveragePrice = unitPrice,
+                Vendors = priceInfo.Vendors?.ToList() ?? new List<VendorInfo>(),
+                RecommendedWorld = vendorWorldSummary,
+                WorldOptions = new List<WorldShoppingSummary> { vendorWorldSummary }
+            };
+
+            plans.Add(plan);
+            _logger.LogDebug("[CreateVendorShoppingPlansForViewModel] Created plan for {Name}", item.Name);
+        }
+
+        _logger.LogInformation("[CreateVendorShoppingPlansForViewModel] END - {Count} plans created", plans.Count);
+        return plans;
     }
 
     private void AddCachedMarketDataCard(List<MaterialAggregate> marketItems, Dictionary<int, PriceInfo> prices)
     {
+        _logger.LogInformation("[AddCachedMarketDataCard] START - {Count} market items", marketItems.Count);
+
+        var itemLines = new List<string>();
+        foreach (var m in marketItems)
+        {
+            if (prices.TryGetValue(m.ItemId, out var priceInfo))
+            {
+                itemLines.Add($"• {m.Name} x{m.TotalQuantity} = {m.TotalCost:N0}g ({priceInfo.SourceDetails})");
+            }
+            else
+            {
+                _logger.LogWarning("[AddCachedMarketDataCard] No price info for {Name} (ItemId={ItemId})", m.Name, m.ItemId);
+                itemLines.Add($"• {m.Name} x{m.TotalQuantity} = {m.TotalCost:N0}g (no price data)");
+            }
+        }
+
         var cachedCard = CreateMarketInfoCard(
             $"Market Board Items ({marketItems.Count})",
             "Using saved prices. Click 'Refresh Market Data' to fetch current listings.\n\n" +
-            "Items to purchase:\n" +
-            string.Join("\n", marketItems.Select(m =>
-                $"• {m.Name} x{m.TotalQuantity} = {m.TotalCost:N0}g ({prices[m.ItemId].SourceDetails})")),
+            "Items to purchase:\n" + string.Join("\n", itemLines),
             MarketInfoCardKind.Cached);
         ProcurementPanel.Children.Add(cachedCard);
 
         LeftPanelConductAnalysisButton.IsEnabled = true;
         LeftPanelViewMarketStatusButton.IsEnabled = true;
         MenuViewMarketStatus.IsEnabled = true;
+
+        _logger.LogInformation("[AddCachedMarketDataCard] END - card added");
     }
 
     private async Task FetchAndDisplayLiveMarketDataAsync(List<MaterialAggregate> marketItems, bool searchAllNA = false)
     {
-        _logger.LogInformation("[FetchAndDisplayLiveMarketDataAsync] START - {Count} market items, SearchAllNA={SearchAllNA}",
+        var plans = await FetchAndDisplayLiveMarketDataForPlansAsync(marketItems, searchAllNA);
+        // Plans are set in UpdateMarketLogisticsAsync, just update UI
+        PopulateProcurementPanel();
+    }
+
+    /// <summary>
+    /// Fetches live market data and returns shopping plans (does not set them in ViewModel).
+    /// This allows the caller to combine vendor and market plans.
+    /// </summary>
+    private async Task<List<DetailedShoppingPlan>> FetchAndDisplayLiveMarketDataForPlansAsync(
+        List<MaterialAggregate> marketItems, 
+        bool searchAllNA = false)
+    {
+        _logger.LogInformation("[FetchAndDisplayLiveMarketDataForPlansAsync] START - {Count} market items, SearchAllNA={SearchAllNA}",
             marketItems.Count, searchAllNA);
 
         var dc = DcCombo.SelectedItem as string ?? "Aether";
@@ -559,7 +710,7 @@ public partial class MainWindow
                 var errorCard = CreateMarketInfoCard("Error", result.Message, MarketInfoCardKind.Error);
                 ProcurementPanel.Children.Add(errorCard);
                 StatusLabel.Text = result.Message;
-                return;
+                return new List<DetailedShoppingPlan>();
             }
 
             if (_currentPlan != null)
@@ -568,16 +719,18 @@ public partial class MainWindow
             }
 
             ProcurementPanel.Children.Remove(loadingCard);
-            PopulateProcurementPanel();
-
             StatusLabel.Text = result.Message;
+
+            _logger.LogInformation("[FetchAndDisplayLiveMarketDataForPlansAsync] END - {Count} plans returned", result.Plans.Count);
+            return result.Plans;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[FetchAndDisplayLiveMarketDataAsync] FAILED - Exception: {Message}", ex.Message);
+            _logger.LogError(ex, "[FetchAndDisplayLiveMarketDataForPlansAsync] FAILED - Exception: {Message}", ex.Message);
             ProcurementPanel.Children.Remove(loadingCard);
             var errorCard = CreateMarketInfoCard("Error", $"Error fetching listings: {ex.Message}", MarketInfoCardKind.Error);
             ProcurementPanel.Children.Add(errorCard);
+            return new List<DetailedShoppingPlan>();
         }
         finally
         {

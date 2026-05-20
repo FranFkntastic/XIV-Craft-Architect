@@ -6,7 +6,7 @@
         Width="600"
         Height="550"
         WindowStartupLocation="CenterOwner"
-        Background="#1e1e1e"
+        Background="{StaticResource WindowBackgroundBrush}"
         MinWidth="500"
         MinHeight="400">
 
@@ -26,7 +26,7 @@
 
         <!-- Plan List -->
         <Border Grid.Row="1"
-                Background="#2d2d2d"
+                Background="{StaticResource CardBackgroundBrush}"
                 CornerRadius="4"
                 Padding="8">
             <ListBox x:Name="PlansListBox"

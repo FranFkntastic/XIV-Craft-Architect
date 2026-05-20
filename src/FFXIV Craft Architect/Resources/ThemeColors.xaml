@@ -32,6 +32,9 @@
     <SolidColorBrush x:Key="Brush.Surface.Card.Error" Color="#4a2d2d"/>
     <SolidColorBrush x:Key="Brush.Surface.Card.Placeholder" Color="#3d3e2d"/>
     <SolidColorBrush x:Key="Brush.Surface.Card.Summary" Color="#3d3d3d"/>
+    <SolidColorBrush x:Key="Brush.Surface.Section.Vendor" Color="#2a2520"/>
+    <SolidColorBrush x:Key="Brush.Surface.Section.Market" Color="#20252a"/>
+    <SolidColorBrush x:Key="Brush.Surface.Listings" Color="#1a1a18"/>
 
     <!-- Status -->
     <SolidColorBrush x:Key="Brush.Status.Success" Color="#4caf50"/>
@@ -49,6 +52,11 @@
     <SolidColorBrush x:Key="Brush.Border.Default" Color="#4d4d4d"/>
     <SolidColorBrush x:Key="Brush.Border.Accent" Color="{StaticResource Color.Accent.Primary}"/>
     <SolidColorBrush x:Key="Brush.Border.Card.Market" Color="#4f5963"/>
+    <SolidColorBrush x:Key="Brush.Border.Section.Vendor" Color="#5a4a3a"/>
+    <SolidColorBrush x:Key="Brush.Border.Section.Market" Color="#3a4a5a"/>
+
+    <!-- Domain text accents -->
+    <SolidColorBrush x:Key="Brush.Text.Vendor" Color="#d4e4a7"/>
 
     <!-- Legacy compatibility keys (existing code path, migrate progressively) -->
     <SolidColorBrush x:Key="CardBackgroundBrush" Color="#2d2d2d"/>
@@ -99,7 +107,7 @@
     <sys:Double x:Key="Layout.MarketCard.Collapsed.Width">280</sys:Double>
     <sys:Double x:Key="Layout.MarketCard.Collapsed.ItemNameMaxWidth">190</sys:Double>
     <Thickness x:Key="Layout.MarketCard.Collapsed.Padding">8,6,8,6</Thickness>
-    <Thickness x:Key="Layout.MarketCard.Collapsed.Margin">0,0,6,6</Thickness>
+    <Thickness x:Key="Layout.MarketCard.Collapsed.Margin">0,0,0,6</Thickness>
 
     <SolidColorBrush x:Key="SystemWhiteBrush" Color="#ffffff"/>
     <SolidColorBrush x:Key="SystemBlackBrush" Color="#000000"/>
