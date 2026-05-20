@@ -6,6 +6,7 @@
 @inject GarlandService GarlandService
 @inject UniversalisService UniversalisService
 @inject RecipeCalculationService RecipeCalculationService
+@inject MarketShoppingService MarketShoppingService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @inject AppState AppState
@@ -53,6 +54,8 @@
 </div>
 
 @code {
+    private static readonly string[] NorthAmericanDataCenters = { "Aether", "Primal", "Crystal", "Dynamis" };
+
     private string _searchQuery = string.Empty;
     private bool _isSearching = false;
     private List<GarlandSearchResult> _searchResults = new();
@@ -203,7 +206,7 @@
             
             // Step 2: Fetch prices for all items (craftable and buyable)
             AppState.BeginOperation("Fetching Prices", "Loading market prices for all materials...");
-            await RefreshPricesAsync();
+            await RefreshPricesAsync(rebuildProcurementPlans: false);
             
             // Step 3: Clear previous shopping plans
             AppState.ShoppingPlans.Clear();
@@ -274,7 +277,7 @@
         }
     }
 
-    private async Task RefreshPricesAsync()
+    private async Task RefreshPricesAsync(bool rebuildProcurementPlans = true)
     {
         if (AppState.CurrentPlan == null)
             return;
@@ -306,11 +309,21 @@
             Logger.LogInformation("Cached {Count} market entries to IndexedDB", responses.Count);
 
             AppState.NotifyPlanChanged();
-            
-            Snackbar.Add("Prices updated (vendor + market)", Severity.Success);
+
+            if (rebuildProcurementPlans)
+            {
+                await RebuildShoppingPlansAsync(forceRefreshData: true);
+                AppState.SetStatus("Prices refreshed and procurement plan rebuilt", busy: false);
+                Snackbar.Add("Prices updated and procurement plan rebuilt", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add("Prices updated (vendor + market)", Severity.Success);
+            }
         }
         catch (Exception ex)
         {
+            AppState.SetStatus($"Price refresh failed: {ex.Message}");
             Snackbar.Add($"Failed to fetch prices: {ex.Message}", Severity.Error);
         }
         finally
@@ -318,9 +331,87 @@
             _isRefreshingPrices = false;
             
             // Increment price version to trigger UI re-render in RecipeNodeView components
-            AppState.CurrentPlan.PriceVersion++;
-            
-            Logger.LogInformation("Prices refreshed, version incremented to {Version}", AppState.CurrentPlan.PriceVersion);
+            if (AppState.CurrentPlan != null)
+            {
+                AppState.CurrentPlan.PriceVersion++;
+                Logger.LogInformation("Prices refreshed, version incremented to {Version}", AppState.CurrentPlan.PriceVersion);
+            }
+        }
+    }
+
+    private List<MaterialAggregate> GetBuyItemsForAnalysis()
+    {
+        if (AppState.CurrentPlan == null)
+        {
+            return new List<MaterialAggregate>();
+        }
+
+        return AppState.CurrentPlan.AggregatedMaterials
+            .Where(m => m.TotalQuantity > 0)
+            .ToList();
+    }
+
+    private async Task RebuildShoppingPlansAsync(bool forceRefreshData)
+    {
+        var materials = GetBuyItemsForAnalysis();
+        if (!materials.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+        {
+            AppState.ShoppingPlans.Clear();
+            AppState.NotifyShoppingListChanged();
+            return;
+        }
+
+        var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+        var maxAge = forceRefreshData ? TimeSpan.Zero : (TimeSpan?)null;
+
+        if (AppState.SearchEntireRegion)
+        {
+            foreach (var dc in NorthAmericanDataCenters)
+            {
+                var requests = materials.Select(m => (m.ItemId, dc)).ToList();
+                await MarketCache.EnsurePopulatedAsync(requests, maxAge: maxAge, progress: progress);
+            }
+
+            AppState.ShoppingPlans = await MarketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
+                materials,
+                progress,
+                mode: AppState.RecommendationMode);
+        }
+        else
+        {
+            var requests = materials.Select(m => (m.ItemId, AppState.SelectedDataCenter)).ToList();
+            await MarketCache.EnsurePopulatedAsync(requests, maxAge: maxAge, progress: progress);
+
+            if (AppState.EnableMultiWorldSplits)
+            {
+                var config = new MarketAnalysisConfig
+                {
+                    EnableSplitWorld = AppState.EnableMultiWorldSplits,
+                    MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null
+                };
+
+                AppState.ShoppingPlans = await MarketShoppingService.CalculateShoppingPlansWithSplitsAsync(
+                    materials,
+                    AppState.SelectedDataCenter,
+                    progress,
+                    config: config);
+            }
+            else
+            {
+                AppState.ShoppingPlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+                    materials,
+                    AppState.SelectedDataCenter,
+                    progress,
+                    mode: AppState.RecommendationMode);
+            }
+        }
+
+        MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
+        AppState.NotifyShoppingListChanged();
+
+        if (!string.IsNullOrEmpty(AppState.CurrentPlanId))
+        {
+            await IndexedDb.SaveMarketAnalysisAsync(AppState.CurrentPlanId, AppState.ShoppingPlans, AppState.RecommendationMode);
         }
     }
 

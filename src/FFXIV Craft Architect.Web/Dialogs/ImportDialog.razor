@@ -1,8 +1,10 @@
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @inject ILogger<ImportDialog> Logger
 @inject GarlandService GarlandService
 @inject RecipeCalculationService RecipeService
+@inject IArtisanService ArtisanService
 @inject ISnackbar Snackbar
 
 <MudDialog>
@@ -128,7 +130,7 @@
             }
             else if (!string.IsNullOrWhiteSpace(_artisanJson))
             {
-                items = await ImportArtisanAsync();
+                (items, nativePlan) = await ImportArtisanAsync();
             }
             
             if (items?.Count > 0)
@@ -321,53 +323,81 @@
         return (line, 1);
     }
     
-    private async Task<List<ImportItem>> ImportArtisanAsync()
+    private async Task<(List<ImportItem> Items, CraftingPlan? Plan)> ImportArtisanAsync()
     {
         var items = new List<ImportItem>();
         
         try
         {
+            _processingMessage = "Importing Artisan recipe list...";
+            StateHasChanged();
+
+            var artisanPlan = await ArtisanService.ImportFromArtisanAsync(_artisanJson, "Aether", string.Empty);
+            if (artisanPlan != null && artisanPlan.RootItems.Count > 0)
+            {
+                foreach (var rootItem in artisanPlan.RootItems)
+                {
+                    items.Add(new ImportItem
+                    {
+                        Id = rootItem.ItemId,
+                        Name = rootItem.Name,
+                        IconId = rootItem.IconId,
+                        Quantity = rootItem.Quantity,
+                        MustBeHq = rootItem.MustBeHq
+                    });
+                }
+
+                Logger.LogInformation("[Import] Artisan import resolved {Count} root items via core service", items.Count);
+                return (items, artisanPlan);
+            }
+
+            Logger.LogWarning("[Import] Core Artisan import returned no items, trying legacy Artisan JSON format");
+
             using var doc = System.Text.Json.JsonDocument.Parse(_artisanJson);
             var root = doc.RootElement;
-            
-            // Artisan format has items array with itemId
+
             if (root.TryGetProperty("items", out var itemsArray))
             {
                 foreach (var item in itemsArray.EnumerateArray())
                 {
-                    if (item.TryGetProperty("itemId", out var itemIdElement))
+                    if (!item.TryGetProperty("itemId", out var itemIdElement))
                     {
-                        var itemId = itemIdElement.GetInt32();
-                        var quantity = 1;
-                        
-                        if (item.TryGetProperty("quantity", out var qtyElement))
+                        continue;
+                    }
+
+                    var itemId = itemIdElement.GetInt32();
+                    var quantity = item.TryGetProperty("quantity", out var qtyElement)
+                        ? qtyElement.GetInt32()
+                        : 1;
+
+                    _processingMessage = $"Resolving item {itemId}...";
+                    StateHasChanged();
+
+                    try
+                    {
+                        var results = await GarlandService.SearchAsync(itemId.ToString());
+                        var match = results.FirstOrDefault(r => r.Id == itemId);
+                        if (match == null)
                         {
-                            quantity = qtyElement.GetInt32();
+                            Logger.LogWarning("[Import] Legacy Artisan item {ItemId} could not be resolved", itemId);
+                            continue;
                         }
-                        
-                        // Look up item name from Garland
-                        try
+
+                        items.Add(new ImportItem
                         {
-                            _processingMessage = $"Resolving item {itemId}...";
-                            StateHasChanged();
-                            
-                            var results = await GarlandService.SearchAsync(itemId.ToString());
-                            var match = results.FirstOrDefault(r => r.Id == itemId);
-                            
-                            if (match != null)
-                            {
-                                items.Add(new ImportItem
-                                {
-                                    Id = itemId,
-                                    Name = match.Object.Name,
-                                    IconId = match.Object.IconId,
-                                    Quantity = quantity
-                                });
-                            }
-                        }
-                        catch { /* Skip items that fail to resolve */ }
+                            Id = itemId,
+                            Name = match.Object.Name,
+                            IconId = match.Object.IconId,
+                            Quantity = quantity
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning(ex, "[Import] Failed resolving legacy Artisan item {ItemId}", itemId);
                     }
                 }
+
+                Logger.LogInformation("[Import] Legacy Artisan parser resolved {Count} items", items.Count);
             }
         }
         catch (Exception ex)
@@ -375,7 +405,7 @@
             throw new Exception("Invalid JSON format: " + ex.Message);
         }
         
-        return items;
+        return (items, null);
     }
     
     private void Cancel()
