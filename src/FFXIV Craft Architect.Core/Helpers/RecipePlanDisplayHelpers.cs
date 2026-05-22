@@ -22,6 +22,7 @@ public static class RecipePlanDisplayHelpers
             AcquisitionSource.Craft => "Craft",
             AcquisitionSource.MarketBuyNq => "Buy NQ",
             AcquisitionSource.MarketBuyHq => "Buy HQ",
+            AcquisitionSource.UnknownSource => "Figure it out",
             AcquisitionSource.VendorBuy => "Vendor",
             AcquisitionSource.VendorSpecialCurrency => "Vendor (Currency)",
             _ => source.ToString()
@@ -38,6 +39,7 @@ public static class RecipePlanDisplayHelpers
             AcquisitionSource.Craft => "Craft",
             AcquisitionSource.MarketBuyNq => "NQ",
             AcquisitionSource.MarketBuyHq => "HQ",
+            AcquisitionSource.UnknownSource => "?",
             AcquisitionSource.VendorBuy => "Vend",
             AcquisitionSource.VendorSpecialCurrency => "Currency",
             _ => source.ToString()
@@ -55,6 +57,7 @@ public static class RecipePlanDisplayHelpers
             AcquisitionSource.Craft => "White",
             AcquisitionSource.MarketBuyNq => "LightBlue",
             AcquisitionSource.MarketBuyHq => "LightGreen",
+            AcquisitionSource.UnknownSource => "Gray",
             AcquisitionSource.VendorBuy => "LightGreen",
             AcquisitionSource.VendorSpecialCurrency => "Gold",
             _ => "White"
@@ -71,6 +74,7 @@ public static class RecipePlanDisplayHelpers
             AcquisitionSource.Craft => "#ffffff",
             AcquisitionSource.MarketBuyNq => "#87cefa", // LightSkyBlue
             AcquisitionSource.MarketBuyHq => "#90ee90", // LightGreen
+            AcquisitionSource.UnknownSource => "#b0b0b0",
             AcquisitionSource.VendorBuy => "#90ee90",   // LightGreen
             AcquisitionSource.VendorSpecialCurrency => "#ffd700", // Gold
             _ => "#ffffff"

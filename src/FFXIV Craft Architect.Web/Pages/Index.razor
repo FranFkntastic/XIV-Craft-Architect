@@ -6,6 +6,7 @@
 @inject GarlandService GarlandService
 @inject UniversalisService UniversalisService
 @inject RecipeCalculationService RecipeCalculationService
+@inject MarketShoppingService MarketShoppingService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @inject AppState AppState
@@ -44,21 +45,28 @@
         OnCollapseAllRequested="CollapseAllRecipeNodes"
         OnLoadPlanRequested="LoadSavedPlanAsync"
         OnDeletePlanRequested="DeleteSavedPlanAsync"
-        OnNodeSourceChanged="OnNodeSourceChanged"
+        SelectedNode="@_selectedNode"
+        OnNodeSelected="OnNodeSelected"
         OnNodeHqChanged="OnNodeHqChanged" />
 
     <!-- Right Column: Shopping List -->
-    <ShoppingListPanel
-        CurrentPlan="@AppState.CurrentPlan" />
+    <AcquisitionDetailsPanel
+        Node="@_selectedNode"
+        CurrentPlan="@AppState.CurrentPlan"
+        UnavailableMarketItems="@AppState.UnavailableMarketItems"
+        OnSourceChanged="OnNodeSourceChanged" />
 </div>
 
 @code {
+    private static readonly string[] NorthAmericanDataCenters = { "Aether", "Primal", "Crystal", "Dynamis" };
+
     private string _searchQuery = string.Empty;
     private bool _isSearching = false;
     private List<GarlandSearchResult> _searchResults = new();
     
     private bool _isBuildingPlan = false;
     private bool _isRefreshingPrices = false;
+    private PlanNode? _selectedNode;
 
     protected override async Task OnInitializedAsync()
     {
@@ -74,6 +82,7 @@
 
     private void OnPlanChanged()
     {
+        EnsureSelectedNode();
         InvokeAsync(StateHasChanged);
     }
 
@@ -200,10 +209,11 @@
                 targetItems, 
                 AppState.SelectedDataCenter, 
                 string.Empty);
+            _selectedNode = AppState.CurrentPlan.RootItems.FirstOrDefault();
             
             // Step 2: Fetch prices for all items (craftable and buyable)
             AppState.BeginOperation("Fetching Prices", "Loading market prices for all materials...");
-            await RefreshPricesAsync();
+            var priceRefresh = await RefreshPricesAsync(rebuildProcurementPlans: false);
             
             // Step 3: Clear previous shopping plans
             AppState.ShoppingPlans.Clear();
@@ -212,8 +222,17 @@
             // These will be shown in Procurement Planner for potential analysis
             PopulateShoppingListFromPlan();
             
-            AppState.EndOperation($"Plan built with {AppState.CurrentPlan.RootItems.Count} items. Go to Procurement Planner to analyze.");
-            Snackbar.Add($"Plan built! Prices fetched. Go to Procurement Planner to run market analysis.", Severity.Success);
+            if (priceRefresh.HasUnavailableItems)
+            {
+                var warning = MarketPriceAvailability.FormatUnavailableMessage(priceRefresh.UnavailableItems);
+                AppState.EndOperation($"Plan built with partial market pricing. {warning}");
+                Snackbar.Add($"Plan built with partial market pricing. {warning}", Severity.Warning);
+            }
+            else
+            {
+                AppState.EndOperation($"Plan built with {AppState.CurrentPlan.RootItems.Count} items. Go to Procurement Planner to analyze.");
+                Snackbar.Add("Plan built! Prices fetched. Go to Procurement Planner to run market analysis.", Severity.Success);
+            }
         }
         catch (Exception ex)
         {
@@ -243,8 +262,11 @@
     
     private void CollectBuyItems(PlanNode node, List<MarketShoppingItem> buyItems)
     {
-        // If this node is set to buy (or is uncraftable), add it to the shopping list
-        if (node.Source == AcquisitionSource.MarketBuyNq || node.Source == AcquisitionSource.MarketBuyHq || node.IsUncraftable)
+        // If this node is set to acquire directly, add it to the shopping list.
+        if (node.Source == AcquisitionSource.MarketBuyNq ||
+            node.Source == AcquisitionSource.MarketBuyHq ||
+            node.Source == AcquisitionSource.VendorBuy ||
+            node.Source == AcquisitionSource.UnknownSource)
         {
             // Only add if not already in the list (aggregate quantities)
             var existing = buyItems.FirstOrDefault(i => i.Id == node.ItemId);
@@ -274,12 +296,15 @@
         }
     }
 
-    private async Task RefreshPricesAsync()
+    private async Task<MarketPriceRefreshResult> RefreshPricesAsync(bool rebuildProcurementPlans = true)
     {
         if (AppState.CurrentPlan == null)
-            return;
+        {
+            return new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
+        }
 
         _isRefreshingPrices = true;
+        MarketPriceRefreshResult refreshResult = new(0, 0, Array.Empty<MarketDataUnavailableItem>());
         
         try
         {
@@ -288,7 +313,13 @@
             
             // Fetch market prices (from Universalis)
             var allItemIds = CollectAllItemIds(AppState.CurrentPlan.RootItems);
-            var responses = await UniversalisService.GetMarketDataBulkAsync(AppState.SelectedDataCenter, allItemIds);
+            var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, allItemIds);
+            var nonMarketItemIds = MarketPriceAvailability.GetNonMarketListableItemIds(AppState.CurrentPlan, allItemIds);
+            var responses = marketItemIds.Any()
+                ? await UniversalisService.GetMarketDataBulkAsync(AppState.SelectedDataCenter, marketItemIds)
+                : new Dictionary<int, UniversalisResponse>();
+            refreshResult = MarketPriceAvailability.FromResponses(AppState.CurrentPlan, marketItemIds, responses, nonMarketItemIds);
+            AppState.SetUnavailableMarketItems(refreshResult.UnavailableItems);
 
             // Update nodes with market prices
             foreach (var root in AppState.CurrentPlan.RootItems)
@@ -306,11 +337,37 @@
             Logger.LogInformation("Cached {Count} market entries to IndexedDB", responses.Count);
 
             AppState.NotifyPlanChanged();
-            
-            Snackbar.Add("Prices updated (vendor + market)", Severity.Success);
+
+            if (rebuildProcurementPlans)
+            {
+                await RebuildShoppingPlansAsync(forceRefreshData: true);
+                if (refreshResult.HasUnavailableItems)
+                {
+                    var warning = MarketPriceAvailability.FormatUnavailableMessage(refreshResult.UnavailableItems);
+                    AppState.SetStatus($"Prices refreshed with unavailable market data. {warning}", busy: false);
+                    Snackbar.Add($"Prices refreshed with warnings. {warning}", Severity.Warning);
+                }
+                else
+                {
+                    AppState.SetStatus("Prices refreshed and procurement plan rebuilt", busy: false);
+                    Snackbar.Add("Prices updated and procurement plan rebuilt", Severity.Success);
+                }
+            }
+            else
+            {
+                if (refreshResult.HasUnavailableItems)
+                {
+                    Snackbar.Add(MarketPriceAvailability.FormatUnavailableMessage(refreshResult.UnavailableItems), Severity.Warning);
+                }
+                else
+                {
+                    Snackbar.Add("Prices updated (vendor + market)", Severity.Success);
+                }
+            }
         }
         catch (Exception ex)
         {
+            AppState.SetStatus($"Price refresh failed: {ex.Message}");
             Snackbar.Add($"Failed to fetch prices: {ex.Message}", Severity.Error);
         }
         finally
@@ -318,9 +375,96 @@
             _isRefreshingPrices = false;
             
             // Increment price version to trigger UI re-render in RecipeNodeView components
-            AppState.CurrentPlan.PriceVersion++;
-            
-            Logger.LogInformation("Prices refreshed, version incremented to {Version}", AppState.CurrentPlan.PriceVersion);
+            if (AppState.CurrentPlan != null)
+            {
+                AppState.CurrentPlan.PriceVersion++;
+                Logger.LogInformation("Prices refreshed, version incremented to {Version}", AppState.CurrentPlan.PriceVersion);
+            }
+        }
+
+        return refreshResult;
+    }
+
+    private List<MaterialAggregate> GetBuyItemsForAnalysis()
+    {
+        if (AppState.CurrentPlan == null)
+        {
+            return new List<MaterialAggregate>();
+        }
+
+        return AppState.CurrentPlan.AggregatedMaterials
+            .Where(m => m.TotalQuantity > 0)
+            .ToList();
+    }
+
+    private async Task RebuildShoppingPlansAsync(bool forceRefreshData)
+    {
+        var plan = AppState.CurrentPlan;
+        var materials = GetBuyItemsForAnalysis();
+        if (plan == null || !materials.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+        {
+            AppState.ShoppingPlans.Clear();
+            AppState.NotifyShoppingListChanged();
+            return;
+        }
+
+        var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+        var maxAge = forceRefreshData ? TimeSpan.Zero : (TimeSpan?)null;
+
+        if (AppState.SearchEntireRegion)
+        {
+            foreach (var dc in NorthAmericanDataCenters)
+            {
+                var requests = materials
+                    .Where(m => plan.FindNode(m.ItemId)?.CanBuyFromMarket != false)
+                    .Select(m => (m.ItemId, dc))
+                    .ToList();
+                await MarketCache.EnsurePopulatedAsync(requests, maxAge: maxAge, progress: progress);
+            }
+
+            AppState.ShoppingPlans = await MarketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
+                materials,
+                progress,
+                mode: AppState.RecommendationMode);
+        }
+        else
+        {
+            var requests = materials
+                .Where(m => plan.FindNode(m.ItemId)?.CanBuyFromMarket != false)
+                .Select(m => (m.ItemId, AppState.SelectedDataCenter))
+                .ToList();
+            await MarketCache.EnsurePopulatedAsync(requests, maxAge: maxAge, progress: progress);
+
+            if (AppState.EnableMultiWorldSplits)
+            {
+                var config = new MarketAnalysisConfig
+                {
+                    EnableSplitWorld = AppState.EnableMultiWorldSplits,
+                    MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null
+                };
+
+                AppState.ShoppingPlans = await MarketShoppingService.CalculateShoppingPlansWithSplitsAsync(
+                    materials,
+                    AppState.SelectedDataCenter,
+                    progress,
+                    config: config);
+            }
+            else
+            {
+                AppState.ShoppingPlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+                    materials,
+                    AppState.SelectedDataCenter,
+                    progress,
+                    mode: AppState.RecommendationMode);
+            }
+        }
+
+        MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
+        AppState.NotifyShoppingListChanged();
+
+        if (!string.IsNullOrEmpty(AppState.CurrentPlanId))
+        {
+            await IndexedDb.SaveMarketAnalysisAsync(AppState.CurrentPlanId, AppState.ShoppingPlans, AppState.RecommendationMode);
         }
     }
 
@@ -401,6 +545,25 @@
         // Recalculate shopping list when acquisition source changes
         PopulateShoppingListFromPlan();
         AppState.NotifyPlanChanged();
+    }
+
+    private void OnNodeSelected(PlanNode node)
+    {
+        _selectedNode = node;
+    }
+
+    private void EnsureSelectedNode()
+    {
+        if (AppState.CurrentPlan == null)
+        {
+            _selectedNode = null;
+            return;
+        }
+
+        if (_selectedNode == null || AppState.CurrentPlan.FindNode(_selectedNode.ItemId) == null)
+        {
+            _selectedNode = AppState.CurrentPlan.RootItems.FirstOrDefault();
+        }
     }
 
     private void OnNodeHqChanged(PlanNode node)
@@ -488,6 +651,7 @@
             }
 
             AppState.LoadStoredPlan(storedPlan, plan);
+            _selectedNode = AppState.CurrentPlan?.RootItems.FirstOrDefault();
             
             // Restore market analysis if available
             if (!string.IsNullOrEmpty(storedPlan.MarketPlansJson))

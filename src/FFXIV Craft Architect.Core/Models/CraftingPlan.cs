@@ -24,6 +24,8 @@ public enum AcquisitionSource
     MarketBuyNq,
     /// <summary>Buy HQ from market board</summary>
     MarketBuyHq,
+    /// <summary>Acquisition source is not currently modeled by the utility</summary>
+    UnknownSource,
     /// <summary>
     /// Buy from NPC vendor using gil (standard currency).
     /// 
@@ -393,6 +395,12 @@ public class PlanNode
     /// Whether this item can be HQ (crafted items and gathered materials can, crystals/clusters/aethersands cannot)
     /// </summary>
     public bool CanBeHq { get; set; }
+
+    /// <summary>
+    /// Whether this item can be bought from the market board.
+    /// Defaults to true so older saved plans keep their previous behavior.
+    /// </summary>
+    public bool CanBuyFromMarket { get; set; } = true;
     
     /// <summary>
     /// Source of the price (Vendor, Market, Untradeable)
@@ -550,6 +558,31 @@ public class PlanNode
     /// If true, this item has a craft recipe and can be crafted.
     /// </summary>
     public bool CanCraft { get; set; }
+
+    public void EnsureValidAcquisitionSource()
+    {
+        if (CanBuyFromMarket ||
+            (Source != AcquisitionSource.MarketBuyNq && Source != AcquisitionSource.MarketBuyHq))
+        {
+            return;
+        }
+
+        if (CanBuyFromVendor)
+        {
+            Source = AcquisitionSource.VendorBuy;
+            return;
+        }
+
+        if (CanCraft)
+        {
+            Source = AcquisitionSource.Craft;
+            return;
+        }
+
+        Source = AcquisitionSource.UnknownSource;
+        PriceSource = PriceSource.Untradeable;
+        PriceSourceDetails = "Unknown acquisition source";
+    }
     
     /// <summary>
     /// Deep clone this node and all children
@@ -565,6 +598,7 @@ public class PlanNode
             Source = Source,
             MustBeHq = MustBeHq,
             CanBeHq = CanBeHq,
+            CanBuyFromMarket = CanBuyFromMarket,
             HqMarketPrice = HqMarketPrice,
             RecipeLevel = RecipeLevel,
             Job = Job,
@@ -695,6 +729,8 @@ public class SerializablePlanNode
     
     /// <summary>If true, this item can be HQ (crafted/gathered items can, crystals/aethersands cannot).</summary>
     public bool CanBeHq { get; set; }
+
+    public bool CanBuyFromMarket { get; set; } = true;
     
     public bool IsUncraftable { get; set; }
     public int RecipeLevel { get; set; }

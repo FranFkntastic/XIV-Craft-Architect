@@ -2,26 +2,22 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-        Title="FFXIV Craft Architect v0.1.0"
+        Title="FFXIV Craft Architect"
+        Icon="pack://application:,,,/Resources/AppIcon.ico"
         Width="1600"
         Height="1000"
         WindowStartupLocation="CenterScreen"
-        Background="#1e1e1e"
-        xmlns:helpers="clr-namespace:FFXIV_Craft_Architect.Helpers">
+        Background="{StaticResource WindowBackgroundBrush}"
+        xmlns:helpers="clr-namespace:FFXIV_Craft_Architect.Helpers"
+        xmlns:modules="clr-namespace:FFXIV_Craft_Architect.Views.Modules">
 
     <Window.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="Resources/ThemeColors.xaml"/>
                 <ResourceDictionary Source="Views/DataTemplates/MarketCardTemplates.xaml"/>
+                <ResourceDictionary Source="Views/DataTemplates/MarketInfoCardTemplates.xaml"/>
             </ResourceDictionary.MergedDictionaries>
-            
-            <!-- Local Window Resources -->
-            <SolidColorBrush x:Key="GoldAccentBrush" Color="#d4a73a"/>
-            <SolidColorBrush x:Key="CardBackgroundBrush" Color="#2d2d2d"/>
-            <SolidColorBrush x:Key="TextPrimaryBrush" Color="#ffffff"/>
-            <SolidColorBrush x:Key="TextSecondaryBrush" Color="#aaaaaa"/>
-            <SolidColorBrush x:Key="SuccessBrush" Color="#4caf50"/>
         </ResourceDictionary>
     </Window.Resources>
 
@@ -35,8 +31,8 @@
 
         <!-- Title Bar with Menu -->
         <Border Grid.Row="0" 
-                Background="#1a1a1a"
-                BorderBrush="{StaticResource GoldAccentBrush}"
+                Background="{StaticResource WindowBackgroundDarkBrush}"
+                BorderBrush="{StaticResource AccentGoldBrush}"
                 BorderThickness="0,0,0,1"
                 Padding="12,4">
             <Grid>
@@ -53,14 +49,14 @@
                            FontWeight="Bold"
                            VerticalAlignment="Center"
                            Margin="0,0,24,0"
-                           Foreground="{StaticResource GoldAccentBrush}"/>
+                           Foreground="{StaticResource AccentGoldBrush}"/>
 
                 <!-- Navigation Tabs (like web) -->
                 <StackPanel Grid.Column="1" 
                             Orientation="Horizontal"
                             VerticalAlignment="Center">
                     <Border x:Name="RecipePlannerTab"
-                            Background="{StaticResource GoldAccentBrush}"
+                            Background="{StaticResource AccentGoldBrush}"
                             CornerRadius="4"
                             Padding="12,6"
                             Margin="0,0,8,0"
@@ -69,7 +65,7 @@
                         <TextBlock Text="RECIPE PLANNER" 
                                    FontSize="12"
                                    FontWeight="SemiBold"
-                                   Foreground="#1a1a1a"/>
+                                   Foreground="{StaticResource TextDarkBrush}"/>
                     </Border>
                     <Border x:Name="MarketAnalysisTab"
                             Background="Transparent"
@@ -81,7 +77,7 @@
                         <TextBlock Text="MARKET ANALYSIS" 
                                    FontSize="12"
                                    FontWeight="SemiBold"
-                                   Foreground="{StaticResource GoldAccentBrush}"/>
+                                   Foreground="{StaticResource AccentGoldBrush}"/>
                     </Border>
                     <Border x:Name="ProcurementPlannerTab"
                             Background="Transparent"
@@ -93,7 +89,7 @@
                         <TextBlock Text="PROCUREMENT PLAN" 
                                    FontSize="12"
                                    FontWeight="SemiBold"
-                                   Foreground="{StaticResource GoldAccentBrush}"/>
+                                   Foreground="{StaticResource AccentGoldBrush}"/>
                     </Border>
                 </StackPanel>
 
@@ -106,16 +102,16 @@
                       FontSize="12">
                     <Menu.Resources>
                         <Style TargetType="MenuItem">
-                            <Setter Property="Foreground" Value="#cccccc"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
                             <Setter Property="Padding" Value="12,4"/>
                             <Style.Triggers>
                                 <Trigger Property="IsHighlighted" Value="True">
-                                    <Setter Property="Background" Value="{StaticResource GoldAccentBrush}"/>
-                                    <Setter Property="Foreground" Value="#1a1a1a"/>
+                                    <Setter Property="Background" Value="{StaticResource AccentGoldBrush}"/>
+                                    <Setter Property="Foreground" Value="{StaticResource TextDarkBrush}"/>
                                 </Trigger>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="{StaticResource GoldAccentBrush}"/>
-                                    <Setter Property="Foreground" Value="#1a1a1a"/>
+                                    <Setter Property="Background" Value="{StaticResource AccentGoldBrush}"/>
+                                    <Setter Property="Foreground" Value="{StaticResource TextDarkBrush}"/>
                                 </Trigger>
                             </Style.Triggers>
                         </Style>
@@ -161,7 +157,7 @@
                     </MenuItem>
 
                     <MenuItem Header="Tools">
-                        <MenuItem Header="Fetch Prices" Click="OnFetchPrices"/>
+                        <MenuItem Header="Conduct Analysis" Click="OnConductAnalysis"/>
                         <MenuItem Header="View Plan Market Data" Click="OnViewMarketStatus" IsEnabled="False" x:Name="MenuViewMarketStatus"/>
                         <Separator/>
                         <MenuItem Header="View Blacklisted Worlds" Click="OnViewBlacklistedWorlds" ToolTip="View and manage temporarily blacklisted worlds"/>
@@ -180,25 +176,6 @@
             </Grid>
         </Border>
 
-        <!-- Hidden controls for backward compatibility (STILL USED BY CODE-BEHIND) -->
-        <Border Grid.Row="1" Visibility="Collapsed">
-            <StackPanel>
-                <Border x:Name="RecipePlanTab"/>
-                <Border x:Name="MarketLogisticsTab"/>
-                <ComboBox x:Name="MarketSortCombo"/>
-                <ComboBox x:Name="MarketModeCombo"/>
-                <CheckBox x:Name="SearchAllNACheck"/>
-                <ui:Button x:Name="ViewMarketStatusButton"/>
-                <ui:Button x:Name="RefreshMarketButton"/>
-                <Border x:Name="RecipePlanContent"/>
-                <Border x:Name="MarketLogisticsContent"/>
-                <StackPanel x:Name="MarketCards"/>
-                <Expander x:Name="MarketSummaryExpander"/>
-                <StackPanel x:Name="MarketSummaryContent"/>
-                <TextBlock x:Name="MarketSummaryHeaderText"/>
-            </StackPanel>
-        </Border>
-
         <!-- Main Content Area -->
         <Grid Grid.Row="2" Margin="0,8,0,0">
             <Grid.ColumnDefinitions>
@@ -206,610 +183,28 @@
                 <ColumnDefinition Width="280" />
                 <!-- Center: Recipe Plan -->
                 <ColumnDefinition Width="*" />
-                <!-- Right: Shopping List (Hidden - Procurement Planner holds this info) -->
-                <ColumnDefinition Width="0" />
             </Grid.ColumnDefinitions>
 
             <!-- Left Panel: Project Items -->
             <Border Grid.Column="0" 
                     Background="Transparent"
                     Padding="16,8,16,16">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel>
-                        <!-- Recipe Planner Left Panel -->
-                        <StackPanel x:Name="RecipePlannerLeftPanel">
-                        <!-- Project Items Header -->
-                        <TextBlock Text="Project Items" 
-                                   FontSize="16"
-                                   FontWeight="SemiBold"
-                                   Foreground="{StaticResource GoldAccentBrush}"
-                                   Margin="0,0,0,16"/>
-
-                        <!-- Item Name Search -->
-                        <TextBlock Text="Item Name:" 
-                                   Margin="0,0,0,4"
-                                   Foreground="{StaticResource TextSecondaryBrush}"/>
-                        <ui:TextBox x:Name="ItemSearch"
-                                    PlaceholderText="Enter item..."
-                                    KeyDown="OnItemSearchKeyDown"
-                                    Margin="0,0,0,8"/>
-
-                        <ui:Button Content="Search"
-                                   Appearance="Primary"
-                                   Margin="0,0,0,20"
-                                   HorizontalAlignment="Stretch"
-                                   Click="OnSearchItem"
-                                   helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
-
-                        <!-- Search Results (hidden by default, shown when searching) -->
-                        <Border x:Name="SearchResultsPanel"
-                                Background="{StaticResource CardBackgroundBrush}"
-                                CornerRadius="4"
-                                Padding="8"
-                                Margin="0,0,0,12"
-                                Visibility="Collapsed">
-                            <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="*"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <TextBlock Text="Search Results" 
-                                           FontWeight="SemiBold"
-                                           Margin="0,0,0,8"
-                                           Foreground="{StaticResource GoldAccentBrush}"/>
-                                <ListBox Grid.Row="1"
-                                         x:Name="SearchResults"
-                                         Background="Transparent"
-                                         BorderThickness="0"
-                                         MaxHeight="150"
-                                         SelectionChanged="OnItemSelected"/>
-                                <ui:Button Grid.Row="2"
-                                           x:Name="AddToProjectButton"
-                                           Content="Add to Project"
-                                           Appearance="Primary"
-                                           Margin="0,8,0,0"
-                                           HorizontalAlignment="Stretch"
-                                           IsEnabled="False"
-                                           Click="OnAddToProject"/>
-                            </Grid>
-                        </Border>
-
-                        <!-- Planned Acquisitions Section -->
-                        <TextBlock Text="Planned Acquisitions" 
-                                   FontSize="12"
-                                   FontWeight="SemiBold"
-                                   Foreground="{StaticResource TextSecondaryBrush}"
-                                   Margin="0,0,0,8"/>
-
-                        <Border Background="{StaticResource CardBackgroundBrush}"
-                                CornerRadius="4"
-                                Padding="4,4,4,4"
-                                Margin="0,0,0,8"
-                                MinHeight="60">
-                            <ListBox x:Name="ProjectList"
-                                     Background="Transparent"
-                                     BorderThickness="0"
-                                     SelectionChanged="OnProjectItemSelected">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Padding="2,1" Margin="0" BorderBrush="#3d3d3d" BorderThickness="0,0,0,1">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="44" />
-                                                    <ColumnDefinition Width="20" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Grid.Column="0"
-                                                           Text="{Binding Name}" 
-                                                           VerticalAlignment="Center"
-                                                           TextWrapping="Wrap"
-                                                           MaxHeight="32"
-                                                           FontSize="11"
-                                                           LineHeight="14"
-                                                           Margin="0,0,4,0"/>
-                                                <TextBox Grid.Column="1"
-                                                         Text="{Binding Quantity, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                                         VerticalAlignment="Center"
-                                                         HorizontalContentAlignment="Center"
-                                                         FontSize="11"
-                                                         Height="18"
-                                                         Padding="0"
-                                                         GotFocus="OnQuantityGotFocus"
-                                                         PreviewTextInput="OnQuantityPreviewTextInput"
-                                                         LostFocus="OnQuantityChanged"/>
-                                                <Button Grid.Column="2"
-                                                        Content="×"
-                                                        Width="16"
-                                                        Height="16"
-                                                        FontSize="12"
-                                                        Padding="0"
-                                                        Margin="2,0,0,0"
-                                                        Foreground="#ff6b6b"
-                                                        Background="Transparent"
-                                                        BorderThickness="0"
-                                                        Click="OnRemoveProjectItem"
-                                                        ToolTip="Remove item"/>
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
-                        </Border>
-
-                        <TextBlock x:Name="QuickViewCountText"
-                                   Text=""
-                                   FontSize="10"
-                                   Foreground="#888888"
-                                   HorizontalAlignment="Right"
-                                   Margin="0,-4,0,8"/>
-
-                        <!-- Build Project Plan Button -->
-                        <ui:Button x:Name="BuildPlanButton"
-                                   Content="Build Project Plan"
-                                   Appearance="Primary"
-                                   Margin="0,8,0,8"
-                                   HorizontalAlignment="Stretch"
-                                   IsEnabled="False"
-                                   Click="OnBuildProjectPlan"
-                                   helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
-
-                        <!-- Browse Plan Button -->
-                        <ui:Button x:Name="BrowsePlanButton"
-                                   Content="Browse Plan..."
-                                   Appearance="Secondary"
-                                   Margin="0,0,0,16"
-                                   HorizontalAlignment="Stretch"
-                                   IsEnabled="False"
-                                   Click="OnBrowsePlan"
-                                   ToolTip="Open plan browser to manage root items"
-                                   helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
-
-                        <!-- Quick Actions -->
-                        <Grid Margin="0,8,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="8" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-
-                            <ui:Button Grid.Column="0"
-                                       Content="Save"
-                                       Appearance="Success"
-                                       HorizontalAlignment="Stretch"
-                                       Command="{Binding RecipePlanner.SavePlanCommand}"
-                                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
-
-                            <ui:Button Grid.Column="2"
-                                       Content="Export"
-                                       Appearance="Info"
-                                       HorizontalAlignment="Stretch"
-                                       Command="{Binding RecipePlanner.ExportToPlainTextCommand}"
-                                       helpers:ButtonAutoShrinkBehavior.EnableAutoShrink="True"/>
-                        </Grid>
-
-                    </StackPanel>
-                    
-                    <!-- Market Analysis Left Panel -->
-                    <StackPanel x:Name="MarketAnalysisLeftPanel" Visibility="Collapsed">
-                        <TextBlock Text="Market Analysis" 
-                                   FontSize="16"
-                                   FontWeight="SemiBold"
-                                   Foreground="{StaticResource GoldAccentBrush}"
-                                   Margin="0,0,0,16"/>
-                        
-                        <TextBlock Text="View market data and shopping plans for your project items." 
-                                   Foreground="{StaticResource TextSecondaryBrush}"
-                                   TextWrapping="Wrap"
-                                   Margin="0,0,0,16"/>
-                        
-                        <ui:Button Content="Conduct Analysis"
-                                   x:Name="LeftPanelConductAnalysisButton"
-                                   Appearance="Primary"
-                                   Margin="0,0,0,8"
-                                   HorizontalAlignment="Stretch"
-                                   Click="OnConductAnalysis"
-                                   IsEnabled="True"
-                                   ToolTip="Analyze using cached market data (fetch if needed)"/>
-                        
-                        <ui:Button Content="View Market Status"
-                                   x:Name="LeftPanelViewMarketStatusButton"
-                                   Appearance="Secondary"
-                                   Margin="0,0,0,8"
-                                   HorizontalAlignment="Stretch"
-                                   Click="OnViewMarketStatus"
-                                   IsEnabled="True"
-                                   ToolTip="View detailed market data status"/>
-                    </StackPanel>
-                    
-                    <!-- Procurement Planner Left Panel -->
-                    <StackPanel x:Name="ProcurementPlannerLeftPanel" Visibility="Collapsed">
-                        <TextBlock Text="Procurement Plan" 
-                                   FontSize="16"
-                                   FontWeight="SemiBold"
-                                   Foreground="{StaticResource GoldAccentBrush}"
-                                   Margin="0,0,0,16"/>
-                        
-                        <TextBlock Text="Optimized shopping plan with world recommendations." 
-                                   Foreground="{StaticResource TextSecondaryBrush}"
-                                   TextWrapping="Wrap"
-                                   Margin="0,0,0,16"/>
-                        
-                        <TextBlock Text="Sort By:" 
-                                   Margin="0,0,0,4"
-                                   Foreground="{StaticResource TextSecondaryBrush}"/>
-                        <ComboBox x:Name="LeftPanelProcurementSortCombo"
-                                  Margin="0,0,0,16"
-                                  SelectionChanged="OnProcurementSortChanged">
-                            <ComboBoxItem Content="By World" IsSelected="True"/>
-                            <ComboBoxItem Content="By Name"/>
-                            <ComboBoxItem Content="By Cost (High to Low)"/>
-                        </ComboBox>
-                        
-                        <ui:Button Content="Conduct Analysis"
-                                   x:Name="LeftPanelProcurementAnalysisButton"
-                                   Appearance="Primary"
-                                   Margin="0,0,0,8"
-                                   HorizontalAlignment="Stretch"
-                                   Click="OnConductAnalysis"
-                                   IsEnabled="True"
-                                   ToolTip="Analyze using cached market data (fetch if needed)"/>
-                    </StackPanel>
-                    </StackPanel>
-                </ScrollViewer>
-            </Border>
-
-            <!-- Center Panel: Recipe Plan (Visible by default) -->
-            <Border x:Name="RecipePlannerContent"
-                    Grid.Column="1" 
-                    Background="Transparent"
-                    Padding="8,8,16,16">
                 <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <!-- Recipe Plan Header -->
-                    <StackPanel Grid.Row="0" 
-                                Orientation="Horizontal"
-                                Margin="0,0,0,6">
-                        <TextBlock Text="Recipe Plan" 
-                                   FontSize="16"
-                                   FontWeight="SemiBold"
-                                   Foreground="{StaticResource GoldAccentBrush}"
-                                   VerticalAlignment="Center"/>
-                    </StackPanel>
-
-                    <!-- Recipe Tree Control Bar -->
-                    <Border Grid.Row="1"
-                            Background="{StaticResource Brush.Surface.Panel}"
-                            BorderBrush="{StaticResource Brush.Border.Default}"
-                            BorderThickness="1"
-                            CornerRadius="4"
-                            Padding="8,6"
-                            Margin="0,0,0,8">
-                        <StackPanel Orientation="Horizontal"
-                                    HorizontalAlignment="Right">
-                            <ui:Button x:Name="ExpandAllButton"
-                                       Content="Expand All"
-                                       Appearance="Secondary"
-                                       Margin="0,0,4,0"
-                                       Click="OnExpandAll"
-                                       IsEnabled="False"
-                                       ToolTip="Expand all recipe nodes"/>
-
-                            <ui:Button x:Name="CollapseAllButton"
-                                       Content="Collapse All"
-                                       Appearance="Secondary"
-                                       Click="OnCollapseAll"
-                                       IsEnabled="False"
-                                       ToolTip="Collapse all recipe nodes"/>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Recipe Tree Content -->
-                    <Border Grid.Row="2"
-                            Background="{StaticResource CardBackgroundBrush}"
-                            CornerRadius="4"
-                            Padding="12">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <StackPanel x:Name="RecipePlanPanel">
-                                <!-- Recipe tree items populated dynamically -->
-                            </StackPanel>
-                        </ScrollViewer>
-                    </Border>
+                    <modules:RecipePlannerSidebarView x:Name="RecipePlannerSidebarModule" Visibility="Visible"/>
+                    <modules:MarketAnalysisSidebarView x:Name="MarketAnalysisSidebarModule" Visibility="Collapsed"/>
+                    <modules:ProcurementPlannerSidebarView x:Name="ProcurementPlannerSidebarModule" Visibility="Collapsed"/>
                 </Grid>
             </Border>
 
-            <!-- Center Panel: Market Analysis (Hidden by default) -->
-            <Border x:Name="MarketAnalysisContent"
-                    Grid.Column="1" 
-                    Background="Transparent"
-                    Padding="8,8,16,16"
-                    Visibility="Collapsed">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <!-- Market Analysis Header -->
-                    <StackPanel Grid.Row="0" 
-                                Orientation="Horizontal"
-                                Margin="0,0,0,8">
-                        <TextBlock Text="Market Analysis" 
-                                   FontSize="16"
-                                   FontWeight="SemiBold"
-                                   Foreground="{StaticResource GoldAccentBrush}"
-                                   VerticalAlignment="Center"/>
-                        
-                        <ui:Button x:Name="ProcurementRefreshButton"
-                                   Content="Refresh Prices"
-                                   Appearance="Secondary"
-                                   Margin="16,0,0,0"
-                                   Click="OnFetchPrices"
-                                   IsEnabled="False"/>
-                        
-                        <ui:Button x:Name="RebuildFromCacheButton"
-                                   Content="Rebuild from Cache"
-                                   Appearance="Secondary"
-                                   Margin="8,0,0,0"
-                                   Click="OnRebuildFromCache"
-                                   IsEnabled="False"
-                                   ToolTip="Rebuild market analysis using cached prices without calling API"/>
-                    </StackPanel>
-
-                    <!-- Filter/Sort Controls with Data Center/World -->
-                    <Border Grid.Row="1"
-                            Background="{StaticResource CardBackgroundBrush}"
-                            CornerRadius="4"
-                            Padding="12"
-                            Margin="0,0,0,8">
-                        <StackPanel Orientation="Horizontal">
-                            <!-- Data Center Selection -->
-                            <TextBlock Text="Data Center:" 
-                                       Foreground="{StaticResource TextSecondaryBrush}"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,6,0"/>
-                            <ComboBox x:Name="DcCombo"
-                                      Width="100"
-                                      IsEditable="False"
-                                      SelectionChanged="OnDataCenterSelected"
-                                      Margin="0,0,16,0"/>
-
-                            <!-- World Selection -->
-                            <TextBlock Text="World:" 
-                                       Foreground="{StaticResource TextSecondaryBrush}"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,6,0"/>
-                            <ComboBox x:Name="WorldCombo"
-                                      Width="120"
-                                      IsEditable="False"
-                                      Margin="0,0,24,0"/>
-
-                            <TextBlock Text="Sort by:" 
-                                       Foreground="{StaticResource TextSecondaryBrush}"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"/>
-                            <ComboBox x:Name="ProcurementSortCombo"
-                                      Width="170"
-                                      SelectedIndex="0"
-                                      SelectionChanged="OnProcurementSortChanged">
-                                <ComboBoxItem Content="Recommended World"/>
-                                <ComboBoxItem Content="Alphabetical"/>
-                                <ComboBoxItem Content="Price (High to Low)"/>
-                            </ComboBox>
-                            
-                            <TextBlock Text="Mode:" 
-                                       Foreground="{StaticResource TextSecondaryBrush}"
-                                       VerticalAlignment="Center"
-                                       Margin="24,0,8,0"/>
-                            <ComboBox x:Name="ProcurementModeCombo"
-                                      Width="170"
-                                      SelectionChanged="OnProcurementModeChanged">
-                                <ComboBoxItem Content="Minimize Total Cost"/>
-                                <ComboBoxItem Content="Maximize Value"/>
-                            </ComboBox>
-                            
-                            <CheckBox x:Name="ProcurementSearchAllNaCheck"
-                                      Content="Search all NA DCs"
-                                      Foreground="{StaticResource TextSecondaryBrush}"
-                                      Margin="24,0,0,0"
-                                      VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Market Analysis Content Area -->
-                    <Border Grid.Row="2"
-                            Background="{StaticResource CardBackgroundBrush}"
-                            CornerRadius="4"
-                            Padding="12">
-                        <Grid>
-                            <!-- Legacy View (default) - shown when split-pane is disabled -->
-                            <ScrollViewer x:Name="LegacyProcurementScrollViewer"
-                                          VerticalScrollBarVisibility="Auto">
-                                <StackPanel x:Name="ProcurementPanel">
-                                    <!-- Placeholder content - populated dynamically -->
-                                    <TextBlock Text="Build a plan to see market analysis"
-                                               Foreground="{StaticResource TextSecondaryBrush}"
-                                               HorizontalAlignment="Center"
-                                               Margin="0,40"
-                                               FontSize="14"/>
-                                </StackPanel>
-                            </ScrollViewer>
-                            
-                            <!-- Split-Pane View (modern) - shown when split-pane is enabled -->
-                            <Grid x:Name="SplitPaneMarketView"
-                                  Visibility="Collapsed">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="*"/>
-                                </Grid.RowDefinitions>
-                                
-                                <!-- Top Panel: Expanded Item View (scrollable) -->
-                                <Border x:Name="SplitPaneExpandedPanel"
-                                        Grid.Row="0"
-                                        Background="#252525"
-                                        CornerRadius="4"
-                                        Margin="0,0,0,8"
-                                        Visibility="Collapsed"
-                                        MaxHeight="300">
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                                  Padding="12">
-                                        <StackPanel x:Name="SplitPaneExpandedContent">
-                                            <!-- Expanded item content populated dynamically -->
-                                        </StackPanel>
-                                    </ScrollViewer>
-                                </Border>
-                                
-                                <!-- Bottom Panel: Collapsed Cards Grid -->
-                                <ScrollViewer Grid.Row="1"
-                                              VerticalScrollBarVisibility="Auto">
-                                    <WrapPanel x:Name="SplitPaneCardsGrid"
-                                               Orientation="Horizontal">
-                                        <!-- Collapsed cards populated dynamically -->
-                                    </WrapPanel>
-                                </ScrollViewer>
-                            </Grid>
-                        </Grid>
-                    </Border>
-                </Grid>
-            </Border>
-
-            <!-- Center Panel: Procurement Planner (Hidden by default) -->
-            <Border x:Name="ProcurementPlannerContent"
-                    Grid.Column="1" 
-                    Background="Transparent"
-                    Padding="8,8,16,16"
-                    Visibility="Collapsed">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <!-- Procurement Plan Header -->
-                    <TextBlock Grid.Row="0"
-                               Text="Procurement Plan" 
-                               FontSize="16"
-                               FontWeight="SemiBold"
-                               Foreground="{StaticResource GoldAccentBrush}"
-                               Margin="0,0,0,8"/>
-                    
-                    <!-- Procurement Plan Content -->
-                    <Border Grid.Row="1"
-                            Background="{StaticResource CardBackgroundBrush}"
-                            CornerRadius="4"
-                            Padding="12">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <StackPanel x:Name="ProcurementPlanPanel">
-                                <TextBlock Text="No procurement plan available - fetch market data to generate actionable plan"
-                                           Foreground="{StaticResource TextSecondaryBrush}"
-                                           FontSize="12"
-                                           TextWrapping="Wrap"/>
-                            </StackPanel>
-                        </ScrollViewer>
-                    </Border>
-                </Grid>
-            </Border>
-
-            <!-- Right Panel: Shopping List (Hidden - Procurement Planner holds this info) -->
-            <Border Grid.Column="2" 
-                    Background="Transparent"
-                    Padding="8,8,16,16"
-                    Visibility="Collapsed">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-
-                    <!-- Shopping List Header -->
-                    <TextBlock Grid.Row="0"
-                               Text="Shopping List" 
-                               FontSize="16"
-                               FontWeight="SemiBold"
-                               Foreground="{StaticResource GoldAccentBrush}"
-                               Margin="0,0,0,8"/>
-
-                    <!-- Shopping List Content -->
-                    <Border Grid.Row="1"
-                            Background="{StaticResource CardBackgroundBrush}"
-                            CornerRadius="4"
-                            Padding="0">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
-
-                            <!-- Header Row -->
-                            <Grid Grid.Row="0" 
-                                  Background="#3d3d3d"
-                                  Margin="0,0,0,1">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="50" />
-                                    <ColumnDefinition Width="80" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" 
-                                           Text="Item" 
-                                           FontWeight="SemiBold"
-                                           Padding="12,8"
-                                           Foreground="{StaticResource TextSecondaryBrush}"/>
-                                <TextBlock Grid.Column="1" 
-                                           Text="Qty" 
-                                           FontWeight="SemiBold"
-                                           Padding="4,8"
-                                           HorizontalAlignment="Center"
-                                           Foreground="{StaticResource TextSecondaryBrush}"/>
-                                <TextBlock Grid.Column="2" 
-                                           Text="Price" 
-                                           FontWeight="SemiBold"
-                                           Padding="8,8"
-                                           HorizontalAlignment="Right"
-                                           Foreground="{StaticResource TextSecondaryBrush}"/>
-                            </Grid>
-
-                            <!-- Items List -->
-                            <ScrollViewer Grid.Row="1" 
-                                          VerticalScrollBarVisibility="Auto">
-                                <StackPanel x:Name="ShoppingListPanel">
-                                    <!-- Shopping list items populated dynamically -->
-                                </StackPanel>
-                            </ScrollViewer>
-                        </Grid>
-                    </Border>
-
-                    <!-- Total Cost -->
-                    <Border Grid.Row="2"
-                            Background="{StaticResource CardBackgroundBrush}"
-                            CornerRadius="4"
-                            Padding="12,8"
-                            Margin="0,8,0,0">
-                        <StackPanel>
-                            <TextBlock Text="Total Cost:" 
-                                       Foreground="{StaticResource TextSecondaryBrush}"/>
-                            <TextBlock x:Name="TotalCostText"
-                                       Text="0g" 
-                                       FontSize="18"
-                                       FontWeight="Bold"
-                                       Foreground="{StaticResource SuccessBrush}"
-                                       HorizontalAlignment="Right"/>
-                        </StackPanel>
-                    </Border>
-                </Grid>
-            </Border>
+            <modules:RecipePlannerView x:Name="RecipePlannerModule" Grid.Column="1"/>
+            <modules:MarketAnalysisView x:Name="MarketAnalysisModule" Grid.Column="1"/>
+            <modules:ProcurementPlannerView x:Name="ProcurementPlannerModule" Grid.Column="1"/>
         </Grid>
 
         <!-- Status Bar -->
         <Border Grid.Row="3" 
-                Background="#1a1a1a"
-                BorderBrush="{StaticResource GoldAccentBrush}"
+                Background="{StaticResource WindowBackgroundDarkBrush}"
+                BorderBrush="{StaticResource AccentGoldBrush}"
                 BorderThickness="0,1,0,0"
                 Padding="12,6">
             <Grid>
@@ -824,14 +219,14 @@
                 <TextBlock Grid.Column="0"
                            x:Name="StatusLabel"
                            Text="Ready" 
-                           Foreground="{StaticResource GoldAccentBrush}"
+                           Foreground="{StaticResource AccentGoldBrush}"
                            VerticalAlignment="Center"/>
 
                 <!-- Market Total Cost (shown in split-pane view) -->
                 <TextBlock Grid.Column="1"
                            x:Name="MarketTotalCostText"
                            Text="" 
-                           Foreground="{StaticResource SuccessBrush}"
+                           Foreground="{StaticResource SuccessGreenBrush}"
                            FontWeight="SemiBold"
                            VerticalAlignment="Center"
                            HorizontalAlignment="Right"

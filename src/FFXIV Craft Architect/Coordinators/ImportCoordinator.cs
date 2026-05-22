@@ -64,49 +64,28 @@ public class ImportCoordinator
     }
 
     /// <summary>
-    /// Import from Artisan JSON format from clipboard.
+    /// Import from Artisan JSON format using a dialog.
     /// </summary>
-    public async Task<ImportResult> ImportFromArtisanAsync(string dataCenter, string world)
+    public ImportResult ImportFromArtisan(Window ownerWindow, string dataCenter, string world)
     {
-        // Get clipboard content
-        string clipboardText;
-        try
+        var importDialog = new ArtisanImportWindow(_artisanService, dataCenter, world)
         {
-            clipboardText = Clipboard.GetText();
-        }
-        catch (Exception ex)
+            Owner = ownerWindow
+        };
+
+        if (importDialog.ShowDialog() != true || importDialog.ImportedPlan == null)
         {
-            _logger.LogError(ex, "Failed to read clipboard for Artisan import");
-            return new ImportResult(false, null, null, "Failed to read clipboard. Please try again.");
+            return new ImportResult(false, null, null, "Import cancelled");
         }
 
-        if (string.IsNullOrWhiteSpace(clipboardText))
-        {
-            return new ImportResult(false, null, null, "Clipboard is empty. Copy an Artisan export first.");
-        }
+        var plan = importDialog.ImportedPlan;
+        var projectItems = CreateProjectItemsFromPlan(plan);
 
-        try
-        {
-            var plan = await _artisanService.ImportFromArtisanAsync(clipboardText, dataCenter, world);
-
-            if (plan == null)
-            {
-                return new ImportResult(false, null, null, "Failed to import - invalid Artisan format or no recipes found.");
-            }
-
-            var projectItems = CreateProjectItemsFromPlan(plan);
-
-            return new ImportResult(
-                true,
-                plan,
-                projectItems,
-                $"Imported plan with {plan.RootItems.Count} items from Artisan");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to import from Artisan format");
-            return new ImportResult(false, null, null, $"Import failed: {ex.Message}");
-        }
+        return new ImportResult(
+            true,
+            plan,
+            projectItems,
+            $"Imported plan with {plan.RootItems.Count} items from Artisan");
     }
 
     /// <summary>

@@ -3,6 +3,7 @@ using System.Windows;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
+using FFXIV_Craft_Architect.Views;
 using Microsoft.Extensions.Logging;
 using ITeamcraftService = FFXIV_Craft_Architect.Core.Services.ITeamcraftService;
 
@@ -121,8 +122,16 @@ public class ExportCoordinator
             return new ExportResult(false, null, "No plan to export - build a plan first");
         }
 
-        var url = _teamcraftService.ExportToTeamcraft(plan);
-        return new ExportResult(true, url, "Teamcraft URL copied to clipboard!");
+        try
+        {
+            var url = _teamcraftService.ExportToTeamcraft(plan);
+            return new ExportResult(true, url, "Teamcraft URL copied to clipboard!");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to export to Teamcraft format");
+            return new ExportResult(false, null, $"Export failed: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -167,8 +176,16 @@ public class ExportCoordinator
             return new ExportResult(false, null, "No plan to export - build a plan first");
         }
 
-        var text = _teamcraftService.ExportToPlainText(plan);
-        return new ExportResult(true, text, "Plan text copied to clipboard!");
+        try
+        {
+            var text = _teamcraftService.ExportToPlainText(plan);
+            return new ExportResult(true, text, "Plan text copied to clipboard!");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to export to plain text format");
+            return new ExportResult(false, null, $"Export failed: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -181,8 +198,16 @@ public class ExportCoordinator
             return new ExportResult(false, null, "No plan to export - build a plan first");
         }
 
-        var csv = _teamcraftService.ExportToCsv(plan);
-        return new ExportResult(true, csv, "CSV copied to clipboard!");
+        try
+        {
+            var csv = _teamcraftService.ExportToCsv(plan);
+            return new ExportResult(true, csv, "CSV copied to clipboard!");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to export to CSV format");
+            return new ExportResult(false, null, $"Export failed: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -204,5 +229,17 @@ public class ExportCoordinator
             }
         }
         return false;
+    }
+
+    /// <summary>
+    /// Show the export result dialog with copyable content.
+    /// </summary>
+    public void ShowExportResultDialog(string title, string content, string? description = null)
+    {
+        var dialog = new ExportResultWindow(title, content, description)
+        {
+            Owner = Application.Current.MainWindow
+        };
+        dialog.ShowDialog();
     }
 }

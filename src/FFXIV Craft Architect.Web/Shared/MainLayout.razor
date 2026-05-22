@@ -472,9 +472,13 @@
                         if (AppState.AutoFetchPricesOnRebuild)
                         {
                             AppState.SetStatus("Fetching market prices...", busy: true);
-                            var responses = await UniversalisService.GetMarketDataBulkAsync(
-                                AppState.SelectedDataCenter,
-                                AppState.CurrentPlan.GetAllItemIds().ToList());
+                            var allItemIds = AppState.CurrentPlan.GetAllItemIds().ToList();
+                            var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, allItemIds);
+                            var responses = marketItemIds.Any()
+                                ? await UniversalisService.GetMarketDataBulkAsync(
+                                    AppState.SelectedDataCenter,
+                                    marketItemIds)
+                                : new Dictionary<int, UniversalisResponse>();
                             
                             UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, responses);
                             

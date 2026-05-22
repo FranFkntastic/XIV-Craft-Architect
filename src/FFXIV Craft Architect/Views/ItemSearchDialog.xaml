@@ -38,7 +38,7 @@
                          Padding="8"
                          Background="{StaticResource Brush.Surface.Card}"
                          Foreground="{StaticResource Brush.Text.Primary}"
-                         BorderBrush="#4d4d4d"
+                         BorderBrush="{StaticResource Brush.Border.Default}"
                          KeyDown="OnSearchKeyDown"/>
                 <Button Grid.Column="1"
                         Content="Search"

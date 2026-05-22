@@ -3,6 +3,17 @@ using System.Runtime.CompilerServices;
 
 namespace FFXIV_Craft_Architect.Models;
 
+internal static class MarketDataStatusColorHex
+{
+    internal const string Pending = "#888888";
+    internal const string NoCache = "#f59e0b";
+    internal const string Fetching = "#4ecdc4";
+    internal const string Success = "#4ade80";
+    internal const string Failed = "#f87171";
+    internal const string Skipped = "#94a3b8";
+    internal const string Cached = "#fbbf24";
+}
+
 /// <summary>
 /// Represents the status of a single item's market data fetch operation.
 /// Used for real-time visualization in the Market Data Status window.
@@ -13,6 +24,9 @@ public class MarketDataStatusItem : INotifyPropertyChanged
     private decimal _unitPrice;
     private string _errorMessage = "";
     private string _sourceDetails = "";
+    private string _dataScopeText = "";
+    private string _retrievalSourceText = "";
+    private string _dataTypeText = "";
 
     public int ItemId { get; set; }
     public string ItemName { get; set; } = "";
@@ -61,6 +75,36 @@ public class MarketDataStatusItem : INotifyPropertyChanged
         }
     }
 
+    public string DataScopeText
+    {
+        get => _dataScopeText;
+        set
+        {
+            _dataScopeText = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string RetrievalSourceText
+    {
+        get => _retrievalSourceText;
+        set
+        {
+            _retrievalSourceText = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string DataTypeText
+    {
+        get => _dataTypeText;
+        set
+        {
+            _dataTypeText = value;
+            OnPropertyChanged();
+        }
+    }
+
     private DateTime _cacheTimestamp;
     
     /// <summary>
@@ -100,21 +144,25 @@ public class MarketDataStatusItem : INotifyPropertyChanged
     public string StatusText => Status switch
     {
         MarketDataFetchStatus.Pending => "⏳ Waiting...",
+        MarketDataFetchStatus.NoCache => "∅ No Cache",
         MarketDataFetchStatus.Fetching => "🔄 Fetching...",
         MarketDataFetchStatus.Success => "✓ Success",
         MarketDataFetchStatus.Failed => "✗ Failed",
+        MarketDataFetchStatus.Skipped => "↷ Skipped",
         MarketDataFetchStatus.Cached => $"📋 Cached ({CacheAgeText})",
         _ => "Unknown"
     };
 
     public string StatusColor => Status switch
     {
-        MarketDataFetchStatus.Pending => "#888888",
-        MarketDataFetchStatus.Fetching => "#4ecdc4",
-        MarketDataFetchStatus.Success => "#4ade80",
-        MarketDataFetchStatus.Failed => "#f87171",
-        MarketDataFetchStatus.Cached => "#fbbf24",
-        _ => "#888888"
+        MarketDataFetchStatus.Pending => MarketDataStatusColorHex.Pending,
+        MarketDataFetchStatus.NoCache => MarketDataStatusColorHex.NoCache,
+        MarketDataFetchStatus.Fetching => MarketDataStatusColorHex.Fetching,
+        MarketDataFetchStatus.Success => MarketDataStatusColorHex.Success,
+        MarketDataFetchStatus.Failed => MarketDataStatusColorHex.Failed,
+        MarketDataFetchStatus.Skipped => MarketDataStatusColorHex.Skipped,
+        MarketDataFetchStatus.Cached => MarketDataStatusColorHex.Cached,
+        _ => MarketDataStatusColorHex.Pending
     };
 
     public string PriceDisplay => UnitPrice > 0 ? $"{UnitPrice:N0}g" : "-";
@@ -130,8 +178,10 @@ public class MarketDataStatusItem : INotifyPropertyChanged
 public enum MarketDataFetchStatus
 {
     Pending,
+    NoCache,
     Fetching,
     Success,
     Failed,
+    Skipped,
     Cached
 }

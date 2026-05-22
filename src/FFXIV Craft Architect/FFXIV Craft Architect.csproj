@@ -12,6 +12,7 @@
     <RootNamespace>FFXIV_Craft_Architect</RootNamespace>
     <Version>0.1.0</Version>
     <FileVersion>0.1.0.0</FileVersion>
+    <ApplicationIcon>Resources\AppIcon.ico</ApplicationIcon>
     <Product>FFXIV Craft Architect</Product>
     <Description>Crafting cost calculator with live inventory tracking for FFXIV</Description>
     <Copyright>Copyright  2026</Copyright>
@@ -34,14 +35,13 @@
     <!-- WPF UI Library for modern styling -->
     <PackageReference Include="WPF-UI" Version="3.0.4" />
     
-    <!-- CSV handling -->
-    <PackageReference Include="CsvHelper" Version="33.0.1" />
-    
     <!-- SQLite -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.4" />
   </ItemGroup>
 
   <ItemGroup>
+    <Resource Include="Resources\AppIcon.ico" />
+
     <!-- Include deucalion.dll in output -->
     <Content Include="..\..\deucalion.dll" Condition="Exists('..\..\deucalion.dll')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

@@ -784,24 +784,55 @@ public class MarketShoppingService
             var toAllocate = Math.Min(remaining, world.TotalQuantityPurchased);
             if (toAllocate <= 0) continue;
             
-            // Calculate actual cost from listings
+            // Calculate actual cost from listings and keep the exact listing breakdown.
             var cost = 0L;
             var remainingFromWorld = toAllocate;
+            var selectedListings = new List<ShoppingListingEntry>();
+
             foreach (var listing in world.Listings.Where(l => !l.IsAdditionalOption).OrderBy(l => l.PricePerUnit))
             {
-                if (remainingFromWorld <= 0) break;
+                if (remainingFromWorld <= 0)
+                {
+                    break;
+                }
+
                 var fromThis = Math.Min(remainingFromWorld, listing.Quantity);
+                if (fromThis <= 0)
+                {
+                    continue;
+                }
+
                 cost += fromThis * listing.PricePerUnit;
                 remainingFromWorld -= fromThis;
+
+                selectedListings.Add(new ShoppingListingEntry
+                {
+                    Quantity = listing.Quantity,
+                    PricePerUnit = listing.PricePerUnit,
+                    RetainerName = listing.RetainerName,
+                    IsUnderAverage = listing.IsUnderAverage,
+                    IsHq = listing.IsHq,
+                    IsAdditionalOption = false,
+                    NeededFromStack = fromThis,
+                    ExcessQuantity = Math.Max(0, listing.Quantity - fromThis)
+                });
             }
+
+            var excessAvailable = selectedListings.Sum(l => l.ExcessQuantity);
+            var travelContext = split.Count == 0
+                ? TravelContextConstants.Primary
+                : TravelContextConstants.Supplemental;
             
             split.Add(new SplitWorldPurchase
             {
                 WorldName = world.WorldName,
                 QuantityToBuy = toAllocate,
                 PricePerUnit = toAllocate > 0 ? cost / (decimal)toAllocate : world.AveragePricePerUnit,
-                IsPartial = toAllocate < world.TotalQuantityPurchased,
-                TotalCost = cost
+                IsPartial = toAllocate < plan.QuantityNeeded,
+                TotalCost = cost,
+                TravelContext = travelContext,
+                ExcessAvailable = excessAvailable,
+                Listings = selectedListings
             });
             
             remaining -= toAllocate;
@@ -823,6 +854,109 @@ public class MarketShoppingService
         
         // Use split
         plan.RecommendedSplit = split;
+    }
+
+    /// <summary>
+    /// Applies hard-lock vendor overrides for items explicitly marked as VendorBuy in the crafting plan.
+    ///
+    /// This keeps existing market world options for comparison, but forces the recommended purchase source
+    /// to a synthetic "Vendor" world using the selected vendor (or cheapest gil vendor fallback).
+    /// </summary>
+    public void ApplyVendorPurchaseOverrides(CraftingPlan? plan, List<DetailedShoppingPlan> plans)
+    {
+        if (plan == null || plans == null || plans.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var shoppingPlan in plans)
+        {
+            var vendorNode = FindVendorBuyNodeByItemId(plan.RootItems, shoppingPlan.ItemId);
+            if (vendorNode == null)
+            {
+                continue;
+            }
+
+            var gilVendors = vendorNode.VendorOptions.Where(v => v.IsGilVendor).ToList();
+            if (gilVendors.Count == 0)
+            {
+                continue;
+            }
+
+            var selectedVendor = vendorNode.SelectedVendor;
+            if (selectedVendor == null || !selectedVendor.IsGilVendor)
+            {
+                selectedVendor = gilVendors.OrderBy(v => v.Price).First();
+            }
+
+            var unitPrice = selectedVendor.Price;
+            if (unitPrice <= 0)
+            {
+                continue;
+            }
+
+            var vendorWorldSummary = new WorldShoppingSummary
+            {
+                WorldName = MarketShoppingConstants.VendorWorldName,
+                WorldId = 0,
+                TotalCost = (long)(unitPrice * shoppingPlan.QuantityNeeded),
+                AveragePricePerUnit = unitPrice,
+                ListingsUsed = 1,
+                TotalQuantityPurchased = shoppingPlan.QuantityNeeded,
+                HasSufficientStock = true,
+                IsHomeWorld = false,
+                IsTravelProhibited = false,
+                IsBlacklisted = false,
+                Classification = WorldClassification.Standard,
+                VendorName = selectedVendor.DisplayName,
+                Listings = new List<ShoppingListingEntry>
+                {
+                    new()
+                    {
+                        Quantity = shoppingPlan.QuantityNeeded,
+                        PricePerUnit = (long)unitPrice,
+                        RetainerName = MarketShoppingConstants.VendorWorldName,
+                        IsUnderAverage = true,
+                        IsHq = false,
+                        NeededFromStack = shoppingPlan.QuantityNeeded,
+                        ExcessQuantity = 0
+                    }
+                }
+            };
+
+            shoppingPlan.RecommendedWorld = vendorWorldSummary;
+            shoppingPlan.RecommendedSplit = null;
+            shoppingPlan.Vendors = gilVendors;
+
+            if (shoppingPlan.WorldOptions.All(w => !string.Equals(w.WorldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase)))
+            {
+                shoppingPlan.WorldOptions.Insert(0, vendorWorldSummary);
+            }
+        }
+    }
+
+    private static PlanNode? FindVendorBuyNodeByItemId(IEnumerable<PlanNode> nodes, int itemId)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.ItemId == itemId && node.Source == AcquisitionSource.VendorBuy)
+            {
+                return node;
+            }
+
+            if (node.Children.Count == 0)
+            {
+                continue;
+            }
+
+            var childMatch = FindVendorBuyNodeByItemId(node.Children, itemId);
+            if (childMatch != null)
+            {
+                return childMatch;
+            }
+        }
+
+        return null;
     }
 
     // ========================================================================
@@ -863,10 +997,39 @@ public class MarketShoppingService
     /// </summary>
     public CategorizedMaterials CategorizeMaterials(List<MaterialAggregate> materials, Dictionary<int, PriceInfo> prices)
     {
+        return CategorizeMaterials(materials, prices, null);
+    }
+
+    /// <summary>
+    /// Categorizes materials by their price source (Vendor, Market, or Untradeable).
+    /// Also checks the plan tree for items explicitly marked as VendorBuy by the user.
+    /// </summary>
+    /// <param name="materials">The materials to categorize.</param>
+    /// <param name="prices">Price information dictionary.</param>
+    /// <param name="plan">Optional crafting plan to check for user-selected VendorBuy sources.</param>
+    public CategorizedMaterials CategorizeMaterials(
+        List<MaterialAggregate> materials, 
+        Dictionary<int, PriceInfo> prices,
+        CraftingPlan? plan)
+    {
         var result = new CategorizedMaterials();
+
+        // Collect items marked as VendorBuy in the plan tree
+        var vendorBuyItemIds = new HashSet<int>();
+        if (plan != null)
+        {
+            CollectVendorBuyItemIds(plan.RootItems, vendorBuyItemIds);
+        }
 
         foreach (var material in materials)
         {
+            // Check if user explicitly selected VendorBuy in recipe tree
+            if (vendorBuyItemIds.Contains(material.ItemId))
+            {
+                result.VendorItems.Add(material);
+                continue;
+            }
+
             if (prices.TryGetValue(material.ItemId, out var priceInfo))
             {
                 switch (priceInfo.Source)
@@ -891,6 +1054,25 @@ public class MarketShoppingService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Recursively collects item IDs that are marked as VendorBuy in the plan tree.
+    /// </summary>
+    private static void CollectVendorBuyItemIds(List<PlanNode> nodes, HashSet<int> itemIds)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Source == AcquisitionSource.VendorBuy)
+            {
+                itemIds.Add(node.ItemId);
+            }
+
+            if (node.Children.Count > 0)
+            {
+                CollectVendorBuyItemIds(node.Children, itemIds);
+            }
+        }
     }
 }
 

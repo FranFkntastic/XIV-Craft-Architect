@@ -16,11 +16,13 @@ namespace FFXIV_Craft_Architect.UIBuilders;
 public class RecipeTreeUiBuilder
 {
     private readonly Dictionary<string, NodeUiElements> _nodeUiRegistry = new();
-    private readonly Action<string, AcquisitionSource> _onAcquisitionChanged;
+    private readonly Action<string, AcquisitionSource, int?> _onAcquisitionChanged;
     private readonly Action<string, bool, HqPropagationMode> _onHqChanged;
 
+    private sealed record AcquisitionSelection(AcquisitionSource Source, int VendorIndex = -1);
+
     public RecipeTreeUiBuilder(
-        Action<string, AcquisitionSource> onAcquisitionChanged,
+        Action<string, AcquisitionSource, int?> onAcquisitionChanged,
         Action<string, bool, HqPropagationMode> onHqChanged)
     {
         _onAcquisitionChanged = onAcquisitionChanged;
@@ -57,7 +59,9 @@ public class RecipeTreeUiBuilder
             if (elements.HqIndicator != null)
             {
                 elements.HqIndicator.Text = isHq ? " [HQ]" : "";
-                elements.HqIndicator.Foreground = isHq ? Brushes.Gold : Brushes.Transparent;
+                elements.HqIndicator.Foreground = isHq
+                    ? ResolveBrush("AccentGoldBrush", Brushes.Gold)
+                    : ResolveBrush("SystemTransparentBrush", Brushes.Transparent);
             }
         }
     }
@@ -66,16 +70,26 @@ public class RecipeTreeUiBuilder
     /// Updates the acquisition source display for a node.
     /// Finds the dropdown item by Tag rather than index to handle dynamic dropdown content.
     /// </summary>
-    public void UpdateNodeAcquisition(string nodeId, AcquisitionSource source)
+    public void UpdateNodeAcquisition(string nodeId, AcquisitionSource source, int selectedVendorIndex = -1)
     {
         if (_nodeUiRegistry.TryGetValue(nodeId, out var elements))
         {
             if (elements.Dropdown != null)
             {
-                // Find the item with matching Tag instead of using fixed index
-                var matchingItem = elements.Dropdown.Items
+                ComboBoxItem? matchingItem = null;
+
+                if (source == AcquisitionSource.VendorBuy && selectedVendorIndex >= 0)
+                {
+                    matchingItem = elements.Dropdown.Items
+                        .OfType<ComboBoxItem>()
+                        .FirstOrDefault(item => item.Tag is AcquisitionSelection selection
+                            && selection.Source == source
+                            && selection.VendorIndex == selectedVendorIndex);
+                }
+
+                matchingItem ??= elements.Dropdown.Items
                     .OfType<ComboBoxItem>()
-                    .FirstOrDefault(item => item.Tag is AcquisitionSource s && s == source);
+                    .FirstOrDefault(item => item.Tag is AcquisitionSelection selection && selection.Source == source);
                 
                 if (matchingItem != null)
                 {
@@ -99,8 +113,8 @@ public class RecipeTreeUiBuilder
         Button? collapseMaterialsButton = null;
 
         var backgroundBrush = depth == 0 
-            ? new SolidColorBrush((Color)ColorConverter.ConvertFromString("#252525"))
-            : Brushes.Transparent;
+            ? ResolveBrush("NodeBackgroundRootBrush", Brushes.Transparent)
+            : ResolveBrush("SystemTransparentBrush", Brushes.Transparent);
 
         var expander = new Expander
         {
@@ -209,7 +223,9 @@ public class RecipeTreeUiBuilder
         {
             Name = "HqIndicator",
             Text = nodeVm.MustBeHq ? " [HQ]" : "",
-            Foreground = nodeVm.MustBeHq ? Brushes.Gold : Brushes.Transparent,
+            Foreground = nodeVm.MustBeHq
+                ? ResolveBrush("AccentGoldBrush", Brushes.Gold)
+                : ResolveBrush("SystemTransparentBrush", Brushes.Transparent),
             FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(2, 0, 0, 0)
@@ -222,7 +238,7 @@ public class RecipeTreeUiBuilder
             var circularIndicator = new TextBlock
             {
                 Text = " ↻ circular",
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#ff9800")),
+                Foreground = ResolveBrush("WarningOrangeBrush", Brushes.Orange),
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(4, 0, 0, 0),
@@ -293,7 +309,7 @@ public class RecipeTreeUiBuilder
             var levelBlock = new TextBlock
             {
                 Text = $"Lv.{nodeVm.RecipeLevel} ",
-                Foreground = Brushes.Gray,
+                Foreground = ResolveBrush("GrayBrush", Brushes.Gray),
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 4, 0)
@@ -328,7 +344,9 @@ public class RecipeTreeUiBuilder
         {
             Name = "HqIndicator",
             Text = nodeVm.MustBeHq ? " [HQ]" : "",
-            Foreground = nodeVm.MustBeHq ? Brushes.Gold : Brushes.Transparent,
+            Foreground = nodeVm.MustBeHq
+                ? ResolveBrush("AccentGoldBrush", Brushes.Gold)
+                : ResolveBrush("SystemTransparentBrush", Brushes.Transparent),
             FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(2, 0, 0, 0)
@@ -341,7 +359,7 @@ public class RecipeTreeUiBuilder
             var circularIndicator = new TextBlock
             {
                 Text = " ↻ circular",
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#ff9800")),
+                Foreground = ResolveBrush("WarningOrangeBrush", Brushes.Orange),
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(4, 0, 0, 0),
@@ -370,8 +388,8 @@ public class RecipeTreeUiBuilder
                 Padding = new Thickness(6, 0, 6, 0),
                 Margin = new Thickness(0, 0, 4, 0),
                 Background = Brushes.Transparent,
-                Foreground = Brushes.LightGray,
-                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#555555")),
+                Foreground = ResolveBrush("LightGrayBrush", Brushes.LightGray),
+                BorderBrush = ResolveBrush("MutedAccentLightBrush", Brushes.Gray),
                 BorderThickness = new Thickness(1),
                 VerticalAlignment = VerticalAlignment.Center,
                 ToolTip = "Collapse all child material nodes",
@@ -438,9 +456,9 @@ public class RecipeTreeUiBuilder
             Height = 22,
             FontSize = 10,
             Padding = new Thickness(2, 0, 0, 0),
-            Foreground = Brushes.White,
-            Background = Brushes.Transparent,
-            BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#555555")),
+            Foreground = ResolveBrush("TextPrimaryBrush", Brushes.White),
+            Background = ResolveBrush("SystemTransparentBrush", Brushes.Transparent),
+            BorderBrush = ResolveBrush("MutedAccentLightBrush", Brushes.Gray),
             BorderThickness = new Thickness(1),
             Margin = new Thickness(4, 0, 4, 0),
             VerticalAlignment = VerticalAlignment.Center,
@@ -453,19 +471,19 @@ public class RecipeTreeUiBuilder
         // Add Craft option if craftable
         if (nodeVm.CanCraft)
         {
-            var craftItem = new ComboBoxItem { Content = "Craft", Tag = AcquisitionSource.Craft };
+            var craftItem = new ComboBoxItem { Content = "Craft", Tag = new AcquisitionSelection(AcquisitionSource.Craft) };
             dropdown.Items.Add(craftItem);
             sourceToItem[AcquisitionSource.Craft] = new List<ComboBoxItem> { craftItem };
         }
 
         // Add Market Buy options
-        var buyNqItem = new ComboBoxItem { Content = "Buy NQ", Tag = AcquisitionSource.MarketBuyNq };
+        var buyNqItem = new ComboBoxItem { Content = "Buy NQ", Tag = new AcquisitionSelection(AcquisitionSource.MarketBuyNq) };
         dropdown.Items.Add(buyNqItem);
         sourceToItem[AcquisitionSource.MarketBuyNq] = new List<ComboBoxItem> { buyNqItem };
 
         if (nodeVm.CanBeHq)
         {
-            var buyHqItem = new ComboBoxItem { Content = "Buy HQ", Tag = AcquisitionSource.MarketBuyHq };
+            var buyHqItem = new ComboBoxItem { Content = "Buy HQ", Tag = new AcquisitionSelection(AcquisitionSource.MarketBuyHq) };
             dropdown.Items.Add(buyHqItem);
             sourceToItem[AcquisitionSource.MarketBuyHq] = new List<ComboBoxItem> { buyHqItem };
         }
@@ -482,10 +500,11 @@ public class RecipeTreeUiBuilder
                 var vendorItems = new List<ComboBoxItem>();
                 foreach (var vendor in cheapestVendors)
                 {
+                    var vendorIndex = nodeVm.VendorOptions.IndexOf(vendor);
                     var vendorItem = new ComboBoxItem
                     {
                         Content = $"Vendor: {vendor.DisplayName}",
-                        Tag = AcquisitionSource.VendorBuy,
+                        Tag = new AcquisitionSelection(AcquisitionSource.VendorBuy, vendorIndex),
                         ToolTip = $"{vendor.FullDisplayText}"
                     };
                     dropdown.Items.Add(vendorItem);
@@ -499,12 +518,15 @@ public class RecipeTreeUiBuilder
         ComboBoxItem? selectedItem = null;
         if (sourceToItem.TryGetValue(nodeVm.Source, out var items) && items.Any())
         {
-            // For vendors, use selected index if valid
-            if (nodeVm.Source == AcquisitionSource.VendorBuy && nodeVm.SelectedVendorIndex >= 0 && nodeVm.SelectedVendorIndex < items.Count)
+            if (nodeVm.Source == AcquisitionSource.VendorBuy && nodeVm.SelectedVendorIndex >= 0)
             {
-                selectedItem = items[nodeVm.SelectedVendorIndex];
+                selectedItem = items.FirstOrDefault(i =>
+                    i.Tag is AcquisitionSelection selection &&
+                    selection.Source == AcquisitionSource.VendorBuy &&
+                    selection.VendorIndex == nodeVm.SelectedVendorIndex);
             }
-            else
+
+            if (selectedItem == null)
             {
                 selectedItem = items.First();
             }
@@ -513,16 +535,13 @@ public class RecipeTreeUiBuilder
 
         dropdown.SelectionChanged += (s, e) =>
         {
-            if (dropdown.SelectedItem is ComboBoxItem item && item.Tag is AcquisitionSource newSource)
+            if (dropdown.SelectedItem is ComboBoxItem item && item.Tag is AcquisitionSelection selection)
             {
-                // For vendor selection, track which vendor was selected
-                int vendorIndex = -1;
-                if (newSource == AcquisitionSource.VendorBuy && sourceToItem.TryGetValue(AcquisitionSource.VendorBuy, out var vendorItems))
-                {
-                    vendorIndex = vendorItems.IndexOf(item);
-                }
-                _onAcquisitionChanged(nodeVm.NodeId, newSource);
-                // TODO: Pass vendorIndex to callback for procurement planning
+                int? vendorIndex = selection.Source == AcquisitionSource.VendorBuy
+                    ? selection.VendorIndex
+                    : null;
+
+                _onAcquisitionChanged(nodeVm.NodeId, selection.Source, vendorIndex);
             }
         };
 
@@ -568,10 +587,12 @@ public class RecipeTreeUiBuilder
 
     private static void UpdateHqButtonStyle(Button button, bool isHq)
     {
-        button.Foreground = isHq ? Brushes.Gold : Brushes.Gray;
+        button.Foreground = isHq
+            ? ResolveBrush("AccentGoldBrush", Brushes.Gold)
+            : ResolveBrush("GrayBrush", Brushes.Gray);
         button.Background = isHq 
-            ? new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3d3d3d"))
-            : Brushes.Transparent;
+            ? ResolveBrush("MutedAccentBrush", Brushes.DimGray)
+            : ResolveBrush("SystemTransparentBrush", Brushes.Transparent);
     }
 
     private static Brush GetNodeForeground(PlanNodeViewModel node)
@@ -579,10 +600,15 @@ public class RecipeTreeUiBuilder
         var colorName = RecipePlanDisplayHelpers.GetSourceColorName(node.Source);
         return colorName switch
         {
-            "LightBlue" => Brushes.LightSkyBlue,
-            "LightGreen" => Brushes.LightGreen,
-            _ => Brushes.White
+            "LightBlue" => ResolveBrush("LightSkyBlueBrush", Brushes.LightSkyBlue),
+            "LightGreen" => ResolveBrush("LightGreenBrush", Brushes.LightGreen),
+            _ => ResolveBrush("TextPrimaryBrush", Brushes.White)
         };
+    }
+
+    private static Brush ResolveBrush(string resourceKey, Brush fallback)
+    {
+        return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
     }
 
     private static string GetJobIcon(string job)

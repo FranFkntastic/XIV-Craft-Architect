@@ -81,6 +81,7 @@ public class AppState
     // Procurement Planner State
     public List<MarketShoppingItem> ShoppingItems { get; set; } = new();
     public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; private set; } = Array.Empty<MarketDataUnavailableItem>();
     public RecommendationMode RecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
     
     /// <summary>
@@ -145,6 +146,17 @@ public class AppState
     public void NotifyShoppingListChanged()
     {
         OnShoppingListChanged?.Invoke();
+    }
+
+    public void SetUnavailableMarketItems(IReadOnlyList<MarketDataUnavailableItem> items)
+    {
+        UnavailableMarketItems = items;
+        NotifyShoppingListChanged();
+    }
+
+    public void ClearUnavailableMarketItems()
+    {
+        SetUnavailableMarketItems(Array.Empty<MarketDataUnavailableItem>());
     }
     
     public void NotifySavedPlansChanged()
@@ -271,6 +283,7 @@ public class AppState
         ProjectItems.Clear();
         ShoppingItems.Clear();
         ShoppingPlans.Clear();
+        ClearUnavailableMarketItems();
         CurrentPlanId = null;  // Reset plan ID for new plan
         CurrentPlanName = null;
         NotifyPlanChanged();

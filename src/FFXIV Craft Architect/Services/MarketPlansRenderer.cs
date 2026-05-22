@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using FFXIV_Craft_Architect.Coordinators;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Helpers;
 using FFXIV_Craft_Architect.Models;
@@ -17,12 +18,14 @@ namespace FFXIV_Craft_Architect.Services;
 public class MarketPlansRenderer : IMarketPlansRenderer
 {
     private readonly ILogger<MarketPlansRenderer> _logger;
-    private readonly ICardFactory _cardFactory;
+    private readonly IMarketLogisticsCoordinator? _coordinator;
 
-    public MarketPlansRenderer(ILogger<MarketPlansRenderer> logger, ICardFactory cardFactory)
+    public MarketPlansRenderer(
+        ILogger<MarketPlansRenderer> logger,
+        IMarketLogisticsCoordinator? coordinator = null)
     {
         _logger = logger;
-        _cardFactory = cardFactory;
+        _coordinator = coordinator;
     }
 
     /// <inheritdoc />
@@ -75,7 +78,7 @@ public class MarketPlansRenderer : IMarketPlansRenderer
 
         var summaryPanel = new Border
         {
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3d3d3d")),
+            Background = ResolveBrush("Brush.Surface.Card.Summary", Brushes.DimGray),
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(12, 8, 12, 8),
             Margin = new Thickness(0, 0, 0, 12)
@@ -90,7 +93,7 @@ public class MarketPlansRenderer : IMarketPlansRenderer
             Text = $"Total: {grandTotal:N0}g",
             FontSize = 16,
             FontWeight = FontWeights.Bold,
-            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4caf50")),
+            Foreground = ResolveBrush("Brush.Status.Success", Brushes.LightGreen),
             VerticalAlignment = VerticalAlignment.Center
         };
         Grid.SetColumn(costText, 0);
@@ -99,7 +102,7 @@ public class MarketPlansRenderer : IMarketPlansRenderer
         var statsText = new TextBlock
         {
             Text = $"{itemsWithOptions} items with data  \u2022  {itemsWithoutOptions} need fetch",
-            Foreground = Brushes.Gray,
+            Foreground = ResolveBrush("GrayBrush", Brushes.Gray),
             FontSize = 11,
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center
@@ -166,7 +169,13 @@ public class MarketPlansRenderer : IMarketPlansRenderer
 
         var border = new Border
         {
-            Background = ColorHelper.GetMutedAccentBrush(),
+            Background = Application.Current?.TryFindResource("Brush.Surface.Card.Market") as Brush
+                ?? Application.Current?.TryFindResource("Brush.Surface.Card") as Brush
+                ?? Application.Current?.TryFindResource("CardBackgroundBrush") as Brush
+                ?? ColorHelper.GetMutedAccentBrush(),
+            BorderBrush = Application.Current?.TryFindResource("Brush.Border.Card.Market") as Brush
+                ?? Application.Current?.TryFindResource("Brush.Border.Default") as Brush,
+            BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(3),
             Padding = new Thickness(0),
             Margin = new Thickness(0, 0, 0, 4),
@@ -192,17 +201,39 @@ public class MarketPlansRenderer : IMarketPlansRenderer
         Func<string, object>? findResource)
     {
         var isExpanded = expandedItemId == plan.ItemId;
-        var viewModel = new MarketCardViewModel(plan);
+        var viewModel = new MarketCardViewModel(plan, _coordinator)
+        {
+            IsSelected = isExpanded
+        };
 
-        // Use CardFactory for consistent styling
-        var border = _cardFactory.CreateCollapsedMarketCard(
-            viewModel,
-            isExpanded,
-            () => { if (onCardClick != null) onCardClick(plan); },
-            findResource);
+        var resourceLookup = findResource ?? (key => Application.Current.MainWindow.FindResource(key));
+        DataTemplate? template = null;
+        try
+        {
+            template = (DataTemplate?)resourceLookup("CollapsedMarketCardTemplate");
+        }
+        catch (ResourceReferenceKeyNotFoundException)
+        {
+            // Template not found - implicit DataTemplate can still render content.
+        }
+
+        var border = new Border
+        {
+            Background = Brushes.Transparent,
+            Child = new ContentControl
+            {
+                Content = viewModel,
+                ContentTemplate = template
+            }
+        };
 
         border.Tag = plan;
         return border;
+    }
+
+    private static Brush ResolveBrush(string resourceKey, Brush fallback)
+    {
+        return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
     }
 
     /// <inheritdoc />
@@ -210,11 +241,7 @@ public class MarketPlansRenderer : IMarketPlansRenderer
     {
         target.Children.Clear();
         
-        var viewModel = new ExpandedPanelViewModel(plan);
-        viewModel.CloseRequested += () =>
-        {
-            onClose();
-        };
+        var viewModel = new ExpandedPanelViewModel(plan, _coordinator);
         
         var contentControl = new ContentControl
         {

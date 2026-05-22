@@ -1,3 +1,5 @@
+@using FFXIV_Craft_Architect.Web.Services
+
 <div class="rp-column">
     <div class="rp-title">Procurement Details</div>
 
@@ -12,6 +14,7 @@
         var materials = CurrentPlan.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList();
         var hqMaterials = materials.Count(m => m.RequiresHq);
         var pricedMaterials = materials.Count(m => m.UnitPrice > 0);
+        var unavailableMarketItems = UnavailableMarketItems.Where(i => materials.Any(m => m.ItemId == i.ItemId)).ToList();
         var unpricedMaterials = materials.Count - pricedMaterials;
 
         <div class="rp-panel">
@@ -38,10 +41,34 @@
                 </div>
                 <div class="rp-detail-row">
                     <span class="rp-detail-label">Missing prices</span>
-                    <span class="rp-detail-value">@unpricedMaterials</span>
+                    <span class="rp-detail-value">@(unpricedMaterials + unavailableMarketItems.Count)</span>
+                </div>
+                <div class="rp-detail-row">
+                    <span class="rp-detail-label">Market unavailable</span>
+                    <span class="rp-detail-value">@unavailableMarketItems.Count</span>
                 </div>
             </div>
         </div>
+
+        @if (unavailableMarketItems.Any())
+        {
+            <div class="rp-warning-block">
+                <div class="rp-warning-title">Market data unavailable</div>
+                <div>
+                    Some items may not be market-board listable. The plan can still be used, but market pricing excludes:
+                </div>
+                <ul class="rp-warning-list">
+                    @foreach (var item in unavailableMarketItems.Take(5))
+                    {
+                        <li>@item.Name</li>
+                    }
+                    @if (unavailableMarketItems.Count > 5)
+                    {
+                        <li>and @(unavailableMarketItems.Count - 5) more</li>
+                    }
+                </ul>
+            </div>
+        }
 
         @if (!materials.Any())
         {
@@ -60,4 +87,5 @@
 
 @code {
     [Parameter] public CraftingPlan? CurrentPlan { get; set; }
+    [Parameter] public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<MarketDataUnavailableItem>();
 }

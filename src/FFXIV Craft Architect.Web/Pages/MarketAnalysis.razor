@@ -43,6 +43,8 @@
 </MudContainer>
 
 @code {
+    private static readonly string[] NorthAmericanDataCenters = { "Aether", "Primal", "Crystal", "Dynamis" };
+
     private bool _isAnalyzing = false;
     private bool _isRefreshingPrices = false;
     
@@ -110,30 +112,77 @@
         if (AppState.CurrentPlan == null) return;
         
         _isRefreshingPrices = true;
-        AppState.BeginOperation("Refreshing Prices", "Fetching latest market data...");
+        AppState.SetStatus("Fetching latest market data...", busy: true);
         
         try
         {
             // Step 1: Fetch vendor prices
             await RecipeCalculationService.FetchVendorPricesAsync(AppState.CurrentPlan);
-            Snackbar.Add("Vendor prices updated", Severity.Success);
             
             // Step 2: Fetch market prices
             var itemIds = AppState.CurrentPlan.GetAllItemIds().ToList();
             if (itemIds.Any())
             {
                 AppState.SetStatus("Fetching market prices...", busy: true);
-                var responses = await UniversalisService.GetMarketDataBulkAsync(
-                    AppState.SelectedDataCenter, 
-                    itemIds);
+                var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, itemIds);
+                var nonMarketItemIds = MarketPriceAvailability.GetNonMarketListableItemIds(AppState.CurrentPlan, itemIds);
+                var responses = marketItemIds.Any()
+                    ? await UniversalisService.GetMarketDataBulkAsync(
+                        AppState.SelectedDataCenter,
+                        marketItemIds)
+                    : new Dictionary<int, UniversalisResponse>();
+                var refreshResult = MarketPriceAvailability.FromResponses(AppState.CurrentPlan, marketItemIds, responses, nonMarketItemIds);
+                AppState.SetUnavailableMarketItems(refreshResult.UnavailableItems);
                 
                 // Update node prices
                 UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, responses);
-                Snackbar.Add("Market prices updated", Severity.Success);
+
+                // Keep analysis/procurement source-of-truth in sync with refreshed prices
+                foreach (var kvp in responses)
+                {
+                    var cachedData = ConvertResponseToCachedData(kvp.Key, AppState.SelectedDataCenter, kvp.Value);
+                    await MarketCache.SetAsync(kvp.Key, AppState.SelectedDataCenter, cachedData);
+                }
+
+                Logger.LogInformation("[Market Refresh] Cached {Count} refreshed market entries", responses.Count);
             }
             
             AppState.NotifyPlanChanged();
-            AppState.EndOperation("Prices refreshed successfully!");
+
+            // Force full recomputation so Procurement always reflects latest data.
+            var canReanalyze = GetBuyItems().Any() && !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
+            if (canReanalyze)
+            {
+                var rebuilt = await RunMarketAnalysisAsync(forceRefreshData: true, showCompletionSnackbar: false);
+                if (rebuilt)
+                {
+                    if (AppState.UnavailableMarketItems.Any())
+                    {
+                        var warning = MarketPriceAvailability.FormatUnavailableMessage(AppState.UnavailableMarketItems);
+                        Snackbar.Add($"Prices refreshed with warnings. {warning}", Severity.Warning);
+                    }
+                    else
+                    {
+                        Snackbar.Add("Prices refreshed and procurement plan rebuilt", Severity.Success);
+                    }
+                }
+                else
+                {
+                    Snackbar.Add("Prices refreshed, but failed to rebuild procurement plan", Severity.Warning);
+                }
+            }
+            else
+            {
+                AppState.SetStatus("Prices refreshed", busy: false);
+                if (AppState.UnavailableMarketItems.Any())
+                {
+                    Snackbar.Add(MarketPriceAvailability.FormatUnavailableMessage(AppState.UnavailableMarketItems), Severity.Warning);
+                }
+                else
+                {
+                    Snackbar.Add("Prices refreshed", Severity.Success);
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -170,12 +219,48 @@
         }
     }
 
+    private static CachedMarketData ConvertResponseToCachedData(int itemId, string dataCenter, UniversalisResponse response)
+    {
+        var worlds = new List<CachedWorldData>();
+
+        foreach (var worldListing in response.Listings.GroupBy(l => l.WorldName))
+        {
+            worlds.Add(new CachedWorldData
+            {
+                WorldName = worldListing.Key ?? "Unknown",
+                Listings = worldListing.Select(l => new CachedListing
+                {
+                    Quantity = l.Quantity,
+                    PricePerUnit = l.PricePerUnit,
+                    RetainerName = l.RetainerName ?? "Unknown",
+                    IsHq = l.IsHq
+                }).ToList()
+            });
+        }
+
+        return new CachedMarketData
+        {
+            ItemId = itemId,
+            DataCenter = dataCenter,
+            FetchedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            DCAveragePrice = (decimal)(response.AveragePriceNq > 0 ? response.AveragePriceNq : response.AveragePrice),
+            HQAveragePrice = response.AveragePriceHq > 0 ? (decimal)response.AveragePriceHq : null,
+            Worlds = worlds
+        };
+    }
+
     private async Task RunMarketAnalysisAsync()
+    {
+        await RunMarketAnalysisAsync(forceRefreshData: false, showCompletionSnackbar: true);
+    }
+
+    private async Task<bool> RunMarketAnalysisAsync(bool forceRefreshData, bool showCompletionSnackbar)
     {
         var materials = GetBuyItems();
         
-        if (!materials.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
-            return;
+        var plan = AppState.CurrentPlan;
+        if (plan == null || !materials.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+            return false;
 
         _isAnalyzing = true;
         AppState.ShoppingPlans.Clear();
@@ -184,11 +269,33 @@
         try
         {
             var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+            var maxAge = forceRefreshData ? TimeSpan.Zero : (TimeSpan?)null;
             
-            // Step 1: Ensure cache is populated with market data (just like WPF app)
-            var cacheRequests = materials.Select(m => (m.ItemId, AppState.SelectedDataCenter)).ToList();
-            AppState.SetStatus($"Checking cache for {cacheRequests.Count} items...");
-            var fetchedCount = await MarketCache.EnsurePopulatedAsync(cacheRequests, progress: progress);
+            // Step 1: Ensure cache is populated with market data
+            int fetchedCount;
+            if (AppState.SearchEntireRegion)
+            {
+                fetchedCount = 0;
+                foreach (var dc in NorthAmericanDataCenters)
+                {
+                    var dcRequests = materials.Select(m => (m.ItemId, dc)).ToList();
+                    dcRequests = dcRequests
+                        .Where(r => plan.FindNode(r.ItemId)?.CanBuyFromMarket != false)
+                        .ToList();
+                    AppState.SetStatus($"Checking cache for {dcRequests.Count} items on {dc}...");
+                    fetchedCount += await MarketCache.EnsurePopulatedAsync(dcRequests, maxAge: maxAge, progress: progress);
+                }
+            }
+            else
+            {
+                var cacheRequests = materials.Select(m => (m.ItemId, AppState.SelectedDataCenter)).ToList();
+                cacheRequests = cacheRequests
+                    .Where(r => plan.FindNode(r.ItemId)?.CanBuyFromMarket != false)
+                    .ToList();
+                AppState.SetStatus($"Checking cache for {cacheRequests.Count} items...");
+                fetchedCount = await MarketCache.EnsurePopulatedAsync(cacheRequests, maxAge: maxAge, progress: progress);
+            }
+
             Logger.LogInformation("Market Analysis: {FetchedCount} items fetched from API", fetchedCount);
             
             // Step 2: Calculate shopping plans from cached data
@@ -227,8 +334,8 @@
                     mode: AppState.RecommendationMode);
             }
             
-            // Apply vendor price overrides for vendor-buy items
-            ApplyVendorPriceOverrides(plans);
+            // Apply hard-lock vendor overrides for vendor-buy items
+            MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, plans);
             
             AppState.ShoppingPlans = plans;
             AppState.NotifyShoppingListChanged();
@@ -242,89 +349,23 @@
             var bestValue = AppState.ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
             // Ensure the status message is properly set to completion
             AppState.EndOperation($"Analysis complete! Best value: {bestValue:N0}g");
-            Snackbar.Add("Market analysis complete!", Severity.Success);
+            if (showCompletionSnackbar)
+            {
+                Snackbar.Add("Market analysis complete!", Severity.Success);
+            }
+
+            return true;
         }
         catch (Exception ex)
         {
             AppState.SetStatus($"Analysis failed: {ex.Message}");
             Snackbar.Add($"Market analysis failed: {ex.Message}", Severity.Error);
+            return false;
         }
         finally
         {
             _isAnalyzing = false;
         }
-    }
-
-    /// <summary>
-    /// For items marked as vendor-buy, override the recommendation to show vendor price.
-    /// Keeps market data visible for comparison but sets vendor as the recommended option.
-    /// Uses the selected vendor from the recipe plan (respects SelectedVendorIndex).
-    /// </summary>
-    private void ApplyVendorPriceOverrides(List<DetailedShoppingPlan> plans)
-    {
-        if (AppState.CurrentPlan == null) return;
-
-        foreach (var plan in plans)
-        {
-            // Find the node in the plan tree to check its source and vendor price
-            var node = FindNodeInPlan(AppState.CurrentPlan, plan.ItemId);
-            if (node?.Source == AcquisitionSource.VendorBuy && node.VendorPrice > 0)
-            {
-                // Get the specific vendor selected in the recipe plan
-                var selectedVendor = node.SelectedVendor;
-                if (selectedVendor != null)
-                {
-                    // Create a vendor "world" option as the recommendation with specific vendor info
-                    plan.RecommendedWorld = new WorldShoppingSummary
-                    {
-                        WorldName = "Vendor",
-                        TotalCost = (long)(selectedVendor.Price * plan.QuantityNeeded),
-                        AveragePricePerUnit = selectedVendor.Price,
-                        TotalQuantityPurchased = plan.QuantityNeeded,
-                        HasSufficientStock = true,
-                        Listings = new List<ShoppingListingEntry>(),
-                        // Store the specific vendor name for display
-                        VendorName = $"{selectedVendor.Name} - {selectedVendor.Location}"
-                    };
-
-                    // Clear any split recommendations since vendor has unlimited stock
-                    plan.RecommendedSplit = null;
-
-                    // Use vendor data already stored in the node (no need to fetch again)
-                    plan.Vendors = node.VendorOptions
-                        .Where(v => v.IsGilVendor)
-                        .ToList();
-
-                    Logger.LogInformation("Applied vendor price override for {ItemName}: {VendorName} @ {VendorPrice}g",
-                        plan.Name, selectedVendor.Name, selectedVendor.Price);
-                }
-            }
-        }
-    }
-    
-    /// <summary>
-    /// Find a node in the plan tree by item ID.
-    /// </summary>
-    private PlanNode? FindNodeInPlan(CraftingPlan plan, int itemId)
-    {
-        foreach (var root in plan.RootItems)
-        {
-            var found = FindNodeRecursive(root, itemId);
-            if (found != null) return found;
-        }
-        return null;
-    }
-    
-    private PlanNode? FindNodeRecursive(PlanNode node, int itemId)
-    {
-        if (node.ItemId == itemId) return node;
-        
-        foreach (var child in node.Children)
-        {
-            var found = FindNodeRecursive(child, itemId);
-            if (found != null) return found;
-        }
-        return null;
     }
 
     private async Task OnModeChanged(RecommendationMode mode)

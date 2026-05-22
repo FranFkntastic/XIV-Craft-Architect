@@ -10,8 +10,8 @@
         @if (HasChildren)
         {
             <!-- Parent Node: Expander -->
-            <div style="border: 1px solid #444; border-radius: 4px; margin-bottom: 4px; overflow: hidden;">
-                <div style="background: #363636; padding: 8px 12px; display: flex; align-items: center; gap: 8px;">
+            <div style="border: 1px solid @(IsSelected ? "#90caf9" : "#444"); border-radius: 4px; margin-bottom: 4px; overflow: hidden;">
+                <div style="background: @(IsSelected ? "#33404a" : "#363636"); padding: 8px 12px; display: flex; align-items: center; gap: 8px;">
                     <!-- Toggle button - only this should expand/collapse -->
                     <div @onclick="ToggleExpanded"
                          @onclick:stopPropagation
@@ -27,7 +27,9 @@
                         {
                             <RecipeNodeView Node="child" 
                                             Depth="Depth + 1"
-                                            OnSourceChanged="OnSourceChanged"
+                                            IsSelected="@(SelectedNodeId == child.NodeId)"
+                                            SelectedNodeId="@SelectedNodeId"
+                                            OnNodeSelected="OnNodeSelected"
                                             OnHqChanged="OnHqChanged" />
                         }
                     </div>
@@ -36,8 +38,8 @@
         }
         else
         {
-            <!-- Leaf Node: Simple row with acquisition dropdown -->
-            <div style="display: flex; align-items: center; gap: 8px; padding: 6px 0;">
+            <!-- Leaf Node: Simple row with details selector -->
+            <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid @(IsSelected ? "#90caf9" : "transparent"); border-radius: 4px; background: @(IsSelected ? "#33404a" : "transparent");">
                 @RenderNodeContentCore()
             </div>
         }
@@ -47,7 +49,9 @@
 @code {
     [Parameter] public PlanNode? Node { get; set; }
     [Parameter] public int Depth { get; set; }
-    [Parameter] public EventCallback<PlanNode> OnSourceChanged { get; set; }
+    [Parameter] public bool IsSelected { get; set; }
+    [Parameter] public string? SelectedNodeId { get; set; }
+    [Parameter] public EventCallback<PlanNode> OnNodeSelected { get; set; }
     [Parameter] public EventCallback<PlanNode> OnHqChanged { get; set; }
     
     private bool _isExpanded = true;
@@ -99,6 +103,8 @@
 
     protected override void OnParametersSet()
     {
+        Node?.EnsureValidAcquisitionSource();
+
         // Sync with global expand state on initial render or when version changes
         if (_lastExpandVersion != AppState.RecipeTreeExpandVersion)
         {
@@ -112,156 +118,34 @@
         _isExpanded = !_isExpanded;
     }
 
+    private async Task SelectNode()
+    {
+        if (Node == null)
+        {
+            return;
+        }
+
+        await OnNodeSelected.InvokeAsync(Node);
+    }
+
     private async Task OnHqToggle()
     {
         if (Node != null && Node.CanBeHq)
         {
             Node.MustBeHq = !Node.MustBeHq;
             // If switching to HQ and currently buying NQ, switch to HQ buy
-            if (Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyNq)
+            if (Node.CanBuyFromMarket && Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyNq)
             {
                 Node.Source = AcquisitionSource.MarketBuyHq;
             }
             // If switching to NQ and currently buying HQ, switch to NQ buy
-            else if (!Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyHq)
+            else if (Node.CanBuyFromMarket && !Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyHq)
             {
                 Node.Source = AcquisitionSource.MarketBuyNq;
             }
             await OnHqChanged.InvokeAsync(Node);
         }
     }
-
-    private List<DropdownOption> GetDropdownOptions()
-    {
-        var options = new List<DropdownOption>();
-        
-        if (Node == null) return options;
-        
-        // Always add market buy options
-        options.Add(new DropdownOption($"market_nq_{Node.NodeId}", "Buy NQ", AcquisitionSource.MarketBuyNq, -1));
-        
-        if (Node.CanBeHq)
-        {
-            options.Add(new DropdownOption($"market_hq_{Node.NodeId}", "Buy HQ", AcquisitionSource.MarketBuyHq, -1));
-        }
-        
-        // Add vendor options - create entry for each location (including alternate instances)
-        if (Node.CanBuyFromVendor && Node.VendorOptions?.Any() == true)
-        {
-            var gilVendors = Node.VendorOptions.Where(v => v.IsGilVendor).ToList();
-            if (gilVendors.Any())
-            {
-                var minPrice = gilVendors.Min(v => v.Price);
-                var cheapestVendors = gilVendors.Where(v => v.Price == minPrice).ToList();
-
-                // Create dropdown entries for each vendor location
-                foreach (var vendor in cheapestVendors)
-                {
-                    var vendorIndex = Node.VendorOptions.IndexOf(vendor);
-                    
-                    // Primary location
-                    options.Add(new DropdownOption(
-                        $"vendor_{vendorIndex}_primary_{Node.NodeId}",
-                        $"Vendor: {vendor.Name} - {vendor.Location} [{vendor.Price:N0}g]",
-                        AcquisitionSource.VendorBuy,
-                        vendorIndex));
-                    
-                    // Alternate locations (if any)
-                    if (vendor.HasMultipleLocations)
-                    {
-                        for (int altIndex = 0; altIndex < vendor.AlternateLocations.Count; altIndex++)
-                        {
-                            var location = vendor.AlternateLocations[altIndex];
-                            options.Add(new DropdownOption(
-                                $"vendor_{vendorIndex}_alt_{altIndex}_{Node.NodeId}",
-                                $"Vendor: {vendor.Name} - {location} [{vendor.Price:N0}g]",
-                                AcquisitionSource.VendorBuy,
-                                vendorIndex));
-                        }
-                    }
-                }
-            }
-
-            // Add special currency vendors (crossed out / not supported)
-            var specialCurrencyVendors = Node.VendorOptions.Where(v => !v.IsGilVendor).ToList();
-            foreach (var vendor in specialCurrencyVendors)
-            {
-                var vendorIndex = Node.VendorOptions.IndexOf(vendor);
-                options.Add(new DropdownOption(
-                    $"vendor_special_{vendorIndex}_{Node.NodeId}",
-                    $"~~{vendor.Name} - {vendor.Location} [{vendor.Price:N0} {vendor.Currency}] (not supported)~~",
-                    AcquisitionSource.VendorSpecialCurrency,
-                    vendorIndex));
-            }
-        }
-        
-        // Add craft option if craftable
-        if (Node.Children?.Any() == true)
-        {
-            options.Add(new DropdownOption($"craft_{Node.NodeId}", "Craft", AcquisitionSource.Craft, -1));
-        }
-        
-        return options;
-    }
-
-    private string GetCurrentDropdownValue()
-    {
-        if (Node == null) return "";
-        
-        return Node.Source switch
-        {
-            AcquisitionSource.MarketBuyNq => $"market_nq_{Node.NodeId}",
-            AcquisitionSource.MarketBuyHq => $"market_hq_{Node.NodeId}",
-            AcquisitionSource.VendorBuy => GetVendorDropdownValue(),
-            AcquisitionSource.Craft => $"craft_{Node.NodeId}",
-            _ => $"market_nq_{Node.NodeId}"
-        };
-    }
-
-    private string GetVendorDropdownValue()
-    {
-        if (Node?.VendorOptions == null || !Node.VendorOptions.Any()) return "";
-        
-        var gilVendors = Node.VendorOptions.Where(v => v.IsGilVendor).ToList();
-        if (!gilVendors.Any()) return "";
-        
-        var minPrice = gilVendors.Min(v => v.Price);
-        var cheapestVendors = gilVendors.Where(v => v.Price == minPrice).ToList();
-        
-        // Use selected vendor index if valid - defaults to primary location
-        if (Node.SelectedVendorIndex >= 0 && Node.SelectedVendorIndex < cheapestVendors.Count)
-        {
-            var vendor = cheapestVendors[Node.SelectedVendorIndex];
-            var vendorIndex = Node.VendorOptions.IndexOf(vendor);
-            return $"vendor_{vendorIndex}_primary_{Node.NodeId}";
-        }
-        
-        // Default to first vendor's primary location
-        var firstVendor = cheapestVendors.First();
-        var firstIndex = Node.VendorOptions.IndexOf(firstVendor);
-        return $"vendor_{firstIndex}_primary_{Node.NodeId}";
-    }
-
-    private async Task OnDropdownChange(ChangeEventArgs e)
-    {
-        if (Node == null) return;
-        
-        var value = e.Value?.ToString() ?? "";
-        var options = GetDropdownOptions();
-        var selectedOption = options.FirstOrDefault(o => o.Value == value);
-        
-        if (selectedOption != null)
-        {
-            Node.Source = selectedOption.Source;
-            if (selectedOption.Source == AcquisitionSource.VendorBuy)
-            {
-                Node.SelectedVendorIndex = selectedOption.VendorIndex;
-            }
-            await OnSourceChanged.InvokeAsync(Node);
-        }
-    }
-
-    private record DropdownOption(string Value, string Text, AcquisitionSource Source, int VendorIndex);
 
     private RenderFragment RenderNodeContentCore() => __builder =>
     {
@@ -311,46 +195,33 @@
             __builder.CloseElement();
         }
         
-        // Acquisition source dropdown with vendor details
-        var dropdownOptions = GetDropdownOptions();
-        var currentValue = GetCurrentDropdownValue();
-        
-        __builder.OpenElement(12, "select");
-        __builder.AddAttribute(13, "value", currentValue);
-        __builder.AddAttribute(14, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, OnDropdownChange));
-        __builder.AddEventStopPropagationAttribute(15, "onclick", true);
-        __builder.AddAttribute(16, "style", "background: #2d2d2d; color: white; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer; min-width: 150px;");
-        
-        foreach (var option in dropdownOptions)
-        {
-            __builder.OpenElement(16, "option");
-            __builder.AddAttribute(17, "value", option.Value);
-            __builder.AddContent(18, option.Text);
-            __builder.CloseElement();
-        }
-        
-        __builder.CloseElement(); // select
-        
-        // Price display
+        // Price display and details selector. Acquisition source edits now live in the right-hand panel.
         var priceText = GetPriceDisplay();
-        if (!string.IsNullOrEmpty(priceText))
-        {
-            __builder.OpenElement(19, "span");
-            __builder.AddAttribute(20, "style", "color: #4caf50; font-size: 12px; min-width: 80px; text-align: right;");
-            __builder.AddContent(21, priceText);
-            __builder.CloseElement();
-        }
+        __builder.OpenElement(19, "button");
+        __builder.AddAttribute(20, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, SelectNode));
+        __builder.AddEventStopPropagationAttribute(21, "onclick", true);
+        __builder.AddAttribute(22, "title", "Show acquisition details");
+        __builder.AddAttribute(23, "aria-label", $"Show acquisition details for {Node.Name}");
+        __builder.AddAttribute(24, "style", "margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: 132px; min-width: 132px; height: 24px; background: transparent; border: none; padding: 0 0 0 10px; cursor: pointer;");
+
+        __builder.OpenElement(25, "span");
+        __builder.AddAttribute(26, "style", "color: #4caf50; font-size: 12px; min-width: 92px; text-align: right;");
+        __builder.AddContent(27, priceText);
+        __builder.CloseElement();
+
+        __builder.OpenElement(28, "span");
+        __builder.AddAttribute(29, "aria-hidden", "true");
+        __builder.AddAttribute(30, "style", "color: #888; font-size: 16px; line-height: 1; width: 10px;");
+        __builder.AddContent(31, "›");
+        __builder.CloseElement();
+
+        __builder.CloseElement();
     };
 
     private string GetNodeColor()
     {
         if (Node == null) return "#ccc";
         return RecipePlanDisplayHelpers.GetSourceHexColor(Node.Source);
-    }
-
-    private static string GetSourceDisplayName(AcquisitionSource source)
-    {
-        return RecipePlanDisplayHelpers.GetSourceDisplayName(source);
     }
 
     private string GetPriceDisplay()

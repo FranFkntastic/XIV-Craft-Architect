@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Windows.Input;
+using CommunityToolkit.Mvvm.Input;
 using FFXIV_Craft_Architect.Core.Models;
-using FFXIV_Craft_Architect.Infrastructure.Commands;
+using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Coordinators;
 
 namespace FFXIV_Craft_Architect.ViewModels;
 
@@ -10,23 +12,48 @@ namespace FFXIV_Craft_Architect.ViewModels;
 /// </summary>
 public class MarketCardViewModel : ViewModelBase
 {
+    private static readonly PurchaseSummaryService _summaryService = new();
+    
     private bool _isExpanded = true;
+    private bool _isSelected;
     private ObservableCollection<WorldOptionViewModel> _worldOptions = new();
     private readonly DetailedShoppingPlan _plan;
+    private readonly IMarketLogisticsCoordinator? _coordinator;
+    private readonly PurchaseSummary _summary;
 
-    public MarketCardViewModel(DetailedShoppingPlan plan)
+    /// <summary>
+    /// Initializes a new instance of the <see cref="MarketCardViewModel"/> class.
+    /// </summary>
+    /// <param name="plan">The shopping plan to display.</param>
+    /// <param name="coordinator">Optional coordinator for selection management. If provided, selection will call SelectItem().</param>
+    public MarketCardViewModel(DetailedShoppingPlan plan, IMarketLogisticsCoordinator? coordinator = null)
     {
         _plan = plan;
+        _coordinator = coordinator;
+        _summary = _summaryService.CreateSummary(plan);
         ToggleExpandCommand = new RelayCommand(() => IsExpanded = !IsExpanded);
+        SelectCommand = new RelayCommand(OnSelect);
         
-        // Initialize world options
         RefreshWorldOptions();
+    }
+    
+    private void OnSelect()
+    {
+        if (_coordinator != null)
+        {
+            _coordinator.SelectItem(_plan.ItemId);
+        }
     }
 
     /// <summary>
     /// The underlying shopping plan.
     /// </summary>
     public DetailedShoppingPlan Plan => _plan;
+    
+    /// <summary>
+    /// Centralized purchase summary with actual quantities.
+    /// </summary>
+    public PurchaseSummary Summary => _summary;
 
     /// <summary>
     /// Item ID.
@@ -39,9 +66,24 @@ public class MarketCardViewModel : ViewModelBase
     public string Name => _plan.Name;
 
     /// <summary>
-    /// Quantity needed.
+    /// Quantity needed for crafting (idealized).
     /// </summary>
     public int QuantityNeeded => _plan.QuantityNeeded;
+    
+    /// <summary>
+    /// Actual quantity to purchase (from listings).
+    /// </summary>
+    public int QuantityToPurchase => _summary.QuantityToPurchase;
+    
+    /// <summary>
+    /// Excess items due to full stacks.
+    /// </summary>
+    public int ExcessQuantity => _summary.ExcessQuantity;
+    
+    /// <summary>
+    /// Whether there are excess items.
+    /// </summary>
+    public bool HasExcess => _summary.HasExcess;
 
     /// <summary>
     /// DC average price.
@@ -55,6 +97,15 @@ public class MarketCardViewModel : ViewModelBase
     {
         get => _isExpanded;
         set => SetProperty(ref _isExpanded, value);
+    }
+
+    /// <summary>
+    /// Whether the card is selected in split-pane mode.
+    /// </summary>
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => SetProperty(ref _isSelected, value);
     }
 
     /// <summary>
@@ -93,6 +144,25 @@ public class MarketCardViewModel : ViewModelBase
     /// Command to toggle expand/collapse state.
     /// </summary>
     public ICommand ToggleExpandCommand { get; }
+
+    /// <summary>
+    /// Command to select this card in split-pane mode.
+    /// </summary>
+    public ICommand SelectCommand { get; }
+
+    /// <summary>
+    /// Whether this item requires a multi-world split purchase.
+    /// </summary>
+    public bool RequiresSplitPurchase => _plan.RequiresSplitPurchase;
+
+    public bool IsVendorOnly => string.Equals(
+        _plan.RecommendedWorld?.WorldName,
+        MarketShoppingConstants.VendorWorldName,
+        StringComparison.OrdinalIgnoreCase);
+
+    public string RecommendedSourceName => IsVendorOnly
+        ? _plan.RecommendedWorld?.VendorName ?? MarketShoppingConstants.VendorWorldName
+        : _plan.RecommendedWorld?.WorldName ?? string.Empty;
 
     /// <summary>
     /// Refreshes the world options collection from the underlying plan.

@@ -59,7 +59,9 @@
             {
                 <RecipeNodeView Node="rootItem"
                                 Depth="0"
-                                OnSourceChanged="OnNodeSourceChanged"
+                                IsSelected="@(SelectedNode?.NodeId == rootItem.NodeId)"
+                                SelectedNodeId="@SelectedNode?.NodeId"
+                                OnNodeSelected="OnNodeSelected"
                                 OnHqChanged="OnNodeHqChanged" />
             }
         </div>
@@ -75,6 +77,7 @@
     [Parameter] public EventCallback OnCollapseAllRequested { get; set; }
     [Parameter] public EventCallback<string> OnLoadPlanRequested { get; set; }
     [Parameter] public EventCallback<string> OnDeletePlanRequested { get; set; }
-    [Parameter] public EventCallback<PlanNode> OnNodeSourceChanged { get; set; }
+    [Parameter] public PlanNode? SelectedNode { get; set; }
+    [Parameter] public EventCallback<PlanNode> OnNodeSelected { get; set; }
     [Parameter] public EventCallback<PlanNode> OnNodeHqChanged { get; set; }
 }

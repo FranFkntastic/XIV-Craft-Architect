@@ -75,6 +75,18 @@ public enum RecommendationMode
     BestUnitPrice
 }
 
+public static class MarketShoppingConstants
+{
+    public const string VendorWorldName = "Vendor";
+}
+
+public static class TravelContextConstants
+{
+    public const string Primary = "Primary";
+    public const string Consolidated = "Consolidated";
+    public const string Supplemental = "Supplemental";
+}
+
 /// <summary>
 /// Complete shopping analysis for a single item across all worlds.
 /// 
@@ -154,21 +166,21 @@ public class DetailedShoppingPlan
     /// Vendors always have unlimited stock.
     /// </summary>
     public int TotalAvailableQuantity => 
-        RecommendedWorld?.WorldName == "Vendor" ? QuantityNeeded : WorldOptions.Sum(w => w.TotalQuantityPurchased);
+        RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName ? QuantityNeeded : WorldOptions.Sum(w => w.TotalQuantityPurchased);
     
     /// <summary>
     /// Whether the total available stock across all worlds is sufficient.
     /// Vendors always have sufficient stock.
     /// </summary>
     public bool HasSufficientStock => 
-        RecommendedWorld?.WorldName == "Vendor" || TotalAvailableQuantity >= QuantityNeeded;
+        RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName || TotalAvailableQuantity >= QuantityNeeded;
     
     /// <summary>
     /// The shortfall quantity if stock is insufficient across all worlds.
     /// Always 0 for vendor purchases.
     /// </summary>
     public int StockShortfall => 
-        RecommendedWorld?.WorldName == "Vendor" ? 0 : Math.Max(0, QuantityNeeded - TotalAvailableQuantity);
+        RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName ? 0 : Math.Max(0, QuantityNeeded - TotalAvailableQuantity);
     
     /// <summary>
     /// Multi-world split recommendation for items that can't be fulfilled on a single world.
@@ -237,7 +249,7 @@ public class SplitWorldPurchase
     /// - "Consolidated": Selected because visiting for other items
     /// - "Supplemental": Needed to complete quantity after primary
     /// </summary>
-    public string TravelContext { get; set; } = "Primary";
+    public string TravelContext { get; set; } = TravelContextConstants.Primary;
     
     /// <summary>
     /// How much stock is available beyond what we need.
@@ -570,7 +582,7 @@ public class WorldItemPurchase
     /// <summary>
     /// For split purchases, indicates if this is the primary world or supplemental.
     /// </summary>
-    public string TravelContext { get; set; } = "Primary";
+    public string TravelContext { get; set; } = TravelContextConstants.Primary;
     
     /// <summary>
     /// Display format: "×X of Y" where X is quantity on this world, Y is total needed.
@@ -610,7 +622,7 @@ public class WorldProcurementCardModel
     /// <summary>
     /// Whether this is a vendor card (not a market world).
     /// </summary>
-    public bool IsVendor => WorldName == "Vendor";
+    public bool IsVendor => WorldName == MarketShoppingConstants.VendorWorldName;
     
     /// <summary>
     /// Whether this world is congested (cannot travel to).
@@ -673,4 +685,94 @@ public class WorldProcurementCardModel
     /// Only populated when IsVendor is true and a specific vendor was selected.
     /// </summary>
     public string? SelectedVendorName { get; set; }
+}
+
+/// <summary>
+/// Centralized summary for displaying purchase information consistently across the UI.
+/// Shows actual purchase quantity (from listings) rather than idealized quantity needed.
+/// </summary>
+public class PurchaseSummary
+{
+    public int ItemId { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public int IconId { get; init; }
+    
+    /// <summary>
+    /// Quantity required for the crafting plan (idealized).
+    /// </summary>
+    public int QuantityNeeded { get; init; }
+    
+    /// <summary>
+    /// Actual quantity to purchase from listings (may include excess due to full stacks).
+    /// </summary>
+    public int QuantityToPurchase { get; init; }
+    
+    /// <summary>
+    /// Extra items beyond what's needed (QuantityToPurchase - QuantityNeeded).
+    /// </summary>
+    public int ExcessQuantity { get; init; }
+    
+    /// <summary>
+    /// Whether there are excess items due to full stack purchases.
+    /// </summary>
+    public bool HasExcess => ExcessQuantity > 0;
+    
+    /// <summary>
+    /// Total cost for this purchase.
+    /// </summary>
+    public long TotalCost { get; init; }
+    
+    /// <summary>
+    /// Average price per unit.
+    /// </summary>
+    public decimal AveragePricePerUnit { get; init; }
+    
+    /// <summary>
+    /// The recommended world for this purchase (null if split-world or vendor).
+    /// </summary>
+    public WorldShoppingSummary? RecommendedWorld { get; init; }
+    
+    /// <summary>
+    /// Whether this is a vendor purchase.
+    /// </summary>
+    public bool IsVendor => RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName;
+    
+    /// <summary>
+    /// Whether this requires a split-world purchase.
+    /// </summary>
+    public bool RequiresSplitPurchase { get; init; }
+    
+    /// <summary>
+    /// Split-world purchase details (if applicable).
+    /// </summary>
+    public List<SplitWorldPurchase>? RecommendedSplit { get; init; }
+    
+    /// <summary>
+    /// Display text: "ItemName ×11 (x3 excess)" or "ItemName ×8" (no excess).
+    /// </summary>
+    public string DisplayText => HasExcess 
+        ? $"{Name} ×{QuantityToPurchase} (x{ExcessQuantity} excess)"
+        : $"{Name} ×{QuantityToPurchase}";
+    
+    /// <summary>
+    /// Short display text without excess: "ItemName ×11".
+    /// </summary>
+    public string ShortDisplayText => $"{Name} ×{QuantityToPurchase}";
+    
+    /// <summary>
+    /// Quantity display with excess: "×11 (x3 excess)" or "×8".
+    /// </summary>
+    public string QuantityDisplay => HasExcess 
+        ? $"×{QuantityToPurchase} (x{ExcessQuantity} excess)"
+        : $"×{QuantityToPurchase}";
+    
+    /// <summary>
+    /// Cost display: "15,000g".
+    /// </summary>
+    public string CostDisplay => $"{TotalCost:N0}g";
+    
+    /// <summary>
+    /// Price per unit display: "~1,364g/ea".
+    /// </summary>
+    public string PricePerUnitDisplay => $"~{AveragePricePerUnit:N0}g/ea";
 }
