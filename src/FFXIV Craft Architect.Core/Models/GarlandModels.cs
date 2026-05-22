@@ -304,6 +304,28 @@ public class GarlandItem
     };
 
     /// <summary>
+    /// Whether Garland marks this item as excluded from market-board listing.
+    /// Some workshop frame items are tradeable between players but still cannot be listed.
+    /// </summary>
+    [JsonPropertyName("unlistable")]
+    public object? UnlistableRaw { get; set; }
+
+    [JsonIgnore]
+    public bool Unlistable => UnlistableRaw switch
+    {
+        bool b => b,
+        int i => i != 0,
+        long l => l != 0,
+        double d => d != 0,
+        string s => int.TryParse(s, out var val) && val != 0,
+        JsonElement e => e.ValueKind == JsonValueKind.True || (e.TryGetInt32(out var i) && i != 0),
+        _ => false
+    };
+
+    [JsonIgnore]
+    public bool CanListOnMarket => Tradeable && !Unlistable;
+
+    /// <summary>
     /// Partial data references for this item (NPCs, locations, etc.).
     /// Populated from the API response when available.
     /// </summary>

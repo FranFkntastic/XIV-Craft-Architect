@@ -124,9 +124,15 @@
             if (itemIds.Any())
             {
                 AppState.SetStatus("Fetching market prices...", busy: true);
-                var responses = await UniversalisService.GetMarketDataBulkAsync(
-                    AppState.SelectedDataCenter, 
-                    itemIds);
+                var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, itemIds);
+                var nonMarketItemIds = MarketPriceAvailability.GetNonMarketListableItemIds(AppState.CurrentPlan, itemIds);
+                var responses = marketItemIds.Any()
+                    ? await UniversalisService.GetMarketDataBulkAsync(
+                        AppState.SelectedDataCenter,
+                        marketItemIds)
+                    : new Dictionary<int, UniversalisResponse>();
+                var refreshResult = MarketPriceAvailability.FromResponses(AppState.CurrentPlan, marketItemIds, responses, nonMarketItemIds);
+                AppState.SetUnavailableMarketItems(refreshResult.UnavailableItems);
                 
                 // Update node prices
                 UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, responses);
@@ -150,7 +156,15 @@
                 var rebuilt = await RunMarketAnalysisAsync(forceRefreshData: true, showCompletionSnackbar: false);
                 if (rebuilt)
                 {
-                    Snackbar.Add("Prices refreshed and procurement plan rebuilt", Severity.Success);
+                    if (AppState.UnavailableMarketItems.Any())
+                    {
+                        var warning = MarketPriceAvailability.FormatUnavailableMessage(AppState.UnavailableMarketItems);
+                        Snackbar.Add($"Prices refreshed with warnings. {warning}", Severity.Warning);
+                    }
+                    else
+                    {
+                        Snackbar.Add("Prices refreshed and procurement plan rebuilt", Severity.Success);
+                    }
                 }
                 else
                 {
@@ -160,7 +174,14 @@
             else
             {
                 AppState.SetStatus("Prices refreshed", busy: false);
-                Snackbar.Add("Prices refreshed", Severity.Success);
+                if (AppState.UnavailableMarketItems.Any())
+                {
+                    Snackbar.Add(MarketPriceAvailability.FormatUnavailableMessage(AppState.UnavailableMarketItems), Severity.Warning);
+                }
+                else
+                {
+                    Snackbar.Add("Prices refreshed", Severity.Success);
+                }
             }
         }
         catch (Exception ex)
@@ -237,7 +258,8 @@
     {
         var materials = GetBuyItems();
         
-        if (!materials.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+        var plan = AppState.CurrentPlan;
+        if (plan == null || !materials.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
             return false;
 
         _isAnalyzing = true;
@@ -257,6 +279,9 @@
                 foreach (var dc in NorthAmericanDataCenters)
                 {
                     var dcRequests = materials.Select(m => (m.ItemId, dc)).ToList();
+                    dcRequests = dcRequests
+                        .Where(r => plan.FindNode(r.ItemId)?.CanBuyFromMarket != false)
+                        .ToList();
                     AppState.SetStatus($"Checking cache for {dcRequests.Count} items on {dc}...");
                     fetchedCount += await MarketCache.EnsurePopulatedAsync(dcRequests, maxAge: maxAge, progress: progress);
                 }
@@ -264,6 +289,9 @@
             else
             {
                 var cacheRequests = materials.Select(m => (m.ItemId, AppState.SelectedDataCenter)).ToList();
+                cacheRequests = cacheRequests
+                    .Where(r => plan.FindNode(r.ItemId)?.CanBuyFromMarket != false)
+                    .ToList();
                 AppState.SetStatus($"Checking cache for {cacheRequests.Count} items...");
                 fetchedCount = await MarketCache.EnsurePopulatedAsync(cacheRequests, maxAge: maxAge, progress: progress);
             }

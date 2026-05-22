@@ -99,6 +99,8 @@
 
     protected override void OnParametersSet()
     {
+        Node?.EnsureValidAcquisitionSource();
+
         // Sync with global expand state on initial render or when version changes
         if (_lastExpandVersion != AppState.RecipeTreeExpandVersion)
         {
@@ -118,12 +120,12 @@
         {
             Node.MustBeHq = !Node.MustBeHq;
             // If switching to HQ and currently buying NQ, switch to HQ buy
-            if (Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyNq)
+            if (Node.CanBuyFromMarket && Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyNq)
             {
                 Node.Source = AcquisitionSource.MarketBuyHq;
             }
             // If switching to NQ and currently buying HQ, switch to NQ buy
-            else if (!Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyHq)
+            else if (Node.CanBuyFromMarket && !Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyHq)
             {
                 Node.Source = AcquisitionSource.MarketBuyNq;
             }
@@ -137,12 +139,14 @@
         
         if (Node == null) return options;
         
-        // Always add market buy options
-        options.Add(new DropdownOption($"market_nq_{Node.NodeId}", "Buy NQ", AcquisitionSource.MarketBuyNq, -1));
-        
-        if (Node.CanBeHq)
+        if (Node.CanBuyFromMarket)
         {
-            options.Add(new DropdownOption($"market_hq_{Node.NodeId}", "Buy HQ", AcquisitionSource.MarketBuyHq, -1));
+            options.Add(new DropdownOption($"market_nq_{Node.NodeId}", "Buy NQ", AcquisitionSource.MarketBuyNq, -1));
+
+            if (Node.CanBeHq)
+            {
+                options.Add(new DropdownOption($"market_hq_{Node.NodeId}", "Buy HQ", AcquisitionSource.MarketBuyHq, -1));
+            }
         }
         
         // Add vendor options - create entry for each location (including alternate instances)
@@ -200,6 +204,11 @@
         {
             options.Add(new DropdownOption($"craft_{Node.NodeId}", "Craft", AcquisitionSource.Craft, -1));
         }
+
+        if (!Node.CanBuyFromMarket && !Node.CanBuyFromVendor && Node.Children?.Any() != true)
+        {
+            options.Add(new DropdownOption($"unknown_{Node.NodeId}", "Figure it out", AcquisitionSource.UnknownSource, -1));
+        }
         
         return options;
     }
@@ -214,7 +223,8 @@
             AcquisitionSource.MarketBuyHq => $"market_hq_{Node.NodeId}",
             AcquisitionSource.VendorBuy => GetVendorDropdownValue(),
             AcquisitionSource.Craft => $"craft_{Node.NodeId}",
-            _ => $"market_nq_{Node.NodeId}"
+            AcquisitionSource.UnknownSource => $"unknown_{Node.NodeId}",
+            _ => GetDropdownOptions().FirstOrDefault()?.Value ?? string.Empty
         };
     }
 
@@ -253,6 +263,7 @@
         if (selectedOption != null)
         {
             Node.Source = selectedOption.Source;
+            Node.EnsureValidAcquisitionSource();
             if (selectedOption.Source == AcquisitionSource.VendorBuy)
             {
                 Node.SelectedVendorIndex = selectedOption.VendorIndex;

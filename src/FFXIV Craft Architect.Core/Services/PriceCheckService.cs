@@ -70,9 +70,9 @@ public class PriceCheckService
         var vendorEntry = await _vendorCacheService.GetOrFetchAsync(itemId, ct);
         var vendorPrice = vendorEntry?.CheapestGilPrice ?? 0;
         
-        // Check if item is untradeable (need Garland data for this check)
+        // Check if item cannot be listed on the market board (need Garland data for this check).
         var garlandItem = await _garlandService.GetItemAsync(itemId, ct);
-        if (garlandItem?.Tradeable == false)
+        if (garlandItem?.CanListOnMarket == false)
         {
             var untradeableInfo = new PriceInfo
             {
@@ -80,7 +80,7 @@ public class PriceCheckService
                 ItemName = itemName,
                 UnitPrice = 0,
                 Source = PriceSource.Untradeable,
-                SourceDetails = "Untradeable",
+                SourceDetails = garlandItem.Unlistable ? "Market unlistable" : "Untradeable",
                 LastUpdated = DateTime.UtcNow
             };
             _memoryCache[itemId] = untradeableInfo;
@@ -198,11 +198,11 @@ public class PriceCheckService
             // Fetch item data from Garland (for vendor prices and tradeability)
             var garlandItem = await _garlandService.GetItemAsync(itemId, ct);
             
-            // Check if item is tradeable
-            if (garlandItem?.Tradeable == false)
+            // Check if item can be listed on the market board.
+            if (garlandItem?.CanListOnMarket == false)
             {
                 priceInfo.Source = PriceSource.Untradeable;
-                priceInfo.SourceDetails = "Untradeable";
+                priceInfo.SourceDetails = garlandItem.Unlistable ? "Market unlistable" : "Untradeable";
                 priceInfo.UnitPrice = 0;
                 _memoryCache[itemId] = priceInfo;
                 return priceInfo;

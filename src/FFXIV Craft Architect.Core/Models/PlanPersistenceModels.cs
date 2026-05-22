@@ -56,6 +56,9 @@ public class PlanFileNode
     /// <summary>If true, this item can be bought from a vendor.</summary>
     public bool CanBuyFromVendor { get; set; }
 
+    /// <summary>If true, this item can be bought from the market board.</summary>
+    public bool CanBuyFromMarket { get; set; } = true;
+
     /// <summary>If true, this item has a craft recipe and can be crafted.</summary>
     public bool CanCraft { get; set; }
 

@@ -358,6 +358,7 @@ public class PlanPersistenceService : IPlanPersistenceService
             MustBeHq = node.MustBeHq,
             CanBeHq = node.CanBeHq,
             CanBuyFromVendor = node.CanBuyFromVendor,
+            CanBuyFromMarket = node.CanBuyFromMarket,
             CanCraft = node.CanCraft,
             RecipeLevel = node.RecipeLevel,
             Job = node.Job,
@@ -419,7 +420,9 @@ public class PlanPersistenceService : IPlanPersistenceService
         node.MustBeHq = fileNode.MustBeHq;
         node.CanBeHq = fileNode.CanBeHq;
         node.CanBuyFromVendor = fileNode.CanBuyFromVendor;
+        node.CanBuyFromMarket = fileNode.CanBuyFromMarket;
         node.CanCraft = fileNode.CanCraft;
+        node.EnsureValidAcquisitionSource();
         node.IsCircularReference = fileNode.IsCircularReference;
 
         // Restore vendor options (backward compatible - may be null in old saves)

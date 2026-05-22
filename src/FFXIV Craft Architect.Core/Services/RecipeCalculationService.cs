@@ -590,8 +590,11 @@ public class RecipeCalculationService
                 ItemId = itemId,
                 Name = name,
                 Quantity = quantity,
-                Source = AcquisitionSource.MarketBuyNq,
+                Source = AcquisitionSource.UnknownSource,
                 Parent = parent,
+                CanBuyFromMarket = false,
+                PriceSource = PriceSource.Untradeable,
+                PriceSourceDetails = "Unknown acquisition source",
                 CanCraft = false  // Max depth reached, can't craft
             };
         }
@@ -618,6 +621,7 @@ public class RecipeCalculationService
         
         // Check if item can be bought from vendor (has vendor objects OR vendor ID references)
         var hasVendor = itemData?.HasVendorReferences == true;
+        var canBuyFromMarket = itemData?.CanListOnMarket != false;
         
         // Create the node
         var node = new PlanNode
@@ -628,6 +632,7 @@ public class RecipeCalculationService
             Quantity = quantity,
             Parent = parent,
             CanBeHq = canBeHq,
+            CanBuyFromMarket = canBuyFromMarket,
             CanBuyFromVendor = hasVendor
         };
 
@@ -640,8 +645,17 @@ public class RecipeCalculationService
         
         if (!hasCraft && !hasCompanyCraft)
         {
-            // No craft recipe - prefer vendor if available, otherwise market
-            node.Source = hasVendor ? AcquisitionSource.VendorBuy : AcquisitionSource.MarketBuyNq;
+            // No craft recipe - prefer vendor, then market, then explicit unknown source.
+            node.Source = hasVendor
+                ? AcquisitionSource.VendorBuy
+                : canBuyFromMarket
+                    ? AcquisitionSource.MarketBuyNq
+                    : AcquisitionSource.UnknownSource;
+            if (!canBuyFromMarket && !hasVendor)
+            {
+                node.PriceSource = PriceSource.Untradeable;
+                node.PriceSourceDetails = "Unknown acquisition source";
+            }
             _logger?.LogDebug("[RecipeCalc] Item {Name} has no recipe, marked as {Source}", node.Name, node.Source);
             return node;
         }
@@ -686,7 +700,7 @@ public class RecipeCalculationService
         // Priority: Vendor > Buy > Craft (for non-root items)
         // Vendor is cheapest and most convenient, so default to it when available
         var shouldDefaultToVendor = !isRootItem && hasVendor;
-        var shouldDefaultToBuy = !isRootItem && !shouldDefaultToVendor && ShouldDefaultToBuy(node);
+        var shouldDefaultToBuy = !isRootItem && !shouldDefaultToVendor && canBuyFromMarket && ShouldDefaultToBuy(node);
         
         _logger?.LogInformation("[RecipeCalc] {Name}: RecipeLevel={Level}, Children={ChildCount}, IsRoot={IsRoot}, HasVendor={HasVendor}, ShouldDefaultToVendor={ShouldVendor}, ShouldDefaultToBuy={ShouldBuy}", 
             node.Name, node.RecipeLevel, node.Children.Count, isRootItem, hasVendor, shouldDefaultToVendor, shouldDefaultToBuy);
@@ -891,6 +905,7 @@ public class RecipeCalculationService
             Source = node.Source,
             MustBeHq = node.MustBeHq,
             CanBeHq = node.CanBeHq,
+            CanBuyFromMarket = node.CanBuyFromMarket,
             CanBuyFromVendor = node.CanBuyFromVendor,
             CanCraft = node.CanCraft,
             RecipeLevel = node.RecipeLevel,
@@ -954,8 +969,10 @@ public class RecipeCalculationService
                 
                 node.MustBeHq = sNode.MustBeHq;
                 node.CanBeHq = sNode.CanBeHq;
+                node.CanBuyFromMarket = sNode.CanBuyFromMarket;
                 node.CanBuyFromVendor = sNode.CanBuyFromVendor;
                 node.CanCraft = sNode.CanCraft;
+                node.EnsureValidAcquisitionSource();
                 node.HqMarketPrice = sNode.HqMarketPrice;
                 node.VendorPrice = sNode.VendorPrice;
                 node.VendorOptions = sNode.Vendors?.ToList() ?? new List<VendorInfo>();
@@ -1437,7 +1454,10 @@ public class RecipeCalculationService
                 ItemId = itemId,
                 Name = $"Item_{itemId} (Max Depth)",
                 Quantity = quantity,
-                Source = AcquisitionSource.MarketBuyNq,
+                Source = AcquisitionSource.UnknownSource,
+                CanBuyFromMarket = false,
+                PriceSource = PriceSource.Untradeable,
+                PriceSourceDetails = "Unknown acquisition source",
                 CanCraft = false
             };
         }
@@ -1455,6 +1475,7 @@ public class RecipeCalculationService
                 Source = cachedNode.Source,
                 MustBeHq = isHqRequired,
                 CanBeHq = cachedNode.CanBeHq,
+                CanBuyFromMarket = cachedNode.CanBuyFromMarket,
                 CanBuyFromVendor = cachedNode.CanBuyFromVendor,
                 CanCraft = cachedNode.CanCraft,
                 RecipeLevel = cachedNode.RecipeLevel,
@@ -1463,7 +1484,10 @@ public class RecipeCalculationService
                 VendorPrice = cachedNode.VendorPrice,
                 VendorOptions = cachedNode.VendorOptions,
                 Children = cachedNode.Children.Select(c => BuildTreeFromCache(
-                    c.ItemId, c.Quantity, depth + 1, c.MustBeHq, itemCache, nodeCache)).ToList()
+                        c.ItemId, c.Quantity, depth + 1, c.MustBeHq, itemCache, nodeCache))
+                    .Where(c => c != null)
+                    .Cast<PlanNode>()
+                    .ToList()
             };
         }
 
@@ -1475,6 +1499,8 @@ public class RecipeCalculationService
 
         var hasVendor = itemData?.HasVendorReferences == true;
         var hasCraft = itemData?.Crafts?.Any() == true;
+        var hasCompanyCraft = itemData?.CompanyCrafts?.Any() == true;
+        var canBuyFromMarket = itemData?.CanListOnMarket != false;
 
         var node = new PlanNode
         {
@@ -1484,13 +1510,30 @@ public class RecipeCalculationService
             Quantity = quantity,
             MustBeHq = isHqRequired,
             CanBeHq = DetermineCanBeHq(itemData, itemId),
+            CanBuyFromMarket = canBuyFromMarket,
             CanBuyFromVendor = hasVendor,
-            CanCraft = hasCraft
+            CanCraft = hasCraft || hasCompanyCraft
         };
 
-        if (!hasCraft)
+        if (!hasCraft && !hasCompanyCraft)
         {
-            node.Source = hasVendor ? AcquisitionSource.VendorBuy : AcquisitionSource.MarketBuyNq;
+            node.Source = hasVendor
+                ? AcquisitionSource.VendorBuy
+                : canBuyFromMarket
+                    ? AcquisitionSource.MarketBuyNq
+                    : AcquisitionSource.UnknownSource;
+            if (!canBuyFromMarket && !hasVendor)
+            {
+                node.PriceSource = PriceSource.Untradeable;
+                node.PriceSourceDetails = "Unknown acquisition source";
+            }
+            nodeCache[itemId] = node;
+            return node;
+        }
+
+        if (hasCompanyCraft)
+        {
+            node = BuildCompanyCraftNodeFromCache(node, itemData!.CompanyCrafts!.First(), quantity, itemCache, nodeCache);
             nodeCache[itemId] = node;
             return node;
         }
@@ -1517,7 +1560,7 @@ public class RecipeCalculationService
         {
             node.Source = AcquisitionSource.VendorBuy;
         }
-        else if (ShouldDefaultToBuy(node))
+        else if (canBuyFromMarket && ShouldDefaultToBuy(node))
         {
             node.Source = AcquisitionSource.MarketBuyNq;
         }
@@ -1527,6 +1570,35 @@ public class RecipeCalculationService
         }
 
         nodeCache[itemId] = node;
+        return node;
+    }
+
+    private PlanNode BuildCompanyCraftNodeFromCache(
+        PlanNode node,
+        GarlandCompanyCraft companyCraft,
+        int quantity,
+        Dictionary<int, GarlandItem> itemCache,
+        Dictionary<int, PlanNode> nodeCache)
+    {
+        node.Job = "Company Workshop";
+        node.RecipeLevel = 1;
+        node.Yield = 1;
+
+        foreach (var phase in companyCraft.Phases)
+        {
+            foreach (var item in phase.Items)
+            {
+                var childQuantity = item.Amount * quantity;
+                var childNode = BuildTreeFromCache(item.Id, childQuantity, 0, false, itemCache, nodeCache);
+                if (childNode != null)
+                {
+                    childNode.Parent = node;
+                    node.Children.Add(childNode);
+                }
+            }
+        }
+
+        node.Source = AcquisitionSource.Craft;
         return node;
     }
 
