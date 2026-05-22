@@ -1,5 +1,4 @@
 @using FFXIV_Craft_Architect.Core.Models
-@inject IJSRuntime JSRuntime
 
 <div class="ma-ledger-shell">
     <div class="ma-ledger-summary">
@@ -19,54 +18,101 @@
 
     <div class="ma-ledger-workspace">
         <div class="ma-ledger-list">
-            <div class="ma-ledger-header" style="@ColumnTemplateStyle">
-                @for (var i = 0; i < Columns.Length; i++)
-                {
-                    var column = Columns[i];
-                    var resizeIndex = i;
-                    <div class="ma-header-cell">
-                        <button type="button"
-                                class="ma-sort-button @(SortColumn == column.Key ? "is-active" : null)"
-                                @onclick="() => SortBy(column.Key)">
-                            <span>@column.Label</span>
-                            @if (SortColumn == column.Key)
-                            {
-                                <MudIcon Icon="@(SortAscending ? Icons.Material.Filled.ArrowUpward : Icons.Material.Filled.ArrowDownward)" Size="Size.Small" />
-                            }
-                        </button>
-                        @if (i < Columns.Length - 1)
-                        {
-                            <span class="ma-column-resizer"
-                                  @onpointerdown="e => StartResize(resizeIndex, e)"
-                                  @onpointermove="OnResizeMove"
-                                  @onpointerup="StopResize"
-                                  @onpointercancel="StopResize">
+            <MudDataGrid T="DetailedShoppingPlan"
+                         Items="GetGridPlans()"
+                         Dense="true"
+                         Hover="true"
+                         Bordered="false"
+                         Striped="false"
+                         Square="true"
+                         Elevation="0"
+                         FixedHeader="true"
+                         Height="100%"
+                         SortMode="SortMode.Single"
+                         Filterable="false"
+                         Groupable="false"
+                         Hideable="false"
+                         ShowMenuIcon="false"
+                         ReadOnly="true"
+                         MultiSelection="false"
+                         SelectOnRowClick="true"
+                         SelectedItem="_selectedPlan"
+                         SelectedItemChanged="SelectPlan"
+                         ColumnResizeMode="ResizeMode.Column"
+                         HorizontalScrollbar="false"
+                         RowClassFunc="GetRowClass"
+                         Class="ma-data-grid">
+                <Columns>
+                    <TemplateColumn T="DetailedShoppingPlan"
+                                    Title="Item"
+                                    SortBy="plan => plan.Name"
+                                    HeaderStyle="width: 27%;"
+                                    CellStyle="width: 27%;"
+                                    CellClass="ma-item-column">
+                        <CellTemplate>
+                            <span class="ma-item-cell">
+                                <span class="ma-item-name">@context.Item.Name</span>
+                                <span class="ma-item-kind">@GetSourceLabel(context.Item)</span>
                             </span>
-                        }
-                    </div>
-                }
-            </div>
+                        </CellTemplate>
+                    </TemplateColumn>
 
-            <div class="ma-ledger-rows">
-                @foreach (var plan in GetSortedPlans())
-                {
-                    var isSelected = _selectedPlan?.ItemId == plan.ItemId;
-                    <button class="ma-ledger-row @(isSelected ? "is-selected" : null) @(HasWarning(plan) ? "has-warning" : null)"
-                            style="@ColumnTemplateStyle"
-                            type="button"
-                            @onclick="() => SelectPlan(plan)">
-                        <span class="ma-item-cell">
-                            <span class="ma-item-name">@plan.Name</span>
-                            <span class="ma-item-kind">@GetSourceLabel(plan)</span>
-                        </span>
-                        <span class="ma-number-cell">@FormatQuantity(plan.QuantityNeeded)</span>
-                        <span class="ma-recommendation-cell" title="@GetRecommendationLabel(plan)">@GetRecommendationLabel(plan)</span>
-                        <span class="ma-number-cell">@GetWorldCount(plan)</span>
-                        <span class="@GetStockClass(plan)">@GetStockLabel(plan)</span>
-                        <span class="ma-total-cell">@GetTotalCost(plan).ToString("N0")g</span>
-                    </button>
-                }
-            </div>
+                    <TemplateColumn T="DetailedShoppingPlan"
+                                    Title="Need"
+                                    SortBy="plan => plan.QuantityNeeded"
+                                    HeaderStyle="width: 9%;"
+                                    CellStyle="width: 9%;"
+                                    CellClass="ma-number-column">
+                        <CellTemplate>
+                            @FormatQuantity(context.Item.QuantityNeeded)
+                        </CellTemplate>
+                    </TemplateColumn>
+
+                    <TemplateColumn T="DetailedShoppingPlan"
+                                    Title="Recommendation"
+                                    SortBy="plan => GetRecommendationLabel(plan)"
+                                    HeaderStyle="width: 28%;"
+                                    CellStyle="width: 28%;"
+                                    CellClass="ma-recommendation-column">
+                        <CellTemplate>
+                            <span title="@GetRecommendationLabel(context.Item)">@GetRecommendationLabel(context.Item)</span>
+                        </CellTemplate>
+                    </TemplateColumn>
+
+                    <TemplateColumn T="DetailedShoppingPlan"
+                                    Title="Worlds"
+                                    SortBy="plan => GetWorldCount(plan)"
+                                    HeaderStyle="width: 7%;"
+                                    CellStyle="width: 7%;"
+                                    CellClass="ma-number-column">
+                        <CellTemplate>
+                            @GetWorldCount(context.Item)
+                        </CellTemplate>
+                    </TemplateColumn>
+
+                    <TemplateColumn T="DetailedShoppingPlan"
+                                    Title="Available"
+                                    SortBy="plan => GetAvailableSortValue(plan)"
+                                    HeaderStyle="width: 12%;"
+                                    CellStyle="width: 12%;"
+                                    CellClass="ma-stock-column">
+                        <CellTemplate>
+                            <span class="@GetStockClass(context.Item)">@GetStockLabel(context.Item)</span>
+                        </CellTemplate>
+                    </TemplateColumn>
+
+                    <TemplateColumn T="DetailedShoppingPlan"
+                                    Title="Total"
+                                    SortBy="plan => GetTotalCost(plan)"
+                                    HeaderStyle="width: 17%;"
+                                    CellStyle="width: 17%;"
+                                    CellClass="ma-total-column">
+                        <CellTemplate>
+                            @GetTotalCost(context.Item).ToString("N0")g
+                        </CellTemplate>
+                    </TemplateColumn>
+                </Columns>
+            </MudDataGrid>
         </div>
 
         <aside class="ma-detail-pane">
@@ -120,24 +166,6 @@
 
     private DetailedShoppingPlan? _selectedPlan;
     private bool _autoExpandProcessed;
-    private LedgerColumnKey SortColumn { get; set; } = LedgerColumnKey.Recommendation;
-    private bool SortAscending { get; set; } = true;
-    private readonly int[] _columnWidths = { 260, 78, 210, 68, 94, 104 };
-    private int? _resizingColumnIndex;
-    private double _resizeStartX;
-    private int _resizeStartWidth;
-
-    private static readonly LedgerColumn[] Columns =
-    {
-        new(LedgerColumnKey.Item, "Item"),
-        new(LedgerColumnKey.Need, "Need"),
-        new(LedgerColumnKey.Recommendation, "Recommendation"),
-        new(LedgerColumnKey.Worlds, "Worlds"),
-        new(LedgerColumnKey.Available, "Available"),
-        new(LedgerColumnKey.Total, "Total")
-    };
-
-    private string ColumnTemplateStyle => $"grid-template-columns: {string.Join(" ", _columnWidths.Select(w => $"{w}px"))};";
 
     protected override void OnParametersSet()
     {
@@ -155,7 +183,7 @@
 
         if (_selectedPlan == null || ShoppingPlans.All(p => p.ItemId != _selectedPlan.ItemId))
         {
-            _selectedPlan = GetSortedPlans().FirstOrDefault();
+            _selectedPlan = GetGridPlans().FirstOrDefault();
         }
     }
 
@@ -164,83 +192,17 @@
         _selectedPlan = plan;
     }
 
-    private IEnumerable<DetailedShoppingPlan> GetSortedPlans()
+    private IEnumerable<DetailedShoppingPlan> GetGridPlans()
     {
         var plans = ShoppingPlans ?? new List<DetailedShoppingPlan>();
 
-        var sorted = SortColumn switch
+        return CurrentSort switch
         {
-            LedgerColumnKey.Item => SortAscending
-                ? plans.OrderBy(p => p.Name)
-                : plans.OrderByDescending(p => p.Name),
-            LedgerColumnKey.Need => SortAscending
-                ? plans.OrderBy(p => p.QuantityNeeded)
-                : plans.OrderByDescending(p => p.QuantityNeeded),
-            LedgerColumnKey.Recommendation => SortAscending
-                ? plans.OrderBy(GetRecommendationLabel).ThenBy(p => p.Name)
-                : plans.OrderByDescending(GetRecommendationLabel).ThenBy(p => p.Name),
-            LedgerColumnKey.Worlds => SortAscending
-                ? plans.OrderBy(GetWorldCount).ThenBy(p => p.Name)
-                : plans.OrderByDescending(GetWorldCount).ThenBy(p => p.Name),
-            LedgerColumnKey.Available => SortAscending
-                ? plans.OrderBy(GetAvailableSortValue).ThenBy(p => p.Name)
-                : plans.OrderByDescending(GetAvailableSortValue).ThenBy(p => p.Name),
-            LedgerColumnKey.Total => SortAscending
-                ? plans.OrderBy(GetTotalCost).ThenBy(p => p.Name)
-                : plans.OrderByDescending(GetTotalCost).ThenBy(p => p.Name),
-            _ => plans.OrderBy(p => p.Name)
+            MarketSortOption.Alphabetical => plans.OrderBy(p => p.Name),
+            MarketSortOption.ByRecommended => plans.OrderBy(p => p.RecommendedWorld?.WorldName ?? string.Empty)
+                .ThenBy(p => p.Name),
+            _ => plans
         };
-
-        return sorted;
-    }
-
-    private void SortBy(LedgerColumnKey column)
-    {
-        if (SortColumn == column)
-        {
-            SortAscending = !SortAscending;
-            return;
-        }
-
-        SortColumn = column;
-        SortAscending = column is LedgerColumnKey.Item or LedgerColumnKey.Recommendation;
-    }
-
-    private void StartResize(int columnIndex, PointerEventArgs args)
-    {
-        if (columnIndex < 0 || columnIndex >= _columnWidths.Length)
-        {
-            _resizingColumnIndex = null;
-            return;
-        }
-
-        _resizingColumnIndex = columnIndex;
-        _resizeStartX = args.ClientX;
-        _resizeStartWidth = _columnWidths[columnIndex];
-    }
-
-    private void OnResizeMove(PointerEventArgs args)
-    {
-        if (_resizingColumnIndex is not { } columnIndex)
-            return;
-
-        if (columnIndex < 0 || columnIndex >= _columnWidths.Length)
-        {
-            _resizingColumnIndex = null;
-            return;
-        }
-
-        var delta = (int)Math.Round(args.ClientX - _resizeStartX);
-        _columnWidths[columnIndex] = Math.Max(GetMinimumWidth(columnIndex), _resizeStartWidth + delta);
-    }
-
-    private async Task StopResize(PointerEventArgs args)
-    {
-        if (_resizingColumnIndex is not { })
-            return;
-
-        _resizingColumnIndex = null;
-        await JSRuntime.InvokeVoidAsync("console.debug", "Market analysis column widths", _columnWidths);
     }
 
     private static bool IsVendorPlan(DetailedShoppingPlan plan)
@@ -301,18 +263,20 @@
         return $"x{quantity:N0}";
     }
 
-    private static int GetMinimumWidth(int columnIndex)
+    private string GetRowClass(DetailedShoppingPlan plan, int rowNumber)
     {
-        return columnIndex switch
+        var classes = new List<string>();
+        if (_selectedPlan?.ItemId == plan.ItemId)
         {
-            0 => 150,
-            1 => 62,
-            2 => 140,
-            3 => 58,
-            4 => 76,
-            5 => 84,
-            _ => 60
-        };
+            classes.Add("is-selected");
+        }
+
+        if (HasWarning(plan))
+        {
+            classes.Add("has-warning");
+        }
+
+        return string.Join(" ", classes);
     }
 
     private static string GetStockClass(DetailedShoppingPlan plan)
@@ -339,15 +303,4 @@
 
     private decimal TotalSavings => Math.Max(0, TotalDCAverage - TotalBestValue);
 
-    private readonly record struct LedgerColumn(LedgerColumnKey Key, string Label);
-
-    private enum LedgerColumnKey
-    {
-        Item,
-        Need,
-        Recommendation,
-        Worlds,
-        Available,
-        Total
-    }
 }
