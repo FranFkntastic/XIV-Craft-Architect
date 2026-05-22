@@ -1,0 +1,308 @@
+@using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
+@using Microsoft.AspNetCore.Components.Web
+@inject GarlandService GarlandService
+@inject ISnackbar Snackbar
+
+<MudDialog Class="pb-dialog">
+    <DialogContent>
+        <div class="pb-shell">
+            <section class="pb-search-panel">
+                <div class="pb-panel-header">
+                    <div>
+                        <MudText Typo="Typo.subtitle1" Class="pb-title">Search Items</MudText>
+                        <MudText Typo="Typo.caption" Class="pb-muted">Select multiple results and add them at once.</MudText>
+                    </div>
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               Disabled="@(!_selectedSearchIds.Any())"
+                               OnClick="AddSelectedSearchResults">
+                        Add Selected
+                    </MudButton>
+                </div>
+
+                <div class="pb-search-row">
+                    <input class="pb-input"
+                           placeholder="Search item name..."
+                           value="@_searchQuery"
+                           @oninput="OnSearchInput"
+                           @onkeyup="OnSearchKeyUp" />
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               Disabled="@(_isSearching || string.IsNullOrWhiteSpace(_searchQuery))"
+                               OnClick="SearchAsync">
+                        @(_isSearching ? "Searching..." : "Search")
+                    </MudButton>
+                </div>
+
+                <div class="pb-result-table">
+                    <div class="pb-table-head pb-result-grid">
+                        <span></span>
+                        <span>Item</span>
+                        <span>Type</span>
+                        <span>Lvl</span>
+                        <span>ID</span>
+                    </div>
+                    <div class="pb-table-body">
+                        @if (_searchResults.Any())
+                        {
+                            @foreach (var result in _searchResults)
+                            {
+                                var alreadyAdded = _draftItems.Any(item => item.Id == result.Id);
+                                <label class="pb-table-row pb-result-grid @(alreadyAdded ? "is-disabled" : null)">
+                                    <input type="checkbox"
+                                           checked="@_selectedSearchIds.Contains(result.Id)"
+                                           disabled="@alreadyAdded"
+                                           @onchange="args => ToggleSearchSelection(result.Id, args)" />
+                                    <span class="pb-primary">@result.Object.Name</span>
+                                    <span>@result.Type</span>
+                                    <span>@(result.Object.Level?.ToString() ?? "-")</span>
+                                    <span>@result.Id</span>
+                                </label>
+                            }
+                        }
+                        else
+                        {
+                            <div class="pb-empty">Search for items to populate this list.</div>
+                        }
+                    </div>
+                </div>
+            </section>
+
+            <section class="pb-target-panel">
+                <div class="pb-panel-header">
+                    <div>
+                        <MudText Typo="Typo.subtitle1" Class="pb-title">Target Items</MudText>
+                        <MudText Typo="Typo.caption" Class="pb-muted">@_draftItems.Count items in this plan draft.</MudText>
+                    </div>
+                    <div class="pb-action-row">
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Disabled="@(!_selectedTargetIds.Any())" OnClick="() => SetSelectedQuality(true)">HQ</MudButton>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Disabled="@(!_selectedTargetIds.Any())" OnClick="() => SetSelectedQuality(false)">NQ</MudButton>
+                        <MudButton Variant="Variant.Text" Size="Size.Small" Disabled="@(!_draftItems.Any())" OnClick="() => SetAllQuality(true)">All HQ</MudButton>
+                        <MudButton Variant="Variant.Text" Size="Size.Small" Disabled="@(!_draftItems.Any())" OnClick="() => SetAllQuality(false)">All NQ</MudButton>
+                    </div>
+                </div>
+
+                <div class="pb-target-table">
+                    <div class="pb-table-head pb-target-grid">
+                        <span></span>
+                        <span>Item</span>
+                        <span>Qty</span>
+                        <span>HQ</span>
+                        <span></span>
+                    </div>
+                    <div class="pb-table-body">
+                        @if (_draftItems.Any())
+                        {
+                            @foreach (var item in _draftItems.OrderBy(item => item.Name).ToList())
+                            {
+                                <div class="pb-table-row pb-target-grid">
+                                    <input type="checkbox"
+                                           checked="@_selectedTargetIds.Contains(item.Id)"
+                                           @onchange="args => ToggleTargetSelection(item.Id, args)" />
+                                    <span class="pb-primary">@item.Name</span>
+                                    <input class="pb-qty-input"
+                                           type="number"
+                                           min="1"
+                                           max="9999"
+                                           value="@item.Quantity"
+                                           @onchange="args => SetQuantity(item, args)" />
+                                    <button class="pb-hq-toggle @(item.MustBeHq ? "is-active" : null)"
+                                            type="button"
+                                            @onclick="() => ToggleQuality(item)">
+                                        HQ
+                                    </button>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                   Size="Size.Small"
+                                                   Color="Color.Error"
+                                                   Title="Remove item"
+                                                   OnClick="() => RemoveItem(item)" />
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div class="pb-empty">Add one or more items from search results.</div>
+                        }
+                    </div>
+                </div>
+            </section>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!_draftItems.Any())" OnClick="Apply">Apply</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled" Disabled="@(!_draftItems.Any())" OnClick="ApplyAndBuild">Apply & Build</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] public MudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public List<ProjectItem> InitialItems { get; set; } = new();
+
+    private readonly HashSet<int> _selectedSearchIds = new();
+    private readonly HashSet<int> _selectedTargetIds = new();
+    private readonly List<ProjectItem> _draftItems = new();
+    private readonly List<GarlandSearchResult> _searchResults = new();
+    private string _searchQuery = string.Empty;
+    private bool _isSearching;
+
+    protected override void OnInitialized()
+    {
+        _draftItems.Clear();
+        _draftItems.AddRange(InitialItems.Select(CloneProjectItem));
+    }
+
+    private async Task SearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_searchQuery) || _isSearching)
+        {
+            return;
+        }
+
+        _isSearching = true;
+        _searchResults.Clear();
+
+        try
+        {
+            var results = await GarlandService.SearchAsync(_searchQuery);
+            _searchResults.AddRange(results.Take(75));
+            _selectedSearchIds.Clear();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Search failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSearching = false;
+        }
+    }
+
+    private Task OnSearchInput(ChangeEventArgs args)
+    {
+        _searchQuery = args.Value?.ToString() ?? string.Empty;
+        return Task.CompletedTask;
+    }
+
+    private async Task OnSearchKeyUp(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter")
+        {
+            await SearchAsync();
+        }
+    }
+
+    private void ToggleSearchSelection(int itemId, ChangeEventArgs args)
+    {
+        SetSelection(_selectedSearchIds, itemId, args);
+    }
+
+    private void ToggleTargetSelection(int itemId, ChangeEventArgs args)
+    {
+        SetSelection(_selectedTargetIds, itemId, args);
+    }
+
+    private static void SetSelection(HashSet<int> selections, int itemId, ChangeEventArgs args)
+    {
+        if (args.Value is bool selected && selected)
+        {
+            selections.Add(itemId);
+            return;
+        }
+
+        selections.Remove(itemId);
+    }
+
+    private void AddSelectedSearchResults()
+    {
+        foreach (var result in _searchResults.Where(result => _selectedSearchIds.Contains(result.Id)))
+        {
+            if (_draftItems.Any(item => item.Id == result.Id))
+            {
+                continue;
+            }
+
+            _draftItems.Add(new ProjectItem
+            {
+                Id = result.Id,
+                Name = result.Object.Name,
+                IconId = result.Object.IconId,
+                Quantity = 1,
+                MustBeHq = false
+            });
+        }
+
+        _selectedSearchIds.Clear();
+    }
+
+    private static void SetQuantity(ProjectItem item, ChangeEventArgs args)
+    {
+        if (int.TryParse(args.Value?.ToString(), out var quantity))
+        {
+            item.Quantity = Math.Clamp(quantity, 1, 9999);
+        }
+    }
+
+    private static void ToggleQuality(ProjectItem item)
+    {
+        item.MustBeHq = !item.MustBeHq;
+    }
+
+    private void SetSelectedQuality(bool mustBeHq)
+    {
+        foreach (var item in _draftItems.Where(item => _selectedTargetIds.Contains(item.Id)))
+        {
+            item.MustBeHq = mustBeHq;
+        }
+    }
+
+    private void SetAllQuality(bool mustBeHq)
+    {
+        foreach (var item in _draftItems)
+        {
+            item.MustBeHq = mustBeHq;
+        }
+    }
+
+    private void RemoveItem(ProjectItem item)
+    {
+        _draftItems.Remove(item);
+        _selectedTargetIds.Remove(item.Id);
+    }
+
+    private void Apply()
+    {
+        MudDialog.Close(DialogResult.Ok(new PlanBuilderResult(
+            _draftItems.Select(CloneProjectItem).ToList(),
+            BuildAfterApply: false)));
+    }
+
+    private void ApplyAndBuild()
+    {
+        MudDialog.Close(DialogResult.Ok(new PlanBuilderResult(
+            _draftItems.Select(CloneProjectItem).ToList(),
+            BuildAfterApply: true)));
+    }
+
+    private void Cancel()
+    {
+        MudDialog.Cancel();
+    }
+
+    private static ProjectItem CloneProjectItem(ProjectItem item)
+    {
+        return new ProjectItem
+        {
+            Id = item.Id,
+            Name = item.Name,
+            IconId = item.IconId,
+            Quantity = item.Quantity,
+            MustBeHq = item.MustBeHq
+        };
+    }
+
+    public sealed record PlanBuilderResult(List<ProjectItem> Items, bool BuildAfterApply);
+}

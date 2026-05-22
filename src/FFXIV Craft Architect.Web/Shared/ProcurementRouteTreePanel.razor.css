@@ -95,6 +95,13 @@
 .pp-dc-header small {
     color: #888;
     font-weight: 400;
+    margin-left: auto;
+    order: 2;
+}
+
+.pp-dc-toggle {
+    color: #90caf9;
+    order: 3;
 }
 
 .pp-dc-header.is-vendor {
@@ -141,10 +148,26 @@
 }
 
 .pp-world-name,
-.pp-item-main > span {
+.pp-item-main > span,
+.pp-item-link {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.pp-item-link {
+    max-width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #ddd;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.pp-item-link:hover {
+    color: #90caf9;
 }
 
 .pp-world-meta {

@@ -43,6 +43,22 @@
     font-weight: 500;
 }
 
+.lp-builder-btn {
+    width: 100%;
+    padding: 8px;
+    margin-top: 8px;
+    background: transparent;
+    color: #d4a73a;
+    border: 1px solid #d4a73a;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.lp-builder-btn:hover {
+    background: #2d291f;
+}
+
 .lp-search-results {
     margin-top: 8px;
     background: #2d2d2d;

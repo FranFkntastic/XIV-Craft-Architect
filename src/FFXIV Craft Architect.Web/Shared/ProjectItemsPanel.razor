@@ -26,6 +26,12 @@
             }
         </button>
 
+        <button type="button"
+                @onclick="OnOpenPlanBuilderRequested"
+                class="lp-builder-btn">
+            Plan Builder
+        </button>
+
         @if (SearchResults.Any())
         {
             <div class="lp-search-results">
@@ -130,6 +136,7 @@
     [Parameter] public IList<ProjectItem> ProjectItems { get; set; } = new List<ProjectItem>();
 
     [Parameter] public EventCallback OnSearchRequested { get; set; }
+    [Parameter] public EventCallback OnOpenPlanBuilderRequested { get; set; }
     [Parameter] public EventCallback<GarlandSearchResult> OnAddProjectItem { get; set; }
     [Parameter] public EventCallback<ProjectItem> OnToggleItemHq { get; set; }
     [Parameter] public EventCallback<ProjectItem> OnRemoveProjectItem { get; set; }

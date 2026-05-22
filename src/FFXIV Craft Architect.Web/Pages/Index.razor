@@ -1,6 +1,7 @@
 @page "/"
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Web.Dialogs
 @using FFXIV_Craft_Architect.Web.Services
 @using Microsoft.AspNetCore.Components.Forms
 @inject GarlandService GarlandService
@@ -9,6 +10,7 @@
 @inject MarketShoppingService MarketShoppingService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 @inject AppState AppState
 @inject IndexedDbService IndexedDb
 @inject IMarketCacheService MarketCache
@@ -30,6 +32,7 @@
         SearchResults="@_searchResults"
         ProjectItems="@AppState.ProjectItems"
         OnSearchRequested="SearchItemsAsync"
+        OnOpenPlanBuilderRequested="OpenPlanBuilderAsync"
         OnAddProjectItem="AddProjectItem"
         OnToggleItemHq="ToggleItemHq"
         OnRemoveProjectItem="RemoveProjectItem"
@@ -190,6 +193,51 @@
     {
         item.MustBeHq = !item.MustBeHq;
         AppState.NotifyPlanChanged();
+    }
+
+    private async Task OpenPlanBuilderAsync()
+    {
+        var parameters = new DialogParameters
+        {
+            ["InitialItems"] = AppState.ProjectItems
+                .Select(CloneProjectItem)
+                .ToList()
+        };
+
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.ExtraLarge,
+            FullWidth = true,
+            CloseButton = true,
+            CloseOnEscapeKey = true
+        };
+
+        var dialog = await DialogService.ShowAsync<PlanBuilderDialog>("Plan Builder", parameters, options);
+        var result = await dialog.Result;
+        if (result.Canceled || result.Data is not PlanBuilderDialog.PlanBuilderResult builderResult)
+        {
+            return;
+        }
+
+        AppState.ProjectItems = builderResult.Items;
+        AppState.NotifyPlanChanged();
+
+        if (builderResult.BuildAfterApply)
+        {
+            await BuildPlanAsync();
+        }
+    }
+
+    private static ProjectItem CloneProjectItem(ProjectItem item)
+    {
+        return new ProjectItem
+        {
+            Id = item.Id,
+            Name = item.Name,
+            IconId = item.IconId,
+            Quantity = item.Quantity,
+            MustBeHq = item.MustBeHq
+        };
     }
 
     private async Task BuildPlanAsync()

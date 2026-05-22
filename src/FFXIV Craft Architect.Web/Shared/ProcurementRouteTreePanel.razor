@@ -3,6 +3,7 @@
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
 @inject IJSRuntime JSRuntime
+@inject NavigationManager NavigationManager
 
 <div class="pp-route-shell">
     <div class="pp-route-summary">
@@ -50,13 +51,19 @@
             <div class="pp-route-tree">
                 @foreach (var dcGroup in dcGroups)
                 {
+                    var worlds = dcGroup.ToList();
                     <section class="pp-dc-group">
                         <div class="pp-dc-header">
                             <span>@dcGroup.Key</span>
+                            <MudIconButton Icon="@(IsGroupFullyExpanded(worlds) ? Icons.Material.Filled.UnfoldLess : Icons.Material.Filled.UnfoldMore)"
+                                           Size="Size.Small"
+                                           Class="pp-dc-toggle"
+                                           Title="@(IsGroupFullyExpanded(worlds) ? "Collapse worlds" : "Expand worlds")"
+                                           OnClick="() => ToggleDataCenter(worlds)" />
                             <small>@dcGroup.Count() worlds · @dcGroup.Sum(w => w.TotalCost).ToString("N0")g</small>
                         </div>
 
-                        @foreach (var world in dcGroup)
+                        @foreach (var world in worlds)
                         {
                             @RenderWorldNode(world)
                         }
@@ -68,6 +75,11 @@
                     <section class="pp-dc-group">
                         <div class="pp-dc-header is-vendor">
                             <span>Vendor</span>
+                            <MudIconButton Icon="@(_expandedWorlds.Contains(GetWorldKey(vendorCard)) ? Icons.Material.Filled.UnfoldLess : Icons.Material.Filled.UnfoldMore)"
+                                           Size="Size.Small"
+                                           Class="pp-dc-toggle"
+                                           Title="@(_expandedWorlds.Contains(GetWorldKey(vendorCard)) ? "Collapse vendor" : "Expand vendor")"
+                                           OnClick="() => ToggleWorld(vendorCard)" />
                             <small>@vendorCard.ItemCount items · @vendorCard.TotalCost.ToString("N0")g</small>
                         </div>
                         @RenderWorldNode(vendorCard)
@@ -153,7 +165,9 @@
                             {
                                 <MudIcon Icon="@Icons.Material.Filled.CallSplit" Size="Size.Small" Class="pp-split-icon" />
                             }
-                            <span>@item.ItemName</span>
+                            <button class="pp-item-link" type="button" @onclick="() => GoToMarketAnalysis(item)">
+                                @item.ItemName
+                            </button>
                             @if (world.IsVendor && item.Vendor != null)
                             {
                                 <small>@item.Vendor.Name - @item.Vendor.Location</small>
@@ -195,6 +209,31 @@
         }
     }
 
+    private bool IsGroupFullyExpanded(IEnumerable<WorldProcurementCardModel> worlds)
+    {
+        var worldList = worlds.ToList();
+        return worldList.Any() && worldList.All(world => _expandedWorlds.Contains(GetWorldKey(world)));
+    }
+
+    private void ToggleDataCenter(IEnumerable<WorldProcurementCardModel> worlds)
+    {
+        var worldList = worlds.ToList();
+        if (IsGroupFullyExpanded(worldList))
+        {
+            foreach (var world in worldList)
+            {
+                _expandedWorlds.Remove(GetWorldKey(world));
+            }
+
+            return;
+        }
+
+        foreach (var world in worldList)
+        {
+            _expandedWorlds.Add(GetWorldKey(world));
+        }
+    }
+
     private async Task ReanalyzeWithoutWorld(string worldName)
     {
         await OnReanalyzeWithoutWorldRequested.InvokeAsync(worldName);
@@ -203,6 +242,12 @@
     private async Task CopyItemName(string itemName)
     {
         await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", itemName);
+    }
+
+    private void GoToMarketAnalysis(WorldItemPurchase item)
+    {
+        AppState.AutoExpandItemId = item.ItemId;
+        NavigationManager.NavigateTo("market");
     }
 
     private decimal GetTotalCost()
