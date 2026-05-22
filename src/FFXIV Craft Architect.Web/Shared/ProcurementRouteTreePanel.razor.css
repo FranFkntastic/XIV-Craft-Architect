@@ -1,0 +1,245 @@
+.pp-route-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    gap: 8px;
+    min-width: 0;
+}
+
+.pp-route-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 8px 12px;
+    background: #202823;
+    border: 1px solid #34533a;
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+
+.pp-route-title-block {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.pp-route-title {
+    color: #90ee90;
+    font-weight: 700;
+}
+
+.pp-route-subtitle {
+    color: #888;
+}
+
+.pp-route-total {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    color: #d4a73a;
+    font-weight: 800;
+}
+
+.pp-route-total small {
+    color: #888;
+    font-weight: 400;
+}
+
+.pp-route-content {
+    min-height: 0;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.pp-route-empty {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: #777;
+    text-align: center;
+    background: #1f2225;
+    border: 1px solid #343a40;
+    border-radius: 6px;
+}
+
+.pp-route-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.pp-dc-group,
+.pp-error-group {
+    background: #1f2225;
+    border: 1px solid #343a40;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.pp-dc-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    background: #252a2e;
+    border-bottom: 1px solid #343a40;
+    color: #90caf9;
+    font-weight: 700;
+}
+
+.pp-dc-header small {
+    color: #888;
+    font-weight: 400;
+}
+
+.pp-dc-header.is-vendor {
+    color: #d4a73a;
+}
+
+.pp-dc-header.is-error {
+    color: #ffb74d;
+}
+
+.pp-world-node {
+    border-bottom: 1px solid #2c3135;
+}
+
+.pp-world-node:last-child {
+    border-bottom: 0;
+}
+
+.pp-world-row {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) 90px 90px 120px 32px;
+    align-items: center;
+    width: 100%;
+    gap: 10px;
+    border: 0;
+    background: transparent;
+    color: #ddd;
+    padding: 8px 12px;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.pp-world-row:hover {
+    background: #28323a;
+}
+
+.pp-world-main,
+.pp-item-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.pp-world-name,
+.pp-item-main > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pp-world-meta {
+    color: #aaa;
+    text-align: right;
+    font-size: 12px;
+}
+
+.pp-world-cost,
+.pp-item-total {
+    color: #d4a73a;
+    font-weight: 700;
+    text-align: right;
+}
+
+.pp-split-icon {
+    color: #ff9800;
+}
+
+.pp-congested-label {
+    color: #ffb74d;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.pp-item-table {
+    padding: 0 12px 10px 36px;
+}
+
+.pp-item-header,
+.pp-item-row {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) 120px 100px 120px 34px;
+    align-items: center;
+    gap: 10px;
+}
+
+.pp-item-header {
+    padding: 6px 8px;
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+.pp-item-row {
+    padding: 7px 8px;
+    border-top: 1px solid #2c3135;
+    color: #ddd;
+}
+
+.pp-item-row:hover {
+    background: #252d33;
+}
+
+.pp-item-main {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+
+.pp-item-main small {
+    color: #90ee90;
+    font-size: 11px;
+}
+
+.pp-item-row > span:not(:first-child) {
+    text-align: right;
+}
+
+.pp-copy-button {
+    color: #777;
+}
+
+.pp-world-warning {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 8px;
+    padding: 8px 10px;
+    background: #34251f;
+    border: 1px solid #5a3a2a;
+    border-radius: 4px;
+    color: #ffb74d;
+}
+
+.pp-error-row {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.7fr) minmax(240px, 1fr);
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #2c3135;
+    color: #ddd;
+}
+
+.pp-error-row span:last-child {
+    color: #ffb74d;
+}

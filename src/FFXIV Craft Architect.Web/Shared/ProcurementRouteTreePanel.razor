@@ -1,0 +1,331 @@
+@using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Web.Services
+@inject AppState AppState
+@inject IJSRuntime JSRuntime
+
+<div class="pp-route-shell">
+    <div class="pp-route-summary">
+        <div class="pp-route-title-block">
+            <MudIcon Icon="@Icons.Material.Filled.Route" Color="Color.Success" Size="Size.Small" />
+            <div>
+                <MudText Typo="Typo.subtitle1" Class="pp-route-title">Procurement Route</MudText>
+                @if (ShoppingPlans.Any())
+                {
+                    <MudText Typo="Typo.caption" Class="pp-route-subtitle">
+                        @GetRouteCards().Count world stops · @ShoppingPlans.Count analyzed items
+                    </MudText>
+                }
+            </div>
+        </div>
+        @if (ShoppingPlans.Any())
+        {
+            <div class="pp-route-total">
+                <span>@GetTotalCost().ToString("N0")g</span>
+                <small>total</small>
+            </div>
+        }
+    </div>
+
+    <div class="pp-route-content">
+        @if (!ShoppingPlans.Any())
+        {
+            <div class="pp-route-empty">
+                <MudIcon Icon="@Icons.Material.Filled.Assignment" Size="Size.Large" />
+                <MudText Typo="Typo.body1">No shopping plans available</MudText>
+                <MudText Typo="Typo.caption">Run market analysis to generate a procurement route.</MudText>
+            </div>
+        }
+        else
+        {
+            var routeCards = GetRouteCards();
+            var dcGroups = routeCards
+                .Where(c => !c.IsVendor)
+                .GroupBy(c => c.DataCenter)
+                .OrderBy(g => g.Key)
+                .ToList();
+            var vendorCard = routeCards.FirstOrDefault(c => c.IsVendor);
+            var errorItems = GetItemsWithErrors().ToList();
+
+            <div class="pp-route-tree">
+                @foreach (var dcGroup in dcGroups)
+                {
+                    <section class="pp-dc-group">
+                        <div class="pp-dc-header">
+                            <span>@dcGroup.Key</span>
+                            <small>@dcGroup.Count() worlds · @dcGroup.Sum(w => w.TotalCost).ToString("N0")g</small>
+                        </div>
+
+                        @foreach (var world in dcGroup)
+                        {
+                            @RenderWorldNode(world)
+                        }
+                    </section>
+                }
+
+                @if (vendorCard != null)
+                {
+                    <section class="pp-dc-group">
+                        <div class="pp-dc-header is-vendor">
+                            <span>Vendor</span>
+                            <small>@vendorCard.ItemCount items · @vendorCard.TotalCost.ToString("N0")g</small>
+                        </div>
+                        @RenderWorldNode(vendorCard)
+                    </section>
+                }
+
+                @if (errorItems.Any())
+                {
+                    <section class="pp-error-group">
+                        <div class="pp-dc-header is-error">
+                            <span>Needs Attention</span>
+                            <small>@errorItems.Count items</small>
+                        </div>
+                        @foreach (var plan in errorItems)
+                        {
+                            <div class="pp-error-row">
+                                <span>@plan.Name</span>
+                                <span>@plan.Error</span>
+                            </div>
+                        }
+                    </section>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    [Parameter] public EventCallback<string> OnReanalyzeWithoutWorldRequested { get; set; }
+
+    private readonly HashSet<string> _expandedWorlds = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override void OnParametersSet()
+    {
+        ShoppingPlans ??= new List<DetailedShoppingPlan>();
+
+        if (_expandedWorlds.Count == 0)
+        {
+            foreach (var world in GetRouteCards().Take(3))
+            {
+                _expandedWorlds.Add(GetWorldKey(world));
+            }
+        }
+    }
+
+    private RenderFragment RenderWorldNode(WorldProcurementCardModel world) => @<div class="pp-world-node @(world.IsVendor ? "is-vendor" : null) @(world.IsCongested ? "is-congested" : null)">
+        <button class="pp-world-row" type="button" @onclick="() => ToggleWorld(world)">
+            <span class="pp-world-main">
+                <MudIcon Icon="@(world.IsVendor ? Icons.Material.Filled.Store : Icons.Material.Filled.Public)" Size="Size.Small" />
+                <span class="pp-world-name">@world.WorldName</span>
+                @if (world.HasSplitPurchases)
+                {
+                    <MudIcon Icon="@Icons.Material.Filled.CallSplit" Size="Size.Small" Class="pp-split-icon" />
+                }
+                @if (world.IsCongested)
+                {
+                    <span class="pp-congested-label">Congested</span>
+                }
+            </span>
+            <span class="pp-world-meta">@world.ItemCount items</span>
+            <span class="pp-world-meta">@world.TotalQuantity qty</span>
+            <span class="pp-world-cost">@world.TotalCost.ToString("N0")g</span>
+            <MudIcon Icon="@(_expandedWorlds.Contains(GetWorldKey(world)) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" Size="Size.Small" />
+        </button>
+
+        @if (_expandedWorlds.Contains(GetWorldKey(world)))
+        {
+            <div class="pp-item-table">
+                <div class="pp-item-header">
+                    <span>Item</span>
+                    <span>Qty</span>
+                    <span>Unit</span>
+                    <span>Total</span>
+                    <span></span>
+                </div>
+
+                @foreach (var item in world.Items.OrderBy(i => i.ItemName))
+                {
+                    <div class="pp-item-row">
+                        <span class="pp-item-main">
+                            @if (item.IsSplitPurchase)
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.CallSplit" Size="Size.Small" Class="pp-split-icon" />
+                            }
+                            <span>@item.ItemName</span>
+                            @if (world.IsVendor && item.Vendor != null)
+                            {
+                                <small>@item.Vendor.Name - @item.Vendor.Location</small>
+                            }
+                        </span>
+                        <span>@(world.IsVendor || !item.IsSplitPurchase ? item.SimpleQuantityDisplay : item.QuantityDisplay)</span>
+                        <span>@item.PricePerUnit.ToString("N0")g</span>
+                        <span class="pp-item-total">@item.TotalCost.ToString("N0")g</span>
+                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                       Size="Size.Small"
+                                       Class="pp-copy-button"
+                                       Title="Copy item name"
+                                       OnClick="() => CopyItemName(item.ItemName)" />
+                    </div>
+                }
+
+                @if (world.IsCongested && !world.IsVendor)
+                {
+                    <div class="pp-world-warning">
+                        <span>Cannot travel to congested worlds.</span>
+                        <MudButton Size="Size.Small"
+                                   Variant="Variant.Outlined"
+                                   Color="Color.Warning"
+                                   OnClick="() => ReanalyzeWithoutWorld(world.WorldName)">
+                            Re-analyze without @world.WorldName
+                        </MudButton>
+                    </div>
+                }
+            </div>
+        }
+    </div>;
+
+    private void ToggleWorld(WorldProcurementCardModel world)
+    {
+        var key = GetWorldKey(world);
+        if (!_expandedWorlds.Add(key))
+        {
+            _expandedWorlds.Remove(key);
+        }
+    }
+
+    private async Task ReanalyzeWithoutWorld(string worldName)
+    {
+        await OnReanalyzeWithoutWorldRequested.InvokeAsync(worldName);
+    }
+
+    private async Task CopyItemName(string itemName)
+    {
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", itemName);
+    }
+
+    private decimal GetTotalCost()
+    {
+        return ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? p.SplitTotalCost ?? 0);
+    }
+
+    private IEnumerable<DetailedShoppingPlan> GetItemsWithErrors()
+    {
+        return ShoppingPlans.Where(p => !string.IsNullOrEmpty(p.Error));
+    }
+
+    private List<WorldProcurementCardModel> GetRouteCards()
+    {
+        if (!ShoppingPlans.Any())
+            return new List<WorldProcurementCardModel>();
+
+        var worldCards = new Dictionary<string, WorldProcurementCardModel>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var plan in ShoppingPlans.Where(p => string.IsNullOrEmpty(p.Error)))
+        {
+            if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
+            {
+                foreach (var split in plan.RecommendedSplit)
+                {
+                    var (worldName, dataCenter) = ParseWorldAndDataCenter(split.WorldName);
+                    var card = GetOrCreateCard(worldCards, worldName, dataCenter, plan);
+
+                    card.Items.Add(new WorldItemPurchase
+                    {
+                        ItemId = plan.ItemId,
+                        ItemName = plan.Name,
+                        IconId = plan.IconId,
+                        QuantityOnThisWorld = split.QuantityToBuy,
+                        TotalQuantityNeeded = plan.QuantityNeeded,
+                        PricePerUnit = split.PricePerUnit,
+                        TotalCost = split.TotalCost,
+                        IsSplitPurchase = true,
+                        SourcePlan = plan,
+                        TravelContext = split.TravelContext
+                    });
+                }
+            }
+            else if (plan.RecommendedWorld != null)
+            {
+                var (worldName, dataCenter) = ParseWorldAndDataCenter(plan.RecommendedWorld.WorldName);
+                var card = GetOrCreateCard(worldCards, worldName, dataCenter, plan);
+                VendorInfo? vendor = null;
+
+                if (worldName == MarketShoppingConstants.VendorWorldName && plan.Vendors.Any())
+                {
+                    vendor = plan.Vendors.FirstOrDefault(v => v.Price == plan.RecommendedWorld.AveragePricePerUnit)
+                        ?? plan.Vendors.FirstOrDefault();
+                    card.Vendors = plan.Vendors.ToList();
+                    card.SelectedVendorName = plan.RecommendedWorld.VendorName;
+                }
+
+                card.Items.Add(new WorldItemPurchase
+                {
+                    ItemId = plan.ItemId,
+                    ItemName = plan.Name,
+                    IconId = plan.IconId,
+                    QuantityOnThisWorld = plan.QuantityNeeded,
+                    TotalQuantityNeeded = plan.QuantityNeeded,
+                    PricePerUnit = plan.RecommendedWorld.AveragePricePerUnit,
+                    TotalCost = plan.RecommendedWorld.TotalCost,
+                    IsSplitPurchase = false,
+                    SourcePlan = plan,
+                    TravelContext = TravelContextConstants.Primary,
+                    Vendor = vendor
+                });
+            }
+        }
+
+        return worldCards.Values
+            .OrderBy(w => w.IsVendor ? 1 : 0)
+            .ThenBy(w => w.DataCenter)
+            .ThenByDescending(w => w.TotalCost)
+            .ToList();
+    }
+
+    private WorldProcurementCardModel GetOrCreateCard(
+        Dictionary<string, WorldProcurementCardModel> worldCards,
+        string worldName,
+        string dataCenter,
+        DetailedShoppingPlan plan)
+    {
+        var key = $"{dataCenter}|{worldName}";
+        if (worldCards.TryGetValue(key, out var existing))
+            return existing;
+
+        var worldOption = plan.WorldOptions.FirstOrDefault(w =>
+            string.Equals(ParseWorldAndDataCenter(w.WorldName).WorldName, worldName, StringComparison.OrdinalIgnoreCase));
+
+        var card = new WorldProcurementCardModel
+        {
+            WorldName = worldName,
+            DataCenter = dataCenter,
+            IsCongested = worldOption?.IsCongested ?? plan.RecommendedWorld?.IsCongested ?? false,
+            Classification = worldOption?.Classification ?? plan.RecommendedWorld?.Classification ?? WorldClassification.Standard
+        };
+
+        worldCards[key] = card;
+        return card;
+    }
+
+    private (string WorldName, string DataCenter) ParseWorldAndDataCenter(string worldLabel)
+    {
+        if (string.Equals(worldLabel, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase))
+            return (MarketShoppingConstants.VendorWorldName, MarketShoppingConstants.VendorWorldName);
+
+        var closeParen = worldLabel.LastIndexOf(')');
+        var openParen = worldLabel.LastIndexOf('(');
+        if (openParen > 0 && closeParen == worldLabel.Length - 1)
+        {
+            return (worldLabel[..openParen].Trim(), worldLabel[(openParen + 1)..closeParen].Trim());
+        }
+
+        return (worldLabel, AppState.SelectedDataCenter);
+    }
+
+    private static string GetWorldKey(WorldProcurementCardModel world)
+    {
+        return $"{world.DataCenter}|{world.WorldName}";
+    }
+}

@@ -181,42 +181,6 @@
         }
     </div>
     
-    @* ALTERNATIVE CONFIGURATIONS SECTION *@
-    @if (GetAlternativeConfigs().Any())
-    {
-        <div style="margin-top: 24px;">
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer;" @onclick="() => _showAlternatives = !_showAlternatives">
-                <MudIcon Icon="@Icons.Material.Filled.AltRoute" Style="color: #666;" Size="Size.Small" />
-                <MudText Typo="Typo.subtitle1" Style="color: #666; font-weight: 600;">Alternative Configurations</MudText>
-                <MudText Typo="Typo.caption" Style="color: #444; margin-left: 8px;">(deprecated)</MudText>
-                <MudIcon Icon="@(_showAlternatives ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" 
-                         Size="Size.Small" Style="color: #666; margin-left: auto;" />
-            </div>
-            
-            @if (_showAlternatives)
-            {
-                <div style="background: #1e2530; border-radius: 8px; border: 1px solid #3a4a5a; overflow: hidden; opacity: 0.7;">
-                    @foreach (var config in GetAlternativeConfigs())
-                    {
-                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #2a3540;">
-                            <div style="display: flex; align-items: center; gap: 12px;">
-                                @if (config.IsBestSingleWorld)
-                                {
-                                    <MudText Typo="Typo.caption" Style="color: #4caf50; background: #1a3a1a; padding: 2px 8px; border-radius: 4px;">BEST</MudText>
-                                }
-                                <MudText Typo="Typo.body1" Style="color: #888;">
-                                    @config.Description
-                                </MudText>
-                            </div>
-                            <MudText Typo="Typo.subtitle1" Style="color: #d4a73a; font-weight: 600;">
-                                @config.TotalCost.ToString("N0")g
-                            </MudText>
-                        </div>
-                    }
-                </div>
-            }
-        </div>
-    }
 </div>
 
 @code {
@@ -224,7 +188,6 @@
     
     private HashSet<string> _expandedWorlds = new();
     private HashSet<string> _expandedAllWorlds = new();
-    private bool _showAlternatives = false;
     private bool _showAllWorlds = false;
     
     private void ToggleWorld(string worldName)
@@ -296,26 +259,4 @@
             .ToList();
     }
     
-    private record AlternativeConfig(string Description, decimal TotalCost, bool IsBestSingleWorld = false);
-    
-    private List<AlternativeConfig> GetAlternativeConfigs()
-    {
-        var configs = new List<AlternativeConfig>();
-        
-        if (Plan.WorldOptions?.Any() == true)
-        {
-            var sortedWorlds = Plan.WorldOptions.OrderBy(w => w.TotalCost).ToList();
-            for (int i = 0; i < sortedWorlds.Count; i++)
-            {
-                var world = sortedWorlds[i];
-                configs.Add(new AlternativeConfig(
-                    $"Single World: {world.WorldName}",
-                    world.TotalCost,
-                    i == 0
-                ));
-            }
-        }
-        
-        return configs;
-    }
 }

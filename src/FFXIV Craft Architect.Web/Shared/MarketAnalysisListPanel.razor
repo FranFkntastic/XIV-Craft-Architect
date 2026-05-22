@@ -1,0 +1,353 @@
+@using FFXIV_Craft_Architect.Core.Models
+@inject IJSRuntime JSRuntime
+
+<div class="ma-ledger-shell">
+    <div class="ma-ledger-summary">
+        <div class="ma-ledger-summary-main">
+            <MudIcon Icon="@Icons.Material.Filled.Savings" Color="Color.Success" Size="Size.Small" />
+            <span class="ma-ledger-summary-value">@TotalBestValue.ToString("N0")g</span>
+            <span class="ma-ledger-summary-label">best value</span>
+        </div>
+        <div class="ma-ledger-summary-side">
+            <span><span class="ma-muted">DC avg</span> @TotalDCAverage.ToString("N0")g</span>
+            @if (TotalSavings > 0)
+            {
+                <span class="ma-positive">Save @TotalSavings.ToString("N0")g</span>
+            }
+        </div>
+    </div>
+
+    <div class="ma-ledger-workspace">
+        <div class="ma-ledger-list">
+            <div class="ma-ledger-header" style="@ColumnTemplateStyle">
+                @for (var i = 0; i < Columns.Length; i++)
+                {
+                    var column = Columns[i];
+                    var resizeIndex = i;
+                    <div class="ma-header-cell">
+                        <button type="button"
+                                class="ma-sort-button @(SortColumn == column.Key ? "is-active" : null)"
+                                @onclick="() => SortBy(column.Key)">
+                            <span>@column.Label</span>
+                            @if (SortColumn == column.Key)
+                            {
+                                <MudIcon Icon="@(SortAscending ? Icons.Material.Filled.ArrowUpward : Icons.Material.Filled.ArrowDownward)" Size="Size.Small" />
+                            }
+                        </button>
+                        @if (i < Columns.Length - 1)
+                        {
+                            <span class="ma-column-resizer"
+                                  @onpointerdown="e => StartResize(resizeIndex, e)"
+                                  @onpointermove="OnResizeMove"
+                                  @onpointerup="StopResize"
+                                  @onpointercancel="StopResize">
+                            </span>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="ma-ledger-rows">
+                @foreach (var plan in GetSortedPlans())
+                {
+                    var isSelected = _selectedPlan?.ItemId == plan.ItemId;
+                    <button class="ma-ledger-row @(isSelected ? "is-selected" : null) @(HasWarning(plan) ? "has-warning" : null)"
+                            style="@ColumnTemplateStyle"
+                            type="button"
+                            @onclick="() => SelectPlan(plan)">
+                        <span class="ma-item-cell">
+                            <span class="ma-item-name">@plan.Name</span>
+                            <span class="ma-item-kind">@GetSourceLabel(plan)</span>
+                        </span>
+                        <span class="ma-number-cell">@FormatQuantity(plan.QuantityNeeded)</span>
+                        <span class="ma-recommendation-cell" title="@GetRecommendationLabel(plan)">@GetRecommendationLabel(plan)</span>
+                        <span class="ma-number-cell">@GetWorldCount(plan)</span>
+                        <span class="@GetStockClass(plan)">@GetStockLabel(plan)</span>
+                        <span class="ma-total-cell">@GetTotalCost(plan).ToString("N0")g</span>
+                    </button>
+                }
+            </div>
+        </div>
+
+        <aside class="ma-detail-pane">
+            @if (_selectedPlan == null)
+            {
+                <div class="ma-detail-empty">
+                    <MudIcon Icon="@Icons.Material.Filled.TableRows" Size="Size.Large" />
+                    <MudText Typo="Typo.body2">Select an item to inspect its market detail.</MudText>
+                </div>
+            }
+            else
+            {
+                <div class="ma-detail-header">
+                    <div>
+                        <MudText Typo="Typo.subtitle1" Class="ma-detail-title">@_selectedPlan.Name</MudText>
+                        <MudText Typo="Typo.caption" Class="ma-detail-subtitle">
+                            @FormatQuantity(_selectedPlan.QuantityNeeded) needed
+                        </MudText>
+                    </div>
+                    <MudText Typo="Typo.subtitle1" Class="ma-detail-total">
+                        @GetTotalCost(_selectedPlan).ToString("N0")g
+                    </MudText>
+                </div>
+
+                <div class="ma-detail-scroll">
+                    @if (!string.IsNullOrWhiteSpace(_selectedPlan.Error))
+                    {
+                        <ExpandedErrorSection ErrorMessage="@_selectedPlan.Error"
+                                              ItemName="@_selectedPlan.Name"
+                                              ItemId="@_selectedPlan.ItemId"
+                                              QuantityNeeded="@_selectedPlan.QuantityNeeded" />
+                    }
+                    else if (IsVendorPlan(_selectedPlan))
+                    {
+                        <ExpandedVendorSection Plan="_selectedPlan" />
+                    }
+                    else
+                    {
+                        <ExpandedMarketSection Plan="_selectedPlan" />
+                    }
+                </div>
+            }
+        </aside>
+    </div>
+</div>
+
+@code {
+    [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    [Parameter] public MarketSortOption CurrentSort { get; set; } = MarketSortOption.ByRecommended;
+    [Parameter] public int? AutoExpandItemId { get; set; }
+
+    private DetailedShoppingPlan? _selectedPlan;
+    private bool _autoExpandProcessed;
+    private LedgerColumnKey SortColumn { get; set; } = LedgerColumnKey.Recommendation;
+    private bool SortAscending { get; set; } = true;
+    private readonly int[] _columnWidths = { 260, 78, 210, 68, 94, 104 };
+    private int? _resizingColumnIndex;
+    private double _resizeStartX;
+    private int _resizeStartWidth;
+
+    private static readonly LedgerColumn[] Columns =
+    {
+        new(LedgerColumnKey.Item, "Item"),
+        new(LedgerColumnKey.Need, "Need"),
+        new(LedgerColumnKey.Recommendation, "Recommendation"),
+        new(LedgerColumnKey.Worlds, "Worlds"),
+        new(LedgerColumnKey.Available, "Available"),
+        new(LedgerColumnKey.Total, "Total")
+    };
+
+    private string ColumnTemplateStyle => $"grid-template-columns: {string.Join(" ", _columnWidths.Select(w => $"{w}px"))};";
+
+    protected override void OnParametersSet()
+    {
+        ShoppingPlans ??= new List<DetailedShoppingPlan>();
+
+        if (!_autoExpandProcessed && AutoExpandItemId.HasValue)
+        {
+            _selectedPlan = ShoppingPlans.FirstOrDefault(p => p.ItemId == AutoExpandItemId.Value) ?? _selectedPlan;
+            _autoExpandProcessed = true;
+        }
+        else if (!AutoExpandItemId.HasValue)
+        {
+            _autoExpandProcessed = false;
+        }
+
+        if (_selectedPlan == null || ShoppingPlans.All(p => p.ItemId != _selectedPlan.ItemId))
+        {
+            _selectedPlan = GetSortedPlans().FirstOrDefault();
+        }
+    }
+
+    private void SelectPlan(DetailedShoppingPlan plan)
+    {
+        _selectedPlan = plan;
+    }
+
+    private IEnumerable<DetailedShoppingPlan> GetSortedPlans()
+    {
+        var plans = ShoppingPlans ?? new List<DetailedShoppingPlan>();
+
+        var sorted = SortColumn switch
+        {
+            LedgerColumnKey.Item => SortAscending
+                ? plans.OrderBy(p => p.Name)
+                : plans.OrderByDescending(p => p.Name),
+            LedgerColumnKey.Need => SortAscending
+                ? plans.OrderBy(p => p.QuantityNeeded)
+                : plans.OrderByDescending(p => p.QuantityNeeded),
+            LedgerColumnKey.Recommendation => SortAscending
+                ? plans.OrderBy(GetRecommendationLabel).ThenBy(p => p.Name)
+                : plans.OrderByDescending(GetRecommendationLabel).ThenBy(p => p.Name),
+            LedgerColumnKey.Worlds => SortAscending
+                ? plans.OrderBy(GetWorldCount).ThenBy(p => p.Name)
+                : plans.OrderByDescending(GetWorldCount).ThenBy(p => p.Name),
+            LedgerColumnKey.Available => SortAscending
+                ? plans.OrderBy(GetAvailableSortValue).ThenBy(p => p.Name)
+                : plans.OrderByDescending(GetAvailableSortValue).ThenBy(p => p.Name),
+            LedgerColumnKey.Total => SortAscending
+                ? plans.OrderBy(GetTotalCost).ThenBy(p => p.Name)
+                : plans.OrderByDescending(GetTotalCost).ThenBy(p => p.Name),
+            _ => plans.OrderBy(p => p.Name)
+        };
+
+        return sorted;
+    }
+
+    private void SortBy(LedgerColumnKey column)
+    {
+        if (SortColumn == column)
+        {
+            SortAscending = !SortAscending;
+            return;
+        }
+
+        SortColumn = column;
+        SortAscending = column is LedgerColumnKey.Item or LedgerColumnKey.Recommendation;
+    }
+
+    private void StartResize(int columnIndex, PointerEventArgs args)
+    {
+        if (columnIndex < 0 || columnIndex >= _columnWidths.Length)
+        {
+            _resizingColumnIndex = null;
+            return;
+        }
+
+        _resizingColumnIndex = columnIndex;
+        _resizeStartX = args.ClientX;
+        _resizeStartWidth = _columnWidths[columnIndex];
+    }
+
+    private void OnResizeMove(PointerEventArgs args)
+    {
+        if (_resizingColumnIndex is not { } columnIndex)
+            return;
+
+        if (columnIndex < 0 || columnIndex >= _columnWidths.Length)
+        {
+            _resizingColumnIndex = null;
+            return;
+        }
+
+        var delta = (int)Math.Round(args.ClientX - _resizeStartX);
+        _columnWidths[columnIndex] = Math.Max(GetMinimumWidth(columnIndex), _resizeStartWidth + delta);
+    }
+
+    private async Task StopResize(PointerEventArgs args)
+    {
+        if (_resizingColumnIndex is not { })
+            return;
+
+        _resizingColumnIndex = null;
+        await JSRuntime.InvokeVoidAsync("console.debug", "Market analysis column widths", _columnWidths);
+    }
+
+    private static bool IsVendorPlan(DetailedShoppingPlan plan)
+    {
+        return plan.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName || plan.Vendors.Any();
+    }
+
+    private static bool HasWarning(DetailedShoppingPlan plan)
+    {
+        return !string.IsNullOrWhiteSpace(plan.Error) || !plan.HasSufficientStock;
+    }
+
+    private static string GetSourceLabel(DetailedShoppingPlan plan)
+    {
+        if (!string.IsNullOrWhiteSpace(plan.Error))
+            return "Error";
+        if (IsVendorPlan(plan))
+            return "Vendor";
+        if (plan.RequiresSplitPurchase)
+            return "Split";
+        return "Market";
+    }
+
+    private static string GetRecommendationLabel(DetailedShoppingPlan plan)
+    {
+        if (!string.IsNullOrWhiteSpace(plan.Error))
+            return plan.Error;
+        if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
+            return string.Join(", ", plan.RecommendedSplit.Select(s => s.WorldName));
+        return plan.RecommendedWorld?.WorldName ?? "No recommendation";
+    }
+
+    private static int GetWorldCount(DetailedShoppingPlan plan)
+    {
+        if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
+            return plan.RecommendedSplit.Select(s => s.WorldName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        return plan.RecommendedWorld == null ? 0 : 1;
+    }
+
+    private static string GetStockLabel(DetailedShoppingPlan plan)
+    {
+        if (IsVendorPlan(plan))
+            return "Unlimited";
+        if (!plan.HasSufficientStock)
+            return $"{plan.TotalAvailableQuantity:N0}/{plan.QuantityNeeded:N0}";
+        return "OK";
+    }
+
+    private static int GetAvailableSortValue(DetailedShoppingPlan plan)
+    {
+        if (IsVendorPlan(plan))
+            return int.MaxValue;
+        return plan.TotalAvailableQuantity;
+    }
+
+    private static string FormatQuantity(int quantity)
+    {
+        return $"x{quantity:N0}";
+    }
+
+    private static int GetMinimumWidth(int columnIndex)
+    {
+        return columnIndex switch
+        {
+            0 => 150,
+            1 => 62,
+            2 => 140,
+            3 => 58,
+            4 => 76,
+            5 => 84,
+            _ => 60
+        };
+    }
+
+    private static string GetStockClass(DetailedShoppingPlan plan)
+    {
+        return !plan.HasSufficientStock && !IsVendorPlan(plan)
+            ? "ma-stock-warning"
+            : "ma-stock-ok";
+    }
+
+    private static long GetTotalCost(DetailedShoppingPlan plan)
+    {
+        if (plan.SplitTotalCost.HasValue)
+            return plan.SplitTotalCost.Value;
+        if (plan.RecommendedWorld != null)
+            return plan.RecommendedWorld.TotalCost;
+        if (plan.WorldOptions.Any())
+            return plan.WorldOptions.OrderBy(w => w.TotalCost).First().TotalCost;
+        return (long)(plan.DCAveragePrice * plan.QuantityNeeded);
+    }
+
+    private decimal TotalDCAverage => ShoppingPlans?.Sum(p => p.DCAveragePrice * p.QuantityNeeded) ?? 0;
+
+    private long TotalBestValue => ShoppingPlans?.Sum(GetTotalCost) ?? 0;
+
+    private decimal TotalSavings => Math.Max(0, TotalDCAverage - TotalBestValue);
+
+    private readonly record struct LedgerColumn(LedgerColumnKey Key, string Label);
+
+    private enum LedgerColumnKey
+    {
+        Item,
+        Need,
+        Recommendation,
+        Worlds,
+        Available,
+        Total
+    }
+}
