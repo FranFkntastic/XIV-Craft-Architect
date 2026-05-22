@@ -45,13 +45,16 @@
         OnCollapseAllRequested="CollapseAllRecipeNodes"
         OnLoadPlanRequested="LoadSavedPlanAsync"
         OnDeletePlanRequested="DeleteSavedPlanAsync"
-        OnNodeSourceChanged="OnNodeSourceChanged"
+        SelectedNode="@_selectedNode"
+        OnNodeSelected="OnNodeSelected"
         OnNodeHqChanged="OnNodeHqChanged" />
 
     <!-- Right Column: Shopping List -->
-    <ShoppingListPanel
+    <AcquisitionDetailsPanel
+        Node="@_selectedNode"
         CurrentPlan="@AppState.CurrentPlan"
-        UnavailableMarketItems="@AppState.UnavailableMarketItems" />
+        UnavailableMarketItems="@AppState.UnavailableMarketItems"
+        OnSourceChanged="OnNodeSourceChanged" />
 </div>
 
 @code {
@@ -63,6 +66,7 @@
     
     private bool _isBuildingPlan = false;
     private bool _isRefreshingPrices = false;
+    private PlanNode? _selectedNode;
 
     protected override async Task OnInitializedAsync()
     {
@@ -78,6 +82,7 @@
 
     private void OnPlanChanged()
     {
+        EnsureSelectedNode();
         InvokeAsync(StateHasChanged);
     }
 
@@ -204,6 +209,7 @@
                 targetItems, 
                 AppState.SelectedDataCenter, 
                 string.Empty);
+            _selectedNode = AppState.CurrentPlan.RootItems.FirstOrDefault();
             
             // Step 2: Fetch prices for all items (craftable and buyable)
             AppState.BeginOperation("Fetching Prices", "Loading market prices for all materials...");
@@ -541,6 +547,25 @@
         AppState.NotifyPlanChanged();
     }
 
+    private void OnNodeSelected(PlanNode node)
+    {
+        _selectedNode = node;
+    }
+
+    private void EnsureSelectedNode()
+    {
+        if (AppState.CurrentPlan == null)
+        {
+            _selectedNode = null;
+            return;
+        }
+
+        if (_selectedNode == null || AppState.CurrentPlan.FindNode(_selectedNode.ItemId) == null)
+        {
+            _selectedNode = AppState.CurrentPlan.RootItems.FirstOrDefault();
+        }
+    }
+
     private void OnNodeHqChanged(PlanNode node)
     {
         AppState.NotifyPlanChanged();
@@ -626,6 +651,7 @@
             }
 
             AppState.LoadStoredPlan(storedPlan, plan);
+            _selectedNode = AppState.CurrentPlan?.RootItems.FirstOrDefault();
             
             // Restore market analysis if available
             if (!string.IsNullOrEmpty(storedPlan.MarketPlansJson))

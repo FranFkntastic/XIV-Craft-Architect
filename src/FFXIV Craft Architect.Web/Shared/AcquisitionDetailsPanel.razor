@@ -1,0 +1,199 @@
+@using FFXIV_Craft_Architect.Core.Helpers
+@using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Web.Services
+
+<div class="rp-column">
+    @if (Node == null)
+    {
+        <div class="rp-empty-state">
+            <div class="rp-empty-title">Acquisition Details</div>
+            <div class="rp-empty-subtitle">Select a recipe node to review acquisition options.</div>
+        </div>
+    }
+    else
+    {
+        <div class="rp-panel">
+            <div class="rp-panel-header">
+                <div class="rp-header-title">Acquisition Details</div>
+            </div>
+            <div class="rp-details-wrap">
+                <div class="rp-item-name">@Node.Name</div>
+                <div class="rp-item-meta">Quantity: @Node.Quantity</div>
+
+                <div class="rp-detail-row">
+                    <span class="rp-detail-label">Current source</span>
+                    <span class="rp-detail-value" style="color: @RecipePlanDisplayHelpers.GetSourceHexColor(Node.Source)">
+                        @RecipePlanDisplayHelpers.GetSourceDisplayName(Node.Source)
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        @if (IsMarketUnavailable)
+        {
+            <div class="rp-warning-block">
+                <div class="rp-warning-title">Market data unavailable</div>
+                <div>This item was not included in market pricing.</div>
+            </div>
+        }
+
+        <div class="rp-panel">
+            <div class="rp-panel-header">
+                <div class="rp-header-title">Sources</div>
+            </div>
+            <div class="rp-details-wrap">
+                <div class="rp-method-list">
+                    @foreach (var option in GetOptions())
+                    {
+                        <button class="rp-method-row @(Node.Source == option.Source ? "selected" : "")"
+                                disabled="@(!option.IsAvailable)"
+                                @onclick="() => SelectSource(option.Source)">
+                            <span class="rp-method-main">
+                                <span class="rp-method-name">@option.Name</span>
+                                <span class="rp-method-detail">@option.Detail</span>
+                            </span>
+                            <span class="rp-method-cost">@option.CostText</span>
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <ShoppingListPanel
+            CurrentPlan="@CurrentPlan"
+            UnavailableMarketItems="@UnavailableMarketItems" />
+    }
+</div>
+
+@code {
+    [Parameter] public PlanNode? Node { get; set; }
+    [Parameter] public CraftingPlan? CurrentPlan { get; set; }
+    [Parameter] public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<MarketDataUnavailableItem>();
+    [Parameter] public EventCallback<PlanNode> OnSourceChanged { get; set; }
+
+    private bool IsMarketUnavailable => Node != null && UnavailableMarketItems.Any(i => i.ItemId == Node.ItemId);
+
+    private async Task SelectSource(AcquisitionSource source)
+    {
+        if (Node == null)
+        {
+            return;
+        }
+
+        Node.Source = source;
+        Node.EnsureValidAcquisitionSource();
+        await OnSourceChanged.InvokeAsync(Node);
+    }
+
+    private List<AcquisitionOptionView> GetOptions()
+    {
+        var options = new List<AcquisitionOptionView>();
+        if (Node == null)
+        {
+            return options;
+        }
+
+        if (Node.Children.Any())
+        {
+            options.Add(new AcquisitionOptionView(
+                AcquisitionSource.Craft,
+                "Craft",
+                "Uses the recipe tree below this item.",
+                $"{CalculateCraftCost(Node):N0}g",
+                true));
+        }
+
+        if (Node.CanBuyFromMarket)
+        {
+            options.Add(new AcquisitionOptionView(
+                AcquisitionSource.MarketBuyNq,
+                "Buy NQ",
+                Node.MarketPrice > 0 ? "Uses the current planner market price." : "No NQ price loaded.",
+                Node.MarketPrice > 0 ? $"{Node.MarketPrice * Node.Quantity:N0}g" : "-",
+                Node.MarketPrice > 0));
+
+            if (Node.CanBeHq)
+            {
+                options.Add(new AcquisitionOptionView(
+                    AcquisitionSource.MarketBuyHq,
+                    "Buy HQ",
+                    Node.HqMarketPrice > 0 ? "Uses the current planner HQ market price." : "No HQ price loaded.",
+                    Node.HqMarketPrice > 0 ? $"{Node.HqMarketPrice * Node.Quantity:N0}g" : "-",
+                    Node.HqMarketPrice > 0));
+            }
+        }
+
+        if (Node.CanBuyFromVendor)
+        {
+            options.Add(new AcquisitionOptionView(
+                AcquisitionSource.VendorBuy,
+                "Vendor",
+                GetVendorDetail(),
+                Node.VendorPrice > 0 ? $"{Node.VendorPrice * Node.Quantity:N0}g" : "-",
+                Node.VendorPrice > 0));
+        }
+
+        if (!Node.CanBuyFromMarket && !Node.CanBuyFromVendor && !Node.Children.Any())
+        {
+            options.Add(new AcquisitionOptionView(
+                AcquisitionSource.UnknownSource,
+                "Figure it out",
+                "No supported craft, market, or vendor source is known.",
+                "-",
+                true));
+        }
+
+        return options;
+    }
+
+    private string GetVendorDetail()
+    {
+        if (Node?.VendorOptions?.Any(v => v.IsGilVendor) != true)
+        {
+            return "No gil vendor price loaded.";
+        }
+
+        var vendor = Node.VendorOptions
+            .Where(v => v.IsGilVendor)
+            .OrderBy(v => v.Price)
+            .First();
+
+        return $"{vendor.Name} - {vendor.Location}";
+    }
+
+    private static decimal CalculateCraftCost(PlanNode node)
+    {
+        if (!node.Children.Any())
+        {
+            return node.Source switch
+            {
+                AcquisitionSource.MarketBuyNq => node.MarketPrice * node.Quantity,
+                AcquisitionSource.MarketBuyHq => node.HqMarketPrice * node.Quantity,
+                AcquisitionSource.VendorBuy => node.VendorPrice * node.Quantity,
+                _ => 0
+            };
+        }
+
+        decimal cost = 0;
+        foreach (var child in node.Children)
+        {
+            cost += child.Source switch
+            {
+                AcquisitionSource.Craft => CalculateCraftCost(child),
+                AcquisitionSource.MarketBuyNq => child.MarketPrice * child.Quantity,
+                AcquisitionSource.MarketBuyHq => child.HqMarketPrice * child.Quantity,
+                AcquisitionSource.VendorBuy => child.VendorPrice * child.Quantity,
+                _ => 0
+            };
+        }
+
+        return node.Yield > 1 ? cost / node.Yield : cost;
+    }
+
+    private record AcquisitionOptionView(
+        AcquisitionSource Source,
+        string Name,
+        string Detail,
+        string CostText,
+        bool IsAvailable);
+}
