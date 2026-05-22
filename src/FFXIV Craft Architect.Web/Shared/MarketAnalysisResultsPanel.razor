@@ -23,7 +23,8 @@
     {
         <MarketAnalysisListPanel ShoppingPlans="ShoppingPlans"
                                  CurrentSort="CurrentSort"
-                                 AutoExpandItemId="AutoExpandItemId" />
+                                 AutoExpandItemId="AutoExpandItemId"
+                                 ShowWorldsColumn="ShowWorldsColumn" />
     }
     else
     {
@@ -61,6 +62,7 @@
     [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
     [Parameter] public MarketSortOption CurrentSort { get; set; }
     [Parameter] public int? AutoExpandItemId { get; set; }
+    [Parameter] public bool ShowWorldsColumn { get; set; }
     [Parameter] public bool IsAnalyzing { get; set; }
 
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }

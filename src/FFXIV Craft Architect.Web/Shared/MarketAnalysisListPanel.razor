@@ -46,8 +46,8 @@
                     <TemplateColumn T="DetailedShoppingPlan"
                                     Title="Item"
                                     SortBy="plan => plan.Name"
-                                    HeaderStyle="width: 27%;"
-                                    CellStyle="width: 27%;"
+                                    HeaderStyle="@ItemColumnStyle"
+                                    CellStyle="@ItemColumnStyle"
                                     CellClass="ma-item-column">
                         <CellTemplate>
                             <span class="ma-item-cell">
@@ -58,54 +58,46 @@
                     </TemplateColumn>
 
                     <TemplateColumn T="DetailedShoppingPlan"
-                                    Title="Need"
-                                    SortBy="plan => plan.QuantityNeeded"
-                                    HeaderStyle="width: 9%;"
-                                    CellStyle="width: 9%;"
+                                    Title="Qty"
+                                    SortBy="plan => GetAvailableSortValue(plan)"
+                                    HeaderStyle="@QuantityColumnStyle"
+                                    CellStyle="@QuantityColumnStyle"
                                     CellClass="ma-number-column">
                         <CellTemplate>
-                            @FormatQuantity(context.Item.QuantityNeeded)
+                            <span class="@GetStockClass(context.Item)">@GetQuantityLabel(context.Item)</span>
                         </CellTemplate>
                     </TemplateColumn>
 
                     <TemplateColumn T="DetailedShoppingPlan"
                                     Title="Recommendation"
                                     SortBy="plan => GetRecommendationLabel(plan)"
-                                    HeaderStyle="width: 28%;"
-                                    CellStyle="width: 28%;"
+                                    HeaderStyle="@RecommendationColumnStyle"
+                                    CellStyle="@RecommendationColumnStyle"
                                     CellClass="ma-recommendation-column">
                         <CellTemplate>
                             <span title="@GetRecommendationLabel(context.Item)">@GetRecommendationLabel(context.Item)</span>
                         </CellTemplate>
                     </TemplateColumn>
 
-                    <TemplateColumn T="DetailedShoppingPlan"
-                                    Title="Worlds"
-                                    SortBy="plan => GetWorldCount(plan)"
-                                    HeaderStyle="width: 7%;"
-                                    CellStyle="width: 7%;"
-                                    CellClass="ma-number-column">
-                        <CellTemplate>
-                            @GetWorldCount(context.Item)
-                        </CellTemplate>
-                    </TemplateColumn>
-
-                    <TemplateColumn T="DetailedShoppingPlan"
-                                    Title="Available"
-                                    SortBy="plan => GetAvailableSortValue(plan)"
-                                    HeaderStyle="width: 12%;"
-                                    CellStyle="width: 12%;"
-                                    CellClass="ma-stock-column">
-                        <CellTemplate>
-                            <span class="@GetStockClass(context.Item)">@GetStockLabel(context.Item)</span>
-                        </CellTemplate>
-                    </TemplateColumn>
+                    @if (ShowWorldsColumn)
+                    {
+                        <TemplateColumn T="DetailedShoppingPlan"
+                                        Title="Worlds"
+                                        SortBy="plan => GetWorldCount(plan)"
+                                        HeaderStyle="width: 7%;"
+                                        CellStyle="width: 7%;"
+                                        CellClass="ma-number-column">
+                            <CellTemplate>
+                                @GetWorldCount(context.Item)
+                            </CellTemplate>
+                        </TemplateColumn>
+                    }
 
                     <TemplateColumn T="DetailedShoppingPlan"
                                     Title="Total"
                                     SortBy="plan => GetTotalCost(plan)"
-                                    HeaderStyle="width: 17%;"
-                                    CellStyle="width: 17%;"
+                                    HeaderStyle="@TotalColumnStyle"
+                                    CellStyle="@TotalColumnStyle"
                                     CellClass="ma-total-column">
                         <CellTemplate>
                             @GetTotalCost(context.Item).ToString("N0")g
@@ -138,21 +130,7 @@
                 </div>
 
                 <div class="ma-detail-scroll">
-                    @if (!string.IsNullOrWhiteSpace(_selectedPlan.Error))
-                    {
-                        <ExpandedErrorSection ErrorMessage="@_selectedPlan.Error"
-                                              ItemName="@_selectedPlan.Name"
-                                              ItemId="@_selectedPlan.ItemId"
-                                              QuantityNeeded="@_selectedPlan.QuantityNeeded" />
-                    }
-                    else if (IsVendorPlan(_selectedPlan))
-                    {
-                        <ExpandedVendorSection Plan="_selectedPlan" />
-                    }
-                    else
-                    {
-                        <ExpandedMarketSection Plan="_selectedPlan" />
-                    }
+                    <MarketAnalysisDetailGrid Plan="_selectedPlan" />
                 </div>
             }
         </aside>
@@ -163,9 +141,18 @@
     [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
     [Parameter] public MarketSortOption CurrentSort { get; set; } = MarketSortOption.ByRecommended;
     [Parameter] public int? AutoExpandItemId { get; set; }
+    [Parameter] public bool ShowWorldsColumn { get; set; }
 
     private DetailedShoppingPlan? _selectedPlan;
     private bool _autoExpandProcessed;
+
+    private string ItemColumnStyle => ShowWorldsColumn ? "width: 27%;" : "width: 29%;";
+
+    private string QuantityColumnStyle => ShowWorldsColumn ? "width: 12%;" : "width: 13%;";
+
+    private string RecommendationColumnStyle => ShowWorldsColumn ? "width: 36%;" : "width: 39%;";
+
+    private string TotalColumnStyle => ShowWorldsColumn ? "width: 18%;" : "width: 19%;";
 
     protected override void OnParametersSet()
     {
@@ -242,13 +229,13 @@
         return plan.RecommendedWorld == null ? 0 : 1;
     }
 
-    private static string GetStockLabel(DetailedShoppingPlan plan)
+    private static string GetQuantityLabel(DetailedShoppingPlan plan)
     {
         if (IsVendorPlan(plan))
-            return "Unlimited";
+            return FormatQuantity(plan.QuantityNeeded);
         if (!plan.HasSufficientStock)
             return $"{plan.TotalAvailableQuantity:N0}/{plan.QuantityNeeded:N0}";
-        return "OK";
+        return FormatQuantity(plan.QuantityNeeded);
     }
 
     private static int GetAvailableSortValue(DetailedShoppingPlan plan)
