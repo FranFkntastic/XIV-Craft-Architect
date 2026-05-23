@@ -255,7 +255,7 @@
         };
         var options = new DialogOptions
         {
-            MaxWidth = MaxWidth.Small,
+            MaxWidth = MaxWidth.Large,
             FullWidth = true,
             CloseButton = true
         };
@@ -267,19 +267,29 @@
             return;
         }
 
-        var editResult = editorResult.Scope switch
+        var selectedNodes = PlanBulkEditService
+            .FlattenPlanNodes(AppState.CurrentPlan)
+            .Where(row => editorResult.NodeIds.Contains(row.Node.NodeId))
+            .Select(row => row.Node)
+            .ToList();
+
+        var editResult = PlanBulkEditService.ApplyBulkEdit(selectedNodes, editorResult.Options);
+
+        if (editorResult.RequireHqMaterials)
         {
-            PlanEditorDialog.PlanEditorScope.SelectedNode when _selectedNode != null =>
-                PlanBulkEditService.RequireHqMaterials(_selectedNode, editorResult.IncludeNested),
-            PlanEditorDialog.PlanEditorScope.AllHqRoots =>
-                PlanBulkEditService.RequireHqMaterialsForHqRoots(AppState.CurrentPlan, editorResult.IncludeNested),
-            _ => new PlanBulkEditResult()
-        };
+            foreach (var node in selectedNodes.Where(node => node.Children.Any()))
+            {
+                var materialResult = PlanBulkEditService.RequireHqMaterials(node, includeNested: true);
+                editResult.ChangedNodes += materialResult.ChangedNodes;
+                editResult.SkippedNodes += materialResult.SkippedNodes;
+                editResult.SwitchedMarketBuys += materialResult.SwitchedMarketBuys;
+            }
+        }
 
         PopulateShoppingListFromPlan();
         AppState.NotifyPlanChanged();
         Snackbar.Add(
-            $"Updated {editResult.ChangedNodes} HQ material requirement{(editResult.ChangedNodes == 1 ? "" : "s")}.",
+            $"Updated {editResult.ChangedNodes} node{(editResult.ChangedNodes == 1 ? "" : "s")}; skipped {editResult.SkippedNodes}.",
             Severity.Success);
     }
 

@@ -70,6 +70,49 @@ public class PlanBulkEditServiceTests
         Assert.Equal(AcquisitionSource.MarketBuyNq, nqMaterial.Source);
     }
 
+    [Fact]
+    public void ApplyBulkEdit_SelectedNodes_AppliesQualityAndAcquisitionWhereValid()
+    {
+        var craft = Node("Craft", canBeHq: true, source: AcquisitionSource.Craft);
+        var market = Node("Market", canBeHq: true, source: AcquisitionSource.MarketBuyNq);
+        var vendor = Node("Vendor", canBeHq: true, source: AcquisitionSource.VendorBuy);
+        vendor.CanBuyFromMarket = false;
+
+        var result = PlanBulkEditService.ApplyBulkEdit(
+            [craft, market, vendor],
+            new PlanBulkEditOptions
+            {
+                Quality = BulkQualitySetting.RequireHq,
+                Source = AcquisitionSource.MarketBuyHq
+            });
+
+        Assert.Equal(2, result.ChangedNodes);
+        Assert.Equal(1, result.SkippedNodes);
+        Assert.True(craft.MustBeHq);
+        Assert.Equal(AcquisitionSource.MarketBuyHq, craft.Source);
+        Assert.True(market.MustBeHq);
+        Assert.Equal(AcquisitionSource.MarketBuyHq, market.Source);
+        Assert.False(vendor.MustBeHq);
+        Assert.Equal(AcquisitionSource.VendorBuy, vendor.Source);
+    }
+
+    [Fact]
+    public void FlattenPlanNodes_IncludesDepthAndCanFilterLeaves()
+    {
+        var root = Node("Root", source: AcquisitionSource.Craft);
+        var child = Node("Child", source: AcquisitionSource.Craft);
+        var leaf = Node("Leaf", source: AcquisitionSource.MarketBuyNq);
+        root.Children.Add(child);
+        child.Children.Add(leaf);
+
+        var flattened = PlanBulkEditService.FlattenPlanNodes(new CraftingPlan { RootItems = [root] });
+        var leaves = PlanBulkEditService.FilterNodes(flattened, PlanNodeFilter.LeavesOnly).ToList();
+
+        Assert.Equal([0, 1, 2], flattened.Select(row => row.Depth).ToArray());
+        Assert.Single(leaves);
+        Assert.Equal("Leaf", leaves[0].Node.Name);
+    }
+
     private static PlanNode Node(
         string name,
         bool mustBeHq = false,

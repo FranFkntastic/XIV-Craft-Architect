@@ -1,38 +1,102 @@
+@using FFXIV_Craft_Architect.Core.Helpers
 @using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
 
 <MudDialog Class="pe-dialog">
     <DialogContent>
         <div class="pe-shell">
             <div class="pe-header">
-                <MudText Typo="Typo.subtitle1" Class="pe-title">Plan Editor</MudText>
-                <MudText Typo="Typo.caption" Class="pe-muted">
-                    Bulk edit the constructed recipe tree. Existing per-node controls stay on the tree and detail panel.
-                </MudText>
+                <div>
+                    <MudText Typo="Typo.subtitle1" Class="pe-title">Plan Editor</MudText>
+                    <MudText Typo="Typo.caption" Class="pe-muted">
+                        Edit a working set of recipe nodes, then apply the changes together.
+                    </MudText>
+                </div>
+                <div class="pe-counts">
+                    @_selectedNodeIds.Count selected / @VisibleRows.Count visible
+                </div>
             </div>
 
-            <div class="pe-section">
-                <MudText Typo="Typo.subtitle2" Class="pe-section-title">HQ Material Requirements</MudText>
-                <MudRadioGroup T="PlanEditorScope" @bind-Value="_scope" Class="pe-scope-group">
-                    <MudRadio T="PlanEditorScope"
-                              Value="PlanEditorScope.SelectedNode"
-                              Disabled="@(SelectedNode == null || !SelectedNode.Children.Any())">
-                        Selected craft: @(SelectedNode?.Name ?? "None selected")
-                    </MudRadio>
-                    <MudRadio T="PlanEditorScope"
-                              Value="PlanEditorScope.AllHqRoots"
-                              Disabled="@(!HasHqRootCrafts)">
-                        All HQ root crafts
-                    </MudRadio>
-                </MudRadioGroup>
-
-                <label class="pe-check-row">
-                    <input type="checkbox" @bind="_includeNested" />
-                    <span>Include nested crafted ingredients</span>
+            <section class="pe-toolbar">
+                <label class="pe-field">
+                    <span>Show</span>
+                    <select class="pe-select" @bind="_filter">
+                        <option value="@PlanNodeFilter.All">All nodes</option>
+                        <option value="@PlanNodeFilter.LeavesOnly">Leaves only</option>
+                        <option value="@PlanNodeFilter.CraftableOnly">Crafts only</option>
+                        <option value="@PlanNodeFilter.MarketBuyableOnly">Market-buyable</option>
+                        <option value="@PlanNodeFilter.HqCapableOnly">HQ-capable</option>
+                    </select>
                 </label>
 
-                <div class="pe-summary">
-                    @SummaryText
+                <div class="pe-selection-actions">
+                    <button type="button" class="pe-text-btn" @onclick="SelectVisible">Select visible</button>
+                    <button type="button" class="pe-text-btn" @onclick="SelectCurrentSubtree" disabled="@(SelectedNode == null)">
+                        Select subtree
+                    </button>
+                    <button type="button" class="pe-text-btn" @onclick="ClearSelection">Clear</button>
                 </div>
+            </section>
+
+            <section class="pe-edit-bar">
+                <label class="pe-field">
+                    <span>Quality</span>
+                    <select class="pe-select" @bind="_quality">
+                        <option value="@BulkQualitySetting.NoChange">No change</option>
+                        <option value="@BulkQualitySetting.RequireHq">Require HQ</option>
+                        <option value="@BulkQualitySetting.RequireNq">Require NQ</option>
+                    </select>
+                </label>
+
+                <label class="pe-field">
+                    <span>Acquisition</span>
+                    <select class="pe-select" @bind="_sourceValue">
+                        <option value="">No change</option>
+                        <option value="@AcquisitionSource.Craft">Craft</option>
+                        <option value="@AcquisitionSource.MarketBuyNq">Buy NQ</option>
+                        <option value="@AcquisitionSource.MarketBuyHq">Buy HQ</option>
+                        <option value="@AcquisitionSource.VendorBuy">Vendor</option>
+                    </select>
+                </label>
+
+                <label class="pe-check-row">
+                    <input type="checkbox" @bind="_requireHqMaterials" />
+                    <span>Require HQ materials under selected crafts</span>
+                </label>
+            </section>
+
+            <section class="pe-node-table">
+                <div class="pe-table-head pe-node-grid">
+                    <span></span>
+                    <span>Item</span>
+                    <span>Qty</span>
+                    <span>HQ</span>
+                    <span>Source</span>
+                    <span>Flags</span>
+                </div>
+                <div class="pe-table-body">
+                    @foreach (var row in VisibleRows)
+                    {
+                        <label class="pe-table-row pe-node-grid">
+                            <input type="checkbox"
+                                   checked="@_selectedNodeIds.Contains(row.Node.NodeId)"
+                                   @onchange="args => ToggleNode(row.Node.NodeId, args)" />
+                            <span class="pe-node-name" style="padding-left: @(row.Depth * 14)px">@row.Node.Name</span>
+                            <span>x@row.Node.Quantity</span>
+                            <span class="@(row.Node.MustBeHq ? "pe-hq" : "pe-muted-cell")">
+                                @(row.Node.MustBeHq ? "HQ" : "NQ")
+                            </span>
+                            <span style="color: @RecipePlanDisplayHelpers.GetSourceHexColor(row.Node.Source)">
+                                @RecipePlanDisplayHelpers.GetSourceShortName(row.Node.Source)
+                            </span>
+                            <span class="pe-flags">@GetFlags(row.Node)</span>
+                        </label>
+                    }
+                </div>
+            </section>
+
+            <div class="pe-summary">
+                @SummaryText
             </div>
         </div>
     </DialogContent>
@@ -52,39 +116,116 @@
     [Parameter] public CraftingPlan? CurrentPlan { get; set; }
     [Parameter] public PlanNode? SelectedNode { get; set; }
 
-    private PlanEditorScope _scope = PlanEditorScope.SelectedNode;
-    private bool _includeNested = true;
+    private readonly HashSet<string> _selectedNodeIds = new();
+    private List<PlanNodeEditRow> _rows = new();
+    private PlanNodeFilter _filter = PlanNodeFilter.All;
+    private BulkQualitySetting _quality = BulkQualitySetting.NoChange;
+    private string _sourceValue = string.Empty;
+    private bool _requireHqMaterials;
 
-    private bool HasHqRootCrafts => CurrentPlan?.RootItems.Any(root => root.MustBeHq && root.Children.Any()) == true;
+    private List<PlanNodeEditRow> VisibleRows => PlanBulkEditService.FilterNodes(_rows, _filter).ToList();
 
-    private bool CanApply => _scope switch
+    private bool CanApply =>
+        _selectedNodeIds.Any() &&
+        (_quality != BulkQualitySetting.NoChange ||
+         !string.IsNullOrWhiteSpace(_sourceValue) ||
+         _requireHqMaterials);
+
+    private string SummaryText
     {
-        PlanEditorScope.SelectedNode => SelectedNode?.Children.Any() == true,
-        PlanEditorScope.AllHqRoots => HasHqRootCrafts,
-        _ => false
-    };
-
-    private string SummaryText => _scope switch
-    {
-        PlanEditorScope.SelectedNode when SelectedNode == null => "Select a recipe node before applying this operation.",
-        PlanEditorScope.SelectedNode when SelectedNode?.Children.Any() != true => "The selected node has no material children to update.",
-        PlanEditorScope.SelectedNode => $"Eligible materials under {SelectedNode.Name} will be marked HQ.",
-        PlanEditorScope.AllHqRoots when !HasHqRootCrafts => "No HQ root crafts are currently available.",
-        PlanEditorScope.AllHqRoots => "Eligible materials under every HQ root craft will be marked HQ.",
-        _ => string.Empty
-    };
-
-    protected override void OnParametersSet()
-    {
-        if (SelectedNode?.Children.Any() != true && HasHqRootCrafts)
+        get
         {
-            _scope = PlanEditorScope.AllHqRoots;
+            if (!_selectedNodeIds.Any())
+            {
+                return "Select one or more nodes to prepare a bulk edit.";
+            }
+
+            var actions = new List<string>();
+            if (_quality != BulkQualitySetting.NoChange)
+            {
+                actions.Add(_quality == BulkQualitySetting.RequireHq ? "quality: HQ" : "quality: NQ");
+            }
+
+            if (!string.IsNullOrWhiteSpace(_sourceValue))
+            {
+                actions.Add($"source: {GetSourceLabel(ParseSource())}");
+            }
+
+            if (_requireHqMaterials)
+            {
+                actions.Add("HQ materials under selected crafts");
+            }
+
+            return actions.Any()
+                ? $"{_selectedNodeIds.Count} nodes selected. Pending: {string.Join(", ", actions)}."
+                : $"{_selectedNodeIds.Count} nodes selected. Choose a bulk edit to apply.";
         }
+    }
+
+    protected override void OnInitialized()
+    {
+        _rows = CurrentPlan != null
+            ? PlanBulkEditService.FlattenPlanNodes(CurrentPlan)
+            : new List<PlanNodeEditRow>();
+
+        SelectCurrentSubtree();
+    }
+
+    private void ToggleNode(string nodeId, ChangeEventArgs args)
+    {
+        if (args.Value is bool isSelected && isSelected)
+        {
+            _selectedNodeIds.Add(nodeId);
+        }
+        else
+        {
+            _selectedNodeIds.Remove(nodeId);
+        }
+    }
+
+    private void SelectVisible()
+    {
+        foreach (var row in VisibleRows)
+        {
+            _selectedNodeIds.Add(row.Node.NodeId);
+        }
+    }
+
+    private void SelectCurrentSubtree()
+    {
+        if (SelectedNode == null)
+        {
+            return;
+        }
+
+        foreach (var node in GetSubtreeNodes(SelectedNode))
+        {
+            _selectedNodeIds.Add(node.NodeId);
+        }
+    }
+
+    private void ClearSelection()
+    {
+        _selectedNodeIds.Clear();
     }
 
     private void Apply()
     {
-        MudDialog.Close(DialogResult.Ok(new PlanEditorResult(_scope, _includeNested)));
+        MudDialog.Close(DialogResult.Ok(new PlanEditorResult(
+            _selectedNodeIds.ToList(),
+            new PlanBulkEditOptions
+            {
+                Quality = _quality,
+                Source = ParseSource()
+            },
+            _requireHqMaterials)));
+    }
+
+    private AcquisitionSource? ParseSource()
+    {
+        return Enum.TryParse<AcquisitionSource>(_sourceValue, out var source)
+            ? source
+            : null;
     }
 
     private void Cancel()
@@ -92,11 +233,54 @@
         MudDialog.Cancel();
     }
 
-    public sealed record PlanEditorResult(PlanEditorScope Scope, bool IncludeNested);
-
-    public enum PlanEditorScope
+    private static IEnumerable<PlanNode> GetSubtreeNodes(PlanNode node)
     {
-        SelectedNode,
-        AllHqRoots
+        yield return node;
+
+        foreach (var child in node.Children)
+        {
+            foreach (var descendant in GetSubtreeNodes(child))
+            {
+                yield return descendant;
+            }
+        }
     }
+
+    private static string GetFlags(PlanNode node)
+    {
+        var flags = new List<string>();
+        if (node.Children.Any())
+        {
+            flags.Add("craft");
+        }
+
+        if (node.CanBuyFromMarket)
+        {
+            flags.Add("market");
+        }
+
+        if (node.CanBuyFromVendor)
+        {
+            flags.Add("vendor");
+        }
+
+        if (node.CanBeHq)
+        {
+            flags.Add("HQ");
+        }
+
+        return flags.Any() ? string.Join(", ", flags) : "-";
+    }
+
+    private static string GetSourceLabel(AcquisitionSource? source)
+    {
+        return source.HasValue
+            ? RecipePlanDisplayHelpers.GetSourceDisplayName(source.Value)
+            : "No change";
+    }
+
+    public sealed record PlanEditorResult(
+        List<string> NodeIds,
+        PlanBulkEditOptions Options,
+        bool RequireHqMaterials);
 }
