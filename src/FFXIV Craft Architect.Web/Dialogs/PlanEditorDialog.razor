@@ -1,0 +1,102 @@
+@using FFXIV_Craft_Architect.Core.Models
+
+<MudDialog Class="pe-dialog">
+    <DialogContent>
+        <div class="pe-shell">
+            <div class="pe-header">
+                <MudText Typo="Typo.subtitle1" Class="pe-title">Plan Editor</MudText>
+                <MudText Typo="Typo.caption" Class="pe-muted">
+                    Bulk edit the constructed recipe tree. Existing per-node controls stay on the tree and detail panel.
+                </MudText>
+            </div>
+
+            <div class="pe-section">
+                <MudText Typo="Typo.subtitle2" Class="pe-section-title">HQ Material Requirements</MudText>
+                <MudRadioGroup T="PlanEditorScope" @bind-Value="_scope" Class="pe-scope-group">
+                    <MudRadio T="PlanEditorScope"
+                              Value="PlanEditorScope.SelectedNode"
+                              Disabled="@(SelectedNode == null || !SelectedNode.Children.Any())">
+                        Selected craft: @(SelectedNode?.Name ?? "None selected")
+                    </MudRadio>
+                    <MudRadio T="PlanEditorScope"
+                              Value="PlanEditorScope.AllHqRoots"
+                              Disabled="@(!HasHqRootCrafts)">
+                        All HQ root crafts
+                    </MudRadio>
+                </MudRadioGroup>
+
+                <label class="pe-check-row">
+                    <input type="checkbox" @bind="_includeNested" />
+                    <span>Include nested crafted ingredients</span>
+                </label>
+
+                <div class="pe-summary">
+                    @SummaryText
+                </div>
+            </div>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   Disabled="@(!CanApply)"
+                   OnClick="Apply">
+            Apply
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] public MudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public CraftingPlan? CurrentPlan { get; set; }
+    [Parameter] public PlanNode? SelectedNode { get; set; }
+
+    private PlanEditorScope _scope = PlanEditorScope.SelectedNode;
+    private bool _includeNested = true;
+
+    private bool HasHqRootCrafts => CurrentPlan?.RootItems.Any(root => root.MustBeHq && root.Children.Any()) == true;
+
+    private bool CanApply => _scope switch
+    {
+        PlanEditorScope.SelectedNode => SelectedNode?.Children.Any() == true,
+        PlanEditorScope.AllHqRoots => HasHqRootCrafts,
+        _ => false
+    };
+
+    private string SummaryText => _scope switch
+    {
+        PlanEditorScope.SelectedNode when SelectedNode == null => "Select a recipe node before applying this operation.",
+        PlanEditorScope.SelectedNode when SelectedNode?.Children.Any() != true => "The selected node has no material children to update.",
+        PlanEditorScope.SelectedNode => $"Eligible materials under {SelectedNode.Name} will be marked HQ.",
+        PlanEditorScope.AllHqRoots when !HasHqRootCrafts => "No HQ root crafts are currently available.",
+        PlanEditorScope.AllHqRoots => "Eligible materials under every HQ root craft will be marked HQ.",
+        _ => string.Empty
+    };
+
+    protected override void OnParametersSet()
+    {
+        if (SelectedNode?.Children.Any() != true && HasHqRootCrafts)
+        {
+            _scope = PlanEditorScope.AllHqRoots;
+        }
+    }
+
+    private void Apply()
+    {
+        MudDialog.Close(DialogResult.Ok(new PlanEditorResult(_scope, _includeNested)));
+    }
+
+    private void Cancel()
+    {
+        MudDialog.Cancel();
+    }
+
+    public sealed record PlanEditorResult(PlanEditorScope Scope, bool IncludeNested);
+
+    public enum PlanEditorScope
+    {
+        SelectedNode,
+        AllHqRoots
+    }
+}

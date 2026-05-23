@@ -1,0 +1,59 @@
+.pe-dialog {
+    background: #1f2327;
+    color: #e6e6e6;
+}
+
+.pe-shell {
+    width: min(520px, calc(100vw - 64px));
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.pe-header {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.pe-title {
+    color: #d4a73a;
+    font-weight: 600;
+}
+
+.pe-muted {
+    color: #9ca3af;
+}
+
+.pe-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid #38424a;
+    border-radius: 4px;
+    background: #252b30;
+}
+
+.pe-section-title {
+    color: #e6e6e6;
+    font-weight: 600;
+}
+
+.pe-scope-group {
+    color: #d7dde3;
+}
+
+.pe-check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #d7dde3;
+    font-size: 13px;
+}
+
+.pe-summary {
+    color: #9ca3af;
+    font-size: 12px;
+    line-height: 1.4;
+}

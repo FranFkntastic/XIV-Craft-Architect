@@ -46,6 +46,7 @@
         SavedPlans="@AppState.SavedPlans"
         OnExpandAllRequested="ExpandAllRecipeNodes"
         OnCollapseAllRequested="CollapseAllRecipeNodes"
+        OnOpenPlanEditorRequested="OpenPlanEditorAsync"
         OnLoadPlanRequested="LoadSavedPlanAsync"
         OnDeletePlanRequested="DeleteSavedPlanAsync"
         SelectedNode="@_selectedNode"
@@ -238,6 +239,48 @@
             Quantity = item.Quantity,
             MustBeHq = item.MustBeHq
         };
+    }
+
+    private async Task OpenPlanEditorAsync()
+    {
+        if (AppState.CurrentPlan == null)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            ["CurrentPlan"] = AppState.CurrentPlan,
+            ["SelectedNode"] = _selectedNode
+        };
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+            CloseButton = true
+        };
+
+        var dialog = await DialogService.ShowAsync<PlanEditorDialog>("Plan Editor", parameters, options);
+        var result = await dialog.Result;
+        if (result.Canceled || result.Data is not PlanEditorDialog.PlanEditorResult editorResult)
+        {
+            return;
+        }
+
+        var editResult = editorResult.Scope switch
+        {
+            PlanEditorDialog.PlanEditorScope.SelectedNode when _selectedNode != null =>
+                PlanBulkEditService.RequireHqMaterials(_selectedNode, editorResult.IncludeNested),
+            PlanEditorDialog.PlanEditorScope.AllHqRoots =>
+                PlanBulkEditService.RequireHqMaterialsForHqRoots(AppState.CurrentPlan, editorResult.IncludeNested),
+            _ => new PlanBulkEditResult()
+        };
+
+        PopulateShoppingListFromPlan();
+        AppState.NotifyPlanChanged();
+        Snackbar.Add(
+            $"Updated {editResult.ChangedNodes} HQ material requirement{(editResult.ChangedNodes == 1 ? "" : "s")}.",
+            Severity.Success);
     }
 
     private async Task BuildPlanAsync()

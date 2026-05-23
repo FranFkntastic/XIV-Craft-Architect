@@ -24,7 +24,7 @@
 
 .mp-control-bar {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
     align-items: center;
     margin-bottom: 12px;
     padding: 6px 8px;
@@ -33,6 +33,7 @@
     border-radius: 4px;
 }
 
+.mp-editor-btn,
 .mp-tree-action-btn {
     padding: 4px 8px;
     background: #2d2d2d;
@@ -41,6 +42,11 @@
     border-radius: 4px;
     cursor: pointer;
     font-size: 12px;
+}
+
+.mp-editor-btn {
+    border-color: #5b7896;
+    color: #d7e8f8;
 }
 
 .mp-empty-state {
