@@ -82,6 +82,14 @@ public class MarketRouteScoringTests
     }
 
     [Fact]
+    public void RoutePenaltyBreakdown_DoesNotExposeCostPlusRoutePenaltyScoreAsPublicProperty()
+    {
+        var property = typeof(RoutePenaltyBreakdown).GetProperty("CostPlusRoutePenaltyScore");
+
+        Assert.Null(property);
+    }
+
+    [Fact]
     public void ScoreCandidate_CasingDifferences_DoNotCountAsNewWorldOrDataCenter()
     {
         var config = new MarketAnalysisConfig { TravelTolerance = 5 };

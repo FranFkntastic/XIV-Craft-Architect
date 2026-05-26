@@ -170,14 +170,32 @@ public class MarketRouteState
     public bool ContainsDataCenter(string dataCenter) => _dataCenters.Contains(dataCenter);
 }
 
-public sealed record RoutePenaltyBreakdown(
-    long GilCost,
-    int AddedWorldCount,
-    int AddedDataCenterCount,
-    long RoutePenalty,
-    long CostPlusRoutePenaltyScore,
-    int TravelTolerance)
+public sealed class RoutePenaltyBreakdown
 {
+    private readonly long _costPlusRoutePenalty;
+
+    public RoutePenaltyBreakdown(
+        long gilCost,
+        int addedWorldCount,
+        int addedDataCenterCount,
+        long routePenalty,
+        long costPlusRoutePenalty,
+        int travelTolerance)
+    {
+        GilCost = gilCost;
+        AddedWorldCount = addedWorldCount;
+        AddedDataCenterCount = addedDataCenterCount;
+        RoutePenalty = routePenalty;
+        _costPlusRoutePenalty = costPlusRoutePenalty;
+        TravelTolerance = travelTolerance;
+    }
+
+    public long GilCost { get; }
+    public int AddedWorldCount { get; }
+    public int AddedDataCenterCount { get; }
+    public long RoutePenalty { get; }
+    public int TravelTolerance { get; }
+
     /// <summary>
     /// Returns the numeric score only when numeric ordering is valid.
     /// TravelTolerance 0 uses lexicographic route ordering; use MarketRouteScoring.CompareCandidates instead.
@@ -190,8 +208,10 @@ public sealed record RoutePenaltyBreakdown(
                 "TravelTolerance 0 uses route-first ordering. Use MarketRouteScoring.CompareCandidates or CompareScores.");
         }
 
-        return CostPlusRoutePenaltyScore;
+        return _costPlusRoutePenalty;
     }
+
+    internal long GetComparisonNumericScore() => _costPlusRoutePenalty;
 }
 
 public static class MarketRouteScoring
@@ -262,7 +282,7 @@ public static class MarketRouteScoring
             return left.GilCost.CompareTo(right.GilCost);
         }
 
-        var scoreComparison = left.CostPlusRoutePenaltyScore.CompareTo(right.CostPlusRoutePenaltyScore);
+        var scoreComparison = left.GetComparisonNumericScore().CompareTo(right.GetComparisonNumericScore());
         if (scoreComparison != 0)
         {
             return scoreComparison;
