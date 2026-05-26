@@ -8,11 +8,23 @@ namespace FFXIV_Craft_Architect.Core.Models;
 /// </summary>
 public class MarketAnalysisConfig
 {
+    private int _travelTolerance;
+
     /// <summary>
     /// Maximum number of worlds to visit for a single item.
     /// Uses soft limit based on tier 1 recommendations if null.
     /// </summary>
     public int? MaxWorldsPerItem { get; set; }
+
+    /// <summary>
+    /// Route-wide tolerance for world and data-center travel.
+    /// 0 strongly prefers the current route; 11 uses raw gil cost.
+    /// </summary>
+    public int TravelTolerance
+    {
+        get => _travelTolerance;
+        set => _travelTolerance = Math.Clamp(value, 0, 11);
+    }
     
     /// <summary>
     /// Whether to enable multi-world split purchases.
@@ -34,7 +46,8 @@ public class MarketAnalysisConfig
         return new MarketAnalysisConfig
         {
             MaxWorldsPerItem = settings.Get<int?>("analysis.max_worlds_per_item", null),
-            EnableSplitWorld = settings.Get("analysis.enable_split_world", false)
+            EnableSplitWorld = settings.Get("analysis.enable_split_world", false),
+            TravelTolerance = settings.Get("analysis.travel_tolerance", 0)
         };
     }
     
@@ -85,6 +98,175 @@ public static class TravelContextConstants
     public const string Primary = "Primary";
     public const string Consolidated = "Consolidated";
     public const string Supplemental = "Supplemental";
+}
+
+public readonly record struct MarketWorldKey(string DataCenter, string WorldName);
+
+/// <summary>
+/// A candidate purchase route for one market choice.
+/// </summary>
+public class MarketPurchaseCandidate
+{
+    public MarketPurchaseCandidate(long gilCost, IEnumerable<MarketWorldKey> worlds)
+    {
+        GilCost = gilCost;
+        Worlds = worlds.Distinct().ToList();
+    }
+
+    public long GilCost { get; }
+    public IReadOnlyList<MarketWorldKey> Worlds { get; }
+}
+
+/// <summary>
+/// Worlds and data centers already selected for the route being built.
+/// </summary>
+public class MarketRouteState
+{
+    private readonly HashSet<MarketWorldKey> _worlds;
+    private readonly HashSet<string> _dataCenters;
+
+    public MarketRouteState()
+        : this([])
+    {
+    }
+
+    public MarketRouteState(IEnumerable<MarketWorldKey> worlds)
+    {
+        _worlds = worlds.ToHashSet();
+        _dataCenters = _worlds
+            .Select(w => w.DataCenter)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    public IReadOnlyCollection<MarketWorldKey> Worlds => _worlds;
+    public IReadOnlyCollection<string> DataCenters => _dataCenters;
+
+    public bool ContainsWorld(MarketWorldKey world) => _worlds.Contains(world);
+    public bool ContainsDataCenter(string dataCenter) => _dataCenters.Contains(dataCenter);
+}
+
+public sealed record RoutePenaltyBreakdown(
+    long GilCost,
+    int AddedWorldCount,
+    int AddedDataCenterCount,
+    long RoutePenalty,
+    long EffectiveScore,
+    int TravelTolerance);
+
+public static class MarketRouteScoring
+{
+    private const long WorldRoutePenalty = 100_000;
+    private const long DataCenterRoutePenalty = 1_000_000;
+
+    public static RoutePenaltyBreakdown ScoreCandidate(
+        MarketPurchaseCandidate candidate,
+        MarketRouteState currentRoute,
+        MarketAnalysisConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        ArgumentNullException.ThrowIfNull(currentRoute);
+        ArgumentNullException.ThrowIfNull(config);
+
+        var addedWorldCount = candidate.Worlds.Count(w => !currentRoute.ContainsWorld(w));
+        var addedDataCenterCount = candidate.Worlds
+            .Select(w => w.DataCenter)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count(dc => !currentRoute.ContainsDataCenter(dc));
+
+        var routePenalty = CalculateRoutePenalty(addedWorldCount, addedDataCenterCount, config.TravelTolerance);
+        return new RoutePenaltyBreakdown(
+            candidate.GilCost,
+            addedWorldCount,
+            addedDataCenterCount,
+            routePenalty,
+            SaturatingAdd(candidate.GilCost, routePenalty),
+            config.TravelTolerance);
+    }
+
+    public static int CompareCandidates(
+        MarketPurchaseCandidate left,
+        MarketPurchaseCandidate right,
+        MarketRouteState currentRoute,
+        MarketAnalysisConfig config)
+    {
+        var leftScore = ScoreCandidate(left, currentRoute, config);
+        var rightScore = ScoreCandidate(right, currentRoute, config);
+
+        return CompareScores(leftScore, rightScore);
+    }
+
+    public static int CompareScores(RoutePenaltyBreakdown left, RoutePenaltyBreakdown right)
+    {
+        if (left.TravelTolerance == 0 || right.TravelTolerance == 0)
+        {
+            var dataCenterComparison = left.AddedDataCenterCount.CompareTo(right.AddedDataCenterCount);
+            if (dataCenterComparison != 0)
+            {
+                return dataCenterComparison;
+            }
+
+            var worldComparison = left.AddedWorldCount.CompareTo(right.AddedWorldCount);
+            if (worldComparison != 0)
+            {
+                return worldComparison;
+            }
+
+            return left.GilCost.CompareTo(right.GilCost);
+        }
+
+        var scoreComparison = left.EffectiveScore.CompareTo(right.EffectiveScore);
+        if (scoreComparison != 0)
+        {
+            return scoreComparison;
+        }
+
+        var routeComparison = left.RoutePenalty.CompareTo(right.RoutePenalty);
+        if (routeComparison != 0)
+        {
+            return routeComparison;
+        }
+
+        return left.GilCost.CompareTo(right.GilCost);
+    }
+
+    private static long CalculateRoutePenalty(int addedWorldCount, int addedDataCenterCount, int travelTolerance)
+    {
+        if (travelTolerance >= 11)
+        {
+            return 0;
+        }
+
+        var toleranceMultiplier = 11 - travelTolerance;
+        var worldPenalty = SaturatingMultiply((long)addedWorldCount * toleranceMultiplier, WorldRoutePenalty);
+        var dataCenterPenalty = SaturatingMultiply((long)addedDataCenterCount * toleranceMultiplier, DataCenterRoutePenalty);
+
+        return SaturatingAdd(worldPenalty, dataCenterPenalty);
+    }
+
+    private static long SaturatingAdd(long left, long right)
+    {
+        if (left > 0 && right > long.MaxValue - left)
+        {
+            return long.MaxValue;
+        }
+
+        return left + right;
+    }
+
+    private static long SaturatingMultiply(long left, long right)
+    {
+        if (left == 0 || right == 0)
+        {
+            return 0;
+        }
+
+        if (left > long.MaxValue / right)
+        {
+            return long.MaxValue;
+        }
+
+        return left * right;
+    }
 }
 
 /// <summary>
@@ -221,6 +403,11 @@ public class DetailedShoppingPlan
 public class SplitWorldPurchase
 {
     /// <summary>
+    /// The data center this world belongs to.
+    /// </summary>
+    public string DataCenter { get; set; } = string.Empty;
+
+    /// <summary>
     /// The world to purchase from.
     /// </summary>
     public string WorldName { get; set; } = string.Empty;
@@ -269,6 +456,7 @@ public class SplitWorldPurchase
 /// </summary>
 public class WorldShoppingSummary
 {
+    public string DataCenter { get; set; } = string.Empty;
     public string WorldName { get; set; } = string.Empty;
     public int WorldId { get; set; }
     public long TotalCost { get; set; }
