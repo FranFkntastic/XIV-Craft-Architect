@@ -17,9 +17,9 @@
 @inject ILogger<Index> Logger
 @implements IDisposable
 
-<!-- 3-Column Layout matching WPF -->
-<div style="display: grid; grid-template-columns: 280px 1fr 350px; gap: 0; height: calc(100vh - 64px);">
-    
+<!-- Planner layout: project inputs and recipe visualization only. -->
+<div style="display: grid; grid-template-columns: 280px 1fr; gap: 0; height: calc(100vh - 64px);">
+
     <!-- Left Column: Project Items -->
     <ProjectItemsPanel
         SearchQuery="@_searchQuery"
@@ -39,7 +39,7 @@
         OnBuildPlanRequested="BuildPlanAsync"
         OnSavePlanRequested="SaveToBrowserAsync"
         OnExportPlanRequested="ExportPlanAsync" />
-    
+
     <!-- Middle Column: Recipe Tree -->
     <RecipePlanPanel
         CurrentPlan="@AppState.CurrentPlan"
@@ -53,12 +53,6 @@
         OnNodeSelected="OnNodeSelected"
         OnNodeHqChanged="OnNodeHqChanged" />
 
-    <!-- Right Column: Shopping List -->
-    <AcquisitionDetailsPanel
-        Node="@_selectedNode"
-        CurrentPlan="@AppState.CurrentPlan"
-        UnavailableMarketItems="@AppState.UnavailableMarketItems"
-        OnSourceChanged="OnNodeSourceChanged" />
 </div>
 
 @code {
@@ -67,19 +61,18 @@
     private string _searchQuery = string.Empty;
     private bool _isSearching = false;
     private List<GarlandSearchResult> _searchResults = new();
-    
+
     private bool _isBuildingPlan = false;
-    private bool _isRefreshingPrices = false;
     private PlanNode? _selectedNode;
 
     protected override async Task OnInitializedAsync()
     {
         // Subscribe to state changes
         AppState.OnPlanChanged += OnPlanChanged;
-        
+
         // Load saved plans list
         await RefreshSavedPlansListAsync();
-        
+
         // Note: WorldData, auto-save restoration, and auto-save timer are now
         // all handled centrally in MainLayout.razor
     }
@@ -93,7 +86,7 @@
     public void Dispose()
     {
         AppState.OnPlanChanged -= OnPlanChanged;
-        
+
         // Note: Auto-save timer is now managed centrally in MainLayout.razor
     }
 
@@ -122,7 +115,7 @@
 
         _isSearching = true;
         _searchResults.Clear();
-        
+
         try
         {
             var results = await GarlandService.SearchAsync(_searchQuery);
@@ -179,7 +172,7 @@
             });
             AppState.NotifyPlanChanged();
         }
-        
+
         _searchResults.Clear();
         _searchQuery = string.Empty;
     }
@@ -300,29 +293,29 @@
 
         _isBuildingPlan = true;
         StateHasChanged();
-        
+
         try
         {
             var targetItems = AppState.ProjectItems.Select(i => (i.Id, i.Name, i.Quantity, i.MustBeHq)).ToList();
-            
+
             // Step 1: Build the recipe tree
             AppState.CurrentPlan = await RecipeCalculationService.BuildPlanAsync(
-                targetItems, 
-                AppState.SelectedDataCenter, 
+                targetItems,
+                AppState.SelectedDataCenter,
                 string.Empty);
             _selectedNode = AppState.CurrentPlan.RootItems.FirstOrDefault();
-            
+
             // Step 2: Fetch prices for all items (craftable and buyable)
             AppState.BeginOperation("Fetching Prices", "Loading market prices for all materials...");
             var priceRefresh = await RefreshPricesAsync(rebuildProcurementPlans: false);
-            
+
             // Step 3: Clear previous shopping plans
             AppState.ShoppingPlans.Clear();
-            
+
             // Step 4: Populate shopping list with items marked as "buy" from recipe plan
             // These will be shown in Procurement Planner for potential analysis
             PopulateShoppingListFromPlan();
-            
+
             if (priceRefresh.HasUnavailableItems)
             {
                 var warning = MarketPriceAvailability.FormatUnavailableMessage(priceRefresh.UnavailableItems);
@@ -345,56 +338,20 @@
             _isBuildingPlan = false;
         }
     }
-    
+
     private void PopulateShoppingListFromPlan()
     {
-        // Collect all items from the plan that are marked for buying
-        // This includes leaf nodes (materials) and any craftable nodes the user set to "buy"
-        var buyItems = new List<MarketShoppingItem>();
-        
-        foreach (var root in AppState.CurrentPlan?.RootItems ?? new List<PlanNode>())
-        {
-            CollectBuyItems(root, buyItems);
-        }
-        
-        AppState.ShoppingItems = buyItems;
+        AppState.ShoppingItems = AcquisitionPlanningService.GetActiveProcurementItems(AppState.CurrentPlan)
+            .Where(item => item.TotalQuantity > 0)
+            .Select(item => new MarketShoppingItem
+            {
+                Id = item.ItemId,
+                Name = item.Name,
+                IconId = item.IconId,
+                Quantity = item.TotalQuantity
+            })
+            .ToList();
         AppState.NotifyShoppingListChanged();
-    }
-    
-    private void CollectBuyItems(PlanNode node, List<MarketShoppingItem> buyItems)
-    {
-        // If this node is set to acquire directly, add it to the shopping list.
-        if (node.Source == AcquisitionSource.MarketBuyNq ||
-            node.Source == AcquisitionSource.MarketBuyHq ||
-            node.Source == AcquisitionSource.VendorBuy ||
-            node.Source == AcquisitionSource.UnknownSource)
-        {
-            // Only add if not already in the list (aggregate quantities)
-            var existing = buyItems.FirstOrDefault(i => i.Id == node.ItemId);
-            if (existing != null)
-            {
-                existing.Quantity += node.Quantity;
-            }
-            else
-            {
-                buyItems.Add(new MarketShoppingItem
-                {
-                    Id = node.ItemId,
-                    Name = node.Name,
-                    IconId = node.IconId,
-                    Quantity = node.Quantity
-                });
-            }
-        }
-        
-        // Recursively check children
-        if (node.Children?.Any() == true)
-        {
-            foreach (var child in node.Children)
-            {
-                CollectBuyItems(child, buyItems);
-            }
-        }
     }
 
     private async Task<MarketPriceRefreshResult> RefreshPricesAsync(bool rebuildProcurementPlans = true)
@@ -404,14 +361,13 @@
             return new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
         }
 
-        _isRefreshingPrices = true;
         MarketPriceRefreshResult refreshResult = new(0, 0, Array.Empty<MarketDataUnavailableItem>());
-        
+
         try
         {
             // Fetch vendor prices (cheap, from Garland)
             await RecipeCalculationService.FetchVendorPricesAsync(AppState.CurrentPlan);
-            
+
             // Fetch market prices (from Universalis)
             var allItemIds = CollectAllItemIds(AppState.CurrentPlan.RootItems);
             var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, allItemIds);
@@ -473,8 +429,6 @@
         }
         finally
         {
-            _isRefreshingPrices = false;
-            
             // Increment price version to trigger UI re-render in RecipeNodeView components
             if (AppState.CurrentPlan != null)
             {
@@ -488,13 +442,8 @@
 
     private List<MaterialAggregate> GetBuyItemsForAnalysis()
     {
-        if (AppState.CurrentPlan == null)
-        {
-            return new List<MaterialAggregate>();
-        }
-
-        return AppState.CurrentPlan.AggregatedMaterials
-            .Where(m => m.TotalQuantity > 0)
+        return AcquisitionPlanningService.GetActiveProcurementItems(AppState.CurrentPlan)
+            .Where(item => item.TotalQuantity > 0)
             .ToList();
     }
 
@@ -517,7 +466,6 @@
             foreach (var dc in NorthAmericanDataCenters)
             {
                 var requests = materials
-                    .Where(m => plan.FindNode(m.ItemId)?.CanBuyFromMarket != false)
                     .Select(m => (m.ItemId, dc))
                     .ToList();
                 await MarketCache.EnsurePopulatedAsync(requests, maxAge: maxAge, progress: progress);
@@ -531,7 +479,6 @@
         else
         {
             var requests = materials
-                .Where(m => plan.FindNode(m.ItemId)?.CanBuyFromMarket != false)
                 .Select(m => (m.ItemId, AppState.SelectedDataCenter))
                 .ToList();
             await MarketCache.EnsurePopulatedAsync(requests, maxAge: maxAge, progress: progress);
@@ -641,13 +588,6 @@
         };
     }
 
-    private void OnNodeSourceChanged(PlanNode node)
-    {
-        // Recalculate shopping list when acquisition source changes
-        PopulateShoppingListFromPlan();
-        AppState.NotifyPlanChanged();
-    }
-
     private void OnNodeSelected(PlanNode node)
     {
         _selectedNode = node;
@@ -682,14 +622,14 @@
             // Use existing plan ID if available (overwrite), otherwise generate new
             var planId = AppState.CurrentPlanId ?? Guid.NewGuid().ToString();
             var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name ?? $"Plan_{DateTime.Now:yyyyMMdd_HHmm}";
-            
+
             // If this is a new save (no CurrentPlanId), set it for future overwrites
             if (AppState.CurrentPlanId == null)
             {
                 AppState.CurrentPlanId = planId;
                 AppState.CurrentPlanName = planName;
             }
-            
+
             var planData = new StoredPlan
             {
                 Id = planId,
@@ -704,8 +644,8 @@
                     Quantity = p.Quantity,
                     MustBeHq = p.MustBeHq
                 }).ToList(),
-                PlanJson = AppState.CurrentPlan != null 
-                    ? System.Text.Json.JsonSerializer.Serialize(AppState.CurrentPlan) 
+                PlanJson = AppState.CurrentPlan != null
+                    ? System.Text.Json.JsonSerializer.Serialize(AppState.CurrentPlan)
                     : null
             };
 
@@ -753,7 +693,7 @@
 
             AppState.LoadStoredPlan(storedPlan, plan);
             _selectedNode = AppState.CurrentPlan?.RootItems.FirstOrDefault();
-            
+
             // Restore market analysis if available
             if (!string.IsNullOrEmpty(storedPlan.MarketPlansJson))
             {
@@ -772,7 +712,7 @@
                     Logger?.LogWarning(ex, "Failed to restore market analysis");
                 }
             }
-            
+
             Snackbar.Add($"Loaded '{storedPlan.Name}'", Severity.Success);
         }
         catch (Exception ex)
@@ -808,10 +748,10 @@
             var json = RecipeCalculationService.SerializePlan(AppState.CurrentPlan);
             var bytes = System.Text.Encoding.UTF8.GetBytes(json);
             var stream = new MemoryStream(bytes);
-            
+
             using var streamRef = new DotNetStreamReference(stream);
             await JSRuntime.InvokeVoidAsync("downloadFileFromStream", $"{AppState.CurrentPlan.Name}.json", streamRef);
-            
+
             Snackbar.Add("Plan exported to Downloads!", Severity.Success);
         }
         catch (Exception ex)

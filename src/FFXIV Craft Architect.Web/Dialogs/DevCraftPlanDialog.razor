@@ -1,0 +1,37 @@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3">
+            Load a craftplan from <code>wwwroot/dev-plans</code>.
+        </MudText>
+        <MudTextField @bind-Value="_path"
+                      Label="Craftplan filename"
+                      Placeholder="shark-class-bridge-16.craftplan"
+                      Variant="Variant.Outlined"
+                      Immediate="true"
+                      AutoFocus="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Disabled="@string.IsNullOrWhiteSpace(_path)"
+                   OnClick="Load">
+            Load
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] public MudDialogInstance MudDialog { get; set; } = default!;
+
+    private string _path = string.Empty;
+
+    private void Load()
+    {
+        MudDialog.Close(DialogResult.Ok(_path));
+    }
+
+    private void Cancel()
+    {
+        MudDialog.Cancel();
+    }
+}

@@ -9,12 +9,14 @@
 @inject ISettingsService Settings
 @inject IndexedDbService IndexedDb
 @inject IJSRuntime JSRuntime
+@inject HttpClient Http
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject RecipeCalculationService RecipeService
 @inject UniversalisService UniversalisService
 @inject IMarketCacheService MarketCache
 @inject ILogger<MainLayout> Logger
+@inject Microsoft.AspNetCore.Components.WebAssembly.Hosting.IWebAssemblyHostEnvironment HostEnvironment
 @implements IDisposable
 
 <MudThemeProvider @ref="_mudThemeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
@@ -38,6 +40,11 @@
                        Color="@GetTabColor("market")"
                        Variant="@GetTabVariant("market")">
                 Market Analysis
+            </MudButton>
+            <MudButton OnClick="@(() => NavigateTo("acquisition"))"
+                       Color="@GetTabColor("acquisition")"
+                       Variant="@GetTabVariant("acquisition")">
+                Acquisition Evaluation
             </MudButton>
             <MudButton OnClick="@(() => NavigateTo("procurement"))"
                        Color="@GetTabColor("procurement")"
@@ -133,6 +140,13 @@
                     <MudMenuItem OnClick="OnOptions" Icon="@Icons.Material.Filled.Settings">
                         Options...
                     </MudMenuItem>
+                    @if (IsDevelopment)
+                    {
+                        <MudDivider />
+                        <MudMenuItem OnClick="OnLoadDevCraftPlanFixture" Icon="@Icons.Material.Filled.BugReport">
+                            Load Dev Craftplan...
+                        </MudMenuItem>
+                    }
                 </ChildContent>
             </MudMenu>
         </div>
@@ -157,6 +171,7 @@
     private MudThemeProvider _mudThemeProvider = null!;
     private string _activeTab = "market";
     private bool _disposed = false;
+    private bool IsDevelopment => string.Equals(HostEnvironment.Environment, "Development", StringComparison.OrdinalIgnoreCase);
     
     private readonly MudTheme _theme = AppTheme.CreateTheme();
 
@@ -314,6 +329,8 @@
         var uriLower = uri.ToLowerInvariant();
         if (uriLower.Contains("/procurement"))
             _activeTab = "procurement";
+        else if (uriLower.Contains("/acquisition"))
+            _activeTab = "acquisition";
         else if (uriLower.Contains("/market"))
             _activeTab = "market";
         else
@@ -437,73 +454,11 @@
             // If we have a native plan, restore it fully
             if (importResult.NativePlan != null)
             {
-                AppState.CurrentPlan = importResult.NativePlan;
-                
-                // Use the plan's root items
-                AppState.ProjectItems = importResult.NativePlan.RootItems.Select(r => new ProjectItem
-                {
-                    Id = r.ItemId,
-                    Name = r.Name,
-                    IconId = r.IconId,
-                    Quantity = r.Quantity,
-                    MustBeHq = r.MustBeHq
-                }).ToList();
-                
-                // Restore data center if available
-                if (!string.IsNullOrEmpty(importResult.NativePlan.DataCenter))
-                {
-                    AppState.SelectedDataCenter = importResult.NativePlan.DataCenter;
-                }
-                
-                AppState.NotifyPlanChanged();
-                Snackbar.Add($"Imported native plan '{importResult.NativePlan.Name}' with {items.Count} items", Severity.Success);
-                
-                // RE-BUILD: Fetch vendor prices and initialize nodes properly
-                if (AppState.CurrentPlan != null)
-                {
-                    AppState.SetStatus("Rebuilding plan...", busy: true);
-                    try
-                    {
-                        // Always fetch vendor prices (fast, local data)
-                        await RecipeService.FetchVendorPricesAsync(AppState.CurrentPlan);
-                        Snackbar.Add("Vendor prices updated", Severity.Success);
-                        
-                        // Optionally fetch market prices based on setting
-                        if (AppState.AutoFetchPricesOnRebuild)
-                        {
-                            AppState.SetStatus("Fetching market prices...", busy: true);
-                            var allItemIds = AppState.CurrentPlan.GetAllItemIds().ToList();
-                            var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, allItemIds);
-                            var responses = marketItemIds.Any()
-                                ? await UniversalisService.GetMarketDataBulkAsync(
-                                    AppState.SelectedDataCenter,
-                                    marketItemIds)
-                                : new Dictionary<int, UniversalisResponse>();
-                            
-                            UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, responses);
-                            
-                            // Cache fetched market data for subsequent operations
-                            foreach (var kvp in responses)
-                            {
-                                var cachedData = ConvertResponseToCachedData(kvp.Key, AppState.SelectedDataCenter, kvp.Value);
-                                await MarketCache.SetAsync(kvp.Key, AppState.SelectedDataCenter, cachedData);
-                            }
-                            Logger.LogInformation("Cached {Count} market entries to IndexedDB", responses.Count);
-                            
-                            Snackbar.Add("Market prices updated", Severity.Success);
-                        }
-                        
-                        AppState.NotifyPlanChanged();
-                    }
-                    catch (Exception ex)
-                    {
-                        Snackbar.Add($"Failed to rebuild plan: {ex.Message}", Severity.Warning);
-                    }
-                    finally
-                    {
-                        AppState.SetStatus("Ready", busy: false);
-                    }
-                }
+                await LoadNativePlanAsync(
+                    importResult.NativePlan,
+                    $"Imported native plan '{importResult.NativePlan.Name}' with {items.Count} items",
+                    refreshPrices: true,
+                    clearCurrentPlanId: false);
             }
             else
             {
@@ -568,6 +523,118 @@
                 NavigationManager.NavigateTo("./");
             }
         }
+    }
+
+    private async Task OnLoadDevCraftPlanFixture()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = DialogService.Show<DevCraftPlanDialog>("Load Dev Craftplan", options);
+        var result = await dialog.Result;
+
+        if (result?.Canceled != false || result.Data is not string input || string.IsNullOrWhiteSpace(input))
+        {
+            return;
+        }
+
+        var devPlanPath = NormalizeDevPlanPath(input);
+        try
+        {
+            AppState.SetStatus($"Loading {devPlanPath}...", busy: true);
+            var json = await Http.GetStringAsync(devPlanPath);
+            var plan = RecipeService.DeserializePlan(json)
+                ?? throw new InvalidOperationException("Could not parse the craftplan JSON.");
+
+            await LoadNativePlanAsync(
+                plan,
+                $"Loaded dev craftplan '{devPlanPath}'",
+                refreshPrices: false,
+                clearCurrentPlanId: true);
+
+            NavigationManager.NavigateTo("./");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load dev craftplan fixture {Path}", devPlanPath);
+            Snackbar.Add($"Failed to load dev craftplan: {ex.Message}", Severity.Error);
+            AppState.SetStatus("Ready", busy: false);
+        }
+    }
+
+    private async Task LoadNativePlanAsync(
+        CraftingPlan plan,
+        string successMessage,
+        bool refreshPrices,
+        bool clearCurrentPlanId)
+    {
+        AppState.CurrentPlan = plan;
+        AppState.ProjectItems = CraftPlanStateMapper.GetRootProjectItems(plan);
+
+        if (!string.IsNullOrEmpty(plan.DataCenter))
+        {
+            AppState.SelectedDataCenter = plan.DataCenter;
+        }
+
+        if (clearCurrentPlanId)
+        {
+            AppState.ClearCurrentPlanId();
+        }
+
+        AppState.NotifyPlanChanged();
+        Snackbar.Add(successMessage, Severity.Success);
+
+        if (!refreshPrices || AppState.CurrentPlan == null)
+        {
+            AppState.SetStatus("Ready", busy: false);
+            return;
+        }
+
+        AppState.SetStatus("Rebuilding plan...", busy: true);
+        try
+        {
+            await RecipeService.FetchVendorPricesAsync(AppState.CurrentPlan);
+            Snackbar.Add("Vendor prices updated", Severity.Success);
+
+            if (AppState.AutoFetchPricesOnRebuild)
+            {
+                AppState.SetStatus("Fetching market prices...", busy: true);
+                var allItemIds = AppState.CurrentPlan.GetAllItemIds().ToList();
+                var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, allItemIds);
+                var responses = marketItemIds.Any()
+                    ? await UniversalisService.GetMarketDataBulkAsync(
+                        AppState.SelectedDataCenter,
+                        marketItemIds)
+                    : new Dictionary<int, UniversalisResponse>();
+
+                UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, responses);
+
+                foreach (var kvp in responses)
+                {
+                    var cachedData = ConvertResponseToCachedData(kvp.Key, AppState.SelectedDataCenter, kvp.Value);
+                    await MarketCache.SetAsync(kvp.Key, AppState.SelectedDataCenter, cachedData);
+                }
+
+                Logger.LogInformation("Cached {Count} market entries to IndexedDB", responses.Count);
+                Snackbar.Add("Market prices updated", Severity.Success);
+            }
+
+            AppState.NotifyPlanChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to rebuild plan: {ex.Message}", Severity.Warning);
+        }
+        finally
+        {
+            AppState.SetStatus("Ready", busy: false);
+        }
+    }
+
+    private static string NormalizeDevPlanPath(string input)
+    {
+        var path = input.Trim().Replace('\\', '/').TrimStart('/');
+        return path.StartsWith("dev-plans/", StringComparison.OrdinalIgnoreCase)
+            ? path
+            : $"dev-plans/{path}";
     }
     
     private void UpdateNodeMarketPrices(List<PlanNode> nodes, Dictionary<int, UniversalisResponse> responses)

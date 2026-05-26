@@ -8,9 +8,12 @@
     @if (CurrentPlan != null)
     {
         <div class="mp-control-bar">
-            <button @onclick="OnOpenPlanEditorRequested" title="Open Plan Editor" class="mp-editor-btn">
-                Plan Editor
-            </button>
+            @if (ShowPlanEditor)
+            {
+                <button @onclick="OnOpenPlanEditorRequested" title="Open Plan Editor" class="mp-editor-btn">
+                    Plan Editor
+                </button>
+            }
             <div class="mp-tree-actions">
                 <button @onclick="OnExpandAllRequested" title="Expand All" class="mp-tree-action-btn">
                     + Expand All
@@ -79,6 +82,7 @@
     [Parameter] public EventCallback OnExpandAllRequested { get; set; }
     [Parameter] public EventCallback OnCollapseAllRequested { get; set; }
     [Parameter] public EventCallback OnOpenPlanEditorRequested { get; set; }
+    [Parameter] public bool ShowPlanEditor { get; set; } = true;
     [Parameter] public EventCallback<string> OnLoadPlanRequested { get; set; }
     [Parameter] public EventCallback<string> OnDeletePlanRequested { get; set; }
     [Parameter] public PlanNode? SelectedNode { get; set; }

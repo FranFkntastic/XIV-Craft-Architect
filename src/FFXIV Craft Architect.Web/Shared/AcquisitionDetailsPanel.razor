@@ -39,7 +39,7 @@
 
         <div class="rp-panel">
             <div class="rp-panel-header">
-                <div class="rp-header-title">Sources</div>
+                <div class="rp-header-title">Acquisition Options</div>
             </div>
             <div class="rp-details-wrap">
                 <div class="rp-method-list">
@@ -68,6 +68,7 @@
 @code {
     [Parameter] public PlanNode? Node { get; set; }
     [Parameter] public CraftingPlan? CurrentPlan { get; set; }
+    [Parameter] public DetailedShoppingPlan? MarketPlan { get; set; }
     [Parameter] public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<MarketDataUnavailableItem>();
     [Parameter] public EventCallback<PlanNode> OnSourceChanged { get; set; }
 
@@ -105,12 +106,13 @@
 
         if (Node.CanBuyFromMarket)
         {
+            var nqMarketCost = GetMarketPlanCost();
             options.Add(new AcquisitionOptionView(
                 AcquisitionSource.MarketBuyNq,
                 "Buy NQ",
-                Node.MarketPrice > 0 ? "Uses the current planner market price." : "No NQ price loaded.",
-                Node.MarketPrice > 0 ? $"{Node.MarketPrice * Node.Quantity:N0}g" : "-",
-                Node.MarketPrice > 0));
+                GetMarketPlanDetail("NQ"),
+                nqMarketCost ?? (Node.MarketPrice > 0 ? $"{Node.MarketPrice * Node.Quantity:N0}g" : "-"),
+                nqMarketCost != null || Node.MarketPrice > 0));
 
             if (Node.CanBeHq)
             {
@@ -144,6 +146,34 @@
         }
 
         return options;
+    }
+
+    private string GetMarketPlanDetail(string quality)
+    {
+        if (MarketPlan?.RecommendedWorld != null)
+        {
+            return $"{MarketPlan.RecommendedWorld.WorldName} can cover {MarketPlan.RecommendedWorld.TotalQuantityPurchased}/{MarketPlan.QuantityNeeded}.";
+        }
+
+        if (MarketPlan?.RecommendedSplit?.Any() == true)
+        {
+            return $"{MarketPlan.RecommendedSplit.Count} world split can cover market purchase.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(MarketPlan?.Error))
+        {
+            return MarketPlan.Error;
+        }
+
+        return Node?.MarketPrice > 0
+            ? $"Uses the current planner {quality} market price."
+            : "Run Market Analysis for actionable market evidence.";
+    }
+
+    private string? GetMarketPlanCost()
+    {
+        var cost = MarketPlan?.RecommendedWorld?.TotalCost ?? MarketPlan?.SplitTotalCost;
+        return cost.HasValue ? $"{cost.Value:N0}g" : null;
     }
 
     private string GetVendorDetail()

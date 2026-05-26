@@ -48,7 +48,7 @@
 
     private bool _isAnalyzing = false;
     private bool _isRefreshingPrices = false;
-    
+
     // Settings now stored in AppState for persistence across page navigations
 
     protected override void OnInitialized()
@@ -57,7 +57,7 @@
         AppState.OnPlanChanged += OnPlanChanged;
         AppState.OnShoppingListChanged += OnShoppingListChanged;
     }
-    
+
     protected override void OnAfterRender(bool firstRender)
     {
         // Clear the auto-expand item ID after the first render
@@ -90,36 +90,31 @@
     /// </summary>
     private List<MaterialAggregate> GetBuyItems()
     {
-        if (AppState.CurrentPlan == null)
-            return new List<MaterialAggregate>();
-        
-        return AppState.CurrentPlan.AggregatedMaterials
-            .Where(m => m.TotalQuantity > 0)
-            .ToList();
+        return AcquisitionPlanningService.GetMarketAnalysisCandidates(AppState.CurrentPlan);
     }
 
     private bool CanAnalyze()
     {
         return GetBuyItems().Any() && !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
     }
-    
+
     private bool CanRefreshPrices()
     {
         return AppState.CurrentPlan != null && !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
     }
-    
+
     private async Task RefreshPricesAsync()
     {
         if (AppState.CurrentPlan == null) return;
-        
+
         _isRefreshingPrices = true;
         AppState.SetStatus("Fetching latest market data...", busy: true);
-        
+
         try
         {
             // Step 1: Fetch vendor prices
             await RecipeCalculationService.FetchVendorPricesAsync(AppState.CurrentPlan);
-            
+
             // Step 2: Fetch market prices
             var itemIds = AppState.CurrentPlan.GetAllItemIds().ToList();
             if (itemIds.Any())
@@ -134,7 +129,7 @@
                     : new Dictionary<int, UniversalisResponse>();
                 var refreshResult = MarketPriceAvailability.FromResponses(AppState.CurrentPlan, marketItemIds, responses, nonMarketItemIds);
                 AppState.SetUnavailableMarketItems(refreshResult.UnavailableItems);
-                
+
                 // Update node prices
                 UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, responses);
 
@@ -147,7 +142,7 @@
 
                 Logger.LogInformation("[Market Refresh] Cached {Count} refreshed market entries", responses.Count);
             }
-            
+
             AppState.NotifyPlanChanged();
 
             // Force full recomputation so Procurement always reflects latest data.
@@ -195,7 +190,7 @@
             _isRefreshingPrices = false;
         }
     }
-    
+
     private void UpdateNodeMarketPrices(List<PlanNode> nodes, Dictionary<int, UniversalisResponse> responses)
     {
         foreach (var node in nodes)
@@ -203,7 +198,7 @@
             if (responses.TryGetValue(node.ItemId, out var response))
             {
                 node.MarketPrice = (decimal)response.AveragePrice;
-                
+
                 // Calculate HQ price if available
                 var hqListings = response.Listings.Where(l => l.IsHq).ToList();
                 if (hqListings.Any())
@@ -211,7 +206,7 @@
                     node.HqMarketPrice = (decimal)hqListings.Average(l => l.PricePerUnit);
                 }
             }
-            
+
             // Recursively update children
             if (node.Children?.Any() == true)
             {
@@ -258,7 +253,7 @@
     private async Task<bool> RunMarketAnalysisAsync(bool forceRefreshData, bool showCompletionSnackbar)
     {
         var materials = GetBuyItems();
-        
+
         var plan = AppState.CurrentPlan;
         if (plan == null || !materials.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
             return false;
@@ -271,7 +266,7 @@
         {
             var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
             var maxAge = forceRefreshData ? TimeSpan.Zero : (TimeSpan?)null;
-            
+
             // Step 1: Ensure cache is populated with market data
             int fetchedCount;
             if (AppState.SearchEntireRegion)
@@ -280,9 +275,6 @@
                 foreach (var dc in NorthAmericanDataCenters)
                 {
                     var dcRequests = materials.Select(m => (m.ItemId, dc)).ToList();
-                    dcRequests = dcRequests
-                        .Where(r => plan.FindNode(r.ItemId)?.CanBuyFromMarket != false)
-                        .ToList();
                     AppState.SetStatus($"Checking cache for {dcRequests.Count} items on {dc}...");
                     fetchedCount += await MarketCache.EnsurePopulatedAsync(dcRequests, maxAge: maxAge, progress: progress);
                 }
@@ -290,18 +282,15 @@
             else
             {
                 var cacheRequests = materials.Select(m => (m.ItemId, AppState.SelectedDataCenter)).ToList();
-                cacheRequests = cacheRequests
-                    .Where(r => plan.FindNode(r.ItemId)?.CanBuyFromMarket != false)
-                    .ToList();
                 AppState.SetStatus($"Checking cache for {cacheRequests.Count} items...");
                 fetchedCount = await MarketCache.EnsurePopulatedAsync(cacheRequests, maxAge: maxAge, progress: progress);
             }
 
             Logger.LogInformation("Market Analysis: {FetchedCount} items fetched from API", fetchedCount);
-            
+
             // Step 2: Calculate shopping plans from cached data
             List<DetailedShoppingPlan> plans;
-            
+
             if (AppState.SearchEntireRegion)
             {
                 // Multi-DC analysis doesn't support splits yet
@@ -318,7 +307,7 @@
                     EnableSplitWorld = AppState.EnableMultiWorldSplits,
                     MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null
                 };
-                
+
                 plans = await MarketShoppingService.CalculateShoppingPlansWithSplitsAsync(
                     materials,
                     AppState.SelectedDataCenter,
@@ -334,19 +323,19 @@
                     progress,
                     mode: AppState.RecommendationMode);
             }
-            
+
             // Apply hard-lock vendor overrides for vendor-buy items
             MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, plans);
-            
+
             AppState.ShoppingPlans = plans;
             AppState.NotifyShoppingListChanged();
-            
+
             // Save market analysis to the current plan for persistence
             if (AppState.CurrentPlanId != null)
             {
                 await IndexedDb.SaveMarketAnalysisAsync(AppState.CurrentPlanId, plans, AppState.RecommendationMode);
             }
-            
+
             var bestValue = AppState.ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
             // Ensure the status message is properly set to completion
             AppState.EndOperation($"Analysis complete! Best value: {bestValue:N0}g");
@@ -387,6 +376,6 @@
     private void GoToProcurement()
     {
         // Use relative path (no leading slash) so it resolves against base href correctly
-        NavigationManager.NavigateTo("procurement");
+        NavigationManager.NavigateTo("acquisition");
     }
 }
