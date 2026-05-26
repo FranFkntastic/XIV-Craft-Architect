@@ -354,6 +354,7 @@
             .Where(occurrence => occurrence.IsSuppressed)
             .Select(occurrence => occurrence.SuppressedBy)
             .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => name!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         var marketPlan = AppState.ShoppingPlans.FirstOrDefault(plan => plan.ItemId == node.ItemId);
