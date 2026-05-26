@@ -82,7 +82,7 @@
                                    checked="@_selectedNodeIds.Contains(row.Node.NodeId)"
                                    @onchange="args => ToggleNode(row.Node.NodeId, args)" />
                             <span class="pe-node-name" style="padding-left: @(row.Depth * 14)px">@row.Node.Name</span>
-                            <span>x@row.Node.Quantity</span>
+                            <span>x@(row.Node.Quantity)</span>
                             <span class="@(row.Node.MustBeHq ? "pe-hq" : "pe-muted-cell")">
                                 @(row.Node.MustBeHq ? "HQ" : "NQ")
                             </span>

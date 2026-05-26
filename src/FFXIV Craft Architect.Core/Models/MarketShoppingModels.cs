@@ -115,6 +115,8 @@ public static class TravelContextConstants
 public class DetailedShoppingPlan
 {
     public int ItemId { get; set; }
+    public string UniversalisUrl => UniversalisService.GetMarketUrl(ItemId);
+
     public string Name { get; set; } = string.Empty;
     public int IconId { get; set; }
     public int QuantityNeeded { get; set; }

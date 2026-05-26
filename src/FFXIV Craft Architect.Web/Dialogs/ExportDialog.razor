@@ -1,7 +1,9 @@
 @using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
 @inject RecipeCalculationService RecipeService
+@inject IArtisanService ArtisanService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
@@ -69,6 +71,13 @@
                 <MudText Typo="Typo.body2" Class="mb-4">
                     Export as Artisan crafting list JSON format.
                 </MudText>
+                <MudCheckBox T="bool"
+                             @bind-Value="_includeArtisanPrecrafts"
+                             Dense="true"
+                             Color="Color.Primary"
+                             Class="mb-4">
+                    <MudText Typo="Typo.body2">Include precrafts</MudText>
+                </MudCheckBox>
                 @if (_artisanJson != null)
                 {
                     <MudTextField Value="_artisanJson"
@@ -111,6 +120,7 @@
     private string? _nativeJson = null;
     private string? _teamcraftUrl = null;
     private string? _artisanJson = null;
+    private bool _includeArtisanPrecrafts;
     
     protected override void OnInitialized()
     {
@@ -200,7 +210,13 @@
             
             if (plan != null)
             {
-                _artisanJson = RecipeService.SerializePlan(plan);
+                var result = await ArtisanService.ExportToArtisanAsync(plan, _includeArtisanPrecrafts);
+                _artisanJson = result.Json;
+
+                if (!result.Success)
+                {
+                    Snackbar.Add(ArtisanService.CreateExportSummary(result), Severity.Warning);
+                }
             }
         }
         catch (Exception ex)

@@ -137,7 +137,7 @@ public class ExportCoordinator
     /// <summary>
     /// Export current plan to Artisan JSON format.
     /// </summary>
-    public async Task<ExportResult> ExportToArtisanAsync(CraftingPlan plan)
+    public async Task<ExportResult> ExportToArtisanAsync(CraftingPlan plan, bool includePrecrafts = false)
     {
         if (plan == null || plan.RootItems.Count == 0)
         {
@@ -146,7 +146,7 @@ public class ExportCoordinator
 
         try
         {
-            var result = await _artisanService.ExportToArtisanAsync(plan);
+            var result = await _artisanService.ExportToArtisanAsync(plan, includePrecrafts);
 
             if (!result.Success)
             {

@@ -27,9 +27,13 @@ public interface IArtisanService
     /// Returns JSON that can be pasted into Artisan's "Import List From Clipboard" feature.
     /// </summary>
     /// <param name="plan">Crafting plan to export</param>
+    /// <param name="includePrecrafts">Whether to include crafted child nodes in the Artisan list</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Export result with JSON and metadata</returns>
-    Task<ArtisanExportResult> ExportToArtisanAsync(CraftingPlan plan, CancellationToken ct = default);
+    Task<ArtisanExportResult> ExportToArtisanAsync(
+        CraftingPlan plan,
+        bool includePrecrafts = false,
+        CancellationToken ct = default);
     
     /// <summary>
     /// Create a summary text of the export result for display to the user.

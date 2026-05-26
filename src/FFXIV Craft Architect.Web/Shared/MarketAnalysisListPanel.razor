@@ -51,7 +51,14 @@
                                     CellClass="ma-item-column">
                         <CellTemplate>
                             <span class="ma-item-cell">
-                                <span class="ma-item-name">@context.Item.Name</span>
+                                <a class="ma-item-name"
+                                   href="@context.Item.UniversalisUrl"
+                                   target="_blank"
+                                   rel="noopener noreferrer"
+                                   title="Open @context.Item.Name on Universalis"
+                                   @onclick:stopPropagation>
+                                    @context.Item.Name
+                                </a>
                                 <span class="ma-item-kind">@GetSourceLabel(context.Item)</span>
                             </span>
                         </CellTemplate>
@@ -119,7 +126,13 @@
             {
                 <div class="ma-detail-header">
                     <div>
-                        <MudText Typo="Typo.subtitle1" Class="ma-detail-title">@_selectedPlan.Name</MudText>
+                        <a class="ma-detail-title"
+                           href="@_selectedPlan.UniversalisUrl"
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           title="Open @_selectedPlan.Name on Universalis">
+                            @_selectedPlan.Name
+                        </a>
                         <MudText Typo="Typo.caption" Class="ma-detail-subtitle">
                             @FormatQuantity(_selectedPlan.QuantityNeeded) needed
                         </MudText>

@@ -84,6 +84,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-decoration: none;
+}
+
+.ma-item-name:hover,
+.ma-detail-title:hover {
+    color: #90caf9;
+    text-decoration: underline;
 }
 
 .ma-item-kind {
@@ -244,6 +251,12 @@
 .ma-detail-title {
     color: #f4f4f4;
     font-weight: 700;
+    text-decoration: none;
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .ma-detail-subtitle {

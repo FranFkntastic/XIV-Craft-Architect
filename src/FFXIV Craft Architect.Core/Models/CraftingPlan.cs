@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.Core.Models;
 
@@ -310,6 +311,9 @@ public class PlanNode
     /// Item ID from Garland/FFXIV
     /// </summary>
     public int ItemId { get; set; }
+
+    [JsonIgnore]
+    public string UniversalisUrl => UniversalisService.GetMarketUrl(ItemId);
     
     /// <summary>
     /// Item name
@@ -681,6 +685,9 @@ public class PlanNode
 public class MaterialAggregate
 {
     public int ItemId { get; set; }
+    [JsonIgnore]
+    public string UniversalisUrl => UniversalisService.GetMarketUrl(ItemId);
+
     public string Name { get; set; } = string.Empty;
     public int IconId { get; set; }
     public int TotalQuantity { get; set; }
