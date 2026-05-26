@@ -1,5 +1,6 @@
 @using FFXIV_Craft_Architect.Core.Helpers
 @using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Web.Services
 
 <div class="rp-column">
@@ -69,6 +70,7 @@
     [Parameter] public PlanNode? Node { get; set; }
     [Parameter] public CraftingPlan? CurrentPlan { get; set; }
     [Parameter] public DetailedShoppingPlan? MarketPlan { get; set; }
+    [Parameter] public IReadOnlyList<DetailedShoppingPlan> MarketPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
     [Parameter] public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<MarketDataUnavailableItem>();
     [Parameter] public EventCallback<PlanNode> OnSourceChanged { get; set; }
 
@@ -99,8 +101,10 @@
             options.Add(new AcquisitionOptionView(
                 AcquisitionSource.Craft,
                 "Craft",
-                "Uses the recipe tree below this item.",
-                $"{CalculateCraftCost(Node):N0}g",
+                MarketPlans.Any()
+                    ? "Uses the recipe tree with market evidence for child purchases."
+                    : "Uses the recipe tree below this item.",
+                $"{AcquisitionPlanningService.CalculateCraftCost(Node, MarketPlans):N0}g",
                 true));
         }
 
@@ -189,35 +193,6 @@
             .First();
 
         return $"{vendor.Name} - {vendor.Location}";
-    }
-
-    private static decimal CalculateCraftCost(PlanNode node)
-    {
-        if (!node.Children.Any())
-        {
-            return node.Source switch
-            {
-                AcquisitionSource.MarketBuyNq => node.MarketPrice * node.Quantity,
-                AcquisitionSource.MarketBuyHq => node.HqMarketPrice * node.Quantity,
-                AcquisitionSource.VendorBuy => node.VendorPrice * node.Quantity,
-                _ => 0
-            };
-        }
-
-        decimal cost = 0;
-        foreach (var child in node.Children)
-        {
-            cost += child.Source switch
-            {
-                AcquisitionSource.Craft => CalculateCraftCost(child),
-                AcquisitionSource.MarketBuyNq => child.MarketPrice * child.Quantity,
-                AcquisitionSource.MarketBuyHq => child.HqMarketPrice * child.Quantity,
-                AcquisitionSource.VendorBuy => child.VendorPrice * child.Quantity,
-                _ => 0
-            };
-        }
-
-        return node.Yield > 1 ? cost / node.Yield : cost;
     }
 
     private record AcquisitionOptionView(

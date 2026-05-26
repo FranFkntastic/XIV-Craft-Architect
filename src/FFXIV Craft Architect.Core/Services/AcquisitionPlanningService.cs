@@ -79,6 +79,17 @@ public static class AcquisitionPlanningService
             suppressedCandidateCount);
     }
 
+    public static decimal CalculateCraftCost(
+        PlanNode node,
+        IEnumerable<DetailedShoppingPlan> shoppingPlans)
+    {
+        var planByItemId = shoppingPlans
+            .GroupBy(shoppingPlan => shoppingPlan.ItemId)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        return CalculateCraftCost(node, planByItemId);
+    }
+
     private static void CollectMarketCandidate(PlanNode node, Dictionary<int, MaterialAggregate> aggregates)
     {
         if (node.Quantity > 0 && node.CanBuyFromMarket)
@@ -124,6 +135,64 @@ public static class AcquisitionPlanningService
             (shoppingPlan.RecommendedWorld != null ||
              shoppingPlan.RecommendedSplit?.Any() == true ||
              shoppingPlan.Vendors.Any());
+    }
+
+    private static decimal CalculateCraftCost(
+        PlanNode node,
+        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
+    {
+        if (!node.Children.Any())
+        {
+            return GetDirectAcquisitionCost(node, planByItemId);
+        }
+
+        decimal cost = 0;
+        foreach (var child in node.Children)
+        {
+            cost += child.Source == AcquisitionSource.Craft
+                ? CalculateCraftCost(child, planByItemId)
+                : GetDirectAcquisitionCost(child, planByItemId);
+        }
+
+        return node.Yield > 1 ? cost / node.Yield : cost;
+    }
+
+    private static decimal GetDirectAcquisitionCost(
+        PlanNode node,
+        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
+    {
+        if (node.Source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq &&
+            planByItemId.TryGetValue(node.ItemId, out var shoppingPlan) &&
+            TryGetEvidenceCost(shoppingPlan, node.Quantity, out var evidenceCost))
+        {
+            return evidenceCost;
+        }
+
+        return node.Source switch
+        {
+            AcquisitionSource.MarketBuyNq => node.MarketPrice * node.Quantity,
+            AcquisitionSource.MarketBuyHq => node.HqMarketPrice * node.Quantity,
+            AcquisitionSource.VendorBuy => node.VendorPrice * node.Quantity,
+            _ => 0
+        };
+    }
+
+    private static bool TryGetEvidenceCost(
+        DetailedShoppingPlan shoppingPlan,
+        int quantity,
+        out decimal cost)
+    {
+        var totalCost = shoppingPlan.RecommendedWorld?.TotalCost ?? shoppingPlan.SplitTotalCost;
+        if (totalCost == null || shoppingPlan.QuantityNeeded <= 0)
+        {
+            cost = 0;
+            return false;
+        }
+
+        cost = quantity == shoppingPlan.QuantityNeeded
+            ? totalCost.Value
+            : totalCost.Value * quantity / shoppingPlan.QuantityNeeded;
+        return true;
     }
 }
 

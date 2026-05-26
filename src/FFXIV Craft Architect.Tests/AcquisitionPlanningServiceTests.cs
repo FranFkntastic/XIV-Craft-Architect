@@ -109,6 +109,103 @@ public class AcquisitionPlanningServiceTests
         Assert.False(summary.HasCompleteActiveEvidence);
     }
 
+    [Fact]
+    public void CalculateCraftCost_UsesMarketEvidenceForBoughtChildren()
+    {
+        var ingot = new PlanNode
+        {
+            ItemId = 1,
+            Name = "Silver Ingot",
+            Quantity = 120,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Yield = 1
+        };
+        var ore = new PlanNode
+        {
+            ItemId = 2,
+            Name = "Silver Ore",
+            Quantity = 360,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 324,
+            Parent = ingot
+        };
+        var shard = new PlanNode
+        {
+            ItemId = 3,
+            Name = "Ice Shard",
+            Quantity = 240,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 45,
+            Parent = ingot
+        };
+        ingot.Children.Add(ore);
+        ingot.Children.Add(shard);
+
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 2,
+                Name = "Silver Ore",
+                QuantityNeeded = 360,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Rafflesia",
+                    TotalCost = 45_734,
+                    TotalQuantityPurchased = 370
+                }
+            },
+            new()
+            {
+                ItemId = 3,
+                Name = "Ice Shard",
+                QuantityNeeded = 240,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Rafflesia",
+                    TotalCost = 10_800,
+                    TotalQuantityPurchased = 240
+                }
+            }
+        };
+
+        var cost = AcquisitionPlanningService.CalculateCraftCost(ingot, marketPlans);
+
+        Assert.Equal(56_534, cost);
+    }
+
+    [Fact]
+    public void CalculateCraftCost_DividesByRecipeYield()
+    {
+        var cloth = new PlanNode
+        {
+            ItemId = 10,
+            Name = "Linen Cloth",
+            Quantity = 2,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Yield = 2
+        };
+        var flax = new PlanNode
+        {
+            ItemId = 11,
+            Name = "Moko Grass",
+            Quantity = 4,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 100,
+            Parent = cloth
+        };
+        cloth.Children.Add(flax);
+
+        var cost = AcquisitionPlanningService.CalculateCraftCost(cloth, Array.Empty<DetailedShoppingPlan>());
+
+        Assert.Equal(200, cost);
+    }
+
     private static CraftingPlan CreatePlanWithBoughtIntermediate()
     {
         var root = new PlanNode
