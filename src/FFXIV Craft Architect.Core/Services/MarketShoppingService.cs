@@ -879,7 +879,7 @@ public class MarketShoppingService
                     continue;
                 }
 
-                cost += fromThis * listing.PricePerUnit;
+                cost += listing.Quantity * listing.PricePerUnit;
                 remainingFromWorld -= fromThis;
 
                 selectedListings.Add(new ShoppingListingEntry

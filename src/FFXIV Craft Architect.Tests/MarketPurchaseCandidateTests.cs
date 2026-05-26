@@ -43,7 +43,7 @@ public class MarketPurchaseCandidateTests
         var candidate = Assert.Single(candidates);
         Assert.True(candidate.IsFullyFulfilled);
         Assert.Equal(5, candidate.QuantityFulfilled);
-        Assert.Equal(700, candidate.GilCost);
+        Assert.Equal(1100, candidate.GilCost);
         Assert.Null(candidate.SingleWorld);
 
         Assert.NotNull(candidate.Split);
@@ -63,7 +63,7 @@ public class MarketPurchaseCandidateTests
                 Assert.Equal("Primal", leviathan.DataCenter);
                 Assert.Equal("Leviathan", leviathan.WorldName);
                 Assert.Equal(2, leviathan.QuantityToBuy);
-                Assert.Equal(400, leviathan.TotalCost);
+                Assert.Equal(800, leviathan.TotalCost);
                 Assert.Equal(TravelContextConstants.Supplemental, leviathan.TravelContext);
                 var listing = Assert.Single(leviathan.Listings);
                 Assert.Equal(2, listing.NeededFromStack);
@@ -73,6 +73,39 @@ public class MarketPurchaseCandidateTests
         Assert.Equal(
             [new MarketWorldKey("Aether", "Siren"), new MarketWorldKey("Primal", "Leviathan")],
             candidate.Worlds);
+    }
+
+    [Fact]
+    public void CalculateSplitPurchase_PricesSelectedStacksByFullListingCost()
+    {
+        var aetherWorld = World("Aether", "Siren", 300, 100, Listing(3, 100, "Siren Retainer"));
+        var primalWorld = World("Primal", "Leviathan", 800, 200, Listing(4, 200, "Leviathan Retainer"));
+        var plan = Plan(quantityNeeded: 5, aetherWorld, primalWorld);
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        service.CalculateSplitPurchase(plan, new MarketAnalysisConfig());
+
+        Assert.NotNull(plan.RecommendedSplit);
+        Assert.Collection(
+            plan.RecommendedSplit!,
+            siren =>
+            {
+                Assert.Equal("Siren", siren.WorldName);
+                Assert.Equal(3, siren.QuantityToBuy);
+                Assert.Equal(300, siren.TotalCost);
+            },
+            leviathan =>
+            {
+                Assert.Equal("Leviathan", leviathan.WorldName);
+                Assert.Equal(2, leviathan.QuantityToBuy);
+                Assert.Equal(800, leviathan.TotalCost);
+                var listing = Assert.Single(leviathan.Listings);
+                Assert.Equal(4, listing.Quantity);
+                Assert.Equal(2, listing.NeededFromStack);
+                Assert.Equal(2, listing.ExcessQuantity);
+                Assert.Equal(800, listing.Quantity * listing.PricePerUnit);
+            });
+        Assert.Equal(1100, plan.SplitTotalCost);
     }
 
     [Fact]

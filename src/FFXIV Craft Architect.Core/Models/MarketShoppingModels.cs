@@ -501,7 +501,7 @@ public class SplitWorldPurchase
     public decimal PricePerUnit { get; set; }
     
     /// <summary>
-    /// Total cost for this portion (QuantityToBuy * PricePerUnit).
+    /// Total cost for the selected listing stacks in this portion.
     /// </summary>
     public long TotalCost { get; set; }
     
