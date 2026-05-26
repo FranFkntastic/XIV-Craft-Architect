@@ -100,7 +100,19 @@ public static class TravelContextConstants
     public const string Supplemental = "Supplemental";
 }
 
-public readonly record struct MarketWorldKey(string DataCenter, string WorldName);
+public readonly record struct MarketWorldKey
+{
+    public MarketWorldKey(string dataCenter, string worldName)
+    {
+        DataCenter = NormalizeKeyPart(dataCenter);
+        WorldName = NormalizeKeyPart(worldName);
+    }
+
+    public string DataCenter { get; init; }
+    public string WorldName { get; init; }
+
+    private static string NormalizeKeyPart(string value) => (value ?? string.Empty).Trim().ToUpperInvariant();
+}
 
 /// <summary>
 /// A candidate purchase route for one market choice.
@@ -150,8 +162,24 @@ public sealed record RoutePenaltyBreakdown(
     int AddedWorldCount,
     int AddedDataCenterCount,
     long RoutePenalty,
-    long EffectiveScore,
-    int TravelTolerance);
+    long CostPlusRoutePenaltyScore,
+    int TravelTolerance)
+{
+    /// <summary>
+    /// Returns the numeric score only when numeric ordering is valid.
+    /// TravelTolerance 0 uses lexicographic route ordering; use MarketRouteScoring.CompareCandidates instead.
+    /// </summary>
+    public long GetSortableNumericScore()
+    {
+        if (TravelTolerance == 0)
+        {
+            throw new InvalidOperationException(
+                "TravelTolerance 0 uses route-first ordering. Use MarketRouteScoring.CompareCandidates or CompareScores.");
+        }
+
+        return CostPlusRoutePenaltyScore;
+    }
+}
 
 public static class MarketRouteScoring
 {
@@ -197,7 +225,14 @@ public static class MarketRouteScoring
 
     public static int CompareScores(RoutePenaltyBreakdown left, RoutePenaltyBreakdown right)
     {
-        if (left.TravelTolerance == 0 || right.TravelTolerance == 0)
+        if (left.TravelTolerance != right.TravelTolerance)
+        {
+            throw new ArgumentException(
+                "Route score comparisons require matching TravelTolerance values.",
+                nameof(right));
+        }
+
+        if (left.TravelTolerance == 0)
         {
             var dataCenterComparison = left.AddedDataCenterCount.CompareTo(right.AddedDataCenterCount);
             if (dataCenterComparison != 0)
@@ -214,7 +249,7 @@ public static class MarketRouteScoring
             return left.GilCost.CompareTo(right.GilCost);
         }
 
-        var scoreComparison = left.EffectiveScore.CompareTo(right.EffectiveScore);
+        var scoreComparison = left.CostPlusRoutePenaltyScore.CompareTo(right.CostPlusRoutePenaltyScore);
         if (scoreComparison != 0)
         {
             return scoreComparison;

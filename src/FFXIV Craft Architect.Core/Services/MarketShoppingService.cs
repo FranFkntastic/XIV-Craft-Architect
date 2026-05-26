@@ -129,12 +129,13 @@ public class MarketShoppingService
                     continue;
                 }
                 
-                var marketData = ConvertFromCachedData(cached);
+                var marketData = ConvertFromCachedData(cached, dataCenter);
                 var plan = CalculateItemShoppingPlan(
                     item.Name,
                     item.ItemId,
                     item.TotalQuantity,
                     marketData,
+                    dataCenter,
                     mode,
                     config,
                     blacklistedWorlds);
@@ -216,9 +217,12 @@ public class MarketShoppingService
         return plans;
     }
 
-    private UniversalisResponse ConvertFromCachedData(CachedMarketData cached)
+    private UniversalisResponse ConvertFromCachedData(CachedMarketData cached, string dataCenter)
     {
         var listings = new List<MarketListing>();
+        var listingDataCenter = !string.IsNullOrWhiteSpace(cached.DataCenter)
+            ? cached.DataCenter
+            : dataCenter;
         
         foreach (var world in cached.Worlds)
         {
@@ -227,6 +231,7 @@ public class MarketShoppingService
                 listings.Add(new MarketListing
                 {
                     WorldName = world.WorldName,
+                    DataCenterName = listingDataCenter,
                     Quantity = listing.Quantity,
                     PricePerUnit = listing.PricePerUnit,
                     RetainerName = listing.RetainerName,
@@ -238,6 +243,7 @@ public class MarketShoppingService
         return new UniversalisResponse
         {
             ItemId = cached.ItemId,
+            DataCenterName = listingDataCenter,
             Listings = listings,
             AveragePrice = (double)cached.DCAveragePrice
         };
@@ -248,6 +254,7 @@ public class MarketShoppingService
         int itemId,
         int quantityNeeded,
         UniversalisResponse marketData,
+        string? dataCenter = null,
         RecommendationMode mode = RecommendationMode.MinimizeTotalCost,
         MarketAnalysisConfig? config = null,
         HashSet<string>? blacklistedWorlds = null)
@@ -283,7 +290,11 @@ public class MarketShoppingService
         // Calculate per-world summaries
         foreach (var (worldName, listings) in listingsByWorld)
         {
-            var worldSummary = CalculateWorldSummary(worldName, listings, quantityNeeded, plan.DCAveragePrice, homeWorld, config);
+            var worldDataCenter = listings.FirstOrDefault()?.DataCenterName
+                ?? marketData.DataCenterName
+                ?? dataCenter
+                ?? string.Empty;
+            var worldSummary = CalculateWorldSummary(worldName, worldDataCenter, listings, quantityNeeded, plan.DCAveragePrice, homeWorld, config);
             if (worldSummary != null)
             {
                 // Skip congested worlds (except home world) if setting is enabled
@@ -400,6 +411,7 @@ public class MarketShoppingService
 
     private WorldShoppingSummary? CalculateWorldSummary(
         string worldName,
+        string dataCenter,
         List<MarketListing> listings,
         int quantityNeeded,
         decimal dcAveragePrice,
@@ -414,6 +426,7 @@ public class MarketShoppingService
         
         var summary = new WorldShoppingSummary
         {
+            DataCenter = dataCenter,
             WorldName = worldName,
             Listings = new List<ShoppingListingEntry>(),
             ExcludedListings = new List<ShoppingListingEntry>(),
@@ -588,6 +601,7 @@ public class MarketShoppingService
                                 allListings.Add(new MarketListing
                                 {
                                     WorldName = $"{world.WorldName} ({dc})",
+                                    DataCenterName = dc,
                                     Quantity = listing.Quantity,
                                     PricePerUnit = listing.PricePerUnit,
                                     RetainerName = listing.RetainerName,
@@ -634,6 +648,7 @@ public class MarketShoppingService
                     item.ItemId,
                     item.TotalQuantity,
                     combinedData,
+                    null,
                     mode,
                     config);
                 
@@ -825,6 +840,7 @@ public class MarketShoppingService
             
             split.Add(new SplitWorldPurchase
             {
+                DataCenter = world.DataCenter,
                 WorldName = world.WorldName,
                 QuantityToBuy = toAllocate,
                 PricePerUnit = toAllocate > 0 ? cost / (decimal)toAllocate : world.AveragePricePerUnit,

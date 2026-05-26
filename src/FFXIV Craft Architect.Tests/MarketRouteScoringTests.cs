@@ -28,6 +28,24 @@ public class MarketRouteScoringTests
     }
 
     [Fact]
+    public void CompareCandidates_TravelToleranceZero_PrefersFewerRouteStopsEvenWhenExtraStopIsMassivelyCheaper()
+    {
+        var config = new MarketAnalysisConfig { TravelTolerance = 0 };
+        var currentRoute = new MarketRouteState(
+        [
+            new MarketWorldKey("Aether", "Siren")
+        ]);
+        var currentWorldExpensive = new MarketPurchaseCandidate(
+            10_000_000,
+            [new MarketWorldKey("Aether", "Siren")]);
+        var extraWorldCheap = new MarketPurchaseCandidate(
+            1,
+            [new MarketWorldKey("Aether", "Gilgamesh")]);
+
+        Assert.True(MarketRouteScoring.CompareCandidates(currentWorldExpensive, extraWorldCheap, currentRoute, config) < 0);
+    }
+
+    [Fact]
     public void ScoreCandidate_TravelToleranceEleven_UsesRawGilCostWithoutRoutePenalty()
     {
         var config = new MarketAnalysisConfig { TravelTolerance = 11 };
@@ -45,8 +63,50 @@ public class MarketRouteScoringTests
         var cheapScore = MarketRouteScoring.ScoreCandidate(cheapNewDataCenter, currentRoute, config);
 
         Assert.Equal(0, cheapScore.RoutePenalty);
-        Assert.Equal(1, cheapScore.EffectiveScore);
+        Assert.Equal(1, cheapScore.GetSortableNumericScore());
         Assert.True(MarketRouteScoring.CompareCandidates(cheapNewDataCenter, expensiveCurrentWorld, currentRoute, config) < 0);
+    }
+
+    [Fact]
+    public void ScoreCandidate_TravelToleranceZero_DoesNotExposeNumericScoreAsSortable()
+    {
+        var config = new MarketAnalysisConfig { TravelTolerance = 0 };
+        var currentRoute = new MarketRouteState();
+        var candidate = new MarketPurchaseCandidate(
+            100,
+            [new MarketWorldKey("Aether", "Siren")]);
+
+        var score = MarketRouteScoring.ScoreCandidate(candidate, currentRoute, config);
+
+        Assert.Throws<InvalidOperationException>(() => score.GetSortableNumericScore());
+    }
+
+    [Fact]
+    public void ScoreCandidate_CasingDifferences_DoNotCountAsNewWorldOrDataCenter()
+    {
+        var config = new MarketAnalysisConfig { TravelTolerance = 5 };
+        var currentRoute = new MarketRouteState(
+        [
+            new MarketWorldKey("Aether", "Siren")
+        ]);
+        var candidate = new MarketPurchaseCandidate(
+            100,
+            [new MarketWorldKey("aether", "siren")]);
+
+        var score = MarketRouteScoring.ScoreCandidate(candidate, currentRoute, config);
+
+        Assert.Equal(0, score.AddedDataCenterCount);
+        Assert.Equal(0, score.AddedWorldCount);
+        Assert.Equal(0, score.RoutePenalty);
+    }
+
+    [Fact]
+    public void CompareScores_MismatchedTravelTolerance_ThrowsArgumentException()
+    {
+        var left = new RoutePenaltyBreakdown(100, 0, 0, 0, 100, 0);
+        var right = new RoutePenaltyBreakdown(100, 0, 0, 0, 100, 11);
+
+        Assert.Throws<ArgumentException>(() => MarketRouteScoring.CompareScores(left, right));
     }
 
     [Theory]
