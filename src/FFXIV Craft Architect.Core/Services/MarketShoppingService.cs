@@ -282,19 +282,22 @@ public class MarketShoppingService
         // Check if we should exclude congested worlds
         var excludeCongested = _settingsService?.Get<bool>("market.exclude_congested_worlds", true) ?? true;
         
-        // Group listings by world
+        // Group listings by structured world identity. World names can collide across data centers.
         var listingsByWorld = marketData.Listings
-            .GroupBy(l => l.WorldName)
+            .GroupBy(l => new
+            {
+                l.WorldName,
+                DataCenterName = !string.IsNullOrWhiteSpace(l.DataCenterName)
+                    ? l.DataCenterName
+                    : marketData.DataCenterName ?? dataCenter ?? string.Empty
+            })
             .ToDictionary(g => g.Key, g => g.OrderBy(l => l.PricePerUnit).ToList());
 
         // Calculate per-world summaries
-        foreach (var (worldName, listings) in listingsByWorld)
+        foreach (var (worldKey, listings) in listingsByWorld)
         {
-            var worldDataCenter = listings.FirstOrDefault()?.DataCenterName
-                ?? marketData.DataCenterName
-                ?? dataCenter
-                ?? string.Empty;
-            var worldSummary = CalculateWorldSummary(worldName, worldDataCenter, listings, quantityNeeded, plan.DCAveragePrice, homeWorld, config);
+            var worldName = worldKey.WorldName;
+            var worldSummary = CalculateWorldSummary(worldName, worldKey.DataCenterName, listings, quantityNeeded, plan.DCAveragePrice, homeWorld, config);
             if (worldSummary != null)
             {
                 // Skip congested worlds (except home world) if setting is enabled
@@ -593,6 +596,10 @@ public class MarketShoppingService
                             continue;
                         }
                         
+                        var listingDataCenter = !string.IsNullOrWhiteSpace(cached.DataCenter)
+                            ? cached.DataCenter
+                            : dc;
+
                         // Convert cached data to listings
                         foreach (var world in cached.Worlds)
                         {
@@ -600,8 +607,8 @@ public class MarketShoppingService
                             {
                                 allListings.Add(new MarketListing
                                 {
-                                    WorldName = $"{world.WorldName} ({dc})",
-                                    DataCenterName = dc,
+                                    WorldName = world.WorldName,
+                                    DataCenterName = listingDataCenter,
                                     Quantity = listing.Quantity,
                                     PricePerUnit = listing.PricePerUnit,
                                     RetainerName = listing.RetainerName,

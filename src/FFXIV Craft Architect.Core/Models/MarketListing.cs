@@ -17,6 +17,7 @@ public class MarketListing
     [JsonPropertyName("worldName")]
     public string WorldName { get; set; } = string.Empty;
 
+    [JsonPropertyName("dataCenterName")]
     public string? DataCenterName { get; set; }
     
     [JsonPropertyName("retainerName")]
