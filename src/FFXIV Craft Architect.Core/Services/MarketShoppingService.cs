@@ -773,9 +773,7 @@ public class MarketShoppingService
     // Multi-World Split Purchase Calculation
     // ========================================================================
 
-    private List<MarketPurchaseCandidate> GeneratePurchaseCandidates(
-        DetailedShoppingPlan plan,
-        MarketAnalysisConfig config)
+    private List<MarketPurchaseCandidate> GeneratePurchaseCandidates(DetailedShoppingPlan plan)
     {
         var candidates = new List<MarketPurchaseCandidate>();
         if (plan.QuantityNeeded <= 0 || plan.WorldOptions.Count == 0)
@@ -823,7 +821,7 @@ public class MarketShoppingService
         var quantityFulfilled = split.Sum(s => s.QuantityToBuy);
         var isFullyFulfilled = quantityFulfilled >= plan.QuantityNeeded;
 
-        if (split.Count > 1 || (split.Count > 0 && !isFullyFulfilled))
+        if (split.Count > 1 && isFullyFulfilled)
         {
             candidates.Add(new MarketPurchaseCandidate(
                 split.Sum(s => s.TotalCost),
@@ -930,6 +928,8 @@ public class MarketShoppingService
         DetailedShoppingPlan plan,
         MarketAnalysisConfig config)
     {
+        plan.RecommendedSplit = null;
+
         // Calculate ValueScores in split mode
         foreach (var world in plan.WorldOptions)
         {
@@ -947,6 +947,11 @@ public class MarketShoppingService
         var split = BuildSplitPurchase(plan.QuantityNeeded, viableWorlds);
 
         if (split.Count == 0) return;
+
+        if (split.Sum(s => s.QuantityToBuy) < plan.QuantityNeeded)
+        {
+            return;
+        }
         
         var splitCost = split.Sum(s => s.TotalCost);
         var singleWorldCost = plan.RecommendedWorld?.TotalCost ?? long.MaxValue;

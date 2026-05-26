@@ -140,7 +140,7 @@ public class MarketPurchaseCandidateTests
     }
 
     [Fact]
-    public void GeneratePurchaseCandidates_InsufficientTotalStock_ReturnsIncompleteCandidateWithoutPretendingFulfillment()
+    public void GeneratePurchaseCandidates_InsufficientTotalStock_ReturnsNoCandidate()
     {
         var siren = World("Aether", "Siren", 300, 100, Listing(3, 100, "Siren Retainer"));
         var balmung = World("Crystal", "Balmung", 300, 150, Listing(2, 150, "Balmung Retainer"));
@@ -148,18 +148,23 @@ public class MarketPurchaseCandidateTests
 
         var candidates = GenerateCandidates(plan);
 
-        var candidate = Assert.Single(candidates);
-        Assert.False(candidate.IsFullyFulfilled);
-        Assert.True(candidate.HasInsufficientStock);
-        Assert.Equal(5, candidate.QuantityFulfilled);
-        Assert.Equal(600, candidate.GilCost);
-        Assert.Null(candidate.SingleWorld);
-        Assert.Equal(5, candidate.Split!.Sum(split => split.QuantityToBuy));
+        Assert.Empty(candidates);
     }
 
-    private static List<MarketPurchaseCandidate> GenerateCandidates(
-        DetailedShoppingPlan plan,
-        MarketAnalysisConfig? config = null)
+    [Fact]
+    public void CalculateSplitPurchase_InsufficientTotalStock_DoesNotPublishRecommendedSplit()
+    {
+        var siren = World("Aether", "Siren", 300, 100, Listing(3, 100, "Siren Retainer"));
+        var balmung = World("Crystal", "Balmung", 300, 150, Listing(2, 150, "Balmung Retainer"));
+        var plan = Plan(quantityNeeded: 10, siren, balmung);
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        service.CalculateSplitPurchase(plan, new MarketAnalysisConfig());
+
+        Assert.Null(plan.RecommendedSplit);
+    }
+
+    private static List<MarketPurchaseCandidate> GenerateCandidates(DetailedShoppingPlan plan)
     {
         var cache = new Mock<IMarketCacheService>();
         var service = new MarketShoppingService(cache.Object);
@@ -169,7 +174,7 @@ public class MarketPurchaseCandidateTests
 
         Assert.NotNull(method);
 
-        var result = method!.Invoke(service, [plan, config ?? new MarketAnalysisConfig()]);
+        var result = method!.Invoke(service, [plan]);
         return Assert.IsType<List<MarketPurchaseCandidate>>(result);
     }
 
