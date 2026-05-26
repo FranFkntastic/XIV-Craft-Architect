@@ -101,6 +101,30 @@ public class MarketRouteScoringTests
     }
 
     [Fact]
+    public void ScoreCandidate_ObjectInitializerAndWithKeys_DoNotCountCasingDifferencesAsNewRouteStops()
+    {
+        var config = new MarketAnalysisConfig { TravelTolerance = 5 };
+        var initializedKey = new MarketWorldKey
+        {
+            DataCenter = "Aether",
+            WorldName = "Siren"
+        };
+        var currentRoute = new MarketRouteState([initializedKey]);
+        var candidateKey = initializedKey with
+        {
+            DataCenter = "aether",
+            WorldName = "siren"
+        };
+        var candidate = new MarketPurchaseCandidate(100, [candidateKey]);
+
+        var score = MarketRouteScoring.ScoreCandidate(candidate, currentRoute, config);
+
+        Assert.Equal(0, score.AddedDataCenterCount);
+        Assert.Equal(0, score.AddedWorldCount);
+        Assert.Equal(0, score.RoutePenalty);
+    }
+
+    [Fact]
     public void CompareScores_MismatchedTravelTolerance_ThrowsArgumentException()
     {
         var left = new RoutePenaltyBreakdown(100, 0, 0, 0, 100, 0);

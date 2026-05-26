@@ -111,6 +111,19 @@ public readonly record struct MarketWorldKey
     public string DataCenter { get; init; }
     public string WorldName { get; init; }
 
+    public bool Equals(MarketWorldKey other)
+    {
+        return string.Equals(DataCenter, other.DataCenter, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(WorldName, other.WorldName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(
+            StringComparer.OrdinalIgnoreCase.GetHashCode(DataCenter ?? string.Empty),
+            StringComparer.OrdinalIgnoreCase.GetHashCode(WorldName ?? string.Empty));
+    }
+
     private static string NormalizeKeyPart(string value) => (value ?? string.Empty).Trim().ToUpperInvariant();
 }
 
