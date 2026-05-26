@@ -140,6 +140,16 @@ public class MarketPurchaseCandidate
 
     public long GilCost { get; }
     public IReadOnlyList<MarketWorldKey> Worlds { get; }
+    public int ItemId { get; init; }
+    public string ItemName { get; init; } = string.Empty;
+    public int QuantityNeeded { get; init; }
+    public int QuantityFulfilled { get; init; }
+    public WorldShoppingSummary? SingleWorld { get; init; }
+    public List<SplitWorldPurchase>? Split { get; init; }
+    public bool IsSingleWorldPurchase => SingleWorld != null;
+    public bool IsSplitPurchase => Split?.Count > 0;
+    public bool IsFullyFulfilled => QuantityNeeded <= 0 || QuantityFulfilled >= QuantityNeeded;
+    public bool HasInsufficientStock => QuantityNeeded > 0 && QuantityFulfilled < QuantityNeeded;
 }
 
 /// <summary>

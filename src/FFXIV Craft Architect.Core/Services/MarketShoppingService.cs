@@ -773,40 +773,95 @@ public class MarketShoppingService
     // Multi-World Split Purchase Calculation
     // ========================================================================
 
-    /// <summary>
-    /// Calculates a multi-world split purchase plan for items that can't be fulfilled on a single world.
-    /// Uses ValueScore as the single metric for world selection.
-    /// </summary>
-    public void CalculateSplitPurchase(
-        DetailedShoppingPlan plan, 
+    private List<MarketPurchaseCandidate> GeneratePurchaseCandidates(
+        DetailedShoppingPlan plan,
         MarketAnalysisConfig config)
     {
-        // Calculate ValueScores in split mode
-        foreach (var world in plan.WorldOptions)
+        var candidates = new List<MarketPurchaseCandidate>();
+        if (plan.QuantityNeeded <= 0 || plan.WorldOptions.Count == 0)
         {
-            world.ValueScore = CalculateValueScore(world, plan.QuantityNeeded, splitEnabled: true);
+            return candidates;
         }
-        
-        // Get viable worlds sorted by ValueScore
-        var viableWorlds = plan.WorldOptions
-            .Where(w => w.ValueScore < decimal.MaxValue && w.TotalQuantityPurchased > 0)
-            .OrderBy(w => w.ValueScore)
+
+        var singleWorlds = plan.WorldOptions
+            .Where(w => w.TotalQuantityPurchased >= plan.QuantityNeeded)
+            .OrderBy(w => w.TotalCost)
+            .ThenBy(w => w.DataCenter)
+            .ThenBy(w => w.WorldName)
             .ToList();
-        
-        if (viableWorlds.Count == 0) return;
-        
-        // Greedy allocation
-        var split = new List<SplitWorldPurchase>();
-        var remaining = plan.QuantityNeeded;
-        
-        foreach (var world in viableWorlds)
+
+        foreach (var world in singleWorlds)
         {
-            if (remaining <= 0) break;
-            
+            candidates.Add(new MarketPurchaseCandidate(
+                world.TotalCost,
+                [new MarketWorldKey(world.DataCenter, world.WorldName)])
+            {
+                ItemId = plan.ItemId,
+                ItemName = plan.Name,
+                QuantityNeeded = plan.QuantityNeeded,
+                QuantityFulfilled = plan.QuantityNeeded,
+                SingleWorld = world
+            });
+        }
+
+        var maxWorlds = Math.Max(1, config.GetEffectiveMaxWorlds(singleWorlds.Count));
+        var splitWorlds = plan.WorldOptions
+            .Where(w => w.TotalQuantityPurchased > 0)
+            .Select(w => new
+            {
+                World = w,
+                SplitScore = CalculateValueScore(w, plan.QuantityNeeded, splitEnabled: true)
+            })
+            .Where(w => w.SplitScore < decimal.MaxValue)
+            .OrderBy(w => w.SplitScore)
+            .ThenBy(w => w.World.TotalCost)
+            .ThenBy(w => w.World.DataCenter)
+            .ThenBy(w => w.World.WorldName)
+            .Take(maxWorlds)
+            .Select(w => w.World)
+            .ToList();
+
+        var split = BuildSplitPurchase(plan.QuantityNeeded, splitWorlds);
+        var quantityFulfilled = split.Sum(s => s.QuantityToBuy);
+        var isFullyFulfilled = quantityFulfilled >= plan.QuantityNeeded;
+
+        if (split.Count > 1 || (split.Count > 0 && !isFullyFulfilled))
+        {
+            candidates.Add(new MarketPurchaseCandidate(
+                split.Sum(s => s.TotalCost),
+                split.Select(s => new MarketWorldKey(s.DataCenter, s.WorldName)))
+            {
+                ItemId = plan.ItemId,
+                ItemName = plan.Name,
+                QuantityNeeded = plan.QuantityNeeded,
+                QuantityFulfilled = quantityFulfilled,
+                Split = split
+            });
+        }
+
+        return candidates;
+    }
+
+    private static List<SplitWorldPurchase> BuildSplitPurchase(
+        int quantityNeeded,
+        IEnumerable<WorldShoppingSummary> worlds)
+    {
+        var split = new List<SplitWorldPurchase>();
+        var remaining = quantityNeeded;
+
+        foreach (var world in worlds)
+        {
+            if (remaining <= 0)
+            {
+                break;
+            }
+
             var toAllocate = Math.Min(remaining, world.TotalQuantityPurchased);
-            if (toAllocate <= 0) continue;
-            
-            // Calculate actual cost from listings and keep the exact listing breakdown.
+            if (toAllocate <= 0)
+            {
+                continue;
+            }
+
             var cost = 0L;
             var remainingFromWorld = toAllocate;
             var selectedListings = new List<ShoppingListingEntry>();
@@ -844,23 +899,50 @@ public class MarketShoppingService
             var travelContext = split.Count == 0
                 ? TravelContextConstants.Primary
                 : TravelContextConstants.Supplemental;
-            
+
             split.Add(new SplitWorldPurchase
             {
                 DataCenter = world.DataCenter,
                 WorldName = world.WorldName,
                 QuantityToBuy = toAllocate,
                 PricePerUnit = toAllocate > 0 ? cost / (decimal)toAllocate : world.AveragePricePerUnit,
-                IsPartial = toAllocate < plan.QuantityNeeded,
+                IsPartial = toAllocate < quantityNeeded,
                 TotalCost = cost,
                 TravelContext = travelContext,
                 ExcessAvailable = excessAvailable,
                 Listings = selectedListings
             });
-            
+
             remaining -= toAllocate;
         }
-        
+
+        return split;
+    }
+
+    /// <summary>
+    /// Calculates a multi-world split purchase plan for items that can't be fulfilled on a single world.
+    /// Uses ValueScore as the single metric for world selection.
+    /// </summary>
+    public void CalculateSplitPurchase(
+        DetailedShoppingPlan plan,
+        MarketAnalysisConfig config)
+    {
+        // Calculate ValueScores in split mode
+        foreach (var world in plan.WorldOptions)
+        {
+            world.ValueScore = CalculateValueScore(world, plan.QuantityNeeded, splitEnabled: true);
+        }
+
+        // Get viable worlds sorted by ValueScore
+        var viableWorlds = plan.WorldOptions
+            .Where(w => w.ValueScore < decimal.MaxValue && w.TotalQuantityPurchased > 0)
+            .OrderBy(w => w.ValueScore)
+            .ToList();
+
+        if (viableWorlds.Count == 0) return;
+
+        var split = BuildSplitPurchase(plan.QuantityNeeded, viableWorlds);
+
         if (split.Count == 0) return;
         
         var splitCost = split.Sum(s => s.TotalCost);
