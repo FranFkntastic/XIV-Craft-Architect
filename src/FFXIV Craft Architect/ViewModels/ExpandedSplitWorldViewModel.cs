@@ -31,7 +31,7 @@ public class ExpandedSplitWorldViewModel : ViewModelBase
     public string WorldName => Split.WorldName;
     public int QuantityToBuy => Split.QuantityToBuy;
     public long TotalCost => Split.TotalCost;
-    public decimal PricePerUnit => Split.PricePerUnit;
+    public decimal PricePerUnit => Split.EffectivePricePerNeededUnit;
     public string TravelContext => Split.TravelContext;
     public int ExcessAvailable => Split.ExcessAvailable;
 

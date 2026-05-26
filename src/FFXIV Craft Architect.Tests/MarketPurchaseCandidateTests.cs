@@ -64,6 +64,8 @@ public class MarketPurchaseCandidateTests
                 Assert.Equal("Leviathan", leviathan.WorldName);
                 Assert.Equal(2, leviathan.QuantityToBuy);
                 Assert.Equal(800, leviathan.TotalCost);
+                Assert.Equal(200, leviathan.PricePerUnit);
+                Assert.Equal(400, leviathan.EffectivePricePerNeededUnit);
                 Assert.Equal(TravelContextConstants.Supplemental, leviathan.TravelContext);
                 var listing = Assert.Single(leviathan.Listings);
                 Assert.Equal(2, listing.NeededFromStack);
@@ -99,6 +101,8 @@ public class MarketPurchaseCandidateTests
                 Assert.Equal("Leviathan", leviathan.WorldName);
                 Assert.Equal(2, leviathan.QuantityToBuy);
                 Assert.Equal(800, leviathan.TotalCost);
+                Assert.Equal(200, leviathan.PricePerUnit);
+                Assert.Equal(400, leviathan.EffectivePricePerNeededUnit);
                 var listing = Assert.Single(leviathan.Listings);
                 Assert.Equal(4, listing.Quantity);
                 Assert.Equal(2, listing.NeededFromStack);
@@ -106,6 +110,33 @@ public class MarketPurchaseCandidateTests
                 Assert.Equal(800, listing.Quantity * listing.PricePerUnit);
             });
         Assert.Equal(1100, plan.SplitTotalCost);
+    }
+
+    [Fact]
+    public void GeneratePurchaseCandidates_SufficientStockBeyondDefaultSplitBound_ReturnsFulfilledSplitCandidate()
+    {
+        var siren = World("Aether", "Siren", 200, 100, Listing(2, 100, "Siren Retainer"));
+        var balmung = World("Crystal", "Balmung", 220, 110, Listing(2, 110, "Balmung Retainer"));
+        var leviathan = World("Primal", "Leviathan", 240, 120, Listing(2, 120, "Leviathan Retainer"));
+        var shiva = World("Light", "Shiva", 260, 130, Listing(2, 130, "Shiva Retainer"));
+        var plan = Plan(quantityNeeded: 8, siren, balmung, leviathan, shiva);
+
+        var candidates = GenerateCandidates(plan);
+
+        var candidate = Assert.Single(candidates);
+        Assert.True(candidate.IsFullyFulfilled);
+        Assert.False(candidate.HasInsufficientStock);
+        Assert.Equal(8, candidate.QuantityFulfilled);
+        Assert.Equal(920, candidate.GilCost);
+        Assert.Equal(4, candidate.Split!.Count);
+        Assert.Equal(
+            [
+                new MarketWorldKey("Aether", "Siren"),
+                new MarketWorldKey("Crystal", "Balmung"),
+                new MarketWorldKey("Primal", "Leviathan"),
+                new MarketWorldKey("Light", "Shiva")
+            ],
+            candidate.Worlds);
     }
 
     [Fact]
@@ -144,6 +175,11 @@ public class MarketPurchaseCandidateTests
 
     private static DetailedShoppingPlan Plan(int quantityNeeded, params WorldShoppingSummary[] worlds)
     {
+        foreach (var world in worlds)
+        {
+            world.HasSufficientStock = world.TotalQuantityPurchased >= quantityNeeded;
+        }
+
         return new DetailedShoppingPlan
         {
             ItemId = 123,
@@ -170,7 +206,6 @@ public class MarketPurchaseCandidateTests
             AveragePricePerUnit = totalQuantity > 0 ? totalCost / (decimal)totalQuantity : 0,
             TotalQuantityPurchased = totalQuantity,
             ModePricePerUnit = modePricePerUnit,
-            HasSufficientStock = true,
             Listings = listings.ToList()
         };
     }

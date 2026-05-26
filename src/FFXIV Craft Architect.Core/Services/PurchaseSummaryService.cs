@@ -77,7 +77,7 @@ public class PurchaseSummaryService : IPurchaseSummaryService
             QuantityToPurchase = split.QuantityToBuy,
             ExcessQuantity = split.ExcessAvailable,
             TotalCost = split.TotalCost,
-            AveragePricePerUnit = split.PricePerUnit,
+            AveragePricePerUnit = split.EffectivePricePerNeededUnit,
             RequiresSplitPurchase = false,
             RecommendedSplit = null
         };

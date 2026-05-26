@@ -480,6 +480,8 @@ public class DetailedShoppingPlan
 /// </summary>
 public class SplitWorldPurchase
 {
+    private decimal? _effectivePricePerNeededUnit;
+
     /// <summary>
     /// The data center this world belongs to.
     /// </summary>
@@ -496,9 +498,19 @@ public class SplitWorldPurchase
     public int QuantityToBuy { get; set; }
     
     /// <summary>
-    /// Price per unit on this world.
+    /// Actual average listing unit price for the selected stacks on this world.
     /// </summary>
     public decimal PricePerUnit { get; set; }
+
+    /// <summary>
+    /// Effective cost per needed unit after full-stack purchases are included.
+    /// </summary>
+    public decimal EffectivePricePerNeededUnit
+    {
+        get => _effectivePricePerNeededUnit
+            ?? (QuantityToBuy > 0 ? TotalCost / (decimal)QuantityToBuy : PricePerUnit);
+        set => _effectivePricePerNeededUnit = value;
+    }
     
     /// <summary>
     /// Total cost for the selected listing stacks in this portion.

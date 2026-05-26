@@ -47,7 +47,7 @@
                 @* Purchase details *@
                 <div style="display: flex; justify-content: space-between; align-items: baseline;">
                     <MudText Typo="Typo.caption" Style="color: #d4a73a;">
-                        @split.QuantityToBuy × @split.PricePerUnit.ToString("N0")g
+                        @split.QuantityToBuy × @split.EffectivePricePerNeededUnit.ToString("N0")g
                     </MudText>
                     <MudText Typo="Typo.body2" Style="color: #4caf50; font-weight: 600;">
                         @split.TotalCost.ToString("N0")g

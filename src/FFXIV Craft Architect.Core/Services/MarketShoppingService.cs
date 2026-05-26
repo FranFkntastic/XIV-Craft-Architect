@@ -804,7 +804,6 @@ public class MarketShoppingService
             });
         }
 
-        var maxWorlds = Math.Max(1, config.GetEffectiveMaxWorlds(singleWorlds.Count));
         var splitWorlds = plan.WorldOptions
             .Where(w => w.TotalQuantityPurchased > 0)
             .Select(w => new
@@ -817,7 +816,6 @@ public class MarketShoppingService
             .ThenBy(w => w.World.TotalCost)
             .ThenBy(w => w.World.DataCenter)
             .ThenBy(w => w.World.WorldName)
-            .Take(maxWorlds)
             .Select(w => w.World)
             .ToList();
 
@@ -896,6 +894,10 @@ public class MarketShoppingService
             }
 
             var excessAvailable = selectedListings.Sum(l => l.ExcessQuantity);
+            var selectedListingQuantity = selectedListings.Sum(l => l.Quantity);
+            var averageListingUnitPrice = selectedListingQuantity > 0
+                ? cost / (decimal)selectedListingQuantity
+                : world.AveragePricePerUnit;
             var travelContext = split.Count == 0
                 ? TravelContextConstants.Primary
                 : TravelContextConstants.Supplemental;
@@ -905,7 +907,8 @@ public class MarketShoppingService
                 DataCenter = world.DataCenter,
                 WorldName = world.WorldName,
                 QuantityToBuy = toAllocate,
-                PricePerUnit = toAllocate > 0 ? cost / (decimal)toAllocate : world.AveragePricePerUnit,
+                PricePerUnit = averageListingUnitPrice,
+                EffectivePricePerNeededUnit = toAllocate > 0 ? cost / (decimal)toAllocate : averageListingUnitPrice,
                 IsPartial = toAllocate < quantityNeeded,
                 TotalCost = cost,
                 TravelContext = travelContext,

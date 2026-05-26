@@ -237,7 +237,7 @@
             return Plan.RecommendedSplit.Select(split => new RecommendedPurchaseRow(
                 split.WorldName,
                 split.QuantityToBuy,
-                split.PricePerUnit,
+                split.EffectivePricePerNeededUnit,
                 split.TotalCost,
                 split.TravelContext));
         }

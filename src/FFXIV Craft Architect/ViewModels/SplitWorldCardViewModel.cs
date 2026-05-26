@@ -21,7 +21,7 @@ public class SplitWorldCardViewModel : ViewModelBase
     public string WorldName => _split.WorldName;
     public int QuantityToBuy => _split.QuantityToBuy;
     public int TotalQuantityNeeded => _totalQuantity;
-    public decimal PricePerUnit => _split.PricePerUnit;
+    public decimal PricePerUnit => _split.EffectivePricePerNeededUnit;
     public long TotalCost => _split.TotalCost;
     public bool IsPartial => _split.IsPartial;
     public string TravelContext => _split.TravelContext;
