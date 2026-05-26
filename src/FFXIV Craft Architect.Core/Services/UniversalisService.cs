@@ -98,7 +98,7 @@ public class UniversalisService : IUniversalisService
         const int maxConcurrency = 3;
         const int maxGlobalRetries = 2;  // How many times to retry missing IDs
 
-        var itemIdList = itemIds.ToList();
+        var itemIdList = itemIds.Distinct().ToList();
         if (itemIdList.Count == 0)
             return new Dictionary<int, UniversalisResponse>();
 
@@ -256,29 +256,44 @@ public class UniversalisService : IUniversalisService
                 backoffMultiplier: 2.0,
                 rateLimitMultiplier: 3.0);
 
-            // Create single-item chunks for missing IDs
+            // Retry missing IDs in small chunks. Single-item retries make large regional
+            // fetches appear stuck on attempt 1/2 and multiply the adaptive delay cost.
             var retryWorkItems = missingIds
-                .Select((id, idx) => new ChunkWorkItem(
-                    new List<int> { id },
+                .Distinct()
+                .Chunk(minChunkSize)
+                .Select((ids, idx) => new ChunkWorkItem(
+                    ids.ToList(),
                     chunkIndex: idx,
                     splitDepth: 0,
                     retryCount: globalRetryAttempt - 1))
                 .ToList();
 
-            foreach (var workItem in retryWorkItems)
+            var retryBatches = useParallel
+                ? retryWorkItems.Chunk(maxConcurrency)
+                : retryWorkItems.Chunk(1);
+
+            foreach (var retryBatch in retryBatches)
             {
-                var result = await FetchChunkWithAdaptiveSplitAsync(
-                    workItem, worldOrDc, allResults, delayStrategy, minChunkSize, ct);
-
-                if (!result.Success)
+                var batch = retryBatch.ToList();
+                var retryTasks = batch.Select(async workItem =>
                 {
-                    _logger?.LogError(
-                        "Failed to fetch item {ItemId} on global retry attempt {Attempt}",
-                        workItem.ItemIds[0], globalRetryAttempt);
-                }
+                    var result = await FetchChunkWithAdaptiveSplitAsync(
+                        workItem, worldOrDc, allResults, delayStrategy, minChunkSize, ct);
 
-                // Delay between single-item retries
-                await Task.Delay(delayStrategy.GetDelay(), ct);
+                    if (!result.Success)
+                    {
+                        _logger?.LogError(
+                            "Failed to fetch retry chunk {ChunkIndex} ({Count} items) on global retry attempt {Attempt}",
+                            workItem.ChunkIndex, workItem.ItemIds.Count, globalRetryAttempt);
+                    }
+                });
+
+                await Task.WhenAll(retryTasks);
+
+                if (batch.Last() != retryWorkItems.Last())
+                {
+                    await Task.Delay(delayStrategy.GetDelay(), ct);
+                }
             }
 
             missingIds = itemIdList.Where(id => !allResults.ContainsKey(id)).ToList();

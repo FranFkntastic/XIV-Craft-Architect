@@ -43,11 +43,17 @@ public class AdaptiveDelayStrategy
 
     /// <summary>
     /// Reports a successful request.
-    /// Resets failure counter but doesn't reduce delay (keeps current speed).
+    /// Resets failure counter and gradually recovers from previous backoff.
     /// </summary>
     public void ReportSuccess()
     {
         _consecutiveFailures = 0;
+
+        if (_currentDelayMs > _minDelay)
+        {
+            var recoveredDelay = (int)Math.Ceiling(_currentDelayMs / _backoffMultiplier);
+            _currentDelayMs = Math.Max(_minDelay, recoveredDelay);
+        }
     }
 
     /// <summary>
