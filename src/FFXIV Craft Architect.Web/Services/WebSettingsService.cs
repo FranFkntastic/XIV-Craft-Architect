@@ -20,6 +20,7 @@ public class WebSettingsService : ISettingsService
         ["market.region"] = "North America",
         ["market.home_world"] = "",
         ["market.auto_fetch_prices"] = true,
+        ["market.default_search_scope"] = "SelectedDataCenter",
         ["market.include_cross_world"] = true,
         ["market.exclude_congested_worlds"] = true,
         ["ui.auto_save_enabled"] = true,

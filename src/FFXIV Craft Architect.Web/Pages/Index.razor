@@ -5,7 +5,6 @@
 @using FFXIV_Craft_Architect.Web.Services
 @using Microsoft.AspNetCore.Components.Forms
 @inject GarlandService GarlandService
-@inject UniversalisService UniversalisService
 @inject RecipeCalculationService RecipeCalculationService
 @inject MarketShoppingService MarketShoppingService
 @inject IJSRuntime JSRuntime
@@ -56,8 +55,6 @@
 </div>
 
 @code {
-    private static readonly string[] NorthAmericanDataCenters = { "Aether", "Primal", "Crystal", "Dynamis" };
-
     private string _searchQuery = string.Empty;
     private bool _isSearching = false;
     private List<GarlandSearchResult> _searchResults = new();
@@ -372,9 +369,12 @@
             var allItemIds = CollectAllItemIds(AppState.CurrentPlan.RootItems);
             var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, allItemIds);
             var nonMarketItemIds = MarketPriceAvailability.GetNonMarketListableItemIds(AppState.CurrentPlan, allItemIds);
-            var responses = marketItemIds.Any()
-                ? await UniversalisService.GetMarketDataBulkAsync(AppState.SelectedDataCenter, marketItemIds)
-                : new Dictionary<int, UniversalisResponse>();
+            var responses = await MarketScopedPriceLoader.LoadResponsesAsync(
+                MarketCache,
+                marketItemIds,
+                AppState.DefaultMarketFetchScope,
+                AppState.SelectedDataCenter,
+                AppState.SelectedRegion);
             refreshResult = MarketPriceAvailability.FromResponses(AppState.CurrentPlan, marketItemIds, responses, nonMarketItemIds);
             AppState.SetUnavailableMarketItems(refreshResult.UnavailableItems);
 
@@ -384,14 +384,7 @@
                 UpdateNodePrices(root, responses);
             }
 
-            // Cache fetched market data in IndexedDB for use by Market Analysis
-            foreach (var kvp in responses)
-            {
-                var cachedData = ConvertResponseToCachedData(kvp.Key, AppState.SelectedDataCenter, kvp.Value);
-                await MarketCache.SetAsync(kvp.Key, AppState.SelectedDataCenter, cachedData);
-            }
-
-            Logger.LogInformation("Cached {Count} market entries to IndexedDB", responses.Count);
+            Logger.LogInformation("Loaded {Count} market entries from cache scope {Scope}", responses.Count, AppState.DefaultMarketFetchScope);
 
             AppState.NotifyPlanChanged();
 
@@ -463,7 +456,7 @@
 
         if (AppState.SearchEntireRegion)
         {
-            foreach (var dc in NorthAmericanDataCenters)
+            foreach (var dc in GetCurrentRegionDataCenters())
             {
                 var requests = materials
                     .Select(m => (m.ItemId, dc))
@@ -483,28 +476,11 @@
                 .ToList();
             await MarketCache.EnsurePopulatedAsync(requests, maxAge: maxAge, progress: progress);
 
-            if (AppState.EnableMultiWorldSplits)
-            {
-                var config = new MarketAnalysisConfig
-                {
-                    EnableSplitWorld = AppState.EnableMultiWorldSplits,
-                    MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null
-                };
-
-                AppState.ShoppingPlans = await MarketShoppingService.CalculateShoppingPlansWithSplitsAsync(
-                    materials,
-                    AppState.SelectedDataCenter,
-                    progress,
-                    config: config);
-            }
-            else
-            {
-                AppState.ShoppingPlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
-                    materials,
-                    AppState.SelectedDataCenter,
-                    progress,
-                    mode: AppState.RecommendationMode);
-            }
+            AppState.ShoppingPlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+                materials,
+                AppState.SelectedDataCenter,
+                progress,
+                mode: AppState.RecommendationMode);
         }
 
         MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
@@ -555,37 +531,12 @@
         }
     }
 
-    /// <summary>
-    /// Converts UniversalisResponse to CachedMarketData for IndexedDB storage.
-    /// </summary>
-    private static CachedMarketData ConvertResponseToCachedData(int itemId, string dataCenter, UniversalisResponse response)
+    private IReadOnlyList<string> GetCurrentRegionDataCenters()
     {
-        var worlds = new List<CachedWorldData>();
-
-        foreach (var worldListing in response.Listings.GroupBy(l => l.WorldName))
-        {
-            worlds.Add(new CachedWorldData
-            {
-                WorldName = worldListing.Key ?? "Unknown",
-                Listings = worldListing.Select(l => new CachedListing
-                {
-                    Quantity = l.Quantity,
-                    PricePerUnit = l.PricePerUnit,
-                    RetainerName = l.RetainerName ?? "Unknown",
-                    IsHq = l.IsHq
-                }).ToList()
-            });
-        }
-
-        return new CachedMarketData
-        {
-            ItemId = itemId,
-            DataCenter = dataCenter,
-            FetchedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-            DCAveragePrice = (decimal)(response.AveragePriceNq > 0 ? response.AveragePriceNq : response.AveragePrice),
-            HQAveragePrice = response.AveragePriceHq > 0 ? (decimal)response.AveragePriceHq : null,
-            Worlds = worlds
-        };
+        return MarketFetchScopeResolver.GetDataCenters(
+            MarketFetchScope.EntireRegion,
+            AppState.SelectedDataCenter,
+            AppState.SelectedRegion);
     }
 
     private void OnNodeSelected(PlanNode node)

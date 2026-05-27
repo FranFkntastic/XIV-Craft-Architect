@@ -42,34 +42,6 @@
         </MudText>
     </div>
 
-    @if (!AppState.SearchEntireRegion)
-    {
-        <div class="ma-split-config">
-            <div class="ma-split-header-row">
-                <MudIcon Icon="@Icons.Material.Filled.CallSplit" Color="Color.Secondary" Size="Size.Small" />
-                <span class="ma-split-title">Split-World Purchases</span>
-                <span class="ma-beta-badge">BETA</span>
-            </div>
-
-            <MudCheckBox T="bool"
-                         @bind-Value="AppState.EnableMultiWorldSplits"
-                         Dense="true"
-                         Color="Color.Secondary"
-                         Class="mb-2">
-                <MudText Typo="Typo.caption" Class="ma-split-toggle-text">Enable multi-world splits</MudText>
-            </MudCheckBox>
-
-            @if (AppState.EnableMultiWorldSplits)
-            {
-                <div class="ma-split-help-wrap">
-                    <MudText Typo="Typo.caption" Class="ma-split-help-text">
-                        Multi-world purchases enabled. The algorithm will automatically find the best combination of worlds.
-                    </MudText>
-                </div>
-            }
-        </div>
-    }
-
     <MudButton OnClick="OnRunAnalysisRequested"
                Disabled="@(!CanAnalyze || IsAnalyzing)"
                Color="Color.Primary"

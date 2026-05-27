@@ -39,7 +39,6 @@
 </MudContainer>
 
 @code {
-    private static readonly string[] NorthAmericanDataCenters = { "Aether", "Primal", "Crystal", "Dynamis" };
     private bool _isAnalyzing = false;
 
     protected override void OnInitialized()
@@ -202,7 +201,7 @@
     {
         if (AppState.ProcurementSearchEntireRegion)
         {
-            foreach (var dc in NorthAmericanDataCenters)
+            foreach (var dc in GetCurrentRegionDataCenters())
             {
                 var requests = materials.Select(item => (item.ItemId, dc)).ToList();
                 AppState.SetStatus($"Checking cache for {requests.Count} active items on {dc}...");
@@ -459,5 +458,13 @@
                 .OrderBy(world => world.DataCenter)
                 .ThenBy(world => world.WorldName)
                 .Select(world => $"{world.WorldName} ({world.DataCenter})"));
+    }
+
+    private IReadOnlyList<string> GetCurrentRegionDataCenters()
+    {
+        return MarketFetchScopeResolver.GetDataCenters(
+            MarketFetchScope.EntireRegion,
+            AppState.SelectedDataCenter,
+            AppState.SelectedRegion);
     }
 }

@@ -46,7 +46,7 @@ namespace FFXIV_Craft_Architect.Web.Services;
 /// STATE CATEGORIES:
 /// - Recipe Planner: CurrentPlan, ProjectItems
 /// - Procurement: ShoppingItems, ShoppingPlans
-/// - Settings: SelectedDataCenter, RecommendationMode, EnableMultiWorldSplits
+/// - Settings: SelectedDataCenter, RecommendationMode, market scope preferences
 /// - UI State: StatusMessage, IsBusy, ProgressPercent
 /// - Session: TemporarilyBlacklistedWorlds (NOT persisted)
 ///
@@ -102,6 +102,7 @@ public class AppState
     // Persistence state
     public bool IsAutoSaveEnabled { get; set; } = true;
     public bool AutoFetchPricesOnRebuild { get; set; } = true;
+    public MarketFetchScope DefaultMarketFetchScope { get; set; } = MarketFetchScope.SelectedDataCenter;
     public DateTime? LastAutoSave { get; set; }
     public List<StoredPlanSummary> SavedPlans { get; set; } = new();
     

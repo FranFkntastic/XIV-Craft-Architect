@@ -240,10 +240,14 @@
             var defaultDc = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
             var region = await Settings.GetAsync("market.region", "North America") ?? "North America";
             var autoFetch = await Settings.GetAsync("market.auto_fetch_prices", true);
-            
+            var defaultScope = ParseMarketFetchScope(
+                await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.SelectedDataCenter)));
+
             AppState.IsAutoSaveEnabled = autoSave;
             AppState.AutoFetchPricesOnRebuild = autoFetch;
+            AppState.DefaultMarketFetchScope = defaultScope;
             AppState.SelectedRegion = region;
+            AppState.SearchEntireRegion = defaultScope == MarketFetchScope.EntireRegion;
             
             if (string.IsNullOrEmpty(AppState.SelectedDataCenter))
             {
@@ -599,21 +603,17 @@
                 AppState.SetStatus("Fetching market prices...", busy: true);
                 var allItemIds = AppState.CurrentPlan.GetAllItemIds().ToList();
                 var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, allItemIds);
-                var responses = marketItemIds.Any()
-                    ? await UniversalisService.GetMarketDataBulkAsync(
-                        AppState.SelectedDataCenter,
-                        marketItemIds)
-                    : new Dictionary<int, UniversalisResponse>();
+                var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+                var responses = await MarketScopedPriceLoader.LoadResponsesAsync(
+                    MarketCache,
+                    marketItemIds,
+                    AppState.DefaultMarketFetchScope,
+                    AppState.SelectedDataCenter,
+                    AppState.SelectedRegion,
+                    progress: progress);
 
                 UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, responses);
-
-                foreach (var kvp in responses)
-                {
-                    var cachedData = ConvertResponseToCachedData(kvp.Key, AppState.SelectedDataCenter, kvp.Value);
-                    await MarketCache.SetAsync(kvp.Key, AppState.SelectedDataCenter, cachedData);
-                }
-
-                Logger.LogInformation("Cached {Count} market entries to IndexedDB", responses.Count);
+                Logger.LogInformation("Loaded {Count} market entries from cache scope {Scope}", responses.Count, AppState.DefaultMarketFetchScope);
                 Snackbar.Add("Market prices updated", Severity.Success);
             }
 
@@ -807,36 +807,10 @@
         }
     }
     
-    /// <summary>
-    /// Converts a UniversalisResponse to CachedMarketData for storage in IndexedDB.
-    /// </summary>
-    private static CachedMarketData ConvertResponseToCachedData(int itemId, string dataCenter, UniversalisResponse response)
+    private static MarketFetchScope ParseMarketFetchScope(string? value)
     {
-        var worlds = new List<CachedWorldData>();
-
-        foreach (var worldListing in response.Listings.GroupBy(l => l.WorldName))
-        {
-            worlds.Add(new CachedWorldData
-            {
-                WorldName = worldListing.Key ?? "Unknown",
-                Listings = worldListing.Select(l => new CachedListing
-                {
-                    Quantity = l.Quantity,
-                    PricePerUnit = l.PricePerUnit,
-                    RetainerName = l.RetainerName ?? "Unknown",
-                    IsHq = l.IsHq
-                }).ToList()
-            });
-        }
-
-        return new CachedMarketData
-        {
-            ItemId = itemId,
-            DataCenter = dataCenter,
-            FetchedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-            DCAveragePrice = (decimal)(response.AveragePriceNq > 0 ? response.AveragePriceNq : response.AveragePrice),
-            HQAveragePrice = response.AveragePriceHq > 0 ? (decimal)response.AveragePriceHq : null,
-            Worlds = worlds
-        };
+        return Enum.TryParse<MarketFetchScope>(value, ignoreCase: true, out var scope)
+            ? scope
+            : MarketFetchScope.SelectedDataCenter;
     }
 }
