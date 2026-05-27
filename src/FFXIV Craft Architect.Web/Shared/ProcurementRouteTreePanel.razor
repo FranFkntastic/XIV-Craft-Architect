@@ -265,113 +265,11 @@
         if (!ShoppingPlans.Any())
             return new List<WorldProcurementCardModel>();
 
-        var worldCards = new Dictionary<string, WorldProcurementCardModel>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var plan in ShoppingPlans.Where(p => string.IsNullOrEmpty(p.Error)))
-        {
-            if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
-            {
-                foreach (var split in plan.RecommendedSplit)
-                {
-                    var (worldName, dataCenter) = ParseWorldAndDataCenter(split.WorldName);
-                    var card = GetOrCreateCard(worldCards, worldName, dataCenter, plan);
-
-                    card.Items.Add(new WorldItemPurchase
-                    {
-                        ItemId = plan.ItemId,
-                        ItemName = plan.Name,
-                        IconId = plan.IconId,
-                        QuantityOnThisWorld = split.QuantityToBuy,
-                        TotalQuantityNeeded = plan.QuantityNeeded,
-                        PricePerUnit = split.EffectivePricePerNeededUnit,
-                        PriceIsEffectiveCost = true,
-                        TotalCost = split.TotalCost,
-                        IsSplitPurchase = true,
-                        SourcePlan = plan,
-                        TravelContext = split.TravelContext
-                    });
-                }
-            }
-            else if (plan.RecommendedWorld != null)
-            {
-                var (worldName, dataCenter) = ParseWorldAndDataCenter(plan.RecommendedWorld.WorldName);
-                var card = GetOrCreateCard(worldCards, worldName, dataCenter, plan);
-                VendorInfo? vendor = null;
-
-                if (worldName == MarketShoppingConstants.VendorWorldName && plan.Vendors.Any())
-                {
-                    vendor = plan.Vendors.FirstOrDefault(v => v.Price == plan.RecommendedWorld.AveragePricePerUnit)
-                        ?? plan.Vendors.FirstOrDefault();
-                    card.Vendors = plan.Vendors.ToList();
-                    card.SelectedVendorName = plan.RecommendedWorld.VendorName;
-                }
-
-                card.Items.Add(new WorldItemPurchase
-                {
-                    ItemId = plan.ItemId,
-                    ItemName = plan.Name,
-                    IconId = plan.IconId,
-                    QuantityOnThisWorld = plan.QuantityNeeded,
-                    TotalQuantityNeeded = plan.QuantityNeeded,
-                    PricePerUnit = plan.RecommendedWorld.AveragePricePerUnit,
-                    TotalCost = plan.RecommendedWorld.TotalCost,
-                    IsSplitPurchase = false,
-                    SourcePlan = plan,
-                    TravelContext = TravelContextConstants.Primary,
-                    Vendor = vendor
-                });
-            }
-        }
-
-        return worldCards.Values
-            .OrderBy(w => w.IsVendor ? 1 : 0)
-            .ThenBy(w => w.DataCenter)
-            .ThenByDescending(w => w.TotalCost)
-            .ToList();
-    }
-
-    private WorldProcurementCardModel GetOrCreateCard(
-        Dictionary<string, WorldProcurementCardModel> worldCards,
-        string worldName,
-        string dataCenter,
-        DetailedShoppingPlan plan)
-    {
-        var key = $"{dataCenter}|{worldName}";
-        if (worldCards.TryGetValue(key, out var existing))
-            return existing;
-
-        var worldOption = plan.WorldOptions.FirstOrDefault(w =>
-            string.Equals(ParseWorldAndDataCenter(w.WorldName).WorldName, worldName, StringComparison.OrdinalIgnoreCase));
-
-        var card = new WorldProcurementCardModel
-        {
-            WorldName = worldName,
-            DataCenter = dataCenter,
-            IsCongested = worldOption?.IsCongested ?? plan.RecommendedWorld?.IsCongested ?? false,
-            Classification = worldOption?.Classification ?? plan.RecommendedWorld?.Classification ?? WorldClassification.Standard
-        };
-
-        worldCards[key] = card;
-        return card;
-    }
-
-    private (string WorldName, string DataCenter) ParseWorldAndDataCenter(string worldLabel)
-    {
-        if (string.Equals(worldLabel, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase))
-            return (MarketShoppingConstants.VendorWorldName, MarketShoppingConstants.VendorWorldName);
-
-        var closeParen = worldLabel.LastIndexOf(')');
-        var openParen = worldLabel.LastIndexOf('(');
-        if (openParen > 0 && closeParen == worldLabel.Length - 1)
-        {
-            return (worldLabel[..openParen].Trim(), worldLabel[(openParen + 1)..closeParen].Trim());
-        }
-
-        return (worldLabel, AppState.SelectedDataCenter);
+        return ProcurementWorldCardBuilder.BuildWorldCards(ShoppingPlans, AppState.SelectedDataCenter);
     }
 
     private static string GetWorldKey(WorldProcurementCardModel world)
     {
-        return $"{world.DataCenter}|{world.WorldName}";
+        return ProcurementWorldCardBuilder.GetWorldKey(world);
     }
 }

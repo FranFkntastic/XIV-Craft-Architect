@@ -95,8 +95,8 @@
                 {
                     <WorldProcurementCard 
                         Card="worldCard" 
-                        IsExpanded="_expandedWorld == worldCard.WorldName"
-                        IsExpandedChanged="(expanded) => OnWorldExpanded(worldCard.WorldName, expanded)"
+                        IsExpanded="_expandedWorld == GetWorldKey(worldCard)"
+                        IsExpandedChanged="(expanded) => OnWorldExpanded(GetWorldKey(worldCard), expanded)"
                         OnItemSelected="OnWorldItemSelected"
                         OnReanalyzeRequested="OnReanalyzeWithoutWorld" />
                 }
@@ -179,13 +179,13 @@
     
     // === WORLD-CENTRIC CARD METHODS ===
     
-    private void OnWorldExpanded(string worldName, bool expanded)
+    private void OnWorldExpanded(string worldKey, bool expanded)
     {
         if (expanded)
         {
-            _expandedWorld = worldName;
+            _expandedWorld = worldKey;
         }
-        else if (_expandedWorld == worldName)
+        else if (_expandedWorld == worldKey)
         {
             _expandedWorld = null;
         }
@@ -217,97 +217,13 @@
     {
         if (!ShoppingPlans.Any())
             return Enumerable.Empty<WorldCardModel>();
-        
-        var worldCards = new Dictionary<string, WorldCardModel>(StringComparer.OrdinalIgnoreCase);
-        
-        foreach (var plan in ShoppingPlans.Where(p => string.IsNullOrEmpty(p.Error)))
-        {
-            // Handle split purchases
-            if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
-            {
-                foreach (var split in plan.RecommendedSplit)
-                {
-                    var worldName = split.WorldName;
-                    
-                    if (!worldCards.TryGetValue(worldName, out var card))
-                    {
-                        var worldOption = plan.WorldOptions.FirstOrDefault(w => w.WorldName == worldName);
-                        card = new WorldCardModel
-                        {
-                            WorldName = worldName,
-                            DataCenter = AppState.SelectedDataCenter,
-                            IsCongested = worldOption?.IsCongested ?? false,
-                            Classification = worldOption?.Classification ?? WorldClassification.Standard
-                        };
-                        worldCards[worldName] = card;
-                    }
-                    
-                    card.Items.Add(new WorldItemPurchase
-                    {
-                        ItemId = plan.ItemId,
-                        ItemName = plan.Name,
-                        IconId = plan.IconId,
-                        QuantityOnThisWorld = split.QuantityToBuy,
-                        TotalQuantityNeeded = plan.QuantityNeeded,
-                        PricePerUnit = split.EffectivePricePerNeededUnit,
-                        PriceIsEffectiveCost = true,
-                        TotalCost = split.TotalCost,
-                        IsSplitPurchase = true,
-                        SourcePlan = plan,
-                        TravelContext = split.IsPartial ? "Supplemental" : "Primary"
-                    });
-                }
-            }
-            // Handle single-world purchases (including vendor)
-            else if (plan.RecommendedWorld != null)
-            {
-                var recommendedWorld = plan.RecommendedWorld;
-                var worldName = recommendedWorld.WorldName;
-                
-                if (!worldCards.TryGetValue(worldName, out var card))
-                {
-                    card = new WorldCardModel
-                    {
-                        WorldName = worldName,
-                        DataCenter = AppState.SelectedDataCenter,
-                        IsCongested = recommendedWorld.IsCongested,
-                        Classification = recommendedWorld.Classification,
-                        Vendors = worldName == "Vendor" ? plan.Vendors?.ToList() ?? new List<VendorInfo>() : new List<VendorInfo>(),
-                        SelectedVendorName = worldName == "Vendor" ? recommendedWorld.VendorName : null
-                    };
-                    worldCards[worldName] = card;
-                }
-                
-                // Find the specific vendor for this item (if it's a vendor purchase)
-                VendorInfo? itemVendor = null;
-                if (worldName == "Vendor" && plan.Vendors?.Any() == true)
-                {
-                    // Match vendor by price - the RecommendedWorld should have the vendor price
-                    itemVendor = plan.Vendors.FirstOrDefault(v => v.Price == recommendedWorld.AveragePricePerUnit)
-                        ?? plan.Vendors.FirstOrDefault();
-                }
 
-                card.Items.Add(new WorldItemPurchase
-                {
-                    ItemId = plan.ItemId,
-                    ItemName = plan.Name,
-                    IconId = plan.IconId,
-                    QuantityOnThisWorld = plan.QuantityNeeded,
-                    TotalQuantityNeeded = plan.QuantityNeeded,
-                    PricePerUnit = recommendedWorld.AveragePricePerUnit,
-                    TotalCost = recommendedWorld.TotalCost,
-                    IsSplitPurchase = false,
-                    SourcePlan = plan,
-                    TravelContext = "Primary",
-                    Vendor = itemVendor
-                });
-            }
-        }
-        
-        // Sort: non-vendor worlds by cost (descending), vendor always last
-        return worldCards.Values
-            .OrderBy(w => w.IsVendor ? 1 : 0)
-            .ThenByDescending(w => w.TotalCost);
+        return ProcurementWorldCardBuilder.BuildWorldCards(ShoppingPlans, AppState.SelectedDataCenter);
+    }
+
+    private static string GetWorldKey(WorldCardModel world)
+    {
+        return ProcurementWorldCardBuilder.GetWorldKey(world);
     }
     
     /// <summary>

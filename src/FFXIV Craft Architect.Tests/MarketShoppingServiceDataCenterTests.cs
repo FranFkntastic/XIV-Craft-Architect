@@ -52,4 +52,56 @@ public class MarketShoppingServiceDataCenterTests
         Assert.NotNull(plan.RecommendedSplit);
         Assert.All(plan.RecommendedSplit!, split => Assert.Equal("Aether", split.DataCenter));
     }
+
+    [Fact]
+    public async Task CalculateDetailedShoppingPlansAsync_SelectedListingDetailsTrackRemainingNeededQuantity()
+    {
+        var cache = new Mock<IMarketCacheService>();
+        cache
+            .Setup(c => c.GetAsync(123, "Aether", null))
+            .ReturnsAsync(new CachedMarketData
+            {
+                ItemId = 123,
+                DataCenter = "Aether",
+                DCAveragePrice = 110,
+                Worlds =
+                {
+                    new CachedWorldData
+                    {
+                        WorldName = "Siren",
+                        Listings =
+                        {
+                            new CachedListing { Quantity = 5, PricePerUnit = 100, RetainerName = "Retainer A" },
+                            new CachedListing { Quantity = 5, PricePerUnit = 110, RetainerName = "Retainer B" }
+                        }
+                    }
+                }
+            });
+
+        var service = new MarketShoppingService(cache.Object);
+        var materials = new List<MaterialAggregate>
+        {
+            new() { ItemId = 123, Name = "Stack Detail Item", TotalQuantity = 7 }
+        };
+
+        var plans = await service.CalculateDetailedShoppingPlansAsync(materials, "Aether");
+
+        var plan = Assert.Single(plans);
+        var world = Assert.Single(plan.WorldOptions);
+        Assert.Equal(1050, world.TotalCost);
+        Assert.Collection(
+            world.Listings.Where(listing => !listing.IsAdditionalOption),
+            first =>
+            {
+                Assert.Equal(5, first.Quantity);
+                Assert.Equal(5, first.NeededFromStack);
+                Assert.Equal(0, first.ExcessQuantity);
+            },
+            second =>
+            {
+                Assert.Equal(5, second.Quantity);
+                Assert.Equal(2, second.NeededFromStack);
+                Assert.Equal(3, second.ExcessQuantity);
+            });
+    }
 }

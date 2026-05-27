@@ -494,9 +494,10 @@ public class MarketShoppingService
 
             var isUnderAverage = listing.PricePerUnit <= dcAveragePrice;
             
+            var neededFromStack = Math.Min(listing.Quantity, remaining);
             var fullStackCost = listing.Quantity * listing.PricePerUnit;
             totalCost += fullStackCost;
-            remaining -= listing.Quantity;
+            remaining -= neededFromStack;
             listingsUsed++;
 
             summary.Listings.Add(new ShoppingListingEntry
@@ -506,8 +507,8 @@ public class MarketShoppingService
                 RetainerName = listing.RetainerName,
                 IsUnderAverage = isUnderAverage,
                 IsHq = listing.IsHq,
-                NeededFromStack = Math.Min(listing.Quantity, quantityNeeded),
-                ExcessQuantity = Math.Max(0, listing.Quantity - quantityNeeded)
+                NeededFromStack = neededFromStack,
+                ExcessQuantity = Math.Max(0, listing.Quantity - neededFromStack)
             });
         }
 
