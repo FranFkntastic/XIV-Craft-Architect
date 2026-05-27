@@ -1,4 +1,5 @@
 @using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
 
 @* Market purchase display section for expanded item panel *@
 @* Extracted from original ExpandedItemPanel.razor *@
@@ -32,24 +33,25 @@
         </div>
         
         <div style="background: #252520; border-radius: 8px; border: 2px solid #4a4a40; padding: 20px;">
-            @if (Plan.RequiresSplitPurchase && Plan.RecommendedSplit?.Any() == true)
+            @if (PurchaseRecommendationCost.UsesSplitRecommendation(Plan) && Plan.RecommendedSplit?.Any() == true)
             {
                 @* Split World Recommendation *@
                 <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px;">
                     @foreach (var split in Plan.RecommendedSplit)
                     {
-                        var isExpanded = _expandedWorlds.Contains(split.WorldName);
-                        var worldData = Plan.WorldOptions?.FirstOrDefault(w => w.WorldName == split.WorldName);
+                        var worldKey = GetWorldKey(split.DataCenter, split.WorldName);
+                        var isExpanded = _expandedWorlds.Contains(worldKey);
+                        var worldData = Plan.WorldOptions?.FirstOrDefault(w => IsSameWorld(w.DataCenter, w.WorldName, split.DataCenter, split.WorldName));
                         
                         <div style="flex: 1; min-width: 200px; max-width: 300px;">
-                            <div @onclick="() => ToggleWorld(split.WorldName)" 
+                            <div @onclick="() => ToggleWorld(worldKey)"
                                  style="cursor: pointer; background: @(isExpanded ? "#1a3a1a" : "#2a2a25"); border-radius: 6px; border: 2px solid @(isExpanded ? "#4caf50" : "#444"); padding: 12px;">
                                 <div style="display: flex; align-items: center; justify-content: space-between;">
                                     <div style="display: flex; align-items: center; gap: 8px;">
                                         <MudIcon Icon="@(isExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" 
                                                  Size="Size.Small" Style="color: #888;" />
                                         <MudText Typo="Typo.subtitle1" Style="color: #90EE90; font-weight: 600;">
-                                            @split.WorldName
+                                            @FormatWorldLabel(split.WorldName, split.DataCenter)
                                         </MudText>
                                     </div>
                                 </div>
@@ -196,6 +198,22 @@
             _expandedWorlds.Remove(worldName);
         else
             _expandedWorlds.Add(worldName);
+    }
+
+    private static string GetWorldKey(string dataCenter, string worldName)
+    {
+        return $"{dataCenter}|{worldName}";
+    }
+
+    private static bool IsSameWorld(string dataCenter, string worldName, string otherDataCenter, string otherWorldName)
+    {
+        return string.Equals(dataCenter, otherDataCenter, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(worldName, otherWorldName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FormatWorldLabel(string worldName, string dataCenter)
+    {
+        return string.IsNullOrWhiteSpace(dataCenter) ? worldName : $"{worldName} ({dataCenter})";
     }
     
     private void ToggleAllWorld(string worldName)
