@@ -142,8 +142,7 @@ public static class ProcurementWorldCardBuilder
 
     private static bool ShouldUseSplitRecommendation(DetailedShoppingPlan plan)
     {
-        return plan.RecommendedSplit?.Any() == true &&
-            (plan.RequiresSplitPurchase || plan.RecommendedWorld == null);
+        return PurchaseRecommendationCost.UsesSplitRecommendation(plan);
     }
 
     private readonly record struct WorldIdentity(string WorldName, string DataCenter);

@@ -285,8 +285,7 @@ public class ExpandedPanelViewModel : ViewModelBase
 
     private static bool HasSplitRecommendation(DetailedShoppingPlan plan)
     {
-        return plan.RecommendedSplit?.Any() == true &&
-            (plan.RequiresSplitPurchase || plan.RecommendedWorld == null);
+        return PurchaseRecommendationCost.UsesSplitRecommendation(plan);
     }
 }
 

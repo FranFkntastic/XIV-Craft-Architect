@@ -147,6 +147,34 @@ public class ProcurementWorldCardBuilderTests
         Assert.Equal(700, card.TotalCost);
     }
 
+    [Fact]
+    public void BuildWorldCards_OneWorldSplitWithComparisonWorld_UsesSplitRecommendation()
+    {
+        var fallbackWorld = World("Aether", "Cactuar");
+        fallbackWorld.TotalCost = 2_000;
+
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 127,
+            Name = "Active Split Item",
+            QuantityNeeded = 1,
+            RecommendedWorld = fallbackWorld,
+            WorldOptions = { fallbackWorld, World("Primal", "Leviathan") },
+            RecommendedSplit = new List<SplitWorldPurchase>
+            {
+                Split("Primal", "Leviathan", quantity: 1, totalCost: 700)
+            }
+        };
+
+        var cards = ProcurementWorldCardBuilder.BuildWorldCards([plan], "Aether");
+
+        var card = Assert.Single(cards);
+        Assert.Equal("Primal", card.DataCenter);
+        Assert.Equal("Leviathan", card.WorldName);
+        Assert.Equal(700, card.TotalCost);
+        Assert.True(Assert.Single(card.Items).IsSplitPurchase);
+    }
+
     private static WorldShoppingSummary World(string dataCenter, string worldName, bool isCongested = false)
     {
         return new WorldShoppingSummary
