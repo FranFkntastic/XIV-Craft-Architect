@@ -41,6 +41,7 @@ namespace FFXIV_Craft_Architect.Core.Services;
 public class MarketShoppingService
 {
     private const int MaxSplitPurchaseCandidateAlternatives = 8;
+    private const int MaxProcurementRouteBeamWidth = 64;
 
     private readonly IMarketCacheService _cacheService;
     private readonly IWorldStatusService? _worldStatusService;
@@ -181,41 +182,118 @@ public class MarketShoppingService
         var plans = await CalculateDetailedShoppingPlansAsync(marketItems, dataCenter, progress, ct, 
             RecommendationMode.MinimizeTotalCost, config, blacklistedWorlds);
         
-        // Build world route map from tier 1 recommendations
-        var worldsInRoute = new HashSet<string>();
-        foreach (var plan in plans.Where(p => p.RecommendedWorld != null))
+        progress?.Report("Optimizing procurement route...");
+        return OptimizeProcurementRoute(plans, config, config.EnableSplitWorld);
+    }
+
+    /// <summary>
+    /// Selects active procurement recommendations globally across a set of market evidence plans.
+    /// The input plans are preserved, with only RecommendedWorld/RecommendedSplit updated for final choices.
+    /// </summary>
+    public List<DetailedShoppingPlan> OptimizeProcurementRoute(
+        IEnumerable<DetailedShoppingPlan> evidencePlans,
+        MarketAnalysisConfig? config = null,
+        bool includeSplitPurchases = false)
+    {
+        ArgumentNullException.ThrowIfNull(evidencePlans);
+
+        config ??= new MarketAnalysisConfig();
+        var plans = evidencePlans.ToList();
+        if (plans.Count == 0)
         {
-            worldsInRoute.Add(plan.RecommendedWorld!.WorldName);
+            return plans;
         }
-        
-        _logger?.LogInformation("[CalculateShoppingPlansWithSplits] Initial route contains {Count} worlds: {Worlds}", 
-            worldsInRoute.Count, string.Join(", ", worldsInRoute));
-        
-        // Pass 2: Calculate splits for items that need them
-        if (config.EnableSplitWorld)
+
+        var candidatePlanIndexes = plans
+            .Select((plan, index) => new { Plan = plan, Index = index })
+            .Where(p => !IsFixedVendorPlan(p.Plan))
+            .ToList();
+
+        var beam = new List<ProcurementRouteSearchState>
         {
-            progress?.Report("Optimizing multi-world purchases...");
-            var itemsNeedingSplit = plans.Where(p => 
-                p.RecommendedWorld == null || 
-                p.RecommendedWorld.TotalQuantityPurchased < p.QuantityNeeded).ToList();
-            
-            foreach (var plan in itemsNeedingSplit)
+            new()
+        };
+
+        foreach (var planEntry in candidatePlanIndexes)
+        {
+            var nextBeam = new List<ProcurementRouteSearchState>();
+
+            foreach (var state in beam)
             {
-                CalculateSplitPurchase(plan, config);
-                
-                // Add split worlds to route for subsequent items
-                if (plan.RecommendedSplit != null)
+                var candidates = GeneratePurchaseCandidates(planEntry.Plan, state.Route)
+                    .Where(c => c.IsFullyFulfilled)
+                    .Where(c => includeSplitPurchases || !c.IsSplitPurchase)
+                    .OrderBy(c => c, Comparer<MarketPurchaseCandidate>.Create(
+                        (left, right) => MarketRouteScoring.CompareCandidates(left, right, state.Route, config)))
+                    .ThenBy(c => c.ItemId)
+                    .ThenBy(c => c.ItemName)
+                    .ToList();
+
+                if (candidates.Count == 0)
                 {
-                    foreach (var split in plan.RecommendedSplit)
-                    {
-                        worldsInRoute.Add(split.WorldName);
-                    }
+                    nextBeam.Add(state.WithoutRecommendation(planEntry.Index));
+                    continue;
+                }
+
+                foreach (var candidate in candidates)
+                {
+                    nextBeam.Add(state.WithCandidate(planEntry.Index, candidate));
                 }
             }
+
+            beam = nextBeam
+                .OrderBy(s => s, Comparer<ProcurementRouteSearchState>.Create(
+                    (left, right) => CompareRouteStates(left, right, config)))
+                .ThenBy(s => s.TieBreakKey, StringComparer.Ordinal)
+                .Take(MaxProcurementRouteBeamWidth)
+                .ToList();
         }
-        
-        _logger?.LogInformation("[CalculateShoppingPlansWithSplits] Final route contains {Count} worlds", worldsInRoute.Count);
-        
+
+        foreach (var plan in plans)
+        {
+            if (IsFixedVendorPlan(plan))
+            {
+                plan.RecommendedSplit = null;
+                continue;
+            }
+
+            plan.RecommendedWorld = null;
+            plan.RecommendedSplit = null;
+        }
+
+        var bestState = beam
+            .OrderBy(s => s, Comparer<ProcurementRouteSearchState>.Create(
+                (left, right) => CompareRouteStates(left, right, config)))
+            .ThenBy(s => s.TieBreakKey, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+        if (bestState == null)
+        {
+            return plans;
+        }
+
+        foreach (var choice in bestState.Choices)
+        {
+            var plan = plans[choice.PlanIndex];
+            if (choice.Candidate == null)
+            {
+                continue;
+            }
+
+            if (choice.Candidate.SingleWorld != null)
+            {
+                plan.RecommendedWorld = choice.Candidate.SingleWorld;
+                plan.RecommendedSplit = null;
+                continue;
+            }
+
+            if (choice.Candidate.Split?.Any() == true)
+            {
+                plan.RecommendedWorld = null;
+                plan.RecommendedSplit = choice.Candidate.Split;
+            }
+        }
+
         return plans;
     }
 
@@ -1308,6 +1386,113 @@ public class MarketShoppingService
             }
         }
     }
+
+    private static int CompareRouteStates(
+        ProcurementRouteSearchState left,
+        ProcurementRouteSearchState right,
+        MarketAnalysisConfig config)
+    {
+        var leftCandidate = new MarketPurchaseCandidate(left.TotalGilCost, left.Route.Worlds);
+        var rightCandidate = new MarketPurchaseCandidate(right.TotalGilCost, right.Route.Worlds);
+        var emptyRoute = new MarketRouteState();
+        var leftScore = MarketRouteScoring.ScoreCandidate(leftCandidate, emptyRoute, config);
+        var rightScore = MarketRouteScoring.ScoreCandidate(rightCandidate, emptyRoute, config);
+        var scoreComparison = MarketRouteScoring.CompareScores(leftScore, rightScore);
+        if (scoreComparison != 0)
+        {
+            return scoreComparison;
+        }
+
+        return left.Choices.Count.CompareTo(right.Choices.Count);
+    }
+
+    private static bool IsFixedVendorPlan(DetailedShoppingPlan plan)
+    {
+        return string.Equals(
+            plan.RecommendedWorld?.WorldName,
+            MarketShoppingConstants.VendorWorldName,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class ProcurementRouteSearchState
+    {
+        public ProcurementRouteSearchState()
+            : this(new MarketRouteState(), 0, [])
+        {
+        }
+
+        private ProcurementRouteSearchState(
+            MarketRouteState route,
+            long totalGilCost,
+            IReadOnlyList<ProcurementRouteChoice> choices)
+        {
+            Route = route;
+            TotalGilCost = totalGilCost;
+            Choices = choices;
+            TieBreakKey = BuildTieBreakKey(choices);
+        }
+
+        public MarketRouteState Route { get; }
+        public long TotalGilCost { get; }
+        public IReadOnlyList<ProcurementRouteChoice> Choices { get; }
+        public string TieBreakKey { get; }
+
+        public ProcurementRouteSearchState WithCandidate(int planIndex, MarketPurchaseCandidate candidate)
+        {
+            var choices = Choices
+                .Append(new ProcurementRouteChoice(planIndex, candidate))
+                .ToList();
+            var route = new MarketRouteState(Route.Worlds.Concat(candidate.Worlds));
+
+            return new ProcurementRouteSearchState(
+                route,
+                SaturatingAdd(TotalGilCost, candidate.GilCost),
+                choices);
+        }
+
+        public ProcurementRouteSearchState WithoutRecommendation(int planIndex)
+        {
+            var choices = Choices
+                .Append(new ProcurementRouteChoice(planIndex, null))
+                .ToList();
+
+            return new ProcurementRouteSearchState(Route, TotalGilCost, choices);
+        }
+
+        private static long SaturatingAdd(long left, long right)
+        {
+            if (left > 0 && right > long.MaxValue - left)
+            {
+                return long.MaxValue;
+            }
+
+            return left + right;
+        }
+
+        private static string BuildTieBreakKey(IEnumerable<ProcurementRouteChoice> choices)
+        {
+            return string.Join(
+                "|",
+                choices.Select(choice =>
+                {
+                    if (choice.Candidate == null)
+                    {
+                        return $"{choice.PlanIndex:D8}:NO_RECOMMENDATION";
+                    }
+
+                    var routeKey = string.Join(
+                        ",",
+                        choice.Candidate.Worlds
+                            .OrderBy(world => world.DataCenter)
+                            .ThenBy(world => world.WorldName)
+                            .Select(world => $"{world.DataCenter}:{world.WorldName}"));
+
+                    return $"{choice.PlanIndex:D8}:{choice.Candidate.GilCost:D20}:{routeKey}";
+                }));
+        }
+    }
+
+    private sealed record ProcurementRouteChoice(int PlanIndex, MarketPurchaseCandidate? Candidate);
 }
 
 /// <summary>

@@ -157,11 +157,23 @@
                 await MarketCache.EnsurePopulatedAsync(requests, progress: progress);
             }
 
-            return await MarketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
+            var config = new MarketAnalysisConfig
+            {
+                EnableSplitWorld = AppState.EnableMultiWorldSplits,
+                MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null
+            };
+
+            var evidencePlans = await MarketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
                 materials,
                 progress,
                 mode: AppState.RecommendationMode,
+                config: config,
                 blacklistedMarketWorlds: AppState.TemporarilyBlacklistedMarketWorlds);
+
+            return MarketShoppingService.OptimizeProcurementRoute(
+                evidencePlans,
+                config,
+                AppState.EnableMultiWorldSplits);
         }
 
         var cacheRequests = materials.Select(item => (item.ItemId, AppState.SelectedDataCenter)).ToList();
@@ -176,20 +188,30 @@
                 MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null
             };
 
-            return await MarketShoppingService.CalculateShoppingPlansWithSplitsAsync(
+            var evidencePlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
                 materials,
                 AppState.SelectedDataCenter,
                 progress,
+                mode: AppState.RecommendationMode,
                 config: config,
                 blacklistedWorlds: AppState.TemporarilyBlacklistedWorlds);
+
+            return MarketShoppingService.OptimizeProcurementRoute(
+                evidencePlans,
+                config,
+                includeSplitPurchases: true);
         }
 
-        return await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+        var plans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
             materials,
             AppState.SelectedDataCenter,
             progress,
             mode: AppState.RecommendationMode,
             blacklistedWorlds: AppState.TemporarilyBlacklistedWorlds);
+
+        return MarketShoppingService.OptimizeProcurementRoute(
+            plans,
+            includeSplitPurchases: false);
     }
 
     private void MergeShoppingPlans(List<DetailedShoppingPlan> activePlans)
