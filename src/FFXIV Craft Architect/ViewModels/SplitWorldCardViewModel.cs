@@ -21,7 +21,9 @@ public class SplitWorldCardViewModel : ViewModelBase
     public string WorldName => _split.WorldName;
     public int QuantityToBuy => _split.QuantityToBuy;
     public int TotalQuantityNeeded => _totalQuantity;
-    public decimal PricePerUnit => _split.EffectivePricePerNeededUnit;
+    public decimal PricePerUnit => EffectivePricePerNeededUnit;
+    public decimal ListingPricePerUnit => _split.PricePerUnit;
+    public decimal EffectivePricePerNeededUnit => _split.EffectivePricePerNeededUnit;
     public long TotalCost => _split.TotalCost;
     public bool IsPartial => _split.IsPartial;
     public string TravelContext => _split.TravelContext;
@@ -29,7 +31,9 @@ public class SplitWorldCardViewModel : ViewModelBase
 
     public string QuantityDisplay => $"×{QuantityToBuy} of {TotalQuantityNeeded}";
     public string CostDisplay => $"{TotalCost:N0}g";
-    public string PriceDisplay => $"@{PricePerUnit:N0}g/ea";
+    public string PriceDisplay => EffectivePriceDisplay;
+    public string ListingPriceDisplay => $"@{ListingPricePerUnit:N0}g/ea listing";
+    public string EffectivePriceDisplay => $"~{EffectivePricePerNeededUnit:N0}g/needed ea";
     public string? ExcessDisplay => ExcessAvailable > 0 ? $"+{ExcessAvailable} excess" : null;
     public bool HasExcess => ExcessAvailable > 0;
 

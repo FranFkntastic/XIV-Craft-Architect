@@ -840,12 +840,24 @@ public class WorldItemPurchase
     public int TotalQuantityNeeded { get; set; }
     
     /// <summary>
-    /// Price per unit on this world.
+    /// Listing unit price on this world, or effective cost per needed unit when PriceIsEffectiveCost is true.
     /// </summary>
     public decimal PricePerUnit { get; set; }
+
+    /// <summary>
+    /// Whether PricePerUnit is an effective cost per needed unit because full listing stacks include excess.
+    /// </summary>
+    public bool PriceIsEffectiveCost { get; set; }
+
+    /// <summary>
+    /// Display string that distinguishes actual listing unit prices from effective full-stack costs.
+    /// </summary>
+    public string PriceDisplay => PriceIsEffectiveCost
+        ? $"{PricePerUnit:N0}g eff."
+        : $"{PricePerUnit:N0}g";
     
     /// <summary>
-    /// Total cost for this portion (QuantityOnThisWorld * PricePerUnit).
+    /// Total cost for this portion.
     /// </summary>
     public long TotalCost { get; set; }
     

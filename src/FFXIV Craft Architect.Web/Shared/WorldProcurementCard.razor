@@ -134,7 +134,7 @@
                                 @item.QuantityDisplay
                             </td>
                             <td style="padding: 6px 8px; color: #aaa; text-align: right; font-size: 11px;">
-                                @item.PricePerUnit.ToString("N0")g
+                                @item.PriceDisplay
                             </td>
                             <td style="padding: 6px 8px; color: #4caf50; text-align: right; font-weight: 500;">
                                 @item.TotalCost.ToString("N0")g
@@ -177,7 +177,7 @@
                         </div>
                         <div style="display: flex; align-items: center; gap: 12px; flex-shrink: 0;">
                             <span style="color: #d4a73a;">@item.SimpleQuantityDisplay</span>
-                            <span style="color: #aaa; font-size: 11px;">@item.PricePerUnit.ToString("N0")g</span>
+                            <span style="color: #aaa; font-size: 11px;">@item.PriceDisplay</span>
                             <span style="color: #4caf50; font-weight: 500;">@item.TotalCost.ToString("N0")g</span>
                         </div>
                     </div>

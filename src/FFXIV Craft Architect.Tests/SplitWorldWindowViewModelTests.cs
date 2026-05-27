@@ -13,6 +13,7 @@ public class SplitWorldWindowViewModelTests
             WorldName = "Siren",
             QuantityToBuy = 14,
             PricePerUnit = 57,
+            EffectivePricePerNeededUnit = 65,
             TotalCost = 798,
             IsPartial = true,
             TravelContext = "Supplemental",
@@ -36,7 +37,10 @@ public class SplitWorldWindowViewModelTests
         Assert.Equal("Siren", viewModel.WorldName);
         Assert.Equal("×14 of 2880", viewModel.QuantityDisplay);
         Assert.Equal("798g", viewModel.CostDisplay);
-        Assert.Equal("@57g/ea", viewModel.PriceDisplay);
+        Assert.Equal(57, viewModel.ListingPricePerUnit);
+        Assert.Equal(65, viewModel.EffectivePricePerNeededUnit);
+        Assert.Equal("@57g/ea listing", viewModel.ListingPriceDisplay);
+        Assert.Equal("~65g/needed ea", viewModel.EffectivePriceDisplay);
         Assert.True(viewModel.HasListings);
         Assert.True(viewModel.HasExcess);
         Assert.Equal("+2 excess", viewModel.ExcessDisplay);

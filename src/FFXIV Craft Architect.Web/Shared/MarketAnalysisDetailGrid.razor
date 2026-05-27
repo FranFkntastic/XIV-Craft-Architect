@@ -120,8 +120,8 @@
                     <TemplateColumn T="RecommendedPurchaseRow" Title="Qty" SortBy="row => row.Quantity" CellClass="ma-detail-number">
                         <CellTemplate>@FormatQuantity(context.Item.Quantity)</CellTemplate>
                     </TemplateColumn>
-                    <TemplateColumn T="RecommendedPurchaseRow" Title="Unit" SortBy="row => row.UnitPrice" CellClass="ma-detail-number">
-                        <CellTemplate>@context.Item.UnitPrice.ToString("N0")g</CellTemplate>
+                    <TemplateColumn T="RecommendedPurchaseRow" Title="Unit / Eff." SortBy="row => row.UnitPrice" CellClass="ma-detail-number">
+                        <CellTemplate>@context.Item.PriceDisplay</CellTemplate>
                     </TemplateColumn>
                     <TemplateColumn T="RecommendedPurchaseRow" Title="Total" SortBy="row => row.TotalCost" CellClass="ma-detail-total-cell">
                         <CellTemplate>@context.Item.TotalCost.ToString("N0")g</CellTemplate>
@@ -239,7 +239,8 @@
                 split.QuantityToBuy,
                 split.EffectivePricePerNeededUnit,
                 split.TotalCost,
-                split.TravelContext));
+                split.TravelContext,
+                true));
         }
 
         if (Plan.RecommendedWorld != null)
@@ -448,7 +449,13 @@
         int Quantity,
         decimal UnitPrice,
         long TotalCost,
-        string Kind);
+        string Kind,
+        bool IsEffectiveCost = false)
+    {
+        public string PriceDisplay => IsEffectiveCost
+            ? $"{UnitPrice:N0}g eff."
+            : $"{UnitPrice:N0}g";
+    }
 
     private enum WorldSortColumn
     {

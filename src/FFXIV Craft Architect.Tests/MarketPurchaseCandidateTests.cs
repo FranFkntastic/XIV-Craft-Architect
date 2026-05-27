@@ -166,6 +166,43 @@ public class MarketPurchaseCandidateTests
     }
 
     [Fact]
+    public void GeneratePurchaseCandidates_RouteStateIncludesReuseWorldBeyondDefaultBound()
+    {
+        var worlds = Enumerable.Range(1, 10)
+            .Select(i => World("Aether", $"World{i:00}", i * 100, i * 100, Listing(1, i * 100, $"Retainer {i:00}")))
+            .ToArray();
+        var plan = Plan(quantityNeeded: 2, worlds);
+        var currentRoute = new MarketRouteState([new MarketWorldKey("Aether", "World10")]);
+
+        var candidates = GenerateCandidates(plan, currentRoute);
+
+        var splitCandidates = candidates.Where(c => c.IsSplitPurchase).ToList();
+        Assert.InRange(splitCandidates.Count, 1, 8);
+        Assert.Contains(splitCandidates, candidate => RouteKey(candidate) == "AETHER:WORLD01|AETHER:WORLD10");
+    }
+
+    [Fact]
+    public void GeneratePurchaseCandidates_DuplicateRouteKeysRetainsCheapestFulfilledSplit()
+    {
+        var alpha = World(
+            "Aether",
+            "Alpha",
+            1500,
+            50,
+            Listing(5, 100, "Alpha Cheap"),
+            Listing(1, 1000, "Alpha Expensive"));
+        var bravo = World("Aether", "Bravo", 600, 100, Listing(6, 100, "Bravo Retainer"));
+        var plan = Plan(quantityNeeded: 10, alpha, bravo);
+
+        var candidates = GenerateCandidates(plan);
+
+        var candidate = Assert.Single(candidates, c => RouteKey(c) == "AETHER:ALPHA|AETHER:BRAVO");
+        Assert.True(candidate.IsFullyFulfilled);
+        Assert.Equal(1100, candidate.GilCost);
+        Assert.Equal(1100, candidate.Split!.Sum(s => s.TotalCost));
+    }
+
+    [Fact]
     public void GeneratePurchaseCandidates_InsufficientTotalStock_ReturnsNoCandidate()
     {
         var siren = World("Aether", "Siren", 300, 100, Listing(3, 100, "Siren Retainer"));
@@ -190,12 +227,14 @@ public class MarketPurchaseCandidateTests
         Assert.Null(plan.RecommendedSplit);
     }
 
-    private static List<MarketPurchaseCandidate> GenerateCandidates(DetailedShoppingPlan plan)
+    private static List<MarketPurchaseCandidate> GenerateCandidates(
+        DetailedShoppingPlan plan,
+        MarketRouteState? currentRoute = null)
     {
         var cache = new Mock<IMarketCacheService>();
         var service = new MarketShoppingService(cache.Object);
 
-        return service.GeneratePurchaseCandidates(plan);
+        return service.GeneratePurchaseCandidates(plan, currentRoute);
     }
 
     private static string RouteKey(MarketPurchaseCandidate candidate)

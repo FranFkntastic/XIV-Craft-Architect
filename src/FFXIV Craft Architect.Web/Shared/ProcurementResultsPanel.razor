@@ -250,6 +250,7 @@
                         QuantityOnThisWorld = split.QuantityToBuy,
                         TotalQuantityNeeded = plan.QuantityNeeded,
                         PricePerUnit = split.EffectivePricePerNeededUnit,
+                        PriceIsEffectiveCost = true,
                         TotalCost = split.TotalCost,
                         IsSplitPurchase = true,
                         SourcePlan = plan,
@@ -260,7 +261,8 @@
             // Handle single-world purchases (including vendor)
             else if (plan.RecommendedWorld != null)
             {
-                var worldName = plan.RecommendedWorld.WorldName;
+                var recommendedWorld = plan.RecommendedWorld;
+                var worldName = recommendedWorld.WorldName;
                 
                 if (!worldCards.TryGetValue(worldName, out var card))
                 {
@@ -268,10 +270,10 @@
                     {
                         WorldName = worldName,
                         DataCenter = AppState.SelectedDataCenter,
-                        IsCongested = plan.RecommendedWorld.IsCongested,
-                        Classification = plan.RecommendedWorld.Classification,
+                        IsCongested = recommendedWorld.IsCongested,
+                        Classification = recommendedWorld.Classification,
                         Vendors = worldName == "Vendor" ? plan.Vendors?.ToList() ?? new List<VendorInfo>() : new List<VendorInfo>(),
-                        SelectedVendorName = worldName == "Vendor" ? plan.RecommendedWorld?.VendorName : null
+                        SelectedVendorName = worldName == "Vendor" ? recommendedWorld.VendorName : null
                     };
                     worldCards[worldName] = card;
                 }
@@ -281,7 +283,7 @@
                 if (worldName == "Vendor" && plan.Vendors?.Any() == true)
                 {
                     // Match vendor by price - the RecommendedWorld should have the vendor price
-                    itemVendor = plan.Vendors.FirstOrDefault(v => v.Price == plan.RecommendedWorld.AveragePricePerUnit)
+                    itemVendor = plan.Vendors.FirstOrDefault(v => v.Price == recommendedWorld.AveragePricePerUnit)
                         ?? plan.Vendors.FirstOrDefault();
                 }
 
@@ -292,8 +294,8 @@
                     IconId = plan.IconId,
                     QuantityOnThisWorld = plan.QuantityNeeded,
                     TotalQuantityNeeded = plan.QuantityNeeded,
-                    PricePerUnit = plan.RecommendedWorld.AveragePricePerUnit,
-                    TotalCost = plan.RecommendedWorld.TotalCost,
+                    PricePerUnit = recommendedWorld.AveragePricePerUnit,
+                    TotalCost = recommendedWorld.TotalCost,
                     IsSplitPurchase = false,
                     SourcePlan = plan,
                     TravelContext = "Primary",
@@ -346,7 +348,7 @@
                     ? item.SimpleQuantityDisplay
                     : item.QuantityDisplay;
                 
-                sb.AppendLine($"- **{item.ItemName}** {qtyDisplay} @ {item.PricePerUnit:N0}g = **{item.TotalCost:N0}g**");
+                sb.AppendLine($"- **{item.ItemName}** {qtyDisplay} @ {item.PriceDisplay} = **{item.TotalCost:N0}g**");
                 
                 // Add vendor information for vendor purchases
                 if (world.IsVendor && item.Vendor != null)

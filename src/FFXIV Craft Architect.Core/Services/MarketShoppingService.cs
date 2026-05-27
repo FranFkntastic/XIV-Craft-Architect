@@ -778,7 +778,9 @@ public class MarketShoppingService
     /// <summary>
     /// Generates feasible purchase candidates for route-aware market optimization.
     /// </summary>
-    public List<MarketPurchaseCandidate> GeneratePurchaseCandidates(DetailedShoppingPlan plan)
+    public List<MarketPurchaseCandidate> GeneratePurchaseCandidates(
+        DetailedShoppingPlan plan,
+        MarketRouteState? currentRoute = null)
     {
         var candidates = new List<MarketPurchaseCandidate>();
         if (plan.QuantityNeeded <= 0 || plan.WorldOptions.Count == 0)
@@ -822,7 +824,7 @@ public class MarketShoppingService
             .Select(w => w.World)
             .ToList();
 
-        foreach (var split in GenerateSplitPurchaseAlternatives(plan.QuantityNeeded, splitWorlds))
+        foreach (var split in GenerateSplitPurchaseAlternatives(plan.QuantityNeeded, splitWorlds, currentRoute))
         {
             var quantityFulfilled = split.Sum(s => s.QuantityToBuy);
             candidates.Add(new MarketPurchaseCandidate(
@@ -842,36 +844,52 @@ public class MarketShoppingService
 
     private static List<List<SplitWorldPurchase>> GenerateSplitPurchaseAlternatives(
         int quantityNeeded,
-        IReadOnlyList<WorldShoppingSummary> rankedWorlds)
+        IReadOnlyList<WorldShoppingSummary> rankedWorlds,
+        MarketRouteState? currentRoute)
     {
-        var alternatives = new List<List<SplitWorldPurchase>>();
-        var routeKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var alternatives = new Dictionary<string, List<SplitWorldPurchase>>(StringComparer.OrdinalIgnoreCase);
+        var routeKeyOrder = new List<string>();
 
-        AddSplitAlternative(quantityNeeded, rankedWorlds, alternatives, routeKeys);
+        AddSplitAlternative(quantityNeeded, rankedWorlds, alternatives, routeKeyOrder);
 
-        foreach (var seedWorld in rankedWorlds)
+        foreach (var seedWorld in GetSplitSeedWorlds(rankedWorlds, currentRoute))
         {
-            if (alternatives.Count >= MaxSplitPurchaseCandidateAlternatives)
-            {
-                break;
-            }
-
             var seededWorlds = rankedWorlds
                 .Where(world => !IsSameWorld(world, seedWorld))
                 .Prepend(seedWorld)
                 .ToList();
 
-            AddSplitAlternative(quantityNeeded, seededWorlds, alternatives, routeKeys);
+            AddSplitAlternative(quantityNeeded, seededWorlds, alternatives, routeKeyOrder);
         }
 
-        return alternatives;
+        return routeKeyOrder
+            .Select(routeKey => alternatives[routeKey])
+            .ToList();
+    }
+
+    private static IEnumerable<WorldShoppingSummary> GetSplitSeedWorlds(
+        IReadOnlyList<WorldShoppingSummary> rankedWorlds,
+        MarketRouteState? currentRoute)
+    {
+        if (currentRoute == null)
+        {
+            return rankedWorlds;
+        }
+
+        var routeReuseWorlds = rankedWorlds
+            .Where(world => currentRoute.ContainsWorld(new MarketWorldKey(world.DataCenter, world.WorldName)));
+
+        var localWorlds = rankedWorlds
+            .Where(world => !currentRoute.ContainsWorld(new MarketWorldKey(world.DataCenter, world.WorldName)));
+
+        return routeReuseWorlds.Concat(localWorlds);
     }
 
     private static void AddSplitAlternative(
         int quantityNeeded,
         IEnumerable<WorldShoppingSummary> worlds,
-        List<List<SplitWorldPurchase>> alternatives,
-        HashSet<string> routeKeys)
+        Dictionary<string, List<SplitWorldPurchase>> alternatives,
+        List<string> routeKeyOrder)
     {
         var split = BuildSplitPurchase(quantityNeeded, worlds);
         if (split.Count <= 1 || split.Sum(s => s.QuantityToBuy) < quantityNeeded)
@@ -880,9 +898,22 @@ public class MarketShoppingService
         }
 
         var routeKey = GetSplitRouteKey(split);
-        if (routeKeys.Add(routeKey))
+        if (alternatives.TryGetValue(routeKey, out var existing))
         {
-            alternatives.Add(split);
+            var existingCost = existing.Sum(s => s.TotalCost);
+            var splitCost = split.Sum(s => s.TotalCost);
+            if (splitCost < existingCost)
+            {
+                alternatives[routeKey] = split;
+            }
+
+            return;
+        }
+
+        if (alternatives.Count < MaxSplitPurchaseCandidateAlternatives)
+        {
+            alternatives[routeKey] = split;
+            routeKeyOrder.Add(routeKey);
         }
     }
 

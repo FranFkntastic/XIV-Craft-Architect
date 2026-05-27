@@ -174,7 +174,7 @@
                             }
                         </span>
                         <span>@(world.IsVendor || !item.IsSplitPurchase ? item.SimpleQuantityDisplay : item.QuantityDisplay)</span>
-                        <span>@item.PricePerUnit.ToString("N0")g</span>
+                        <span>@item.PriceDisplay</span>
                         <span class="pp-item-total">@item.TotalCost.ToString("N0")g</span>
                         <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
                                        Size="Size.Small"
@@ -284,6 +284,7 @@
                         QuantityOnThisWorld = split.QuantityToBuy,
                         TotalQuantityNeeded = plan.QuantityNeeded,
                         PricePerUnit = split.EffectivePricePerNeededUnit,
+                        PriceIsEffectiveCost = true,
                         TotalCost = split.TotalCost,
                         IsSplitPurchase = true,
                         SourcePlan = plan,
