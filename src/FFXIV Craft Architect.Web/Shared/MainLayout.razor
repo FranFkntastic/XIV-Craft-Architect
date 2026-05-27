@@ -604,7 +604,7 @@
                 var allItemIds = AppState.CurrentPlan.GetAllItemIds().ToList();
                 var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, allItemIds);
                 var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
-                var responses = await MarketScopedPriceLoader.LoadResponsesAsync(
+                var marketEntries = await MarketScopedPriceLoader.LoadBestEntriesAsync(
                     MarketCache,
                     marketItemIds,
                     AppState.DefaultMarketFetchScope,
@@ -612,8 +612,8 @@
                     AppState.SelectedRegion,
                     progress: progress);
 
-                UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, responses);
-                Logger.LogInformation("Loaded {Count} market entries from cache scope {Scope}", responses.Count, AppState.DefaultMarketFetchScope);
+                UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, marketEntries);
+                Logger.LogInformation("Loaded {Count} market entries from cache scope {Scope}", marketEntries.Count, AppState.DefaultMarketFetchScope);
                 Snackbar.Add("Market prices updated", Severity.Success);
             }
 
@@ -637,26 +637,26 @@
             : $"dev-plans/{path}";
     }
     
-    private void UpdateNodeMarketPrices(List<PlanNode> nodes, Dictionary<int, UniversalisResponse> responses)
+    private void UpdateNodeMarketPrices(List<PlanNode> nodes, IReadOnlyDictionary<int, CachedMarketData> marketEntries)
     {
         foreach (var node in nodes)
         {
-            if (responses.TryGetValue(node.ItemId, out var response))
+            if (marketEntries.TryGetValue(node.ItemId, out var entry))
             {
-                node.MarketPrice = (decimal)response.AveragePrice;
+                node.MarketPrice = MarketScopedPriceLoader.GetComparableAveragePrice(entry);
                 
                 // Calculate HQ price if available
-                var hqListings = response.Listings.Where(l => l.IsHq).ToList();
+                var hqListings = entry.Worlds.SelectMany(world => world.Listings).Where(listing => listing.IsHq).ToList();
                 if (hqListings.Any())
                 {
-                    node.HqMarketPrice = (decimal)hqListings.Average(l => l.PricePerUnit);
+                    node.HqMarketPrice = (decimal)hqListings.Average(listing => listing.PricePerUnit);
                 }
             }
             
             // Recursively update children
             if (node.Children?.Any() == true)
             {
-                UpdateNodeMarketPrices(node.Children, responses);
+                UpdateNodeMarketPrices(node.Children, marketEntries);
             }
         }
     }

@@ -47,6 +47,7 @@
                 .ToList();
             var vendorCard = routeCards.FirstOrDefault(c => c.IsVendor);
             var errorItems = GetItemsWithErrors().ToList();
+            var warningItems = GetItemsWithWarnings().ToList();
 
             <div class="pp-route-tree">
                 @foreach (var dcGroup in dcGroups)
@@ -98,6 +99,23 @@
                             <div class="pp-error-row">
                                 <span>@plan.Name</span>
                                 <span>@plan.Error</span>
+                            </div>
+                        }
+                    </section>
+                }
+
+                @if (warningItems.Any())
+                {
+                    <section class="pp-error-group">
+                        <div class="pp-dc-header">
+                            <span>Warnings</span>
+                            <small>@warningItems.Count items</small>
+                        </div>
+                        @foreach (var plan in warningItems)
+                        {
+                            <div class="pp-error-row">
+                                <span>@plan.Name</span>
+                                <span>@plan.MarketDataWarning</span>
                             </div>
                         }
                     </section>
@@ -258,6 +276,11 @@
     private IEnumerable<DetailedShoppingPlan> GetItemsWithErrors()
     {
         return ShoppingPlans.Where(p => !string.IsNullOrEmpty(p.Error));
+    }
+
+    private IEnumerable<DetailedShoppingPlan> GetItemsWithWarnings()
+    {
+        return ShoppingPlans.Where(p => string.IsNullOrEmpty(p.Error) && !string.IsNullOrEmpty(p.MarketDataWarning));
     }
 
     private List<WorldProcurementCardModel> GetRouteCards()

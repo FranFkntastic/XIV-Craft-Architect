@@ -384,6 +384,7 @@ public class DetailedShoppingPlan
     public List<WorldShoppingSummary> WorldOptions { get; set; } = new();
     public WorldShoppingSummary? RecommendedWorld { get; set; }
     public string? Error { get; set; }
+    public string? MarketDataWarning { get; set; }
     
     /// <summary>
     /// HQ price data if available (for endgame crafting considerations).

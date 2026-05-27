@@ -1,5 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace FFXIV_Craft_Architect.Tests;
@@ -106,6 +107,148 @@ public class MarketShoppingServiceDataCenterTests
     }
 
     [Fact]
+    public async Task CalculateDetailedShoppingPlansAsync_RequestUsesProvidedEvidenceWithoutCacheReads()
+    {
+        var cache = new Mock<IMarketCacheService>(MockBehavior.Strict);
+        var service = new MarketShoppingService(cache.Object);
+        var materials = new List<MaterialAggregate>
+        {
+            new() { ItemId = 123, Name = "Evidence Item", TotalQuantity = 2 }
+        };
+        var evidence = new MarketEvidenceSet(
+            new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(123, "Aether")] = new CachedMarketData
+                {
+                    ItemId = 123,
+                    DataCenter = "Aether",
+                    DCAveragePrice = 50,
+                    Worlds =
+                    {
+                        new CachedWorldData
+                        {
+                            WorldName = "Siren",
+                            Listings =
+                            {
+                                new CachedListing { Quantity = 2, PricePerUnit = 50, RetainerName = "Evidence Retainer" }
+                            }
+                        }
+                    }
+                }
+            },
+            [(123, "Aether")],
+            MarketFetchScope.SelectedDataCenter,
+            ["Aether"],
+            "Aether",
+            "North America",
+            maxAge: null,
+            fetchedCount: 0,
+            loadedAtUtc: DateTime.UtcNow);
+
+        var plans = await service.CalculateDetailedShoppingPlansAsync(new MarketAnalysisRequest
+        {
+            Items = materials,
+            Evidence = evidence
+        });
+
+        var plan = Assert.Single(plans);
+        Assert.Equal("Siren", plan.RecommendedWorld?.WorldName);
+        Assert.Equal("Aether", plan.RecommendedWorld?.DataCenter);
+        cache.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task CalculateDetailedShoppingPlansAsync_RequestKeepsBlacklistedHomeWorldAvailable()
+    {
+        var cache = new Mock<IMarketCacheService>(MockBehavior.Strict);
+        var settings = new Mock<SettingsService>(Mock.Of<ILogger<SettingsService>>());
+        settings
+            .Setup(s => s.Get<string>("market.home_world", ""))
+            .Returns("Siren");
+        settings
+            .Setup(s => s.Get<bool>("market.exclude_congested_worlds", true))
+            .Returns(true);
+        var service = new MarketShoppingService(cache.Object, settingsService: settings.Object);
+        var materials = new List<MaterialAggregate>
+        {
+            new() { ItemId = 123, Name = "Home World Item", TotalQuantity = 1 }
+        };
+        var evidence = CreateEvidence(
+            new CachedMarketData
+            {
+                ItemId = 123,
+                DataCenter = "Aether",
+                DCAveragePrice = 50,
+                Worlds =
+                {
+                    new CachedWorldData
+                    {
+                        WorldName = "Siren",
+                        Listings =
+                        {
+                            new CachedListing { Quantity = 1, PricePerUnit = 50, RetainerName = "Home Retainer" }
+                        }
+                    }
+                }
+            },
+            [(123, "Aether")]);
+
+        var plans = await service.CalculateDetailedShoppingPlansAsync(new MarketAnalysisRequest
+        {
+            Items = materials,
+            Evidence = evidence,
+            BlacklistedWorlds = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Siren" }
+        });
+
+        var plan = Assert.Single(plans);
+        var world = Assert.Single(plan.WorldOptions);
+        Assert.Equal("Siren", world.WorldName);
+        Assert.True(world.IsHomeWorld);
+        Assert.Equal("Siren", plan.RecommendedWorld?.WorldName);
+    }
+
+    [Fact]
+    public async Task CalculateDetailedShoppingPlansAsync_RequestMarksPartialEvidence()
+    {
+        var cache = new Mock<IMarketCacheService>(MockBehavior.Strict);
+        var service = new MarketShoppingService(cache.Object);
+        var materials = new List<MaterialAggregate>
+        {
+            new() { ItemId = 123, Name = "Partial Evidence Item", TotalQuantity = 1 }
+        };
+        var evidence = CreateEvidence(
+            new CachedMarketData
+            {
+                ItemId = 123,
+                DataCenter = "Aether",
+                DCAveragePrice = 50,
+                Worlds =
+                {
+                    new CachedWorldData
+                    {
+                        WorldName = "Siren",
+                        Listings =
+                        {
+                            new CachedListing { Quantity = 1, PricePerUnit = 50, RetainerName = "Partial Retainer" }
+                        }
+                    }
+                }
+            },
+            [(123, "Aether"), (123, "Primal")]);
+
+        var plans = await service.CalculateDetailedShoppingPlansAsync(new MarketAnalysisRequest
+        {
+            Items = materials,
+            Evidence = evidence
+        });
+
+        var plan = Assert.Single(plans);
+        Assert.Equal("Siren", plan.RecommendedWorld?.WorldName);
+        Assert.Null(plan.Error);
+        Assert.Contains("Market data incomplete for Primal", plan.MarketDataWarning);
+    }
+
+    [Fact]
     public async Task CalculateDetailedShoppingPlansMultiDCAsync_StructuredBlacklistExcludesOnlyMatchingDataCenterWorld()
     {
         var cache = new Mock<IMarketCacheService>();
@@ -163,5 +306,24 @@ public class MarketShoppingServiceDataCenterTests
                     }
                 }
             });
+    }
+
+    private static MarketEvidenceSet CreateEvidence(
+        CachedMarketData entry,
+        IReadOnlyList<(int itemId, string dataCenter)> requestedPairs)
+    {
+        return new MarketEvidenceSet(
+            new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(entry.ItemId, entry.DataCenter)] = entry
+            },
+            requestedPairs,
+            requestedPairs.Count > 1 ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter,
+            requestedPairs.Select(pair => pair.dataCenter).Distinct().ToList(),
+            entry.DataCenter,
+            "North America",
+            maxAge: null,
+            fetchedCount: 0,
+            loadedAtUtc: DateTime.UtcNow);
     }
 }

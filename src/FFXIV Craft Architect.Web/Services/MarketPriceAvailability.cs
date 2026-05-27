@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -33,6 +34,28 @@ public static class MarketPriceAvailability
         return new MarketPriceRefreshResult(
             requestedIds.Count + skippedIds.Count,
             responses.Count,
+            unavailableItems);
+    }
+
+    public static MarketPriceRefreshResult FromCachedMarketData(
+        CraftingPlan plan,
+        IEnumerable<int> requestedItemIds,
+        IReadOnlyDictionary<int, CachedMarketData> entries,
+        IEnumerable<int>? skippedItemIds = null)
+    {
+        var requestedIds = requestedItemIds.Distinct().ToList();
+        var skippedIds = skippedItemIds?.Distinct().ToList() ?? new List<int>();
+        var unavailableItems = requestedIds
+            .Where(id => !entries.ContainsKey(id))
+            .Concat(skippedIds)
+            .Distinct()
+            .Select(id => new MarketDataUnavailableItem(id, ResolveItemName(plan, id)))
+            .OrderBy(item => item.Name)
+            .ToList();
+
+        return new MarketPriceRefreshResult(
+            requestedIds.Count + skippedIds.Count,
+            entries.Count,
             unavailableItems);
     }
 

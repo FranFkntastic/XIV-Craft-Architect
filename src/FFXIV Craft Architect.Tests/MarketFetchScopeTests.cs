@@ -52,14 +52,15 @@ public class MarketFetchScopeTests
             .Callback<List<(int itemId, string dataCenter)>, TimeSpan?, IProgress<string>?, CancellationToken>(
                 (requests, _, _, _) => ensuredRequests = requests)
             .ReturnsAsync(0);
-        cache.Setup(c => c.GetAsync(123, "Aether", It.IsAny<TimeSpan?>()))
-            .ReturnsAsync(CreateCachedData(123, "Aether", 200));
-        cache.Setup(c => c.GetAsync(123, "Primal", It.IsAny<TimeSpan?>()))
-            .ReturnsAsync(CreateCachedData(123, "Primal", 100));
-        cache.Setup(c => c.GetAsync(123, "Crystal", It.IsAny<TimeSpan?>()))
-            .ReturnsAsync(CreateCachedData(123, "Crystal", 150));
-        cache.Setup(c => c.GetAsync(123, "Dynamis", It.IsAny<TimeSpan?>()))
-            .ReturnsAsync((CachedMarketData?)null);
+        cache.Setup(c => c.GetManyAsync(
+                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>()))
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(123, "Aether")] = CreateCachedData(123, "Aether", 200),
+                [(123, "Primal")] = CreateCachedData(123, "Primal", 100),
+                [(123, "Crystal")] = CreateCachedData(123, "Crystal", 150)
+            });
 
         var responses = await MarketScopedPriceLoader.LoadResponsesAsync(
             cache.Object,
@@ -87,8 +88,13 @@ public class MarketFetchScopeTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(0);
-        cache.Setup(c => c.GetAsync(456, "Aether", It.IsAny<TimeSpan?>()))
-            .ReturnsAsync(CreateCachedData(456, "Aether", averagePrice: 0, listingPrice: 375));
+        cache.Setup(c => c.GetManyAsync(
+                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>()))
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(456, "Aether")] = CreateCachedData(456, "Aether", averagePrice: 0, listingPrice: 375)
+            });
 
         var responses = await MarketScopedPriceLoader.LoadResponsesAsync(
             cache.Object,
@@ -100,6 +106,38 @@ public class MarketFetchScopeTests
         var response = Assert.Single(responses);
         Assert.Equal(456, response.Key);
         Assert.Equal(375, response.Value.AveragePrice);
+    }
+
+    [Fact]
+    public async Task LoadBestEntriesAsync_EntireRegion_ReturnsCachedDataWithoutResponseConversion()
+    {
+        var cache = new Mock<IMarketCacheService>();
+        var primalEntry = CreateCachedData(789, "Primal", 80);
+        cache.Setup(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+        cache.Setup(c => c.GetManyAsync(
+                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>()))
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(789, "Aether")] = CreateCachedData(789, "Aether", 120),
+                [(789, "Primal")] = primalEntry
+            });
+
+        var entries = await MarketScopedPriceLoader.LoadBestEntriesAsync(
+            cache.Object,
+            [789],
+            MarketFetchScope.EntireRegion,
+            selectedDataCenter: "Aether",
+            selectedRegion: "North America");
+
+        var entry = Assert.Single(entries);
+        Assert.Equal(789, entry.Key);
+        Assert.Same(primalEntry, entry.Value);
     }
 
     private static CachedMarketData CreateCachedData(

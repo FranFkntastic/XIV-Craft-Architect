@@ -80,6 +80,14 @@
     }
     else
     {
+        @if (!string.IsNullOrWhiteSpace(Plan.MarketDataWarning))
+        {
+            <div class="ma-detail-alert is-warning">
+                <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" />
+                <span>@Plan.MarketDataWarning</span>
+            </div>
+        }
+
         @if (!Plan.HasSufficientStock)
         {
             <div class="ma-detail-alert is-warning">

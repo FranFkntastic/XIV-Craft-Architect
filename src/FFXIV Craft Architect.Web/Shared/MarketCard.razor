@@ -28,6 +28,13 @@
         }
         else if (Plan.HasOptions)
         {
+            @if (!string.IsNullOrWhiteSpace(Plan.MarketDataWarning))
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2 mb-2">
+                    @Plan.MarketDataWarning
+                </MudAlert>
+            }
+
             <MudStack Spacing="1">
                 @foreach (var world in Plan.WorldOptions.Take(5))
                 {

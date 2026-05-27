@@ -108,57 +108,33 @@ public class MarketShoppingService
         HashSet<string>? blacklistedWorlds = null)
     {
         config ??= new MarketAnalysisConfig();  // Use defaults
-        var plans = new List<DetailedShoppingPlan>();
         blacklistedWorlds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        
-        // Read all items from cache (callers must ensure cache is populated)
-        foreach (var item in marketItems)
-        {
-            progress?.Report($"Analyzing {item.Name}...");
-            ct.ThrowIfCancellationRequested();
-            
-            try
-            {
-                var cached = await _cacheService.GetAsync(item.ItemId, dataCenter);
-                if (cached == null)
-                {
-                    plans.Add(new DetailedShoppingPlan
-                    {
-                        ItemId = item.ItemId,
-                        Name = item.Name,
-                        QuantityNeeded = item.TotalQuantity,
-                        Error = "No market data in cache"
-                    });
-                    continue;
-                }
-                
-                var marketData = ConvertFromCachedData(cached, dataCenter);
-                var plan = CalculateItemShoppingPlan(
-                    item.Name,
-                    item.ItemId,
-                    item.TotalQuantity,
-                    marketData,
-                    dataCenter,
-                    mode,
-                    config,
-                    blacklistedWorlds);
-                
-                plans.Add(plan);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "Failed to calculate shopping plan for {ItemName}", item.Name);
-                plans.Add(new DetailedShoppingPlan
-                {
-                    ItemId = item.ItemId,
-                    Name = item.Name,
-                    QuantityNeeded = item.TotalQuantity,
-                    Error = ex.Message
-                });
-            }
-        }
+        var requests = marketItems
+            .Select(item => (item.ItemId, dataCenter))
+            .ToList();
+        var entries = await GetManyCachedAsync(requests);
+        var evidence = new MarketEvidenceSet(
+            entries,
+            requests,
+            MarketFetchScope.SelectedDataCenter,
+            [dataCenter],
+            dataCenter,
+            string.Empty,
+            maxAge: null,
+            fetchedCount: 0,
+            loadedAtUtc: DateTime.UtcNow);
 
-        return plans;
+        return await CalculateDetailedShoppingPlansAsync(
+            new MarketAnalysisRequest
+            {
+                Items = marketItems,
+                Evidence = evidence,
+                RecommendationMode = mode,
+                AnalysisConfig = config,
+                BlacklistedWorlds = blacklistedWorlds
+            },
+            progress,
+            ct);
     }
 
     /// <summary>
@@ -299,7 +275,89 @@ public class MarketShoppingService
         return plans;
     }
 
-    private UniversalisResponse ConvertFromCachedData(CachedMarketData cached, string dataCenter)
+    public Task<List<DetailedShoppingPlan>> CalculateDetailedShoppingPlansAsync(
+        MarketAnalysisRequest request,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Evidence);
+
+        var config = request.AnalysisConfig ?? new MarketAnalysisConfig();
+        var plans = new List<DetailedShoppingPlan>();
+
+        foreach (var item in request.Items)
+        {
+            progress?.Report($"Analyzing {item.Name}...");
+            ct.ThrowIfCancellationRequested();
+
+            try
+            {
+                var cachedEntries = request.Evidence.GetEntriesForItem(item.ItemId);
+                if (cachedEntries.Count == 0)
+                {
+                    plans.Add(new DetailedShoppingPlan
+                    {
+                        ItemId = item.ItemId,
+                        Name = item.Name,
+                        QuantityNeeded = item.TotalQuantity,
+                        Error = "No market data in cache"
+                    });
+                    continue;
+                }
+
+                var listings = cachedEntries
+                    .SelectMany(entry => ConvertCachedDataToListings(
+                        entry,
+                        entry.DataCenter,
+                        request.BlacklistedMarketWorlds))
+                    .ToList();
+                var averagePrice = CalculateAveragePrice(cachedEntries);
+                var dataCenter = cachedEntries.Count == 1 ? cachedEntries[0].DataCenter : null;
+
+                var plan = CalculateItemShoppingPlan(
+                    item.Name,
+                    item.ItemId,
+                    item.TotalQuantity,
+                    listings,
+                    averagePrice,
+                    dataCenter,
+                    request.RecommendationMode,
+                    config,
+                    request.BlacklistedWorlds);
+                var missingDataCenters = request.Evidence.MissingRequests
+                    .Where(pair => pair.itemId == item.ItemId)
+                    .Select(pair => pair.dataCenter)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(dataCenterName => dataCenterName, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (missingDataCenters.Count > 0)
+                {
+                    plan.MarketDataWarning = $"Market data incomplete for {string.Join(", ", missingDataCenters)}; recommendations use available cache data only.";
+                }
+
+                plans.Add(plan);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to calculate shopping plan for {ItemName}", item.Name);
+                plans.Add(new DetailedShoppingPlan
+                {
+                    ItemId = item.ItemId,
+                    Name = item.Name,
+                    QuantityNeeded = item.TotalQuantity,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        return Task.FromResult(plans);
+    }
+
+    private static List<MarketListing> ConvertCachedDataToListings(
+        CachedMarketData cached,
+        string dataCenter,
+        HashSet<MarketWorldKey>? blacklistedMarketWorlds = null)
     {
         var listings = new List<MarketListing>();
         var listingDataCenter = !string.IsNullOrWhiteSpace(cached.DataCenter)
@@ -308,6 +366,11 @@ public class MarketShoppingService
         
         foreach (var world in cached.Worlds)
         {
+            if (IsBlacklistedMarketWorld(listingDataCenter, world.WorldName, blacklistedMarketWorlds))
+            {
+                continue;
+            }
+
             foreach (var listing in world.Listings)
             {
                 listings.Add(new MarketListing
@@ -321,21 +384,16 @@ public class MarketShoppingService
                 });
             }
         }
-        
-        return new UniversalisResponse
-        {
-            ItemId = cached.ItemId,
-            DataCenterName = listingDataCenter,
-            Listings = listings,
-            AveragePrice = (double)cached.DCAveragePrice
-        };
+
+        return listings;
     }
 
     private DetailedShoppingPlan CalculateItemShoppingPlan(
         string itemName,
         int itemId,
         int quantityNeeded,
-        UniversalisResponse marketData,
+        List<MarketListing> listings,
+        decimal averagePrice,
         string? dataCenter = null,
         RecommendationMode mode = RecommendationMode.MinimizeTotalCost,
         MarketAnalysisConfig? config = null,
@@ -348,10 +406,10 @@ public class MarketShoppingService
             ItemId = itemId,
             Name = itemName,
             QuantityNeeded = quantityNeeded,
-            DCAveragePrice = (decimal)marketData.AveragePrice
+            DCAveragePrice = averagePrice
         };
 
-        if (marketData.Listings.Count == 0)
+        if (listings.Count == 0)
         {
             plan.Error = "No market listings found";
             return plan;
@@ -365,21 +423,21 @@ public class MarketShoppingService
         var excludeCongested = _settingsService?.Get<bool>("market.exclude_congested_worlds", true) ?? true;
         
         // Group listings by structured world identity. World names can collide across data centers.
-        var listingsByWorld = marketData.Listings
+        var listingsByWorld = listings
             .GroupBy(l => new
             {
                 l.WorldName,
                 DataCenterName = !string.IsNullOrWhiteSpace(l.DataCenterName)
                     ? l.DataCenterName
-                    : marketData.DataCenterName ?? dataCenter ?? string.Empty
+                    : dataCenter ?? string.Empty
             })
             .ToDictionary(g => g.Key, g => g.OrderBy(l => l.PricePerUnit).ToList());
 
         // Calculate per-world summaries
-        foreach (var (worldKey, listings) in listingsByWorld)
+        foreach (var (worldKey, worldListings) in listingsByWorld)
         {
             var worldName = worldKey.WorldName;
-            var worldSummary = CalculateWorldSummary(worldName, worldKey.DataCenterName, listings, quantityNeeded, plan.DCAveragePrice, homeWorld, config);
+            var worldSummary = CalculateWorldSummary(worldName, worldKey.DataCenterName, worldListings, quantityNeeded, plan.DCAveragePrice, homeWorld, config);
             if (worldSummary != null)
             {
                 // Skip congested worlds (except home world) if setting is enabled
@@ -657,130 +715,74 @@ public class MarketShoppingService
         config ??= new MarketAnalysisConfig();  // Use defaults
         blacklistedMarketWorlds ??= new HashSet<MarketWorldKey>();
         blacklistedWorlds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var plans = new List<DetailedShoppingPlan>();
+        var requests = marketItems
+            .SelectMany(item => NorthAmericanDCs.Select(dc => (item.ItemId, dc)))
+            .ToList();
+        var entries = await GetManyCachedAsync(requests);
+        var evidence = new MarketEvidenceSet(
+            entries,
+            requests,
+            MarketFetchScope.EntireRegion,
+            NorthAmericanDCs,
+            NorthAmericanDCs[0],
+            "North America",
+            maxAge: null,
+            fetchedCount: 0,
+            loadedAtUtc: DateTime.UtcNow);
 
-        foreach (var item in marketItems)
+        return await CalculateDetailedShoppingPlansAsync(
+            new MarketAnalysisRequest
+            {
+                Items = marketItems,
+                Evidence = evidence,
+                RecommendationMode = mode,
+                AnalysisConfig = config,
+                BlacklistedMarketWorlds = blacklistedMarketWorlds,
+                BlacklistedWorlds = blacklistedWorlds
+            },
+            progress,
+            ct);
+    }
+
+    private async Task<IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData>> GetManyCachedAsync(
+        IReadOnlyCollection<(int itemId, string dataCenter)> requests)
+    {
+        var entries = await _cacheService.GetManyAsync(requests);
+        if (entries != null)
         {
-            progress?.Report($"Analyzing {item.Name} across all NA DCs...");
-            ct.ThrowIfCancellationRequested();
-            
-            try
+            return entries;
+        }
+
+        var fallback = new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
+        foreach (var (itemId, dataCenter) in requests)
+        {
+            var cached = await _cacheService.GetAsync(itemId, dataCenter);
+            if (cached != null)
             {
-                var allListings = new List<MarketListing>();
-                decimal globalAverage = 0;
-                int dcCount = 0;
-
-                // Read from cache for each DC (callers must ensure cache is populated)
-                foreach (var dc in NorthAmericanDCs)
-                {
-                    try
-                    {
-                        var cached = await _cacheService.GetAsync(item.ItemId, dc);
-                        
-                        if (cached == null)
-                        {
-                            _logger?.LogWarning("[MarketShopping] No cached data for {Item}@{DC}", item.Name, dc);
-                            continue;
-                        }
-                        
-                        var listingDataCenter = !string.IsNullOrWhiteSpace(cached.DataCenter)
-                            ? cached.DataCenter
-                            : dc;
-
-                        // Convert cached data to listings
-                        foreach (var world in cached.Worlds)
-                        {
-                            if (IsBlacklistedMarketWorld(listingDataCenter, world.WorldName, blacklistedMarketWorlds, blacklistedWorlds))
-                            {
-                                _logger?.LogDebug(
-                                    "[MarketShopping] Excluding {World}@{DataCenter} - user blacklisted",
-                                    world.WorldName,
-                                    listingDataCenter);
-                                continue;
-                            }
-
-                            foreach (var listing in world.Listings)
-                            {
-                                allListings.Add(new MarketListing
-                                {
-                                    WorldName = world.WorldName,
-                                    DataCenterName = listingDataCenter,
-                                    Quantity = listing.Quantity,
-                                    PricePerUnit = listing.PricePerUnit,
-                                    RetainerName = listing.RetainerName,
-                                    IsHq = listing.IsHq
-                                });
-                            }
-                        }
-                        
-                        globalAverage += cached.DCAveragePrice;
-                        dcCount++;
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogWarning(ex, "Failed to read cached data for {Item}@{DC}", item.Name, dc);
-                    }
-                }
-
-                if (allListings.Count == 0)
-                {
-                    plans.Add(new DetailedShoppingPlan
-                    {
-                        ItemId = item.ItemId,
-                        Name = item.Name,
-                        QuantityNeeded = item.TotalQuantity,
-                        Error = "No cached data found on any NA Data Center"
-                    });
-                    continue;
-                }
-
-                if (dcCount > 0)
-                {
-                    globalAverage /= dcCount;
-                }
-
-                var combinedData = new UniversalisResponse
-                {
-                    ItemId = item.ItemId,
-                    Listings = allListings,
-                    AveragePrice = (double)globalAverage
-                };
-
-                var plan = CalculateItemShoppingPlan(
-                    item.Name,
-                    item.ItemId,
-                    item.TotalQuantity,
-                    combinedData,
-                    null,
-                    mode,
-                    config);
-                
-                plans.Add(plan);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "Failed to calculate multi-DC shopping plan for {ItemName}", item.Name);
-                plans.Add(new DetailedShoppingPlan
-                {
-                    ItemId = item.ItemId,
-                    Name = item.Name,
-                    QuantityNeeded = item.TotalQuantity,
-                    Error = ex.Message
-                });
+                fallback[(itemId, dataCenter)] = cached;
             }
         }
 
-        return plans;
+        return fallback;
+    }
+
+    private static decimal CalculateAveragePrice(IReadOnlyList<CachedMarketData> entries)
+    {
+        var pricedEntries = entries
+            .Where(entry => entry.DCAveragePrice > 0)
+            .ToList();
+
+        return pricedEntries.Count == 0
+            ? 0
+            : pricedEntries.Average(entry => entry.DCAveragePrice);
     }
 
     private static bool IsBlacklistedMarketWorld(
         string dataCenter,
         string worldName,
-        HashSet<MarketWorldKey> blacklistedMarketWorlds,
-        HashSet<string> blacklistedWorlds)
+        HashSet<MarketWorldKey>? blacklistedMarketWorlds)
     {
-        return blacklistedMarketWorlds.Contains(new MarketWorldKey(dataCenter, worldName))
-            || blacklistedWorlds.Contains(worldName);
+        return blacklistedMarketWorlds?.Contains(new MarketWorldKey(dataCenter, worldName)) == true;
     }
 
     /// <summary>
@@ -1429,6 +1431,7 @@ public class MarketShoppingService
             RecommendedWorld = plan.RecommendedWorld,
             RecommendedSplit = plan.RecommendedSplit?.ToList(),
             Error = plan.Error,
+            MarketDataWarning = plan.MarketDataWarning,
             HQAveragePrice = plan.HQAveragePrice,
             Vendors = plan.Vendors.ToList()
         };

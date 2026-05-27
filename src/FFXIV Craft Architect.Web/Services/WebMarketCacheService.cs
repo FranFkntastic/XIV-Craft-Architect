@@ -42,6 +42,25 @@ public class WebMarketCacheService : IMarketCacheService
         return Task.FromResult<(CachedMarketData?, bool)>((null, false));
     }
 
+    public Task<IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData>> GetManyAsync(
+        IReadOnlyCollection<(int itemId, string dataCenter)> requests,
+        TimeSpan? maxAge = null)
+    {
+        var cutoff = DateTime.UtcNow - (maxAge ?? _defaultMaxAge);
+        var entries = new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
+
+        foreach (var (itemId, dataCenter) in requests)
+        {
+            var key = GetKey(itemId, dataCenter);
+            if (_cache.TryGetValue(key, out var data) && data.FetchedAt > cutoff)
+            {
+                entries[(itemId, dataCenter)] = data;
+            }
+        }
+
+        return Task.FromResult<IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData>>(entries);
+    }
+
     public Task SetAsync(int itemId, string dataCenter, CachedMarketData data)
     {
         var key = GetKey(itemId, dataCenter);

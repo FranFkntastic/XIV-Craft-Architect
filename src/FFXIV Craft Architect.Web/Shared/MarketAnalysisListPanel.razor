@@ -212,7 +212,9 @@
 
     private static bool HasWarning(DetailedShoppingPlan plan)
     {
-        return !string.IsNullOrWhiteSpace(plan.Error) || !plan.HasSufficientStock;
+        return !string.IsNullOrWhiteSpace(plan.Error) ||
+            !string.IsNullOrWhiteSpace(plan.MarketDataWarning) ||
+            !plan.HasSufficientStock;
     }
 
     private static string GetSourceLabel(DetailedShoppingPlan plan)

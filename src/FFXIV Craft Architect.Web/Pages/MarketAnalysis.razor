@@ -119,20 +119,20 @@
                 AppState.SetStatus("Fetching market prices...", busy: true);
                 var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, itemIds);
                 var nonMarketItemIds = MarketPriceAvailability.GetNonMarketListableItemIds(AppState.CurrentPlan, itemIds);
-                var responses = await MarketScopedPriceLoader.LoadResponsesAsync(
+                var marketEntries = await MarketScopedPriceLoader.LoadBestEntriesAsync(
                     MarketCache,
                     marketItemIds,
                     AppState.SearchEntireRegion ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter,
                     AppState.SelectedDataCenter,
                     AppState.SelectedRegion,
                     maxAge: TimeSpan.Zero);
-                var refreshResult = MarketPriceAvailability.FromResponses(AppState.CurrentPlan, marketItemIds, responses, nonMarketItemIds);
+                var refreshResult = MarketPriceAvailability.FromCachedMarketData(AppState.CurrentPlan, marketItemIds, marketEntries, nonMarketItemIds);
                 AppState.SetUnavailableMarketItems(refreshResult.UnavailableItems);
 
                 // Update node prices
-                UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, responses);
+                UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, marketEntries);
 
-                Logger.LogInformation("[Market Refresh] Loaded {Count} market entries from cache", responses.Count);
+                Logger.LogInformation("[Market Refresh] Loaded {Count} market entries from cache", marketEntries.Count);
             }
 
             AppState.NotifyPlanChanged();
@@ -183,26 +183,26 @@
         }
     }
 
-    private void UpdateNodeMarketPrices(List<PlanNode> nodes, Dictionary<int, UniversalisResponse> responses)
+    private void UpdateNodeMarketPrices(List<PlanNode> nodes, IReadOnlyDictionary<int, CachedMarketData> marketEntries)
     {
         foreach (var node in nodes)
         {
-            if (responses.TryGetValue(node.ItemId, out var response))
+            if (marketEntries.TryGetValue(node.ItemId, out var entry))
             {
-                node.MarketPrice = (decimal)response.AveragePrice;
+                node.MarketPrice = MarketScopedPriceLoader.GetComparableAveragePrice(entry);
 
                 // Calculate HQ price if available
-                var hqListings = response.Listings.Where(l => l.IsHq).ToList();
+                var hqListings = entry.Worlds.SelectMany(world => world.Listings).Where(listing => listing.IsHq).ToList();
                 if (hqListings.Any())
                 {
-                    node.HqMarketPrice = (decimal)hqListings.Average(l => l.PricePerUnit);
+                    node.HqMarketPrice = (decimal)hqListings.Average(listing => listing.PricePerUnit);
                 }
             }
 
             // Recursively update children
             if (node.Children?.Any() == true)
             {
-                UpdateNodeMarketPrices(node.Children, responses);
+                UpdateNodeMarketPrices(node.Children, marketEntries);
             }
         }
     }
@@ -229,47 +229,28 @@
             var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
             var maxAge = forceRefreshData ? TimeSpan.Zero : (TimeSpan?)null;
 
-            // Step 1: Ensure cache is populated with market data
-            int fetchedCount;
-            if (AppState.SearchEntireRegion)
-            {
-                fetchedCount = 0;
-                foreach (var dc in GetCurrentRegionDataCenters())
-                {
-                    var dcRequests = materials.Select(m => (m.ItemId, dc)).ToList();
-                    AppState.SetStatus($"Checking cache for {dcRequests.Count} items on {dc}...");
-                    fetchedCount += await MarketCache.EnsurePopulatedAsync(dcRequests, maxAge: maxAge, progress: progress);
-                }
-            }
-            else
-            {
-                var cacheRequests = materials.Select(m => (m.ItemId, AppState.SelectedDataCenter)).ToList();
-                AppState.SetStatus($"Checking cache for {cacheRequests.Count} items...");
-                fetchedCount = await MarketCache.EnsurePopulatedAsync(cacheRequests, maxAge: maxAge, progress: progress);
-            }
+            var scope = AppState.SearchEntireRegion ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter;
+            var evidence = await MarketEvidenceLoader.LoadAsync(
+                MarketCache,
+                materials.Select(material => material.ItemId),
+                scope,
+                AppState.SelectedDataCenter,
+                AppState.SelectedRegion,
+                maxAge,
+                progress);
 
-            Logger.LogInformation("Market Analysis: {FetchedCount} items fetched from API", fetchedCount);
+            Logger.LogInformation("Market Analysis: {FetchedCount} items fetched from API", evidence.FetchedCount);
 
             // Step 2: Calculate shopping plans from cached data
-            List<DetailedShoppingPlan> plans;
-
-            if (AppState.SearchEntireRegion)
-            {
-                plans = await MarketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
-                    materials,
-                    progress,
-                    mode: AppState.RecommendationMode,
-                    blacklistedMarketWorlds: AppState.TemporarilyBlacklistedMarketWorlds);
-            }
-            else
-            {
-                // Standard single-world calculation
-                plans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
-                    materials,
-                    AppState.SelectedDataCenter,
-                    progress,
-                    mode: AppState.RecommendationMode);
-            }
+            var plans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+                new MarketAnalysisRequest
+                {
+                    Items = materials,
+                    Evidence = evidence,
+                    RecommendationMode = AppState.RecommendationMode,
+                    BlacklistedMarketWorlds = AppState.TemporarilyBlacklistedMarketWorlds
+                },
+                progress);
 
             // Apply hard-lock vendor overrides for vendor-buy items
             MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, plans);

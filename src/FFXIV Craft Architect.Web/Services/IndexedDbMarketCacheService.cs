@@ -94,6 +94,75 @@ public class IndexedDbMarketCacheService : IMarketCacheService
         }
     }
 
+    public async Task<IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData>> GetManyAsync(
+        IReadOnlyCollection<(int itemId, string dataCenter)> requests,
+        TimeSpan? maxAge = null)
+    {
+        if (requests.Count == 0)
+        {
+            return new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
+        }
+
+        var maxAgeSeconds = (long)(maxAge ?? _defaultMaxAge).TotalSeconds;
+        var cutoffUnix = DateTimeToUnix(DateTime.UtcNow) - maxAgeSeconds;
+        var requestsByKey = new Dictionary<string, (int itemId, string dataCenter)>();
+
+        foreach (var request in requests)
+        {
+            requestsByKey.TryAdd(GetKey(request.itemId, request.dataCenter), request);
+        }
+
+        try
+        {
+            var entries = await _jsRuntime.InvokeAsync<List<IndexedDbMarketCacheEntry>>(
+                "IndexedDB.loadMarketDataBulk",
+                requestsByKey.Keys.ToArray(),
+                cutoffUnix);
+
+            var results = new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
+
+            foreach (var entry in entries ?? new List<IndexedDbMarketCacheEntry>())
+            {
+                if (entry.FetchedAtUnix <= cutoffUnix)
+                {
+                    continue;
+                }
+
+                var key = string.IsNullOrWhiteSpace(entry.Key)
+                    ? GetKey(entry.ItemId, entry.DataCenter)
+                    : entry.Key;
+
+                if (!requestsByKey.TryGetValue(key, out var request))
+                {
+                    continue;
+                }
+
+                results[request] = new CachedMarketData
+                {
+                    ItemId = request.itemId,
+                    DataCenter = request.dataCenter,
+                    FetchedAtUnix = entry.FetchedAtUnix,
+                    DCAveragePrice = entry.DcAvgPrice,
+                    HQAveragePrice = entry.HqAvgPrice,
+                    Worlds = entry.Worlds ?? new List<CachedWorldData>()
+                };
+            }
+
+            _logger?.LogDebug(
+                "[IndexedDbMarketCache] Bulk checked {Checked}, Hits {Hits}, Missing {Missing}",
+                requestsByKey.Count,
+                results.Count,
+                requestsByKey.Count - results.Count);
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[IndexedDbMarketCache] Error getting bulk cached data");
+            return new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
+        }
+    }
+
     public async Task<(CachedMarketData? Data, bool IsStale)> GetWithStaleAsync(int itemId, string dataCenter, TimeSpan? maxAge = null)
     {
         var maxAgeSeconds = (long)(maxAge ?? _defaultMaxAge).TotalSeconds;
@@ -175,36 +244,67 @@ public class IndexedDbMarketCacheService : IMarketCacheService
         TimeSpan? maxAge = null)
     {
         var missing = new List<(int, string)>();
-        int checkedCount = 0;
-        int hitCount = 0;
-        
-        foreach (var (itemId, dataCenter) in requests)
+
+        if (requests.Count == 0)
         {
-            checkedCount++;
-            var (data, isStale) = await GetWithStaleAsync(itemId, dataCenter, maxAge);
-            
-            if (data == null)
-            {
-                missing.Add((itemId, dataCenter));
-                _logger?.LogDebug("[IndexedDbMarketCache] MISS (no data) for {ItemId}@{DC}", itemId, dataCenter);
-            }
-            else if (isStale)
-            {
-                missing.Add((itemId, dataCenter));
-                _logger?.LogDebug("[IndexedDbMarketCache] STALE (age: {Age:F0}min) for {ItemId}@{DC}", 
-                    data.Age.TotalMinutes, itemId, dataCenter);
-            }
-            else
-            {
-                hitCount++;
-                _logger?.LogDebug("[IndexedDbMarketCache] HIT (age: {Age:F0}min) for {ItemId}@{DC}", 
-                    data.Age.TotalMinutes, itemId, dataCenter);
-            }
+            return missing;
         }
-        
-        _logger?.LogInformation("[IndexedDbMarketCache] Checked {Checked}, Hits {Hits}, Missing {Missing}", 
-            checkedCount, hitCount, missing.Count);
-        
+
+        var maxAgeSeconds = (long)(maxAge ?? _defaultMaxAge).TotalSeconds;
+        var cutoffUnix = DateTimeToUnix(DateTime.UtcNow) - maxAgeSeconds;
+        var requestsByKey = new Dictionary<string, (int itemId, string dataCenter)>();
+
+        foreach (var request in requests)
+        {
+            requestsByKey.TryAdd(GetKey(request.itemId, request.dataCenter), request);
+        }
+
+        try
+        {
+            var entries = await _jsRuntime.InvokeAsync<List<IndexedDbMarketCacheEntry>>(
+                "IndexedDB.loadMarketDataBulk",
+                requestsByKey.Keys.ToArray(),
+                cutoffUnix);
+
+            var freshKeys = new HashSet<string>();
+
+            foreach (var entry in entries ?? new List<IndexedDbMarketCacheEntry>())
+            {
+                if (entry.FetchedAtUnix <= cutoffUnix)
+                {
+                    continue;
+                }
+
+                var key = string.IsNullOrWhiteSpace(entry.Key)
+                    ? GetKey(entry.ItemId, entry.DataCenter)
+                    : entry.Key;
+
+                if (requestsByKey.ContainsKey(key))
+                {
+                    freshKeys.Add(key);
+                }
+            }
+
+            foreach (var request in requests)
+            {
+                if (!freshKeys.Contains(GetKey(request.itemId, request.dataCenter)))
+                {
+                    missing.Add(request);
+                }
+            }
+
+            _logger?.LogInformation(
+                "[IndexedDbMarketCache] Bulk checked {Checked}, Hits {Hits}, MissingOrStale {Missing}",
+                requests.Count,
+                requests.Count - missing.Count,
+                missing.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[IndexedDbMarketCache] Error checking bulk cache state");
+            missing.AddRange(requests);
+        }
+
         return missing;
     }
 

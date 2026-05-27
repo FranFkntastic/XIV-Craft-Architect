@@ -271,6 +271,63 @@ async function loadMarketData(key) {
 }
 
 /**
+ * Load multiple fresh market cache entries in one IndexedDB transaction.
+ * Missing or stale entries are omitted from the returned array.
+ * @param {string[]} keys - Market cache keys in itemId@dataCenter format
+ * @param {number} cutoffUnix - Unix timestamp in seconds; entries older than this are stale
+ */
+async function loadMarketDataBulk(keys, cutoffUnix) {
+    const database = await initDB();
+    const uniqueKeys = Array.from(new Set(keys || []));
+
+    if (uniqueKeys.length === 0) {
+        return [];
+    }
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_MARKET_CACHE], 'readonly');
+        const store = transaction.objectStore(STORE_MARKET_CACHE);
+        const results = [];
+
+        transaction.oncomplete = () => {
+            console.log('[IndexedDB] Bulk loaded market data:', results.length, 'of', uniqueKeys.length);
+            resolve(results);
+        };
+        transaction.onerror = () => {
+            console.error('[IndexedDB] Failed to bulk load market data:', transaction.error);
+            reject(transaction.error);
+        };
+        transaction.onabort = () => {
+            console.error('[IndexedDB] Bulk load transaction aborted:', transaction.error);
+            reject(transaction.error);
+        };
+
+        for (const key of uniqueKeys) {
+            const request = store.get(key);
+
+            request.onsuccess = () => {
+                const result = request.result;
+                if (!result) {
+                    return;
+                }
+
+                const unix = getFetchedAtUnix(result);
+                if (unix <= cutoffUnix) {
+                    return;
+                }
+
+                result.fetchedAtUnix = unix;
+                results.push(result);
+            };
+            request.onerror = () => {
+                console.error('[IndexedDB] Failed to bulk load market data for', key, request.error);
+                reject(request.error);
+            };
+        }
+    });
+}
+
+/**
  * Helper to get Unix timestamp from entry (handles both old and new formats)
  */
 function getFetchedAtUnix(entry) {
@@ -458,6 +515,7 @@ window.IndexedDB = {
     clearMarketCache,
     saveMarketData,
     loadMarketData,
+    loadMarketDataBulk,
     deleteStaleMarketData,
     deleteOldestEntries,
     getMarketCacheStats

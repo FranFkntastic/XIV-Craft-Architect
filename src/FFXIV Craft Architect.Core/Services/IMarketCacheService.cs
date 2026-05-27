@@ -18,6 +18,14 @@ public interface IMarketCacheService
     /// Get cached market data even if it's stale. Returns null only if no data exists.
     /// </summary>
     Task<(CachedMarketData? Data, bool IsStale)> GetWithStaleAsync(int itemId, string dataCenter, TimeSpan? maxAge = null);
+
+    /// <summary>
+    /// Get valid cached market data for multiple item/data-center pairs.
+    /// Missing or stale entries are omitted from the returned dictionary.
+    /// </summary>
+    Task<IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData>> GetManyAsync(
+        IReadOnlyCollection<(int itemId, string dataCenter)> requests,
+        TimeSpan? maxAge = null);
     
     /// <summary>
     /// Store market data in the cache.

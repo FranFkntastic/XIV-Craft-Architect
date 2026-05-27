@@ -201,21 +201,25 @@
     {
         if (AppState.ProcurementSearchEntireRegion)
         {
-            foreach (var dc in GetCurrentRegionDataCenters())
-            {
-                var requests = materials.Select(item => (item.ItemId, dc)).ToList();
-                AppState.SetStatus($"Checking cache for {requests.Count} active items on {dc}...");
-                await MarketCache.EnsurePopulatedAsync(requests, progress: progress);
-            }
-
             var config = CreateProcurementMarketConfig();
-
-            var evidencePlans = await MarketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
-                materials,
+            var evidence = await MarketEvidenceLoader.LoadAsync(
+                MarketCache,
+                materials.Select(material => material.ItemId),
+                MarketFetchScope.EntireRegion,
+                AppState.SelectedDataCenter,
+                AppState.SelectedRegion,
+                progress: progress);
+            var evidencePlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+                new MarketAnalysisRequest
+                {
+                    Items = materials,
+                    Evidence = evidence,
+                    RecommendationMode = AppState.ProcurementRecommendationMode,
+                    AnalysisConfig = config,
+                    BlacklistedMarketWorlds = AppState.TemporarilyBlacklistedMarketWorlds
+                },
                 progress,
-                mode: AppState.ProcurementRecommendationMode,
-                config: config,
-                blacklistedMarketWorlds: AppState.TemporarilyBlacklistedMarketWorlds);
+                ct: default);
 
             return MarketShoppingService.OptimizeProcurementRoute(
                 evidencePlans,
@@ -223,21 +227,28 @@
                 AppState.ProcurementEnableSplitWorldPurchases);
         }
 
-        var cacheRequests = materials.Select(item => (item.ItemId, AppState.SelectedDataCenter)).ToList();
-        AppState.SetStatus($"Checking cache for {cacheRequests.Count} active items...");
-        await MarketCache.EnsurePopulatedAsync(cacheRequests, progress: progress);
+        var selectedDcEvidence = await MarketEvidenceLoader.LoadAsync(
+            MarketCache,
+            materials.Select(material => material.ItemId),
+            MarketFetchScope.SelectedDataCenter,
+            AppState.SelectedDataCenter,
+            AppState.SelectedRegion,
+            progress: progress);
 
         if (AppState.ProcurementEnableSplitWorldPurchases)
         {
             var config = CreateProcurementMarketConfig();
 
             var evidencePlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
-                materials,
-                AppState.SelectedDataCenter,
-                progress,
-                mode: AppState.ProcurementRecommendationMode,
-                config: config,
-                blacklistedWorlds: AppState.TemporarilyBlacklistedWorlds);
+                new MarketAnalysisRequest
+                {
+                    Items = materials,
+                    Evidence = selectedDcEvidence,
+                    RecommendationMode = AppState.ProcurementRecommendationMode,
+                    AnalysisConfig = config,
+                    BlacklistedWorlds = AppState.TemporarilyBlacklistedWorlds
+                },
+                progress);
 
             return MarketShoppingService.OptimizeProcurementRoute(
                 evidencePlans,
@@ -246,11 +257,14 @@
         }
 
         var plans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
-            materials,
-            AppState.SelectedDataCenter,
-            progress,
-            mode: AppState.ProcurementRecommendationMode,
-            blacklistedWorlds: AppState.TemporarilyBlacklistedWorlds);
+            new MarketAnalysisRequest
+            {
+                Items = materials,
+                Evidence = selectedDcEvidence,
+                RecommendationMode = AppState.ProcurementRecommendationMode,
+                BlacklistedWorlds = AppState.TemporarilyBlacklistedWorlds
+            },
+            progress);
 
         return MarketShoppingService.OptimizeProcurementRoute(
             plans,
@@ -328,6 +342,7 @@
             RecommendedWorld = recommendedWorld,
             RecommendedSplit = recommendedSplit?.Count > 0 ? recommendedSplit : null,
             Error = plan.Error,
+            MarketDataWarning = plan.MarketDataWarning,
             HQAveragePrice = plan.HQAveragePrice,
             Vendors = plan.Vendors
         };

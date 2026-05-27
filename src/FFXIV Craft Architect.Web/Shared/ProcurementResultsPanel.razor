@@ -88,6 +88,7 @@
                 @{ 
                     var worldCards = GetWorldCards().ToList();
                     var errorItems = GetItemsWithErrors().ToList();
+                    var warningItems = GetItemsWithWarnings().ToList();
                 }
                 
                 <!-- Market & Vendor World Cards -->
@@ -123,6 +124,26 @@
                                             <MudText Typo="Typo.caption" Style="color: #f44336;">@plan.Error</MudText>
                                         </div>
                                     </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @if (warningItems.Any())
+                {
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px; padding: 3px 8px; background: #2a2a2a; border-radius: 3px; border: 1px solid #555;">
+                            <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" Style="color: #ff9800;" />
+                            <MudText Typo="Typo.subtitle2" Style="color: #ff9800; font-weight: 600;">Warnings</MudText>
+                            <MudText Typo="Typo.caption" Style="color: #888;">(@warningItems.Count)</MudText>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 4px; align-items: start;">
+                            @foreach (var plan in warningItems)
+                            {
+                                <div style="padding: 12px; background: #2a2a2a; border-radius: 4px; border: 1px solid #ff9800;">
+                                    <MudText Typo="Typo.body2" Style="color: #e0e0e0;">@plan.Name</MudText>
+                                    <MudText Typo="Typo.caption" Style="color: #ff9800;">@plan.MarketDataWarning</MudText>
                                 </div>
                             }
                         </div>
@@ -175,6 +196,11 @@
     private IEnumerable<DetailedShoppingPlan> GetItemsWithErrors()
     {
         return ShoppingPlans.Where(p => !string.IsNullOrEmpty(p.Error));
+    }
+
+    private IEnumerable<DetailedShoppingPlan> GetItemsWithWarnings()
+    {
+        return ShoppingPlans.Where(p => string.IsNullOrEmpty(p.Error) && !string.IsNullOrEmpty(p.MarketDataWarning));
     }
     
     // === WORLD-CENTRIC CARD METHODS ===
@@ -243,8 +269,9 @@
         
         var worldCards = GetWorldCards().ToList();
         var errorItems = GetItemsWithErrors().ToList();
+        var warningItems = GetItemsWithWarnings().ToList();
         
-        if (!worldCards.Any() && !errorItems.Any())
+        if (!worldCards.Any() && !errorItems.Any() && !warningItems.Any())
         {
             sb.AppendLine("_No items to purchase._");
             return sb.ToString();
@@ -275,6 +302,17 @@
             
             sb.AppendLine();
             sb.AppendLine($"**Subtotal: {world.TotalCost:N0}g**");
+            sb.AppendLine();
+        }
+
+        if (warningItems.Any())
+        {
+            sb.AppendLine("## Warnings");
+            sb.AppendLine();
+            foreach (var plan in warningItems.OrderBy(p => p.Name))
+            {
+                sb.AppendLine($"- {plan.Name} x{plan.QuantityNeeded} - {plan.MarketDataWarning}");
+            }
             sb.AppendLine();
         }
         

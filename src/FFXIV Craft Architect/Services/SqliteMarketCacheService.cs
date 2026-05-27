@@ -15,6 +15,8 @@ namespace FFXIV_Craft_Architect.Services;
 /// </summary>
 public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisposable
 {
+    private const int BulkReadChunkSize = 400;
+
     private readonly ILogger<SqliteMarketCacheService> _logger;
     private readonly UniversalisService _universalisService;
     private readonly string _dbPath;
@@ -225,6 +227,56 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         return (data, isStale);
     }
 
+    public async Task<IReadOnlyDictionary<(int itemId, string dataCenter), Core.Services.CachedMarketData>> GetManyAsync(
+        IReadOnlyCollection<(int itemId, string dataCenter)> requests,
+        TimeSpan? maxAge = null)
+    {
+        var result = new Dictionary<(int itemId, string dataCenter), Core.Services.CachedMarketData>();
+        if (requests.Count == 0)
+        {
+            return result;
+        }
+
+        var cutoff = DateTime.UtcNow - (maxAge ?? _defaultMaxAge);
+        foreach (var chunk in requests.Distinct().Chunk(BulkReadChunkSize))
+        {
+            using var cmd = _connection.CreateCommand();
+            var values = new List<string>();
+            for (var i = 0; i < chunk.Length; i++)
+            {
+                values.Add($"(@itemId{i}, @dataCenter{i})");
+                cmd.Parameters.AddWithValue($"@itemId{i}", chunk[i].itemId);
+                cmd.Parameters.AddWithValue($"@dataCenter{i}", chunk[i].dataCenter);
+            }
+
+            cmd.CommandText = $@"
+                WITH requested(item_id, data_center) AS (
+                    VALUES {string.Join(", ", values)}
+                )
+                SELECT md.item_id, md.data_center, md.fetched_at, md.dc_avg_price, md.hq_avg_price, md.compressed_data
+                FROM market_data md
+                INNER JOIN requested r ON r.item_id = md.item_id AND r.data_center = md.data_center
+                WHERE md.fetched_at > @cutoff
+            ";
+            cmd.Parameters.AddWithValue("@cutoff", cutoff.ToString("O"));
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var itemId = reader.GetInt32(0);
+                var dataCenter = reader.GetString(1);
+                result[(itemId, dataCenter)] = ReadCachedData(reader, itemId, dataCenter, fetchedAtOrdinal: 2);
+            }
+        }
+
+        _logger.LogDebug(
+            "[SqliteMarketCache] Bulk loaded {HitCount}/{RequestCount} valid entries",
+            result.Count,
+            requests.Count);
+
+        return result;
+    }
+
     public async Task SetAsync(int itemId, string dataCenter, Core.Services.CachedMarketData data)
     {
         var age = DateTime.UtcNow - data.FetchedAt;
@@ -261,38 +313,18 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         List<(int itemId, string dataCenter)> requests, 
         TimeSpan? maxAge = null)
     {
-        var missing = new List<(int, string)>();
-        int checkedCount = 0;
-        int hitCount = 0;
-        
-        foreach (var (itemId, dataCenter) in requests)
+        if (requests.Count == 0)
         {
-            checkedCount++;
-            var (data, isStale) = await GetWithStaleAsync(itemId, dataCenter, maxAge);
-            
-            if (data == null)
-            {
-                missing.Add((itemId, dataCenter));
-                _logger.LogDebug("[SqliteMarketCache] MISS (no data) for {ItemId}@{DC}", itemId, dataCenter);
-            }
-            else if (isStale)
-            {
-                missing.Add((itemId, dataCenter));
-                var age = DateTime.UtcNow - data.FetchedAt;
-                _logger.LogDebug("[SqliteMarketCache] STALE ({Age:F0}min old) for {ItemId}@{DC}", 
-                    age.TotalMinutes, itemId, dataCenter);
-            }
-            else
-            {
-                hitCount++;
-                var age = DateTime.UtcNow - data.FetchedAt;
-                _logger.LogDebug("[SqliteMarketCache] HIT ({Age:F0}min old) for {ItemId}@{DC}", 
-                    age.TotalMinutes, itemId, dataCenter);
-            }
+            return new List<(int itemId, string dataCenter)>();
         }
+
+        var validEntries = await GetManyAsync(requests, maxAge);
+        var missing = requests
+            .Where(request => !validEntries.ContainsKey(request))
+            .ToList();
         
         _logger.LogInformation("[SqliteMarketCache] Checked {Checked}, Hits {Hits}, Missing {Missing}", 
-            checkedCount, hitCount, missing.Count);
+            requests.Count, requests.Count - missing.Count, missing.Count);
         
         return missing;
     }
@@ -393,6 +425,27 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
             DCAveragePrice = (decimal)(response.AveragePriceNq > 0 ? response.AveragePriceNq : response.AveragePrice),
             HQAveragePrice = response.AveragePriceHq > 0 ? (decimal)response.AveragePriceHq : null,
             Worlds = worlds
+        };
+    }
+
+    private Core.Services.CachedMarketData ReadCachedData(
+        SqliteDataReader reader,
+        int itemId,
+        string dataCenter,
+        int fetchedAtOrdinal)
+    {
+        var compressedData = (byte[])reader.GetValue(fetchedAtOrdinal + 3);
+        var json = Decompress(compressedData);
+        var worlds = JsonSerializer.Deserialize<List<Core.Services.CachedWorldData>>(json, _jsonOptions);
+
+        return new Core.Services.CachedMarketData
+        {
+            ItemId = itemId,
+            DataCenter = dataCenter,
+            FetchedAt = CacheTimeHelper.ParseFetchedAt(reader.GetValue(fetchedAtOrdinal)),
+            DCAveragePrice = reader.GetDecimal(fetchedAtOrdinal + 1),
+            HQAveragePrice = reader.IsDBNull(fetchedAtOrdinal + 2) ? null : reader.GetDecimal(fetchedAtOrdinal + 2),
+            Worlds = worlds ?? new List<Core.Services.CachedWorldData>()
         };
     }
 
