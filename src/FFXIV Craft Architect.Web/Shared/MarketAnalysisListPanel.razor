@@ -1,21 +1,6 @@
 @using FFXIV_Craft_Architect.Core.Models
 
 <div class="ma-ledger-shell">
-    <div class="ma-ledger-summary">
-        <div class="ma-ledger-summary-main">
-            <MudIcon Icon="@Icons.Material.Filled.Savings" Color="Color.Success" Size="Size.Small" />
-            <span class="ma-ledger-summary-value">@TotalBestValue.ToString("N0")g</span>
-            <span class="ma-ledger-summary-label">best value</span>
-        </div>
-        <div class="ma-ledger-summary-side">
-            <span><span class="ma-muted">DC avg</span> @TotalDCAverage.ToString("N0")g</span>
-            @if (TotalSavings > 0)
-            {
-                <span class="ma-positive">Save @TotalSavings.ToString("N0")g</span>
-            }
-        </div>
-    </div>
-
     <div class="ma-ledger-workspace">
         <div class="ma-ledger-list">
             <MudDataGrid T="DetailedShoppingPlan"
@@ -298,11 +283,5 @@
             return plan.WorldOptions.OrderBy(w => w.TotalCost).First().TotalCost;
         return (long)(plan.DCAveragePrice * plan.QuantityNeeded);
     }
-
-    private decimal TotalDCAverage => ShoppingPlans?.Sum(p => p.DCAveragePrice * p.QuantityNeeded) ?? 0;
-
-    private long TotalBestValue => ShoppingPlans?.Sum(GetTotalCost) ?? 0;
-
-    private decimal TotalSavings => Math.Max(0, TotalDCAverage - TotalBestValue);
 
 }

@@ -216,8 +216,6 @@
         }
 
         AppState.LoadStoredPlan(storedPlan, plan);
-        EnsureSelectedNode();
-        PopulateShoppingListFromPlan();
 
         if (!string.IsNullOrEmpty(storedPlan.MarketPlansJson))
         {
@@ -236,6 +234,9 @@
                 Snackbar.Add($"Warning: Could not restore market analysis: {ex.Message}", Severity.Warning);
             }
         }
+
+        EnsureSelectedNode();
+        PopulateShoppingListFromPlan();
 
         Snackbar.Add($"Loaded '{storedPlan.Name}'", Severity.Success);
     }
@@ -506,7 +507,11 @@
 
         if (node.CanBuyFromMarket)
         {
-            options.Add(AcquisitionSource.MarketBuyNq);
+            if (!node.MustBeHq)
+            {
+                options.Add(AcquisitionSource.MarketBuyNq);
+            }
+
             if (node.CanBeHq)
             {
                 options.Add(AcquisitionSource.MarketBuyHq);
@@ -533,23 +538,30 @@
 
     private static string GetEstimatedCost(PlanNode node, DetailedShoppingPlan? marketPlan, int activeQuantity)
     {
-        long? marketCost = marketPlan != null &&
-            (marketPlan.RecommendedWorld != null || PurchaseRecommendationCost.UsesSplitRecommendation(marketPlan))
-                ? PurchaseRecommendationCost.GetRecommendedCost(marketPlan)
-                : null;
-        if (marketCost.HasValue)
+        if (node.Source == AcquisitionSource.Craft && node.Children.Any())
         {
-            return $"{marketCost.Value:N0}g";
+            return AcquisitionPlanningService.TryGetAcquisitionCost(node, node.Source, GetMarketPlans(marketPlan), out var craftCost)
+                ? $"{craftCost:N0}g"
+                : "Craft";
         }
 
-        return node.Source switch
+        var costNode = node;
+        if (activeQuantity > 0 && activeQuantity != node.Quantity)
         {
-            AcquisitionSource.MarketBuyNq when node.MarketPrice > 0 => $"{node.MarketPrice * activeQuantity:N0}g",
-            AcquisitionSource.MarketBuyHq when node.HqMarketPrice > 0 => $"{node.HqMarketPrice * activeQuantity:N0}g",
-            AcquisitionSource.VendorBuy when node.VendorPrice > 0 => $"{node.VendorPrice * activeQuantity:N0}g",
-            AcquisitionSource.Craft when node.Children.Any() => "Craft",
-            _ => "-"
-        };
+            costNode = node.Clone();
+            costNode.Quantity = activeQuantity;
+        }
+
+        return AcquisitionPlanningService.TryGetAcquisitionCost(costNode, costNode.Source, GetMarketPlans(marketPlan), out var cost)
+            ? $"{cost:N0}g"
+            : "-";
+    }
+
+    private static IReadOnlyList<DetailedShoppingPlan> GetMarketPlans(DetailedShoppingPlan? marketPlan)
+    {
+        return marketPlan == null
+            ? Array.Empty<DetailedShoppingPlan>()
+            : [marketPlan];
     }
 
     private static string GetUsedInText(IReadOnlyList<DecisionOccurrence> occurrences)

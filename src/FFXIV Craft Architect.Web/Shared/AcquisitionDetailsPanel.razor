@@ -96,47 +96,53 @@
             return options;
         }
 
-        if (Node.Children.Any())
+        if (Node.Children.Any() && Node.CanCraft)
         {
+            var hasCraftCost = TryGetOptionCost(AcquisitionSource.Craft, out var craftCost);
             options.Add(new AcquisitionOptionView(
                 AcquisitionSource.Craft,
                 "Craft",
                 MarketPlans.Any()
                     ? "Uses the recipe tree with market evidence for child purchases."
                     : "Uses the recipe tree below this item.",
-                $"{AcquisitionPlanningService.CalculateCraftCost(Node, MarketPlans):N0}g",
+                hasCraftCost ? $"{craftCost:N0}g" : "-",
                 true));
         }
 
         if (Node.CanBuyFromMarket)
         {
-            var nqMarketCost = GetMarketPlanCost();
-            options.Add(new AcquisitionOptionView(
-                AcquisitionSource.MarketBuyNq,
-                "Buy NQ",
-                GetMarketPlanDetail("NQ"),
-                nqMarketCost ?? (Node.MarketPrice > 0 ? $"{Node.MarketPrice * Node.Quantity:N0}g" : "-"),
-                nqMarketCost != null || Node.MarketPrice > 0));
+            if (!Node.MustBeHq)
+            {
+                var hasNqMarketCost = TryGetOptionCost(AcquisitionSource.MarketBuyNq, out var nqMarketCost);
+                options.Add(new AcquisitionOptionView(
+                    AcquisitionSource.MarketBuyNq,
+                    "Buy NQ",
+                    GetMarketPlanDetail("NQ"),
+                    hasNqMarketCost ? $"{nqMarketCost:N0}g" : "-",
+                    hasNqMarketCost));
+            }
 
             if (Node.CanBeHq)
             {
+                var hasHqMarketCost = TryGetOptionCost(AcquisitionSource.MarketBuyHq, out var hqMarketCost);
                 options.Add(new AcquisitionOptionView(
                     AcquisitionSource.MarketBuyHq,
                     "Buy HQ",
                     Node.HqMarketPrice > 0 ? "Uses the current planner HQ market price." : "No HQ price loaded.",
-                    Node.HqMarketPrice > 0 ? $"{Node.HqMarketPrice * Node.Quantity:N0}g" : "-",
-                    Node.HqMarketPrice > 0));
+                    hasHqMarketCost ? $"{hqMarketCost:N0}g" : "-",
+                    hasHqMarketCost));
             }
         }
 
         if (Node.CanBuyFromVendor)
         {
+            var hasVendorCost = TryGetOptionCost(AcquisitionSource.VendorBuy, out var vendorCost);
             options.Add(new AcquisitionOptionView(
                 AcquisitionSource.VendorBuy,
                 "Vendor",
                 GetVendorDetail(),
-                Node.VendorPrice > 0 ? $"{Node.VendorPrice * Node.Quantity:N0}g" : "-",
-                Node.VendorPrice > 0));
+                hasVendorCost ? $"{vendorCost:N0}g" : "-",
+                hasVendorCost));
         }
 
         if (!Node.CanBuyFromMarket && !Node.CanBuyFromVendor && !Node.Children.Any())
@@ -174,17 +180,6 @@
             : "Run Market Analysis for actionable market evidence.";
     }
 
-    private string? GetMarketPlanCost()
-    {
-        if (MarketPlan == null ||
-            (MarketPlan.RecommendedWorld == null && !PurchaseRecommendationCost.UsesSplitRecommendation(MarketPlan)))
-        {
-            return null;
-        }
-
-        return $"{PurchaseRecommendationCost.GetRecommendedCost(MarketPlan):N0}g";
-    }
-
     private string GetVendorDetail()
     {
         if (Node?.VendorOptions?.Any(v => v.IsGilVendor) != true)
@@ -198,6 +193,17 @@
             .First();
 
         return $"{vendor.Name} - {vendor.Location}";
+    }
+
+    private bool TryGetOptionCost(AcquisitionSource source, out decimal cost)
+    {
+        if (Node == null)
+        {
+            cost = 0;
+            return false;
+        }
+
+        return AcquisitionPlanningService.TryGetAcquisitionCost(Node, source, MarketPlans, out cost);
     }
 
     private record AcquisitionOptionView(

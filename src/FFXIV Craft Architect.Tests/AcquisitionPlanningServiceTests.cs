@@ -351,6 +351,154 @@ public class AcquisitionPlanningServiceTests
         Assert.Equal(200, cost);
     }
 
+    [Fact]
+    public void ApplyCheapestAcquisitionDefaults_RootCraftBeatsExpensiveMarket_SelectsCraft()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Root Craft",
+            Quantity = 1,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            MarketPrice = 10_000,
+            Yield = 1
+        };
+        root.Children.Add(new PlanNode
+        {
+            ItemId = 200,
+            Name = "Cheap Child",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 50,
+            Parent = root
+        });
+        var plan = new CraftingPlan { RootItems = [root] };
+
+        var changed = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(plan, Array.Empty<DetailedShoppingPlan>());
+
+        Assert.Equal(1, changed);
+        Assert.Equal(AcquisitionSource.Craft, root.Source);
+    }
+
+    [Fact]
+    public void ApplyCheapestAcquisitionDefaults_UsesMarketEvidenceForBuyCost()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Root Buy",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            MarketPrice = 10_000,
+            Yield = 1
+        };
+        root.Children.Add(new PlanNode
+        {
+            ItemId = 200,
+            Name = "Expensive Child",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 500,
+            Parent = root
+        });
+        var plan = new CraftingPlan { RootItems = [root] };
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 100,
+                Name = "Root Buy",
+                QuantityNeeded = 1,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 100,
+                    TotalQuantityPurchased = 1
+                }
+            }
+        };
+
+        var changed = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(plan, marketPlans);
+
+        Assert.Equal(1, changed);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, root.Source);
+    }
+
+    [Fact]
+    public void ApplyCheapestAcquisitionDefaults_VendorBeatsMarketAndCraft_SelectsVendor()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Vendor Root",
+            Quantity = 3,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            CanBuyFromVendor = true,
+            MarketPrice = 500,
+            VendorPrice = 20,
+            Yield = 1
+        };
+        root.Children.Add(new PlanNode
+        {
+            ItemId = 200,
+            Name = "Craft Child",
+            Quantity = 3,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 100,
+            Parent = root
+        });
+        var plan = new CraftingPlan { RootItems = [root] };
+
+        var changed = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(plan, Array.Empty<DetailedShoppingPlan>());
+
+        Assert.Equal(1, changed);
+        Assert.Equal(AcquisitionSource.VendorBuy, root.Source);
+    }
+
+    [Fact]
+    public void ApplyCheapestAcquisitionDefaults_HqRequired_DoesNotSelectNqMarket()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "HQ Root",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            MustBeHq = true,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            CanBeHq = true,
+            MarketPrice = 10,
+            HqMarketPrice = 1_000,
+            Yield = 1
+        };
+        root.Children.Add(new PlanNode
+        {
+            ItemId = 200,
+            Name = "Cheap Child",
+            Quantity = 1,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 20,
+            Parent = root
+        });
+        var plan = new CraftingPlan { RootItems = [root] };
+
+        var changed = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(plan, Array.Empty<DetailedShoppingPlan>());
+
+        Assert.Equal(0, changed);
+        Assert.Equal(AcquisitionSource.Craft, root.Source);
+    }
+
     private static CraftingPlan CreatePlanWithBoughtIntermediate()
     {
         var root = new PlanNode

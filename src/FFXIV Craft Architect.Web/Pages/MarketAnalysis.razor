@@ -19,7 +19,6 @@
     <div class="ma-grid-layout">
         <MarketAnalysisControlsPanel
             AppState="AppState"
-            BuyItems="GetBuyItems()"
             IsAnalyzing="_isAnalyzing"
             IsRefreshingPrices="_isRefreshingPrices"
             CanAnalyze="CanAnalyze()"
@@ -214,6 +213,7 @@
 
     private async Task<bool> RunMarketAnalysisAsync(bool forceRefreshData, bool showCompletionSnackbar)
     {
+        NormalizeRecommendationMode();
         var materials = GetBuyItems();
 
         var plan = AppState.CurrentPlan;
@@ -247,7 +247,7 @@
                 {
                     Items = materials,
                     Evidence = evidence,
-                    RecommendationMode = AppState.RecommendationMode,
+                    RecommendationMode = GetEffectiveRecommendationMode(),
                     BlacklistedMarketWorlds = AppState.TemporarilyBlacklistedMarketWorlds
                 },
                 progress);
@@ -256,17 +256,19 @@
             MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, plans);
 
             AppState.ShoppingPlans = plans;
+            AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(AppState.CurrentPlan, AppState.ShoppingPlans);
+            MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
             AppState.NotifyShoppingListChanged();
+            AppState.NotifyPlanChanged();
 
             // Save market analysis to the current plan for persistence
             if (AppState.CurrentPlanId != null)
             {
-                await IndexedDb.SaveMarketAnalysisAsync(AppState.CurrentPlanId, plans, AppState.RecommendationMode);
+                await IndexedDb.SaveMarketAnalysisAsync(AppState.CurrentPlanId, plans, GetEffectiveRecommendationMode());
             }
 
-            var bestValue = AppState.ShoppingPlans.Sum(PurchaseRecommendationCost.GetRecommendedCost);
             // Ensure the status message is properly set to completion
-            AppState.EndOperation($"Analysis complete! Best value: {bestValue:N0}g");
+            AppState.EndOperation($"Analysis complete. {AppState.ShoppingPlans.Count} items analyzed.");
             if (showCompletionSnackbar)
             {
                 Snackbar.Add("Market analysis complete!", Severity.Success);
@@ -288,7 +290,7 @@
 
     private async Task OnModeChanged(RecommendationMode mode)
     {
-        AppState.RecommendationMode = mode;
+        AppState.RecommendationMode = NormalizeRecommendationMode(mode);
         if (GetBuyItems().Any() && AppState.ShoppingPlans.Any())
         {
             await RunMarketAnalysisAsync();
@@ -313,5 +315,22 @@
             MarketFetchScope.EntireRegion,
             AppState.SelectedDataCenter,
             AppState.SelectedRegion);
+    }
+
+    private RecommendationMode GetEffectiveRecommendationMode()
+    {
+        return NormalizeRecommendationMode(AppState.RecommendationMode);
+    }
+
+    private void NormalizeRecommendationMode()
+    {
+        AppState.RecommendationMode = NormalizeRecommendationMode(AppState.RecommendationMode);
+    }
+
+    private static RecommendationMode NormalizeRecommendationMode(RecommendationMode mode)
+    {
+        return mode == RecommendationMode.MaximizeValue
+            ? RecommendationMode.MinimizeTotalCost
+            : mode;
     }
 }

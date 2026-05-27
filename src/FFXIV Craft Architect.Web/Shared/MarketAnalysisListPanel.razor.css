@@ -6,47 +6,6 @@
     min-width: 0;
 }
 
-.ma-ledger-summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 6px 8px;
-    background: #202823;
-    border: 1px solid #34533a;
-    border-radius: 6px;
-    flex-shrink: 0;
-}
-
-.ma-ledger-summary-main,
-.ma-ledger-summary-side {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-}
-
-.ma-ledger-summary-side {
-    color: #aaa;
-    font-size: 12px;
-}
-
-.ma-ledger-summary-value {
-    color: #90ee90;
-    font-weight: 700;
-    font-size: 14px;
-}
-
-.ma-ledger-summary-label,
-.ma-muted {
-    color: #777;
-    font-size: 12px;
-}
-
-.ma-positive {
-    color: #4caf50;
-}
-
 .ma-ledger-workspace {
     display: grid;
     grid-template-columns: minmax(0, 1.2fr) minmax(380px, 0.8fr);

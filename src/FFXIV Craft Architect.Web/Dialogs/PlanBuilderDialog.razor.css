@@ -93,7 +93,7 @@
 }
 
 .pb-result-grid {
-    grid-template-columns: 28px minmax(220px, 1fr) 86px 50px 72px;
+    grid-template-columns: 28px minmax(190px, 1fr) 72px 86px 50px 72px;
 }
 
 .pb-target-grid {

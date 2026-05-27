@@ -41,6 +41,7 @@
                     <div class="pb-table-head pb-result-grid">
                         <span></span>
                         <span>Item</span>
+                        <span>Qty</span>
                         <span>Type</span>
                         <span>Lvl</span>
                         <span>ID</span>
@@ -51,16 +52,23 @@
                             @foreach (var result in _searchResults)
                             {
                                 var alreadyAdded = _draftItems.Any(item => item.Id == result.Id);
-                                <label class="pb-table-row pb-result-grid @(alreadyAdded ? "is-disabled" : null)">
+                                <div class="pb-table-row pb-result-grid @(alreadyAdded ? "is-disabled" : null)">
                                     <input type="checkbox"
                                            checked="@_selectedSearchIds.Contains(result.Id)"
                                            disabled="@alreadyAdded"
                                            @onchange="args => ToggleSearchSelection(result.Id, args)" />
                                     <span class="pb-primary">@result.Object.Name</span>
+                                    <input class="pb-qty-input"
+                                           type="number"
+                                           min="1"
+                                           max="9999"
+                                           value="@GetSearchQuantity(result.Id)"
+                                           disabled="@alreadyAdded"
+                                           @onchange="args => SetSearchQuantity(result.Id, args)" />
                                     <span>@result.Type</span>
                                     <span>@(result.Object.Level?.ToString() ?? "-")</span>
                                     <span>@result.Id</span>
-                                </label>
+                                </div>
                             }
                         }
                         else
@@ -144,6 +152,7 @@
 
     private readonly HashSet<int> _selectedSearchIds = new();
     private readonly HashSet<int> _selectedTargetIds = new();
+    private readonly Dictionary<int, int> _searchQuantities = new();
     private readonly List<ProjectItem> _draftItems = new();
     private readonly List<GarlandSearchResult> _searchResults = new();
     private string _searchQuery = string.Empty;
@@ -170,6 +179,7 @@
             var results = await GarlandService.SearchAsync(_searchQuery);
             _searchResults.AddRange(results.Take(75));
             _selectedSearchIds.Clear();
+            SyncSearchQuantities();
         }
         catch (Exception ex)
         {
@@ -230,12 +240,41 @@
                 Id = result.Id,
                 Name = result.Object.Name,
                 IconId = result.Object.IconId,
-                Quantity = 1,
+                Quantity = GetSearchQuantity(result.Id),
                 MustBeHq = false
             });
         }
 
         _selectedSearchIds.Clear();
+    }
+
+    private void SyncSearchQuantities()
+    {
+        var resultIds = _searchResults.Select(result => result.Id).ToHashSet();
+        foreach (var itemId in _searchQuantities.Keys.Where(itemId => !resultIds.Contains(itemId)).ToList())
+        {
+            _searchQuantities.Remove(itemId);
+        }
+
+        foreach (var result in _searchResults)
+        {
+            _searchQuantities.TryAdd(result.Id, 1);
+        }
+    }
+
+    private int GetSearchQuantity(int itemId)
+    {
+        return _searchQuantities.TryGetValue(itemId, out var quantity)
+            ? Math.Clamp(quantity, 1, 9999)
+            : 1;
+    }
+
+    private void SetSearchQuantity(int itemId, ChangeEventArgs args)
+    {
+        if (int.TryParse(args.Value?.ToString(), out var quantity))
+        {
+            _searchQuantities[itemId] = Math.Clamp(quantity, 1, 9999);
+        }
     }
 
     private static void SetQuantity(ProjectItem item, ChangeEventArgs args)

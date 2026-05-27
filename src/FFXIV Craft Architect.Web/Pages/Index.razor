@@ -306,8 +306,10 @@
             AppState.BeginOperation("Fetching Prices", "Loading market prices for all materials...");
             var priceRefresh = await RefreshPricesAsync(rebuildProcurementPlans: false);
 
-            // Step 3: Clear previous shopping plans
+            // Step 3: Clear previous shopping plans and set price-based acquisition defaults
             AppState.ShoppingPlans.Clear();
+            AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(AppState.CurrentPlan, AppState.ShoppingPlans);
+            AppState.NotifyPlanChanged();
 
             // Step 4: Populate shopping list with items marked as "buy" from recipe plan
             // These will be shown in Procurement Planner for potential analysis
