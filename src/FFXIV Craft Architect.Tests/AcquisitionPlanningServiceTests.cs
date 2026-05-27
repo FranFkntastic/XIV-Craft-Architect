@@ -110,7 +110,7 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
-    public void CanReuseProcurementEvidence_SplitDisabled_ReusesCompleteSingleWorldEvidence()
+    public void HasCompleteProcurementEvidence_CompleteSingleWorldEvidence_ReturnsTrue()
     {
         var plan = CreatePlanWithBoughtIntermediate();
         var marketPlans = new List<DetailedShoppingPlan>
@@ -129,16 +129,15 @@ public class AcquisitionPlanningServiceTests
             }
         };
 
-        var canReuse = AcquisitionPlanningService.CanReuseProcurementEvidence(
+        var canReuse = AcquisitionPlanningService.HasCompleteProcurementEvidence(
             plan,
-            marketPlans,
-            enableMultiWorldSplits: false);
+            marketPlans);
 
         Assert.True(canReuse);
     }
 
     [Fact]
-    public void CanReuseProcurementEvidence_SplitEnabled_RejectsSingleWorldOnlyEvidence()
+    public void HasCompleteProcurementEvidence_CompleteSingleWorldEvidenceWithSplitAllowed_ReturnsTrue()
     {
         var plan = CreatePlanWithBoughtIntermediate();
         var marketPlans = new List<DetailedShoppingPlan>
@@ -157,16 +156,15 @@ public class AcquisitionPlanningServiceTests
             }
         };
 
-        var canReuse = AcquisitionPlanningService.CanReuseProcurementEvidence(
+        var canReuse = AcquisitionPlanningService.HasCompleteProcurementEvidence(
             plan,
-            marketPlans,
-            enableMultiWorldSplits: true);
+            marketPlans);
 
-        Assert.False(canReuse);
+        Assert.True(canReuse);
     }
 
     [Fact]
-    public void CanReuseProcurementEvidence_SplitEnabled_ReusesActiveSplitEvidence()
+    public void HasCompleteProcurementEvidence_CompleteSplitEvidence_ReturnsTrue()
     {
         var plan = CreatePlanWithBoughtIntermediate();
         var marketPlans = new List<DetailedShoppingPlan>
@@ -194,10 +192,9 @@ public class AcquisitionPlanningServiceTests
             }
         };
 
-        var canReuse = AcquisitionPlanningService.CanReuseProcurementEvidence(
+        var canReuse = AcquisitionPlanningService.HasCompleteProcurementEvidence(
             plan,
-            marketPlans,
-            enableMultiWorldSplits: true);
+            marketPlans);
 
         Assert.True(canReuse);
     }

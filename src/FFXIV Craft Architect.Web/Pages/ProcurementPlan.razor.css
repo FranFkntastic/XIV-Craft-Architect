@@ -8,3 +8,11 @@
     height: 100%;
     width: 100%;
 }
+
+@media (max-width: 720px) {
+    .pp-grid-layout {
+        grid-template-columns: 1fr;
+        height: auto;
+        min-height: 100%;
+    }
+}

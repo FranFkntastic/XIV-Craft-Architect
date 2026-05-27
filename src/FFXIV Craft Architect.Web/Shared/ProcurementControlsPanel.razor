@@ -7,7 +7,7 @@
     <div class="pp-field-block">
         <div class="pp-field-label">Mode</div>
         <MudSelect T="RecommendationMode"
-                   @bind-Value="AppState.RecommendationMode"
+                   @bind-Value="AppState.ProcurementRecommendationMode"
                    Variant="Variant.Outlined"
                    Dense="true"
                    Class="pp-full-width">
@@ -17,9 +17,11 @@
         </MudSelect>
     </div>
 
+    <MudText Typo="Typo.subtitle2" Class="pp-section-title">Procurement Route Settings</MudText>
+
     <div class="pp-field-block">
         <MudCheckBox T="bool"
-                     @bind-Value="AppState.SearchEntireRegion"
+                     @bind-Value="AppState.ProcurementSearchEntireRegion"
                      Dense="true"
                      Color="Color.Primary">
             <MudText Typo="Typo.body2">Use region-wide market evidence</MudText>
@@ -28,7 +30,7 @@
 
     <div class="pp-field-block">
         <MudCheckBox T="bool"
-                     @bind-Value="AppState.EnableMultiWorldSplits"
+                     @bind-Value="AppState.ProcurementEnableSplitWorldPurchases"
                      Dense="true"
                      Color="Color.Secondary">
             <MudText Typo="Typo.body2">Allow split-world purchases</MudText>
@@ -44,6 +46,10 @@
                    Step="1"
                    Color="Color.Primary"
                    Class="pp-full-width" />
+        <MudStack Row="true" Justify="Justify.SpaceBetween" Class="pp-slider-endpoints">
+            <MudText Typo="Typo.caption">Shortest route</MudText>
+            <MudText Typo="Typo.caption">Cheapest</MudText>
+        </MudStack>
     </div>
 
     <MudButton OnClick="OnRunAnalysisRequested"
@@ -66,33 +72,9 @@
 
     <MudDivider Class="my-4" />
 
-    @if (AppState.ShoppingPlans.Any())
-    {
-        <MudAlert Severity="@(EvidenceSummary.ActiveItemsMissingEvidence > 0 ? Severity.Warning : Severity.Info)" Class="mb-4" Dense="true">
-            <MudText Typo="Typo.caption">
-                @if (EvidenceSummary.ActiveItemsMissingEvidence > 0)
-                {
-                    <span>@EvidenceSummary.ActiveItemsMissingEvidence active procurement items need market evidence.</span>
-                }
-                else
-                {
-                    <span>Using market data for @ShoppingPlans.Count active procurement items from @EvidenceSummary.AnalyzedCandidateCount analyzed candidates.</span>
-                }
-                @if (EvidenceSummary.SuppressedMarketCandidateCount > 0)
-                {
-                    <span> @EvidenceSummary.SuppressedMarketCandidateCount analyzed candidates are suppressed by acquisition choices.</span>
-                }
-            </MudText>
-        </MudAlert>
-    }
-    else
-    {
-        <MudAlert Severity="Severity.Warning" Class="mb-4" Dense="true">
-            <MudText Typo="Typo.caption">
-                No market analysis found. Run Market Analysis first for accurate results.
-            </MudText>
-        </MudAlert>
-    }
+    <MudAlert Severity="NoticeSeverity" Class="mb-4" Dense="true">
+        <MudText Typo="Typo.caption">@NoticeMessage</MudText>
+    </MudAlert>
 
     <MudButton OnClick="OnGoToPlannerRequested"
                Color="Color.Info"
@@ -139,6 +121,8 @@
     [Parameter] public ProcurementEvidenceSummary EvidenceSummary { get; set; } = new(0, 0, 0, 0, 0);
     [Parameter] public bool IsAnalyzing { get; set; }
     [Parameter] public bool CanAnalyze { get; set; }
+    [Parameter] public Severity NoticeSeverity { get; set; } = Severity.Info;
+    [Parameter] public string NoticeMessage { get; set; } = string.Empty;
 
     [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
@@ -155,7 +139,7 @@
         {
             0 => "shortest route",
             11 => "cheapest",
-            _ => AppState.ProcurementTravelTolerance.ToString()
+            _ => $"balanced {AppState.ProcurementTravelTolerance}/11"
         };
     }
 }

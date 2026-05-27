@@ -108,9 +108,14 @@ public class AppState
     // Market Analysis Settings (persist across page navigations)
     public bool EnableMultiWorldSplits { get; set; } = false;
     public int MaxWorldsPerItem { get; set; } = 0; // 0 = unlimited
-    public int ProcurementTravelTolerance { get; set; } = 0; // 0 = shortest route, 11 = cheapest
     public bool SearchEntireRegion { get; set; } = false;
     public MarketSortOption MarketSortPreference { get; set; } = MarketSortOption.ByRecommended;
+
+    // Procurement Planning Settings
+    public RecommendationMode ProcurementRecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
+    public bool ProcurementSearchEntireRegion { get; set; } = false;
+    public bool ProcurementEnableSplitWorldPurchases { get; set; } = false;
+    public int ProcurementTravelTolerance { get; set; } = 0; // 0 = shortest route, 11 = cheapest
     
     // Current plan tracking for save-overwrite behavior
     public string? CurrentPlanId { get; set; }

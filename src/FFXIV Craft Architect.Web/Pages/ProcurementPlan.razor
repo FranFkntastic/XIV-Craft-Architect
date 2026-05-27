@@ -26,6 +26,8 @@
             EvidenceSummary="evidenceSummary"
             IsAnalyzing="_isAnalyzing"
             CanAnalyze="CanAnalyze()"
+            NoticeSeverity="@GetProcurementNoticeSeverity(evidenceSummary)"
+            NoticeMessage="@GetProcurementNoticeMessage(evidenceSummary)"
             OnRunAnalysisRequested="RunAnalysisAsync"
             OnGoToPlannerRequested="GoToPlanner"
             OnGoToMarketAnalysisRequested="GoToMarketAnalysis" />
@@ -94,6 +96,52 @@
             AppState.ShoppingPlans);
     }
 
+    private Severity GetProcurementNoticeSeverity(ProcurementEvidenceSummary evidenceSummary)
+    {
+        if (!CanAnalyze() || evidenceSummary.ActiveItemsMissingEvidence > 0)
+        {
+            return Severity.Warning;
+        }
+
+        return AppState.ShoppingPlans.Any() ? Severity.Info : Severity.Success;
+    }
+
+    private string GetProcurementNoticeMessage(ProcurementEvidenceSummary evidenceSummary)
+    {
+        if (AppState.CurrentPlan == null)
+        {
+            return "Build a recipe plan before generating a procurement route.";
+        }
+
+        if (!GetBuyItems().Any())
+        {
+            return "Mark at least one active item for purchase before generating a procurement route.";
+        }
+
+        if (string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+        {
+            return "Select a data center before generating a procurement route.";
+        }
+
+        if (AppState.ShoppingPlans.Any())
+        {
+            if (evidenceSummary.ActiveItemsMissingEvidence > 0)
+            {
+                return $"{evidenceSummary.ActiveItemsMissingEvidence} active procurement items need market evidence.";
+            }
+
+            var message = $"Using market data for {evidenceSummary.ActiveProcurementItemCount} active procurement items from {evidenceSummary.AnalyzedCandidateCount} analyzed candidates.";
+            if (evidenceSummary.SuppressedMarketCandidateCount > 0)
+            {
+                message += $" {evidenceSummary.SuppressedMarketCandidateCount} analyzed candidates are suppressed by acquisition choices.";
+            }
+
+            return message;
+        }
+
+        return "Ready to fetch active procurement prices.";
+    }
+
     private async Task RunAnalysisAsync()
     {
         if (!CanAnalyze())
@@ -110,17 +158,15 @@
             // Use existing market analysis results if available and data center matches
             List<DetailedShoppingPlan> shoppingPlans;
 
-            if (AcquisitionPlanningService.CanReuseProcurementEvidence(
-                AppState.CurrentPlan,
-                AppState.ShoppingPlans,
-                AppState.EnableMultiWorldSplits))
+            if (CanReuseCurrentProcurementEvidence())
             {
                 // Reuse existing market analysis
                 AppState.SetStatus("Using existing market analysis...", busy: true);
+                var reusablePlans = GetProcurementEvidenceForCurrentScope();
                 shoppingPlans = MarketShoppingService.OptimizeProcurementRoute(
-                    GetProcurementShoppingPlans(),
+                    reusablePlans,
                     CreateProcurementMarketConfig(),
-                    AppState.EnableMultiWorldSplits);
+                    AppState.ProcurementEnableSplitWorldPurchases);
 
                 MergeShoppingPlans(shoppingPlans);
                 AppState.NotifyShoppingListChanged();
@@ -154,7 +200,7 @@
         List<MaterialAggregate> materials,
         IProgress<string> progress)
     {
-        if (AppState.SearchEntireRegion)
+        if (AppState.ProcurementSearchEntireRegion)
         {
             foreach (var dc in NorthAmericanDataCenters)
             {
@@ -168,21 +214,21 @@
             var evidencePlans = await MarketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
                 materials,
                 progress,
-                mode: AppState.RecommendationMode,
+                mode: AppState.ProcurementRecommendationMode,
                 config: config,
                 blacklistedMarketWorlds: AppState.TemporarilyBlacklistedMarketWorlds);
 
             return MarketShoppingService.OptimizeProcurementRoute(
                 evidencePlans,
                 config,
-                AppState.EnableMultiWorldSplits);
+                AppState.ProcurementEnableSplitWorldPurchases);
         }
 
         var cacheRequests = materials.Select(item => (item.ItemId, AppState.SelectedDataCenter)).ToList();
         AppState.SetStatus($"Checking cache for {cacheRequests.Count} active items...");
         await MarketCache.EnsurePopulatedAsync(cacheRequests, progress: progress);
 
-        if (AppState.EnableMultiWorldSplits)
+        if (AppState.ProcurementEnableSplitWorldPurchases)
         {
             var config = CreateProcurementMarketConfig();
 
@@ -190,7 +236,7 @@
                 materials,
                 AppState.SelectedDataCenter,
                 progress,
-                mode: AppState.RecommendationMode,
+                mode: AppState.ProcurementRecommendationMode,
                 config: config,
                 blacklistedWorlds: AppState.TemporarilyBlacklistedWorlds);
 
@@ -204,7 +250,7 @@
             materials,
             AppState.SelectedDataCenter,
             progress,
-            mode: AppState.RecommendationMode,
+            mode: AppState.ProcurementRecommendationMode,
             blacklistedWorlds: AppState.TemporarilyBlacklistedWorlds);
 
         return MarketShoppingService.OptimizeProcurementRoute(
@@ -216,10 +262,142 @@
     {
         return new MarketAnalysisConfig
         {
-            EnableSplitWorld = AppState.EnableMultiWorldSplits,
-            MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null,
+            EnableSplitWorld = AppState.ProcurementEnableSplitWorldPurchases,
+            MaxWorldsPerItem = null,
             TravelTolerance = AppState.ProcurementTravelTolerance
         };
+    }
+
+    private bool CanReuseCurrentProcurementEvidence()
+    {
+        if (!AcquisitionPlanningService.HasCompleteProcurementEvidence(
+            AppState.CurrentPlan,
+            AppState.ShoppingPlans))
+        {
+            return false;
+        }
+
+        var activePlans = GetProcurementShoppingPlans();
+        if (AppState.ProcurementSearchEntireRegion)
+        {
+            return activePlans.All(HasRegionWideEvidence);
+        }
+
+        return activePlans.All(plan => HasSelectedDataCenterEvidence(plan, AppState.SelectedDataCenter));
+    }
+
+    private List<DetailedShoppingPlan> GetProcurementEvidenceForCurrentScope()
+    {
+        var activePlans = GetProcurementShoppingPlans();
+        if (AppState.ProcurementSearchEntireRegion)
+        {
+            return activePlans;
+        }
+
+        return activePlans
+            .Select(plan => FilterPlanToSelectedDataCenter(plan, AppState.SelectedDataCenter))
+            .ToList();
+    }
+
+    private static DetailedShoppingPlan FilterPlanToSelectedDataCenter(
+        DetailedShoppingPlan plan,
+        string selectedDataCenter)
+    {
+        if (IsVendorPlan(plan))
+        {
+            return plan;
+        }
+
+        var worldOptions = plan.WorldOptions
+            .Where(world => IsSelectedDataCenter(world.DataCenter, selectedDataCenter))
+            .ToList();
+        var recommendedWorld = IsSelectedDataCenter(plan.RecommendedWorld?.DataCenter, selectedDataCenter)
+            ? plan.RecommendedWorld
+            : null;
+        var recommendedSplit = plan.RecommendedSplit?
+            .Where(split => IsSelectedDataCenter(split.DataCenter, selectedDataCenter))
+            .ToList();
+
+        return new DetailedShoppingPlan
+        {
+            ItemId = plan.ItemId,
+            Name = plan.Name,
+            IconId = plan.IconId,
+            QuantityNeeded = plan.QuantityNeeded,
+            DCAveragePrice = plan.DCAveragePrice,
+            WorldOptions = worldOptions,
+            RecommendedWorld = recommendedWorld,
+            RecommendedSplit = recommendedSplit?.Count > 0 ? recommendedSplit : null,
+            Error = plan.Error,
+            HQAveragePrice = plan.HQAveragePrice,
+            Vendors = plan.Vendors
+        };
+    }
+
+    private static bool HasRegionWideEvidence(DetailedShoppingPlan plan)
+    {
+        if (IsVendorPlan(plan))
+        {
+            return true;
+        }
+
+        return GetEvidenceDataCenters(plan)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count() > 1;
+    }
+
+    private static bool HasSelectedDataCenterEvidence(DetailedShoppingPlan plan, string selectedDataCenter)
+    {
+        if (IsVendorPlan(plan))
+        {
+            return true;
+        }
+
+        return GetEvidenceDataCenters(plan)
+            .Any(dataCenter => IsSelectedDataCenter(dataCenter, selectedDataCenter));
+    }
+
+    private static IEnumerable<string> GetEvidenceDataCenters(DetailedShoppingPlan plan)
+    {
+        foreach (var world in plan.WorldOptions)
+        {
+            if (!string.IsNullOrWhiteSpace(world.DataCenter))
+            {
+                yield return world.DataCenter;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(plan.RecommendedWorld?.DataCenter))
+        {
+            yield return plan.RecommendedWorld.DataCenter;
+        }
+
+        if (plan.RecommendedSplit == null)
+        {
+            yield break;
+        }
+
+        foreach (var split in plan.RecommendedSplit)
+        {
+            if (!string.IsNullOrWhiteSpace(split.DataCenter))
+            {
+                yield return split.DataCenter;
+            }
+        }
+    }
+
+    private static bool IsVendorPlan(DetailedShoppingPlan plan)
+    {
+        return string.Equals(
+            plan.RecommendedWorld?.WorldName,
+            MarketShoppingConstants.VendorWorldName,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSelectedDataCenter(string? dataCenter, string selectedDataCenter)
+    {
+        return !string.IsNullOrWhiteSpace(dataCenter) &&
+               string.Equals(dataCenter, selectedDataCenter, StringComparison.OrdinalIgnoreCase);
     }
 
     private void MergeShoppingPlans(List<DetailedShoppingPlan> activePlans)

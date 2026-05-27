@@ -79,24 +79,12 @@ public static class AcquisitionPlanningService
             suppressedCandidateCount);
     }
 
-    public static bool CanReuseProcurementEvidence(
+    public static bool HasCompleteProcurementEvidence(
         CraftingPlan? plan,
-        IEnumerable<DetailedShoppingPlan> shoppingPlans,
-        bool enableMultiWorldSplits)
+        IEnumerable<DetailedShoppingPlan> shoppingPlans)
     {
         var summary = GetProcurementEvidenceSummary(plan, shoppingPlans);
-        if (!summary.HasCompleteActiveEvidence)
-        {
-            return false;
-        }
-
-        if (!enableMultiWorldSplits)
-        {
-            return true;
-        }
-
-        return FilterShoppingPlansForActiveProcurement(plan, shoppingPlans)
-            .Any(PurchaseRecommendationCost.UsesSplitRecommendation);
+        return summary.HasCompleteActiveEvidence;
     }
 
     public static decimal CalculateCraftCost(

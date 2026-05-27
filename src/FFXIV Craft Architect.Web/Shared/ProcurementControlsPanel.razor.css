@@ -16,8 +16,21 @@
     margin-bottom: 4px;
 }
 
+.pp-section-title {
+    color: #d4a73a;
+    margin: 16px 0 8px;
+}
+
 .pp-full-width {
     width: 100%;
+}
+
+.pp-slider-endpoints {
+    display: flex;
+    justify-content: space-between;
+    margin-top: -8px;
+    color: #888;
+    font-size: 11px;
 }
 
 .pp-summary-paper {
@@ -55,4 +68,13 @@
 
 .pp-summary-stat-text {
     display: block;
+}
+
+@media (max-width: 720px) {
+    .pp-controls-column {
+        max-width: none;
+        min-width: 0;
+        border-right: none;
+        border-bottom: 1px solid #444;
+    }
 }
