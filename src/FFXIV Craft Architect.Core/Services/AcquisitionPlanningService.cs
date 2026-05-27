@@ -133,6 +133,68 @@ public static class AcquisitionPlanningService
         return TryGetAcquisitionCost(node, source, CreatePlanLookup(shoppingPlans), out cost);
     }
 
+    public static bool TryGetMarketBoardPurchase(
+        DetailedShoppingPlan? shoppingPlan,
+        int quantity,
+        out WorldShoppingSummary? world,
+        out decimal cost)
+    {
+        world = null;
+        cost = 0;
+
+        if (shoppingPlan == null || quantity <= 0 || shoppingPlan.QuantityNeeded <= 0)
+        {
+            return false;
+        }
+
+        var hasSplitCost = TryGetMarketBoardSplitCost(shoppingPlan, quantity, out var splitCost);
+        var recommendedWorld = shoppingPlan.RecommendedWorld;
+        if (recommendedWorld != null &&
+            IsMarketWorld(recommendedWorld) &&
+            recommendedWorld.TotalQuantityPurchased >= quantity &&
+            recommendedWorld.TotalCost > 0)
+        {
+            var recommendedCost = ScaleEvidenceCost(recommendedWorld.TotalCost, quantity, shoppingPlan.QuantityNeeded);
+            if (hasSplitCost && splitCost < recommendedCost)
+            {
+                cost = splitCost;
+                return true;
+            }
+
+            world = recommendedWorld;
+            cost = recommendedCost;
+            return true;
+        }
+
+        world = shoppingPlan.WorldOptions
+            .Where(IsMarketWorld)
+            .Where(option => option.TotalQuantityPurchased >= quantity && option.TotalCost > 0)
+            .OrderBy(option => ScaleEvidenceCost(option.TotalCost, quantity, shoppingPlan.QuantityNeeded))
+            .FirstOrDefault();
+
+        if (world == null)
+        {
+            if (!hasSplitCost)
+            {
+                return false;
+            }
+
+            cost = splitCost;
+            return true;
+        }
+
+        var worldCost = ScaleEvidenceCost(world.TotalCost, quantity, shoppingPlan.QuantityNeeded);
+        if (hasSplitCost && splitCost < worldCost)
+        {
+            world = null;
+            cost = splitCost;
+            return true;
+        }
+
+        cost = worldCost;
+        return true;
+    }
+
     private static void CollectMarketCandidate(PlanNode node, Dictionary<int, MaterialAggregate> aggregates)
     {
         if (node.Quantity > 0 && node.CanBuyFromMarket)
@@ -282,7 +344,7 @@ public static class AcquisitionPlanningService
         IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
     {
         return planByItemId.TryGetValue(node.ItemId, out var shoppingPlan) &&
-            TryGetEvidenceCost(shoppingPlan, node.Quantity, out var evidenceCost)
+            TryGetMarketBoardPurchase(shoppingPlan, node.Quantity, out _, out var evidenceCost)
                 ? evidenceCost
                 : node.MarketPrice * node.Quantity;
     }
@@ -323,9 +385,9 @@ public static class AcquisitionPlanningService
         PlanNode node,
         IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
     {
-        if (node.Source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq &&
+        if (node.Source is AcquisitionSource.MarketBuyNq &&
             planByItemId.TryGetValue(node.ItemId, out var shoppingPlan) &&
-            TryGetEvidenceCost(shoppingPlan, node.Quantity, out var evidenceCost))
+            TryGetMarketBoardPurchase(shoppingPlan, node.Quantity, out _, out var evidenceCost))
         {
             return evidenceCost;
         }
@@ -339,24 +401,33 @@ public static class AcquisitionPlanningService
         };
     }
 
-    private static bool TryGetEvidenceCost(
-        DetailedShoppingPlan shoppingPlan,
-        int quantity,
-        out decimal cost)
+    private static bool IsMarketWorld(WorldShoppingSummary? world)
     {
-        long? totalCost = shoppingPlan.RecommendedWorld != null || PurchaseRecommendationCost.UsesSplitRecommendation(shoppingPlan)
-            ? PurchaseRecommendationCost.GetRecommendedCost(shoppingPlan)
-            : null;
-        if (totalCost == null || shoppingPlan.QuantityNeeded <= 0)
+        return world != null &&
+            !string.Equals(world.WorldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryGetMarketBoardSplitCost(DetailedShoppingPlan shoppingPlan, int quantity, out decimal cost)
+    {
+        cost = 0;
+        if (shoppingPlan.RecommendedSplit?.Any() != true ||
+            shoppingPlan.RecommendedSplit.Any(split =>
+                string.Equals(split.WorldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase)) ||
+            shoppingPlan.SplitTotalCost is not { } splitTotalCost ||
+            splitTotalCost <= 0)
         {
-            cost = 0;
             return false;
         }
 
-        cost = quantity == shoppingPlan.QuantityNeeded
-            ? totalCost.Value
-            : totalCost.Value * quantity / shoppingPlan.QuantityNeeded;
+        cost = ScaleEvidenceCost(splitTotalCost, quantity, shoppingPlan.QuantityNeeded);
         return true;
+    }
+
+    private static decimal ScaleEvidenceCost(long totalCost, int quantity, int quantityNeeded)
+    {
+        return quantity == quantityNeeded
+            ? totalCost
+            : totalCost * quantity / quantityNeeded;
     }
 }
 

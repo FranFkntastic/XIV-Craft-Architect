@@ -499,6 +499,61 @@ public class AcquisitionPlanningServiceTests
         Assert.Equal(AcquisitionSource.Craft, root.Source);
     }
 
+    [Fact]
+    public void TryGetAcquisitionCost_MarketBuyNq_IgnoresVendorOverrideRecommendation()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Vendor Comparable",
+            Quantity = 3,
+            Source = AcquisitionSource.VendorBuy,
+            CanBuyFromMarket = true,
+            CanBuyFromVendor = true,
+            VendorPrice = 50
+        };
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 100,
+                Name = "Vendor Comparable",
+                QuantityNeeded = 3,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = MarketShoppingConstants.VendorWorldName,
+                    TotalCost = 150,
+                    TotalQuantityPurchased = 3
+                },
+                WorldOptions =
+                [
+                    new WorldShoppingSummary
+                    {
+                        WorldName = MarketShoppingConstants.VendorWorldName,
+                        TotalCost = 150,
+                        TotalQuantityPurchased = 3
+                    },
+                    new WorldShoppingSummary
+                    {
+                        WorldName = "Siren",
+                        TotalCost = 1_200,
+                        TotalQuantityPurchased = 3,
+                        AveragePricePerUnit = 400
+                    }
+                ]
+            }
+        };
+
+        var hasCost = AcquisitionPlanningService.TryGetAcquisitionCost(
+            node,
+            AcquisitionSource.MarketBuyNq,
+            marketPlans,
+            out var cost);
+
+        Assert.True(hasCost);
+        Assert.Equal(1_200, cost);
+    }
+
     private static CraftingPlan CreatePlanWithBoughtIntermediate()
     {
         var root = new PlanNode

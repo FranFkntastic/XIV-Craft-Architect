@@ -160,9 +160,10 @@
 
     private string GetMarketPlanDetail(string quality)
     {
-        if (MarketPlan?.RecommendedWorld != null)
+        if (AcquisitionPlanningService.TryGetMarketBoardPurchase(MarketPlan, Node?.Quantity ?? 0, out var marketWorld, out _) &&
+            marketWorld != null)
         {
-            return $"{MarketPlan.RecommendedWorld.WorldName} can cover {MarketPlan.RecommendedWorld.TotalQuantityPurchased}/{MarketPlan.QuantityNeeded}.";
+            return $"{marketWorld.WorldName} can cover {marketWorld.TotalQuantityPurchased}/{MarketPlan?.QuantityNeeded}.";
         }
 
         if (MarketPlan?.RecommendedSplit?.Any() == true)
