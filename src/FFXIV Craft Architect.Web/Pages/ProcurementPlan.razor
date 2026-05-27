@@ -166,6 +166,22 @@
         AppState.SetStatus($"Checking cache for {cacheRequests.Count} active items...");
         await MarketCache.EnsurePopulatedAsync(cacheRequests, progress: progress);
 
+        if (AppState.EnableMultiWorldSplits)
+        {
+            var config = new MarketAnalysisConfig
+            {
+                EnableSplitWorld = AppState.EnableMultiWorldSplits,
+                MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null
+            };
+
+            return await MarketShoppingService.CalculateShoppingPlansWithSplitsAsync(
+                materials,
+                AppState.SelectedDataCenter,
+                progress,
+                config: config,
+                blacklistedWorlds: AppState.TemporarilyBlacklistedWorlds);
+        }
+
         return await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
             materials,
             AppState.SelectedDataCenter,

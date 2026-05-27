@@ -178,6 +178,61 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void CalculateCraftCost_PrefersRecommendedSplitCostForBoughtChildren()
+    {
+        var craft = new PlanNode
+        {
+            ItemId = 1,
+            Name = "Route Craft",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Yield = 1
+        };
+        var boughtChild = new PlanNode
+        {
+            ItemId = 2,
+            Name = "Route Material",
+            Quantity = 10,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 1_000,
+            Parent = craft
+        };
+        craft.Children.Add(boughtChild);
+
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 2,
+                Name = "Route Material",
+                QuantityNeeded = 10,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 10_000,
+                    TotalQuantityPurchased = 10
+                },
+                RecommendedSplit =
+                [
+                    new SplitWorldPurchase
+                    {
+                        WorldName = "Leviathan",
+                        QuantityToBuy = 10,
+                        TotalCost = 4_000,
+                        EffectivePricePerNeededUnit = 400
+                    }
+                ]
+            }
+        };
+
+        var cost = AcquisitionPlanningService.CalculateCraftCost(craft, marketPlans);
+
+        Assert.Equal(4_000, cost);
+    }
+
+    [Fact]
     public void CalculateCraftCost_DividesByRecipeYield()
     {
         var cloth = new PlanNode

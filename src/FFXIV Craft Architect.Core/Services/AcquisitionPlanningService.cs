@@ -182,7 +182,9 @@ public static class AcquisitionPlanningService
         int quantity,
         out decimal cost)
     {
-        var totalCost = shoppingPlan.RecommendedWorld?.TotalCost ?? shoppingPlan.SplitTotalCost;
+        long? totalCost = shoppingPlan.RecommendedWorld != null || PurchaseRecommendationCost.UsesSplitRecommendation(shoppingPlan)
+            ? PurchaseRecommendationCost.GetRecommendedCost(shoppingPlan)
+            : null;
         if (totalCost == null || shoppingPlan.QuantityNeeded <= 0)
         {
             cost = 0;

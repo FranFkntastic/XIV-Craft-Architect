@@ -176,8 +176,13 @@
 
     private string? GetMarketPlanCost()
     {
-        var cost = MarketPlan?.RecommendedWorld?.TotalCost ?? MarketPlan?.SplitTotalCost;
-        return cost.HasValue ? $"{cost.Value:N0}g" : null;
+        if (MarketPlan == null ||
+            (MarketPlan.RecommendedWorld == null && !PurchaseRecommendationCost.UsesSplitRecommendation(MarketPlan)))
+        {
+            return null;
+        }
+
+        return $"{PurchaseRecommendationCost.GetRecommendedCost(MarketPlan):N0}g";
     }
 
     private string GetVendorDetail()

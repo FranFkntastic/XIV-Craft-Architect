@@ -141,7 +141,7 @@ public class ShoppingOptimizationCoordinator : IShoppingOptimizationCoordinator
                 .OrderBy(p => p.Name)
                 .ToList(),
             ShoppingPlanSortMode.PriceHighToLow => plans
-                .OrderByDescending(p => p.RecommendedWorld?.TotalCost ?? 0)
+                .OrderByDescending(PurchaseRecommendationCost.GetRecommendedCost)
                 .ThenBy(p => p.Name)
                 .ToList(),
             _ => plans

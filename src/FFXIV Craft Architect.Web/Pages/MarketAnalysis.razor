@@ -297,7 +297,8 @@
                 plans = await MarketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
                     materials,
                     progress,
-                    mode: AppState.RecommendationMode);
+                    mode: AppState.RecommendationMode,
+                    blacklistedMarketWorlds: AppState.TemporarilyBlacklistedMarketWorlds);
             }
             else if (AppState.EnableMultiWorldSplits)
             {
@@ -312,7 +313,8 @@
                     materials,
                     AppState.SelectedDataCenter,
                     progress,
-                    config: config);
+                    config: config,
+                    blacklistedWorlds: AppState.TemporarilyBlacklistedWorlds);
             }
             else
             {
@@ -336,7 +338,7 @@
                 await IndexedDb.SaveMarketAnalysisAsync(AppState.CurrentPlanId, plans, AppState.RecommendationMode);
             }
 
-            var bestValue = AppState.ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
+            var bestValue = AppState.ShoppingPlans.Sum(PurchaseRecommendationCost.GetRecommendedCost);
             // Ensure the status message is properly set to completion
             AppState.EndOperation($"Analysis complete! Best value: {bestValue:N0}g");
             if (showCompletionSnackbar)

@@ -533,7 +533,10 @@
 
     private static string GetEstimatedCost(PlanNode node, DetailedShoppingPlan? marketPlan, int activeQuantity)
     {
-        var marketCost = marketPlan?.RecommendedWorld?.TotalCost ?? marketPlan?.SplitTotalCost;
+        long? marketCost = marketPlan != null &&
+            (marketPlan.RecommendedWorld != null || PurchaseRecommendationCost.UsesSplitRecommendation(marketPlan))
+                ? PurchaseRecommendationCost.GetRecommendedCost(marketPlan)
+                : null;
         if (marketCost.HasValue)
         {
             return $"{marketCost.Value:N0}g";
