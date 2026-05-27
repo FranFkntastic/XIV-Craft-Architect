@@ -90,6 +90,11 @@ public class AppState
     /// Cleared on page reload - NOT persisted.
     /// </summary>
     public HashSet<string> TemporarilyBlacklistedWorlds { get; set; } = new();
+
+    /// <summary>
+    /// Structured temporary market-world exclusions for region-wide procurement analysis.
+    /// </summary>
+    public HashSet<MarketWorldKey> TemporarilyBlacklistedMarketWorlds { get; set; } = new();
     
     // Auto-expand item ID when navigating from procurement to market analysis
     public int? AutoExpandItemId { get; set; }

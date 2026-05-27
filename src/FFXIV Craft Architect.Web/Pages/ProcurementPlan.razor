@@ -158,7 +158,8 @@
             return await MarketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
                 materials,
                 progress,
-                mode: AppState.RecommendationMode);
+                mode: AppState.RecommendationMode,
+                blacklistedMarketWorlds: AppState.TemporarilyBlacklistedMarketWorlds);
         }
 
         var cacheRequests = materials.Select(item => (item.ItemId, AppState.SelectedDataCenter)).ToList();
@@ -200,9 +201,7 @@
     /// </summary>
     private async Task ReanalyzeWithoutWorldAsync(WorldProcurementCardModel world)
     {
-        // MarketShoppingService currently accepts a world-name blacklist only. Keep the
-        // structured UI identity here so this can narrow to DC+world without touching
-        // unrelated market-analysis storage in this fix.
+        AppState.TemporarilyBlacklistedMarketWorlds.Add(new MarketWorldKey(world.DataCenter, world.WorldName));
         AppState.TemporarilyBlacklistedWorlds.Add(world.WorldName);
 
         Snackbar.Add($"Re-analyzing without {world.WorldName} ({world.DataCenter})...", Severity.Info);
@@ -214,10 +213,25 @@
         await RunAnalysisAsync();
 
         // Show results
-        var blacklistedCount = AppState.TemporarilyBlacklistedWorlds.Count;
+        var blacklistedCount = AppState.TemporarilyBlacklistedMarketWorlds.Count;
         if (blacklistedCount > 0)
         {
-            Snackbar.Add($"Analysis complete. Excluded worlds: {string.Join(", ", AppState.TemporarilyBlacklistedWorlds)}", Severity.Success);
+            Snackbar.Add($"Analysis complete. Excluded worlds: {FormatBlacklistedMarketWorlds()}", Severity.Success);
         }
+    }
+
+    private string FormatBlacklistedMarketWorlds()
+    {
+        if (AppState.TemporarilyBlacklistedMarketWorlds.Count == 0)
+        {
+            return string.Join(", ", AppState.TemporarilyBlacklistedWorlds);
+        }
+
+        return string.Join(
+            ", ",
+            AppState.TemporarilyBlacklistedMarketWorlds
+                .OrderBy(world => world.DataCenter)
+                .ThenBy(world => world.WorldName)
+                .Select(world => $"{world.WorldName} ({world.DataCenter})"));
     }
 }

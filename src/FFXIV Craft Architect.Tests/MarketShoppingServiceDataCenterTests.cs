@@ -104,4 +104,64 @@ public class MarketShoppingServiceDataCenterTests
                 Assert.Equal(3, second.ExcessQuantity);
             });
     }
+
+    [Fact]
+    public async Task CalculateDetailedShoppingPlansMultiDCAsync_StructuredBlacklistExcludesOnlyMatchingDataCenterWorld()
+    {
+        var cache = new Mock<IMarketCacheService>();
+        SetupCachedWorld(cache, "Aether", "Siren", 10);
+        SetupCachedWorld(cache, "Primal", "Siren", 20);
+        cache
+            .Setup(c => c.GetAsync(123, "Crystal", null))
+            .ReturnsAsync((CachedMarketData?)null);
+        cache
+            .Setup(c => c.GetAsync(123, "Dynamis", null))
+            .ReturnsAsync((CachedMarketData?)null);
+
+        var service = new MarketShoppingService(cache.Object);
+        var materials = new List<MaterialAggregate>
+        {
+            new() { ItemId = 123, Name = "Structured Blacklist Item", TotalQuantity = 1 }
+        };
+        var blacklistedWorlds = new HashSet<MarketWorldKey>
+        {
+            new("Aether", "Siren")
+        };
+
+        var plans = await service.CalculateDetailedShoppingPlansMultiDCAsync(
+            materials,
+            blacklistedMarketWorlds: blacklistedWorlds);
+
+        var plan = Assert.Single(plans);
+        var siren = Assert.Single(plan.WorldOptions, option => option.WorldName == "Siren");
+        Assert.Equal("Primal", siren.DataCenter);
+    }
+
+    private static void SetupCachedWorld(Mock<IMarketCacheService> cache, string dataCenter, string worldName, long pricePerUnit)
+    {
+        cache
+            .Setup(c => c.GetAsync(123, dataCenter, null))
+            .ReturnsAsync(new CachedMarketData
+            {
+                ItemId = 123,
+                DataCenter = dataCenter,
+                DCAveragePrice = pricePerUnit,
+                Worlds =
+                {
+                    new CachedWorldData
+                    {
+                        WorldName = worldName,
+                        Listings =
+                        {
+                            new CachedListing
+                            {
+                                Quantity = 1,
+                                PricePerUnit = pricePerUnit,
+                                RetainerName = $"{dataCenter} Retainer"
+                            }
+                        }
+                    }
+                }
+            });
+    }
 }

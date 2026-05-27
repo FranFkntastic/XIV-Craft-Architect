@@ -570,9 +570,13 @@ public class MarketShoppingService
         IProgress<string>? progress = null,
         CancellationToken ct = default,
         RecommendationMode mode = RecommendationMode.MinimizeTotalCost,
-        MarketAnalysisConfig? config = null)
+        MarketAnalysisConfig? config = null,
+        HashSet<MarketWorldKey>? blacklistedMarketWorlds = null,
+        HashSet<string>? blacklistedWorlds = null)
     {
         config ??= new MarketAnalysisConfig();  // Use defaults
+        blacklistedMarketWorlds ??= new HashSet<MarketWorldKey>();
+        blacklistedWorlds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var plans = new List<DetailedShoppingPlan>();
 
         foreach (var item in marketItems)
@@ -606,6 +610,15 @@ public class MarketShoppingService
                         // Convert cached data to listings
                         foreach (var world in cached.Worlds)
                         {
+                            if (IsBlacklistedMarketWorld(listingDataCenter, world.WorldName, blacklistedMarketWorlds, blacklistedWorlds))
+                            {
+                                _logger?.LogDebug(
+                                    "[MarketShopping] Excluding {World}@{DataCenter} - user blacklisted",
+                                    world.WorldName,
+                                    listingDataCenter);
+                                continue;
+                            }
+
                             foreach (var listing in world.Listings)
                             {
                                 allListings.Add(new MarketListing
@@ -678,6 +691,16 @@ public class MarketShoppingService
         }
 
         return plans;
+    }
+
+    private static bool IsBlacklistedMarketWorld(
+        string dataCenter,
+        string worldName,
+        HashSet<MarketWorldKey> blacklistedMarketWorlds,
+        HashSet<string> blacklistedWorlds)
+    {
+        return blacklistedMarketWorlds.Contains(new MarketWorldKey(dataCenter, worldName))
+            || blacklistedWorlds.Contains(worldName);
     }
 
     /// <summary>
