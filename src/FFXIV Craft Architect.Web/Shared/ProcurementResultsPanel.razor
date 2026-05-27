@@ -141,7 +141,7 @@
     /// Called when user requests re-analysis without a specific world (due to congestion).
     /// </summary>
     [Parameter]
-    public EventCallback<string> OnReanalyzeWithoutWorldRequested { get; set; }
+    public EventCallback<WorldCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
     
     private DetailedShoppingPlan? _expandedItem;
     private ViewMode _viewMode = ViewMode.Cards;
@@ -165,9 +165,9 @@
         }
     }
     
-    private decimal GetTotalCost()
+    private long GetTotalCost()
     {
-        return ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
+        return ShoppingPlans.Sum(PurchaseRecommendationCost.GetRecommendedCost);
     }
     
     // === FILTER METHODS ===
@@ -201,13 +201,13 @@
         }
     }
     
-    private async Task OnReanalyzeWithoutWorld(string worldName)
+    private async Task OnReanalyzeWithoutWorld(WorldCardModel world)
     {
         // Collapse all cards before re-analysis
         _expandedWorld = null;
         
         // Notify parent to re-run analysis with this world blacklisted
-        await OnReanalyzeWithoutWorldRequested.InvokeAsync(worldName);
+        await OnReanalyzeWithoutWorldRequested.InvokeAsync(world);
     }
     
     /// <summary>

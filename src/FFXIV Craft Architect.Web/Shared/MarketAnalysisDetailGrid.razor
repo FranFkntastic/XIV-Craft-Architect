@@ -1,4 +1,5 @@
 @using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
 
 <div class="ma-detail-grid-shell">
     @if (!string.IsNullOrWhiteSpace(Plan.Error))
@@ -111,9 +112,13 @@
                 <Columns>
                     <TemplateColumn T="RecommendedPurchaseRow" Title="World" SortBy="row => row.WorldName">
                         <CellTemplate>
-                            <button class="ma-link-button" type="button" @onclick="() => ToggleWorldListings(context.Item.WorldName)">
-                                <MudIcon Icon="@(IsWorldExpanded(context.Item.WorldName) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
+                            <button class="ma-link-button" type="button" @onclick="() => ToggleWorldListings(context.Item)">
+                                <MudIcon Icon="@(IsWorldExpanded(context.Item) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
                                 <span>@context.Item.WorldName</span>
+                                @if (!string.IsNullOrWhiteSpace(context.Item.DataCenter))
+                                {
+                                    <span class="ma-detail-muted">@context.Item.DataCenter</span>
+                                }
                             </button>
                         </CellTemplate>
                     </TemplateColumn>
@@ -132,13 +137,13 @@
                 </Columns>
             </MudDataGrid>
 
-            @foreach (var worldName in _expandedRecommendedWorlds)
+            @foreach (var row in GetRecommendedRows().Where(row => _expandedRecommendedWorlds.Contains(GetWorldKey(row))))
             {
-                var listings = GetRecommendedListings(worldName).ToList();
+                var listings = GetRecommendedListings(row).ToList();
                 if (listings.Any())
                 {
                     <div class="ma-detail-subtable">
-                        <div class="ma-detail-subtitle">@worldName listings</div>
+                        <div class="ma-detail-subtitle">@FormatWorldLabel(row.WorldName, row.DataCenter) listings</div>
                         @RenderListingsGrid(listings)
                     </div>
                 }
@@ -173,9 +178,13 @@
                                 {
                                     <tr class="@GetWorldRowClass(world, 0)">
                                         <td>
-                                            <button class="ma-link-button" type="button" @onclick="() => ToggleAllWorld(world.WorldName)">
-                                                <MudIcon Icon="@(_expandedAllWorlds.Contains(world.WorldName) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
+                                            <button class="ma-link-button" type="button" @onclick="() => ToggleAllWorld(world)">
+                                                <MudIcon Icon="@(_expandedAllWorlds.Contains(GetWorldKey(world)) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
                                                 <span>@world.WorldName</span>
+                                                @if (!string.IsNullOrWhiteSpace(world.DataCenter))
+                                                {
+                                                    <span class="ma-detail-muted">@world.DataCenter</span>
+                                                }
                                             </button>
                                         </td>
                                         <td class="ma-detail-number">
@@ -187,7 +196,7 @@
                                         <td class="ma-detail-total-cell">@world.TotalCost.ToString("N0")g</td>
                                     </tr>
 
-                                    @if (_expandedAllWorlds.Contains(world.WorldName))
+                                    @if (_expandedAllWorlds.Contains(GetWorldKey(world)))
                                     {
                                         var listings = GetAllListings(world).ToList();
                                         if (listings.Any())
@@ -195,7 +204,7 @@
                                             <tr class="ma-detail-expanded-row">
                                                 <td colspan="4">
                                                     <div class="ma-detail-subtable ma-detail-child-subtable">
-                                                        <div class="ma-detail-subtitle">@world.WorldName listings</div>
+                                                        <div class="ma-detail-subtitle">@FormatWorldLabel(world.WorldName, world.DataCenter) listings</div>
                                                         @RenderListingsGrid(listings, world.ExcludedListings, world.ModePricePerUnit)
                                                     </div>
                                                 </td>
@@ -232,9 +241,10 @@
 
     private IEnumerable<RecommendedPurchaseRow> GetRecommendedRows()
     {
-        if (Plan.RequiresSplitPurchase && Plan.RecommendedSplit?.Any() == true)
+        if (PurchaseRecommendationCost.UsesSplitRecommendation(Plan))
         {
-            return Plan.RecommendedSplit.Select(split => new RecommendedPurchaseRow(
+            return Plan.RecommendedSplit!.Select(split => new RecommendedPurchaseRow(
+                split.DataCenter,
                 split.WorldName,
                 split.QuantityToBuy,
                 split.EffectivePricePerNeededUnit,
@@ -248,6 +258,7 @@
             return new[]
             {
                 new RecommendedPurchaseRow(
+                    Plan.RecommendedWorld.DataCenter,
                     Plan.RecommendedWorld.WorldName,
                     Plan.QuantityNeeded,
                     Plan.RecommendedWorld.AveragePricePerUnit,
@@ -259,18 +270,18 @@
         return Array.Empty<RecommendedPurchaseRow>();
     }
 
-    private IEnumerable<ShoppingListingEntry> GetRecommendedListings(string worldName)
+    private IEnumerable<ShoppingListingEntry> GetRecommendedListings(RecommendedPurchaseRow row)
     {
-        if (Plan.RequiresSplitPurchase && Plan.RecommendedSplit?.Any() == true)
+        if (PurchaseRecommendationCost.UsesSplitRecommendation(Plan))
         {
-            var split = Plan.RecommendedSplit.FirstOrDefault(s => string.Equals(s.WorldName, worldName, StringComparison.OrdinalIgnoreCase));
+            var split = Plan.RecommendedSplit!.FirstOrDefault(s => IsSameWorld(s.DataCenter, s.WorldName, row.DataCenter, row.WorldName));
             if (split?.Listings?.Any() == true)
             {
                 return split.Listings.OrderBy(l => l.PricePerUnit);
             }
         }
 
-        var world = Plan.WorldOptions.FirstOrDefault(w => string.Equals(w.WorldName, worldName, StringComparison.OrdinalIgnoreCase));
+        var world = Plan.WorldOptions.FirstOrDefault(w => IsSameWorld(w.DataCenter, w.WorldName, row.DataCenter, row.WorldName));
         return world?.Listings?.Where(l => !l.IsAdditionalOption).OrderBy(l => l.PricePerUnit)
             ?? Enumerable.Empty<ShoppingListingEntry>();
     }
@@ -281,14 +292,14 @@
 
         return (_worldSortColumn, _worldSortAscending) switch
         {
-            (WorldSortColumn.World, true) => worlds.OrderBy(w => w.WorldName),
-            (WorldSortColumn.World, false) => worlds.OrderByDescending(w => w.WorldName),
-            (WorldSortColumn.Quantity, true) => worlds.OrderBy(w => w.TotalQuantityPurchased).ThenBy(w => w.WorldName),
-            (WorldSortColumn.Quantity, false) => worlds.OrderByDescending(w => w.TotalQuantityPurchased).ThenBy(w => w.WorldName),
-            (WorldSortColumn.Unit, true) => worlds.OrderBy(w => w.AveragePricePerUnit).ThenBy(w => w.WorldName),
-            (WorldSortColumn.Unit, false) => worlds.OrderByDescending(w => w.AveragePricePerUnit).ThenBy(w => w.WorldName),
-            (WorldSortColumn.Total, false) => worlds.OrderByDescending(w => w.TotalCost).ThenBy(w => w.WorldName),
-            _ => worlds.OrderBy(w => w.TotalCost).ThenBy(w => w.WorldName)
+            (WorldSortColumn.World, true) => worlds.OrderBy(w => w.WorldName).ThenBy(w => w.DataCenter),
+            (WorldSortColumn.World, false) => worlds.OrderByDescending(w => w.WorldName).ThenBy(w => w.DataCenter),
+            (WorldSortColumn.Quantity, true) => worlds.OrderBy(w => w.TotalQuantityPurchased).ThenBy(w => w.WorldName).ThenBy(w => w.DataCenter),
+            (WorldSortColumn.Quantity, false) => worlds.OrderByDescending(w => w.TotalQuantityPurchased).ThenBy(w => w.WorldName).ThenBy(w => w.DataCenter),
+            (WorldSortColumn.Unit, true) => worlds.OrderBy(w => w.AveragePricePerUnit).ThenBy(w => w.WorldName).ThenBy(w => w.DataCenter),
+            (WorldSortColumn.Unit, false) => worlds.OrderByDescending(w => w.AveragePricePerUnit).ThenBy(w => w.WorldName).ThenBy(w => w.DataCenter),
+            (WorldSortColumn.Total, false) => worlds.OrderByDescending(w => w.TotalCost).ThenBy(w => w.WorldName).ThenBy(w => w.DataCenter),
+            _ => worlds.OrderBy(w => w.TotalCost).ThenBy(w => w.WorldName).ThenBy(w => w.DataCenter)
         };
     }
 
@@ -349,24 +360,26 @@
         </Columns>
     </MudDataGrid>;
 
-    private void ToggleWorldListings(string worldName)
+    private void ToggleWorldListings(RecommendedPurchaseRow row)
     {
-        if (!_expandedRecommendedWorlds.Add(worldName))
+        var key = GetWorldKey(row);
+        if (!_expandedRecommendedWorlds.Add(key))
         {
-            _expandedRecommendedWorlds.Remove(worldName);
+            _expandedRecommendedWorlds.Remove(key);
         }
     }
 
-    private bool IsWorldExpanded(string worldName)
+    private bool IsWorldExpanded(RecommendedPurchaseRow row)
     {
-        return _expandedRecommendedWorlds.Contains(worldName);
+        return _expandedRecommendedWorlds.Contains(GetWorldKey(row));
     }
 
-    private void ToggleAllWorld(string worldName)
+    private void ToggleAllWorld(WorldShoppingSummary world)
     {
-        if (!_expandedAllWorlds.Add(worldName))
+        var key = GetWorldKey(world);
+        if (!_expandedAllWorlds.Add(key))
         {
-            _expandedAllWorlds.Remove(worldName);
+            _expandedAllWorlds.Remove(key);
         }
     }
 
@@ -395,7 +408,35 @@
 
     private string GetWorldRowClass(WorldShoppingSummary world, int rowNumber)
     {
-        return _expandedAllWorlds.Contains(world.WorldName) ? "is-selected" : string.Empty;
+        return _expandedAllWorlds.Contains(GetWorldKey(world)) ? "is-selected" : string.Empty;
+    }
+
+    private static string GetWorldKey(RecommendedPurchaseRow row)
+    {
+        return GetWorldKey(row.DataCenter, row.WorldName);
+    }
+
+    private static string GetWorldKey(WorldShoppingSummary world)
+    {
+        return GetWorldKey(world.DataCenter, world.WorldName);
+    }
+
+    private static string GetWorldKey(string dataCenter, string worldName)
+    {
+        return $"{dataCenter.Trim()}|{worldName.Trim()}";
+    }
+
+    private static bool IsSameWorld(string dataCenter, string worldName, string otherDataCenter, string otherWorldName)
+    {
+        return string.Equals(dataCenter, otherDataCenter, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(worldName, otherWorldName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FormatWorldLabel(string worldName, string dataCenter)
+    {
+        return string.IsNullOrWhiteSpace(dataCenter)
+            ? worldName
+            : $"{worldName} ({dataCenter})";
     }
 
     private static string GetListingRowClass(
@@ -445,6 +486,7 @@
     private readonly record struct DetailFact(string Label, string Value);
 
     private readonly record struct RecommendedPurchaseRow(
+        string DataCenter,
         string WorldName,
         int Quantity,
         decimal UnitPrice,

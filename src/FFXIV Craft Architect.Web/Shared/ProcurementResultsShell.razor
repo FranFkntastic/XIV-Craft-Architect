@@ -5,5 +5,5 @@
 
 @code {
     [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
-    [Parameter] public EventCallback<string> OnReanalyzeWithoutWorldRequested { get; set; }
+    [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
 }

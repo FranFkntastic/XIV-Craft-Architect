@@ -198,12 +198,14 @@
     /// Re-runs analysis with the specified world blacklisted.
     /// Called when user clicks "Re-analyze without this world" on a congested world card.
     /// </summary>
-    private async Task ReanalyzeWithoutWorldAsync(string worldName)
+    private async Task ReanalyzeWithoutWorldAsync(WorldProcurementCardModel world)
     {
-        // Add world to temporary blacklist
-        AppState.TemporarilyBlacklistedWorlds.Add(worldName);
+        // MarketShoppingService currently accepts a world-name blacklist only. Keep the
+        // structured UI identity here so this can narrow to DC+world without touching
+        // unrelated market-analysis storage in this fix.
+        AppState.TemporarilyBlacklistedWorlds.Add(world.WorldName);
 
-        Snackbar.Add($"Re-analyzing without {worldName}...", Severity.Info);
+        Snackbar.Add($"Re-analyzing without {world.WorldName} ({world.DataCenter})...", Severity.Info);
 
         // Clear current shopping plans to force recalculation with blacklist
         AppState.ShoppingPlans = new List<DetailedShoppingPlan>();

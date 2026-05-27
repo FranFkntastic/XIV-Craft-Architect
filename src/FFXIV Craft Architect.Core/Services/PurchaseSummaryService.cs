@@ -16,7 +16,7 @@ public class PurchaseSummaryService : IPurchaseSummaryService
         var excessQuantity = 0;
 
         var recommendedSplit = plan.RecommendedSplit;
-        if (ShouldUseSplitRecommendation(plan) && recommendedSplit != null)
+        if (PurchaseRecommendationCost.UsesSplitRecommendation(plan) && recommendedSplit != null)
         {
             quantityToPurchase = recommendedSplit.Sum(s => s.QuantityToBuy);
             totalCost = plan.SplitTotalCost ?? 0;
@@ -84,9 +84,4 @@ public class PurchaseSummaryService : IPurchaseSummaryService
         };
     }
 
-    private static bool ShouldUseSplitRecommendation(DetailedShoppingPlan plan)
-    {
-        return plan.RecommendedSplit?.Any() == true &&
-            (plan.RequiresSplitPurchase || plan.RecommendedWorld == null);
-    }
 }

@@ -109,7 +109,7 @@
 
 @code {
     [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
-    [Parameter] public EventCallback<string> OnReanalyzeWithoutWorldRequested { get; set; }
+    [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
 
     private readonly HashSet<string> _expandedWorlds = new(StringComparer.OrdinalIgnoreCase);
 
@@ -191,7 +191,7 @@
                         <MudButton Size="Size.Small"
                                    Variant="Variant.Outlined"
                                    Color="Color.Warning"
-                                   OnClick="() => ReanalyzeWithoutWorld(world.WorldName)">
+                                   OnClick="() => ReanalyzeWithoutWorld(world)">
                             Re-analyze without @world.WorldName
                         </MudButton>
                     </div>
@@ -234,9 +234,9 @@
         }
     }
 
-    private async Task ReanalyzeWithoutWorld(string worldName)
+    private async Task ReanalyzeWithoutWorld(WorldProcurementCardModel world)
     {
-        await OnReanalyzeWithoutWorldRequested.InvokeAsync(worldName);
+        await OnReanalyzeWithoutWorldRequested.InvokeAsync(world);
     }
 
     private async Task CopyItemName(string itemName)
@@ -252,7 +252,7 @@
 
     private decimal GetTotalCost()
     {
-        return ShoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? p.SplitTotalCost ?? 0);
+        return ShoppingPlans.Sum(PurchaseRecommendationCost.GetRecommendedCost);
     }
 
     private IEnumerable<DetailedShoppingPlan> GetItemsWithErrors()

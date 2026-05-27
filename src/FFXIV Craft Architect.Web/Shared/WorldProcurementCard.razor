@@ -209,7 +209,7 @@
     [Parameter] public bool IsExpanded { get; set; } = false;
     [Parameter] public EventCallback<bool> IsExpandedChanged { get; set; }
     [Parameter] public EventCallback<WorldItemPurchase> OnItemSelected { get; set; }
-    [Parameter] public EventCallback<string> OnReanalyzeRequested { get; set; }
+    [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeRequested { get; set; }
     
     private async Task ToggleExpanded()
     {
@@ -224,7 +224,7 @@
     
     private async Task OnReanalyzeWithoutWorld()
     {
-        await OnReanalyzeRequested.InvokeAsync(Card.WorldName);
+        await OnReanalyzeRequested.InvokeAsync(Card);
     }
     
     private async Task CopyItemName(string itemName)
