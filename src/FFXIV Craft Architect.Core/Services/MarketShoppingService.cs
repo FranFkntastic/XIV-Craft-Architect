@@ -198,7 +198,9 @@ public class MarketShoppingService
         ArgumentNullException.ThrowIfNull(evidencePlans);
 
         config ??= new MarketAnalysisConfig();
-        var plans = evidencePlans.ToList();
+        var plans = evidencePlans
+            .Select(ClonePlanForRouteOptimization)
+            .ToList();
         if (plans.Count == 0)
         {
             return plans;
@@ -1412,6 +1414,24 @@ public class MarketShoppingService
             plan.RecommendedWorld?.WorldName,
             MarketShoppingConstants.VendorWorldName,
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static DetailedShoppingPlan ClonePlanForRouteOptimization(DetailedShoppingPlan plan)
+    {
+        return new DetailedShoppingPlan
+        {
+            ItemId = plan.ItemId,
+            Name = plan.Name,
+            IconId = plan.IconId,
+            QuantityNeeded = plan.QuantityNeeded,
+            DCAveragePrice = plan.DCAveragePrice,
+            WorldOptions = plan.WorldOptions.ToList(),
+            RecommendedWorld = plan.RecommendedWorld,
+            RecommendedSplit = plan.RecommendedSplit?.ToList(),
+            Error = plan.Error,
+            HQAveragePrice = plan.HQAveragePrice,
+            Vendors = plan.Vendors.ToList()
+        };
     }
 
     private sealed class ProcurementRouteSearchState

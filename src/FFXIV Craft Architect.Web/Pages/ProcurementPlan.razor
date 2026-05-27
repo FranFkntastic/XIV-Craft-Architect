@@ -117,7 +117,13 @@
             {
                 // Reuse existing market analysis
                 AppState.SetStatus("Using existing market analysis...", busy: true);
-                shoppingPlans = GetProcurementShoppingPlans();
+                shoppingPlans = MarketShoppingService.OptimizeProcurementRoute(
+                    GetProcurementShoppingPlans(),
+                    CreateProcurementMarketConfig(),
+                    AppState.EnableMultiWorldSplits);
+
+                MergeShoppingPlans(shoppingPlans);
+                AppState.NotifyShoppingListChanged();
             }
             else
             {
@@ -157,11 +163,7 @@
                 await MarketCache.EnsurePopulatedAsync(requests, progress: progress);
             }
 
-            var config = new MarketAnalysisConfig
-            {
-                EnableSplitWorld = AppState.EnableMultiWorldSplits,
-                MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null
-            };
+            var config = CreateProcurementMarketConfig();
 
             var evidencePlans = await MarketShoppingService.CalculateDetailedShoppingPlansMultiDCAsync(
                 materials,
@@ -182,11 +184,7 @@
 
         if (AppState.EnableMultiWorldSplits)
         {
-            var config = new MarketAnalysisConfig
-            {
-                EnableSplitWorld = AppState.EnableMultiWorldSplits,
-                MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null
-            };
+            var config = CreateProcurementMarketConfig();
 
             var evidencePlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
                 materials,
@@ -212,6 +210,15 @@
         return MarketShoppingService.OptimizeProcurementRoute(
             plans,
             includeSplitPurchases: false);
+    }
+
+    private MarketAnalysisConfig CreateProcurementMarketConfig()
+    {
+        return new MarketAnalysisConfig
+        {
+            EnableSplitWorld = AppState.EnableMultiWorldSplits,
+            MaxWorldsPerItem = AppState.MaxWorldsPerItem > 0 ? AppState.MaxWorldsPerItem : null
+        };
     }
 
     private void MergeShoppingPlans(List<DetailedShoppingPlan> activePlans)

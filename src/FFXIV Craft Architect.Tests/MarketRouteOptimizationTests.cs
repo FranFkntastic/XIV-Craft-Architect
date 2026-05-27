@@ -191,7 +191,9 @@ public class MarketRouteOptimizationTests
         var optimized = Optimize([plan], travelTolerance: 0, includeSplitPurchases: true);
 
         var result = Assert.Single(optimized);
-        Assert.Same(plan, result);
+        Assert.NotSame(plan, result);
+        Assert.Equal(plan.ItemId, result.ItemId);
+        Assert.Equal(plan.Name, result.Name);
         Assert.Equal("No market data in cache", result.Error);
         Assert.Null(result.RecommendedWorld);
         Assert.Null(result.RecommendedSplit);
