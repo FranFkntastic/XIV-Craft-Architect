@@ -106,12 +106,14 @@
         {
             var materials = GetBuyItems();
             var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
-            var evidenceSummary = GetEvidenceSummary();
 
             // Use existing market analysis results if available and data center matches
             List<DetailedShoppingPlan> shoppingPlans;
 
-            if (evidenceSummary.HasCompleteActiveEvidence)
+            if (AcquisitionPlanningService.CanReuseProcurementEvidence(
+                AppState.CurrentPlan,
+                AppState.ShoppingPlans,
+                AppState.EnableMultiWorldSplits))
             {
                 // Reuse existing market analysis
                 AppState.SetStatus("Using existing market analysis...", busy: true);

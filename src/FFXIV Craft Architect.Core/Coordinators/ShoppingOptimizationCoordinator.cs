@@ -88,9 +88,7 @@ public class ShoppingOptimizationCoordinator : IShoppingOptimizationCoordinator
             // Step 4: Process results
             var itemsWithOptions = shoppingPlans.Count(p => p.HasOptions && string.IsNullOrEmpty(p.Error));
             var itemsWithoutOptions = shoppingPlans.Count - itemsWithOptions;
-            var totalCost = shoppingPlans
-                .Where(p => p.RecommendedWorld != null)
-                .Sum(p => p.RecommendedWorld!.TotalCost);
+            var totalCost = CalculateTotalCost(shoppingPlans);
 
             // Step 5: Determine status and build message
             var status = DetermineStatus(itemsWithOptions, itemsWithoutOptions, marketItems.Count);
@@ -149,6 +147,11 @@ public class ShoppingOptimizationCoordinator : IShoppingOptimizationCoordinator
                 .ThenBy(p => p.Name)
                 .ToList()
         };
+    }
+
+    public static decimal CalculateTotalCost(IEnumerable<DetailedShoppingPlan> plans)
+    {
+        return plans.Sum(PurchaseRecommendationCost.GetRecommendedCost);
     }
 
     /// <summary>

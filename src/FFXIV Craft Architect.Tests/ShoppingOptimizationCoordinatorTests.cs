@@ -53,4 +53,47 @@ public class ShoppingOptimizationCoordinatorTests
 
         Assert.Equal([worldPlan, splitPlan], sorted);
     }
+
+    [Fact]
+    public void CalculateTotalCost_UsesRecommendedSplitCost()
+    {
+        var splitPlan = new DetailedShoppingPlan
+        {
+            ItemId = 1,
+            Name = "Split Plan",
+            QuantityNeeded = 10,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                WorldName = "Siren",
+                TotalCost = 10_000,
+                TotalQuantityPurchased = 10
+            },
+            RecommendedSplit =
+            [
+                new SplitWorldPurchase
+                {
+                    WorldName = "Leviathan",
+                    QuantityToBuy = 10,
+                    TotalCost = 4_000,
+                    EffectivePricePerNeededUnit = 400
+                }
+            ]
+        };
+        var worldPlan = new DetailedShoppingPlan
+        {
+            ItemId = 2,
+            Name = "World Plan",
+            QuantityNeeded = 10,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                WorldName = "Cactuar",
+                TotalCost = 7_000,
+                TotalQuantityPurchased = 10
+            }
+        };
+
+        var totalCost = ShoppingOptimizationCoordinator.CalculateTotalCost([splitPlan, worldPlan]);
+
+        Assert.Equal(11_000, totalCost);
+    }
 }

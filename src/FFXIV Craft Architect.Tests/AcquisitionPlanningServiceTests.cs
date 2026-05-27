@@ -110,6 +110,99 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void CanReuseProcurementEvidence_SplitDisabled_ReusesCompleteSingleWorldEvidence()
+    {
+        var plan = CreatePlanWithBoughtIntermediate();
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 200,
+                Name = "Intermediate",
+                QuantityNeeded = 2,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 100,
+                    TotalQuantityPurchased = 2
+                }
+            }
+        };
+
+        var canReuse = AcquisitionPlanningService.CanReuseProcurementEvidence(
+            plan,
+            marketPlans,
+            enableMultiWorldSplits: false);
+
+        Assert.True(canReuse);
+    }
+
+    [Fact]
+    public void CanReuseProcurementEvidence_SplitEnabled_RejectsSingleWorldOnlyEvidence()
+    {
+        var plan = CreatePlanWithBoughtIntermediate();
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 200,
+                Name = "Intermediate",
+                QuantityNeeded = 2,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 100,
+                    TotalQuantityPurchased = 2
+                }
+            }
+        };
+
+        var canReuse = AcquisitionPlanningService.CanReuseProcurementEvidence(
+            plan,
+            marketPlans,
+            enableMultiWorldSplits: true);
+
+        Assert.False(canReuse);
+    }
+
+    [Fact]
+    public void CanReuseProcurementEvidence_SplitEnabled_ReusesActiveSplitEvidence()
+    {
+        var plan = CreatePlanWithBoughtIntermediate();
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 200,
+                Name = "Intermediate",
+                QuantityNeeded = 2,
+                RecommendedSplit =
+                [
+                    new SplitWorldPurchase
+                    {
+                        WorldName = "Siren",
+                        QuantityToBuy = 1,
+                        TotalCost = 40
+                    },
+                    new SplitWorldPurchase
+                    {
+                        WorldName = "Leviathan",
+                        QuantityToBuy = 1,
+                        TotalCost = 50
+                    }
+                ]
+            }
+        };
+
+        var canReuse = AcquisitionPlanningService.CanReuseProcurementEvidence(
+            plan,
+            marketPlans,
+            enableMultiWorldSplits: true);
+
+        Assert.True(canReuse);
+    }
+
+    [Fact]
     public void CalculateCraftCost_UsesMarketEvidenceForBoughtChildren()
     {
         var ingot = new PlanNode
