@@ -17,6 +17,35 @@
         </MudSelect>
     </div>
 
+    <div class="pp-field-block">
+        <MudCheckBox T="bool"
+                     @bind-Value="AppState.SearchEntireRegion"
+                     Dense="true"
+                     Color="Color.Primary">
+            <MudText Typo="Typo.body2">Use region-wide market evidence</MudText>
+        </MudCheckBox>
+    </div>
+
+    <div class="pp-field-block">
+        <MudCheckBox T="bool"
+                     @bind-Value="AppState.EnableMultiWorldSplits"
+                     Dense="true"
+                     Color="Color.Secondary">
+            <MudText Typo="Typo.body2">Allow split-world purchases</MudText>
+        </MudCheckBox>
+    </div>
+
+    <div class="pp-field-block">
+        <div class="pp-field-label">Travel tolerance: @GetTravelToleranceLabel()</div>
+        <MudSlider T="int"
+                   @bind-Value="AppState.ProcurementTravelTolerance"
+                   Min="0"
+                   Max="11"
+                   Step="1"
+                   Color="Color.Primary"
+                   Class="pp-full-width" />
+    </div>
+
     <MudButton OnClick="OnRunAnalysisRequested"
                Disabled="@(!CanAnalyze || IsAnalyzing)"
                Color="Color.Primary"
@@ -118,5 +147,15 @@
     private static long GetPlanCost(DetailedShoppingPlan plan)
     {
         return PurchaseRecommendationCost.GetRecommendedCost(plan);
+    }
+
+    private string GetTravelToleranceLabel()
+    {
+        return AppState.ProcurementTravelTolerance switch
+        {
+            0 => "shortest route",
+            11 => "cheapest",
+            _ => AppState.ProcurementTravelTolerance.ToString()
+        };
     }
 }
