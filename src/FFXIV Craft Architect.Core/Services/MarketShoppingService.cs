@@ -40,6 +40,8 @@ namespace FFXIV_Craft_Architect.Core.Services;
 /// </summary>
 public class MarketShoppingService
 {
+    private const int MaxSplitPurchaseCandidateAlternatives = 8;
+
     private readonly IMarketCacheService _cacheService;
     private readonly IWorldStatusService? _worldStatusService;
     private readonly SettingsService? _settingsService;
@@ -773,7 +775,10 @@ public class MarketShoppingService
     // Multi-World Split Purchase Calculation
     // ========================================================================
 
-    private List<MarketPurchaseCandidate> GeneratePurchaseCandidates(DetailedShoppingPlan plan)
+    /// <summary>
+    /// Generates feasible purchase candidates for route-aware market optimization.
+    /// </summary>
+    public List<MarketPurchaseCandidate> GeneratePurchaseCandidates(DetailedShoppingPlan plan)
     {
         var candidates = new List<MarketPurchaseCandidate>();
         if (plan.QuantityNeeded <= 0 || plan.WorldOptions.Count == 0)
@@ -817,12 +822,9 @@ public class MarketShoppingService
             .Select(w => w.World)
             .ToList();
 
-        var split = BuildSplitPurchase(plan.QuantityNeeded, splitWorlds);
-        var quantityFulfilled = split.Sum(s => s.QuantityToBuy);
-        var isFullyFulfilled = quantityFulfilled >= plan.QuantityNeeded;
-
-        if (split.Count > 1 && isFullyFulfilled)
+        foreach (var split in GenerateSplitPurchaseAlternatives(plan.QuantityNeeded, splitWorlds))
         {
+            var quantityFulfilled = split.Sum(s => s.QuantityToBuy);
             candidates.Add(new MarketPurchaseCandidate(
                 split.Sum(s => s.TotalCost),
                 split.Select(s => new MarketWorldKey(s.DataCenter, s.WorldName)))
@@ -836,6 +838,70 @@ public class MarketShoppingService
         }
 
         return candidates;
+    }
+
+    private static List<List<SplitWorldPurchase>> GenerateSplitPurchaseAlternatives(
+        int quantityNeeded,
+        IReadOnlyList<WorldShoppingSummary> rankedWorlds)
+    {
+        var alternatives = new List<List<SplitWorldPurchase>>();
+        var routeKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        AddSplitAlternative(quantityNeeded, rankedWorlds, alternatives, routeKeys);
+
+        foreach (var seedWorld in rankedWorlds)
+        {
+            if (alternatives.Count >= MaxSplitPurchaseCandidateAlternatives)
+            {
+                break;
+            }
+
+            var seededWorlds = rankedWorlds
+                .Where(world => !IsSameWorld(world, seedWorld))
+                .Prepend(seedWorld)
+                .ToList();
+
+            AddSplitAlternative(quantityNeeded, seededWorlds, alternatives, routeKeys);
+        }
+
+        return alternatives;
+    }
+
+    private static void AddSplitAlternative(
+        int quantityNeeded,
+        IEnumerable<WorldShoppingSummary> worlds,
+        List<List<SplitWorldPurchase>> alternatives,
+        HashSet<string> routeKeys)
+    {
+        var split = BuildSplitPurchase(quantityNeeded, worlds);
+        if (split.Count <= 1 || split.Sum(s => s.QuantityToBuy) < quantityNeeded)
+        {
+            return;
+        }
+
+        var routeKey = GetSplitRouteKey(split);
+        if (routeKeys.Add(routeKey))
+        {
+            alternatives.Add(split);
+        }
+    }
+
+    private static string GetSplitRouteKey(IEnumerable<SplitWorldPurchase> split)
+    {
+        return string.Join(
+            "|",
+            split
+                .Select(s => new MarketWorldKey(s.DataCenter, s.WorldName))
+                .Distinct()
+                .OrderBy(world => world.DataCenter)
+                .ThenBy(world => world.WorldName)
+                .Select(world => $"{world.DataCenter}:{world.WorldName}"));
+    }
+
+    private static bool IsSameWorld(WorldShoppingSummary left, WorldShoppingSummary right)
+    {
+        return string.Equals(left.DataCenter, right.DataCenter, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(left.WorldName, right.WorldName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static List<SplitWorldPurchase> BuildSplitPurchase(

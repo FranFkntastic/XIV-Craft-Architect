@@ -1,5 +1,3 @@
-using System.Reflection;
-
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using Moq;
@@ -140,6 +138,34 @@ public class MarketPurchaseCandidateTests
     }
 
     [Fact]
+    public void GeneratePurchaseCandidates_MultipleSplitRoutesAvailable_ReturnsBoundedDistinctRouteAlternatives()
+    {
+        var siren = World("Aether", "Siren", 300, 100, Listing(3, 100, "Siren Retainer"));
+        var gilgamesh = World("Aether", "Gilgamesh", 315, 105, Listing(3, 105, "Gilgamesh Retainer"));
+        var balmung = World("Crystal", "Balmung", 330, 110, Listing(3, 110, "Balmung Retainer"));
+        var leviathan = World("Primal", "Leviathan", 180, 90, Listing(2, 90, "Leviathan Retainer"));
+        var plan = Plan(quantityNeeded: 5, siren, gilgamesh, balmung, leviathan);
+
+        var candidates = GenerateCandidates(plan);
+
+        var splitCandidates = candidates.Where(c => c.IsSplitPurchase).ToList();
+        Assert.InRange(splitCandidates.Count, 3, 8);
+        Assert.All(splitCandidates, candidate =>
+        {
+            Assert.True(candidate.IsFullyFulfilled);
+            Assert.False(candidate.HasInsufficientStock);
+            Assert.Equal(5, candidate.QuantityFulfilled);
+            Assert.Equal(5, candidate.Split!.Sum(split => split.QuantityToBuy));
+        });
+
+        var routeKeys = splitCandidates.Select(RouteKey).ToList();
+        Assert.Equal(routeKeys.Distinct().Count(), routeKeys.Count);
+        Assert.Contains("AETHER:GILGAMESH|AETHER:SIREN", routeKeys);
+        Assert.Contains("AETHER:SIREN|CRYSTAL:BALMUNG", routeKeys);
+        Assert.Contains("AETHER:SIREN|PRIMAL:LEVIATHAN", routeKeys);
+    }
+
+    [Fact]
     public void GeneratePurchaseCandidates_InsufficientTotalStock_ReturnsNoCandidate()
     {
         var siren = World("Aether", "Siren", 300, 100, Listing(3, 100, "Siren Retainer"));
@@ -168,14 +194,18 @@ public class MarketPurchaseCandidateTests
     {
         var cache = new Mock<IMarketCacheService>();
         var service = new MarketShoppingService(cache.Object);
-        var method = typeof(MarketShoppingService).GetMethod(
-            "GeneratePurchaseCandidates",
-            BindingFlags.Instance | BindingFlags.NonPublic);
 
-        Assert.NotNull(method);
+        return service.GeneratePurchaseCandidates(plan);
+    }
 
-        var result = method!.Invoke(service, [plan]);
-        return Assert.IsType<List<MarketPurchaseCandidate>>(result);
+    private static string RouteKey(MarketPurchaseCandidate candidate)
+    {
+        return string.Join(
+            "|",
+            candidate.Worlds
+                .OrderBy(world => world.DataCenter)
+                .ThenBy(world => world.WorldName)
+                .Select(world => $"{world.DataCenter}:{world.WorldName}"));
     }
 
     private static DetailedShoppingPlan Plan(int quantityNeeded, params WorldShoppingSummary[] worlds)
