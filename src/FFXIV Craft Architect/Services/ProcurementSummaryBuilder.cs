@@ -12,8 +12,6 @@ namespace FFXIV_Craft_Architect.Services;
 /// </summary>
 public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
 {
-    private static readonly PurchaseSummaryService _summaryService = new();
-    
     /// <inheritdoc />
     public void BuildSummary(Panel targetPanel, IEnumerable<DetailedShoppingPlan> shoppingPlans)
     {
@@ -23,15 +21,11 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
         if (plans?.Any() != true)
             return;
         
-        var summaries = _summaryService.CreateSummaries(plans);
-        
-        var itemsByWorld = summaries
-            .Where(s => s.RecommendedWorld != null)
-            .GroupBy(s => s.RecommendedWorld!.WorldName)
-            .OrderBy(g => g.Key)
+        var worldCards = ProcurementWorldCardBuilder
+            .BuildWorldCards(plans, string.Empty)
             .ToList();
         
-        if (!itemsByWorld.Any())
+        if (!worldCards.Any())
         {
             targetPanel.Children.Add(new TextBlock 
             { 
@@ -42,12 +36,10 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
             return;
         }
         
-        foreach (var worldGroup in itemsByWorld)
+        foreach (var worldCard in worldCards)
         {
-            var worldName = worldGroup.Key;
-            var items = worldGroup.ToList();
-            var worldTotal = items.Sum(i => i.TotalCost);
-            var isHomeWorld = items.First().RecommendedWorld?.IsHomeWorld ?? false;
+            var worldName = GetWorldDisplayName(worldCard.WorldName, worldCard.DataCenter);
+            var isHomeWorld = worldCard.Items.First().SourcePlan?.RecommendedWorld?.IsHomeWorld ?? false;
             
             var worldHeader = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
             
@@ -76,7 +68,7 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
             
             worldHeader.Children.Add(new TextBlock
             {
-                Text = $" - {items.Count} items, {worldTotal:N0}g total",
+                Text = $" - {worldCard.ItemCount} items, {worldCard.TotalCost:N0}g total",
                 Foreground = ResolveBrush("GrayBrush", Brushes.Gray),
                 FontSize = 11,
                 Margin = new Thickness(8, 0, 0, 0)
@@ -84,11 +76,11 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
             
             targetPanel.Children.Add(worldHeader);
             
-            foreach (var item in items.OrderBy(i => i.Name))
+            foreach (var item in worldCard.Items.OrderBy(i => i.ItemName))
             {
                 var itemText = new TextBlock
                 {
-                    Text = $"  \u2022 {item.ShortDisplayText} = {item.TotalCost:N0}g",
+                    Text = $"  \u2022 {item.ItemName} {GetQuantityDisplay(item)} = {item.TotalCost:N0}g",
                     FontSize = 11,
                     Foreground = ResolveBrush("LightGrayBrush", Brushes.LightGray),
                     TextWrapping = TextWrapping.Wrap,
@@ -100,7 +92,7 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
             targetPanel.Children.Add(new Border { Height = 12 });
         }
         
-        var grandTotal = summaries.Sum(s => s.TotalCost);
+        var grandTotal = worldCards.Sum(w => w.TotalCost);
         var totalText = new TextBlock
         {
             Text = $"Grand Total: {grandTotal:N0}g",
@@ -115,5 +107,21 @@ public class ProcurementSummaryBuilder : IProcurementSummaryBuilder
     private static Brush ResolveBrush(string resourceKey, Brush fallback)
     {
         return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
+    }
+
+    private static string GetWorldDisplayName(string worldName, string dataCenter)
+    {
+        if (string.Equals(worldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(dataCenter))
+        {
+            return worldName;
+        }
+
+        return $"{worldName} ({dataCenter})";
+    }
+
+    private static string GetQuantityDisplay(WorldItemPurchase item)
+    {
+        return item.IsSplitPurchase ? item.QuantityDisplay : item.SimpleQuantityDisplay;
     }
 }

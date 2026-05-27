@@ -35,8 +35,8 @@ public class MarketPlansRenderer : IMarketPlansRenderer
         var plans = request.Plans.ToList();
 
         // Calculate common statistics
-        result.GrandTotal = plans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
-        result.ItemsWithOptions = plans.Count(p => p.HasOptions);
+        result.GrandTotal = plans.Sum(ProcurementPlanCost.GetRecommendedCost);
+        result.ItemsWithOptions = plans.Count(ProcurementPlanCost.HasRecommendation);
 
         // Apply view mode specific UI updates
         switch (request.ViewMode)
@@ -137,7 +137,7 @@ public class MarketPlansRenderer : IMarketPlansRenderer
                 .ThenBy(p => p.Name),
             1 => plans.OrderBy(p => p.Name),
             2 => plans
-                .OrderByDescending(p => p.RecommendedWorld?.TotalCost ?? 0)
+                .OrderByDescending(ProcurementPlanCost.GetRecommendedCost)
                 .ThenBy(p => p.Name),
             _ => plans
         };

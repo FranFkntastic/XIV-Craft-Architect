@@ -103,7 +103,7 @@ public class ExpandedPanelViewModel : ViewModelBase
     /// <summary>
     /// Whether this item is using a split-world recommendation.
     /// </summary>
-    public bool RequiresSplitPurchase => _plan.RequiresSplitPurchase;
+    public bool RequiresSplitPurchase => HasSplitRecommendation(_plan);
 
     /// <summary>
     /// Split-world recommendations for this item.
@@ -216,7 +216,7 @@ public class ExpandedPanelViewModel : ViewModelBase
         {
             foreach (var split in _plan.RecommendedSplit)
             {
-                var worldData = sortedWorlds.FirstOrDefault(w => string.Equals(w.WorldName, split.WorldName, StringComparison.OrdinalIgnoreCase));
+                var worldData = FindMatchingWorldData(sortedWorlds, split);
                 _splitWorlds.Add(new ExpandedSplitWorldViewModel(split, worldData, _plan.QuantityNeeded));
             }
         }
@@ -262,6 +262,31 @@ public class ExpandedPanelViewModel : ViewModelBase
     private static string Pluralize(int count, string singular)
     {
         return count == 1 ? singular : $"{singular}s";
+    }
+
+    private static WorldShoppingSummary? FindMatchingWorldData(
+        IReadOnlyCollection<WorldShoppingSummary> worlds,
+        SplitWorldPurchase split)
+    {
+        if (!string.IsNullOrWhiteSpace(split.DataCenter))
+        {
+            return worlds.FirstOrDefault(w =>
+                string.Equals(w.DataCenter, split.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(w.WorldName, split.WorldName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var matches = worlds
+            .Where(w => string.Equals(w.WorldName, split.WorldName, StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToList();
+
+        return matches.Count == 1 ? matches[0] : null;
+    }
+
+    private static bool HasSplitRecommendation(DetailedShoppingPlan plan)
+    {
+        return plan.RecommendedSplit?.Any() == true &&
+            (plan.RequiresSplitPurchase || plan.RecommendedWorld == null);
     }
 }
 

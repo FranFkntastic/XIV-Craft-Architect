@@ -86,11 +86,13 @@ public class ExpandedPanelViewModelTests
     {
         var worldSiren = new WorldShoppingSummary
         {
+            DataCenter = "Aether",
             WorldName = "Siren",
             Listings = new List<ShoppingListingEntry>()
         };
         var worldAda = new WorldShoppingSummary
         {
+            DataCenter = "Aether",
             WorldName = "Adamantoise",
             Listings = new List<ShoppingListingEntry>()
         };
@@ -104,8 +106,8 @@ public class ExpandedPanelViewModelTests
             WorldOptions = new List<WorldShoppingSummary> { worldSiren, worldAda },
             RecommendedSplit = new List<SplitWorldPurchase>
             {
-                new() { WorldName = "Siren", QuantityToBuy = 100, TotalCost = 10000, TravelContext = "Primary" },
-                new() { WorldName = "Adamantoise", QuantityToBuy = 200, TotalCost = 22000, TravelContext = "Supplemental" }
+                new() { DataCenter = "Aether", WorldName = "Siren", QuantityToBuy = 100, TotalCost = 10000, TravelContext = "Primary" },
+                new() { DataCenter = "Aether", WorldName = "Adamantoise", QuantityToBuy = 200, TotalCost = 22000, TravelContext = "Supplemental" }
             }
         };
 
@@ -114,8 +116,61 @@ public class ExpandedPanelViewModelTests
         Assert.True(viewModel.HasSplitWorldOptions);
         Assert.False(viewModel.ShowSingleWorldOptions);
         Assert.Equal(2, viewModel.SplitWorlds.Count);
-        Assert.Contains(viewModel.SplitWorlds, w => w.WorldName == "Siren");
-        Assert.Contains(viewModel.SplitWorlds, w => w.WorldName == "Adamantoise");
+        Assert.Contains(viewModel.SplitWorlds, w => w.WorldDisplayName == "Siren (Aether)");
+        Assert.Contains(viewModel.SplitWorlds, w => w.WorldDisplayName == "Adamantoise (Aether)");
+    }
+
+    [Fact]
+    public void SplitWorldMode_MatchesWorldDataByDataCenterAndWorldName()
+    {
+        var aetherSiren = new WorldShoppingSummary
+        {
+            DataCenter = "Aether",
+            WorldName = "Siren",
+            Classification = WorldClassification.Standard,
+            Listings = new List<ShoppingListingEntry>()
+        };
+        var primalSiren = new WorldShoppingSummary
+        {
+            DataCenter = "Primal",
+            WorldName = "Siren",
+            Classification = WorldClassification.Congested,
+            Listings = new List<ShoppingListingEntry>()
+        };
+
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 1003,
+            Name = "Ambiguous Siren Item",
+            QuantityNeeded = 100,
+            DCAveragePrice = 120,
+            WorldOptions = new List<WorldShoppingSummary> { aetherSiren, primalSiren },
+            RecommendedSplit = new List<SplitWorldPurchase>
+            {
+                new()
+                {
+                    DataCenter = "Primal",
+                    WorldName = "Siren",
+                    QuantityToBuy = 100,
+                    TotalCost = 10000,
+                    TravelContext = "Primary"
+                },
+                new()
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Siren",
+                    QuantityToBuy = 1,
+                    TotalCost = 1,
+                    TravelContext = "Supplemental"
+                }
+            }
+        };
+
+        var viewModel = new ExpandedPanelViewModel(plan, null);
+
+        var primal = Assert.Single(viewModel.SplitWorlds, w => w.DataCenter == "Primal");
+        Assert.Equal("Siren (Primal)", primal.WorldDisplayName);
+        Assert.True(primal.IsCongested);
     }
 
     private static DetailedShoppingPlan CreatePlan()

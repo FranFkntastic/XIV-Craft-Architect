@@ -12,9 +12,9 @@ public static class ProcurementWorldCardBuilder
 
         foreach (var plan in shoppingPlans.Where(p => string.IsNullOrEmpty(p.Error)))
         {
-            if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
+            if (ShouldUseSplitRecommendation(plan))
             {
-                foreach (var split in plan.RecommendedSplit)
+                foreach (var split in plan.RecommendedSplit ?? Enumerable.Empty<SplitWorldPurchase>())
                 {
                     var worldIdentity = GetWorldIdentity(split, fallbackDataCenter);
                     var card = GetOrCreateCard(worldCards, worldIdentity, plan);
@@ -138,6 +138,12 @@ public static class ProcurementWorldCardBuilder
     {
         return string.Equals(left.DataCenter, right.DataCenter, StringComparison.OrdinalIgnoreCase)
             && string.Equals(left.WorldName, right.WorldName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ShouldUseSplitRecommendation(DetailedShoppingPlan plan)
+    {
+        return plan.RecommendedSplit?.Any() == true &&
+            (plan.RequiresSplitPurchase || plan.RecommendedWorld == null);
     }
 
     private readonly record struct WorldIdentity(string WorldName, string DataCenter);

@@ -5,6 +5,7 @@ using System.Windows.Input;
 using CommunityToolkit.Mvvm.Input;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Services;
 
 namespace FFXIV_Craft_Architect.ViewModels;
 
@@ -44,16 +45,14 @@ public class SplitWorldWindowViewModel : ViewModelBase
         ? $"Fixed Vendor Price: {(_plan.RecommendedWorld?.AveragePricePerUnit ?? _plan.DCAveragePrice):N0}g"
         : $"DC Average: {DCAveragePrice:N0}g";
 
-    public bool IsSplitMode => _plan.RequiresSplitPurchase;
+    public bool IsSplitMode => HasSplitRecommendation(_plan);
     public string RecommendationsHeaderText => IsVendorMode
         ? $"Vendor Purchase Options ({VendorOptions.Count} {Pluralize(VendorOptions.Count, "vendor")})"
         : IsSplitMode
         ? $"Split Purchase Plan ({WorldCards.Count} {Pluralize(WorldCards.Count, "world")})"
         : $"World Purchase Options ({WorldCards.Count} {Pluralize(WorldCards.Count, "option")})";
 
-    public long DetailsTotalCost => IsSplitMode
-        ? (_plan.SplitTotalCost ?? 0)
-        : (_plan.RecommendedWorld?.TotalCost ?? 0);
+    public long DetailsTotalCost => ProcurementPlanCost.GetRecommendedCost(_plan);
 
     public ObservableCollection<SplitWorldCardViewModel> WorldCards { get; }
     public ObservableCollection<VendorDetailViewModel> VendorOptions { get; }
@@ -127,7 +126,7 @@ public class SplitWorldWindowViewModel : ViewModelBase
 
             foreach (var card in WorldCards)
             {
-                sb.AppendLine($"{card.WorldName}: ×{card.QuantityToBuy} @ {card.PricePerUnit:N0}g = {card.TotalCost:N0}g");
+                sb.AppendLine(card.ShoppingListLine);
             }
 
             Clipboard.SetText(sb.ToString());
@@ -144,7 +143,7 @@ public class SplitWorldWindowViewModel : ViewModelBase
             return Array.Empty<SplitWorldCardViewModel>();
         }
 
-        if (plan.RequiresSplitPurchase && plan.RecommendedSplit != null)
+        if (HasSplitRecommendation(plan) && plan.RecommendedSplit != null)
         {
             return plan.RecommendedSplit
                 .Select(s => new SplitWorldCardViewModel(s, plan.QuantityNeeded));
@@ -165,6 +164,7 @@ public class SplitWorldWindowViewModel : ViewModelBase
 
             var pseudoSplit = new SplitWorldPurchase
             {
+                DataCenter = world.DataCenter,
                 WorldName = world.WorldName,
                 QuantityToBuy = quantityToBuy,
                 PricePerUnit = world.AveragePricePerUnit,
@@ -211,6 +211,12 @@ public class SplitWorldWindowViewModel : ViewModelBase
     private static string Pluralize(int count, string singular)
     {
         return count == 1 ? singular : $"{singular}s";
+    }
+
+    private static bool HasSplitRecommendation(DetailedShoppingPlan plan)
+    {
+        return plan.RecommendedSplit?.Any() == true &&
+            (plan.RequiresSplitPurchase || plan.RecommendedWorld == null);
     }
 }
 

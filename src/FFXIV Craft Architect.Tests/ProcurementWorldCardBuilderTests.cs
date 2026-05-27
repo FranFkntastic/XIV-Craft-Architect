@@ -89,6 +89,64 @@ public class ProcurementWorldCardBuilderTests
         });
     }
 
+    [Fact]
+    public void BuildWorldCards_SplitAndSingleWorldPurchases_SurfaceAllCostsForProcurementTotals()
+    {
+        var singleWorld = World("Aether", "Cactuar");
+        singleWorld.TotalCost = 300;
+        singleWorld.AveragePricePerUnit = 150;
+
+        var singlePlan = new DetailedShoppingPlan
+        {
+            ItemId = 124,
+            Name = "Single Item",
+            QuantityNeeded = 2,
+            RecommendedWorld = singleWorld,
+            WorldOptions = { singleWorld }
+        };
+
+        var splitPlan = new DetailedShoppingPlan
+        {
+            ItemId = 125,
+            Name = "Split Item",
+            QuantityNeeded = 2,
+            RecommendedSplit = new List<SplitWorldPurchase>
+            {
+                Split("Aether", "Cactuar", quantity: 1, totalCost: 500),
+                Split("Primal", "Leviathan", quantity: 1, totalCost: 700)
+            }
+        };
+
+        var cards = ProcurementWorldCardBuilder.BuildWorldCards([singlePlan, splitPlan], "Aether");
+
+        Assert.Equal(1500, cards.Sum(card => card.TotalCost));
+        Assert.Contains(cards, card => card.WorldName == "Cactuar" && card.TotalCost == 800);
+        Assert.Contains(cards, card => card.WorldName == "Leviathan" && card.TotalCost == 700);
+    }
+
+    [Fact]
+    public void BuildWorldCards_SplitRecommendationWithoutRecommendedWorld_StillSurfacesCost()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 126,
+            Name = "Split Only Item",
+            QuantityNeeded = 1,
+            RecommendedWorld = null,
+            RecommendedSplit = new List<SplitWorldPurchase>
+            {
+                Split("Primal", "Leviathan", quantity: 1, totalCost: 700)
+            }
+        };
+
+        var cards = ProcurementWorldCardBuilder.BuildWorldCards([plan], "Aether");
+
+        var card = Assert.Single(cards);
+        Assert.Equal("Primal", card.DataCenter);
+        Assert.Equal("Leviathan", card.WorldName);
+        Assert.Equal(700, card.TotalCost);
+    }
+
     private static WorldShoppingSummary World(string dataCenter, string worldName, bool isCongested = false)
     {
         return new WorldShoppingSummary

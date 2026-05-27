@@ -403,7 +403,7 @@
                                 <Setter Property="Text" Value="🛒"/>
                                 <Setter Property="Foreground" Value="{StaticResource Brush.Status.Info}"/>
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Plan.RequiresSplitPurchase}" Value="True">
+                                    <DataTrigger Binding="{Binding RequiresSplitPurchase}" Value="True">
                                         <Setter Property="Text" Value="⇄"/>
                                         <Setter Property="Foreground" Value="{StaticResource WarningOrangeBrush}"/>
                                     </DataTrigger>
@@ -435,19 +435,21 @@
                                     Visibility="{Binding Error, Converter={StaticResource StringNullOrEmptyToVisibilityConverter}}"/>
 
                          <StackPanel Orientation="Horizontal"
-                                     Visibility="{Binding Plan.RequiresSplitPurchase, Converter={StaticResource BoolToVisibilityConverter}}">
+                                     Visibility="{Binding RequiresSplitPurchase, Converter={StaticResource BoolToVisibilityConverter}}">
                              <StackPanel.ToolTip>
                                  <ToolTip>
                                      <StackPanel>
                                          <TextBlock Text="Split-world recommendation" FontWeight="Bold" FontSize="10"/>
                                          <TextBlock Text="Use Open Details in the summary pane for full breakdown." Margin="0,4,0,2" FontSize="10"/>
-                                         <ItemsControl ItemsSource="{Binding Plan.RecommendedSplit}" Margin="8,0,0,0">
+                                         <ItemsControl ItemsSource="{Binding SplitWorlds}" Margin="8,0,0,0">
                                              <ItemsControl.ItemTemplate>
                                                  <DataTemplate>
                                                      <TextBlock FontSize="10">
-                                                         <Run Text="{Binding WorldName}"/>
+                                                         <Run Text="{Binding WorldDisplayName}"/>
                                                          <Run Text=": ×"/>
                                                          <Run Text="{Binding QuantityToBuy}"/>
+                                                         <Run Text=" @ "/>
+                                                         <Run Text="{Binding EffectivePriceDisplay}"/>
                                                          <Run Text=" = "/>
                                                          <Run Text="{Binding TotalCost, StringFormat='{}{0:N0}g'}"/>
                                                      </TextBlock>
@@ -458,7 +460,7 @@
                                  </ToolTip>
                              </StackPanel.ToolTip>
                              <TextBlock Text="⇄" FontSize="10" Foreground="{StaticResource WarningOrangeBrush}" VerticalAlignment="Center"/>
-                             <TextBlock Text="{Binding Plan.RecommendedSplit.Count, StringFormat=' {0} worlds'}"
+                             <TextBlock Text="{Binding SplitWorlds.Count, StringFormat=' {0} worlds'}"
                                         FontSize="10"
                                         FontWeight="SemiBold"
                                         Foreground="{StaticResource WarningOrangeBrush}"
@@ -474,7 +476,7 @@
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Foreground" Value="{StaticResource LightGreenBrush}"/>
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Plan.RequiresSplitPurchase}" Value="True">
+                                        <DataTrigger Binding="{Binding RequiresSplitPurchase}" Value="True">
                                             <Setter Property="Visibility" Value="Collapsed"/>
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding RecommendedWorld.IsTravelProhibited}" Value="True">
@@ -501,7 +503,7 @@
                                    FontWeight="SemiBold"
                                    Foreground="{StaticResource WarningOrangeBrush}"
                                    HorizontalAlignment="Right"
-                                   Visibility="{Binding Plan.RequiresSplitPurchase, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                   Visibility="{Binding RequiresSplitPurchase, Converter={StaticResource BoolToVisibilityConverter}}"/>
 
                         <TextBlock Text="{Binding RecommendedWorld.TotalCost, StringFormat='{}{0:N0}g'}"
                                    FontSize="10"
@@ -512,7 +514,7 @@
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Plan.RequiresSplitPurchase}" Value="True">
+                                        <DataTrigger Binding="{Binding RequiresSplitPurchase}" Value="True">
                                             <Setter Property="Visibility" Value="Collapsed"/>
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -528,7 +530,7 @@
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Plan.RequiresSplitPurchase}" Value="True">
+                                        <DataTrigger Binding="{Binding RequiresSplitPurchase}" Value="True">
                                             <Setter Property="Visibility" Value="Collapsed"/>
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -778,7 +780,7 @@
                                                 </Grid.ColumnDefinitions>
 
                                                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding WorldName}" FontWeight="SemiBold" FontSize="12" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                                    <TextBlock Text="{Binding WorldDisplayName}" FontWeight="SemiBold" FontSize="12" Foreground="{StaticResource TextPrimaryBrush}"/>
                                                     <TextBlock Text="  ⚠ Congested"
                                                                Foreground="{StaticResource WarningOrangeBrush}"
                                                                FontSize="10"

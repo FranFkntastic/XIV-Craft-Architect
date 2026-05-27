@@ -9,6 +9,7 @@ using FFXIV_Craft_Architect.Coordinators;
 using FFXIV_Craft_Architect.Core.Coordinators;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Services;
 using Microsoft.Extensions.Logging;
 using PriceInfo = FFXIV_Craft_Architect.Core.Models.PriceInfo;
 
@@ -180,7 +181,7 @@ public partial class MarketAnalysisViewModel : ViewModelBase
     /// <summary>
     /// Total cost across all shopping plans.
     /// </summary>
-    public long TotalCost => _shoppingPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
+    public long TotalCost => _shoppingPlans.Sum(p => ProcurementPlanCost.GetRecommendedCost(p.Plan));
 
     /// <summary>
     /// Whether any shopping data is available.
@@ -665,7 +666,7 @@ public partial class MarketAnalysisViewModel : ViewModelBase
         {
             MarketSortOption.RecommendedWorld => _shoppingPlans.OrderBy(p => p.RecommendedWorld?.WorldName ?? "ZZZ"),
             MarketSortOption.Alphabetical => _shoppingPlans.OrderBy(p => p.Name),
-            MarketSortOption.PriceHighToLow => _shoppingPlans.OrderByDescending(p => p.RecommendedWorld?.TotalCost ?? 0),
+            MarketSortOption.PriceHighToLow => _shoppingPlans.OrderByDescending(p => ProcurementPlanCost.GetRecommendedCost(p.Plan)),
             _ => _shoppingPlans.OrderBy(p => p.Name)
         };
 

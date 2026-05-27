@@ -28,7 +28,11 @@ public class ExpandedSplitWorldViewModel : ViewModelBase
     public SplitWorldPurchase Split { get; }
     public int TotalQuantityNeeded { get; }
 
+    public string DataCenter => Split.DataCenter;
     public string WorldName => Split.WorldName;
+    public string WorldDisplayName => string.IsNullOrWhiteSpace(DataCenter)
+        ? WorldName
+        : $"{WorldName} ({DataCenter})";
     public int QuantityToBuy => Split.QuantityToBuy;
     public long TotalCost => Split.TotalCost;
     public decimal PricePerUnit => EffectivePricePerNeededUnit;
@@ -68,7 +72,7 @@ public class ExpandedSplitWorldViewModel : ViewModelBase
     public bool IsConsolidated => TravelContext == TravelContextConstants.Consolidated;
 
     public string QuantityDisplay => $"x{QuantityToBuy} of {TotalQuantityNeeded}";
-    public string CostText => $"{TotalCost:N0}g total  -  ~{EffectivePricePerNeededUnit:N0}g/needed ea";
+    public string CostText => $"{TotalCost:N0}g total  -  ~{EffectivePricePerNeededUnit:N0}g eff./needed ea";
 
     public bool HasExcess => ExcessAvailable > 0;
     public string ExcessText => $"{ExcessAvailable} excess due to full stacks";

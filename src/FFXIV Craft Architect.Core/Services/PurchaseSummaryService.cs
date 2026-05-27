@@ -15,9 +15,10 @@ public class PurchaseSummaryService : IPurchaseSummaryService
         decimal averagePricePerUnit;
         var excessQuantity = 0;
 
-        if (plan.RequiresSplitPurchase && plan.RecommendedSplit != null)
+        var recommendedSplit = plan.RecommendedSplit;
+        if (ShouldUseSplitRecommendation(plan) && recommendedSplit != null)
         {
-            quantityToPurchase = plan.RecommendedSplit.Sum(s => s.QuantityToBuy);
+            quantityToPurchase = recommendedSplit.Sum(s => s.QuantityToBuy);
             totalCost = plan.SplitTotalCost ?? 0;
             averagePricePerUnit = quantityToPurchase > 0 
                 ? (decimal)totalCost / quantityToPurchase 
@@ -81,5 +82,11 @@ public class PurchaseSummaryService : IPurchaseSummaryService
             RequiresSplitPurchase = false,
             RecommendedSplit = null
         };
+    }
+
+    private static bool ShouldUseSplitRecommendation(DetailedShoppingPlan plan)
+    {
+        return plan.RecommendedSplit?.Any() == true &&
+            (plan.RequiresSplitPurchase || plan.RecommendedWorld == null);
     }
 }

@@ -10,6 +10,7 @@ public class SplitWorldWindowViewModelTests
     {
         var split = new SplitWorldPurchase
         {
+            DataCenter = "Aether",
             WorldName = "Siren",
             QuantityToBuy = 14,
             PricePerUnit = 57,
@@ -34,13 +35,16 @@ public class SplitWorldWindowViewModelTests
         var viewModel = new SplitWorldCardViewModel(split, totalQuantity: 2880);
 
         Assert.False(viewModel.IsExpanded);
+        Assert.Equal("Aether", viewModel.DataCenter);
         Assert.Equal("Siren", viewModel.WorldName);
+        Assert.Equal("Siren (Aether)", viewModel.WorldDisplayName);
         Assert.Equal("×14 of 2880", viewModel.QuantityDisplay);
         Assert.Equal("798g", viewModel.CostDisplay);
         Assert.Equal(57, viewModel.ListingPricePerUnit);
         Assert.Equal(65, viewModel.EffectivePricePerNeededUnit);
         Assert.Equal("@57g/ea listing", viewModel.ListingPriceDisplay);
-        Assert.Equal("~65g/needed ea", viewModel.EffectivePriceDisplay);
+        Assert.Equal("~65g eff./needed ea", viewModel.EffectivePriceDisplay);
+        Assert.Equal("Siren (Aether): \u00d714 @ ~65g eff./needed ea = 798g", viewModel.ShoppingListLine);
         Assert.True(viewModel.HasListings);
         Assert.True(viewModel.HasExcess);
         Assert.Equal("+2 excess", viewModel.ExcessDisplay);
@@ -71,6 +75,7 @@ public class SplitWorldWindowViewModelTests
             {
                 new()
                 {
+                    DataCenter = "Aether",
                     WorldName = "Siren",
                     QuantityToBuy = 14,
                     PricePerUnit = 57,
@@ -79,6 +84,7 @@ public class SplitWorldWindowViewModelTests
                 },
                 new()
                 {
+                    DataCenter = "Primal",
                     WorldName = "Adamantoise",
                     QuantityToBuy = 2866,
                     PricePerUnit = 60,
@@ -94,8 +100,8 @@ public class SplitWorldWindowViewModelTests
         Assert.True(viewModel.IsSplitMode);
         Assert.Equal(172758, viewModel.DetailsTotalCost);
         Assert.Equal(2, viewModel.WorldCards.Count);
-        Assert.Contains(viewModel.WorldCards, c => c.WorldName == "Siren");
-        Assert.Contains(viewModel.WorldCards, c => c.WorldName == "Adamantoise");
+        Assert.Contains(viewModel.WorldCards, c => c.WorldDisplayName == "Siren (Aether)");
+        Assert.Contains(viewModel.WorldCards, c => c.WorldDisplayName == "Adamantoise (Primal)");
     }
 
     [Fact]
@@ -103,6 +109,7 @@ public class SplitWorldWindowViewModelTests
     {
         var recommended = new WorldShoppingSummary
         {
+            DataCenter = "Aether",
             WorldName = "Sargatanas",
             TotalCost = 12000,
             AveragePricePerUnit = 120,
@@ -115,6 +122,7 @@ public class SplitWorldWindowViewModelTests
 
         var alternate = new WorldShoppingSummary
         {
+            DataCenter = "Primal",
             WorldName = "Adamantoise",
             TotalCost = 13000,
             AveragePricePerUnit = 130,
@@ -140,8 +148,37 @@ public class SplitWorldWindowViewModelTests
         Assert.Equal("World Purchase Options (2 options)", viewModel.RecommendationsHeaderText);
         Assert.Equal(12000, viewModel.DetailsTotalCost);
         Assert.Equal(2, viewModel.WorldCards.Count);
-        Assert.Contains(viewModel.WorldCards, c => c.WorldName == "Sargatanas");
-        Assert.Contains(viewModel.WorldCards, c => c.WorldName == "Adamantoise");
+        Assert.Contains(viewModel.WorldCards, c => c.WorldDisplayName == "Sargatanas (Aether)");
+        Assert.Contains(viewModel.WorldCards, c => c.WorldDisplayName == "Adamantoise (Primal)");
+    }
+
+    [Fact]
+    public void SplitWorldWindowViewModel_WithSplitRecommendationWithoutRecommendedWorld_UsesSplitCardsAndTotal()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            Name = "Split Only Item",
+            QuantityNeeded = 1,
+            RecommendedWorld = null,
+            RecommendedSplit = new List<SplitWorldPurchase>
+            {
+                new()
+                {
+                    DataCenter = "Primal",
+                    WorldName = "Leviathan",
+                    QuantityToBuy = 1,
+                    TotalCost = 700,
+                    EffectivePricePerNeededUnit = 700
+                }
+            }
+        };
+
+        var viewModel = new SplitWorldWindowViewModel(plan);
+
+        Assert.True(viewModel.IsSplitMode);
+        Assert.Equal(700, viewModel.DetailsTotalCost);
+        var card = Assert.Single(viewModel.WorldCards);
+        Assert.Equal("Leviathan (Primal)", card.WorldDisplayName);
     }
 
     [Fact]

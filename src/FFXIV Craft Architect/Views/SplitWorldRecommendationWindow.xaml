@@ -92,7 +92,7 @@
                                     </Grid.ColumnDefinitions>
 
                                     <TextBlock Grid.Column="0"
-                                               Text="{Binding WorldName}"
+                                               Text="{Binding WorldDisplayName}"
                                                FontWeight="SemiBold"
                                                FontSize="13"
                                                Foreground="{StaticResource LightGreenBrush}"/>

@@ -3,6 +3,8 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using FFXIV_Craft_Architect.Coordinators;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Services;
 using FFXIV_Craft_Architect.ViewModels;
 using Microsoft.Extensions.Logging;
 using ShoppingPlanSortMode = FFXIV_Craft_Architect.Core.Coordinators.ShoppingPlanSortMode;
@@ -61,13 +63,10 @@ public partial class MainWindow
             return;
         }
 
-        var itemsByWorld = _currentMarketPlans
-            .Where(p => p.RecommendedWorld != null)
-            .GroupBy(p => p.RecommendedWorld!.WorldName)
-            .OrderBy(g => g.Key)
-            .ToList();
+        var worldCards = ProcurementWorldCardBuilder
+            .BuildWorldCards(_currentMarketPlans, GetCurrentDataCenter() ?? string.Empty);
 
-        if (!itemsByWorld.Any())
+        if (!worldCards.Any())
         {
             _procurementBuilder?.ProcurementPlanPanel.Children.Add(new TextBlock
             {
@@ -78,11 +77,12 @@ public partial class MainWindow
             return;
         }
 
-        foreach (var worldGroup in itemsByWorld)
+        foreach (var worldCard in worldCards)
         {
-            var worldName = worldGroup.Key;
-            var items = worldGroup.ToList();
-            var worldTotal = items.Sum(i => i.RecommendedWorld?.TotalCost ?? 0);
+            var worldName = GetWorldDisplayName(worldCard.WorldName, worldCard.DataCenter);
+            var items = worldCard.Items
+                .OrderBy(i => i.ItemName)
+                .ToList();
 
             var worldHeader = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
 
@@ -97,7 +97,7 @@ public partial class MainWindow
 
             worldHeader.Children.Add(new TextBlock
             {
-                Text = $" - {items.Count} items, {worldTotal:N0}g total",
+                Text = $" - {items.Count} items, {worldCard.TotalCost:N0}g total",
                 Foreground = ResolveBrush("GrayBrush", Brushes.Gray),
                 FontSize = 11,
                 Margin = new Thickness(8, 0, 0, 0)
@@ -105,11 +105,11 @@ public partial class MainWindow
 
             _procurementBuilder?.ProcurementPlanPanel.Children.Add(worldHeader);
 
-            foreach (var item in items.OrderBy(i => i.Name))
+            foreach (var item in items)
             {
                 var itemText = new TextBlock
                 {
-                    Text = $"  - {item.Name} x{item.QuantityNeeded} = {item.RecommendedWorld?.TotalCost:N0}g",
+                    Text = $"  - {item.ItemName} {GetQuantityDisplay(item)} = {item.TotalCost:N0}g",
                     FontSize = 11,
                     Foreground = ResolveBrush("LightGrayBrush", Brushes.LightGray),
                     TextWrapping = TextWrapping.Wrap,
@@ -121,7 +121,7 @@ public partial class MainWindow
             _procurementBuilder?.ProcurementPlanPanel.Children.Add(new Border { Height = 12 });
         }
 
-        var grandTotal = _currentMarketPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
+        var grandTotal = worldCards.Sum(w => w.TotalCost);
         var totalText = new TextBlock
         {
             Text = $"Grand Total: {grandTotal:N0}g",
@@ -137,8 +137,8 @@ public partial class MainWindow
     {
         _procurementBuilder?.SplitPaneCardsGrid.Children.Clear();
 
-        var grandTotal = _currentMarketPlans.Sum(p => p.RecommendedWorld?.TotalCost ?? 0);
-        var itemsWithOptions = _currentMarketPlans.Count(p => p.HasOptions);
+        var grandTotal = _currentMarketPlans.Sum(ProcurementPlanCost.GetRecommendedCost);
+        var itemsWithOptions = _currentMarketPlans.Count(ProcurementPlanCost.HasRecommendation);
 
         _procurementBuilder?.UpdateSplitPaneTotal(grandTotal, itemsWithOptions);
 
@@ -285,6 +285,22 @@ public partial class MainWindow
         }
 
         return 320;
+    }
+
+    private static string GetWorldDisplayName(string worldName, string dataCenter)
+    {
+        if (string.Equals(worldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(dataCenter))
+        {
+            return worldName;
+        }
+
+        return $"{worldName} ({dataCenter})";
+    }
+
+    private static string GetQuantityDisplay(WorldItemPurchase item)
+    {
+        return item.IsSplitPurchase ? item.QuantityDisplay : item.SimpleQuantityDisplay;
     }
 
     private void PopulateSplitPaneWithSimpleMaterials()

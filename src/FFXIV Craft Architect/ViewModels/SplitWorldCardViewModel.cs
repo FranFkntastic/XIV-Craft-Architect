@@ -18,7 +18,11 @@ public class SplitWorldCardViewModel : ViewModelBase
         ToggleExpandCommand = new RelayCommand(() => IsExpanded = !IsExpanded);
     }
 
+    public string DataCenter => _split.DataCenter;
     public string WorldName => _split.WorldName;
+    public string WorldDisplayName => string.IsNullOrWhiteSpace(DataCenter)
+        ? WorldName
+        : $"{WorldName} ({DataCenter})";
     public int QuantityToBuy => _split.QuantityToBuy;
     public int TotalQuantityNeeded => _totalQuantity;
     public decimal PricePerUnit => EffectivePricePerNeededUnit;
@@ -33,7 +37,8 @@ public class SplitWorldCardViewModel : ViewModelBase
     public string CostDisplay => $"{TotalCost:N0}g";
     public string PriceDisplay => EffectivePriceDisplay;
     public string ListingPriceDisplay => $"@{ListingPricePerUnit:N0}g/ea listing";
-    public string EffectivePriceDisplay => $"~{EffectivePricePerNeededUnit:N0}g/needed ea";
+    public string EffectivePriceDisplay => $"~{EffectivePricePerNeededUnit:N0}g eff./needed ea";
+    public string ShoppingListLine => $"{WorldDisplayName}: \u00d7{QuantityToBuy} @ {EffectivePriceDisplay} = {TotalCost:N0}g";
     public string? ExcessDisplay => ExcessAvailable > 0 ? $"+{ExcessAvailable} excess" : null;
     public bool HasExcess => ExcessAvailable > 0;
 

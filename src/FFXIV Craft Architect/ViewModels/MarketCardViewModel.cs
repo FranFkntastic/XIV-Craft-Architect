@@ -17,6 +17,7 @@ public class MarketCardViewModel : ViewModelBase
     private bool _isExpanded = true;
     private bool _isSelected;
     private ObservableCollection<WorldOptionViewModel> _worldOptions = new();
+    private ObservableCollection<SplitWorldCardViewModel> _splitWorlds = new();
     private readonly DetailedShoppingPlan _plan;
     private readonly IMarketLogisticsCoordinator? _coordinator;
     private readonly PurchaseSummary _summary;
@@ -141,6 +142,15 @@ public class MarketCardViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Split-world recommendations with structured data-center display.
+    /// </summary>
+    public ObservableCollection<SplitWorldCardViewModel> SplitWorlds
+    {
+        get => _splitWorlds;
+        private set => SetProperty(ref _splitWorlds, value);
+    }
+
+    /// <summary>
     /// Command to toggle expand/collapse state.
     /// </summary>
     public ICommand ToggleExpandCommand { get; }
@@ -153,7 +163,7 @@ public class MarketCardViewModel : ViewModelBase
     /// <summary>
     /// Whether this item requires a multi-world split purchase.
     /// </summary>
-    public bool RequiresSplitPurchase => _plan.RequiresSplitPurchase;
+    public bool RequiresSplitPurchase => HasSplitRecommendation(_plan);
 
     public bool IsVendorOnly => string.Equals(
         _plan.RecommendedWorld?.WorldName,
@@ -183,5 +193,20 @@ public class MarketCardViewModel : ViewModelBase
             var isRecommended = world == _plan.RecommendedWorld;
             _worldOptions.Add(new WorldOptionViewModel(world, isRecommended));
         }
+
+        _splitWorlds.Clear();
+        if (_plan.RecommendedSplit?.Any() == true)
+        {
+            foreach (var split in _plan.RecommendedSplit)
+            {
+                _splitWorlds.Add(new SplitWorldCardViewModel(split, _plan.QuantityNeeded));
+            }
+        }
+    }
+
+    private static bool HasSplitRecommendation(DetailedShoppingPlan plan)
+    {
+        return plan.RecommendedSplit?.Any() == true &&
+            (plan.RequiresSplitPurchase || plan.RecommendedWorld == null);
     }
 }
