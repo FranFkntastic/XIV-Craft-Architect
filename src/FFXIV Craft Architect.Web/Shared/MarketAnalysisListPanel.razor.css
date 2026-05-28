@@ -245,3 +245,15 @@
     color: #777;
     text-align: center;
 }
+
+.ma-analysis-missing {
+    display: flex;
+    min-height: 180px;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 10px;
+    padding: 20px;
+    color: #8d949c;
+    text-align: center;
+}

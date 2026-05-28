@@ -292,6 +292,7 @@
                     if (marketPlans?.Any() == true)
                     {
                         AppState.ShoppingPlans = marketPlans;
+                        AppState.MarketItemAnalyses.Clear();
                         AppState.ProcurementShoppingPlans.Clear();
                         AppState.RecommendationMode = autoSave.SavedRecommendationMode;
                     }

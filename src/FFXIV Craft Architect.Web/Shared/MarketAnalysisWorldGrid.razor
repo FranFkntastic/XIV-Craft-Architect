@@ -1,0 +1,235 @@
+@using FFXIV_Craft_Architect.Core.Models
+
+<div class="ma-world-grid-shell">
+    @if (!string.IsNullOrWhiteSpace(Analysis.Warning))
+    {
+        <div class="ma-world-warning">
+            <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" />
+            <span>@Analysis.Warning</span>
+        </div>
+    }
+
+    <table class="ma-world-grid-table">
+        <thead>
+            <tr>
+                <th>World</th>
+                <th>Stock Depth</th>
+                <th>Coverage</th>
+                <th>Price / Value</th>
+                <th>Break</th>
+                <th>Data</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var world in GetWorlds())
+            {
+                var key = GetWorldKey(world);
+                <tr class="@GetWorldRowClass(world)">
+                    <td>
+                        <button type="button" class="ma-world-toggle" @onclick="() => ToggleWorld(key)">
+                            <MudIcon Icon="@(_expandedWorlds.Contains(key) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
+                            <span>@world.WorldName</span>
+                            @if (!string.IsNullOrWhiteSpace(world.DataCenter))
+                            {
+                                <span class="ma-world-dc">@world.DataCenter</span>
+                            }
+                        </button>
+                    </td>
+                    <td>
+                        <span>@world.CompetitiveQuantity.ToString("N0") comp.</span>
+                        <span class="ma-world-muted">@world.TotalSaneQuantity.ToString("N0") sane</span>
+                    </td>
+                    <td>
+                        <span>@FormatCoverage(world)</span>
+                        <span class="ma-world-muted">@FormatCoverageBucket(world.CoverageBucket)</span>
+                    </td>
+                    <td>
+                        <span class="ma-world-score @GetScoreClass(GetScore(world).ScoreBucket)">@FormatScoreBucket(GetScore(world).ScoreBucket)</span>
+                        <span class="ma-world-muted">@GetScore(world).Summary</span>
+                    </td>
+                    <td>@FormatBreak(world)</td>
+                    <td title="@FormatDataTooltip(world)">
+                        <span>@FormatDataAge(world)</span>
+                        <span class="ma-world-muted">@FormatDataQuality(world)</span>
+                    </td>
+                </tr>
+
+                @if (_expandedWorlds.Contains(key))
+                {
+                    <tr class="ma-world-expanded-row">
+                        <td colspan="6">
+                            <MarketAnalysisListingLadder World="world" />
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public MarketItemAnalysis Analysis { get; set; } = default!;
+    [Parameter] public MarketAcquisitionLens Lens { get; set; }
+
+    private readonly HashSet<string> _expandedWorlds = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override void OnParametersSet()
+    {
+        _expandedWorlds.RemoveWhere(key => Analysis.Worlds.All(world => !string.Equals(GetWorldKey(world), key, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private IEnumerable<WorldMarketAnalysis> GetWorlds()
+    {
+        return Analysis.Worlds
+            .OrderBy(world => world.DataQualityBucket == MarketDataQualityBucket.Missing)
+            .ThenBy(world => GetScore(world).Rank == 0 ? int.MaxValue : GetScore(world).Rank)
+            .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private WorldLensScore GetScore(WorldMarketAnalysis world)
+    {
+        return world.Scores.FirstOrDefault(score => score.Lens == Lens)
+            ?? world.Scores.FirstOrDefault()
+            ?? new WorldLensScore { Lens = Lens, ScoreBucket = MarketScoreBucket.Unavailable };
+    }
+
+    private void ToggleWorld(string key)
+    {
+        if (!_expandedWorlds.Add(key))
+        {
+            _expandedWorlds.Remove(key);
+        }
+    }
+
+    private static string GetWorldKey(WorldMarketAnalysis world)
+    {
+        return $"{world.DataCenter.Trim()}|{world.WorldName.Trim()}";
+    }
+
+    private string GetWorldRowClass(WorldMarketAnalysis world)
+    {
+        return $"ma-world-row {GetScoreClass(GetScore(world).ScoreBucket)}";
+    }
+
+    private static string GetScoreClass(MarketScoreBucket bucket)
+    {
+        return bucket switch
+        {
+            MarketScoreBucket.Optimal => "is-optimal",
+            MarketScoreBucket.Competitive => "is-competitive",
+            MarketScoreBucket.Expensive => "is-expensive",
+            MarketScoreBucket.PoorFit => "is-poor",
+            _ => "is-unavailable"
+        };
+    }
+
+    private static string FormatScoreBucket(MarketScoreBucket bucket)
+    {
+        return bucket switch
+        {
+            MarketScoreBucket.Optimal => "optimal",
+            MarketScoreBucket.Competitive => "average",
+            MarketScoreBucket.Expensive => "expensive",
+            MarketScoreBucket.PoorFit => "low stock",
+            _ => "unavailable"
+        };
+    }
+
+    private static string FormatCoverage(WorldMarketAnalysis world)
+    {
+        if (world.QuantityNeeded <= 0)
+        {
+            return "0/0";
+        }
+
+        return $"{Math.Min(world.TotalSaneQuantity, world.QuantityNeeded):N0}/{world.QuantityNeeded:N0}";
+    }
+
+    private static string FormatCoverageBucket(MarketCoverageBucket bucket)
+    {
+        return bucket switch
+        {
+            MarketCoverageBucket.Full => "full",
+            MarketCoverageBucket.PartialDeep => "partial deep",
+            MarketCoverageBucket.PartialThin => "partial thin",
+            _ => "none"
+        };
+    }
+
+    private static string FormatBreak(WorldMarketAnalysis world)
+    {
+        var firstBreak = world.PriceBands
+            .Where(band => band.IsCompetitiveShelf)
+            .Select(band => band.NextBreakPercent)
+            .FirstOrDefault(percent => percent.HasValue);
+
+        return firstBreak.HasValue
+            ? $"+{firstBreak.Value:N0}%"
+            : "-";
+    }
+
+    private static string FormatDataAge(WorldMarketAnalysis world)
+    {
+        if (!world.DataAge.HasValue)
+        {
+            return "Missing";
+        }
+
+        var prefix = world.DataAgeSource switch
+        {
+            MarketDataAgeSource.UniversalisWorldUpload => "MB ",
+            MarketDataAgeSource.UniversalisResponseUpload => "API ",
+            MarketDataAgeSource.LocalFetchFallback => "Cache ",
+            _ => string.Empty
+        };
+        var age = world.DataAge.Value;
+        if (age < TimeSpan.FromMinutes(1))
+        {
+            return $"{prefix}<1m";
+        }
+
+        if (age < TimeSpan.FromHours(1))
+        {
+            return $"{prefix}{Math.Floor(age.TotalMinutes):N0}m";
+        }
+
+        return age < TimeSpan.FromDays(1)
+            ? $"{prefix}{Math.Floor(age.TotalHours):N0}h"
+            : $"{prefix}{Math.Floor(age.TotalDays):N0}d";
+    }
+
+    private static string FormatDataQuality(WorldMarketAnalysis world)
+    {
+        var quality = world.DataQualityBucket switch
+        {
+            MarketDataQualityBucket.Current => "current",
+            MarketDataQualityBucket.Aging => "aging",
+            MarketDataQualityBucket.Old => "old",
+            MarketDataQualityBucket.VeryOld => "very old",
+            _ => "missing"
+        };
+
+        return world.DataAgeSource == MarketDataAgeSource.LocalFetchFallback && world.DataQualityBucket != MarketDataQualityBucket.Missing
+            ? "cache fallback"
+            : quality;
+    }
+
+    private static string FormatDataTooltip(WorldMarketAnalysis world)
+    {
+        return world.DataAgeSource switch
+        {
+            MarketDataAgeSource.UniversalisWorldUpload => $"World upload: {FormatTimestamp(world.MarketUploadedAtUtc)}; local fetch: {FormatTimestamp(world.FetchedAtUtc)}",
+            MarketDataAgeSource.UniversalisResponseUpload => $"API response upload: {FormatTimestamp(world.MarketUploadedAtUtc)}; local fetch: {FormatTimestamp(world.FetchedAtUtc)}",
+            MarketDataAgeSource.LocalFetchFallback => $"Universalis upload time unavailable; using local cache fetch time: {FormatTimestamp(world.FetchedAtUtc)}",
+            _ => "Market data missing"
+        };
+    }
+
+    private static string FormatTimestamp(DateTime? timestampUtc)
+    {
+        return timestampUtc.HasValue
+            ? $"{timestampUtc.Value.ToLocalTime():g}"
+            : "unknown";
+    }
+}

@@ -1,0 +1,129 @@
+.ma-world-grid-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ma-world-warning {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 9px;
+    border: 1px solid #614b20;
+    border-radius: 6px;
+    color: #ffd28a;
+    background: #2d281e;
+    font-size: 12px;
+}
+
+.ma-world-grid-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 12px;
+}
+
+.ma-world-grid-table th,
+.ma-world-grid-table td {
+    padding: 6px;
+    border-bottom: 1px solid #30363b;
+    color: #d7d7d7;
+    text-align: left;
+    vertical-align: top;
+}
+
+.ma-world-grid-table th {
+    color: #8d949c;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    background: #252a2e;
+    white-space: nowrap;
+}
+
+.ma-world-grid-table th:nth-child(1),
+.ma-world-grid-table td:nth-child(1) {
+    width: 22%;
+}
+
+.ma-world-grid-table th:nth-child(4),
+.ma-world-grid-table td:nth-child(4) {
+    width: 24%;
+}
+
+.ma-world-row {
+    box-shadow: inset 3px 0 0 transparent;
+}
+
+.ma-world-row.is-optimal {
+    box-shadow: inset 3px 0 0 #4fab78;
+}
+
+.ma-world-row.is-competitive {
+    box-shadow: inset 3px 0 0 #d4a73a;
+}
+
+.ma-world-row.is-expensive,
+.ma-world-row.is-poor,
+.ma-world-row.is-unavailable {
+    box-shadow: inset 3px 0 0 #df6f5d;
+}
+
+.ma-world-toggle {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    color: #f0f0f0;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ma-world-toggle span:first-of-type {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ma-world-dc,
+.ma-world-muted {
+    display: block;
+    color: #8d949c;
+    font-size: 11px;
+    line-height: 1.3;
+}
+
+.ma-world-score {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 999px;
+    color: #141719;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.ma-world-score.is-optimal {
+    background: #8bd19f;
+}
+
+.ma-world-score.is-competitive {
+    background: #f0c65b;
+}
+
+.ma-world-score.is-expensive,
+.ma-world-score.is-poor,
+.ma-world-score.is-unavailable {
+    background: #f09080;
+}
+
+.ma-world-expanded-row td {
+    padding: 0 6px 8px 24px;
+    background: #1a1d20;
+}

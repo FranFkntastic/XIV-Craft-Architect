@@ -1,12 +1,14 @@
 @page "/"
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Dialogs
 @using FFXIV_Craft_Architect.Web.Services
 @using Microsoft.AspNetCore.Components.Forms
 @inject GarlandService GarlandService
 @inject RecipeCalculationService RecipeCalculationService
 @inject MarketShoppingService MarketShoppingService
+@inject IMarketPriceLadderAnalysisService MarketPriceLadderAnalysisService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -308,6 +310,7 @@
 
             // Step 3: Clear previous market/procurement analysis for the new recipe tree
             AppState.ShoppingPlans.Clear();
+            AppState.MarketItemAnalyses.Clear();
             AppState.ProcurementShoppingPlans.Clear();
             AppState.NotifyPlanChanged();
 
@@ -449,6 +452,7 @@
         if (plan == null || !materials.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
         {
             AppState.ShoppingPlans.Clear();
+            AppState.MarketItemAnalyses.Clear();
             AppState.ProcurementShoppingPlans.Clear();
             AppState.NotifyShoppingListChanged();
             return;
@@ -456,23 +460,30 @@
 
         var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
         var maxAge = forceRefreshData ? TimeSpan.Zero : (TimeSpan?)null;
+        var scope = AppState.SearchEntireRegion ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter;
         var evidence = await MarketEvidenceLoader.LoadAsync(
             MarketCache,
             materials.Select(material => material.ItemId),
-            AppState.SearchEntireRegion ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter,
+            scope,
             AppState.SelectedDataCenter,
             AppState.SelectedRegion,
             maxAge,
             progress);
 
-        AppState.ShoppingPlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+        AppState.MarketItemAnalyses = await MarketPriceLadderAnalysisService.AnalyzeAsync(
             new MarketAnalysisRequest
             {
                 Items = materials,
                 Evidence = evidence,
-                RecommendationMode = AppState.RecommendationMode
+                RecommendationMode = RecommendationMode.MinimizeTotalCost,
+                ExpectedWorldsByDataCenter = AppState.GetExpectedMarketWorlds(scope)
             },
             progress);
+        AppState.ShoppingPlans = AppState.MarketItemAnalyses
+            .Select(analysis => MarketPriceLadderAnalysisService.ProjectToShoppingPlan(
+                analysis,
+                AppState.MarketAnalysisLens))
+            .ToList();
 
         MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
         AppState.ProcurementShoppingPlans.Clear();

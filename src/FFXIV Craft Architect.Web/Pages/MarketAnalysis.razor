@@ -1,11 +1,13 @@
 @page "/market"
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
 @using static FFXIV_Craft_Architect.Core.Models.MarketSortOption
 @inject GarlandService GarlandService
 @inject RecipeCalculationService RecipeCalculationService
 @inject MarketShoppingService MarketShoppingService
+@inject IMarketPriceLadderAnalysisService MarketPriceLadderAnalysisService
 @inject IMarketCacheService MarketCache
 @inject ILogger<MarketAnalysis> Logger
 @inject IJSRuntime JSRuntime
@@ -23,7 +25,7 @@
             IsRefreshingPrices="_isRefreshingPrices"
             CanAnalyze="CanAnalyze()"
             CanRefreshPrices="CanRefreshPrices()"
-            OnModeChangedRequested="OnModeChanged"
+            OnLensChangedRequested="OnLensChanged"
             OnRunAnalysisRequested="RunMarketAnalysisAsync"
             OnRefreshPricesRequested="RefreshPricesAsync"
             OnGoToPlannerRequested="GoToPlanner"
@@ -32,6 +34,8 @@
         <MarketAnalysisResultsPanel
             BuyItems="GetBuyItems()"
             ShoppingPlans="AppState.ShoppingPlans"
+            MarketItemAnalyses="AppState.MarketItemAnalyses"
+            CurrentLens="AppState.MarketAnalysisLens"
             CurrentSort="AppState.MarketSortPreference"
             AutoExpandItemId="AppState.AutoExpandItemId"
             ShowWorldsColumn="AppState.SearchEntireRegion"
@@ -213,7 +217,6 @@
 
     private async Task<bool> RunMarketAnalysisAsync(bool forceRefreshData, bool showCompletionSnackbar)
     {
-        NormalizeRecommendationMode();
         var materials = GetBuyItems();
 
         var plan = AppState.CurrentPlan;
@@ -222,6 +225,7 @@
 
         _isAnalyzing = true;
         AppState.ShoppingPlans.Clear();
+        AppState.MarketItemAnalyses.Clear();
         AppState.ProcurementShoppingPlans.Clear();
         AppState.BeginOperation("Market Analysis", $"Analyzing {materials.Count} items on {AppState.SelectedDataCenter}...");
 
@@ -243,20 +247,23 @@
 
             Logger.LogInformation("Market Analysis: {FetchedCount} items fetched from API", evidence.FetchedCount);
 
-            // Step 2: Calculate shopping plans from cached data
-            var plans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
-                new MarketAnalysisRequest
-                {
-                    Items = materials,
-                    Evidence = evidence,
-                    RecommendationMode = GetEffectiveRecommendationMode()
-                },
+            var request = new MarketAnalysisRequest
+            {
+                Items = materials,
+                Evidence = evidence,
+                RecommendationMode = GetEffectiveRecommendationMode(),
+                ExpectedWorldsByDataCenter = AppState.GetExpectedMarketWorlds(scope)
+            };
+            var analyses = await MarketPriceLadderAnalysisService.AnalyzeAsync(
+                request,
                 progress,
                 executionOptions: executionOptions);
+            var plans = ProjectShoppingPlans(analyses);
 
             // Apply hard-lock vendor overrides for vendor-buy items
             MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, plans);
 
+            AppState.MarketItemAnalyses = analyses;
             AppState.ShoppingPlans = plans;
             AppState.ProcurementShoppingPlans.Clear();
             AppState.NotifyShoppingListChanged();
@@ -289,13 +296,18 @@
         }
     }
 
-    private async Task OnModeChanged(RecommendationMode mode)
+    private Task OnLensChanged(MarketAcquisitionLens lens)
     {
-        AppState.RecommendationMode = NormalizeRecommendationMode(mode);
-        if (GetBuyItems().Any() && AppState.ShoppingPlans.Any())
+        AppState.MarketAnalysisLens = lens;
+        if (AppState.MarketItemAnalyses.Any())
         {
-            await RunMarketAnalysisAsync();
+            AppState.ShoppingPlans = ProjectShoppingPlans(AppState.MarketItemAnalyses);
+            MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
+            AppState.ProcurementShoppingPlans.Clear();
         }
+
+        AppState.NotifyShoppingListChanged();
+        return Task.CompletedTask;
     }
 
     private void GoToPlanner()
@@ -320,18 +332,15 @@
 
     private RecommendationMode GetEffectiveRecommendationMode()
     {
-        return NormalizeRecommendationMode(AppState.RecommendationMode);
+        return RecommendationMode.MinimizeTotalCost;
     }
 
-    private void NormalizeRecommendationMode()
+    private List<DetailedShoppingPlan> ProjectShoppingPlans(IEnumerable<MarketItemAnalysis> analyses)
     {
-        AppState.RecommendationMode = NormalizeRecommendationMode(AppState.RecommendationMode);
-    }
-
-    private static RecommendationMode NormalizeRecommendationMode(RecommendationMode mode)
-    {
-        return mode == RecommendationMode.MaximizeValue
-            ? RecommendationMode.MinimizeTotalCost
-            : mode;
+        return analyses
+            .Select(analysis => MarketPriceLadderAnalysisService.ProjectToShoppingPlan(
+                analysis,
+                AppState.MarketAnalysisLens))
+            .ToList();
     }
 }

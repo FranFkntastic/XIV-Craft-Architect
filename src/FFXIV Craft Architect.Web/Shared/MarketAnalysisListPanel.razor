@@ -61,13 +61,13 @@
                     </TemplateColumn>
 
                     <TemplateColumn T="DetailedShoppingPlan"
-                                    Title="Recommendation"
-                                    SortBy="plan => GetRecommendationLabel(plan)"
-                                    HeaderStyle="@RecommendationColumnStyle"
-                                    CellStyle="@RecommendationColumnStyle"
+                                    Title="Coverage"
+                                    SortBy="plan => GetCoverageSortValue(plan)"
+                                    HeaderStyle="@CoverageColumnStyle"
+                                    CellStyle="@CoverageColumnStyle"
                                     CellClass="ma-recommendation-column">
                         <CellTemplate>
-                            <span title="@GetRecommendationLabel(context.Item)">@GetRecommendationLabel(context.Item)</span>
+                            <span title="@GetCoverageLabel(context.Item)">@GetCoverageLabel(context.Item)</span>
                         </CellTemplate>
                     </TemplateColumn>
 
@@ -128,7 +128,19 @@
                 </div>
 
                 <div class="ma-detail-scroll">
-                    <MarketAnalysisDetailGrid Plan="_selectedPlan" />
+                    @if (GetSelectedAnalysis() is { } analysis)
+                    {
+                        <MarketAnalysisWorldGrid Analysis="analysis" Lens="CurrentLens" />
+                    }
+                    else
+                    {
+                        <div class="ma-analysis-missing">
+                            <MudIcon Icon="@Icons.Material.Filled.SyncProblem" Size="Size.Large" />
+                            <MudText Typo="Typo.body2">
+                                Analytics for this item are not available in the current session. Run Market Analysis again to rebuild the source data.
+                            </MudText>
+                        </div>
+                    }
                 </div>
             }
         </aside>
@@ -137,6 +149,8 @@
 
 @code {
     [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    [Parameter] public List<MarketItemAnalysis> MarketItemAnalyses { get; set; } = new();
+    [Parameter] public MarketAcquisitionLens CurrentLens { get; set; } = MarketAcquisitionLens.MinimumUpfrontCost;
     [Parameter] public MarketSortOption CurrentSort { get; set; } = MarketSortOption.ByRecommended;
     [Parameter] public int? AutoExpandItemId { get; set; }
     [Parameter] public bool ShowWorldsColumn { get; set; }
@@ -148,13 +162,14 @@
 
     private string QuantityColumnStyle => ShowWorldsColumn ? "width: 12%;" : "width: 13%;";
 
-    private string RecommendationColumnStyle => ShowWorldsColumn ? "width: 36%;" : "width: 39%;";
+    private string CoverageColumnStyle => ShowWorldsColumn ? "width: 36%;" : "width: 39%;";
 
     private string TotalColumnStyle => ShowWorldsColumn ? "width: 18%;" : "width: 19%;";
 
     protected override void OnParametersSet()
     {
         ShoppingPlans ??= new List<DetailedShoppingPlan>();
+        MarketItemAnalyses ??= new List<MarketItemAnalysis>();
 
         if (!_autoExpandProcessed && AutoExpandItemId.HasValue)
         {
@@ -177,6 +192,13 @@
         _selectedPlan = plan;
     }
 
+    private MarketItemAnalysis? GetSelectedAnalysis()
+    {
+        return _selectedPlan == null
+            ? null
+            : MarketItemAnalyses.FirstOrDefault(analysis => analysis.ItemId == _selectedPlan.ItemId);
+    }
+
     private IEnumerable<DetailedShoppingPlan> GetGridPlans()
     {
         var plans = ShoppingPlans ?? new List<DetailedShoppingPlan>();
@@ -184,7 +206,7 @@
         return CurrentSort switch
         {
             MarketSortOption.Alphabetical => plans.OrderBy(p => p.Name),
-            MarketSortOption.ByRecommended => plans.OrderBy(p => p.RecommendedWorld?.WorldName ?? string.Empty)
+            MarketSortOption.ByRecommended => plans.OrderBy(p => GetBestWorldRank(p))
                 .ThenBy(p => p.Name),
             _ => plans
         };
@@ -213,13 +235,47 @@
         return "Market";
     }
 
-    private static string GetRecommendationLabel(DetailedShoppingPlan plan)
+    private string GetCoverageLabel(DetailedShoppingPlan plan)
     {
+        var analysis = MarketItemAnalyses.FirstOrDefault(item => item.ItemId == plan.ItemId);
+        if (analysis != null)
+        {
+            var full = analysis.Worlds.Count(world => world.CoverageBucket == MarketCoverageBucket.Full);
+            var partial = analysis.Worlds.Count(world =>
+                world.CoverageBucket is MarketCoverageBucket.PartialDeep or MarketCoverageBucket.PartialThin);
+            if (analysis.Worlds.Count == 0)
+            {
+                return analysis.Warning ?? "No market data";
+            }
+
+            return $"{full} full, {partial} partial across {analysis.Worlds.Count} worlds";
+        }
+
         if (!string.IsNullOrWhiteSpace(plan.Error))
             return plan.Error;
-        if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
-            return string.Join(", ", plan.RecommendedSplit.Select(s => s.WorldName));
-        return plan.RecommendedWorld?.WorldName ?? "No recommendation";
+        return "Analytics unavailable; rerun analysis";
+    }
+
+    private int GetCoverageSortValue(DetailedShoppingPlan plan)
+    {
+        var analysis = MarketItemAnalyses.FirstOrDefault(item => item.ItemId == plan.ItemId);
+        if (analysis == null)
+        {
+            return plan.HasSufficientStock ? 0 : 1;
+        }
+
+        return analysis.Worlds.Count(world => world.CoverageBucket == MarketCoverageBucket.Full) * -100
+            - analysis.Worlds.Count(world => world.CoverageBucket == MarketCoverageBucket.PartialDeep) * 10
+            - analysis.Worlds.Count(world => world.CoverageBucket == MarketCoverageBucket.PartialThin);
+    }
+
+    private int GetBestWorldRank(DetailedShoppingPlan plan)
+    {
+        var analysis = MarketItemAnalyses.FirstOrDefault(item => item.ItemId == plan.ItemId);
+        return analysis?.Worlds
+            .Select(world => world.Scores.FirstOrDefault(score => score.Lens == CurrentLens)?.Rank ?? int.MaxValue)
+            .DefaultIfEmpty(int.MaxValue)
+            .Min() ?? int.MaxValue;
     }
 
     private static int GetWorldCount(DetailedShoppingPlan plan)

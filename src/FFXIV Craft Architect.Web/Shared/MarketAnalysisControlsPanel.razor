@@ -4,15 +4,15 @@
     <MudText Typo="Typo.h6" Color="Color.Primary" Class="mb-4">Market Analysis</MudText>
 
     <div class="ma-field-block">
-        <div class="ma-field-label">Mode</div>
-        <MudSelect T="RecommendationMode"
-                   Value="SelectedMode"
-                   ValueChanged="OnModeChangedRequested"
+        <div class="ma-field-label">Lens</div>
+        <MudSelect T="MarketAcquisitionLens"
+                   Value="AppState.MarketAnalysisLens"
+                   ValueChanged="OnLensChangedRequested"
                    Variant="Variant.Outlined"
                    Dense="true"
                    Class="ma-full-width">
-            <MudSelectItem Value="@RecommendationMode.MinimizeTotalCost">Minimize Total Cost</MudSelectItem>
-            <MudSelectItem Value="@RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
+            <MudSelectItem Value="@MarketAcquisitionLens.MinimumUpfrontCost">Minimum Upfront Cost</MudSelectItem>
+            <MudSelectItem Value="@MarketAcquisitionLens.BulkValue">Best Value / Bulk Acquisition</MudSelectItem>
         </MudSelect>
     </div>
 
@@ -23,7 +23,7 @@
                    Variant="Variant.Outlined"
                    Dense="true"
                    Class="ma-full-width">
-            <MudSelectItem Value="@MarketSortOption.ByRecommended">By Recommended</MudSelectItem>
+            <MudSelectItem Value="@MarketSortOption.ByRecommended">By Lens Score</MudSelectItem>
             <MudSelectItem Value="@MarketSortOption.Alphabetical">Alphabetical</MudSelectItem>
         </MudSelect>
     </div>
@@ -105,13 +105,9 @@
     [Parameter] public bool CanAnalyze { get; set; }
     [Parameter] public bool CanRefreshPrices { get; set; }
 
-    [Parameter] public EventCallback<RecommendationMode> OnModeChangedRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionLens> OnLensChangedRequested { get; set; }
     [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
     [Parameter] public EventCallback OnRefreshPricesRequested { get; set; }
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
     [Parameter] public EventCallback OnGoToProcurementRequested { get; set; }
-
-    private RecommendationMode SelectedMode => AppState.RecommendationMode == RecommendationMode.MaximizeValue
-        ? RecommendationMode.MinimizeTotalCost
-        : AppState.RecommendationMode;
 }

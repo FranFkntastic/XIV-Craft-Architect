@@ -1,0 +1,109 @@
+@using FFXIV_Craft_Architect.Core.Models
+
+<div class="ma-ladder-shell">
+    <table class="ma-ladder-table">
+        <thead>
+            <tr>
+                <th>Qty</th>
+                <th>Unit</th>
+                <th>Total</th>
+                <th>Retainer</th>
+                <th>HQ/NQ</th>
+                <th>Reviewed</th>
+                <th>Flags</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var listing in World.Listings.OrderBy(listing => listing.SortIndex))
+            {
+                var priceBreakBefore = HasPriceBreakBefore(listing);
+                if (priceBreakBefore)
+                {
+                    <tr class="ma-ladder-break-row">
+                        <td colspan="7">Price break</td>
+                    </tr>
+                }
+
+                <tr class="@GetListingClass(listing)">
+                    <td>@listing.Quantity.ToString("N0")</td>
+                    <td>@listing.PricePerUnit.ToString("N0")g</td>
+                    <td>@((listing.Quantity * listing.PricePerUnit).ToString("N0"))g</td>
+                    <td class="ma-ladder-retainer">@listing.RetainerName</td>
+                    <td>@(listing.IsHq ? "HQ" : "NQ")</td>
+                    <td title="@FormatReviewTooltip(listing)">@FormatReviewAge(listing)</td>
+                    <td>
+                        @if (listing.IsOutlier)
+                        {
+                            <span class="ma-ladder-flag">outlier</span>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public WorldMarketAnalysis World { get; set; } = default!;
+
+    private bool HasPriceBreakBefore(AnalyzedMarketListing listing)
+    {
+        var firstBreak = World.PriceBands
+            .Where(band => band.NextBreakPercent >= 10)
+            .OrderBy(band => band.LastListingIndex)
+            .FirstOrDefault();
+
+        return firstBreak != null && listing.SortIndex == firstBreak.LastListingIndex + 1;
+    }
+
+    private static string GetListingClass(AnalyzedMarketListing listing)
+    {
+        var classes = new List<string>();
+        if (listing.IsInCompetitiveShelf)
+        {
+            classes.Add("is-competitive");
+        }
+
+        if (listing.IsOutlier)
+        {
+            classes.Add("is-outlier");
+        }
+
+        return string.Join(" ", classes);
+    }
+
+    private static string FormatReviewAge(AnalyzedMarketListing listing)
+    {
+        if (!listing.LastReviewTimeUtc.HasValue)
+        {
+            return "-";
+        }
+
+        var age = DateTime.UtcNow - listing.LastReviewTimeUtc.Value;
+        if (age < TimeSpan.Zero)
+        {
+            age = TimeSpan.Zero;
+        }
+
+        if (age < TimeSpan.FromMinutes(1))
+        {
+            return "<1m";
+        }
+
+        if (age < TimeSpan.FromHours(1))
+        {
+            return $"{Math.Floor(age.TotalMinutes):N0}m";
+        }
+
+        return age < TimeSpan.FromDays(1)
+            ? $"{Math.Floor(age.TotalHours):N0}h"
+            : $"{Math.Floor(age.TotalDays):N0}d";
+    }
+
+    private static string FormatReviewTooltip(AnalyzedMarketListing listing)
+    {
+        return listing.LastReviewTimeUtc.HasValue
+            ? $"Reviewed: {listing.LastReviewTimeUtc.Value.ToLocalTime():g}"
+            : "Review time unavailable";
+    }
+}

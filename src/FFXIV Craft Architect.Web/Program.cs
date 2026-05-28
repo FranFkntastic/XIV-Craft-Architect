@@ -30,6 +30,7 @@ builder.Services.AddScoped<ITeamcraftRecipeService, TeamcraftRecipeService>();
 builder.Services.AddScoped<IArtisanService, ArtisanService>();
 builder.Services.AddScoped<IMarketCacheService, IndexedDbMarketCacheService>();
 builder.Services.AddScoped<MarketShoppingService>();
+builder.Services.AddScoped<IMarketPriceLadderAnalysisService, MarketPriceLadderAnalysisService>();
 builder.Services.AddScoped<IndexedDbMarketCacheService>();
 
 // Register Settings Service (Web implementation)

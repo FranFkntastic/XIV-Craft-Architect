@@ -1,11 +1,13 @@
 @page "/procurement"
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
 @inject GarlandService GarlandService
 @inject UniversalisService UniversalisService
 @inject RecipeCalculationService RecipeCalculationService
 @inject MarketShoppingService MarketShoppingService
+@inject IMarketPriceLadderAnalysisService MarketPriceLadderAnalysisService
 @inject IMarketCacheService MarketCache
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
@@ -498,24 +500,32 @@
                 AppState.SelectedRegion,
                 maxAge: TimeSpan.Zero,
                 progress: progress);
-            var refreshedPlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+            var refreshedAnalyses = await MarketPriceLadderAnalysisService.AnalyzeAsync(
                 new MarketAnalysisRequest
                 {
                     Items = [candidate],
                     Evidence = evidence,
-                    RecommendationMode = AppState.RecommendationMode
+                    RecommendationMode = RecommendationMode.MinimizeTotalCost,
+                    ExpectedWorldsByDataCenter = AppState.GetExpectedMarketWorlds(scope)
                 },
                 progress,
                 executionOptions: MarketAnalysisExecutionOptions.Interactive);
-            MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, refreshedPlans);
+            var refreshedAnalysis = refreshedAnalyses.SingleOrDefault();
 
-            if (refreshedPlans.Count == 0)
+            if (refreshedAnalysis == null)
             {
                 AppState.EndOperation($"No refreshed market data was returned for {candidate.Name}.");
                 Snackbar.Add($"No refreshed market data was returned for {candidate.Name}.", Severity.Warning);
                 return;
             }
 
+            var refreshedPlan = MarketPriceLadderAnalysisService.ProjectToShoppingPlan(
+                refreshedAnalysis,
+                AppState.MarketAnalysisLens);
+            var refreshedPlans = new List<DetailedShoppingPlan> { refreshedPlan };
+            MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, refreshedPlans);
+
+            AppState.MarketItemAnalyses = ReplaceAnalysis(AppState.MarketItemAnalyses, refreshedAnalysis);
             AppState.ShoppingPlans = MarketAnalysisPlanAdjuster.ReplacePlan(
                 AppState.ShoppingPlans,
                 refreshedPlans[0]);
@@ -542,6 +552,17 @@
         }
 
         AppState.NotifyShoppingListChanged();
+    }
+
+    private static List<MarketItemAnalysis> ReplaceAnalysis(
+        IEnumerable<MarketItemAnalysis> analyses,
+        MarketItemAnalysis replacement)
+    {
+        return analyses
+            .Where(analysis => analysis.ItemId != replacement.ItemId)
+            .Append(replacement)
+            .OrderBy(analysis => analysis.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private string FormatBlacklistedMarketWorlds()

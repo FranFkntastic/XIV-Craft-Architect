@@ -88,12 +88,19 @@ public class AppState
     public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
 
     /// <summary>
+    /// Immutable market-analysis analytics for every market-listable candidate in the recipe plan.
+    /// Acquisition and procurement views may project from this data, but should not mutate or filter it.
+    /// </summary>
+    public List<MarketItemAnalysis> MarketItemAnalyses { get; set; } = new();
+
+    /// <summary>
     /// Mutable procurement overlay derived from ShoppingPlans and current acquisition choices.
     /// This may be filtered, re-routed, or affected by temporary world exclusions.
     /// </summary>
     public List<DetailedShoppingPlan> ProcurementShoppingPlans { get; set; } = new();
     public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; private set; } = Array.Empty<MarketDataUnavailableItem>();
     public RecommendationMode RecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
+    public MarketAcquisitionLens MarketAnalysisLens { get; set; } = MarketAcquisitionLens.MinimumUpfrontCost;
     
     /// <summary>
     /// Temporarily blacklisted worlds for the current session.
@@ -217,6 +224,25 @@ public class AppState
     {
         SyncTemporaryBlacklistSets();
         return TemporarilyBlacklistedWorlds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> GetExpectedMarketWorlds(MarketFetchScope scope)
+    {
+        var dataCenters = MarketFetchScopeResolver.GetDataCenters(
+            scope,
+            SelectedDataCenter,
+            SelectedRegion);
+        var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dataCenter in dataCenters)
+        {
+            if (WorldData?.DataCenterToWorlds.TryGetValue(dataCenter, out var worlds) == true)
+            {
+                result[dataCenter] = worlds;
+            }
+        }
+
+        return result;
     }
 
     public void ClearTemporaryMarketWorldBlacklists()
@@ -366,6 +392,7 @@ public class AppState
         ProjectItems.Clear();
         ShoppingItems.Clear();
         ShoppingPlans.Clear();
+        MarketItemAnalyses.Clear();
         ProcurementShoppingPlans.Clear();
         ClearUnavailableMarketItems();
         CurrentPlanId = null;  // Reset plan ID for new plan
@@ -391,6 +418,7 @@ public class AppState
         }).ToList();
         
         CurrentPlan = deserializedPlan;
+        MarketItemAnalyses.Clear();
         ProcurementShoppingPlans.Clear();
         
         // Track the loaded plan ID for save-overwrite behavior
