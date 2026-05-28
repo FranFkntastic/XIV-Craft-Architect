@@ -74,4 +74,7 @@ public sealed class MarketAnalysisRequest
     public HashSet<string> BlacklistedWorlds { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
     public HashSet<MarketWorldKey> BlacklistedMarketWorlds { get; init; } = new();
+
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> ExpectedWorldsByDataCenter { get; init; }
+        = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
 }

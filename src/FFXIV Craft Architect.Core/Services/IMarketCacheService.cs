@@ -86,6 +86,12 @@ public class CachedMarketData
     /// Store-only; use FetchedAt property for reading.
     /// </summary>
     public long FetchedAtUnix { get; set; }
+
+    /// <summary>
+    /// Universalis response-level last upload time in Unix milliseconds, when provided by the API.
+    /// This is market-board freshness, distinct from when this app fetched the response.
+    /// </summary>
+    public long? LastUploadTimeUnixMilliseconds { get; set; }
     
     /// <summary>
     /// Gets or sets the fetch time as UTC DateTime.
@@ -117,7 +123,9 @@ public class CachedMarketData
 /// </summary>
 public class CachedWorldData
 {
+    public int? WorldId { get; set; }
     public string WorldName { get; set; } = string.Empty;
+    public long? LastUploadTimeUnixMilliseconds { get; set; }
     public List<CachedListing> Listings { get; set; } = new();
     public bool IsCongested { get; set; }
 }
@@ -131,6 +139,7 @@ public class CachedListing
     public long PricePerUnit { get; set; }
     public string RetainerName { get; set; } = string.Empty;
     public bool IsHq { get; set; }
+    public long? LastReviewTimeUnix { get; set; }
 }
 
 /// <summary>
