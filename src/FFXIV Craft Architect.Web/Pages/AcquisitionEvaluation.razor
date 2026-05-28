@@ -225,6 +225,7 @@
                 if (marketPlans?.Any() == true)
                 {
                     AppState.ShoppingPlans = marketPlans;
+                    AppState.ProcurementShoppingPlans.Clear();
                     AppState.RecommendationMode = storedPlan.SavedRecommendationMode;
                     AppState.NotifyShoppingListChanged();
                 }
@@ -268,7 +269,7 @@
         }
 
         PopulateShoppingListFromPlan();
-        MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
+        AppState.ProcurementShoppingPlans.Clear();
         AppState.NotifyPlanChanged();
     }
 
@@ -373,7 +374,7 @@
             aggregate.Occurrences.Any(occurrence => !occurrence.IsSuppressed),
             node.CanBuyFromMarket,
             GetMarketEvidence(marketPlan),
-            GetEstimatedCost(node, marketPlan, activeQuantity));
+            GetEstimatedCost(node, AppState.ShoppingPlans, activeQuantity));
     }
 
     private IEnumerable<DecisionRow> GetVisibleRows(List<DecisionRow> rows)
@@ -536,11 +537,11 @@
         return options;
     }
 
-    private static string GetEstimatedCost(PlanNode node, DetailedShoppingPlan? marketPlan, int activeQuantity)
+    private static string GetEstimatedCost(PlanNode node, IReadOnlyList<DetailedShoppingPlan> marketPlans, int activeQuantity)
     {
         if (node.Source == AcquisitionSource.Craft && node.Children.Any())
         {
-            return AcquisitionPlanningService.TryGetAcquisitionCost(node, node.Source, GetMarketPlans(marketPlan), out var craftCost)
+            return AcquisitionPlanningService.TryGetAcquisitionCost(node, node.Source, marketPlans, out var craftCost)
                 ? $"{craftCost:N0}g"
                 : "Craft";
         }
@@ -552,16 +553,9 @@
             costNode.Quantity = activeQuantity;
         }
 
-        return AcquisitionPlanningService.TryGetAcquisitionCost(costNode, costNode.Source, GetMarketPlans(marketPlan), out var cost)
+        return AcquisitionPlanningService.TryGetAcquisitionCost(costNode, costNode.Source, marketPlans, out var cost)
             ? $"{cost:N0}g"
             : "-";
-    }
-
-    private static IReadOnlyList<DetailedShoppingPlan> GetMarketPlans(DetailedShoppingPlan? marketPlan)
-    {
-        return marketPlan == null
-            ? Array.Empty<DetailedShoppingPlan>()
-            : [marketPlan];
     }
 
     private static string GetUsedInText(IReadOnlyList<DecisionOccurrence> occurrences)

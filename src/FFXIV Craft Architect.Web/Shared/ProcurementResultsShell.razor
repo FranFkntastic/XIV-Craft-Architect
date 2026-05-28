@@ -1,9 +1,13 @@
 <div class="pp-results-column">
     <ProcurementRouteTreePanel ShoppingPlans="ShoppingPlans"
-                               OnReanalyzeWithoutWorldRequested="OnReanalyzeWithoutWorldRequested" />
+                               OnReanalyzeWithoutWorldRequested="OnReanalyzeWithoutWorldRequested"
+                               OnExcludeWorldForItemRequested="OnExcludeWorldForItemRequested"
+                               OnRefreshItemRequested="OnRefreshItemRequested" />
 </div>
 
 @code {
     [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
     [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
+    [Parameter] public EventCallback<WorldItemProcurementAction> OnExcludeWorldForItemRequested { get; set; }
+    [Parameter] public EventCallback<WorldItemProcurementAction> OnRefreshItemRequested { get; set; }
 }

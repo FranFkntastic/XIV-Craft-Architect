@@ -306,9 +306,9 @@
             AppState.BeginOperation("Fetching Prices", "Loading market prices for all materials...");
             var priceRefresh = await RefreshPricesAsync(rebuildProcurementPlans: false);
 
-            // Step 3: Clear previous shopping plans and set price-based acquisition defaults
+            // Step 3: Clear previous market/procurement analysis for the new recipe tree
             AppState.ShoppingPlans.Clear();
-            AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(AppState.CurrentPlan, AppState.ShoppingPlans);
+            AppState.ProcurementShoppingPlans.Clear();
             AppState.NotifyPlanChanged();
 
             // Step 4: Populate shopping list with items marked as "buy" from recipe plan
@@ -437,7 +437,7 @@
 
     private List<MaterialAggregate> GetBuyItemsForAnalysis()
     {
-        return AcquisitionPlanningService.GetActiveProcurementItems(AppState.CurrentPlan)
+        return AcquisitionPlanningService.GetMarketAnalysisCandidates(AppState.CurrentPlan)
             .Where(item => item.TotalQuantity > 0)
             .ToList();
     }
@@ -449,6 +449,7 @@
         if (plan == null || !materials.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
         {
             AppState.ShoppingPlans.Clear();
+            AppState.ProcurementShoppingPlans.Clear();
             AppState.NotifyShoppingListChanged();
             return;
         }
@@ -474,6 +475,7 @@
             progress);
 
         MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
+        AppState.ProcurementShoppingPlans.Clear();
         AppState.NotifyShoppingListChanged();
 
         if (!string.IsNullOrEmpty(AppState.CurrentPlanId))
@@ -644,6 +646,7 @@
                     if (marketPlans?.Any() == true)
                     {
                         AppState.ShoppingPlans = marketPlans;
+                        AppState.ProcurementShoppingPlans.Clear();
                         AppState.RecommendationMode = storedPlan.SavedRecommendationMode;
                         AppState.NotifyShoppingListChanged();
                     }

@@ -222,11 +222,13 @@
 
         _isAnalyzing = true;
         AppState.ShoppingPlans.Clear();
+        AppState.ProcurementShoppingPlans.Clear();
         AppState.BeginOperation("Market Analysis", $"Analyzing {materials.Count} items on {AppState.SelectedDataCenter}...");
 
         try
         {
             var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+            var executionOptions = MarketAnalysisExecutionOptions.Interactive;
             var maxAge = forceRefreshData ? TimeSpan.Zero : (TimeSpan?)null;
 
             var scope = AppState.SearchEntireRegion ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter;
@@ -247,17 +249,16 @@
                 {
                     Items = materials,
                     Evidence = evidence,
-                    RecommendationMode = GetEffectiveRecommendationMode(),
-                    BlacklistedMarketWorlds = AppState.TemporarilyBlacklistedMarketWorlds
+                    RecommendationMode = GetEffectiveRecommendationMode()
                 },
-                progress);
+                progress,
+                executionOptions: executionOptions);
 
             // Apply hard-lock vendor overrides for vendor-buy items
             MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, plans);
 
             AppState.ShoppingPlans = plans;
-            AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(AppState.CurrentPlan, AppState.ShoppingPlans);
-            MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
+            AppState.ProcurementShoppingPlans.Clear();
             AppState.NotifyShoppingListChanged();
             AppState.NotifyPlanChanged();
 

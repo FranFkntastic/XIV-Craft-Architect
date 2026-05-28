@@ -200,7 +200,7 @@
 .pp-item-header,
 .pp-item-row {
     display: grid;
-    grid-template-columns: minmax(220px, 1fr) 120px 100px 120px 34px;
+    grid-template-columns: minmax(220px, 1fr) 120px 100px 120px 108px;
     align-items: center;
     gap: 10px;
 }
@@ -239,6 +239,12 @@
 
 .pp-copy-button {
     color: #777;
+}
+
+.pp-item-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 2px;
 }
 
 .pp-world-warning {

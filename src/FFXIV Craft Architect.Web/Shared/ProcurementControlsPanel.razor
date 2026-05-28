@@ -52,6 +52,37 @@
         </MudStack>
     </div>
 
+    <div class="pp-field-block">
+        <div class="pp-field-label">World exclusion duration</div>
+        <MudSelect T="int"
+                   @bind-Value="AppState.TemporaryWorldBlacklistDurationMinutes"
+                   Variant="Variant.Outlined"
+                   Dense="true"
+                   Class="pp-full-width">
+            <MudSelectItem Value="15">15 minutes</MudSelectItem>
+            <MudSelectItem Value="60">1 hour</MudSelectItem>
+            <MudSelectItem Value="240">4 hours</MudSelectItem>
+            <MudSelectItem Value="1440">1 day</MudSelectItem>
+        </MudSelect>
+    </div>
+
+    @if (AppState.ActiveTemporaryExclusionCount > 0)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+            <MudText Typo="Typo.caption">
+                Excluding @AppState.ActiveTemporaryExclusionCount world/item rule(s) from procurement recommendations.
+            </MudText>
+        </MudAlert>
+        <MudButton OnClick="ClearWorldExclusions"
+                   Color="Color.Warning"
+                   Variant="Variant.Outlined"
+                   FullWidth="true"
+                   Class="mb-4"
+                   StartIcon="@Icons.Material.Filled.Clear">
+            Clear World Exclusions
+        </MudButton>
+    }
+
     <MudButton OnClick="OnRunAnalysisRequested"
                Disabled="@(!CanAnalyze || IsAnalyzing)"
                Color="Color.Primary"
@@ -141,5 +172,10 @@
             11 => "cheapest",
             _ => $"balanced {AppState.ProcurementTravelTolerance}/11"
         };
+    }
+
+    private void ClearWorldExclusions()
+    {
+        AppState.ClearTemporaryMarketWorldBlacklists();
     }
 }

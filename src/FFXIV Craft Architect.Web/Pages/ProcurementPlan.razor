@@ -10,6 +10,7 @@
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @inject AppState AppState
+@inject IndexedDbService IndexedDb
 @inject NavigationManager NavigationManager
 @implements IDisposable
 
@@ -34,7 +35,9 @@
 
         <ProcurementResultsShell
             ShoppingPlans="procurementShoppingPlans"
-            OnReanalyzeWithoutWorldRequested="ReanalyzeWithoutWorldAsync" />
+            OnReanalyzeWithoutWorldRequested="ReanalyzeWithoutWorldAsync"
+            OnExcludeWorldForItemRequested="ExcludeWorldForItemAsync"
+            OnRefreshItemRequested="RefreshItemMarketDataAsync" />
     </div>
 </MudContainer>
 
@@ -83,9 +86,8 @@
 
     private List<DetailedShoppingPlan> GetProcurementShoppingPlans()
     {
-        return AcquisitionPlanningService.FilterShoppingPlansForActiveProcurement(
-            AppState.CurrentPlan,
-            AppState.ShoppingPlans);
+        AppState.PruneExpiredTemporaryMarketWorldBlacklists();
+        return AppState.ProcurementShoppingPlans;
     }
 
     private ProcurementEvidenceSummary GetEvidenceSummary()
@@ -97,6 +99,14 @@
 
     private Severity GetProcurementNoticeSeverity(ProcurementEvidenceSummary evidenceSummary)
     {
+        var overlaySummary = AcquisitionPlanningService.GetProcurementEvidenceSummary(
+            AppState.CurrentPlan,
+            AppState.ProcurementShoppingPlans);
+        if (overlaySummary.HasCompleteActiveEvidence)
+        {
+            return Severity.Info;
+        }
+
         if (!CanAnalyze() || evidenceSummary.ActiveItemsMissingEvidence > 0)
         {
             return Severity.Warning;
@@ -126,6 +136,14 @@
         {
             if (evidenceSummary.ActiveItemsMissingEvidence > 0)
             {
+                var overlaySummary = AcquisitionPlanningService.GetProcurementEvidenceSummary(
+                    AppState.CurrentPlan,
+                    AppState.ProcurementShoppingPlans);
+                if (overlaySummary.HasCompleteActiveEvidence)
+                {
+                    return $"Using procurement-only market data for {overlaySummary.ActiveProcurementItemCount} active items. Run Market Analysis to update full comparison.";
+                }
+
                 return $"{evidenceSummary.ActiveItemsMissingEvidence} active procurement items need market evidence.";
             }
 
@@ -136,6 +154,14 @@
             }
 
             return message;
+        }
+
+        var procurementOverlaySummary = AcquisitionPlanningService.GetProcurementEvidenceSummary(
+            AppState.CurrentPlan,
+            AppState.ProcurementShoppingPlans);
+        if (procurementOverlaySummary.HasCompleteActiveEvidence)
+        {
+            return $"Using procurement-only market data for {procurementOverlaySummary.ActiveProcurementItemCount} active items. Run Market Analysis to update full comparison.";
         }
 
         return "Ready to fetch active procurement prices.";
@@ -151,34 +177,44 @@
 
         try
         {
-            var materials = GetBuyItems();
             var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+            var executionOptions = MarketAnalysisExecutionOptions.Interactive;
+            var scope = AppState.ProcurementSearchEntireRegion
+                ? MarketFetchScope.EntireRegion
+                : MarketFetchScope.SelectedDataCenter;
 
-            // Use existing market analysis results if available and data center matches
-            List<DetailedShoppingPlan> shoppingPlans;
+            AppState.SetStatus("Selecting procurement market evidence...", busy: true);
+            var selection = AcquisitionPlanningService.SelectActiveProcurementEvidence(
+                AppState.CurrentPlan,
+                AppState.ShoppingPlans,
+                scope,
+                AppState.SelectedDataCenter);
 
-            if (CanReuseCurrentProcurementEvidence())
+            var refreshedPlans = new List<DetailedShoppingPlan>();
+            if (selection.MissingItems.Count > 0)
             {
-                // Reuse existing market analysis
-                AppState.SetStatus("Using existing market analysis...", busy: true);
-                var reusablePlans = GetProcurementEvidenceForCurrentScope();
-                shoppingPlans = MarketShoppingService.OptimizeProcurementRoute(
-                    reusablePlans,
-                    CreateProcurementMarketConfig(),
-                    AppState.ProcurementEnableSplitWorldPurchases);
-
-                MergeShoppingPlans(shoppingPlans);
-                AppState.NotifyShoppingListChanged();
-            }
-            else
-            {
-                AppState.SetStatus("Refreshing active procurement market data...", busy: true);
-                shoppingPlans = await AnalyzeActiveProcurementItemsAsync(materials, progress);
-
-                MergeShoppingPlans(shoppingPlans);
-                AppState.NotifyShoppingListChanged();
+                AppState.SetStatus($"Fetching procurement prices for {selection.MissingItems.Count} active items...", busy: true);
+                refreshedPlans = await AnalyzeMarketItemsAsync(
+                    selection.MissingItems.ToList(),
+                    scope,
+                    progress,
+                    executionOptions);
             }
 
+            var procurementEvidence = AcquisitionPlanningService.MergeActiveProcurementEvidence(
+                AppState.CurrentPlan,
+                selection.ReusablePlans,
+                refreshedPlans);
+            var scopedEvidence = PrepareProcurementEvidenceForCurrentScope(procurementEvidence);
+            AppState.SetStatus($"Optimizing procurement route for {scopedEvidence.Count} items...", busy: true);
+            var shoppingPlans = await MarketShoppingService.OptimizeProcurementRouteAsync(
+                scopedEvidence,
+                CreateProcurementMarketConfig(),
+                AppState.ProcurementEnableSplitWorldPurchases,
+                executionOptions,
+                progress);
+
+            AppState.ProcurementShoppingPlans = shoppingPlans;
             AppState.NotifyShoppingListChanged();
 
             AppState.EndOperation("Shopping plans generated!");
@@ -195,80 +231,39 @@
         }
     }
 
-    private async Task<List<DetailedShoppingPlan>> AnalyzeActiveProcurementItemsAsync(
-        List<MaterialAggregate> materials,
-        IProgress<string> progress)
+    private List<MaterialAggregate> GetMarketAnalysisItems()
     {
-        if (AppState.ProcurementSearchEntireRegion)
-        {
-            var config = CreateProcurementMarketConfig();
-            var evidence = await MarketEvidenceLoader.LoadAsync(
-                MarketCache,
-                materials.Select(material => material.ItemId),
-                MarketFetchScope.EntireRegion,
-                AppState.SelectedDataCenter,
-                AppState.SelectedRegion,
-                progress: progress);
-            var evidencePlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
-                new MarketAnalysisRequest
-                {
-                    Items = materials,
-                    Evidence = evidence,
-                    RecommendationMode = AppState.ProcurementRecommendationMode,
-                    AnalysisConfig = config,
-                    BlacklistedMarketWorlds = AppState.TemporarilyBlacklistedMarketWorlds
-                },
-                progress,
-                ct: default);
+        return AcquisitionPlanningService.GetMarketAnalysisCandidates(AppState.CurrentPlan)
+            .Where(m => m.TotalQuantity > 0)
+            .ToList();
+    }
 
-            return MarketShoppingService.OptimizeProcurementRoute(
-                evidencePlans,
-                config,
-                AppState.ProcurementEnableSplitWorldPurchases);
-        }
-
-        var selectedDcEvidence = await MarketEvidenceLoader.LoadAsync(
+    private async Task<List<DetailedShoppingPlan>> AnalyzeMarketItemsAsync(
+        List<MaterialAggregate> materials,
+        MarketFetchScope scope,
+        IProgress<string> progress,
+        MarketAnalysisExecutionOptions executionOptions)
+    {
+        var evidence = await MarketEvidenceLoader.LoadAsync(
             MarketCache,
             materials.Select(material => material.ItemId),
-            MarketFetchScope.SelectedDataCenter,
+            scope,
             AppState.SelectedDataCenter,
             AppState.SelectedRegion,
             progress: progress);
-
-        if (AppState.ProcurementEnableSplitWorldPurchases)
-        {
-            var config = CreateProcurementMarketConfig();
-
-            var evidencePlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
-                new MarketAnalysisRequest
-                {
-                    Items = materials,
-                    Evidence = selectedDcEvidence,
-                    RecommendationMode = AppState.ProcurementRecommendationMode,
-                    AnalysisConfig = config,
-                    BlacklistedWorlds = AppState.TemporarilyBlacklistedWorlds
-                },
-                progress);
-
-            return MarketShoppingService.OptimizeProcurementRoute(
-                evidencePlans,
-                config,
-                includeSplitPurchases: true);
-        }
 
         var plans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
             new MarketAnalysisRequest
             {
                 Items = materials,
-                Evidence = selectedDcEvidence,
-                RecommendationMode = AppState.ProcurementRecommendationMode,
-                BlacklistedWorlds = AppState.TemporarilyBlacklistedWorlds
+                Evidence = evidence,
+                RecommendationMode = AppState.ProcurementRecommendationMode
             },
-            progress);
+            progress,
+            executionOptions: executionOptions);
 
-        return MarketShoppingService.OptimizeProcurementRoute(
-            plans,
-            includeSplitPurchases: false);
+        MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, plans);
+        return plans;
     }
 
     private MarketAnalysisConfig CreateProcurementMarketConfig()
@@ -290,7 +285,9 @@
             return false;
         }
 
-        var activePlans = GetProcurementShoppingPlans();
+        var activePlans = AcquisitionPlanningService.FilterShoppingPlansForActiveProcurement(
+            AppState.CurrentPlan,
+            AppState.ShoppingPlans);
         if (AppState.ProcurementSearchEntireRegion)
         {
             return activePlans.All(HasRegionWideEvidence);
@@ -301,7 +298,24 @@
 
     private List<DetailedShoppingPlan> GetProcurementEvidenceForCurrentScope()
     {
-        var activePlans = GetProcurementShoppingPlans();
+        var activePlans = AcquisitionPlanningService.FilterShoppingPlansForActiveProcurement(
+            AppState.CurrentPlan,
+            AppState.ShoppingPlans);
+        return PrepareProcurementEvidenceForCurrentScope(activePlans);
+    }
+
+    private List<DetailedShoppingPlan> PrepareProcurementEvidenceForCurrentScope(
+        IEnumerable<DetailedShoppingPlan> sourcePlans)
+    {
+        var activePlans = AcquisitionPlanningService.FilterShoppingPlansForActiveProcurement(
+            AppState.CurrentPlan,
+            sourcePlans);
+        activePlans = MarketAnalysisPlanAdjuster.ExcludeWorlds(
+            activePlans,
+            AppState.GetActiveBlacklistedMarketWorlds());
+        activePlans = MarketAnalysisPlanAdjuster.ExcludeItemWorlds(
+            activePlans,
+            AppState.TemporarilyExcludedItemWorlds);
         if (AppState.ProcurementSearchEntireRegion)
         {
             return activePlans;
@@ -414,15 +428,6 @@
                string.Equals(dataCenter, selectedDataCenter, StringComparison.OrdinalIgnoreCase);
     }
 
-    private void MergeShoppingPlans(List<DetailedShoppingPlan> activePlans)
-    {
-        var activeItemIds = activePlans.Select(plan => plan.ItemId).ToHashSet();
-        AppState.ShoppingPlans = AppState.ShoppingPlans
-            .Where(plan => !activeItemIds.Contains(plan.ItemId))
-            .Concat(activePlans)
-            .ToList();
-    }
-
     private void GoToPlanner()
     {
         // Use relative path (no leading slash) so it resolves against base href correctly
@@ -441,35 +446,115 @@
     /// </summary>
     private async Task ReanalyzeWithoutWorldAsync(WorldProcurementCardModel world)
     {
-        AppState.TemporarilyBlacklistedMarketWorlds.Add(new MarketWorldKey(world.DataCenter, world.WorldName));
-        AppState.TemporarilyBlacklistedWorlds.Add(world.WorldName);
+        AppState.BlacklistMarketWorldTemporarily(new MarketWorldKey(world.DataCenter, world.WorldName));
 
-        Snackbar.Add($"Re-analyzing without {world.WorldName} ({world.DataCenter})...", Severity.Info);
-
-        // Clear current shopping plans to force recalculation with blacklist
-        AppState.ShoppingPlans = new List<DetailedShoppingPlan>();
+        Snackbar.Add($"Re-analyzing without {world.WorldName} ({world.DataCenter}) for {AppState.TemporaryWorldBlacklistDurationMinutes} minutes...", Severity.Info);
 
         // Re-run the analysis
         await RunAnalysisAsync();
 
         // Show results
-        var blacklistedCount = AppState.TemporarilyBlacklistedMarketWorlds.Count;
+        var blacklistedCount = AppState.GetActiveBlacklistedMarketWorlds().Count;
         if (blacklistedCount > 0)
         {
             Snackbar.Add($"Analysis complete. Excluded worlds: {FormatBlacklistedMarketWorlds()}", Severity.Success);
         }
     }
 
+    private async Task ExcludeWorldForItemAsync(WorldItemProcurementAction action)
+    {
+        var world = action.World;
+        var item = action.Item;
+        AppState.ExcludeItemWorldTemporarily(
+            item.ItemId,
+            new MarketWorldKey(world.DataCenter, world.WorldName));
+
+        Snackbar.Add($"Removed {world.WorldName} listings from {item.ItemName} and re-running procurement.", Severity.Info);
+        await RunAnalysisAsync();
+    }
+
+    private async Task RefreshItemMarketDataAsync(WorldItemProcurementAction action)
+    {
+        var candidate = AcquisitionPlanningService.GetMarketAnalysisCandidates(AppState.CurrentPlan)
+            .FirstOrDefault(item => item.ItemId == action.Item.ItemId);
+        if (candidate == null)
+        {
+            Snackbar.Add($"Could not find {action.Item.ItemName} in the market analysis candidates.", Severity.Warning);
+            return;
+        }
+
+        AppState.BeginOperation("Market Refresh", $"Refreshing {candidate.Name}...");
+        try
+        {
+            var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+            var scope = AppState.SearchEntireRegion
+                ? MarketFetchScope.EntireRegion
+                : MarketFetchScope.SelectedDataCenter;
+            var evidence = await MarketEvidenceLoader.LoadAsync(
+                MarketCache,
+                [candidate.ItemId],
+                scope,
+                AppState.SelectedDataCenter,
+                AppState.SelectedRegion,
+                maxAge: TimeSpan.Zero,
+                progress: progress);
+            var refreshedPlans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+                new MarketAnalysisRequest
+                {
+                    Items = [candidate],
+                    Evidence = evidence,
+                    RecommendationMode = AppState.RecommendationMode
+                },
+                progress,
+                executionOptions: MarketAnalysisExecutionOptions.Interactive);
+            MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, refreshedPlans);
+
+            if (refreshedPlans.Count == 0)
+            {
+                AppState.EndOperation($"No refreshed market data was returned for {candidate.Name}.");
+                Snackbar.Add($"No refreshed market data was returned for {candidate.Name}.", Severity.Warning);
+                return;
+            }
+
+            AppState.ShoppingPlans = MarketAnalysisPlanAdjuster.ReplacePlan(
+                AppState.ShoppingPlans,
+                refreshedPlans[0]);
+            await SaveMarketAnalysisIfCurrentPlanAsync();
+
+            Snackbar.Add($"Refreshed {candidate.Name}; re-running procurement.", Severity.Info);
+            await RunAnalysisAsync();
+        }
+        catch (Exception ex)
+        {
+            AppState.SetStatus($"Item refresh failed: {ex.Message}");
+            Snackbar.Add($"Failed to refresh {action.Item.ItemName}: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task SaveMarketAnalysisIfCurrentPlanAsync()
+    {
+        if (!string.IsNullOrEmpty(AppState.CurrentPlanId))
+        {
+            await IndexedDb.SaveMarketAnalysisAsync(
+                AppState.CurrentPlanId,
+                AppState.ShoppingPlans,
+                AppState.RecommendationMode);
+        }
+
+        AppState.NotifyShoppingListChanged();
+    }
+
     private string FormatBlacklistedMarketWorlds()
     {
-        if (AppState.TemporarilyBlacklistedMarketWorlds.Count == 0)
+        var activeWorlds = AppState.GetActiveBlacklistedMarketWorlds();
+        if (activeWorlds.Count == 0)
         {
-            return string.Join(", ", AppState.TemporarilyBlacklistedWorlds);
+            return string.Empty;
         }
 
         return string.Join(
             ", ",
-            AppState.TemporarilyBlacklistedMarketWorlds
+            activeWorlds
                 .OrderBy(world => world.DataCenter)
                 .ThenBy(world => world.WorldName)
                 .Select(world => $"{world.WorldName} ({world.DataCenter})"));

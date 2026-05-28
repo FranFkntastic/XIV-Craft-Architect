@@ -80,7 +80,18 @@ public class AppState
     
     // Procurement Planner State
     public List<MarketShoppingItem> ShoppingItems { get; set; } = new();
+
+    /// <summary>
+    /// Full market analysis evidence for every market-listable candidate in the recipe plan.
+    /// Procurement may derive from this list, but must not delete or replace entries for inactive choices.
+    /// </summary>
     public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+
+    /// <summary>
+    /// Mutable procurement overlay derived from ShoppingPlans and current acquisition choices.
+    /// This may be filtered, re-routed, or affected by temporary world exclusions.
+    /// </summary>
+    public List<DetailedShoppingPlan> ProcurementShoppingPlans { get; set; } = new();
     public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; private set; } = Array.Empty<MarketDataUnavailableItem>();
     public RecommendationMode RecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
     
@@ -95,6 +106,12 @@ public class AppState
     /// Structured temporary market-world exclusions for region-wide procurement analysis.
     /// </summary>
     public HashSet<MarketWorldKey> TemporarilyBlacklistedMarketWorlds { get; set; } = new();
+
+    public MarketWorldBlacklist TemporaryMarketWorldBlacklist { get; } = new();
+
+    public HashSet<MarketItemWorldKey> TemporarilyExcludedItemWorlds { get; set; } = new();
+
+    public int TemporaryWorldBlacklistDurationMinutes { get; set; } = 60;
     
     // Auto-expand item ID when navigating from procurement to market analysis
     public int? AutoExpandItemId { get; set; }
@@ -169,6 +186,60 @@ public class AppState
     public void ClearUnavailableMarketItems()
     {
         SetUnavailableMarketItems(Array.Empty<MarketDataUnavailableItem>());
+    }
+
+    public void BlacklistMarketWorldTemporarily(MarketWorldKey world)
+    {
+        var duration = TimeSpan.FromMinutes(Math.Max(1, TemporaryWorldBlacklistDurationMinutes));
+        TemporaryMarketWorldBlacklist.Add(world, duration);
+        SyncTemporaryBlacklistSets();
+        ProcurementShoppingPlans.Clear();
+        NotifyShoppingListChanged();
+    }
+
+    public void ExcludeItemWorldTemporarily(int itemId, MarketWorldKey world)
+    {
+        TemporarilyExcludedItemWorlds.Add(new MarketItemWorldKey(itemId, world));
+        ProcurementShoppingPlans.Clear();
+        NotifyShoppingListChanged();
+    }
+
+    public int ActiveTemporaryExclusionCount =>
+        GetActiveBlacklistedMarketWorlds().Count + TemporarilyExcludedItemWorlds.Count;
+
+    public HashSet<MarketWorldKey> GetActiveBlacklistedMarketWorlds()
+    {
+        SyncTemporaryBlacklistSets();
+        return TemporarilyBlacklistedMarketWorlds.ToHashSet();
+    }
+
+    public HashSet<string> GetActiveBlacklistedWorldNames()
+    {
+        SyncTemporaryBlacklistSets();
+        return TemporarilyBlacklistedWorlds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    public void ClearTemporaryMarketWorldBlacklists()
+    {
+        TemporaryMarketWorldBlacklist.Clear();
+        TemporarilyBlacklistedMarketWorlds.Clear();
+        TemporarilyBlacklistedWorlds.Clear();
+        TemporarilyExcludedItemWorlds.Clear();
+        ProcurementShoppingPlans.Clear();
+        NotifyShoppingListChanged();
+    }
+
+    public bool PruneExpiredTemporaryMarketWorldBlacklists()
+    {
+        var previousCount = TemporarilyBlacklistedMarketWorlds.Count;
+        SyncTemporaryBlacklistSets();
+        if (TemporarilyBlacklistedMarketWorlds.Count == previousCount)
+        {
+            return false;
+        }
+
+        ProcurementShoppingPlans.Clear();
+        return true;
     }
     
     public void NotifySavedPlansChanged()
@@ -295,6 +366,7 @@ public class AppState
         ProjectItems.Clear();
         ShoppingItems.Clear();
         ShoppingPlans.Clear();
+        ProcurementShoppingPlans.Clear();
         ClearUnavailableMarketItems();
         CurrentPlanId = null;  // Reset plan ID for new plan
         CurrentPlanName = null;
@@ -319,6 +391,7 @@ public class AppState
         }).ToList();
         
         CurrentPlan = deserializedPlan;
+        ProcurementShoppingPlans.Clear();
         
         // Track the loaded plan ID for save-overwrite behavior
         CurrentPlanId = storedPlan.Id;
@@ -407,6 +480,14 @@ public class AppState
     {
         AutoSaveTimer?.Dispose();
         AutoSaveTimer = null;
+    }
+
+    private void SyncTemporaryBlacklistSets()
+    {
+        TemporarilyBlacklistedMarketWorlds = TemporaryMarketWorldBlacklist.GetActiveWorlds();
+        TemporarilyBlacklistedWorlds = TemporarilyBlacklistedMarketWorlds
+            .Select(world => world.WorldName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 }
 

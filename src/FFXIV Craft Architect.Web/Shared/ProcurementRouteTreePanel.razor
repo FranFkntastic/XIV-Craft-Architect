@@ -128,6 +128,8 @@
 @code {
     [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
     [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
+    [Parameter] public EventCallback<WorldItemProcurementAction> OnExcludeWorldForItemRequested { get; set; }
+    [Parameter] public EventCallback<WorldItemProcurementAction> OnRefreshItemRequested { get; set; }
 
     private readonly HashSet<string> _expandedWorlds = new(StringComparer.OrdinalIgnoreCase);
 
@@ -194,23 +196,38 @@
                         <span>@(world.IsVendor || !item.IsSplitPurchase ? item.SimpleQuantityDisplay : item.QuantityDisplay)</span>
                         <span>@item.PriceDisplay</span>
                         <span class="pp-item-total">@item.TotalCost.ToString("N0")g</span>
-                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
-                                       Size="Size.Small"
-                                       Class="pp-copy-button"
-                                       Title="Copy item name"
-                                       OnClick="() => CopyItemName(item.ItemName)" />
+                        <span class="pp-item-actions">
+                            @if (!world.IsVendor)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Block"
+                                               Size="Size.Small"
+                                               Class="pp-copy-button"
+                                               Title="Exclude this world's listings for this item"
+                                               OnClick="() => ExcludeWorldForItem(world, item)" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                               Size="Size.Small"
+                                               Class="pp-copy-button"
+                                               Title="Refresh market data for this item"
+                                               OnClick="() => RefreshItem(world, item)" />
+                            }
+                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                           Size="Size.Small"
+                                           Class="pp-copy-button"
+                                           Title="Copy item name"
+                                           OnClick="() => CopyItemName(item.ItemName)" />
+                        </span>
                     </div>
                 }
 
-                @if (world.IsCongested && !world.IsVendor)
+                @if (!world.IsVendor)
                 {
                     <div class="pp-world-warning">
-                        <span>Cannot travel to congested worlds.</span>
+                        <span>@(world.IsCongested ? "Cannot travel to congested worlds." : "World unavailable or listings stale?")</span>
                         <MudButton Size="Size.Small"
                                    Variant="Variant.Outlined"
                                    Color="Color.Warning"
                                    OnClick="() => ReanalyzeWithoutWorld(world)">
-                            Re-analyze without @world.WorldName
+                            Exclude @world.WorldName
                         </MudButton>
                     </div>
                 }
@@ -255,6 +272,24 @@
     private async Task ReanalyzeWithoutWorld(WorldProcurementCardModel world)
     {
         await OnReanalyzeWithoutWorldRequested.InvokeAsync(world);
+    }
+
+    private async Task ExcludeWorldForItem(WorldProcurementCardModel world, WorldItemPurchase item)
+    {
+        await OnExcludeWorldForItemRequested.InvokeAsync(new WorldItemProcurementAction
+        {
+            World = world,
+            Item = item
+        });
+    }
+
+    private async Task RefreshItem(WorldProcurementCardModel world, WorldItemPurchase item)
+    {
+        await OnRefreshItemRequested.InvokeAsync(new WorldItemProcurementAction
+        {
+            World = world,
+            Item = item
+        });
     }
 
     private async Task CopyItemName(string itemName)
