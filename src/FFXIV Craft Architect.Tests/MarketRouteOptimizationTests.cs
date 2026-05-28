@@ -199,6 +199,49 @@ public class MarketRouteOptimizationTests
         Assert.Null(result.RecommendedSplit);
     }
 
+    [Fact]
+    public async Task OptimizeProcurementRouteAsync_MatchesSynchronousRouteChoices()
+    {
+        var plans = new[]
+        {
+            Plan(1, "First Cheapest", 10,
+                World("Aether", "Siren", 10_000, 10, Listing(10, 1_000, "Siren First")),
+                World("Crystal", "Balmung", 100, 10, Listing(10, 10, "Balmung First"))),
+            Plan(2, "Second Cheapest", 10,
+                World("Aether", "Siren", 10_000, 10, Listing(10, 1_000, "Siren Second")),
+                World("Primal", "Leviathan", 1, 1, Listing(10, 1, "Leviathan Second")))
+        };
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+        var config = new MarketAnalysisConfig { TravelTolerance = 11 };
+        var options = new MarketAnalysisExecutionOptions { YieldEveryItems = 1 };
+
+        var sync = service.OptimizeProcurementRoute(plans, config, includeSplitPurchases: false);
+        var async = await service.OptimizeProcurementRouteAsync(
+            plans,
+            config,
+            includeSplitPurchases: false,
+            executionOptions: options);
+
+        Assert.Equal(sync.Select(plan => plan.RecommendedWorld?.WorldName), async.Select(plan => plan.RecommendedWorld?.WorldName));
+        Assert.Equal(sync.Select(plan => plan.RecommendedWorld?.DataCenter), async.Select(plan => plan.RecommendedWorld?.DataCenter));
+    }
+
+    [Fact]
+    public void OptimizeProcurementRoute_WithoutAsyncWrapper_CompletesSynchronously()
+    {
+        var plans = new[]
+        {
+            Plan(1, "Synchronous Route Item", 1,
+                World("Aether", "Siren", 100, 100, Listing(1, 100, "Sync Route")))
+        };
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var optimized = service.OptimizeProcurementRoute(plans);
+
+        var result = Assert.Single(optimized);
+        Assert.Equal("Siren", result.RecommendedWorld?.WorldName);
+    }
+
     private static List<DetailedShoppingPlan> Optimize(
         IEnumerable<DetailedShoppingPlan> plans,
         int travelTolerance,

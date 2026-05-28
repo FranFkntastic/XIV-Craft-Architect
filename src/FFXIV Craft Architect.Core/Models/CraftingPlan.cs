@@ -664,16 +664,6 @@ public class PlanNode
     public void SetBuyMode(bool buy)
     {
         Source = buy ? AcquisitionSource.MarketBuyNq : AcquisitionSource.Craft;
-        
-        if (buy)
-        {
-            // If buying this item, its children are no longer needed
-            // Keep them for reference but mark as resolved
-            foreach (var child in Children)
-            {
-                child.Quantity = 0;
-            }
-        }
     }
     
     public override string ToString() => $"{Name} x{Quantity}";

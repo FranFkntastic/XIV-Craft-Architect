@@ -127,6 +127,8 @@ public readonly record struct MarketWorldKey
     private static string NormalizeKeyPart(string value) => (value ?? string.Empty).Trim().ToUpperInvariant();
 }
 
+public readonly record struct MarketItemWorldKey(int ItemId, MarketWorldKey World);
+
 /// <summary>
 /// A candidate purchase route for one market choice.
 /// </summary>
@@ -894,6 +896,13 @@ public class WorldItemPurchase
     /// Contains vendor name and location for display in procurement cards.
     /// </summary>
     public VendorInfo? Vendor { get; set; }
+}
+
+public sealed class WorldItemProcurementAction
+{
+    public WorldProcurementCardModel World { get; init; } = new();
+
+    public WorldItemPurchase Item { get; init; } = new();
 }
 
 /// <summary>

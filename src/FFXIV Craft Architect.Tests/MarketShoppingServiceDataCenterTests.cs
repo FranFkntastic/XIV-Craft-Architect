@@ -249,6 +249,89 @@ public class MarketShoppingServiceDataCenterTests
     }
 
     [Fact]
+    public async Task CalculateDetailedShoppingPlansAsync_WithExecutionOptionsMatchesDefaultResults()
+    {
+        var cache = new Mock<IMarketCacheService>(MockBehavior.Strict);
+        var service = new MarketShoppingService(cache.Object);
+        var materials = new List<MaterialAggregate>
+        {
+            new() { ItemId = 123, Name = "Yielded Evidence Item", TotalQuantity = 1 }
+        };
+        var evidence = CreateEvidence(
+            new CachedMarketData
+            {
+                ItemId = 123,
+                DataCenter = "Aether",
+                DCAveragePrice = 50,
+                Worlds =
+                {
+                    new CachedWorldData
+                    {
+                        WorldName = "Siren",
+                        Listings =
+                        {
+                            new CachedListing { Quantity = 1, PricePerUnit = 50, RetainerName = "Yielded Retainer" }
+                        }
+                    }
+                }
+            },
+            [(123, "Aether")]);
+        var request = new MarketAnalysisRequest
+        {
+            Items = materials,
+            Evidence = evidence
+        };
+        var options = new MarketAnalysisExecutionOptions { YieldEveryItems = 1 };
+
+        var defaultPlans = await service.CalculateDetailedShoppingPlansAsync(request);
+        var yieldedPlans = await service.CalculateDetailedShoppingPlansAsync(request, executionOptions: options);
+
+        var defaultPlan = Assert.Single(defaultPlans);
+        var yieldedPlan = Assert.Single(yieldedPlans);
+        Assert.Equal(defaultPlan.RecommendedWorld?.WorldName, yieldedPlan.RecommendedWorld?.WorldName);
+        Assert.Equal(defaultPlan.RecommendedWorld?.DataCenter, yieldedPlan.RecommendedWorld?.DataCenter);
+        Assert.Equal(defaultPlan.RecommendedWorld?.TotalCost, yieldedPlan.RecommendedWorld?.TotalCost);
+    }
+
+    [Fact]
+    public void CalculateDetailedShoppingPlansAsync_WithoutExecutionOptions_CompletesSynchronously()
+    {
+        var cache = new Mock<IMarketCacheService>(MockBehavior.Strict);
+        var service = new MarketShoppingService(cache.Object);
+        var materials = new List<MaterialAggregate>
+        {
+            new() { ItemId = 123, Name = "Synchronous Evidence Item", TotalQuantity = 1 }
+        };
+        var evidence = CreateEvidence(
+            new CachedMarketData
+            {
+                ItemId = 123,
+                DataCenter = "Aether",
+                DCAveragePrice = 50,
+                Worlds =
+                {
+                    new CachedWorldData
+                    {
+                        WorldName = "Siren",
+                        Listings =
+                        {
+                            new CachedListing { Quantity = 1, PricePerUnit = 50, RetainerName = "Sync Retainer" }
+                        }
+                    }
+                }
+            },
+            [(123, "Aether")]);
+
+        var task = service.CalculateDetailedShoppingPlansAsync(new MarketAnalysisRequest
+        {
+            Items = materials,
+            Evidence = evidence
+        });
+
+        Assert.True(task.IsCompleted);
+    }
+
+    [Fact]
     public async Task CalculateDetailedShoppingPlansMultiDCAsync_StructuredBlacklistExcludesOnlyMatchingDataCenterWorld()
     {
         var cache = new Mock<IMarketCacheService>();

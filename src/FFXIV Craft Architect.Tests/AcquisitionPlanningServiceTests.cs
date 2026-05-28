@@ -19,6 +19,20 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void GetMarketAnalysisCandidates_IncludesChildrenAfterIntermediateIsSetToBuyMode()
+    {
+        var plan = CreatePlanWithBoughtIntermediate();
+        var intermediate = plan.RootItems[0].Children[0];
+
+        intermediate.SetBuyMode(true);
+
+        var candidates = AcquisitionPlanningService.GetMarketAnalysisCandidates(plan);
+
+        Assert.Contains(candidates, item => item.ItemId == 200 && item.TotalQuantity == 2);
+        Assert.Contains(candidates, item => item.ItemId == 300 && item.TotalQuantity == 6);
+    }
+
+    [Fact]
     public void GetActiveProcurementItems_PrunesChildrenWhenParentIsBought()
     {
         var plan = CreatePlanWithBoughtIntermediate();
@@ -197,6 +211,139 @@ public class AcquisitionPlanningServiceTests
             marketPlans);
 
         Assert.True(canReuse);
+    }
+
+    [Fact]
+    public void GetActiveProcurementItemsMissingEvidence_ReturnsOnlyActiveItemsWithoutUsableEvidence()
+    {
+        var plan = CreatePlanWithBoughtIntermediate();
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 300,
+                Name = "Raw Material",
+                QuantityNeeded = 6,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 60,
+                    TotalQuantityPurchased = 6
+                }
+            }
+        };
+
+        var missingItems = AcquisitionPlanningService.GetActiveProcurementItemsMissingEvidence(
+            plan,
+            marketPlans);
+
+        var missingItem = Assert.Single(missingItems);
+        Assert.Equal(200, missingItem.ItemId);
+        Assert.Equal("Intermediate", missingItem.Name);
+        Assert.Equal(2, missingItem.TotalQuantity);
+    }
+
+    [Fact]
+    public void GetActiveProcurementItemsMissingEvidence_TreatsErroredActivePlanAsMissing()
+    {
+        var plan = CreatePlanWithBoughtIntermediate();
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 200,
+                Name = "Intermediate",
+                QuantityNeeded = 2,
+                Error = "No market data in cache"
+            }
+        };
+
+        var missingItems = AcquisitionPlanningService.GetActiveProcurementItemsMissingEvidence(
+            plan,
+            marketPlans);
+
+        var missingItem = Assert.Single(missingItems);
+        Assert.Equal(200, missingItem.ItemId);
+    }
+
+    [Fact]
+    public void SelectActiveProcurementEvidence_TreatsSelectedDcMismatchAsMissing()
+    {
+        var plan = CreatePlanWithBoughtIntermediate();
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            CreateMarketPlan(200, "Intermediate", "Primal", "Leviathan")
+        };
+
+        var selection = AcquisitionPlanningService.SelectActiveProcurementEvidence(
+            plan,
+            marketPlans,
+            MarketFetchScope.SelectedDataCenter,
+            "Aether");
+
+        Assert.Empty(selection.ReusablePlans);
+        var missingItem = Assert.Single(selection.MissingItems);
+        Assert.Equal(200, missingItem.ItemId);
+    }
+
+    [Fact]
+    public void SelectActiveProcurementEvidence_TreatsSingleDcEvidenceAsMissingForRegionScope()
+    {
+        var plan = CreatePlanWithBoughtIntermediate();
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            CreateMarketPlan(200, "Intermediate", "Aether", "Siren")
+        };
+
+        var selection = AcquisitionPlanningService.SelectActiveProcurementEvidence(
+            plan,
+            marketPlans,
+            MarketFetchScope.EntireRegion,
+            "Aether");
+
+        Assert.Empty(selection.ReusablePlans);
+        var missingItem = Assert.Single(selection.MissingItems);
+        Assert.Equal(200, missingItem.ItemId);
+    }
+
+    [Fact]
+    public void SelectActiveProcurementEvidence_ReusesActivePlanWithRequiredScope()
+    {
+        var plan = CreatePlanWithBoughtIntermediate();
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            CreateMarketPlan(200, "Intermediate", "Aether", "Siren"),
+            CreateMarketPlan(300, "Raw Material", "Aether", "Siren")
+        };
+
+        var selection = AcquisitionPlanningService.SelectActiveProcurementEvidence(
+            plan,
+            marketPlans,
+            MarketFetchScope.SelectedDataCenter,
+            "Aether");
+
+        var reusablePlan = Assert.Single(selection.ReusablePlans);
+        Assert.Equal(200, reusablePlan.ItemId);
+        Assert.Empty(selection.MissingItems);
+    }
+
+    [Fact]
+    public void MergeActiveProcurementEvidence_PrefersFetchedMissingPlansAndDoesNotIncludeInactiveCandidates()
+    {
+        var plan = CreatePlanWithBoughtIntermediate();
+        var staleActivePlan = CreateMarketPlan(200, "Intermediate", "Aether", "Siren", totalCost: 500);
+        var inactiveCandidatePlan = CreateMarketPlan(300, "Raw Material", "Aether", "Siren", totalCost: 100);
+        var fetchedActivePlan = CreateMarketPlan(200, "Intermediate", "Aether", "Adamantoise", totalCost: 200);
+
+        var merged = AcquisitionPlanningService.MergeActiveProcurementEvidence(
+            plan,
+            [staleActivePlan, inactiveCandidatePlan],
+            [fetchedActivePlan]);
+
+        var mergedPlan = Assert.Single(merged);
+        Assert.Equal(200, mergedPlan.ItemId);
+        Assert.Equal("Adamantoise", mergedPlan.RecommendedWorld?.WorldName);
+        Assert.Equal(200, mergedPlan.RecommendedWorld?.TotalCost);
     }
 
     [Fact]
@@ -594,6 +741,38 @@ public class AcquisitionPlanningServiceTests
         return new CraftingPlan
         {
             RootItems = new List<PlanNode> { root }
+        };
+    }
+
+    private static DetailedShoppingPlan CreateMarketPlan(
+        int itemId,
+        string name,
+        string dataCenter,
+        string worldName,
+        long totalCost = 100)
+    {
+        return new DetailedShoppingPlan
+        {
+            ItemId = itemId,
+            Name = name,
+            QuantityNeeded = 2,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                DataCenter = dataCenter,
+                WorldName = worldName,
+                TotalCost = totalCost,
+                TotalQuantityPurchased = 2
+            },
+            WorldOptions =
+            [
+                new WorldShoppingSummary
+                {
+                    DataCenter = dataCenter,
+                    WorldName = worldName,
+                    TotalCost = totalCost,
+                    TotalQuantityPurchased = 2
+                }
+            ]
         };
     }
 }

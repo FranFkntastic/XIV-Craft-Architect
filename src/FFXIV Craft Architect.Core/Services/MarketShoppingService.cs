@@ -105,7 +105,8 @@ public class MarketShoppingService
         CancellationToken ct = default,
         RecommendationMode mode = RecommendationMode.MinimizeTotalCost,
         MarketAnalysisConfig? config = null,
-        HashSet<string>? blacklistedWorlds = null)
+        HashSet<string>? blacklistedWorlds = null,
+        MarketAnalysisExecutionOptions? executionOptions = null)
     {
         config ??= new MarketAnalysisConfig();  // Use defaults
         blacklistedWorlds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -134,7 +135,8 @@ public class MarketShoppingService
                 BlacklistedWorlds = blacklistedWorlds
             },
             progress,
-            ct);
+            ct,
+            executionOptions);
     }
 
     /// <summary>
@@ -148,7 +150,8 @@ public class MarketShoppingService
         IProgress<string>? progress = null,
         CancellationToken ct = default,
         MarketAnalysisConfig? config = null,
-        HashSet<string>? blacklistedWorlds = null)
+        HashSet<string>? blacklistedWorlds = null,
+        MarketAnalysisExecutionOptions? executionOptions = null)
     {
         config ??= new MarketAnalysisConfig();
         blacklistedWorlds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -156,10 +159,16 @@ public class MarketShoppingService
         // Pass 1: Calculate basic plans for all items
         progress?.Report("Calculating base recommendations...");
         var plans = await CalculateDetailedShoppingPlansAsync(marketItems, dataCenter, progress, ct, 
-            RecommendationMode.MinimizeTotalCost, config, blacklistedWorlds);
+            RecommendationMode.MinimizeTotalCost, config, blacklistedWorlds, executionOptions);
         
         progress?.Report("Optimizing procurement route...");
-        return OptimizeProcurementRoute(plans, config, config.EnableSplitWorld);
+        return await OptimizeProcurementRouteAsync(
+            plans,
+            config,
+            config.EnableSplitWorld,
+            executionOptions,
+            progress,
+            ct);
     }
 
     /// <summary>
@@ -170,6 +179,42 @@ public class MarketShoppingService
         IEnumerable<DetailedShoppingPlan> evidencePlans,
         MarketAnalysisConfig? config = null,
         bool includeSplitPurchases = false)
+    {
+        return OptimizeProcurementRouteCoreAsync(
+            evidencePlans,
+            config,
+            includeSplitPurchases,
+            MarketAnalysisExecutionOptions.Synchronous,
+            progress: null,
+            CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    public Task<List<DetailedShoppingPlan>> OptimizeProcurementRouteAsync(
+        IEnumerable<DetailedShoppingPlan> evidencePlans,
+        MarketAnalysisConfig? config = null,
+        bool includeSplitPurchases = false,
+        MarketAnalysisExecutionOptions? executionOptions = null,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        return OptimizeProcurementRouteCoreAsync(
+            evidencePlans,
+            config,
+            includeSplitPurchases,
+            executionOptions ?? MarketAnalysisExecutionOptions.Interactive,
+            progress,
+            ct);
+    }
+
+    private async Task<List<DetailedShoppingPlan>> OptimizeProcurementRouteCoreAsync(
+        IEnumerable<DetailedShoppingPlan> evidencePlans,
+        MarketAnalysisConfig? config,
+        bool includeSplitPurchases,
+        MarketAnalysisExecutionOptions executionOptions,
+        IProgress<string>? progress,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(evidencePlans);
 
@@ -192,12 +237,16 @@ public class MarketShoppingService
             new()
         };
 
-        foreach (var planEntry in candidatePlanIndexes)
+        for (var planIndex = 0; planIndex < candidatePlanIndexes.Count; planIndex++)
         {
+            ct.ThrowIfCancellationRequested();
+            var planEntry = candidatePlanIndexes[planIndex];
             var nextBeam = new List<ProcurementRouteSearchState>();
 
-            foreach (var state in beam)
+            for (var stateIndex = 0; stateIndex < beam.Count; stateIndex++)
             {
+                ct.ThrowIfCancellationRequested();
+                var state = beam[stateIndex];
                 var candidates = GeneratePurchaseCandidates(planEntry.Plan, state.Route)
                     .Where(c => c.IsFullyFulfilled)
                     .Where(c => includeSplitPurchases || !c.IsSplitPurchase)
@@ -217,6 +266,12 @@ public class MarketShoppingService
                 {
                     nextBeam.Add(state.WithCandidate(planEntry.Index, candidate));
                 }
+
+                var completedStates = stateIndex + 1;
+                if (executionOptions.ShouldYieldAfterItem(completedStates))
+                {
+                    await Task.Yield();
+                }
             }
 
             beam = nextBeam
@@ -225,6 +280,17 @@ public class MarketShoppingService
                 .ThenBy(s => s.TieBreakKey, StringComparer.Ordinal)
                 .Take(MaxProcurementRouteBeamWidth)
                 .ToList();
+
+            var completedItems = planIndex + 1;
+            if (executionOptions.ShouldReportProgress(completedItems))
+            {
+                progress?.Report($"Optimizing procurement route {completedItems}/{candidatePlanIndexes.Count}...");
+            }
+
+            if (executionOptions.ShouldYieldAfterItem(completedItems))
+            {
+                await Task.Yield();
+            }
         }
 
         foreach (var plan in plans)
@@ -275,20 +341,28 @@ public class MarketShoppingService
         return plans;
     }
 
-    public Task<List<DetailedShoppingPlan>> CalculateDetailedShoppingPlansAsync(
+    public async Task<List<DetailedShoppingPlan>> CalculateDetailedShoppingPlansAsync(
         MarketAnalysisRequest request,
         IProgress<string>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        MarketAnalysisExecutionOptions? executionOptions = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Evidence);
 
         var config = request.AnalysisConfig ?? new MarketAnalysisConfig();
+        var execution = executionOptions ?? MarketAnalysisExecutionOptions.Synchronous;
         var plans = new List<DetailedShoppingPlan>();
 
-        foreach (var item in request.Items)
+        for (var itemIndex = 0; itemIndex < request.Items.Count; itemIndex++)
         {
-            progress?.Report($"Analyzing {item.Name}...");
+            var item = request.Items[itemIndex];
+            var completedItems = itemIndex + 1;
+            if (execution.ShouldReportProgress(completedItems))
+            {
+                progress?.Report($"Analyzing {completedItems}/{request.Items.Count}: {item.Name}...");
+            }
+
             ct.ThrowIfCancellationRequested();
 
             try
@@ -349,9 +423,16 @@ public class MarketShoppingService
                     Error = ex.Message
                 });
             }
+            finally
+            {
+                if (execution.ShouldYieldAfterItem(completedItems))
+                {
+                    await Task.Yield();
+                }
+            }
         }
 
-        return Task.FromResult(plans);
+        return plans;
     }
 
     private static List<MarketListing> ConvertCachedDataToListings(
