@@ -18,6 +18,10 @@ dist/
 # VS Code
 .vscode/
 
+# Local IDE/run metadata
+.run/
+*.slnLaunch.user
+*.rsuser
 
 # Build results
 *.exe
@@ -43,13 +47,21 @@ settings.json
 
 # Cache files
 inventory_cache.json
+.cache/
+.tmp/
+tmp/
 
-# Agent-specific files (Kimi CLI)
+# Agent-specific files
 .kimi/
+.codex/
+.aider*
+.claude/
 
 # Build rules (agent-specific, regenerate as needed)
 .builderrules
-.obsidian/workspace.json
+
+# Local notes/workspace state
+.obsidian/
 
 # Agent documentation (regenerate as needed)
 AGENTS.md
