@@ -254,15 +254,21 @@
             AppState.SelectedRegion,
             progress: progress);
 
-        var plans = await MarketShoppingService.CalculateDetailedShoppingPlansAsync(
+        var analyses = await MarketPriceLadderAnalysisService.AnalyzeAsync(
             new MarketAnalysisRequest
             {
                 Items = materials,
                 Evidence = evidence,
-                RecommendationMode = AppState.ProcurementRecommendationMode
+                RecommendationMode = RecommendationMode.MinimizeTotalCost,
+                ExpectedWorldsByDataCenter = AppState.GetExpectedMarketWorlds(scope)
             },
             progress,
             executionOptions: executionOptions);
+        var plans = analyses
+            .Select(analysis => MarketPriceLadderAnalysisService.ProjectToShoppingPlan(
+                analysis,
+                AppState.MarketAnalysisLens))
+            .ToList();
 
         MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, plans);
         return plans;
@@ -489,7 +495,7 @@
         try
         {
             var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
-            var scope = AppState.SearchEntireRegion
+            var scope = AppState.ProcurementSearchEntireRegion
                 ? MarketFetchScope.EntireRegion
                 : MarketFetchScope.SelectedDataCenter;
             var evidence = await MarketEvidenceLoader.LoadAsync(
@@ -548,7 +554,9 @@
             await IndexedDb.SaveMarketAnalysisAsync(
                 AppState.CurrentPlanId,
                 AppState.ShoppingPlans,
-                AppState.RecommendationMode);
+                AppState.MarketItemAnalyses,
+                AppState.RecommendationMode,
+                AppState.MarketAnalysisLens);
         }
 
         AppState.NotifyShoppingListChanged();

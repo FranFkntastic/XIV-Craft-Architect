@@ -319,8 +319,9 @@ public static class AcquisitionPlanningService
     private static bool HasUsableEvidence(DetailedShoppingPlan shoppingPlan)
     {
         return string.IsNullOrWhiteSpace(shoppingPlan.Error) &&
-            (shoppingPlan.RecommendedWorld != null ||
-             shoppingPlan.RecommendedSplit?.Any() == true ||
+            ((shoppingPlan.RecommendedWorld != null &&
+              shoppingPlan.RecommendedWorld.TotalQuantityPurchased >= shoppingPlan.QuantityNeeded) ||
+             HasFulfilledRecommendedSplit(shoppingPlan, shoppingPlan.QuantityNeeded) ||
              shoppingPlan.Vendors.Any());
     }
 
@@ -559,6 +560,7 @@ public static class AcquisitionPlanningService
         if (shoppingPlan.RecommendedSplit?.Any() != true ||
             shoppingPlan.RecommendedSplit.Any(split =>
                 string.Equals(split.WorldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase)) ||
+            !HasFulfilledRecommendedSplit(shoppingPlan, quantity) ||
             shoppingPlan.SplitTotalCost is not { } splitTotalCost ||
             splitTotalCost <= 0)
         {
@@ -567,6 +569,11 @@ public static class AcquisitionPlanningService
 
         cost = ScaleEvidenceCost(splitTotalCost, quantity, shoppingPlan.QuantityNeeded);
         return true;
+    }
+
+    private static bool HasFulfilledRecommendedSplit(DetailedShoppingPlan shoppingPlan, int quantity)
+    {
+        return shoppingPlan.RecommendedSplit?.Sum(split => split.QuantityToBuy) >= quantity;
     }
 
     private static decimal ScaleEvidenceCost(long totalCost, int quantity, int quantityNeeded)

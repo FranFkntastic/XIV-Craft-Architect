@@ -68,6 +68,24 @@ public class MarketRouteScoringTests
     }
 
     [Fact]
+    public void CompareCandidates_SameRouteImpact_UsesMarketEvidencePenaltyBeforeRawGilCost()
+    {
+        var config = new MarketAnalysisConfig { TravelTolerance = 11 };
+        var currentRoute = new MarketRouteState();
+        var staleCheap = new MarketPurchaseCandidate(
+            9_000,
+            [new MarketWorldKey("Aether", "Siren")])
+        {
+            MarketEvidencePenalty = 5_000
+        };
+        var freshCostlier = new MarketPurchaseCandidate(
+            10_000,
+            [new MarketWorldKey("Aether", "Siren")]);
+
+        Assert.True(MarketRouteScoring.CompareCandidates(freshCostlier, staleCheap, currentRoute, config) < 0);
+    }
+
+    [Fact]
     public void ScoreCandidate_TravelToleranceZero_DoesNotExposeNumericScoreAsSortable()
     {
         var config = new MarketAnalysisConfig { TravelTolerance = 0 };

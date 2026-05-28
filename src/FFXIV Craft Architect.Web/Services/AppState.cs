@@ -138,7 +138,6 @@ public class AppState
     public MarketSortOption MarketSortPreference { get; set; } = MarketSortOption.ByRecommended;
 
     // Procurement Planning Settings
-    public RecommendationMode ProcurementRecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
     public bool ProcurementSearchEntireRegion { get; set; } = false;
     public bool ProcurementEnableSplitWorldPurchases { get; set; } = false;
     public int ProcurementTravelTolerance { get; set; } = 0; // 0 = shortest route, 11 = cheapest

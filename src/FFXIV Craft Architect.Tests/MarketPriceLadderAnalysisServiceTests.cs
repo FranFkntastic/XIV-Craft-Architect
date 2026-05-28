@@ -250,6 +250,46 @@ public class MarketPriceLadderAnalysisServiceTests
     }
 
     [Fact]
+    public async Task ProjectToShoppingPlan_CheaperVeryOldWorld_DoesNotOutrankFreshCompetitiveStock()
+    {
+        var service = CreateService();
+        var now = DateTime.UtcNow;
+        var analysis = Assert.Single(await service.AnalyzeAsync(CreateRequest(
+            quantityNeeded: 10,
+            worlds:
+            [
+                World("StaleWorld", [Listing(10, 900, "Old Seller")], uploadedAtUtc: now.AddHours(-12)),
+                World("FreshWorld", [Listing(10, 1_000, "Fresh Seller")], uploadedAtUtc: now.AddMinutes(-5))
+            ])));
+
+        var plan = service.ProjectToShoppingPlan(analysis, MarketAcquisitionLens.MinimumUpfrontCost);
+
+        Assert.Equal("FreshWorld", plan.RecommendedWorld?.WorldName);
+        Assert.Equal(9_000, plan.WorldOptions.Single(world => world.WorldName == "StaleWorld").TotalCost);
+        Assert.Equal(10_000, plan.WorldOptions.Single(world => world.WorldName == "FreshWorld").TotalCost);
+    }
+
+    [Fact]
+    public async Task ProjectToShoppingPlan_PartialWorldsBuildRecommendedSplitWhenTogetherTheySatisfyNeed()
+    {
+        var service = CreateService();
+        var analysis = Assert.Single(await service.AnalyzeAsync(CreateRequest(
+            quantityNeeded: 200,
+            worlds:
+            [
+                World("FirstWorld", [Listing(120, 100, "Deep Partial")]),
+                World("SecondWorld", [Listing(80, 105, "Second Partial")])
+            ])));
+
+        var plan = service.ProjectToShoppingPlan(analysis, MarketAcquisitionLens.BulkValue);
+
+        Assert.Null(plan.RecommendedWorld);
+        Assert.NotNull(plan.RecommendedSplit);
+        Assert.Equal(200, plan.RecommendedSplit.Sum(split => split.QuantityToBuy));
+        Assert.Equal(["FirstWorld", "SecondWorld"], plan.RecommendedSplit.Select(split => split.WorldName).ToArray());
+    }
+
+    [Fact]
     public async Task ProjectToShoppingPlan_MinimumUpfront_DoesNotTreatPartialDeepAsFullPurchase()
     {
         var service = CreateService();

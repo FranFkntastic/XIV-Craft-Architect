@@ -214,6 +214,71 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void HasCompleteProcurementEvidence_UnderfilledRecommendedSplit_ReturnsFalse()
+    {
+        var plan = CreatePlanWithBoughtIntermediate();
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 200,
+                Name = "Intermediate",
+                QuantityNeeded = 2,
+                RecommendedSplit =
+                [
+                    new SplitWorldPurchase
+                    {
+                        WorldName = "Siren",
+                        QuantityToBuy = 1,
+                        TotalCost = 40
+                    }
+                ]
+            }
+        };
+
+        var canReuse = AcquisitionPlanningService.HasCompleteProcurementEvidence(
+            plan,
+            marketPlans);
+
+        Assert.False(canReuse);
+    }
+
+    [Fact]
+    public void SelectActiveProcurementEvidence_UnderfilledRecommendedSplitIsMissing()
+    {
+        var plan = CreatePlanWithBoughtIntermediate();
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 200,
+                Name = "Intermediate",
+                QuantityNeeded = 2,
+                RecommendedSplit =
+                [
+                    new SplitWorldPurchase
+                    {
+                        DataCenter = "Aether",
+                        WorldName = "Siren",
+                        QuantityToBuy = 1,
+                        TotalCost = 40
+                    }
+                ]
+            }
+        };
+
+        var selection = AcquisitionPlanningService.SelectActiveProcurementEvidence(
+            plan,
+            marketPlans,
+            MarketFetchScope.SelectedDataCenter,
+            "Aether");
+
+        Assert.Empty(selection.ReusablePlans);
+        var missingItem = Assert.Single(selection.MissingItems);
+        Assert.Equal(200, missingItem.ItemId);
+    }
+
+    [Fact]
     public void GetActiveProcurementItemsMissingEvidence_ReturnsOnlyActiveItemsWithoutUsableEvidence()
     {
         var plan = CreatePlanWithBoughtIntermediate();

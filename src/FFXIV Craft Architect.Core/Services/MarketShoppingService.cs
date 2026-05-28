@@ -655,7 +655,10 @@ public class MarketShoppingService
             Listings = new List<ShoppingListingEntry>(),
             ExcludedListings = new List<ShoppingListingEntry>(),
             IsHomeWorld = isHomeWorld,
-            Classification = worldStatus?.Classification ?? WorldClassification.Standard
+            Classification = worldStatus?.Classification ?? WorldClassification.Standard,
+            MarketDataQualityScore = 70,
+            MarketDataQualityBucket = MarketDataQualityBucket.Aging,
+            MarketDataAgeSource = MarketDataAgeSource.LocalFetchFallback
         };
 
         var bestListing = listings.FirstOrDefault();
@@ -977,7 +980,8 @@ public class MarketShoppingService
 
         var singleWorlds = plan.WorldOptions
             .Where(w => w.TotalQuantityPurchased >= plan.QuantityNeeded)
-            .OrderBy(w => w.TotalCost)
+            .OrderBy(w => GetProcurementPriorityScore(w, w.TotalCost))
+            .ThenBy(w => w.TotalCost)
             .ThenBy(w => w.DataCenter)
             .ThenBy(w => w.WorldName)
             .ToList();
@@ -992,6 +996,7 @@ public class MarketShoppingService
                 ItemName = plan.Name,
                 QuantityNeeded = plan.QuantityNeeded,
                 QuantityFulfilled = plan.QuantityNeeded,
+                MarketEvidencePenalty = MarketWorldRecommendationScoring.CalculateEvidencePenalty(world.TotalCost, world),
                 SingleWorld = world
             });
         }
@@ -1005,6 +1010,7 @@ public class MarketShoppingService
             })
             .Where(w => w.SplitScore < decimal.MaxValue)
             .OrderBy(w => w.SplitScore)
+            .ThenBy(w => GetProcurementPriorityScore(w.World, w.World.TotalCost))
             .ThenBy(w => w.World.TotalCost)
             .ThenBy(w => w.World.DataCenter)
             .ThenBy(w => w.World.WorldName)
@@ -1014,6 +1020,7 @@ public class MarketShoppingService
         foreach (var split in GenerateSplitPurchaseAlternatives(plan.QuantityNeeded, splitWorlds, currentRoute))
         {
             var quantityFulfilled = split.Sum(s => s.QuantityToBuy);
+            var evidencePenalty = CalculateSplitEvidencePenalty(split, plan.WorldOptions);
             candidates.Add(new MarketPurchaseCandidate(
                 split.Sum(s => s.TotalCost),
                 split.Select(s => new MarketWorldKey(s.DataCenter, s.WorldName)))
@@ -1022,6 +1029,7 @@ public class MarketShoppingService
                 ItemName = plan.Name,
                 QuantityNeeded = plan.QuantityNeeded,
                 QuantityFulfilled = quantityFulfilled,
+                MarketEvidencePenalty = evidencePenalty,
                 Split = split
             });
         }
@@ -1038,6 +1046,14 @@ public class MarketShoppingService
         var routeKeyOrder = new List<string>();
 
         AddSplitAlternative(quantityNeeded, rankedWorlds, alternatives, routeKeyOrder);
+        AddSplitAlternative(
+            quantityNeeded,
+            rankedWorlds
+                .OrderBy(world => GetProcurementPriorityScore(world, world.TotalCost))
+                .ThenBy(world => world.DataCenter)
+                .ThenBy(world => world.WorldName),
+            alternatives,
+            routeKeyOrder);
 
         foreach (var seedWorld in GetSplitSeedWorlds(rankedWorlds, currentRoute))
         {
@@ -1122,7 +1138,7 @@ public class MarketShoppingService
             && string.Equals(left.WorldName, right.WorldName, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static List<SplitWorldPurchase> BuildSplitPurchase(
+    internal static List<SplitWorldPurchase> BuildSplitPurchase(
         int quantityNeeded,
         IEnumerable<WorldShoppingSummary> worlds)
     {
@@ -1202,6 +1218,47 @@ public class MarketShoppingService
         }
 
         return split;
+    }
+
+    private static decimal GetProcurementPriorityScore(WorldShoppingSummary world, long gilCost)
+    {
+        return world.ProcurementPriorityScore > 0 && world.ProcurementPriorityScore < decimal.MaxValue
+            ? world.ProcurementPriorityScore
+            : MarketWorldRecommendationScoring.CalculatePriorityScore(gilCost, world);
+    }
+
+    private static long CalculateSplitEvidencePenalty(
+        IEnumerable<SplitWorldPurchase> split,
+        IEnumerable<WorldShoppingSummary> worldOptions)
+    {
+        var worldLookup = worldOptions.ToDictionary(
+            world => new MarketWorldKey(world.DataCenter, world.WorldName),
+            world => world);
+        long totalPenalty = 0;
+
+        foreach (var splitWorld in split)
+        {
+            var key = new MarketWorldKey(splitWorld.DataCenter, splitWorld.WorldName);
+            if (!worldLookup.TryGetValue(key, out var world))
+            {
+                continue;
+            }
+
+            var penalty = MarketWorldRecommendationScoring.CalculateEvidencePenalty(splitWorld.TotalCost, world);
+            totalPenalty = SafeAdd(totalPenalty, penalty);
+        }
+
+        return totalPenalty;
+    }
+
+    private static long SafeAdd(long left, long right)
+    {
+        if (left > 0 && right > long.MaxValue - left)
+        {
+            return long.MaxValue;
+        }
+
+        return left + right;
     }
 
     /// <summary>

@@ -110,16 +110,25 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 .Where(listing => !listing.IsOutlier)
                 .OrderBy(listing => listing.SortIndex)
                 .ToList();
-            var summary = CreateWorldSummary(world, listings, analysis.QuantityNeeded);
+            var summary = CreateWorldSummary(world, listings, analysis.QuantityNeeded, lens);
             plan.WorldOptions.Add(summary);
         }
 
         plan.RecommendedWorld = plan.WorldOptions
             .Where(world => world.HasSufficientStock)
-            .OrderBy(world => world.ValueScore)
+            .OrderBy(world => world.ProcurementPriorityScore)
+            .ThenBy(world => world.TotalCost)
             .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
             .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
+
+        if (plan.RecommendedWorld == null && plan.WorldOptions.Sum(world => world.TotalQuantityPurchased) >= analysis.QuantityNeeded)
+        {
+            plan.RecommendedSplit = MarketShoppingService.BuildSplitPurchase(
+                analysis.QuantityNeeded,
+                plan.WorldOptions
+                    .Where(world => world.TotalQuantityPurchased > 0));
+        }
 
         if (plan.WorldOptions.Count == 0 && !string.IsNullOrWhiteSpace(analysis.Warning))
         {
@@ -569,7 +578,8 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
     private static WorldShoppingSummary CreateWorldSummary(
         WorldMarketAnalysis world,
         IReadOnlyList<AnalyzedMarketListing> listings,
-        int quantityNeeded)
+        int quantityNeeded,
+        MarketAcquisitionLens lens)
     {
         var remaining = quantityNeeded;
         var entries = new List<ShoppingListingEntry>();
@@ -600,7 +610,8 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         }
 
         var hasSufficientStock = remaining <= 0;
-        return new WorldShoppingSummary
+        var lensScore = world.Scores.FirstOrDefault(score => score.Lens == lens);
+        var summary = new WorldShoppingSummary
         {
             DataCenter = world.DataCenter,
             WorldName = world.WorldName,
@@ -614,8 +625,18 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             ShortfallQuantity = Math.Max(0, remaining),
             BestSingleListing = entries.OrderBy(entry => entry.PricePerUnit).FirstOrDefault(),
             ModePricePerUnit = world.PriceBands.FirstOrDefault(band => band.IsCompetitiveShelf)?.MinUnitPrice ?? 0,
-            ValueScore = hasSufficientStock ? totalCost : decimal.MaxValue
+            ValueScore = hasSufficientStock ? totalCost : decimal.MaxValue,
+            MarketDataQualityScore = world.DataQualityScore,
+            MarketDataQualityBucket = world.DataQualityBucket,
+            MarketDataAgeSource = world.DataAgeSource,
+            LensRank = lensScore?.Rank ?? int.MaxValue,
+            LensScoreBucket = lensScore?.ScoreBucket ?? MarketScoreBucket.Unavailable
         };
+        summary.ProcurementPriorityScore = purchasedQuantity > 0
+            ? MarketWorldRecommendationScoring.CalculatePriorityScore(summary.TotalCost, summary)
+            : decimal.MaxValue;
+
+        return summary;
     }
 
     private static DataQualityEvaluation CalculateDataQuality(

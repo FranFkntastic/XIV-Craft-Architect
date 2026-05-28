@@ -4,19 +4,6 @@
 <div class="pp-controls-column">
     <MudText Typo="Typo.h6" Color="Color.Primary" Class="mb-4">Procurement Plan</MudText>
 
-    <div class="pp-field-block">
-        <div class="pp-field-label">Mode</div>
-        <MudSelect T="RecommendationMode"
-                   @bind-Value="AppState.ProcurementRecommendationMode"
-                   Variant="Variant.Outlined"
-                   Dense="true"
-                   Class="pp-full-width">
-            <MudSelectItem Value="@RecommendationMode.MinimizeTotalCost">Minimize Total Cost</MudSelectItem>
-            <MudSelectItem Value="@RecommendationMode.MaximizeValue">Maximize Value</MudSelectItem>
-            <MudSelectItem Value="@RecommendationMode.BestUnitPrice">Best Unit Price</MudSelectItem>
-        </MudSelect>
-    </div>
-
     <MudText Typo="Typo.subtitle2" Class="pp-section-title">Procurement Route Settings</MudText>
 
     <div class="pp-field-block">

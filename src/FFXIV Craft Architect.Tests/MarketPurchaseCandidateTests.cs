@@ -30,6 +30,19 @@ public class MarketPurchaseCandidateTests
     }
 
     [Fact]
+    public void GeneratePurchaseCandidates_StaleSingleWorldStock_CarriesEvidencePenalty()
+    {
+        var world = World("Aether", "Siren", 500, 100, Listing(5, 100, "Siren Retainer"));
+        world.MarketDataQualityScore = 10;
+        world.MarketDataQualityBucket = MarketDataQualityBucket.VeryOld;
+        var plan = Plan(quantityNeeded: 5, world);
+
+        var candidate = Assert.Single(GenerateCandidates(plan));
+
+        Assert.True(candidate.MarketEvidencePenalty > 0);
+    }
+
+    [Fact]
     public void GeneratePurchaseCandidates_SplitRequiredStock_ReturnsSplitCandidateWithQuantitiesCostsAndDataCenters()
     {
         var aetherWorld = World("Aether", "Siren", 300, 100, Listing(3, 100, "Siren Retainer"));
@@ -73,6 +86,21 @@ public class MarketPurchaseCandidateTests
         Assert.Equal(
             [new MarketWorldKey("Aether", "Siren"), new MarketWorldKey("Primal", "Leviathan")],
             candidate.Worlds);
+    }
+
+    [Fact]
+    public void GeneratePurchaseCandidates_StaleSplitWorld_CarriesEvidencePenalty()
+    {
+        var aetherWorld = World("Aether", "Siren", 300, 100, Listing(3, 100, "Siren Retainer"));
+        var primalWorld = World("Primal", "Leviathan", 800, 200, Listing(4, 200, "Leviathan Retainer"));
+        primalWorld.MarketDataQualityScore = 10;
+        primalWorld.MarketDataQualityBucket = MarketDataQualityBucket.VeryOld;
+        var plan = Plan(quantityNeeded: 5, aetherWorld, primalWorld);
+
+        var candidate = Assert.Single(GenerateCandidates(plan));
+
+        Assert.True(candidate.IsSplitPurchase);
+        Assert.True(candidate.MarketEvidencePenalty > 0);
     }
 
     [Fact]
@@ -163,6 +191,26 @@ public class MarketPurchaseCandidateTests
         Assert.Contains("AETHER:GILGAMESH|AETHER:SIREN", routeKeys);
         Assert.Contains("AETHER:SIREN|CRYSTAL:BALMUNG", routeKeys);
         Assert.Contains("AETHER:SIREN|PRIMAL:LEVIATHAN", routeKeys);
+    }
+
+    [Fact]
+    public void GeneratePurchaseCandidates_SplitAlternativesIncludeEvidenceAwareRouteBeforeCap()
+    {
+        var staleWorlds = Enumerable.Range(1, 8)
+            .Select(i =>
+            {
+                var world = World("Aether", $"Stale{i:00}", 10 + i, 10 + i, Listing(1, 10 + i, $"Stale {i:00}"));
+                world.MarketDataQualityScore = 1;
+                world.MarketDataQualityBucket = MarketDataQualityBucket.VeryOld;
+                return world;
+            });
+        var freshA = World("Aether", "FreshA", 100, 100, Listing(1, 100, "Fresh A"));
+        var freshB = World("Aether", "FreshB", 101, 101, Listing(1, 101, "Fresh B"));
+        var plan = Plan(quantityNeeded: 2, staleWorlds.Append(freshA).Append(freshB).ToArray());
+
+        var candidates = GenerateCandidates(plan);
+
+        Assert.Contains(candidates, candidate => RouteKey(candidate) == "AETHER:FRESHA|AETHER:FRESHB");
     }
 
     [Fact]

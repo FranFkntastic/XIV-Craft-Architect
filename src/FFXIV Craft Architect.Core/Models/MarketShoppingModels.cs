@@ -146,6 +146,7 @@ public class MarketPurchaseCandidate
     public string ItemName { get; init; } = string.Empty;
     public int QuantityNeeded { get; init; }
     public int QuantityFulfilled { get; init; }
+    public long MarketEvidencePenalty { get; init; }
     public WorldShoppingSummary? SingleWorld { get; init; }
     public List<SplitWorldPurchase>? Split { get; init; }
     public bool IsSingleWorldPurchase => SingleWorld != null;
@@ -193,11 +194,24 @@ public sealed class RoutePenaltyBreakdown
         long routePenalty,
         long costPlusRoutePenalty,
         int travelTolerance)
+        : this(gilCost, addedWorldCount, addedDataCenterCount, routePenalty, 0, costPlusRoutePenalty, travelTolerance)
+    {
+    }
+
+    public RoutePenaltyBreakdown(
+        long gilCost,
+        int addedWorldCount,
+        int addedDataCenterCount,
+        long routePenalty,
+        long marketEvidencePenalty,
+        long costPlusRoutePenalty,
+        int travelTolerance)
     {
         GilCost = gilCost;
         AddedWorldCount = addedWorldCount;
         AddedDataCenterCount = addedDataCenterCount;
         RoutePenalty = routePenalty;
+        MarketEvidencePenalty = marketEvidencePenalty;
         _costPlusRoutePenalty = costPlusRoutePenalty;
         TravelTolerance = travelTolerance;
     }
@@ -206,6 +220,7 @@ public sealed class RoutePenaltyBreakdown
     public int AddedWorldCount { get; }
     public int AddedDataCenterCount { get; }
     public long RoutePenalty { get; }
+    public long MarketEvidencePenalty { get; }
     public int TravelTolerance { get; }
 
     /// <summary>
@@ -247,12 +262,17 @@ public static class MarketRouteScoring
             .Count(dc => !currentRoute.ContainsDataCenter(dc));
 
         var routePenalty = CalculateRoutePenalty(addedWorldCount, addedDataCenterCount, config.TravelTolerance);
+        var comparisonCost = SaturatingAdd(
+            SaturatingAdd(candidate.GilCost, candidate.MarketEvidencePenalty),
+            routePenalty);
+
         return new RoutePenaltyBreakdown(
             candidate.GilCost,
             addedWorldCount,
             addedDataCenterCount,
             routePenalty,
-            SaturatingAdd(candidate.GilCost, routePenalty),
+            candidate.MarketEvidencePenalty,
+            comparisonCost,
             config.TravelTolerance);
     }
 
@@ -289,6 +309,12 @@ public static class MarketRouteScoring
             if (worldComparison != 0)
             {
                 return worldComparison;
+            }
+
+            var comparisonScore = left.GetComparisonNumericScore().CompareTo(right.GetComparisonNumericScore());
+            if (comparisonScore != 0)
+            {
+                return comparisonScore;
             }
 
             return left.GilCost.CompareTo(right.GilCost);
@@ -579,6 +605,17 @@ public class WorldShoppingSummary
     /// Split mode: ValueScore = ModePrice / StockRatio
     /// </summary>
     public decimal ValueScore { get; set; }
+
+    /// <summary>
+    /// Projected freshness and reliability from market analysis.
+    /// Actual gil costs remain in TotalCost; these fields only affect recommendation ordering.
+    /// </summary>
+    public decimal MarketDataQualityScore { get; set; } = 100;
+    public MarketDataQualityBucket MarketDataQualityBucket { get; set; } = MarketDataQualityBucket.Current;
+    public MarketDataAgeSource MarketDataAgeSource { get; set; } = MarketDataAgeSource.UniversalisWorldUpload;
+    public int LensRank { get; set; } = int.MaxValue;
+    public MarketScoreBucket LensScoreBucket { get; set; } = MarketScoreBucket.Unavailable;
+    public decimal ProcurementPriorityScore { get; set; }
     
     /// <summary>
     /// For vendor purchases: the specific vendor name and location.
@@ -671,6 +708,53 @@ public class WorldShoppingSummary
                 
             return (multipliers.Min(), multipliers.Max());
         }
+    }
+}
+
+public static class MarketWorldRecommendationScoring
+{
+    public static decimal CalculatePriorityScore(long gilCost, WorldShoppingSummary world)
+    {
+        if (gilCost <= 0)
+        {
+            return decimal.MaxValue;
+        }
+
+        return gilCost + CalculateEvidencePenalty(gilCost, world);
+    }
+
+    public static long CalculateEvidencePenalty(long gilCost, WorldShoppingSummary world)
+    {
+        if (gilCost <= 0)
+        {
+            return 0;
+        }
+
+        var qualityScore = Math.Clamp(world.MarketDataQualityScore, 0, 100);
+        if (world.MarketDataQualityBucket == MarketDataQualityBucket.Missing)
+        {
+            qualityScore = 0;
+        }
+
+        var effectiveQuality = Math.Max(qualityScore, 5);
+        var qualityPenalty = gilCost * (100m / effectiveQuality - 1m);
+        var rankPenalty = world.LensRank is > 1 and < int.MaxValue
+            ? gilCost * Math.Min(world.LensRank - 1, 25) * 0.02m
+            : 0m;
+
+        return ToLongSaturating(qualityPenalty + rankPenalty);
+    }
+
+    private static long ToLongSaturating(decimal value)
+    {
+        if (value <= 0)
+        {
+            return 0;
+        }
+
+        return value >= long.MaxValue
+            ? long.MaxValue
+            : (long)Math.Ceiling(value);
     }
 }
 
