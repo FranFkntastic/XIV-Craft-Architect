@@ -272,8 +272,15 @@
             // Save market analysis to the current plan for persistence
             if (AppState.CurrentPlanId != null)
             {
-                await IndexedDb.SaveMarketAnalysisAsync(AppState.CurrentPlanId, plans, GetEffectiveRecommendationMode());
+                await IndexedDb.SaveMarketAnalysisAsync(
+                    AppState.CurrentPlanId,
+                    plans,
+                    analyses,
+                    GetEffectiveRecommendationMode(),
+                    AppState.MarketAnalysisLens);
             }
+
+            await IndexedDb.AutoSaveStateAsync(AppState);
 
             // Ensure the status message is properly set to completion
             AppState.EndOperation($"Analysis complete. {AppState.ShoppingPlans.Count} items analyzed.");
@@ -296,7 +303,7 @@
         }
     }
 
-    private Task OnLensChanged(MarketAcquisitionLens lens)
+    private async Task OnLensChanged(MarketAcquisitionLens lens)
     {
         AppState.MarketAnalysisLens = lens;
         if (AppState.MarketItemAnalyses.Any())
@@ -307,7 +314,17 @@
         }
 
         AppState.NotifyShoppingListChanged();
-        return Task.CompletedTask;
+        if (AppState.CurrentPlanId != null)
+        {
+            await IndexedDb.SaveMarketAnalysisAsync(
+                AppState.CurrentPlanId,
+                AppState.ShoppingPlans,
+                AppState.MarketItemAnalyses,
+                GetEffectiveRecommendationMode(),
+                AppState.MarketAnalysisLens);
+        }
+
+        await IndexedDb.AutoSaveStateAsync(AppState);
     }
 
     private void GoToPlanner()

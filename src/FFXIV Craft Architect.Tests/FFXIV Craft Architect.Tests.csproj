@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj" />
     <ProjectReference Include="..\FFXIV Craft Architect\FFXIV Craft Architect.csproj" />
+    <ProjectReference Include="..\FFXIV Craft Architect.Web\FFXIV Craft Architect.Web.csproj" />
   </ItemGroup>
 
 </Project>

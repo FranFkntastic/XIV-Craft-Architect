@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 
@@ -193,6 +194,14 @@ public class AppState
     public void ClearUnavailableMarketItems()
     {
         SetUnavailableMarketItems(Array.Empty<MarketDataUnavailableItem>());
+    }
+
+    public void ClearMarketAnalysisState()
+    {
+        ShoppingPlans.Clear();
+        MarketItemAnalyses.Clear();
+        ProcurementShoppingPlans.Clear();
+        ClearUnavailableMarketItems();
     }
 
     public void BlacklistMarketWorldTemporarily(MarketWorldKey world)
@@ -391,20 +400,57 @@ public class AppState
         CurrentPlan = null;
         ProjectItems.Clear();
         ShoppingItems.Clear();
-        ShoppingPlans.Clear();
-        MarketItemAnalyses.Clear();
-        ProcurementShoppingPlans.Clear();
-        ClearUnavailableMarketItems();
+        ClearMarketAnalysisState();
         CurrentPlanId = null;  // Reset plan ID for new plan
         CurrentPlanName = null;
         NotifyPlanChanged();
         NotifyShoppingListChanged();
     }
 
+    public StoredPlan CreateStoredPlanSnapshot(
+        string planId,
+        string planName,
+        DateTime? savedAt = null,
+        bool includeSourcePlanIdentity = false)
+    {
+        return new StoredPlan
+        {
+            Id = planId,
+            Name = planName,
+            DataCenter = SelectedDataCenter,
+            ModifiedAt = DateTime.UtcNow,
+            SavedAt = savedAt ?? DateTime.UtcNow,
+            ProjectItems = ProjectItems.Select(p => new StoredProjectItem
+            {
+                Id = p.Id,
+                Name = p.Name,
+                IconId = p.IconId,
+                Quantity = p.Quantity,
+                MustBeHq = p.MustBeHq
+            }).ToList(),
+            PlanJson = CurrentPlan != null
+                ? JsonSerializer.Serialize(CurrentPlan)
+                : null,
+            MarketPlansJson = ShoppingPlans.Any()
+                ? JsonSerializer.Serialize(ShoppingPlans)
+                : null,
+            MarketItemAnalysesJson = MarketItemAnalyses.Any()
+                ? JsonSerializer.Serialize(MarketItemAnalyses)
+                : null,
+            SavedRecommendationMode = RecommendationMode,
+            SavedMarketAnalysisLens = MarketAnalysisLens,
+            SourcePlanId = includeSourcePlanIdentity ? CurrentPlanId : null,
+            SourcePlanName = includeSourcePlanIdentity ? CurrentPlanName : null
+        };
+    }
+
     /// <summary>
     /// Load a stored plan into the current state.
     /// </summary>
-    public void LoadStoredPlan(StoredPlan storedPlan, CraftingPlan? deserializedPlan)
+    public void LoadStoredPlan(
+        StoredPlan storedPlan,
+        CraftingPlan? deserializedPlan,
+        bool trackStoredPlanIdentity = true)
     {
         SelectedDataCenter = storedPlan.DataCenter;
         
@@ -418,20 +464,81 @@ public class AppState
         }).ToList();
         
         CurrentPlan = deserializedPlan;
-        MarketItemAnalyses.Clear();
+        MarketItemAnalyses = DeserializeOrEmpty<MarketItemAnalysis>(storedPlan.MarketItemAnalysesJson);
+        if (!RestoredMarketAnalysisMatchesCurrentPlan(MarketItemAnalyses))
+        {
+            MarketItemAnalyses.Clear();
+        }
+
+        var restoredShoppingPlans = DeserializeOrEmpty<DetailedShoppingPlan>(storedPlan.MarketPlansJson);
+        ShoppingPlans = MarketItemAnalyses.Count > 0 &&
+                        RestoredShoppingPlansMatchMarketAnalysis(restoredShoppingPlans, MarketItemAnalyses)
+            ? restoredShoppingPlans
+            : new List<DetailedShoppingPlan>();
+        RecommendationMode = storedPlan.SavedRecommendationMode;
+        MarketAnalysisLens = storedPlan.SavedMarketAnalysisLens;
         ProcurementShoppingPlans.Clear();
         
         // Track the loaded plan ID for save-overwrite behavior
-        CurrentPlanId = storedPlan.Id;
-        CurrentPlanName = storedPlan.Name;
-        
-        // Only sync to shopping if shopping list is empty (preserve existing shopping list otherwise)
-        if (!ShoppingItems.Any())
+        if (trackStoredPlanIdentity)
         {
-            SyncProjectToShopping();
+            CurrentPlanId = storedPlan.Id;
+            CurrentPlanName = storedPlan.Name;
         }
-        
+        else
+        {
+            CurrentPlanId = storedPlan.SourcePlanId;
+            CurrentPlanName = storedPlan.SourcePlanName;
+        }
+
+        ShoppingItems.Clear();
+        SyncProjectToShopping();
+
         NotifyPlanChanged();
+        NotifyShoppingListChanged();
+    }
+
+    private bool RestoredMarketAnalysisMatchesCurrentPlan(IReadOnlyList<MarketItemAnalysis> analyses)
+    {
+        if (analyses.Count == 0)
+        {
+            return false;
+        }
+
+        var candidates = CurrentPlan != null
+            ? AcquisitionPlanningService.GetMarketAnalysisCandidates(CurrentPlan)
+            : ProjectItems
+                .Where(item => item.Quantity > 0)
+                .Select(item => new MaterialAggregate
+                {
+                    ItemId = item.Id,
+                    Name = item.Name,
+                    IconId = item.IconId,
+                    TotalQuantity = item.Quantity
+                })
+                .ToList();
+        var expected = candidates.ToDictionary(candidate => candidate.ItemId, candidate => candidate.TotalQuantity);
+
+        return expected.Count == analyses.Count &&
+               analyses.All(analysis =>
+                   expected.TryGetValue(analysis.ItemId, out var quantityNeeded) &&
+                   quantityNeeded == analysis.QuantityNeeded);
+    }
+
+    private static bool RestoredShoppingPlansMatchMarketAnalysis(
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
+        IReadOnlyList<MarketItemAnalysis> analyses)
+    {
+        if (shoppingPlans.Count == 0)
+        {
+            return false;
+        }
+
+        var expected = analyses.ToDictionary(analysis => analysis.ItemId, analysis => analysis.QuantityNeeded);
+        return expected.Count == shoppingPlans.Count &&
+               shoppingPlans.All(plan =>
+                   expected.TryGetValue(plan.ItemId, out var quantityNeeded) &&
+                   quantityNeeded == plan.QuantityNeeded);
     }
     
     /// <summary>
@@ -516,6 +623,23 @@ public class AppState
         TemporarilyBlacklistedWorlds = TemporarilyBlacklistedMarketWorlds
             .Select(world => world.WorldName)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static List<T> DeserializeOrEmpty<T>(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return new List<T>();
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<T>>(json) ?? new List<T>();
+        }
+        catch
+        {
+            return new List<T>();
+        }
     }
 }
 

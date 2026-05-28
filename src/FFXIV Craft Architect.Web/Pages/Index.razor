@@ -491,7 +491,12 @@
 
         if (!string.IsNullOrEmpty(AppState.CurrentPlanId))
         {
-            await IndexedDb.SaveMarketAnalysisAsync(AppState.CurrentPlanId, AppState.ShoppingPlans, AppState.RecommendationMode);
+            await IndexedDb.SaveMarketAnalysisAsync(
+                AppState.CurrentPlanId,
+                AppState.ShoppingPlans,
+                AppState.MarketItemAnalyses,
+                AppState.RecommendationMode,
+                AppState.MarketAnalysisLens);
         }
     }
 
@@ -584,24 +589,11 @@
                 AppState.CurrentPlanName = planName;
             }
 
-            var planData = new StoredPlan
-            {
-                Id = planId,
-                Name = planName,
-                DataCenter = AppState.SelectedDataCenter,
-                ModifiedAt = DateTime.UtcNow,
-                ProjectItems = AppState.ProjectItems.Select(p => new StoredProjectItem
-                {
-                    Id = p.Id,
-                    Name = p.Name,
-                    IconId = p.IconId,
-                    Quantity = p.Quantity,
-                    MustBeHq = p.MustBeHq
-                }).ToList(),
-                PlanJson = AppState.CurrentPlan != null
-                    ? System.Text.Json.JsonSerializer.Serialize(AppState.CurrentPlan)
-                    : null
-            };
+            var existingPlan = await IndexedDb.LoadPlanAsync(planId);
+            var planData = AppState.CreateStoredPlanSnapshot(
+                planId,
+                planName,
+                existingPlan?.SavedAt);
 
             var success = await IndexedDb.SavePlanAsync(planData);
             if (success)
@@ -647,26 +639,6 @@
 
             AppState.LoadStoredPlan(storedPlan, plan);
             _selectedNode = AppState.CurrentPlan?.RootItems.FirstOrDefault();
-
-            // Restore market analysis if available
-            if (!string.IsNullOrEmpty(storedPlan.MarketPlansJson))
-            {
-                try
-                {
-                    var marketPlans = System.Text.Json.JsonSerializer.Deserialize<List<DetailedShoppingPlan>>(storedPlan.MarketPlansJson);
-                    if (marketPlans?.Any() == true)
-                    {
-                        AppState.ShoppingPlans = marketPlans;
-                        AppState.ProcurementShoppingPlans.Clear();
-                        AppState.RecommendationMode = storedPlan.SavedRecommendationMode;
-                        AppState.NotifyShoppingListChanged();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger?.LogWarning(ex, "Failed to restore market analysis");
-                }
-            }
 
             Snackbar.Add($"Loaded '{storedPlan.Name}'", Severity.Success);
         }

@@ -217,26 +217,6 @@
 
         AppState.LoadStoredPlan(storedPlan, plan);
 
-        if (!string.IsNullOrEmpty(storedPlan.MarketPlansJson))
-        {
-            try
-            {
-                var marketPlans = System.Text.Json.JsonSerializer.Deserialize<List<DetailedShoppingPlan>>(storedPlan.MarketPlansJson);
-                if (marketPlans?.Any() == true)
-                {
-                    AppState.ShoppingPlans = marketPlans;
-                    AppState.MarketItemAnalyses.Clear();
-                    AppState.ProcurementShoppingPlans.Clear();
-                    AppState.RecommendationMode = storedPlan.SavedRecommendationMode;
-                    AppState.NotifyShoppingListChanged();
-                }
-            }
-            catch (Exception ex)
-            {
-                Snackbar.Add($"Warning: Could not restore market analysis: {ex.Message}", Severity.Warning);
-            }
-        }
-
         EnsureSelectedNode();
         PopulateShoppingListFromPlan();
 

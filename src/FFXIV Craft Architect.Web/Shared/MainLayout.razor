@@ -283,28 +283,8 @@
                 }
             }
 
-            // Restore market analysis if available
-            if (!string.IsNullOrEmpty(autoSave.MarketPlansJson))
-            {
-                try
-                {
-                    var marketPlans = System.Text.Json.JsonSerializer.Deserialize<List<DetailedShoppingPlan>>(autoSave.MarketPlansJson);
-                    if (marketPlans?.Any() == true)
-                    {
-                        AppState.ShoppingPlans = marketPlans;
-                        AppState.MarketItemAnalyses.Clear();
-                        AppState.ProcurementShoppingPlans.Clear();
-                        AppState.RecommendationMode = autoSave.SavedRecommendationMode;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger?.LogWarning(ex, "Failed to restore market analysis from auto-save");
-                }
-            }
-
             // Load the plan into AppState
-            AppState.LoadStoredPlan(autoSave, plan);
+            AppState.LoadStoredPlan(autoSave, plan, trackStoredPlanIdentity: false);
             
             // Notify that plan has changed (will refresh UI)
             AppState.NotifyPlanChanged();
@@ -464,13 +444,15 @@
                     importResult.NativePlan,
                     $"Imported native plan '{importResult.NativePlan.Name}' with {items.Count} items",
                     refreshPrices: true,
-                    clearCurrentPlanId: false);
+                    clearCurrentPlanId: true);
             }
             else
             {
                 // Clear existing project items before importing (replace current plan)
                 AppState.ProjectItems.Clear();
                 AppState.CurrentPlan = null;
+                AppState.ClearCurrentPlanId();
+                AppState.ClearMarketAnalysisState();
                  
                 // Add imported items to project (for non-native formats)
                 foreach (var item in items)
@@ -574,6 +556,7 @@
     {
         AppState.CurrentPlan = plan;
         AppState.ProjectItems = CraftPlanStateMapper.GetRootProjectItems(plan);
+        AppState.ClearMarketAnalysisState();
 
         if (!string.IsNullOrEmpty(plan.DataCenter))
         {

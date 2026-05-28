@@ -171,28 +171,10 @@ public class IndexedDbService
             if (state.CurrentPlan == null && !state.ProjectItems.Any())
                 return false;
 
-            var planData = new StoredPlan
-            {
-                Id = "autosave",
-                Name = planName,
-                DataCenter = state.SelectedDataCenter,
-                ModifiedAt = DateTime.UtcNow,
-                ProjectItems = state.ProjectItems.Select(p => new StoredProjectItem
-                {
-                    Id = p.Id,
-                    Name = p.Name,
-                    IconId = p.IconId,
-                    Quantity = p.Quantity,
-                    MustBeHq = p.MustBeHq
-                }).ToList(),
-                PlanJson = state.CurrentPlan != null 
-                    ? System.Text.Json.JsonSerializer.Serialize(state.CurrentPlan) 
-                    : null,
-                MarketPlansJson = state.ShoppingPlans?.Any() == true
-                    ? System.Text.Json.JsonSerializer.Serialize(state.ShoppingPlans)
-                    : null,
-                SavedRecommendationMode = state.RecommendationMode
-            };
+            var planData = state.CreateStoredPlanSnapshot(
+                "autosave",
+                planName,
+                includeSourcePlanIdentity: true);
 
             return await SavePlanAsync(planData);
         }
@@ -206,7 +188,12 @@ public class IndexedDbService
     /// <summary>
     /// Save market analysis results for a plan.
     /// </summary>
-    public async Task<bool> SaveMarketAnalysisAsync(string planId, List<DetailedShoppingPlan> shoppingPlans, RecommendationMode mode)
+    public async Task<bool> SaveMarketAnalysisAsync(
+        string planId,
+        List<DetailedShoppingPlan> shoppingPlans,
+        List<MarketItemAnalysis> marketItemAnalyses,
+        RecommendationMode mode,
+        MarketAcquisitionLens lens)
     {
         try
         {
@@ -219,7 +206,9 @@ public class IndexedDbService
             
             // Update with market data
             existingPlan.MarketPlansJson = System.Text.Json.JsonSerializer.Serialize(shoppingPlans);
+            existingPlan.MarketItemAnalysesJson = System.Text.Json.JsonSerializer.Serialize(marketItemAnalyses);
             existingPlan.SavedRecommendationMode = mode;
+            existingPlan.SavedMarketAnalysisLens = lens;
             existingPlan.ModifiedAt = DateTime.UtcNow;
             
             return await SavePlanAsync(existingPlan);
@@ -291,11 +280,32 @@ public class StoredPlan
     /// Serialized market analysis shopping plans.
     /// </summary>
     public string? MarketPlansJson { get; set; }
+
+    /// <summary>
+    /// Serialized immutable market analysis source data.
+    /// </summary>
+    public string? MarketItemAnalysesJson { get; set; }
     
     /// <summary>
     /// Recommendation mode used for the saved market analysis.
     /// </summary>
     public RecommendationMode SavedRecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
+
+    /// <summary>
+    /// Market analysis lens used to project the saved shopping plans.
+    /// </summary>
+    public MarketAcquisitionLens SavedMarketAnalysisLens { get; set; } = MarketAcquisitionLens.MinimumUpfrontCost;
+
+    /// <summary>
+    /// Named plan identity active when this autosave was captured.
+    /// Autosave itself should not become the user's current named plan.
+    /// </summary>
+    public string? SourcePlanId { get; set; }
+
+    /// <summary>
+    /// Named plan display name active when this autosave was captured.
+    /// </summary>
+    public string? SourcePlanName { get; set; }
 }
 
 /// <summary>

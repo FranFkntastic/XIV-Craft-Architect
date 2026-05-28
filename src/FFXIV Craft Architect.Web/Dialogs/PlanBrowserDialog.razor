@@ -234,27 +234,10 @@
             // Load existing plan to preserve any extra data
             var existingPlan = await IndexedDb.LoadPlanAsync(planId);
 
-            var planData = new StoredPlan
-            {
-                Id = planId,
-                Name = planName,
-                DataCenter = AppState.SelectedDataCenter,
-                ModifiedAt = DateTime.UtcNow,
-                SavedAt = existingPlan?.SavedAt ?? DateTime.UtcNow,
-                ProjectItems = AppState.ProjectItems.Select(p => new StoredProjectItem
-                {
-                    Id = p.Id,
-                    Name = p.Name,
-                    IconId = p.IconId,
-                    Quantity = p.Quantity,
-                    MustBeHq = p.MustBeHq
-                }).ToList(),
-                PlanJson = AppState.CurrentPlan != null
-                    ? System.Text.Json.JsonSerializer.Serialize(AppState.CurrentPlan)
-                    : existingPlan?.PlanJson,
-                MarketPlansJson = existingPlan?.MarketPlansJson,
-                SavedRecommendationMode = existingPlan?.SavedRecommendationMode ?? RecommendationMode.MinimizeTotalCost
-            };
+            var planData = AppState.CreateStoredPlanSnapshot(
+                planId,
+                planName,
+                existingPlan?.SavedAt);
 
             var success = await IndexedDb.SavePlanAsync(planData);
             if (success)
