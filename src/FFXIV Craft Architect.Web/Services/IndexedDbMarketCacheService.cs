@@ -82,6 +82,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService
                 ItemId = itemId,
                 DataCenter = dataCenter,
                 FetchedAtUnix = entry.FetchedAtUnix,
+                LastUploadTimeUnixMilliseconds = entry.LastUploadTimeUnixMilliseconds,
                 DCAveragePrice = entry.DcAvgPrice,
                 HQAveragePrice = entry.HqAvgPrice,
                 Worlds = entry.Worlds ?? new List<CachedWorldData>()
@@ -142,6 +143,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService
                     ItemId = request.itemId,
                     DataCenter = request.dataCenter,
                     FetchedAtUnix = entry.FetchedAtUnix,
+                    LastUploadTimeUnixMilliseconds = entry.LastUploadTimeUnixMilliseconds,
                     DCAveragePrice = entry.DcAvgPrice,
                     HQAveragePrice = entry.HqAvgPrice,
                     Worlds = entry.Worlds ?? new List<CachedWorldData>()
@@ -190,6 +192,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService
                 ItemId = itemId,
                 DataCenter = dataCenter,
                 FetchedAtUnix = entry.FetchedAtUnix,
+                LastUploadTimeUnixMilliseconds = entry.LastUploadTimeUnixMilliseconds,
                 DCAveragePrice = entry.DcAvgPrice,
                 HQAveragePrice = entry.HqAvgPrice,
                 Worlds = entry.Worlds ?? new List<CachedWorldData>()
@@ -220,6 +223,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService
                 ItemId = itemId,
                 DataCenter = dataCenter,
                 FetchedAtUnix = data.FetchedAtUnix,
+                LastUploadTimeUnixMilliseconds = data.LastUploadTimeUnixMilliseconds,
                 DcAvgPrice = data.DCAveragePrice,
                 HqAvgPrice = data.HQAveragePrice,
                 Worlds = data.Worlds
@@ -376,11 +380,20 @@ public class IndexedDbMarketCacheService : IMarketCacheService
                 progress?.Report($"Fetching {itemIds.Count} items from {dc}...");
                 
                 var fetchedData = await _universalisService.GetMarketDataBulkAsync(dc, itemIds, useParallel: true, ct: ct);
+                WorldData? worldData = null;
+                try
+                {
+                    worldData = await _universalisService.GetWorldDataAsync(ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "[IndexedDbMarketCache] World metadata unavailable; caching {DC} without per-world upload mapping", dc);
+                }
                 
                 // STEP 5: Store each result in cache with verification
                 foreach (var kvp in fetchedData)
                 {
-                    var cachedData = ConvertUniversalisResponseToCachedData(kvp.Key, dc, kvp.Value);
+                    var cachedData = ConvertUniversalisResponseToCachedData(kvp.Key, dc, kvp.Value, worldData);
                     await SetAsync(kvp.Key, dc, cachedData);
                     fetchedCount++;
                     
@@ -510,40 +523,20 @@ public class IndexedDbMarketCacheService : IMarketCacheService
         }
     }
 
-    private CachedMarketData ConvertUniversalisResponseToCachedData(int itemId, string dataCenter, UniversalisResponse response)
+    private CachedMarketData ConvertUniversalisResponseToCachedData(
+        int itemId,
+        string dataCenter,
+        UniversalisResponse response,
+        WorldData? worldData)
     {
         _logger?.LogDebug("[IndexedDbMarketCache] Converting response for {ItemId}@{DC} with {ListingCount} listings", 
             itemId, dataCenter, response.Listings.Count);
-        
-        var worlds = new List<CachedWorldData>();
-        
-        foreach (var worldListing in response.Listings.GroupBy(l => l.WorldName))
-        {
-            worlds.Add(new CachedWorldData
-            {
-                WorldName = worldListing.Key ?? "Unknown",
-                Listings = worldListing.Select(l => new CachedListing
-                {
-                    Quantity = l.Quantity,
-                    PricePerUnit = l.PricePerUnit,
-                    RetainerName = l.RetainerName ?? "Unknown",
-                    IsHq = l.IsHq
-                }).ToList()
-            });
-        }
-        
-        var nowUnix = DateTimeToUnix(DateTime.UtcNow);
+
+        var now = DateTime.UtcNow;
+        var nowUnix = DateTimeToUnix(now);
         _logger?.LogDebug("[IndexedDbMarketCache] Setting FetchedAtUnix={Now} for {ItemId}@{DC}", nowUnix, itemId, dataCenter);
-        
-        return new CachedMarketData
-        {
-            ItemId = itemId,
-            DataCenter = dataCenter,
-            FetchedAtUnix = nowUnix,
-            DCAveragePrice = (decimal)(response.AveragePriceNq > 0 ? response.AveragePriceNq : response.AveragePrice),
-            HQAveragePrice = response.AveragePriceHq > 0 ? (decimal)response.AveragePriceHq : null,
-            Worlds = worlds
-        };
+
+        return UniversalisMarketDataMapper.ToCachedMarketData(itemId, dataCenter, response, worldData, now);
     }
 }
 
@@ -557,6 +550,7 @@ public class IndexedDbMarketCacheEntry
     public int ItemId { get; set; }
     public string DataCenter { get; set; } = string.Empty;
     public long FetchedAtUnix { get; set; }  // Unix timestamp in seconds
+    public long? LastUploadTimeUnixMilliseconds { get; set; }
     public decimal DcAvgPrice { get; set; }
     public decimal? HqAvgPrice { get; set; }
     public List<CachedWorldData> Worlds { get; set; } = new();

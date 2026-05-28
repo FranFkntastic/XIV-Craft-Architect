@@ -96,7 +96,8 @@ public static class MarketScopedPriceLoader
                 WorldName = world.WorldName,
                 DataCenterName = cached.DataCenter,
                 RetainerName = listing.RetainerName,
-                IsHq = listing.IsHq
+                IsHq = listing.IsHq,
+                LastReviewTimeUnix = listing.LastReviewTimeUnix
             }));
         }
 
@@ -104,6 +105,12 @@ public static class MarketScopedPriceLoader
         {
             ItemId = cached.ItemId,
             DataCenterName = cached.DataCenter,
+            LastUploadTimeUnixMilliseconds = cached.LastUploadTimeUnixMilliseconds,
+            WorldUploadTimes = cached.Worlds
+                .Where(world => world.WorldId.HasValue && world.LastUploadTimeUnixMilliseconds.HasValue)
+                .ToDictionary(
+                    world => world.WorldId!.Value,
+                    world => world.LastUploadTimeUnixMilliseconds!.Value),
             Listings = listings,
             AveragePrice = (double)GetComparableAveragePrice(cached),
             AveragePriceNq = (double)GetComparableAveragePrice(cached),

@@ -25,6 +25,9 @@ public class MarketListing
     
     [JsonPropertyName("hq")]
     public bool IsHq { get; set; }
+
+    [JsonPropertyName("lastReviewTime")]
+    public long? LastReviewTimeUnix { get; set; }
 }
 
 /// <summary>
@@ -40,6 +43,12 @@ public class UniversalisResponse
     
     [JsonPropertyName("dcName")]
     public string? DataCenterName { get; set; }
+
+    [JsonPropertyName("lastUploadTime")]
+    public long? LastUploadTimeUnixMilliseconds { get; set; }
+
+    [JsonPropertyName("worldUploadTimes")]
+    public Dictionary<int, long> WorldUploadTimes { get; set; } = new();
     
     [JsonPropertyName("listings")]
     public List<MarketListing> Listings { get; set; } = new();

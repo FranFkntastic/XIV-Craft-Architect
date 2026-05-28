@@ -285,28 +285,12 @@ public class PriceCheckService
                 {
                     try
                     {
-                        var cachedData = new CachedMarketData
-                        {
-                            ItemId = itemId,
-                            DataCenter = worldOrDc,
-                            FetchedAt = DateTime.UtcNow,
-                            DCAveragePrice = (decimal)marketData.AveragePrice,
-                            HQAveragePrice = marketPriceHq > 0 ? marketPriceHq : null,
-                            Worlds = marketData.Listings?.Select(l => new CachedWorldData
-                            {
-                                WorldName = l.WorldName ?? worldOrDc,
-                                Listings = new List<CachedListing>
-                                {
-                                    new CachedListing
-                                    {
-                                        Quantity = l.Quantity,
-                                        PricePerUnit = l.PricePerUnit,
-                                        IsHq = l.IsHq,
-                                        RetainerName = l.RetainerName ?? ""
-                                    }
-                                }
-                            }).ToList() ?? new List<CachedWorldData>()
-                        };
+                        var cachedData = UniversalisMarketDataMapper.ToCachedMarketData(
+                            itemId,
+                            worldOrDc,
+                            marketData,
+                            _universalisService.GetCachedWorldData(),
+                            DateTime.UtcNow);
                         
                         await _marketCache.SetAsync(itemId, worldOrDc, cachedData);
                         _logger.LogDebug("[PriceCheck] Saved {ItemName} to SQLite cache", itemName);

@@ -60,6 +60,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
                 item_id INTEGER NOT NULL,
                 data_center TEXT NOT NULL,
                 fetched_at TEXT NOT NULL,
+                last_upload_time_unix_ms INTEGER,
                 dc_avg_price REAL NOT NULL,
                 hq_avg_price REAL,
                 compressed_data BLOB NOT NULL,
@@ -72,6 +73,25 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
             PRAGMA synchronous = NORMAL;
         ";
         cmd.ExecuteNonQuery();
+        EnsureColumnExists("market_data", "last_upload_time_unix_ms", "INTEGER");
+    }
+
+    private void EnsureColumnExists(string tableName, string columnName, string definition)
+    {
+        using var checkCmd = _connection.CreateCommand();
+        checkCmd.CommandText = $"PRAGMA table_info({tableName})";
+        using var reader = checkCmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        using var alterCmd = _connection.CreateCommand();
+        alterCmd.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}";
+        alterCmd.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -152,7 +172,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
-            SELECT fetched_at, dc_avg_price, hq_avg_price, compressed_data
+            SELECT fetched_at, last_upload_time_unix_ms, dc_avg_price, hq_avg_price, compressed_data
             FROM market_data
             WHERE item_id = @itemId AND data_center = @dataCenter AND fetched_at > @cutoff
         ";
@@ -167,7 +187,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
             return null;
         }
         
-        var compressedData = (byte[])reader.GetValue(3);
+        var compressedData = (byte[])reader.GetValue(4);
         var json = Decompress(compressedData);
         var worlds = JsonSerializer.Deserialize<List<Core.Services.CachedWorldData>>(json, _jsonOptions);
         
@@ -178,8 +198,9 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
             ItemId = itemId,
             DataCenter = dataCenter,
             FetchedAt = CacheTimeHelper.ParseFetchedAt(reader.GetValue(0)),
-            DCAveragePrice = reader.GetDecimal(1),
-            HQAveragePrice = reader.IsDBNull(2) ? null : reader.GetDecimal(2),
+            LastUploadTimeUnixMilliseconds = reader.IsDBNull(1) ? null : reader.GetInt64(1),
+            DCAveragePrice = reader.GetDecimal(2),
+            HQAveragePrice = reader.IsDBNull(3) ? null : reader.GetDecimal(3),
             Worlds = worlds ?? new List<Core.Services.CachedWorldData>()
         };
     }
@@ -190,7 +211,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
-            SELECT fetched_at, dc_avg_price, hq_avg_price, compressed_data
+            SELECT fetched_at, last_upload_time_unix_ms, dc_avg_price, hq_avg_price, compressed_data
             FROM market_data
             WHERE item_id = @itemId AND data_center = @dataCenter
         ";
@@ -207,7 +228,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         var fetchedAt = CacheTimeHelper.ParseFetchedAt(reader.GetValue(0));
         var isStale = fetchedAt <= cutoff;
         
-        var compressedData = (byte[])reader.GetValue(3);
+        var compressedData = (byte[])reader.GetValue(4);
         var json = Decompress(compressedData);
         var worlds = JsonSerializer.Deserialize<List<Core.Services.CachedWorldData>>(json, _jsonOptions);
         
@@ -219,8 +240,9 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
             ItemId = itemId,
             DataCenter = dataCenter,
             FetchedAt = fetchedAt,
-            DCAveragePrice = reader.GetDecimal(1),
-            HQAveragePrice = reader.IsDBNull(2) ? null : reader.GetDecimal(2),
+            LastUploadTimeUnixMilliseconds = reader.IsDBNull(1) ? null : reader.GetInt64(1),
+            DCAveragePrice = reader.GetDecimal(2),
+            HQAveragePrice = reader.IsDBNull(3) ? null : reader.GetDecimal(3),
             Worlds = worlds ?? new List<Core.Services.CachedWorldData>()
         };
         
@@ -253,7 +275,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
                 WITH requested(item_id, data_center) AS (
                     VALUES {string.Join(", ", values)}
                 )
-                SELECT md.item_id, md.data_center, md.fetched_at, md.dc_avg_price, md.hq_avg_price, md.compressed_data
+                SELECT md.item_id, md.data_center, md.fetched_at, md.last_upload_time_unix_ms, md.dc_avg_price, md.hq_avg_price, md.compressed_data
                 FROM market_data md
                 INNER JOIN requested r ON r.item_id = md.item_id AND r.data_center = md.data_center
                 WHERE md.fetched_at > @cutoff
@@ -289,13 +311,14 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
             INSERT OR REPLACE INTO market_data 
-            (item_id, data_center, fetched_at, dc_avg_price, hq_avg_price, compressed_data)
-            VALUES (@itemId, @dataCenter, @fetchedAt, @dcAvgPrice, @hqAvgPrice, @compressedData)
+            (item_id, data_center, fetched_at, last_upload_time_unix_ms, dc_avg_price, hq_avg_price, compressed_data)
+            VALUES (@itemId, @dataCenter, @fetchedAt, @lastUploadTimeUnixMs, @dcAvgPrice, @hqAvgPrice, @compressedData)
         ";
         cmd.Parameters.AddWithValue("@itemId", itemId);
         cmd.Parameters.AddWithValue("@dataCenter", dataCenter);
         var fetchedAtUtc = CacheTimeHelper.NormalizeToUtc(data.FetchedAt);
         cmd.Parameters.AddWithValue("@fetchedAt", fetchedAtUtc.ToString("O"));
+        cmd.Parameters.AddWithValue("@lastUploadTimeUnixMs", data.LastUploadTimeUnixMilliseconds ?? (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@dcAvgPrice", data.DCAveragePrice);
         cmd.Parameters.AddWithValue("@hqAvgPrice", data.HQAveragePrice ?? (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@compressedData", compressed);
@@ -370,11 +393,20 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
                 progress?.Report($"Fetching {itemIds.Count} items from {dc}...");
                 
                 var fetchedData = await _universalisService.GetMarketDataBulkAsync(dc, itemIds, useParallel: true, ct: ct);
+                WorldData? worldData = null;
+                try
+                {
+                    worldData = await _universalisService.GetWorldDataAsync(ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[SqliteMarketCache] World metadata unavailable; caching {DC} without per-world upload mapping", dc);
+                }
                 
                 // Store each result in cache
                 foreach (var kvp in fetchedData)
                 {
-                    var cachedData = ConvertUniversalisResponseToCachedData(kvp.Key, dc, kvp.Value);
+                    var cachedData = ConvertUniversalisResponseToCachedData(kvp.Key, dc, kvp.Value, worldData);
                     await SetAsync(kvp.Key, dc, cachedData);
                     fetchedCount++;
                 }
@@ -392,40 +424,19 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         return fetchedCount;
     }
     
-    private Core.Services.CachedMarketData ConvertUniversalisResponseToCachedData(int itemId, string dataCenter, UniversalisResponse response)
+    private Core.Services.CachedMarketData ConvertUniversalisResponseToCachedData(
+        int itemId,
+        string dataCenter,
+        UniversalisResponse response,
+        WorldData? worldData)
     {
         _logger.LogDebug("[SqliteMarketCache] Converting response for {ItemId}@{DC} with {ListingCount} listings", 
             itemId, dataCenter, response.Listings.Count);
-        
-        var worlds = new List<Core.Services.CachedWorldData>();
-        
-        foreach (var worldListing in response.Listings.GroupBy(l => l.WorldName))
-        {
-            worlds.Add(new Core.Services.CachedWorldData
-            {
-                WorldName = worldListing.Key ?? "Unknown",
-                Listings = worldListing.Select(l => new Core.Services.CachedListing
-                {
-                    Quantity = l.Quantity,
-                    PricePerUnit = l.PricePerUnit,
-                    RetainerName = l.RetainerName ?? "Unknown",
-                    IsHq = l.IsHq
-                }).ToList()
-            });
-        }
-        
+
         var now = DateTime.UtcNow;
         _logger.LogDebug("[SqliteMarketCache] Setting FetchedAt={Now} for {ItemId}@{DC}", now, itemId, dataCenter);
-        
-        return new Core.Services.CachedMarketData
-        {
-            ItemId = itemId,
-            DataCenter = dataCenter,
-            FetchedAt = now,
-            DCAveragePrice = (decimal)(response.AveragePriceNq > 0 ? response.AveragePriceNq : response.AveragePrice),
-            HQAveragePrice = response.AveragePriceHq > 0 ? (decimal)response.AveragePriceHq : null,
-            Worlds = worlds
-        };
+
+        return UniversalisMarketDataMapper.ToCachedMarketData(itemId, dataCenter, response, worldData, now);
     }
 
     private Core.Services.CachedMarketData ReadCachedData(
@@ -434,7 +445,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         string dataCenter,
         int fetchedAtOrdinal)
     {
-        var compressedData = (byte[])reader.GetValue(fetchedAtOrdinal + 3);
+        var compressedData = (byte[])reader.GetValue(fetchedAtOrdinal + 4);
         var json = Decompress(compressedData);
         var worlds = JsonSerializer.Deserialize<List<Core.Services.CachedWorldData>>(json, _jsonOptions);
 
@@ -443,8 +454,9 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
             ItemId = itemId,
             DataCenter = dataCenter,
             FetchedAt = CacheTimeHelper.ParseFetchedAt(reader.GetValue(fetchedAtOrdinal)),
-            DCAveragePrice = reader.GetDecimal(fetchedAtOrdinal + 1),
-            HQAveragePrice = reader.IsDBNull(fetchedAtOrdinal + 2) ? null : reader.GetDecimal(fetchedAtOrdinal + 2),
+            LastUploadTimeUnixMilliseconds = reader.IsDBNull(fetchedAtOrdinal + 1) ? null : reader.GetInt64(fetchedAtOrdinal + 1),
+            DCAveragePrice = reader.GetDecimal(fetchedAtOrdinal + 2),
+            HQAveragePrice = reader.IsDBNull(fetchedAtOrdinal + 3) ? null : reader.GetDecimal(fetchedAtOrdinal + 3),
             Worlds = worlds ?? new List<Core.Services.CachedWorldData>()
         };
     }

@@ -221,6 +221,7 @@ async function saveMarketData(key, data) {
             itemId: data.itemId,
             dataCenter: data.dataCenter,
             fetchedAtUnix: data.fetchedAtUnix,  // Unix timestamp in seconds
+            lastUploadTimeUnixMilliseconds: data.lastUploadTimeUnixMilliseconds,
             dcAvgPrice: data.dcAvgPrice,
             hqAvgPrice: data.hqAvgPrice,
             worlds: data.worlds
