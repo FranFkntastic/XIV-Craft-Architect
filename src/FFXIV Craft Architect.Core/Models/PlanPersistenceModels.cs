@@ -44,6 +44,11 @@ public class PlanFileNode
     /// </summary>
     public AcquisitionSource? Source { get; set; }
 
+    /// <summary>
+    /// Why the current acquisition source is selected.
+    /// </summary>
+    public AcquisitionSourceReason? SourceReason { get; set; }
+
     /// <summary>Legacy: Use MustBeHq instead.</summary>
     public bool RequiresHq { get; set; }
 

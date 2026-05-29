@@ -217,7 +217,7 @@
                 progress);
 
             AppState.ProcurementShoppingPlans = shoppingPlans;
-            AppState.NotifyShoppingListChanged();
+            AppState.NotifyProcurementOverlayChanged();
 
             AppState.EndOperation("Shopping plans generated!");
             Snackbar.Add("Shopping plans generated successfully!", Severity.Success);

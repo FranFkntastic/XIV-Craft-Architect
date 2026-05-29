@@ -73,6 +73,23 @@ namespace FFXIV_Craft_Architect.Web.Services;
 /// </summary>
 public class AppState
 {
+    private long _planStructureVersion;
+    private long _planDecisionVersion;
+    private long _planPriceVersion;
+    private long _planCoreVersion;
+    private long _marketAnalysisVersion;
+    private long _procurementOverlayVersion;
+    private long _settingsVersion;
+    private long _statusVersion;
+    private long _lastPersistedPlanCoreVersion = -1;
+    private long _lastPersistedMarketAnalysisVersion = -1;
+    private readonly SemaphoreSlim _autoSaveSemaphore = new(1, 1);
+    private int _changeBatchDepth;
+    private AppStateChangeScope _batchedScopes = AppStateChangeScope.None;
+    private bool _raisePlanChanged;
+    private bool _raiseShoppingListChanged;
+    private bool _raiseStatusChanged;
+
     // Recipe Planner State
     public CraftingPlan? CurrentPlan { get; set; }
     public List<ProjectItem> ProjectItems { get; set; } = new();
@@ -159,6 +176,17 @@ public class AppState
     public event Action? OnSavedPlansChanged;
     public event Action? OnStatusChanged;
     public event Action? OnRecipeTreeExpandChanged;
+    public event Action<AppStateChange>? OnStateChanged;
+
+    public AppStateVersionSnapshot CurrentVersions => new(
+        _planStructureVersion,
+        _planDecisionVersion,
+        _planPriceVersion,
+        _planCoreVersion,
+        _marketAnalysisVersion,
+        _procurementOverlayVersion,
+        _settingsVersion,
+        _statusVersion);
     
     // Recipe tree expand/collapse state (incremented to trigger re-evaluation)
     private int _recipeTreeExpandVersion = 0;
@@ -176,12 +204,39 @@ public class AppState
     
     public void NotifyPlanChanged()
     {
-        OnPlanChanged?.Invoke();
+        PublishChange(AppStateChangeScope.PlanStructure, raisePlanChanged: true);
     }
     
     public void NotifyShoppingListChanged()
     {
-        OnShoppingListChanged?.Invoke();
+        PublishChange(
+            AppStateChangeScope.MarketAnalysis | AppStateChangeScope.ShoppingItems,
+            raiseShoppingListChanged: true);
+    }
+
+    public void NotifyShoppingItemsChanged()
+    {
+        PublishChange(AppStateChangeScope.ShoppingItems, raiseShoppingListChanged: true);
+    }
+
+    public void NotifyPlanDecisionChanged()
+    {
+        PublishChange(AppStateChangeScope.PlanDecision, raisePlanChanged: true);
+    }
+
+    public void NotifyPlanPriceChanged()
+    {
+        PublishChange(AppStateChangeScope.PlanPrice, raisePlanChanged: true);
+    }
+
+    public void NotifyProcurementOverlayChanged()
+    {
+        PublishChange(AppStateChangeScope.ProcurementOverlay, raiseShoppingListChanged: true);
+    }
+
+    public void NotifySettingsChanged()
+    {
+        PublishChange(AppStateChangeScope.Settings);
     }
 
     public void SetUnavailableMarketItems(IReadOnlyList<MarketDataUnavailableItem> items)
@@ -200,7 +255,10 @@ public class AppState
         ShoppingPlans.Clear();
         MarketItemAnalyses.Clear();
         ProcurementShoppingPlans.Clear();
-        ClearUnavailableMarketItems();
+        UnavailableMarketItems = Array.Empty<MarketDataUnavailableItem>();
+        PublishChange(
+            AppStateChangeScope.MarketAnalysis | AppStateChangeScope.ProcurementOverlay,
+            raiseShoppingListChanged: true);
     }
 
     public void BlacklistMarketWorldTemporarily(MarketWorldKey world)
@@ -209,14 +267,14 @@ public class AppState
         TemporaryMarketWorldBlacklist.Add(world, duration);
         SyncTemporaryBlacklistSets();
         ProcurementShoppingPlans.Clear();
-        NotifyShoppingListChanged();
+        NotifyProcurementOverlayChanged();
     }
 
     public void ExcludeItemWorldTemporarily(int itemId, MarketWorldKey world)
     {
         TemporarilyExcludedItemWorlds.Add(new MarketItemWorldKey(itemId, world));
         ProcurementShoppingPlans.Clear();
-        NotifyShoppingListChanged();
+        NotifyProcurementOverlayChanged();
     }
 
     public int ActiveTemporaryExclusionCount =>
@@ -260,7 +318,7 @@ public class AppState
         TemporarilyBlacklistedWorlds.Clear();
         TemporarilyExcludedItemWorlds.Clear();
         ProcurementShoppingPlans.Clear();
-        NotifyShoppingListChanged();
+        NotifyProcurementOverlayChanged();
     }
 
     public bool PruneExpiredTemporaryMarketWorldBlacklists()
@@ -273,6 +331,7 @@ public class AppState
         }
 
         ProcurementShoppingPlans.Clear();
+        NotifyProcurementOverlayChanged();
         return true;
     }
     
@@ -284,7 +343,7 @@ public class AppState
     public void NotifyStatusChanged()
     {
         LastStatusUpdate = DateTime.Now;
-        OnStatusChanged?.Invoke();
+        PublishChange(AppStateChangeScope.Status, raiseStatusChanged: true);
     }
     
     /// <summary>
@@ -451,6 +510,8 @@ public class AppState
         CraftingPlan? deserializedPlan,
         bool trackStoredPlanIdentity = true)
     {
+        using var batch = BeginStateChangeBatch();
+
         SelectedDataCenter = storedPlan.DataCenter;
         
         ProjectItems = storedPlan.ProjectItems.Select(p => new ProjectItem
@@ -495,6 +556,128 @@ public class AppState
 
         NotifyPlanChanged();
         NotifyShoppingListChanged();
+    }
+
+    public IDisposable BeginStateChangeBatch()
+    {
+        _changeBatchDepth++;
+        return new StateChangeBatch(this);
+    }
+
+    public PersistedStateBucket GetDirtyPersistedBuckets()
+    {
+        var dirtyBuckets = PersistedStateBucket.None;
+
+        if (IsDirtyVersion(_planCoreVersion, _lastPersistedPlanCoreVersion, CurrentPlan != null || ProjectItems.Any()))
+        {
+            dirtyBuckets |= PersistedStateBucket.PlanCore;
+        }
+
+        if (IsDirtyVersion(_marketAnalysisVersion, _lastPersistedMarketAnalysisVersion, ShoppingPlans.Any() || MarketItemAnalyses.Any()))
+        {
+            dirtyBuckets |= PersistedStateBucket.MarketAnalysis;
+        }
+
+        return dirtyBuckets;
+    }
+
+    public bool IsPersistedBucketDirty(PersistedStateBucket bucket)
+    {
+        return (GetDirtyPersistedBuckets() & bucket) != PersistedStateBucket.None;
+    }
+
+    public void MarkPersisted(PersistedStateBucket buckets, AppStateVersionSnapshot versions)
+    {
+        if (buckets.HasFlag(PersistedStateBucket.PlanCore) &&
+            versions.PlanCoreVersion == _planCoreVersion)
+        {
+            _lastPersistedPlanCoreVersion = versions.PlanCoreVersion;
+        }
+
+        if (buckets.HasFlag(PersistedStateBucket.MarketAnalysis) &&
+            versions.MarketAnalysisVersion == _marketAnalysisVersion)
+        {
+            _lastPersistedMarketAnalysisVersion = versions.MarketAnalysisVersion;
+        }
+    }
+
+    public bool TryBeginAutoSave(
+        out AppStateVersionSnapshot capturedVersions,
+        out PersistedStateBucket dirtyBuckets)
+    {
+        capturedVersions = CurrentVersions;
+        dirtyBuckets = PersistedStateBucket.None;
+
+        if (CurrentPlan == null && !ProjectItems.Any())
+        {
+            return false;
+        }
+
+        if (!_autoSaveSemaphore.WaitAsync(0).GetAwaiter().GetResult())
+        {
+            return false;
+        }
+
+        dirtyBuckets = GetDirtyPersistedBuckets();
+        if (dirtyBuckets == PersistedStateBucket.None)
+        {
+            _autoSaveSemaphore.Release();
+            return false;
+        }
+
+        return true;
+    }
+
+    public async Task<AppStateAutoSaveLease?> BeginAutoSaveAsync(bool skipIfInFlight = false)
+    {
+        if (CurrentPlan == null && !ProjectItems.Any())
+        {
+            return null;
+        }
+
+        bool acquired;
+        if (skipIfInFlight)
+        {
+            acquired = await _autoSaveSemaphore.WaitAsync(0);
+        }
+        else
+        {
+            await _autoSaveSemaphore.WaitAsync();
+            acquired = true;
+        }
+
+        if (!acquired)
+        {
+            return null;
+        }
+
+        var capturedVersions = CurrentVersions;
+        var dirtyBuckets = GetDirtyPersistedBuckets();
+        if (dirtyBuckets == PersistedStateBucket.None)
+        {
+            _autoSaveSemaphore.Release();
+            return null;
+        }
+
+        return new AppStateAutoSaveLease(capturedVersions, dirtyBuckets);
+    }
+
+    public void CompleteAutoSave(
+        bool succeeded,
+        AppStateVersionSnapshot capturedVersions,
+        PersistedStateBucket dirtyBuckets)
+    {
+        try
+        {
+            if (succeeded)
+            {
+                MarkPersisted(dirtyBuckets, capturedVersions);
+            }
+        }
+        finally
+        {
+            _autoSaveSemaphore.Release();
+        }
     }
 
     private bool RestoredMarketAnalysisMatchesCurrentPlan(IReadOnlyList<MarketItemAnalysis> analyses)
@@ -624,6 +807,148 @@ public class AppState
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
+    private static bool IsDirtyVersion(long currentVersion, long persistedVersion, bool hasPersistableData)
+    {
+        return currentVersion != persistedVersion &&
+               (persistedVersion >= 0 || currentVersion > 0 || hasPersistableData);
+    }
+
+    private void PublishChange(
+        AppStateChangeScope scopes,
+        bool raisePlanChanged = false,
+        bool raiseShoppingListChanged = false,
+        bool raiseStatusChanged = false)
+    {
+        if (_changeBatchDepth > 0)
+        {
+            var newScopes = scopes & ~_batchedScopes;
+            IncrementVersions(newScopes);
+            _batchedScopes |= scopes;
+            _raisePlanChanged |= raisePlanChanged;
+            _raiseShoppingListChanged |= raiseShoppingListChanged;
+            _raiseStatusChanged |= raiseStatusChanged;
+            return;
+        }
+
+        IncrementVersions(scopes);
+        EmitChange(scopes, raisePlanChanged, raiseShoppingListChanged, raiseStatusChanged);
+    }
+
+    private void IncrementVersions(AppStateChangeScope scopes)
+    {
+        if (scopes.HasFlag(AppStateChangeScope.PlanStructure))
+        {
+            _planStructureVersion++;
+        }
+
+        if (scopes.HasFlag(AppStateChangeScope.PlanDecision))
+        {
+            _planDecisionVersion++;
+        }
+
+        if (scopes.HasFlag(AppStateChangeScope.PlanPrice))
+        {
+            _planPriceVersion++;
+        }
+
+        if (scopes.HasFlag(AppStateChangeScope.MarketAnalysis))
+        {
+            _marketAnalysisVersion++;
+        }
+
+        if (scopes.HasFlag(AppStateChangeScope.ProcurementOverlay))
+        {
+            _procurementOverlayVersion++;
+        }
+
+        if (scopes.HasFlag(AppStateChangeScope.Settings))
+        {
+            _settingsVersion++;
+        }
+
+        if (scopes.HasFlag(AppStateChangeScope.Status))
+        {
+            _statusVersion++;
+        }
+
+        if ((scopes & AppStateChangeScope.PlanCore) != AppStateChangeScope.None)
+        {
+            _planCoreVersion++;
+        }
+    }
+
+    private void EndStateChangeBatch()
+    {
+        if (_changeBatchDepth == 0)
+        {
+            return;
+        }
+
+        _changeBatchDepth--;
+        if (_changeBatchDepth > 0 || _batchedScopes == AppStateChangeScope.None)
+        {
+            return;
+        }
+
+        var scopes = _batchedScopes;
+        var raisePlanChanged = _raisePlanChanged;
+        var raiseShoppingListChanged = _raiseShoppingListChanged;
+        var raiseStatusChanged = _raiseStatusChanged;
+
+        _batchedScopes = AppStateChangeScope.None;
+        _raisePlanChanged = false;
+        _raiseShoppingListChanged = false;
+        _raiseStatusChanged = false;
+
+        EmitChange(scopes, raisePlanChanged, raiseShoppingListChanged, raiseStatusChanged);
+    }
+
+    private void EmitChange(
+        AppStateChangeScope scopes,
+        bool raisePlanChanged,
+        bool raiseShoppingListChanged,
+        bool raiseStatusChanged)
+    {
+        OnStateChanged?.Invoke(new AppStateChange(scopes, CurrentVersions));
+
+        if (raisePlanChanged)
+        {
+            OnPlanChanged?.Invoke();
+        }
+
+        if (raiseShoppingListChanged)
+        {
+            OnShoppingListChanged?.Invoke();
+        }
+
+        if (raiseStatusChanged)
+        {
+            OnStatusChanged?.Invoke();
+        }
+    }
+
+    private sealed class StateChangeBatch : IDisposable
+    {
+        private readonly AppState _state;
+        private bool _disposed;
+
+        public StateChangeBatch(AppState state)
+        {
+            _state = state;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _state.EndStateChangeBatch();
+        }
+    }
+
     private static List<T> DeserializeOrEmpty<T>(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -641,6 +966,54 @@ public class AppState
         }
     }
 }
+
+[Flags]
+public enum AppStateChangeScope
+{
+    None = 0,
+    PlanStructure = 1 << 0,
+    PlanDecision = 1 << 1,
+    PlanPrice = 1 << 2,
+    MarketAnalysis = 1 << 3,
+    ProcurementOverlay = 1 << 4,
+    ShoppingItems = 1 << 5,
+    Settings = 1 << 6,
+    Status = 1 << 7,
+    PlanCore = PlanStructure | PlanDecision | PlanPrice | Settings
+}
+
+[Flags]
+public enum PersistedStateBucket
+{
+    None = 0,
+    PlanCore = 1 << 0,
+    MarketAnalysis = 1 << 1,
+    All = PlanCore | MarketAnalysis
+}
+
+public sealed record AppStateVersionSnapshot(
+    long PlanStructureVersion,
+    long PlanDecisionVersion,
+    long PlanPriceVersion,
+    long PlanCoreVersion,
+    long MarketAnalysisVersion,
+    long ProcurementOverlayVersion,
+    long SettingsVersion,
+    long StatusVersion);
+
+public sealed record AppStateChange(
+    AppStateChangeScope Scopes,
+    AppStateVersionSnapshot Versions)
+{
+    public bool HasScope(AppStateChangeScope scope)
+    {
+        return (Scopes & scope) == scope;
+    }
+}
+
+public sealed record AppStateAutoSaveLease(
+    AppStateVersionSnapshot CapturedVersions,
+    PersistedStateBucket DirtyBuckets);
 
 // PlannerProjectItem removed - now using FFXIV_Craft_Architect.Core.Models.ProjectItem
 

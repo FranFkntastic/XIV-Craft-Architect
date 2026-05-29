@@ -43,6 +43,12 @@ public class PlanNodeMarketEligibilityTests
             CanBuyFromMarket = false,
             CanCraft = true
         };
+        node.Children.Add(new PlanNode
+        {
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            Parent = node
+        });
 
         node.EnsureValidAcquisitionSource();
 

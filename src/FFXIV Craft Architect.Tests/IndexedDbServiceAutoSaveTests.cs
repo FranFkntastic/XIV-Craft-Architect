@@ -1,0 +1,130 @@
+using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Web.Services;
+using Microsoft.JSInterop;
+
+namespace FFXIV_Craft_Architect.Tests;
+
+public class IndexedDbServiceAutoSaveTests
+{
+    [Fact]
+    public async Task AutoSaveStateAsync_SkipsSecondSaveWhenStateIsClean()
+    {
+        var jsRuntime = new RecordingJsRuntime();
+        var service = new IndexedDbService(jsRuntime);
+        var appState = new AppState
+        {
+            ProjectItems =
+            [
+                new ProjectItem
+                {
+                    Id = 123,
+                    Name = "Saved Item",
+                    Quantity = 10
+                }
+            ]
+        };
+
+        var firstSave = await service.AutoSaveStateAsync(appState);
+        var secondSave = await service.AutoSaveStateAsync(appState);
+
+        Assert.True(firstSave);
+        Assert.False(secondSave);
+        Assert.Equal(1, jsRuntime.SavePlanCallCount);
+    }
+
+    [Fact]
+    public async Task AutoSaveStateAsync_ExplicitSaveWaitsForInFlightSaveAndWritesNewDirtyState()
+    {
+        var jsRuntime = new RecordingJsRuntime(manualCompletion: true);
+        var service = new IndexedDbService(jsRuntime);
+        var appState = new AppState
+        {
+            ProjectItems =
+            [
+                new ProjectItem
+                {
+                    Id = 123,
+                    Name = "Saved Item",
+                    Quantity = 10
+                }
+            ]
+        };
+
+        var firstSave = service.AutoSaveStateAsync(appState);
+        await jsRuntime.WaitForSavePlanCallCountAsync(1);
+
+        appState.ShoppingPlans.Add(new DetailedShoppingPlan { ItemId = 123, QuantityNeeded = 10 });
+        appState.MarketItemAnalyses.Add(new MarketItemAnalysis { ItemId = 123, QuantityNeeded = 10 });
+        appState.NotifyShoppingListChanged();
+
+        var secondSave = service.AutoSaveStateAsync(appState);
+        Assert.False(secondSave.IsCompleted);
+
+        jsRuntime.CompleteNextSave();
+        Assert.True(await firstSave);
+
+        await jsRuntime.WaitForSavePlanCallCountAsync(2);
+        jsRuntime.CompleteNextSave();
+
+        Assert.True(await secondSave);
+        Assert.Equal(2, jsRuntime.SavePlanCallCount);
+    }
+
+    private sealed class RecordingJsRuntime : IJSRuntime
+    {
+        private readonly bool _manualCompletion;
+        private readonly Queue<TaskCompletionSource<bool>> _pendingSaves = new();
+
+        public RecordingJsRuntime(bool manualCompletion = false)
+        {
+            _manualCompletion = manualCompletion;
+        }
+
+        public int SavePlanCallCount { get; private set; }
+
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
+        {
+            if (identifier == "IndexedDB.savePlan")
+            {
+                SavePlanCallCount++;
+                if (!_manualCompletion)
+                {
+                    return new ValueTask<TValue>((TValue)(object)true);
+                }
+
+                var saveCompletion = new TaskCompletionSource<bool>();
+                _pendingSaves.Enqueue(saveCompletion);
+                return new ValueTask<TValue>(CompleteSaveAsync<TValue>(saveCompletion.Task));
+            }
+
+            throw new InvalidOperationException($"Unexpected JS invocation: {identifier}");
+        }
+
+        public ValueTask<TValue> InvokeAsync<TValue>(
+            string identifier,
+            CancellationToken cancellationToken,
+            object?[]? args)
+        {
+            return InvokeAsync<TValue>(identifier, args);
+        }
+
+        public void CompleteNextSave()
+        {
+            _pendingSaves.Dequeue().SetResult(true);
+        }
+
+        public async Task WaitForSavePlanCallCountAsync(int expectedCount)
+        {
+            while (SavePlanCallCount < expectedCount)
+            {
+                await Task.Delay(10);
+            }
+        }
+
+        private static async Task<TValue> CompleteSaveAsync<TValue>(Task<bool> saveTask)
+        {
+            var result = await saveTask;
+            return (TValue)(object)result;
+        }
+    }
+}

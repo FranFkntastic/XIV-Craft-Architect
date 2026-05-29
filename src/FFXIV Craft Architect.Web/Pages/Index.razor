@@ -278,8 +278,14 @@
             }
         }
 
-        PopulateShoppingListFromPlan();
-        AppState.NotifyPlanChanged();
+        using (AppState.BeginStateChangeBatch())
+        {
+            AcquisitionPlanningService.ReconcileAcquisitionDecisions(AppState.CurrentPlan, AppState.ShoppingPlans);
+            PopulateShoppingListFromPlan();
+            AppState.ProcurementShoppingPlans.Clear();
+            AppState.NotifyProcurementOverlayChanged();
+            AppState.NotifyPlanDecisionChanged();
+        }
         Snackbar.Add(
             $"Updated {editResult.ChangedNodes} node{(editResult.ChangedNodes == 1 ? "" : "s")}; skipped {editResult.SkippedNodes}.",
             Severity.Success);
@@ -307,12 +313,22 @@
             // Step 2: Fetch prices for all items (craftable and buyable)
             AppState.BeginOperation("Fetching Prices", "Loading market prices for all materials...");
             var priceRefresh = await RefreshPricesAsync(rebuildProcurementPlans: false);
+            var changedDefaults = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(
+                AppState.CurrentPlan,
+                Array.Empty<DetailedShoppingPlan>());
 
             // Step 3: Clear previous market/procurement analysis for the new recipe tree
             AppState.ShoppingPlans.Clear();
             AppState.MarketItemAnalyses.Clear();
             AppState.ProcurementShoppingPlans.Clear();
-            AppState.NotifyPlanChanged();
+            if (changedDefaults > 0)
+            {
+                AppState.NotifyPlanDecisionChanged();
+            }
+            else
+            {
+                AppState.NotifyPlanChanged();
+            }
 
             // Step 4: Populate shopping list with items marked as "buy" from recipe plan
             // These will be shown in Procurement Planner for potential analysis
@@ -353,7 +369,7 @@
                 Quantity = item.TotalQuantity
             })
             .ToList();
-        AppState.NotifyShoppingListChanged();
+        AppState.NotifyShoppingItemsChanged();
     }
 
     private async Task<MarketPriceRefreshResult> RefreshPricesAsync(bool rebuildProcurementPlans = true)
@@ -485,9 +501,23 @@
                 AppState.MarketAnalysisLens))
             .ToList();
 
-        MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
-        AppState.ProcurementShoppingPlans.Clear();
-        AppState.NotifyShoppingListChanged();
+        using (AppState.BeginStateChangeBatch())
+        {
+            var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(plan, AppState.ShoppingPlans);
+            if (changedDecisions > 0)
+            {
+                PopulateShoppingListFromPlan();
+            }
+
+            MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
+            AppState.ProcurementShoppingPlans.Clear();
+            AppState.NotifyProcurementOverlayChanged();
+            AppState.NotifyShoppingListChanged();
+            if (changedDecisions > 0)
+            {
+                AppState.NotifyPlanDecisionChanged();
+            }
+        }
 
         if (!string.IsNullOrEmpty(AppState.CurrentPlanId))
         {
@@ -568,7 +598,12 @@
 
     private void OnNodeHqChanged(PlanNode node)
     {
-        AppState.NotifyPlanChanged();
+        using var batch = AppState.BeginStateChangeBatch();
+        AcquisitionPlanningService.ReconcileAcquisitionDecisions(AppState.CurrentPlan, AppState.ShoppingPlans);
+        PopulateShoppingListFromPlan();
+        AppState.ProcurementShoppingPlans.Clear();
+        AppState.NotifyProcurementOverlayChanged();
+        AppState.NotifyPlanDecisionChanged();
     }
 
     private async Task SaveToBrowserAsync()

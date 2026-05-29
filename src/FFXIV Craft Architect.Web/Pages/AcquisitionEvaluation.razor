@@ -243,15 +243,17 @@
 
     private void ApplyNodeSourceChange(PlanNode node, AcquisitionSource source)
     {
+        using var batch = AppState.BeginStateChangeBatch();
         foreach (var occurrence in FindNodesByItemId(node.ItemId))
         {
-            occurrence.Source = source;
-            occurrence.EnsureValidAcquisitionSource();
+            AcquisitionPlanningService.SetAcquisitionSource(occurrence, source);
         }
 
+        AcquisitionPlanningService.ReconcileAcquisitionDecisions(AppState.CurrentPlan, AppState.ShoppingPlans);
         PopulateShoppingListFromPlan();
         AppState.ProcurementShoppingPlans.Clear();
-        AppState.NotifyPlanChanged();
+        AppState.NotifyProcurementOverlayChanged();
+        AppState.NotifyPlanDecisionChanged();
     }
 
     private void PopulateShoppingListFromPlan()
@@ -266,7 +268,7 @@
                 Quantity = item.TotalQuantity
             })
             .ToList();
-        AppState.NotifyShoppingListChanged();
+        AppState.NotifyShoppingItemsChanged();
     }
 
     private DetailedShoppingPlan? GetMarketPlan(PlanNode? node)
@@ -355,7 +357,7 @@
             aggregate.Occurrences.Any(occurrence => !occurrence.IsSuppressed),
             node.CanBuyFromMarket,
             GetMarketEvidence(marketPlan),
-            GetEstimatedCost(node, AppState.ShoppingPlans, activeQuantity));
+            GetEstimatedCost(aggregate.Occurrences, AppState.ShoppingPlans));
     }
 
     private IEnumerable<DecisionRow> GetVisibleRows(List<DecisionRow> rows)
@@ -480,36 +482,7 @@
 
     private static List<AcquisitionSource> GetSourceOptions(PlanNode node)
     {
-        var options = new List<AcquisitionSource>();
-
-        if (node.Children.Any() && node.CanCraft)
-        {
-            options.Add(AcquisitionSource.Craft);
-        }
-
-        if (node.CanBuyFromMarket)
-        {
-            if (!node.MustBeHq)
-            {
-                options.Add(AcquisitionSource.MarketBuyNq);
-            }
-
-            if (node.CanBeHq)
-            {
-                options.Add(AcquisitionSource.MarketBuyHq);
-            }
-        }
-
-        if (node.CanBuyFromVendor)
-        {
-            options.Add(AcquisitionSource.VendorBuy);
-        }
-
-        if (!options.Any())
-        {
-            options.Add(AcquisitionSource.UnknownSource);
-        }
-
+        var options = AcquisitionPlanningService.GetAvailableSources(node);
         if (!options.Contains(node.Source))
         {
             options.Insert(0, node.Source);
@@ -518,23 +491,26 @@
         return options;
     }
 
-    private static string GetEstimatedCost(PlanNode node, IReadOnlyList<DetailedShoppingPlan> marketPlans, int activeQuantity)
+    private static string GetEstimatedCost(IReadOnlyList<DecisionOccurrence> occurrences, IReadOnlyList<DetailedShoppingPlan> marketPlans)
     {
-        if (node.Source == AcquisitionSource.Craft && node.Children.Any())
+        var primaryNode = occurrences.FirstOrDefault()?.Node;
+        if (primaryNode == null)
         {
-            return AcquisitionPlanningService.TryGetAcquisitionCost(node, node.Source, marketPlans, out var craftCost)
-                ? $"{craftCost:N0}g"
-                : "Craft";
+            return "-";
         }
 
-        var costNode = node;
-        if (activeQuantity > 0 && activeQuantity != node.Quantity)
+        var costNodes = primaryNode.Source == AcquisitionSource.Craft
+            ? occurrences.Where(occurrence => !occurrence.IsSuppressed).Select(occurrence => occurrence.Node).ToList()
+            : occurrences.Where(occurrence => occurrence.IsActiveProcurement).Select(occurrence => occurrence.Node).ToList();
+        if (costNodes.Count == 0)
         {
-            costNode = node.Clone();
-            costNode.Quantity = activeQuantity;
+            costNodes = occurrences
+                .Where(occurrence => !occurrence.IsSuppressed)
+                .Select(occurrence => occurrence.Node)
+                .ToList();
         }
 
-        return AcquisitionPlanningService.TryGetAcquisitionCost(costNode, costNode.Source, marketPlans, out var cost)
+        return AcquisitionPlanningService.TryGetSelectedAcquisitionCost(costNodes, marketPlans, out var cost)
             ? $"{cost:N0}g"
             : "-";
     }

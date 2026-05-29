@@ -219,7 +219,7 @@
             
         try
         {
-            var success = await IndexedDb.AutoSaveStateAsync(AppState);
+            var success = await IndexedDb.AutoSaveStateAsync(AppState, skipIfInFlight: true);
             if (success)
             {
                 AppState.LastAutoSave = DateTime.Now;
@@ -285,10 +285,6 @@
 
             // Load the plan into AppState
             AppState.LoadStoredPlan(autoSave, plan, trackStoredPlanIdentity: false);
-            
-            // Notify that plan has changed (will refresh UI)
-            AppState.NotifyPlanChanged();
-            AppState.NotifyShoppingListChanged();
             
             Snackbar.Add("Restored previous session", Severity.Info);
             Logger?.LogInformation("Auto-restored plan '{PlanName}' with {ProjectItemCount} items and {MarketPlanCount} market plans", 
@@ -785,10 +781,22 @@
             // Final auto-save on dispose
             if (AppState.IsAutoSaveEnabled)
             {
-            _ = IndexedDb.AutoSaveStateAsync(AppState);
+                _ = FinalAutoSaveAsync();
             }
             
             _disposed = true;
+        }
+    }
+
+    private async Task FinalAutoSaveAsync()
+    {
+        try
+        {
+            await IndexedDb.AutoSaveStateAsync(AppState);
+        }
+        catch (Exception ex)
+        {
+            Logger?.LogError(ex, "Final auto-save failed");
         }
     }
     

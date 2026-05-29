@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
@@ -164,24 +165,75 @@ public class IndexedDbService
     /// <summary>
     /// Save the current app state (auto-save functionality).
     /// </summary>
-    public async Task<bool> AutoSaveStateAsync(AppState state, string planName = "AutoSave")
+    public async Task<bool> AutoSaveStateAsync(
+        AppState state,
+        string planName = "AutoSave",
+        bool skipIfInFlight = false)
     {
+        AppStateAutoSaveLease? autoSaveLease = null;
+        var success = false;
+
         try
         {
+            var totalElapsed = Stopwatch.StartNew();
+
             if (state.CurrentPlan == null && !state.ProjectItems.Any())
                 return false;
 
+            autoSaveLease = await state.BeginAutoSaveAsync(skipIfInFlight);
+            if (autoSaveLease == null)
+                return false;
+
+            var snapshotElapsed = Stopwatch.StartNew();
             var planData = state.CreateStoredPlanSnapshot(
                 "autosave",
                 planName,
                 includeSourcePlanIdentity: true);
+            snapshotElapsed.Stop();
 
-            return await SavePlanAsync(planData);
+            StoredPlanSnapshotMetrics? metrics = null;
+            var metricsElapsed = Stopwatch.StartNew();
+            if (_logger?.IsEnabled(LogLevel.Debug) == true)
+            {
+                metrics = StoredPlanSnapshotMetrics.FromStoredPlan(planData);
+            }
+            metricsElapsed.Stop();
+
+            var saveElapsed = Stopwatch.StartNew();
+            success = await SavePlanAsync(planData);
+            saveElapsed.Stop();
+            totalElapsed.Stop();
+
+            if (metrics != null)
+            {
+                _logger?.LogDebug(
+                    "Auto-save wrote {PlanNodeCount} nodes, {ShoppingPlanCount} shopping plans, {MarketAnalysisCount} analyses, {TotalJsonBytes} JSON bytes in {TotalElapsedMs} ms (snapshot {SnapshotElapsedMs} ms, metrics {MetricsElapsedMs} ms, save {SaveElapsedMs} ms)",
+                    metrics.PlanNodeCount,
+                    metrics.ShoppingPlanCount,
+                    metrics.MarketAnalysisCount,
+                    metrics.TotalJsonBytes,
+                    totalElapsed.ElapsedMilliseconds,
+                    snapshotElapsed.ElapsedMilliseconds,
+                    metricsElapsed.ElapsedMilliseconds,
+                    saveElapsed.ElapsedMilliseconds);
+            }
+
+            return success;
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Failed to auto-save state");
             return false;
+        }
+        finally
+        {
+            if (autoSaveLease != null)
+            {
+                state.CompleteAutoSave(
+                    success,
+                    autoSaveLease.CapturedVersions,
+                    autoSaveLease.DirtyBuckets);
+            }
         }
     }
 

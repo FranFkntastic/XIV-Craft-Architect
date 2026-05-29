@@ -68,10 +68,11 @@ async function savePlan(planData) {
             savedAt: new Date().toISOString()
         };
         
-        const request = store.put(data);
-        
-        request.onsuccess = () => resolve(true);
-        request.onerror = () => reject(request.error);
+        store.put(data);
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
 }
 
@@ -128,10 +129,11 @@ async function deletePlan(planId) {
     return new Promise((resolve, reject) => {
         const transaction = database.transaction([STORE_PLANS], 'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
-        const request = store.delete(planId);
-        
-        request.onsuccess = () => resolve(true);
-        request.onerror = () => reject(request.error);
+        store.delete(planId);
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
 }
 
@@ -144,10 +146,11 @@ async function saveSetting(key, value) {
     return new Promise((resolve, reject) => {
         const transaction = database.transaction([STORE_SETTINGS], 'readwrite');
         const store = transaction.objectStore(STORE_SETTINGS);
-        const request = store.put({ key, value });
-        
-        request.onsuccess = () => resolve(true);
-        request.onerror = () => reject(request.error);
+        store.put({ key, value });
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
 }
 
@@ -179,10 +182,11 @@ async function clearAllPlans() {
     return new Promise((resolve, reject) => {
         const transaction = database.transaction([STORE_PLANS], 'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
-        const request = store.clear();
-        
-        request.onsuccess = () => resolve(true);
-        request.onerror = () => reject(request.error);
+        store.clear();
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
 }
 

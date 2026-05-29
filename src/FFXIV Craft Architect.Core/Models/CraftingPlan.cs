@@ -72,6 +72,23 @@ public enum AcquisitionSource
 }
 
 /// <summary>
+/// Explains why the current acquisition source is selected.
+/// </summary>
+public enum AcquisitionSourceReason
+{
+    /// <summary>The planner selected this source as an automatic default.</summary>
+    SystemDefault,
+    /// <summary>The user explicitly selected this source.</summary>
+    UserSelected,
+    /// <summary>The source was restored from a saved plan.</summary>
+    Restored,
+    /// <summary>The previous source became invalid and was coerced to an available source.</summary>
+    Coerced,
+    /// <summary>Only one supported acquisition source is available.</summary>
+    RequiredByAvailability
+}
+
+/// <summary>
 /// Represents the root of a crafting plan containing all items to be crafted.
 /// Serializable for save/load functionality.
 /// </summary>
@@ -334,6 +351,11 @@ public class PlanNode
     /// How to acquire this item (craft, buy, vendor, etc.)
     /// </summary>
     public AcquisitionSource Source { get; set; } = AcquisitionSource.Craft;
+
+    /// <summary>
+    /// Why the current acquisition source is selected.
+    /// </summary>
+    public AcquisitionSourceReason SourceReason { get; set; } = AcquisitionSourceReason.SystemDefault;
     
     /// <summary>
     /// If true, HQ version is required (for buying from market)
@@ -565,27 +587,7 @@ public class PlanNode
 
     public void EnsureValidAcquisitionSource()
     {
-        if (CanBuyFromMarket ||
-            (Source != AcquisitionSource.MarketBuyNq && Source != AcquisitionSource.MarketBuyHq))
-        {
-            return;
-        }
-
-        if (CanBuyFromVendor)
-        {
-            Source = AcquisitionSource.VendorBuy;
-            return;
-        }
-
-        if (CanCraft)
-        {
-            Source = AcquisitionSource.Craft;
-            return;
-        }
-
-        Source = AcquisitionSource.UnknownSource;
-        PriceSource = PriceSource.Untradeable;
-        PriceSourceDetails = "Unknown acquisition source";
+        AcquisitionPlanningService.EnsureValidAcquisitionSource(this);
     }
     
     /// <summary>
@@ -616,7 +618,8 @@ public class PlanNode
             CanBuyFromVendor = CanBuyFromVendor,
             CanCraft = CanCraft,
             VendorPrice = VendorPrice,
-            SelectedVendorIndex = SelectedVendorIndex
+            SelectedVendorIndex = SelectedVendorIndex,
+            SourceReason = SourceReason
         };
 
         // Clone vendor options
@@ -717,6 +720,9 @@ public class SerializablePlanNode
     
     /// <summary>Acquisition source (new preferred property).</summary>
     public AcquisitionSource? Source { get; set; }
+
+    /// <summary>Why this acquisition source is currently selected.</summary>
+    public AcquisitionSourceReason? SourceReason { get; set; }
     
     /// <summary>Legacy: Use MustBeHq instead.</summary>
     public bool RequiresHq { get; set; }

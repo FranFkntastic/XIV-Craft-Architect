@@ -83,8 +83,7 @@
             return;
         }
 
-        Node.Source = source;
-        Node.EnsureValidAcquisitionSource();
+        AcquisitionPlanningService.SetAcquisitionSource(Node, source);
         await OnSourceChanged.InvokeAsync(Node);
     }
 

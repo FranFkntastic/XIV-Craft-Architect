@@ -259,15 +259,31 @@
                 progress,
                 executionOptions: executionOptions);
             var plans = ProjectShoppingPlans(analyses);
+            var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(AppState.CurrentPlan, plans);
 
             // Apply hard-lock vendor overrides for vendor-buy items
             MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, plans);
 
-            AppState.MarketItemAnalyses = analyses;
-            AppState.ShoppingPlans = plans;
-            AppState.ProcurementShoppingPlans.Clear();
-            AppState.NotifyShoppingListChanged();
-            AppState.NotifyPlanChanged();
+            using (AppState.BeginStateChangeBatch())
+            {
+                AppState.MarketItemAnalyses = analyses;
+                AppState.ShoppingPlans = plans;
+                if (changedDecisions > 0)
+                {
+                    PopulateShoppingItemsFromPlan();
+                }
+                AppState.ProcurementShoppingPlans.Clear();
+                AppState.NotifyProcurementOverlayChanged();
+                AppState.NotifyShoppingListChanged();
+                if (changedDecisions > 0)
+                {
+                    AppState.NotifyPlanDecisionChanged();
+                }
+                else
+                {
+                    AppState.NotifyPlanChanged();
+                }
+            }
 
             // Save market analysis to the current plan for persistence
             if (AppState.CurrentPlanId != null)
@@ -308,9 +324,19 @@
         AppState.MarketAnalysisLens = lens;
         if (AppState.MarketItemAnalyses.Any())
         {
-            AppState.ShoppingPlans = ProjectShoppingPlans(AppState.MarketItemAnalyses);
-            MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
-            AppState.ProcurementShoppingPlans.Clear();
+            using (AppState.BeginStateChangeBatch())
+            {
+                AppState.ShoppingPlans = ProjectShoppingPlans(AppState.MarketItemAnalyses);
+                var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(AppState.CurrentPlan, AppState.ShoppingPlans);
+                MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
+                if (changedDecisions > 0)
+                {
+                    PopulateShoppingItemsFromPlan();
+                    AppState.NotifyPlanDecisionChanged();
+                }
+                AppState.ProcurementShoppingPlans.Clear();
+                AppState.NotifyProcurementOverlayChanged();
+            }
         }
 
         AppState.NotifyShoppingListChanged();
@@ -358,6 +384,20 @@
             .Select(analysis => MarketPriceLadderAnalysisService.ProjectToShoppingPlan(
                 analysis,
                 AppState.MarketAnalysisLens))
+            .ToList();
+    }
+
+    private void PopulateShoppingItemsFromPlan()
+    {
+        AppState.ShoppingItems = AcquisitionPlanningService.GetActiveProcurementItems(AppState.CurrentPlan)
+            .Where(item => item.TotalQuantity > 0)
+            .Select(item => new MarketShoppingItem
+            {
+                Id = item.ItemId,
+                Name = item.Name,
+                IconId = item.IconId,
+                Quantity = item.TotalQuantity
+            })
             .ToList();
     }
 }
