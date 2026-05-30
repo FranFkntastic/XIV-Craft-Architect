@@ -24,18 +24,8 @@ public class WebPlanPersistenceServiceTests
     public async Task SaveCurrentPlanAsync_DoesNotLoadFullPayload()
     {
         var jsRuntime = new RecordingJsRuntime();
-        var appState = new AppState
-        {
-            ProjectItems =
-            [
-                new ProjectItem
-                {
-                    Id = 100,
-                    Name = "Saved Item",
-                    Quantity = 12
-                }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 100, Name = "Saved Item", Quantity = 12 }]);
         var service = CreateService(jsRuntime, appState);
 
         var saved = await service.SaveCurrentPlanAsync(

@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Web.Services;
 using Microsoft.JSInterop;
@@ -24,18 +26,8 @@ public class IndexedDbServiceAutoSaveTests
     {
         var jsRuntime = new RecordingJsRuntime();
         var service = new IndexedDbService(jsRuntime);
-        var appState = new AppState
-        {
-            ProjectItems =
-            [
-                new ProjectItem
-                {
-                    Id = 123,
-                    Name = "Saved Item",
-                    Quantity = 10
-                }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 123, Name = "Saved Item", Quantity = 10 }]);
 
         var firstSave = await service.AutoSaveStateAsync(appState);
         var secondSave = await service.AutoSaveStateAsync(appState);
@@ -50,25 +42,15 @@ public class IndexedDbServiceAutoSaveTests
     {
         var jsRuntime = new RecordingJsRuntime(manualCompletion: true);
         var service = new IndexedDbService(jsRuntime);
-        var appState = new AppState
-        {
-            ProjectItems =
-            [
-                new ProjectItem
-                {
-                    Id = 123,
-                    Name = "Saved Item",
-                    Quantity = 10
-                }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 123, Name = "Saved Item", Quantity = 10 }]);
 
         var firstSave = service.AutoSaveStateAsync(appState);
         await jsRuntime.WaitForSavePlanCallCountAsync(1);
 
-        appState.ShoppingPlans.Add(new DetailedShoppingPlan { ItemId = 123, QuantityNeeded = 10 });
-        appState.MarketItemAnalyses.Add(new MarketItemAnalysis { ItemId = 123, QuantityNeeded = 10 });
-        appState.NotifyShoppingListChanged();
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 123, QuantityNeeded = 10 }],
+            [new DetailedShoppingPlan { ItemId = 123, QuantityNeeded = 10 }]);
 
         var secondSave = service.AutoSaveStateAsync(appState);
         Assert.False(secondSave.IsCompleted);
@@ -101,6 +83,33 @@ public class IndexedDbServiceAutoSaveTests
         Assert.Equal(0, jsRuntime.LoadPlanCallCount);
     }
 
+    [Fact]
+    public async Task SaveMarketAnalysisAsync_AcceptsReadOnlyInputsAndSerializesSamePayload()
+    {
+        var jsRuntime = new RecordingJsRuntime();
+        var service = new IndexedDbService(jsRuntime);
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans = new ReadOnlyCollection<DetailedShoppingPlan>(
+        [
+            new DetailedShoppingPlan { ItemId = 100, QuantityNeeded = 2 }
+        ]);
+        IReadOnlyList<MarketItemAnalysis> analyses = new ReadOnlyCollection<MarketItemAnalysis>(
+        [
+            new MarketItemAnalysis { ItemId = 100, QuantityNeeded = 2 }
+        ]);
+
+        var saved = await service.SaveMarketAnalysisAsync(
+            "plan-id",
+            shoppingPlans,
+            analyses,
+            RecommendationMode.MaximizeValue,
+            MarketAcquisitionLens.BulkValue);
+
+        Assert.True(saved);
+        Assert.Equal("IndexedDB.patchMarketAnalysis", jsRuntime.LastIdentifier);
+        Assert.Contains("\"ItemId\":100", Assert.IsType<string>(jsRuntime.LastArgs?[1]));
+        Assert.Contains("\"ItemId\":100", Assert.IsType<string>(jsRuntime.LastArgs?[2]));
+    }
+
     private sealed class RecordingJsRuntime : IJSRuntime
     {
         private readonly bool _manualCompletion;
@@ -115,10 +124,12 @@ public class IndexedDbServiceAutoSaveTests
         public int LoadPlanCallCount { get; private set; }
         public int LoadAllPlansCallCount { get; private set; }
         public string? LastIdentifier { get; private set; }
+        public object?[]? LastArgs { get; private set; }
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
         {
             LastIdentifier = identifier;
+            LastArgs = args;
 
             if (identifier == "IndexedDB.savePlan")
             {

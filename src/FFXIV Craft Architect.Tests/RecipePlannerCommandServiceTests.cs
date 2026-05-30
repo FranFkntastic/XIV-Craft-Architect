@@ -10,10 +10,8 @@ public class RecipePlannerCommandServiceTests
     [Fact]
     public async Task BuildPlanAsync_EmptyProjectItems_DoesNotMutateCurrentPlan()
     {
-        var appState = new AppState
-        {
-            CurrentPlan = CreatePlan("Existing", 10)
-        };
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(CreatePlan("Existing", 10));
         var builder = new FakeRecipePlanBuilder();
         var service = CreateService(appState, builder);
 
@@ -32,23 +30,9 @@ public class RecipePlannerCommandServiceTests
     [Fact]
     public async Task BuildPlanAsync_SuccessfulBuildPublishesPlanAndClearsStaleMarketState()
     {
-        var appState = new AppState
-        {
-            SelectedDataCenter = "Aether",
-            SelectedRegion = "North America",
-            ShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 900, Name = "Old Plan" }
-            ],
-            MarketItemAnalyses =
-            [
-                new MarketItemAnalysis { ItemId = 900, Name = "Old Analysis" }
-            ],
-            ProcurementShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 900, Name = "Old Route" }
-            ]
-        };
+        var appState = new AppState();
+        AddStaleMarketState(appState);
+        var beforeVersions = appState.CurrentVersions;
         var builder = new FakeRecipePlanBuilder
         {
             PlanToReturn = CreatePlan("Built Item", 100, marketPrice: 12)
@@ -90,7 +74,7 @@ public class RecipePlannerCommandServiceTests
         Assert.Contains(changes, change => change.HasScope(AppStateChangeScope.ShoppingItems));
         Assert.Contains(changes, change => change.HasScope(AppStateChangeScope.MarketAnalysis));
         Assert.Contains(changes, change => change.HasScope(AppStateChangeScope.ProcurementOverlay));
-        Assert.Equal(1, appState.CurrentVersions.ProcurementOverlayVersion);
+        Assert.Equal(beforeVersions.ProcurementOverlayVersion + 1, appState.CurrentVersions.ProcurementOverlayVersion);
         Assert.False(result.PriceRefresh.HasUnavailableItems);
         Assert.Equal(RecipePlannerCommandMessageLevel.Success, result.MessageLevel);
     }
@@ -125,23 +109,8 @@ public class RecipePlannerCommandServiceTests
     [Fact]
     public async Task BuildPlanAsync_WhenPriceRefreshFails_ClearsStaleMarketStateForNewPlan()
     {
-        var appState = new AppState
-        {
-            SelectedDataCenter = "Aether",
-            SelectedRegion = "North America",
-            ShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 900, Name = "Old Plan" }
-            ],
-            MarketItemAnalyses =
-            [
-                new MarketItemAnalysis { ItemId = 900, Name = "Old Analysis" }
-            ],
-            ProcurementShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 900, Name = "Old Route" }
-            ]
-        };
+        var appState = new AppState();
+        AddStaleMarketState(appState);
         var builder = new FakeRecipePlanBuilder
         {
             PlanToReturn = CreatePlan("Built Item", 100)
@@ -177,28 +146,11 @@ public class RecipePlannerCommandServiceTests
     [Fact]
     public async Task ImportProjectItemsAsync_ReplacesProjectItemsClearsPlanAndBuildsWithoutPriceRefresh()
     {
-        var appState = new AppState
-        {
-            CurrentPlan = CreatePlan("Old Plan", 900),
-            CurrentPlanId = "old-plan",
-            CurrentPlanName = "Old Plan",
-            ProjectItems =
-            [
-                new ProjectItem { Id = 900, Name = "Old", Quantity = 1 }
-            ],
-            ShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 900, Name = "Old Market" }
-            ],
-            MarketItemAnalyses =
-            [
-                new MarketItemAnalysis { ItemId = 900, Name = "Old Analysis" }
-            ],
-            ProcurementShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 900, Name = "Old Route" }
-            ]
-        };
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(CreatePlan("Old Plan", 900));
+        appState.TrackCurrentPlanIdentity("old-plan", "Old Plan");
+        appState.ReplaceProjectItems([new ProjectItem { Id = 900, Name = "Old", Quantity = 1 }]);
+        AddStaleMarketState(appState);
         var importedPlan = CreatePlan("Imported Item", 100);
         var builder = new FakeRecipePlanBuilder
         {
@@ -301,6 +253,75 @@ public class RecipePlannerCommandServiceTests
     }
 
     [Fact]
+    public async Task BuildPlanAsync_WhenSamePlanSessionChangesDuringCanceledPriceRefresh_ReturnsNeutralResult()
+    {
+        var appState = new AppState();
+        var cancellation = new CancellationTokenSource();
+        var builtPlan = CreatePlan("Built Plan", 100);
+        var builder = new FakeRecipePlanBuilder
+        {
+            PlanToReturn = builtPlan
+        };
+        var cache = new Mock<IMarketCacheService>();
+        cache.Setup(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(() =>
+            {
+                appState.ApplyBuiltRecipePlan(builtPlan);
+                cancellation.Cancel();
+            })
+            .ThrowsAsync(new OperationCanceledException(cancellation.Token));
+        var service = CreateService(appState, builder, cache.Object);
+
+        var result = await service.BuildPlanAsync(new BuildRecipePlanRequest(
+            [new ProjectItem { Id = 100, Name = "Built Plan", Quantity = 1 }],
+            "Aether",
+            "North America",
+            MarketFetchScope.SelectedDataCenter), cancellation.Token);
+
+        Assert.False(result.Built);
+        Assert.Same(builtPlan, appState.CurrentPlan);
+        Assert.Equal(RecipePlannerCommandMessageLevel.Info, result.MessageLevel);
+        Assert.Equal("Plan build canceled.", result.Message);
+        Assert.Equal("Ready", appState.StatusMessage);
+        Assert.False(appState.IsBusy);
+    }
+
+    [Fact]
+    public async Task BuildPlanAsync_WhenPlanChangesDuringPriceRefresh_ReturnsNeutralWithoutFollowUpPublish()
+    {
+        var appState = new AppState();
+        var builtPlan = CreatePlan("Built Plan", 100);
+        var replacementPlan = CreatePlan("Replacement Plan", 200);
+        var builder = new FakeRecipePlanBuilder
+        {
+            PlanToReturn = builtPlan,
+            FetchVendorAsync = _ =>
+            {
+                appState.ApplyBuiltRecipePlan(replacementPlan);
+                return Task.CompletedTask;
+            }
+        };
+        var service = CreateService(appState, builder);
+
+        var result = await service.BuildPlanAsync(new BuildRecipePlanRequest(
+            [new ProjectItem { Id = 100, Name = "Built Plan", Quantity = 1 }],
+            "Aether",
+            "North America",
+            MarketFetchScope.SelectedDataCenter));
+
+        Assert.False(result.Built);
+        Assert.Same(replacementPlan, appState.CurrentPlan);
+        Assert.Equal(RecipePlannerCommandMessageLevel.Info, result.MessageLevel);
+        Assert.DoesNotContain("failed", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, builtPlan.PriceVersion);
+        Assert.Empty(result.PriceRefresh.UnavailableItems);
+    }
+
+    [Fact]
     public async Task BuildPlanAsync_WhenSuperseded_DoesNotPublishOlderPlan()
     {
         var appState = new AppState();
@@ -362,14 +383,9 @@ public class RecipePlannerCommandServiceTests
     [Fact]
     public async Task RefreshPricesAsync_UpdatesNodePricesAndUnavailableItems()
     {
-        var appState = new AppState
-        {
-            CurrentPlan = CreatePlan("Refresh Item", 100),
-            DefaultMarketFetchScope = MarketFetchScope.SelectedDataCenter,
-            SelectedDataCenter = "Aether",
-            SelectedRegion = "North America"
-        };
-        appState.CurrentPlan.RootItems.Add(new PlanNode
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(CreatePlan("Refresh Item", 100));
+        appState.CurrentPlan!.RootItems.Add(new PlanNode
         {
             ItemId = 200,
             Name = "Unavailable Item",
@@ -377,6 +393,7 @@ public class RecipePlannerCommandServiceTests
             Source = AcquisitionSource.MarketBuyNq,
             CanBuyFromMarket = true
         });
+        var beforePlanStructureVersion = appState.CurrentVersions.PlanStructureVersion;
         var builder = new FakeRecipePlanBuilder();
         var cache = new Mock<IMarketCacheService>();
         cache.Setup(c => c.EnsurePopulatedAsync(
@@ -408,7 +425,7 @@ public class RecipePlannerCommandServiceTests
         Assert.Equal(200, Assert.Single(result.UnavailableItems).ItemId);
         Assert.Equal(200, Assert.Single(appState.UnavailableMarketItems).ItemId);
         Assert.Equal(1, appState.CurrentVersions.PlanPriceVersion);
-        Assert.Equal(0, appState.CurrentVersions.PlanStructureVersion);
+        Assert.Equal(beforePlanStructureVersion, appState.CurrentVersions.PlanStructureVersion);
         Assert.Contains(changes, change => change.HasScope(AppStateChangeScope.PlanPrice));
         Assert.DoesNotContain(changes, change => change.HasScope(AppStateChangeScope.PlanStructure));
     }
@@ -418,17 +435,13 @@ public class RecipePlannerCommandServiceTests
     {
         var oldPlan = CreatePlan("Old Plan", 100);
         var newPlan = CreatePlan("New Plan", 200);
-        var appState = new AppState
-        {
-            CurrentPlan = oldPlan,
-            SelectedDataCenter = "Aether",
-            SelectedRegion = "North America"
-        };
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(oldPlan);
         var builder = new FakeRecipePlanBuilder
         {
             FetchVendorAsync = _ =>
             {
-                appState.CurrentPlan = newPlan;
+                appState.ApplyBuiltRecipePlan(newPlan);
                 return Task.CompletedTask;
             }
         };
@@ -484,14 +497,9 @@ public class RecipePlannerCommandServiceTests
             CanBuyFromMarket = false,
             Children = [child]
         };
-        var appState = new AppState
-        {
-            CurrentPlan = new CraftingPlan { RootItems = [root] },
-            ProcurementShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 999, Name = "Old Route" }
-            ]
-        };
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(new CraftingPlan { RootItems = [root] });
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 999, Name = "Old Route" }]);
         var changes = new List<AppStateChange>();
         appState.OnStateChanged += changes.Add;
         var service = CreateService(appState, new FakeRecipePlanBuilder());
@@ -542,23 +550,9 @@ public class RecipePlannerCommandServiceTests
                 }
             ]
         };
-        var appState = new AppState
-        {
-            CurrentPlanId = "saved-plan",
-            SelectedDataCenter = "Aether",
-            ShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 999, Name = "Old Plan" }
-            ],
-            MarketItemAnalyses =
-            [
-                new MarketItemAnalysis { ItemId = 999, Name = "Old Analysis" }
-            ],
-            ProcurementShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 999, Name = "Old Route" }
-            ]
-        };
+        var appState = new AppState();
+        appState.TrackCurrentPlanIdentity("saved-plan", null);
+        AddStaleMarketState(appState);
         var builder = new FakeRecipePlanBuilder();
         var cache = new Mock<IMarketCacheService>();
         cache.Setup(c => c.GetManyAsync(
@@ -605,10 +599,7 @@ public class RecipePlannerCommandServiceTests
     {
         var plan = CreatePlan("Imported Plan", 100);
         plan.DataCenter = "Crystal";
-        var appState = new AppState
-        {
-            SelectedDataCenter = "Aether"
-        };
+        var appState = new AppState();
         var builder = new FakeRecipePlanBuilder();
         var cache = new Mock<IMarketCacheService>();
         cache.Setup(c => c.EnsurePopulatedAsync(
@@ -676,6 +667,38 @@ public class RecipePlannerCommandServiceTests
         Assert.False(appState.IsBusy);
     }
 
+    [Fact]
+    public async Task ActivatePlanAsync_WhenPlanChangesDuringMarketRefresh_ReturnsNeutralWithoutSuccess()
+    {
+        var activatedPlan = CreatePlan("Activated Plan", 100);
+        var replacementPlan = CreatePlan("Replacement Plan", 200);
+        var appState = new AppState();
+        var builder = new FakeRecipePlanBuilder
+        {
+            FetchVendorAsync = _ =>
+            {
+                appState.ApplyBuiltRecipePlan(replacementPlan);
+                return Task.CompletedTask;
+            }
+        };
+        var service = CreateService(appState, builder);
+
+        var result = await service.ActivatePlanAsync(new ActivateRecipePlanRequest(
+            activatedPlan,
+            ClearCurrentPlanId: true,
+            RefreshVendorPrices: true,
+            RefreshMarketPrices: true,
+            MarketFetchScope.SelectedDataCenter,
+            "Aether",
+            "North America"));
+
+        Assert.Same(replacementPlan, appState.CurrentPlan);
+        Assert.Equal(RecipePlannerCommandMessageLevel.Info, result.MessageLevel);
+        Assert.Contains("canceled", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, activatedPlan.PriceVersion);
+        Assert.Empty(result.PriceRefresh.UnavailableItems);
+    }
+
     private static RecipePlannerCommandService CreateService(
         AppState appState,
         IRecipePlanBuilder builder,
@@ -705,6 +728,14 @@ public class RecipePlannerCommandServiceTests
                 }
             ]
         };
+    }
+
+    private static void AddStaleMarketState(AppState appState)
+    {
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 900, Name = "Old Analysis" }],
+            [new DetailedShoppingPlan { ItemId = 900, Name = "Old Plan" }]);
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 900, Name = "Old Route" }]);
     }
 
     private static CachedMarketData CachedData(int itemId, string dataCenter, decimal averagePrice)

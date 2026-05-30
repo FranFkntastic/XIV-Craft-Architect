@@ -28,6 +28,7 @@ public class AcquisitionEvaluationSourceChangeHandlerTests
         var appState = CreateState();
         var root = appState.CurrentPlan!.RootItems[0];
         var child = root.Children[0];
+        var beforeMarketVersion = appState.CurrentVersions.MarketAnalysisVersion;
         var contextBefore = AcquisitionPlanningService.CreateCostContext(appState.ShoppingPlans);
         Assert.True(AcquisitionPlanningService.TryGetSelectedAcquisitionCost([root], contextBefore, out var beforeCost));
 
@@ -36,7 +37,7 @@ public class AcquisitionEvaluationSourceChangeHandlerTests
 
         Assert.True(AcquisitionPlanningService.TryGetSelectedAcquisitionCost([root], contextAfter, out var afterCost));
         Assert.NotEqual(beforeCost, afterCost);
-        Assert.Equal(0, appState.CurrentVersions.MarketAnalysisVersion);
+        Assert.Equal(beforeMarketVersion, appState.CurrentVersions.MarketAnalysisVersion);
     }
 
     [Fact]
@@ -84,10 +85,10 @@ public class AcquisitionEvaluationSourceChangeHandlerTests
         };
         root.Children.Add(child);
 
-        return new AppState
-        {
-            CurrentPlan = new CraftingPlan { RootItems = [root] },
-            ShoppingPlans =
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(new CraftingPlan { RootItems = [root] });
+        appState.ReplaceMarketAnalysis(
+            [],
             [
                 new DetailedShoppingPlan
                 {
@@ -101,7 +102,7 @@ public class AcquisitionEvaluationSourceChangeHandlerTests
                         TotalQuantityPurchased = 2
                     }
                 }
-            ]
-        };
+            ]);
+        return appState;
     }
 }

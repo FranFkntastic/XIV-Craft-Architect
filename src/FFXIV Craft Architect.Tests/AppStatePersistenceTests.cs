@@ -9,19 +9,15 @@ public class AppStatePersistenceTests
     [Fact]
     public void LoadStoredPlan_RestoresMarketAnalysisSourceAndLens()
     {
-        var appState = new AppState
-        {
-            MarketAnalysisLens = MarketAcquisitionLens.MinimumUpfrontCost,
-            RecommendationMode = RecommendationMode.MinimizeTotalCost,
-            ProcurementShoppingPlans =
-            [
-                new DetailedShoppingPlan
-                {
-                    ItemId = 999,
-                    Name = "Stale Procurement Item"
-                }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceProcurementOverlay(
+        [
+            new DetailedShoppingPlan
+            {
+                ItemId = 999,
+                Name = "Stale Procurement Item"
+            }
+        ]);
         var shoppingPlans = new List<DetailedShoppingPlan>
         {
             new()
@@ -93,10 +89,8 @@ public class AppStatePersistenceTests
     [Fact]
     public void LoadStoredPlan_LegacyMarketPlansWithoutAnalysisSource_ClearsProjectionAndDefaultLens()
     {
-        var appState = new AppState
-        {
-            MarketAnalysisLens = MarketAcquisitionLens.BulkValue
-        };
+        var appState = new AppState();
+        appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
         var shoppingPlans = new List<DetailedShoppingPlan>
         {
             new()
@@ -309,18 +303,7 @@ public class AppStatePersistenceTests
     [Fact]
     public void LoadStoredPlan_RebuildsShoppingItemsFromLoadedPlan()
     {
-        var appState = new AppState
-        {
-            ShoppingItems =
-            [
-                new MarketShoppingItem
-                {
-                    Id = 999,
-                    Name = "Previous Item",
-                    Quantity = 99
-                }
-            ]
-        };
+        var appState = new AppState();
         var storedPlan = new StoredPlan
         {
             Id = "plan",
@@ -348,37 +331,17 @@ public class AppStatePersistenceTests
     [Fact]
     public void CreateStoredPlanSnapshot_PreservesMarketAnalysisAndLens()
     {
-        var appState = new AppState
+        var appState = new AppState();
+        appState.SetRecommendationMode(RecommendationMode.MaximizeValue);
+        appState.ApplyBuiltRecipePlan(new CraftingPlan
         {
-            CurrentPlan = new CraftingPlan
-            {
-                Name = "Snapshot Plan",
-                DataCenter = "Aether"
-            },
-            CurrentPlanId = "named-plan",
-            CurrentPlanName = "Named Plan",
-            SelectedDataCenter = "Aether",
-            RecommendationMode = RecommendationMode.MaximizeValue,
-            MarketAnalysisLens = MarketAcquisitionLens.BulkValue,
-            ProjectItems =
-            [
-                new ProjectItem
-                {
-                    Id = 123,
-                    Name = "Snapshot Item",
-                    Quantity = 10
-                }
-            ],
-            ShoppingPlans =
-            [
-                new DetailedShoppingPlan
-                {
-                    ItemId = 123,
-                    Name = "Snapshot Item",
-                    QuantityNeeded = 10
-                }
-            ],
-            MarketItemAnalyses =
+            Name = "Snapshot Plan",
+            DataCenter = "Aether"
+        });
+        appState.TrackCurrentPlanIdentity("named-plan", "Named Plan");
+        appState.ReplaceProjectItems([new ProjectItem { Id = 123, Name = "Snapshot Item", Quantity = 10 }]);
+        appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
+        appState.ReplaceMarketAnalysis(
             [
                 new MarketItemAnalysis
                 {
@@ -386,8 +349,15 @@ public class AppStatePersistenceTests
                     Name = "Snapshot Item",
                     QuantityNeeded = 10
                 }
-            ]
-        };
+            ],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 123,
+                    Name = "Snapshot Item",
+                    QuantityNeeded = 10
+                }
+            ]);
 
         var snapshot = appState.CreateStoredPlanSnapshot(
             "autosave",
@@ -406,27 +376,9 @@ public class AppStatePersistenceTests
     [Fact]
     public void CreateStoredPlanSnapshot_AfterAnalysisCleared_WritesNullMarketAnalysisFields()
     {
-        var appState = new AppState
-        {
-            ProjectItems =
-            [
-                new ProjectItem
-                {
-                    Id = 123,
-                    Name = "Snapshot Item",
-                    Quantity = 10
-                }
-            ],
-            ShoppingPlans =
-            [
-                new DetailedShoppingPlan
-                {
-                    ItemId = 123,
-                    Name = "Snapshot Item",
-                    QuantityNeeded = 10
-                }
-            ],
-            MarketItemAnalyses =
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 123, Name = "Snapshot Item", Quantity = 10 }]);
+        appState.ReplaceMarketAnalysis(
             [
                 new MarketItemAnalysis
                 {
@@ -434,8 +386,15 @@ public class AppStatePersistenceTests
                     Name = "Snapshot Item",
                     QuantityNeeded = 10
                 }
-            ]
-        };
+            ],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 123,
+                    Name = "Snapshot Item",
+                    QuantityNeeded = 10
+                }
+            ]);
 
         appState.ClearMarketAnalysisState();
         var snapshot = appState.CreateStoredPlanSnapshot("plan", "Plan");
@@ -475,21 +434,11 @@ public class AppStatePersistenceTests
     [Fact]
     public void ClearMarketAnalysisState_RemovesAnalysisProjectionAndProcurementOverlay()
     {
-        var appState = new AppState
-        {
-            ShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 1, Name = "Market" }
-            ],
-            MarketItemAnalyses =
-            [
-                new MarketItemAnalysis { ItemId = 1, Name = "Market" }
-            ],
-            ProcurementShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 1, Name = "Procurement" }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 1, Name = "Market" }],
+            [new DetailedShoppingPlan { ItemId = 1, Name = "Market" }]);
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 1, Name = "Procurement" }]);
 
         appState.ClearMarketAnalysisState();
 

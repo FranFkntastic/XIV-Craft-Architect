@@ -10,7 +10,7 @@ public class AcquisitionDecisionServiceTests
     public void ChangeSource_UpdatesAllSameItemOccurrencesAndClearsProcurementOverlay()
     {
         var appState = CreateStateWithDuplicateChildren();
-        appState.ProcurementShoppingPlans =
+        appState.ReplaceProcurementOverlay(
         [
             new DetailedShoppingPlan
             {
@@ -18,7 +18,7 @@ public class AcquisitionDecisionServiceTests
                 Name = "Shared Child",
                 QuantityNeeded = 4
             }
-        ];
+        ]);
         var firstChild = appState.CurrentPlan!.RootItems[0].Children[0];
         var beforeMarketVersion = appState.CurrentVersions.MarketAnalysisVersion;
 
@@ -119,7 +119,7 @@ public class AcquisitionDecisionServiceTests
             AcquisitionSource.MarketBuyNq,
             AcquisitionSourceReason.UserSelected);
         appState.CurrentPlan.RootItems[1].Children[0].SourceReason = AcquisitionSourceReason.UserSelected;
-        appState.ProcurementShoppingPlans =
+        appState.ReplaceProcurementOverlay(
         [
             new DetailedShoppingPlan
             {
@@ -127,7 +127,7 @@ public class AcquisitionDecisionServiceTests
                 Name = "Shared Child",
                 QuantityNeeded = 4
             }
-        ];
+        ]);
 
         var service = new AcquisitionDecisionService(appState);
         var result = service.ChangeSource(child, AcquisitionSource.MarketBuyNq);
@@ -179,25 +179,10 @@ public class AcquisitionDecisionServiceTests
         rootA.Children.Add(childA);
         rootB.Children.Add(childB);
 
-        return new AppState
-        {
-            CurrentPlan = new CraftingPlan { RootItems = [rootA, rootB] },
-            ShoppingPlans =
-            [
-                new DetailedShoppingPlan
-                {
-                    ItemId = 200,
-                    Name = "Shared Child",
-                    QuantityNeeded = 4,
-                    RecommendedWorld = new WorldShoppingSummary
-                    {
-                        WorldName = "Siren",
-                        TotalCost = 400,
-                        TotalQuantityPurchased = 4
-                    }
-                }
-            ]
-        };
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(new CraftingPlan { RootItems = [rootA, rootB] });
+        appState.ReplaceMarketAnalysis([], [CreateSharedChildShoppingPlan(quantityNeeded: 4, totalCost: 400)]);
+        return appState;
     }
 
     private static AppState CreateStateWithSingleRoot()
@@ -205,24 +190,25 @@ public class AcquisitionDecisionServiceTests
         var root = CreateRoot(100, "Root A");
         root.Children.Add(CreateSharedChild(root));
 
-        return new AppState
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(new CraftingPlan { RootItems = [root] });
+        appState.ReplaceMarketAnalysis([], [CreateSharedChildShoppingPlan(quantityNeeded: 2, totalCost: 200)]);
+        return appState;
+    }
+
+    private static DetailedShoppingPlan CreateSharedChildShoppingPlan(int quantityNeeded, long totalCost)
+    {
+        return new DetailedShoppingPlan
         {
-            CurrentPlan = new CraftingPlan { RootItems = [root] },
-            ShoppingPlans =
-            [
-                new DetailedShoppingPlan
-                {
-                    ItemId = 200,
-                    Name = "Shared Child",
-                    QuantityNeeded = 2,
-                    RecommendedWorld = new WorldShoppingSummary
-                    {
-                        WorldName = "Siren",
-                        TotalCost = 200,
-                        TotalQuantityPurchased = 2
-                    }
-                }
-            ]
+            ItemId = 200,
+            Name = "Shared Child",
+            QuantityNeeded = quantityNeeded,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                WorldName = "Siren",
+                TotalCost = totalCost,
+                TotalQuantityPurchased = quantityNeeded
+            }
         };
     }
 

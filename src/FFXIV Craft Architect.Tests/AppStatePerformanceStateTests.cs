@@ -39,21 +39,11 @@ public class AppStatePerformanceStateTests
     [Fact]
     public void ClearMarketAnalysisState_EmitsMarketAndProcurementScopesWithoutDirtyingPlanCore()
     {
-        var appState = new AppState
-        {
-            ShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 100, Name = "Market Item" }
-            ],
-            MarketItemAnalyses =
-            [
-                new MarketItemAnalysis { ItemId = 100, Name = "Market Item" }
-            ],
-            ProcurementShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 100, Name = "Route Item" }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 100, Name = "Market Item" }],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Market Item" }]);
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 100, Name = "Route Item" }]);
         appState.NotifyPlanChanged();
         appState.MarkPersisted(PersistedStateBucket.All, appState.CurrentVersions);
         var changes = new List<AppStateChange>();
@@ -143,11 +133,13 @@ public class AppStatePerformanceStateTests
         appState.MarkPersisted(PersistedStateBucket.All, appState.CurrentVersions);
         var changes = new List<AppStateChange>();
         appState.OnStateChanged += changes.Add;
+        var source = new List<MarketDataUnavailableItem>
+        {
+            new(123, "Unavailable Item")
+        };
 
-        appState.SetUnavailableMarketItems(
-        [
-            new MarketDataUnavailableItem(123, "Unavailable Item")
-        ]);
+        appState.SetUnavailableMarketItems(source);
+        source.Add(new MarketDataUnavailableItem(456, "Late Mutation"));
 
         var change = Assert.Single(changes);
         Assert.True(change.HasScope(AppStateChangeScope.MarketAnalysis));
@@ -159,21 +151,11 @@ public class AppStatePerformanceStateTests
     [Fact]
     public void ReplaceMarketAnalysis_ReplacesAnalysisProjectionAndClearsProcurementOverlay()
     {
-        var appState = new AppState
-        {
-            ShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 100, Name = "Old Plan" }
-            ],
-            MarketItemAnalyses =
-            [
-                new MarketItemAnalysis { ItemId = 100, Name = "Old Analysis" }
-            ],
-            ProcurementShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 100, Name = "Old Route" }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 100, Name = "Old Analysis" }],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Old Plan" }]);
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 100, Name = "Old Route" }]);
         appState.NotifyPlanChanged();
         appState.MarkPersisted(PersistedStateBucket.All, appState.CurrentVersions);
         var changes = new List<AppStateChange>();
@@ -197,23 +179,17 @@ public class AppStatePerformanceStateTests
     [Fact]
     public void ReplaceMarketAnalysisItem_ReplacesSingleAnalysisPlanAndClearsProcurementOverlay()
     {
-        var appState = new AppState
-        {
-            MarketItemAnalyses =
+        var appState = new AppState();
+        appState.ReplaceMarketAnalysis(
             [
                 new MarketItemAnalysis { ItemId = 100, Name = "Keep Analysis" },
                 new MarketItemAnalysis { ItemId = 200, Name = "Old Analysis" }
             ],
-            ShoppingPlans =
             [
                 new DetailedShoppingPlan { ItemId = 100, Name = "Keep Plan" },
                 new DetailedShoppingPlan { ItemId = 200, Name = "Old Plan" }
-            ],
-            ProcurementShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 200, Name = "Old Route" }
-            ]
-        };
+            ]);
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 200, Name = "Old Route" }]);
         appState.MarkPersisted(PersistedStateBucket.All, appState.CurrentVersions);
         var changes = new List<AppStateChange>();
         appState.OnStateChanged += changes.Add;
@@ -351,13 +327,8 @@ public class AppStatePerformanceStateTests
     [Fact]
     public void ClearProcurementOverlay_ClearsOverlayAndPublishesOnlyOverlayScope()
     {
-        var appState = new AppState
-        {
-            ProcurementShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 100, Name = "Route Item" }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 100, Name = "Route Item" }]);
         appState.NotifyShoppingListChanged();
         appState.MarkPersisted(PersistedStateBucket.All, appState.CurrentVersions);
         var changes = new List<AppStateChange>();
@@ -375,13 +346,8 @@ public class AppStatePerformanceStateTests
     [Fact]
     public void ReplaceProcurementOverlay_ReplacesOverlayAndPublishesOnlyOverlayScope()
     {
-        var appState = new AppState
-        {
-            ProcurementShoppingPlans =
-            [
-                new DetailedShoppingPlan { ItemId = 100, Name = "Old Route Item" }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 100, Name = "Old Route Item" }]);
         var replacement = new List<DetailedShoppingPlan>
         {
             new() { ItemId = 200, Name = "New Route Item" }
@@ -424,14 +390,9 @@ public class AppStatePerformanceStateTests
             Children = [child]
         };
         child.Parent = root;
-        var appState = new AppState
-        {
-            CurrentPlan = new CraftingPlan { RootItems = [root] },
-            ShoppingItems =
-            [
-                new MarketShoppingItem { Id = 999, Name = "Stale Item", Quantity = 1 }
-            ]
-        };
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(new CraftingPlan { RootItems = [root] });
+        appState.SyncProjectToShopping();
         appState.NotifyShoppingListChanged();
         appState.MarkPersisted(PersistedStateBucket.All, appState.CurrentVersions);
         var changes = new List<AppStateChange>();
@@ -447,6 +408,161 @@ public class AppStatePerformanceStateTests
         Assert.True(change.HasScope(AppStateChangeScope.ShoppingItems));
         Assert.False(change.HasScope(AppStateChangeScope.MarketAnalysis));
         Assert.False(appState.IsPersistedBucketDirty(PersistedStateBucket.MarketAnalysis));
+    }
+
+    [Fact]
+    public void ApplyBuiltRecipePlan_ReplacesPlanClearsDerivedMarketStateAndAdvancesSession()
+    {
+        var appState = new AppState();
+        var oldPlan = new CraftingPlan { RootItems = [new PlanNode { ItemId = 1, Name = "Old", Quantity = 1 }] };
+        var newPlan = new CraftingPlan
+        {
+            RootItems =
+            [
+                new PlanNode
+                {
+                    ItemId = 100,
+                    Name = "Built Root",
+                    Quantity = 1,
+                    Source = AcquisitionSource.Craft,
+                    Children =
+                    [
+                        new PlanNode
+                        {
+                            ItemId = 200,
+                            Name = "Bought Child",
+                            Quantity = 3,
+                            Source = AcquisitionSource.MarketBuyNq,
+                            CanBuyFromMarket = true
+                        }
+                    ]
+                }
+            ]
+        };
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 100, Name = "Old Analysis" }],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Old Plan" }]);
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 100, Name = "Old Route" }]);
+        appState.SetUnavailableMarketItems([new MarketDataUnavailableItem(100, "Old Unavailable")]);
+        appState.RequestMarketItemAutoExpand(100);
+        appState.ApplyBuiltRecipePlan(oldPlan);
+        var previousSession = appState.PlanSessionVersion;
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        appState.ApplyBuiltRecipePlan(newPlan);
+
+        var change = Assert.Single(changes);
+        Assert.Same(newPlan, appState.CurrentPlan);
+        Assert.True(appState.PlanSessionVersion > previousSession);
+        Assert.Empty(appState.ShoppingPlans);
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Empty(appState.ProcurementShoppingPlans);
+        Assert.Empty(appState.UnavailableMarketItems);
+        Assert.Null(appState.AutoExpandItemId);
+        Assert.Equal(200, Assert.Single(appState.ShoppingItems).Id);
+        Assert.True(change.HasScope(AppStateChangeScope.PlanStructure));
+        Assert.True(change.HasScope(AppStateChangeScope.MarketAnalysis));
+        Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
+        Assert.True(change.HasScope(AppStateChangeScope.ShoppingItems));
+    }
+
+    [Fact]
+    public void TrackCurrentPlanIdentity_DoesNotAdvancePlanSession()
+    {
+        var appState = new AppState();
+        var session = appState.PlanSessionVersion;
+
+        appState.TrackCurrentPlanIdentity("plan-1", "Plan 1");
+        appState.RenameCurrentPlanIdentity("plan-1", "Renamed");
+        appState.ClearCurrentPlanId();
+
+        Assert.Equal(session, appState.PlanSessionVersion);
+    }
+
+    [Fact]
+    public void IsCurrentPlanSession_RejectsOldPlanAfterNewSession()
+    {
+        var appState = new AppState();
+        var oldPlan = new CraftingPlan { RootItems = [new PlanNode { ItemId = 1, Name = "Old", Quantity = 1 }] };
+        var newPlan = new CraftingPlan { RootItems = [new PlanNode { ItemId = 2, Name = "New", Quantity = 1 }] };
+        appState.ApplyBuiltRecipePlan(oldPlan);
+        var oldSession = appState.PlanSessionVersion;
+
+        appState.ApplyBuiltRecipePlan(newPlan);
+
+        Assert.False(appState.IsCurrentPlanSession(oldPlan, oldSession));
+        Assert.True(appState.IsCurrentPlanSession(newPlan, appState.PlanSessionVersion));
+    }
+
+    [Fact]
+    public void ApplyImportedProjectItems_ClearsActivePlanIdentityAndDerivedState()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(new CraftingPlan { RootItems = [new PlanNode { ItemId = 1, Name = "Old", Quantity = 1 }] });
+        appState.TrackCurrentPlanIdentity("old-plan", "Old Plan");
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 100, Name = "Old Analysis" }],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Old Plan" }]);
+        var previousSession = appState.PlanSessionVersion;
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        appState.ApplyImportedProjectItems(
+        [
+            new ProjectItem { Id = 200, Name = "Imported Item", Quantity = 4 }
+        ]);
+
+        var change = Assert.Single(changes);
+        Assert.Null(appState.CurrentPlan);
+        Assert.Null(appState.CurrentPlanId);
+        Assert.Null(appState.CurrentPlanName);
+        Assert.True(appState.PlanSessionVersion > previousSession);
+        Assert.Equal(200, Assert.Single(appState.ProjectItems).Id);
+        Assert.Empty(appState.ShoppingItems);
+        Assert.Empty(appState.ShoppingPlans);
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.True(change.HasScope(AppStateChangeScope.PlanStructure));
+        Assert.True(change.HasScope(AppStateChangeScope.MarketAnalysis));
+        Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
+    }
+
+    [Fact]
+    public void ActivateRecipePlan_ReplacesPlanProjectItemsMarketContextAndAdvancesSession()
+    {
+        var plan = new CraftingPlan
+        {
+            DataCenter = "Primal",
+            RootItems = [new PlanNode { ItemId = 100, Name = "Native Root", Quantity = 2 }]
+        };
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(new CraftingPlan { RootItems = [new PlanNode { ItemId = 1, Name = "Old", Quantity = 1 }] });
+        appState.TrackCurrentPlanIdentity("old-plan", "Old Plan");
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 100, Name = "Old Analysis" }],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Old Plan" }]);
+        var previousSession = appState.PlanSessionVersion;
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        appState.ActivateRecipePlan(
+            plan,
+            [new ProjectItem { Id = 100, Name = "Native Root", Quantity = 2 }],
+            plan.DataCenter,
+            clearCurrentPlanId: true);
+
+        var change = Assert.Single(changes);
+        Assert.Same(plan, appState.CurrentPlan);
+        Assert.Equal("Primal", appState.SelectedDataCenter);
+        Assert.Null(appState.CurrentPlanId);
+        Assert.Null(appState.CurrentPlanName);
+        Assert.True(appState.PlanSessionVersion > previousSession);
+        Assert.Equal(100, Assert.Single(appState.ProjectItems).Id);
+        Assert.Empty(appState.ShoppingPlans);
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.True(change.HasScope(AppStateChangeScope.PlanStructure));
+        Assert.True(change.HasScope(AppStateChangeScope.MarketAnalysis));
+        Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
     }
 
     [Fact]
@@ -473,18 +589,8 @@ public class AppStatePerformanceStateTests
     [Fact]
     public void AddProjectItem_WhenItemAlreadyExists_DoesNotPublish()
     {
-        var appState = new AppState
-        {
-            ProjectItems =
-            [
-                new ProjectItem
-                {
-                    Id = 100,
-                    Name = "Test Item",
-                    Quantity = 1
-                }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 100, Name = "Test Item", Quantity = 1 }]);
         var changes = new List<AppStateChange>();
         appState.OnStateChanged += changes.Add;
 
@@ -503,18 +609,8 @@ public class AppStatePerformanceStateTests
     [Fact]
     public void ReplaceProjectItems_ReplacesItemsAndPublishesPlanStructure()
     {
-        var appState = new AppState
-        {
-            ProjectItems =
-            [
-                new ProjectItem
-                {
-                    Id = 100,
-                    Name = "Old",
-                    Quantity = 1
-                }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 100, Name = "Old", Quantity = 1 }]);
         var changes = new List<AppStateChange>();
         appState.OnStateChanged += changes.Add;
 
@@ -531,6 +627,46 @@ public class AppStatePerformanceStateTests
         var change = Assert.Single(changes);
         Assert.Equal(200, Assert.Single(appState.ProjectItems).Id);
         Assert.True(change.HasScope(AppStateChangeScope.PlanStructure));
+    }
+
+    [Fact]
+    public void UpdateProjectItemQuantity_ClampsQuantityAndPublishesPlanStructure()
+    {
+        var appState = new AppState();
+        var item = new ProjectItem { Id = 100, Name = "Target", Quantity = 1 };
+        appState.ReplaceProjectItems([item]);
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        var changed = appState.UpdateProjectItemQuantity(item, 20_000);
+        var unchanged = appState.UpdateProjectItemQuantity(item, 9_999);
+
+        Assert.True(changed);
+        Assert.False(unchanged);
+        Assert.Equal(9_999, Assert.Single(appState.ProjectItems).Quantity);
+        var change = Assert.Single(changes);
+        Assert.True(change.HasScope(AppStateChangeScope.PlanStructure));
+    }
+
+    [Fact]
+    public void ProjectItems_ReturnSnapshotsThatCannotMutateBackingState()
+    {
+        var appState = new AppState();
+        var sourceItem = new ProjectItem { Id = 100, Name = "Target", Quantity = 1, MustBeHq = false };
+        appState.ReplaceProjectItems([sourceItem]);
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        sourceItem.Quantity = 99;
+        sourceItem.MustBeHq = true;
+        var publishedItem = Assert.Single(appState.ProjectItems);
+        publishedItem.Quantity = 123;
+        publishedItem.MustBeHq = true;
+
+        var currentItem = Assert.Single(appState.ProjectItems);
+        Assert.Equal(1, currentItem.Quantity);
+        Assert.False(currentItem.MustBeHq);
+        Assert.Empty(changes);
     }
 
     [Fact]
@@ -563,23 +699,14 @@ public class AppStatePerformanceStateTests
         Assert.True(change.HasScope(AppStateChangeScope.ShoppingItems));
         Assert.True(change.HasScope(AppStateChangeScope.MarketAnalysis));
         Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
+        Assert.True(change.HasScope(AppStateChangeScope.Settings));
     }
 
     [Fact]
     public void AutoSaveGuard_SkipsWhenCleanAndBlocksConcurrentSave()
     {
-        var appState = new AppState
-        {
-            ProjectItems =
-            [
-                new ProjectItem
-                {
-                    Id = 123,
-                    Name = "Current Item",
-                    Quantity = 10
-                }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 123, Name = "Current Item", Quantity = 10 }]);
 
         Assert.True(appState.TryBeginAutoSave(out var capturedVersions, out var dirtyBuckets));
         Assert.Equal(PersistedStateBucket.PlanCore, dirtyBuckets);
@@ -588,5 +715,214 @@ public class AppStatePerformanceStateTests
         appState.CompleteAutoSave(succeeded: true, capturedVersions, dirtyBuckets);
 
         Assert.False(appState.TryBeginAutoSave(out _, out _));
+    }
+
+    [Fact]
+    public void AutoSaveLifecycleState_IsNotExternallyMutable()
+    {
+        var autoSaveTimerProperty = typeof(AppState).GetProperty("AutoSaveTimer");
+        var lastAutoSaveProperty = typeof(AppState).GetProperty(nameof(AppState.LastAutoSave));
+
+        Assert.Null(autoSaveTimerProperty);
+        Assert.NotNull(lastAutoSaveProperty);
+        Assert.Null(lastAutoSaveProperty.GetSetMethod(nonPublic: false));
+    }
+
+    [Fact]
+    public void RecordAutoSaveCompleted_UpdatesLastAutoSave()
+    {
+        var appState = new AppState();
+        var completedAt = new DateTime(2026, 5, 30, 12, 34, 56, DateTimeKind.Local);
+
+        appState.RecordAutoSaveCompleted(completedAt);
+
+        Assert.Equal(completedAt, appState.LastAutoSave);
+    }
+
+    [Fact]
+    public void SetMarketEvidenceSettings_WhenLocationChanges_ClearsMarketAnalysisAndProcurementOverlay()
+    {
+        var appState = new AppState();
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 100, Name = "Market Item" }],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Market Item" }]);
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 100, Name = "Route Item" }]);
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        appState.SetMarketEvidenceSettings(
+            dataCenter: "Primal",
+            region: "North America",
+            defaultFetchScope: MarketFetchScope.SelectedDataCenter,
+            searchEntireRegion: false,
+            autoFetchPricesOnRebuild: true);
+
+        var change = Assert.Single(changes);
+        Assert.Equal("Primal", appState.SelectedDataCenter);
+        Assert.Empty(appState.ShoppingPlans);
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Empty(appState.ProcurementShoppingPlans);
+        Assert.True(change.HasScope(AppStateChangeScope.Settings));
+        Assert.True(change.HasScope(AppStateChangeScope.MarketAnalysis));
+        Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
+    }
+
+    [Fact]
+    public void SetProcurementSettings_WhenRouteMeaningChanges_ClearsProcurementOverlayOnly()
+    {
+        var appState = new AppState();
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 100, Name = "Market Item" }],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Market Item" }]);
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 100, Name = "Route Item" }]);
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        appState.SetProcurementSettings(
+            searchEntireRegion: true,
+            enableSplitWorldPurchases: true,
+            travelTolerance: 7,
+            temporaryWorldBlacklistDurationMinutes: 60);
+
+        var change = Assert.Single(changes);
+        Assert.True(appState.ProcurementSearchEntireRegion);
+        Assert.True(appState.ProcurementEnableSplitWorldPurchases);
+        Assert.Equal(7, appState.ProcurementTravelTolerance);
+        Assert.Single(appState.ShoppingPlans);
+        Assert.Single(appState.MarketItemAnalyses);
+        Assert.Empty(appState.ProcurementShoppingPlans);
+        Assert.True(change.HasScope(AppStateChangeScope.Settings));
+        Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
+        Assert.False(change.HasScope(AppStateChangeScope.MarketAnalysis));
+    }
+
+    [Fact]
+    public void SetMarketAnalysisLens_WhenChanged_PublishesSettingsOnly()
+    {
+        var appState = new AppState();
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        var changed = appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
+        var unchanged = appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
+
+        Assert.True(changed);
+        Assert.False(unchanged);
+        Assert.Equal(MarketAcquisitionLens.BulkValue, appState.MarketAnalysisLens);
+        var change = Assert.Single(changes);
+        Assert.True(change.HasScope(AppStateChangeScope.Settings));
+        Assert.False(change.HasScope(AppStateChangeScope.MarketAnalysis));
+        Assert.False(change.HasScope(AppStateChangeScope.ProcurementOverlay));
+    }
+
+    [Fact]
+    public void SetAutoSaveEnabled_WhenChanged_PublishesSettingsOnly()
+    {
+        var appState = new AppState();
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        var changed = appState.SetAutoSaveEnabled(false);
+        var unchanged = appState.SetAutoSaveEnabled(false);
+
+        Assert.True(changed);
+        Assert.False(unchanged);
+        Assert.False(appState.IsAutoSaveEnabled);
+        var change = Assert.Single(changes);
+        Assert.True(change.HasScope(AppStateChangeScope.Settings));
+        Assert.False(change.HasScope(AppStateChangeScope.MarketAnalysis));
+        Assert.False(change.HasScope(AppStateChangeScope.ProcurementOverlay));
+    }
+
+    [Fact]
+    public void SetMarketSortPreference_WhenChanged_PublishesSettingsOnly()
+    {
+        var appState = new AppState();
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        var changed = appState.SetMarketSortPreference(MarketSortOption.Alphabetical);
+        var unchanged = appState.SetMarketSortPreference(MarketSortOption.Alphabetical);
+
+        Assert.True(changed);
+        Assert.False(unchanged);
+        Assert.Equal(MarketSortOption.Alphabetical, appState.MarketSortPreference);
+        var change = Assert.Single(changes);
+        Assert.True(change.HasScope(AppStateChangeScope.Settings));
+        Assert.False(change.HasScope(AppStateChangeScope.MarketAnalysis));
+        Assert.False(change.HasScope(AppStateChangeScope.ProcurementOverlay));
+    }
+
+    [Fact]
+    public void ReplaceSavedPlans_CopiesIncomingSequenceAndRaisesLegacyEventOnly()
+    {
+        var appState = new AppState();
+        var source = new List<StoredPlanSummary>
+        {
+            new() { Id = "plan-1", Name = "Plan 1" }
+        };
+        var legacyEventCount = 0;
+        var stateChanges = new List<AppStateChange>();
+        appState.OnSavedPlansChanged += () => legacyEventCount++;
+        appState.OnStateChanged += stateChanges.Add;
+
+        appState.ReplaceSavedPlans(source);
+        source.Add(new StoredPlanSummary { Id = "plan-2", Name = "Plan 2" });
+
+        Assert.Equal(1, legacyEventCount);
+        Assert.Empty(stateChanges);
+        Assert.Equal("plan-1", Assert.Single(appState.SavedPlans).Id);
+    }
+
+    [Fact]
+    public void SavedPlans_IsNotCastableToMutableBackingCollection()
+    {
+        var appState = new AppState();
+        appState.ReplaceSavedPlans([new StoredPlanSummary { Id = "plan-1", Name = "Plan 1" }]);
+
+        Assert.IsNotType<List<StoredPlanSummary>>(appState.SavedPlans);
+    }
+
+    [Fact]
+    public void ClearSavedPlans_RaisesLegacyEventOnly()
+    {
+        var appState = new AppState();
+        appState.ReplaceSavedPlans([new StoredPlanSummary { Id = "plan-1", Name = "Plan 1" }]);
+        var legacyEventCount = 0;
+        var stateChanges = new List<AppStateChange>();
+        appState.OnSavedPlansChanged += () => legacyEventCount++;
+        appState.OnStateChanged += stateChanges.Add;
+
+        appState.ClearSavedPlans();
+
+        Assert.Equal(1, legacyEventCount);
+        Assert.Empty(stateChanges);
+        Assert.Empty(appState.SavedPlans);
+    }
+
+    [Fact]
+    public void TemporaryExclusionViews_AreNotCastableToMutableBackingCollections()
+    {
+        var appState = new AppState();
+        appState.BlacklistMarketWorldTemporarily(new MarketWorldKey("Aether", "Siren"));
+        appState.ExcludeItemWorldTemporarily(123, new MarketWorldKey("Aether", "Siren"));
+
+        Assert.IsNotType<HashSet<string>>(appState.TemporarilyBlacklistedWorlds);
+        Assert.IsNotType<HashSet<MarketWorldKey>>(appState.TemporarilyBlacklistedMarketWorlds);
+        Assert.IsNotType<HashSet<MarketItemWorldKey>>(appState.TemporarilyExcludedItemWorlds);
+    }
+
+    [Fact]
+    public void RequestMarketItemAutoExpand_PersistsUntilTargetConsumed()
+    {
+        var appState = new AppState();
+
+        appState.RequestMarketItemAutoExpand(123);
+
+        Assert.Equal(123, appState.AutoExpandItemId);
+        Assert.False(appState.ConsumeMarketItemAutoExpand(456));
+        Assert.Equal(123, appState.AutoExpandItemId);
+        Assert.True(appState.ConsumeMarketItemAutoExpand(123));
+        Assert.Null(appState.AutoExpandItemId);
     }
 }

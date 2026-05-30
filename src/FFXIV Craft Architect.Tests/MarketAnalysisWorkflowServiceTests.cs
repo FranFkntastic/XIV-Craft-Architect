@@ -12,13 +12,9 @@ public class MarketAnalysisWorkflowServiceTests
     [Fact]
     public async Task RunAnalysisAsync_PublishesAnalysisPersistsAndAutosaves()
     {
-        var appState = new AppState
-        {
-            CurrentPlanId = "saved-plan",
-            CurrentPlan = CreatePlan(),
-            SelectedDataCenter = "Aether",
-            SelectedRegion = "North America"
-        };
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(CreatePlan());
+        appState.TrackCurrentPlanIdentity("saved-plan", null);
         var jsRuntime = new RecordingJsRuntime();
         var execution = new Mock<IMarketAnalysisExecutionService>();
         execution.Setup(e => e.ExecuteAsync(
@@ -50,12 +46,8 @@ public class MarketAnalysisWorkflowServiceTests
     {
         var originalPlan = CreatePlan();
         var replacementPlan = CreatePlan(itemId: 2);
-        var appState = new AppState
-        {
-            CurrentPlan = originalPlan,
-            SelectedDataCenter = "Aether",
-            SelectedRegion = "North America"
-        };
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(originalPlan);
         var jsRuntime = new RecordingJsRuntime();
         var execution = new Mock<IMarketAnalysisExecutionService>();
         execution.Setup(e => e.ExecuteAsync(
@@ -63,7 +55,37 @@ public class MarketAnalysisWorkflowServiceTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>(),
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
-            .Callback(() => appState.CurrentPlan = replacementPlan)
+            .Callback(() => appState.ApplyBuiltRecipePlan(replacementPlan))
+            .ReturnsAsync(CreateExecutionResult());
+        var service = CreateService(appState, execution.Object, jsRuntime);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.False(result.Published);
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Empty(appState.ShoppingPlans);
+        Assert.Equal(0, jsRuntime.PatchMarketAnalysisCallCount);
+        Assert.Equal(0, jsRuntime.SavePlanCallCount);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_WhenMarketScopeChangesDuringExecution_DoesNotPublishStaleResults()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(CreatePlan());
+        var jsRuntime = new RecordingJsRuntime();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(() => appState.SetMarketEvidenceSettings(
+                "Aether",
+                "North America",
+                MarketFetchScope.SelectedDataCenter,
+                searchEntireRegion: true,
+                autoFetchPricesOnRebuild: true))
             .ReturnsAsync(CreateExecutionResult());
         var service = CreateService(appState, execution.Object, jsRuntime);
 
@@ -79,15 +101,12 @@ public class MarketAnalysisWorkflowServiceTests
     [Fact]
     public async Task ApplyLensAsync_ReprojectsExistingAnalysisAndPersists()
     {
-        var appState = new AppState
-        {
-            CurrentPlanId = "saved-plan",
-            CurrentPlan = CreatePlan(),
-            MarketItemAnalyses =
-            [
-                new MarketItemAnalysis { ItemId = 1, Name = "Material", QuantityNeeded = 2 }
-            ]
-        };
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(CreatePlan());
+        appState.TrackCurrentPlanIdentity("saved-plan", null);
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 1, Name = "Material", QuantityNeeded = 2 }],
+            []);
         var jsRuntime = new RecordingJsRuntime();
         var service = CreateService(appState, Mock.Of<IMarketAnalysisExecutionService>(), jsRuntime);
 

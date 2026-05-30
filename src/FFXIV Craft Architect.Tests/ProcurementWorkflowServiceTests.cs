@@ -13,7 +13,7 @@ public class ProcurementWorkflowServiceTests
     public async Task RunAnalysisAsync_PublishesProcurementOverlay()
     {
         var appState = CreateAppState();
-        appState.ShoppingPlans = [ShoppingPlan(101), ShoppingPlan(202)];
+        appState.ReplaceMarketAnalysis([], [ShoppingPlan(101), ShoppingPlan(202)]);
         var execution = new Mock<IProcurementRouteExecutionService>();
         execution.Setup(e => e.AnalyzeAsync(
                 It.IsAny<ProcurementRouteExecutionRequest>(),
@@ -86,7 +86,7 @@ public class ProcurementWorkflowServiceTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>(),
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
-            .Callback(() => appState.CurrentPlan = replacementPlan)
+            .Callback(() => appState.ApplyBuiltRecipePlan(replacementPlan))
             .ReturnsAsync(new ProcurementRouteExecutionResult([ShoppingPlan(101)], [], [], [], []));
         var service = CreateService(appState, procurementExecution: execution.Object);
 
@@ -120,11 +120,58 @@ public class ProcurementWorkflowServiceTests
     }
 
     [Fact]
+    public async Task RunAnalysisAsync_WhenProcurementSettingsChange_DoesNotPublish()
+    {
+        var appState = CreateAppState();
+        var execution = new Mock<IProcurementRouteExecutionService>();
+        execution.Setup(e => e.AnalyzeAsync(
+                It.IsAny<ProcurementRouteExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(() => appState.SetProcurementSettings(
+                searchEntireRegion: true,
+                enableSplitWorldPurchases: true,
+                travelTolerance: 11,
+                temporaryWorldBlacklistDurationMinutes: appState.TemporaryWorldBlacklistDurationMinutes))
+            .ReturnsAsync(new ProcurementRouteExecutionResult([ShoppingPlan(101)], [], [], [], []));
+        var service = CreateService(appState, procurementExecution: execution.Object);
+
+        var result = await service.RunAnalysisAsync(
+            new ProcurementWorkflowRequest(() => true, MarketAnalysisExecutionOptions.Synchronous));
+
+        Assert.Equal(ProcurementWorkflowStatus.StaleConfiguration, result.Status);
+        Assert.Empty(appState.ProcurementShoppingPlans);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_WhenMarketEvidenceChanges_DoesNotPublish()
+    {
+        var appState = CreateAppState();
+        var execution = new Mock<IProcurementRouteExecutionService>();
+        execution.Setup(e => e.AnalyzeAsync(
+                It.IsAny<ProcurementRouteExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(() => appState.ReplaceMarketAnalysis(
+                [new MarketItemAnalysis { ItemId = 303, Name = "New Evidence" }],
+                [ShoppingPlan(303)]))
+            .ReturnsAsync(new ProcurementRouteExecutionResult([ShoppingPlan(101)], [], [], [], []));
+        var service = CreateService(appState, procurementExecution: execution.Object);
+
+        var result = await service.RunAnalysisAsync(
+            new ProcurementWorkflowRequest(() => true, MarketAnalysisExecutionOptions.Synchronous));
+
+        Assert.Equal(ProcurementWorkflowStatus.StaleConfiguration, result.Status);
+        Assert.Empty(appState.ProcurementShoppingPlans);
+    }
+
+    [Fact]
     public async Task RefreshItemMarketDataAsync_ReplacesMarketAnalysisItemAndSavesCapturedPlan()
     {
         var appState = CreateAppState();
-        appState.CurrentPlanId = "plan-1";
-        appState.CurrentPlanName = "Saved Plan";
+        appState.TrackCurrentPlanIdentity("plan-1", "Saved Plan");
         var jsRuntime = new RecordingJsRuntime();
         var marketExecution = new Mock<IMarketAnalysisExecutionService>();
         marketExecution.Setup(e => e.ExecuteAsync(
@@ -164,7 +211,7 @@ public class ProcurementWorkflowServiceTests
     public async Task RefreshItemMarketDataAsync_WhenPlanChangesAfterFetch_DoesNotPublishOrSave()
     {
         var appState = CreateAppState();
-        appState.CurrentPlanId = "plan-1";
+        appState.TrackCurrentPlanIdentity("plan-1", null);
         var jsRuntime = new RecordingJsRuntime();
         var marketExecution = new Mock<IMarketAnalysisExecutionService>();
         marketExecution.Setup(e => e.ExecuteAsync(
@@ -172,7 +219,7 @@ public class ProcurementWorkflowServiceTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>(),
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
-            .Callback(() => appState.CurrentPlan = CreatePlan(303))
+            .Callback(() => appState.ApplyBuiltRecipePlan(CreatePlan(303)))
             .ReturnsAsync(new MarketAnalysisExecutionResult(
                 CreateEmptyEvidence(),
                 [new MarketItemAnalysis { ItemId = 101, Name = "Item 101", QuantityNeeded = 5 }],
@@ -196,7 +243,7 @@ public class ProcurementWorkflowServiceTests
     public async Task RefreshItemMarketDataAsync_WhenDecisionVersionChanges_DoesNotPublishOrSave()
     {
         var appState = CreateAppState();
-        appState.CurrentPlanId = "plan-1";
+        appState.TrackCurrentPlanIdentity("plan-1", null);
         var jsRuntime = new RecordingJsRuntime();
         var marketExecution = new Mock<IMarketAnalysisExecutionService>();
         marketExecution.Setup(e => e.ExecuteAsync(
@@ -228,7 +275,7 @@ public class ProcurementWorkflowServiceTests
     public async Task RefreshItemMarketDataAsync_WhenOperationNoLongerCurrent_DoesNotPublishOrSave()
     {
         var appState = CreateAppState();
-        appState.CurrentPlanId = "plan-1";
+        appState.TrackCurrentPlanIdentity("plan-1", null);
         var jsRuntime = new RecordingJsRuntime();
         var isCurrent = true;
         var marketExecution = new Mock<IMarketAnalysisExecutionService>();
@@ -257,6 +304,76 @@ public class ProcurementWorkflowServiceTests
         Assert.Empty(jsRuntime.PatchedPlanIds);
     }
 
+    [Fact]
+    public async Task RefreshItemMarketDataAsync_WhenProcurementSettingsChange_DoesNotPublishOrSave()
+    {
+        var appState = CreateAppState();
+        appState.TrackCurrentPlanIdentity("plan-1", null);
+        var jsRuntime = new RecordingJsRuntime();
+        var marketExecution = new Mock<IMarketAnalysisExecutionService>();
+        marketExecution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(() => appState.SetProcurementSettings(
+                searchEntireRegion: true,
+                enableSplitWorldPurchases: true,
+                travelTolerance: 11,
+                temporaryWorldBlacklistDurationMinutes: appState.TemporaryWorldBlacklistDurationMinutes))
+            .ReturnsAsync(new MarketAnalysisExecutionResult(
+                CreateEmptyEvidence(),
+                [new MarketItemAnalysis { ItemId = 101, Name = "Item 101", QuantityNeeded = 5 }],
+                [ShoppingPlan(101, "Siren")]));
+        var service = CreateService(appState, marketExecution: marketExecution.Object, jsRuntime: jsRuntime);
+
+        var result = await service.RefreshItemMarketDataAsync(
+            new ProcurementItemRefreshWorkflowRequest(
+                ItemId: 101,
+                ItemName: "Item 101",
+                IsCurrentOperation: () => true,
+                ExecutionOptions: MarketAnalysisExecutionOptions.Synchronous));
+
+        Assert.Equal(ProcurementItemRefreshStatus.StaleConfiguration, result.Status);
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Empty(appState.ShoppingPlans);
+        Assert.Empty(jsRuntime.PatchedPlanIds);
+    }
+
+    [Fact]
+    public async Task RefreshItemMarketDataAsync_WhenMarketEvidenceChanges_DoesNotPublishOrSave()
+    {
+        var appState = CreateAppState();
+        appState.TrackCurrentPlanIdentity("plan-1", null);
+        var jsRuntime = new RecordingJsRuntime();
+        var marketExecution = new Mock<IMarketAnalysisExecutionService>();
+        marketExecution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(() => appState.ReplaceMarketAnalysis(
+                [new MarketItemAnalysis { ItemId = 303, Name = "New Evidence" }],
+                [ShoppingPlan(303)]))
+            .ReturnsAsync(new MarketAnalysisExecutionResult(
+                CreateEmptyEvidence(),
+                [new MarketItemAnalysis { ItemId = 101, Name = "Item 101", QuantityNeeded = 5 }],
+                [ShoppingPlan(101, "Siren")]));
+        var service = CreateService(appState, marketExecution: marketExecution.Object, jsRuntime: jsRuntime);
+
+        var result = await service.RefreshItemMarketDataAsync(
+            new ProcurementItemRefreshWorkflowRequest(
+                ItemId: 101,
+                ItemName: "Item 101",
+                IsCurrentOperation: () => true,
+                ExecutionOptions: MarketAnalysisExecutionOptions.Synchronous));
+
+        Assert.Equal(ProcurementItemRefreshStatus.StaleConfiguration, result.Status);
+        Assert.Equal(303, Assert.Single(appState.MarketItemAnalyses).ItemId);
+        Assert.Equal(303, Assert.Single(appState.ShoppingPlans).ItemId);
+        Assert.Empty(jsRuntime.PatchedPlanIds);
+    }
+
     private static ProcurementWorkflowService CreateService(
         AppState appState,
         IProcurementRouteExecutionService? procurementExecution = null,
@@ -280,13 +397,14 @@ public class ProcurementWorkflowServiceTests
 
     private static AppState CreateAppState()
     {
-        return new AppState
-        {
-            CurrentPlan = CreatePlan(),
-            SelectedDataCenter = "Aether",
-            SelectedRegion = "North America",
-            ProcurementTravelTolerance = 7
-        };
+        var appState = new AppState();
+        appState.SetProcurementSettings(
+            searchEntireRegion: false,
+            enableSplitWorldPurchases: false,
+            travelTolerance: 7,
+            temporaryWorldBlacklistDurationMinutes: appState.TemporaryWorldBlacklistDurationMinutes);
+        appState.ApplyBuiltRecipePlan(CreatePlan());
+        return appState;
     }
 
     private static CraftingPlan CreatePlan(params int[] itemIds)
