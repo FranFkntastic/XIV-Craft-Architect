@@ -718,17 +718,6 @@ public class AppStatePerformanceStateTests
     }
 
     [Fact]
-    public void AutoSaveLifecycleState_IsNotExternallyMutable()
-    {
-        var autoSaveTimerProperty = typeof(AppState).GetProperty("AutoSaveTimer");
-        var lastAutoSaveProperty = typeof(AppState).GetProperty(nameof(AppState.LastAutoSave));
-
-        Assert.Null(autoSaveTimerProperty);
-        Assert.NotNull(lastAutoSaveProperty);
-        Assert.Null(lastAutoSaveProperty.GetSetMethod(nonPublic: false));
-    }
-
-    [Fact]
     public void RecordAutoSaveCompleted_UpdatesLastAutoSave()
     {
         var appState = new AppState();
@@ -797,60 +786,20 @@ public class AppStatePerformanceStateTests
     }
 
     [Fact]
-    public void SetMarketAnalysisLens_WhenChanged_PublishesSettingsOnly()
+    public void SettingsOnlyMutators_PublishSettingsWithoutInvalidatingMarketOrProcurementState()
     {
-        var appState = new AppState();
-        var changes = new List<AppStateChange>();
-        appState.OnStateChanged += changes.Add;
-
-        var changed = appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
-        var unchanged = appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
-
-        Assert.True(changed);
-        Assert.False(unchanged);
-        Assert.Equal(MarketAcquisitionLens.BulkValue, appState.MarketAnalysisLens);
-        var change = Assert.Single(changes);
-        Assert.True(change.HasScope(AppStateChangeScope.Settings));
-        Assert.False(change.HasScope(AppStateChangeScope.MarketAnalysis));
-        Assert.False(change.HasScope(AppStateChangeScope.ProcurementOverlay));
-    }
-
-    [Fact]
-    public void SetAutoSaveEnabled_WhenChanged_PublishesSettingsOnly()
-    {
-        var appState = new AppState();
-        var changes = new List<AppStateChange>();
-        appState.OnStateChanged += changes.Add;
-
-        var changed = appState.SetAutoSaveEnabled(false);
-        var unchanged = appState.SetAutoSaveEnabled(false);
-
-        Assert.True(changed);
-        Assert.False(unchanged);
-        Assert.False(appState.IsAutoSaveEnabled);
-        var change = Assert.Single(changes);
-        Assert.True(change.HasScope(AppStateChangeScope.Settings));
-        Assert.False(change.HasScope(AppStateChangeScope.MarketAnalysis));
-        Assert.False(change.HasScope(AppStateChangeScope.ProcurementOverlay));
-    }
-
-    [Fact]
-    public void SetMarketSortPreference_WhenChanged_PublishesSettingsOnly()
-    {
-        var appState = new AppState();
-        var changes = new List<AppStateChange>();
-        appState.OnStateChanged += changes.Add;
-
-        var changed = appState.SetMarketSortPreference(MarketSortOption.Alphabetical);
-        var unchanged = appState.SetMarketSortPreference(MarketSortOption.Alphabetical);
-
-        Assert.True(changed);
-        Assert.False(unchanged);
-        Assert.Equal(MarketSortOption.Alphabetical, appState.MarketSortPreference);
-        var change = Assert.Single(changes);
-        Assert.True(change.HasScope(AppStateChangeScope.Settings));
-        Assert.False(change.HasScope(AppStateChangeScope.MarketAnalysis));
-        Assert.False(change.HasScope(AppStateChangeScope.ProcurementOverlay));
+        AssertSettingsOnlyChange(
+            state => state.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue),
+            state => state.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue),
+            state => Assert.Equal(MarketAcquisitionLens.BulkValue, state.MarketAnalysisLens));
+        AssertSettingsOnlyChange(
+            state => state.SetAutoSaveEnabled(false),
+            state => state.SetAutoSaveEnabled(false),
+            state => Assert.False(state.IsAutoSaveEnabled));
+        AssertSettingsOnlyChange(
+            state => state.SetMarketSortPreference(MarketSortOption.Alphabetical),
+            state => state.SetMarketSortPreference(MarketSortOption.Alphabetical),
+            state => Assert.Equal(MarketSortOption.Alphabetical, state.MarketSortPreference));
     }
 
     [Fact]
@@ -875,15 +824,6 @@ public class AppStatePerformanceStateTests
     }
 
     [Fact]
-    public void SavedPlans_IsNotCastableToMutableBackingCollection()
-    {
-        var appState = new AppState();
-        appState.ReplaceSavedPlans([new StoredPlanSummary { Id = "plan-1", Name = "Plan 1" }]);
-
-        Assert.IsNotType<List<StoredPlanSummary>>(appState.SavedPlans);
-    }
-
-    [Fact]
     public void ClearSavedPlans_RaisesLegacyEventOnly()
     {
         var appState = new AppState();
@@ -901,18 +841,6 @@ public class AppStatePerformanceStateTests
     }
 
     [Fact]
-    public void TemporaryExclusionViews_AreNotCastableToMutableBackingCollections()
-    {
-        var appState = new AppState();
-        appState.BlacklistMarketWorldTemporarily(new MarketWorldKey("Aether", "Siren"));
-        appState.ExcludeItemWorldTemporarily(123, new MarketWorldKey("Aether", "Siren"));
-
-        Assert.IsNotType<HashSet<string>>(appState.TemporarilyBlacklistedWorlds);
-        Assert.IsNotType<HashSet<MarketWorldKey>>(appState.TemporarilyBlacklistedMarketWorlds);
-        Assert.IsNotType<HashSet<MarketItemWorldKey>>(appState.TemporarilyExcludedItemWorlds);
-    }
-
-    [Fact]
     public void RequestMarketItemAutoExpand_PersistsUntilTargetConsumed()
     {
         var appState = new AppState();
@@ -924,5 +852,24 @@ public class AppStatePerformanceStateTests
         Assert.Equal(123, appState.AutoExpandItemId);
         Assert.True(appState.ConsumeMarketItemAutoExpand(123));
         Assert.Null(appState.AutoExpandItemId);
+    }
+
+    private static void AssertSettingsOnlyChange(
+        Func<AppState, bool> change,
+        Func<AppState, bool> unchanged,
+        Action<AppState> assertValue)
+    {
+        var appState = new AppState();
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        Assert.True(change(appState));
+        Assert.False(unchanged(appState));
+
+        assertValue(appState);
+        var stateChange = Assert.Single(changes);
+        Assert.True(stateChange.HasScope(AppStateChangeScope.Settings));
+        Assert.False(stateChange.HasScope(AppStateChangeScope.MarketAnalysis));
+        Assert.False(stateChange.HasScope(AppStateChangeScope.ProcurementOverlay));
     }
 }

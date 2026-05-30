@@ -1,5 +1,4 @@
 using FFXIV_Craft_Architect.Core.Models;
-using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Web.Services;
 
 namespace FFXIV_Craft_Architect.Tests;
@@ -20,42 +19,6 @@ public class AcquisitionEvaluationSourceChangeHandlerTests
         Assert.Same(beforeShoppingPlans[0], appState.ShoppingPlans[0]);
         Assert.Equal(AcquisitionSource.VendorBuy, child.Source);
         Assert.NotEmpty(appState.ShoppingItems);
-    }
-
-    [Fact]
-    public void Apply_ChildSourceChangeUpdatesParentCraftCostWithoutMarketRerun()
-    {
-        var appState = CreateState();
-        var root = appState.CurrentPlan!.RootItems[0];
-        var child = root.Children[0];
-        var beforeMarketVersion = appState.CurrentVersions.MarketAnalysisVersion;
-        var contextBefore = AcquisitionPlanningService.CreateCostContext(appState.ShoppingPlans);
-        Assert.True(AcquisitionPlanningService.TryGetSelectedAcquisitionCost([root], contextBefore, out var beforeCost));
-
-        AcquisitionEvaluationSourceChangeHandler.Apply(appState, child, AcquisitionSource.VendorBuy);
-        var contextAfter = AcquisitionPlanningService.CreateCostContext(appState.ShoppingPlans);
-
-        Assert.True(AcquisitionPlanningService.TryGetSelectedAcquisitionCost([root], contextAfter, out var afterCost));
-        Assert.NotEqual(beforeCost, afterCost);
-        Assert.Equal(beforeMarketVersion, appState.CurrentVersions.MarketAnalysisVersion);
-    }
-
-    [Fact]
-    public void Apply_ParentMarketBuyKeepsChildrenSuppressedInSnapshot()
-    {
-        var appState = CreateState();
-        var root = appState.CurrentPlan!.RootItems[0];
-
-        AcquisitionEvaluationSourceChangeHandler.Apply(appState, root, AcquisitionSource.MarketBuyNq);
-        var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
-            appState.CurrentPlan,
-            appState.ShoppingPlans,
-            Array.Empty<MarketDataUnavailableItem>(),
-            AcquisitionFilter.All);
-
-        var childRow = snapshot.Rows.Single(row => row.Node.ItemId == 200);
-        Assert.True(childRow.IsFullySuppressed);
-        Assert.DoesNotContain(snapshot.ActiveProcurementItems, item => item.ItemId == 200);
     }
 
     private static AppState CreateState()

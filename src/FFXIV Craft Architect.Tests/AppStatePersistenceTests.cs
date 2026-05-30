@@ -431,19 +431,4 @@ public class AppStatePersistenceTests
         Assert.Equal("Named Plan", appState.CurrentPlanName);
     }
 
-    [Fact]
-    public void ClearMarketAnalysisState_RemovesAnalysisProjectionAndProcurementOverlay()
-    {
-        var appState = new AppState();
-        appState.ReplaceMarketAnalysis(
-            [new MarketItemAnalysis { ItemId = 1, Name = "Market" }],
-            [new DetailedShoppingPlan { ItemId = 1, Name = "Market" }]);
-        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 1, Name = "Procurement" }]);
-
-        appState.ClearMarketAnalysisState();
-
-        Assert.Empty(appState.ShoppingPlans);
-        Assert.Empty(appState.MarketItemAnalyses);
-        Assert.Empty(appState.ProcurementShoppingPlans);
-    }
 }

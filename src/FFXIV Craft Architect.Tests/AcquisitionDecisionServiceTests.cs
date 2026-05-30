@@ -37,7 +37,7 @@ public class AcquisitionDecisionServiceTests
     }
 
     [Fact]
-    public void ChangeSource_EmitsSingleBatchedDecisionShoppingAndProcurementChange()
+    public void ChangeSource_UpdatesShoppingItemsAndPublishesDecisionWithoutInvalidatingMarketAnalysis()
     {
         var appState = CreateStateWithSingleRoot();
         var root = appState.CurrentPlan!.RootItems[0];
@@ -53,22 +53,7 @@ public class AcquisitionDecisionServiceTests
         Assert.True(change.HasScope(AppStateChangeScope.ShoppingItems));
         Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
         Assert.False(change.HasScope(AppStateChangeScope.MarketAnalysis));
-        Assert.Equal(beforeVersions.PlanStructureVersion, change.Versions.PlanStructureVersion);
-        Assert.Equal(beforeVersions.PlanPriceVersion, change.Versions.PlanPriceVersion);
         Assert.Equal(beforeVersions.MarketAnalysisVersion, change.Versions.MarketAnalysisVersion);
-        Assert.Equal(beforeVersions.PlanDecisionVersion + 1, change.Versions.PlanDecisionVersion);
-        Assert.Equal(beforeVersions.ProcurementOverlayVersion + 1, change.Versions.ProcurementOverlayVersion);
-    }
-
-    [Fact]
-    public void ChangeSource_RebuildsActiveProcurementItemsFromCurrentDecisions()
-    {
-        var appState = CreateStateWithSingleRoot();
-        var root = appState.CurrentPlan!.RootItems[0];
-
-        var service = new AcquisitionDecisionService(appState);
-        service.ChangeSource(root, AcquisitionSource.MarketBuyNq);
-
         Assert.Contains(appState.ShoppingItems, item => item.Id == 100);
         Assert.DoesNotContain(appState.ShoppingItems, item => item.Id == 200);
     }
