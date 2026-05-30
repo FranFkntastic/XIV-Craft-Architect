@@ -355,6 +355,7 @@ public class PlanPersistenceService : IPlanPersistenceService
             Quantity = node.Quantity,
             IsBuy = node.IsBuy,  // For backward compatibility
             Source = node.Source,
+            SourceReason = node.SourceReason,
             MustBeHq = node.MustBeHq,
             CanBeHq = node.CanBeHq,
             CanBuyFromVendor = node.CanBuyFromVendor,
@@ -406,15 +407,18 @@ public class PlanPersistenceService : IPlanPersistenceService
         if (fileNode.Source.HasValue)
         {
             node.Source = fileNode.Source.Value;
+            node.SourceReason = fileNode.SourceReason ?? AcquisitionSourceReason.Restored;
         }
         else if (fileNode.IsBuy)
         {
             // Legacy: IsBuy=true meant market purchase (default to NQ)
             node.Source = AcquisitionSource.MarketBuyNq;
+            node.SourceReason = AcquisitionSourceReason.Restored;
         }
         else
         {
             node.Source = AcquisitionSource.Craft;
+            node.SourceReason = AcquisitionSourceReason.Restored;
         }
         
         node.MustBeHq = fileNode.MustBeHq;
@@ -422,7 +426,6 @@ public class PlanPersistenceService : IPlanPersistenceService
         node.CanBuyFromVendor = fileNode.CanBuyFromVendor;
         node.CanBuyFromMarket = fileNode.CanBuyFromMarket;
         node.CanCraft = fileNode.CanCraft;
-        node.EnsureValidAcquisitionSource();
         node.IsCircularReference = fileNode.IsCircularReference;
 
         // Restore vendor options (backward compatible - may be null in old saves)
@@ -434,6 +437,7 @@ public class PlanPersistenceService : IPlanPersistenceService
             Currency = v.Currency
         }).ToList() ?? new List<VendorInfo>();
         node.SelectedVendorIndex = fileNode.SelectedVendorIndex;
+        node.EnsureValidAcquisitionSource();
 
         return node;
     }

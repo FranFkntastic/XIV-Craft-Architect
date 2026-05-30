@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
@@ -29,7 +30,10 @@ public class IndexedDbService
         try
         {
             await EnsureInitialized();
-            plan.SavedAt = DateTime.UtcNow;
+            if (plan.SavedAt == default)
+            {
+                plan.SavedAt = DateTime.UtcNow;
+            }
             var result = await _jsRuntime.InvokeAsync<bool>("IndexedDB.savePlan", plan);
             _logger?.LogInformation("Saved plan '{PlanName}' ({PlanId}) to IndexedDB", plan.Name, plan.Id);
             return result;
@@ -79,6 +83,25 @@ public class IndexedDbService
         {
             _logger?.LogError(ex, "Failed to load plans from IndexedDB");
             return new List<StoredPlan>();
+        }
+    }
+
+    /// <summary>
+    /// Load saved plan summaries without transferring full serialized plan payloads.
+    /// </summary>
+    public async Task<List<StoredPlanSummary>> LoadPlanSummariesAsync()
+    {
+        try
+        {
+            await EnsureInitialized();
+            var summaries = await _jsRuntime.InvokeAsync<List<StoredPlanSummary>>("IndexedDB.loadPlanSummaries");
+            _logger?.LogInformation("Loaded {Count} plan summaries from IndexedDB", summaries.Count);
+            return summaries;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to load plan summaries from IndexedDB");
+            return new List<StoredPlanSummary>();
         }
     }
 
@@ -164,24 +187,75 @@ public class IndexedDbService
     /// <summary>
     /// Save the current app state (auto-save functionality).
     /// </summary>
-    public async Task<bool> AutoSaveStateAsync(AppState state, string planName = "AutoSave")
+    public async Task<bool> AutoSaveStateAsync(
+        AppState state,
+        string planName = "AutoSave",
+        bool skipIfInFlight = false)
     {
+        AppStateAutoSaveLease? autoSaveLease = null;
+        var success = false;
+
         try
         {
+            var totalElapsed = Stopwatch.StartNew();
+
             if (state.CurrentPlan == null && !state.ProjectItems.Any())
                 return false;
 
+            autoSaveLease = await state.BeginAutoSaveAsync(skipIfInFlight);
+            if (autoSaveLease == null)
+                return false;
+
+            var snapshotElapsed = Stopwatch.StartNew();
             var planData = state.CreateStoredPlanSnapshot(
                 "autosave",
                 planName,
                 includeSourcePlanIdentity: true);
+            snapshotElapsed.Stop();
 
-            return await SavePlanAsync(planData);
+            StoredPlanSnapshotMetrics? metrics = null;
+            var metricsElapsed = Stopwatch.StartNew();
+            if (_logger?.IsEnabled(LogLevel.Debug) == true)
+            {
+                metrics = StoredPlanSnapshotMetrics.FromStoredPlan(planData);
+            }
+            metricsElapsed.Stop();
+
+            var saveElapsed = Stopwatch.StartNew();
+            success = await SavePlanAsync(planData);
+            saveElapsed.Stop();
+            totalElapsed.Stop();
+
+            if (metrics != null)
+            {
+                _logger?.LogDebug(
+                    "Auto-save wrote {PlanNodeCount} nodes, {ShoppingPlanCount} shopping plans, {MarketAnalysisCount} analyses, {TotalJsonBytes} JSON bytes in {TotalElapsedMs} ms (snapshot {SnapshotElapsedMs} ms, metrics {MetricsElapsedMs} ms, save {SaveElapsedMs} ms)",
+                    metrics.PlanNodeCount,
+                    metrics.ShoppingPlanCount,
+                    metrics.MarketAnalysisCount,
+                    metrics.TotalJsonBytes,
+                    totalElapsed.ElapsedMilliseconds,
+                    snapshotElapsed.ElapsedMilliseconds,
+                    metricsElapsed.ElapsedMilliseconds,
+                    saveElapsed.ElapsedMilliseconds);
+            }
+
+            return success;
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Failed to auto-save state");
             return false;
+        }
+        finally
+        {
+            if (autoSaveLease != null)
+            {
+                state.CompleteAutoSave(
+                    success,
+                    autoSaveLease.CapturedVersions,
+                    autoSaveLease.DirtyBuckets);
+            }
         }
     }
 
@@ -198,20 +272,13 @@ public class IndexedDbService
         try
         {
             await EnsureInitialized();
-            
-            // Load existing plan first
-            var existingPlan = await LoadPlanAsync(planId);
-            if (existingPlan == null)
-                return false;
-            
-            // Update with market data
-            existingPlan.MarketPlansJson = System.Text.Json.JsonSerializer.Serialize(shoppingPlans);
-            existingPlan.MarketItemAnalysesJson = System.Text.Json.JsonSerializer.Serialize(marketItemAnalyses);
-            existingPlan.SavedRecommendationMode = mode;
-            existingPlan.SavedMarketAnalysisLens = lens;
-            existingPlan.ModifiedAt = DateTime.UtcNow;
-            
-            return await SavePlanAsync(existingPlan);
+            return await _jsRuntime.InvokeAsync<bool>(
+                "IndexedDB.patchMarketAnalysis",
+                planId,
+                JsonSerializer.Serialize(shoppingPlans),
+                JsonSerializer.Serialize(marketItemAnalyses),
+                mode,
+                lens);
         }
         catch (Exception ex)
         {

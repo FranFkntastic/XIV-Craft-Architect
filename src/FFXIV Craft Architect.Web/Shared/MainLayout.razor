@@ -8,6 +8,9 @@
 @inject AppState AppState
 @inject ISettingsService Settings
 @inject IndexedDbService IndexedDb
+@inject WebPlanPersistenceService PlanPersistence
+@inject PlanSessionLoadService PlanSessionLoad
+@inject StartupInitializationService StartupInitialization
 @inject IJSRuntime JSRuntime
 @inject HttpClient Http
 @inject ISnackbar Snackbar
@@ -166,6 +169,9 @@
     <StatusBar />
 </MudLayout>
 
+<StartupLoadingOverlay Status="StartupInitialization.Status"
+                       OnContinue="StartupInitialization.ContinueAfterWarning" />
+
 @code {
     private bool _isDarkMode = true;
     private MudThemeProvider _mudThemeProvider = null!;
@@ -184,6 +190,7 @@
         
         // Listen for navigation changes
         NavigationManager.LocationChanged += OnLocationChanged;
+        StartupInitialization.StatusChanged += OnStartupStatusChanged;
     }
     
     protected override void OnAfterRender(bool firstRender)
@@ -198,18 +205,17 @@
     {
         if (firstRender)
         {
-            // Load settings
-            await LoadSettingsAsync();
-            
-            // Initialize world data (shared across all pages)
-            await AppState.InitializeWorldDataAsync(UniversalisService);
-            
-            // Restore auto-saved plan (if any) - this runs regardless of which page user is on
-            await RestoreAutoSaveAsync();
-            
-            // Start auto-save timer (app-wide)
-            AppState.StartAutoSaveTimer(AutoSaveCallback);
+            await StartupInitialization.InitializeAsync(new StartupInitializationSteps(
+                LoadSettingsAsync: _ => LoadSettingsAsync(),
+                InitializeWorldDataAsync: _ => AppState.InitializeWorldDataAsync(UniversalisService),
+                StartAutoSave: () => AppState.StartAutoSaveTimer(AutoSaveCallback),
+                RestoreAutoSaveAsync: _ => RestoreAutoSaveAsync()));
         }
+    }
+
+    private void OnStartupStatusChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
     }
     
     private async Task AutoSaveCallback()
@@ -219,7 +225,7 @@
             
         try
         {
-            var success = await IndexedDb.AutoSaveStateAsync(AppState);
+            var success = await IndexedDb.AutoSaveStateAsync(AppState, skipIfInFlight: true);
             if (success)
             {
                 AppState.LastAutoSave = DateTime.Now;
@@ -257,48 +263,61 @@
         catch { /* Ignore settings load errors */ }
     }
 
-    private async Task RestoreAutoSaveAsync()
+    private async Task<StartupAutoSaveRestoreResult> RestoreAutoSaveAsync()
     {
         try
         {
+            var totalElapsed = System.Diagnostics.Stopwatch.StartNew();
+
             // Only restore if no plan is currently loaded
             if (AppState.CurrentPlan != null || AppState.ProjectItems.Any())
-                return;
+                return StartupAutoSaveRestoreResult.NoAutoSave();
 
-            var autoSave = await IndexedDb.LoadAutoSaveAsync();
+            var loadElapsed = System.Diagnostics.Stopwatch.StartNew();
+            var autoSave = await PlanPersistence.LoadPlanPayloadAsync("autosave");
+            loadElapsed.Stop();
             if (autoSave?.ProjectItems.Any() != true)
-                return;
+                return StartupAutoSaveRestoreResult.NoAutoSave();
 
-            // Deserialize the plan
-            CraftingPlan? plan = null;
-            if (!string.IsNullOrEmpty(autoSave.PlanJson))
+            // Deserialize and validate the plan before applying state.
+            var planDeserializeElapsed = System.Diagnostics.Stopwatch.StartNew();
+            var loadResult = PlanSessionLoadService.Prepare(autoSave);
+            planDeserializeElapsed.Stop();
+            string? warning = null;
+            if (!string.IsNullOrWhiteSpace(loadResult.Warning))
             {
-                try
-                {
-                    plan = System.Text.Json.JsonSerializer.Deserialize<CraftingPlan>(autoSave.PlanJson);
-                }
-                catch (Exception ex)
-                {
-                    Logger?.LogWarning(ex, "Failed to deserialize plan JSON from auto-save");
-                }
+                warning = loadResult.Warning;
+                Logger?.LogWarning("Failed to deserialize plan JSON from auto-save: {Warning}", loadResult.Warning);
+            }
+
+            if (AppState.CurrentPlan != null || AppState.ProjectItems.Any())
+            {
+                Logger?.LogInformation("Skipped auto-save restore because a plan was loaded while restore was pending");
+                return StartupAutoSaveRestoreResult.NoAutoSave();
             }
 
             // Load the plan into AppState
-            AppState.LoadStoredPlan(autoSave, plan, trackStoredPlanIdentity: false);
-            
-            // Notify that plan has changed (will refresh UI)
-            AppState.NotifyPlanChanged();
-            AppState.NotifyShoppingListChanged();
+            var stateLoadElapsed = System.Diagnostics.Stopwatch.StartNew();
+            PlanSessionLoad.Load(autoSave, trackStoredPlanIdentity: false);
+            stateLoadElapsed.Stop();
+            totalElapsed.Stop();
             
             Snackbar.Add("Restored previous session", Severity.Info);
-            Logger?.LogInformation("Auto-restored plan '{PlanName}' with {ProjectItemCount} items and {MarketPlanCount} market plans", 
+            Logger?.LogInformation(
+                "Auto-restored plan '{PlanName}' with {ProjectItemCount} items and {MarketPlanCount} market plans in {TotalElapsedMs} ms (load {LoadElapsedMs} ms, plan JSON {PlanDeserializeElapsedMs} ms, state load {StateLoadElapsedMs} ms)",
                 autoSave.Name, 
                 autoSave.ProjectItems.Count,
-                AppState.ShoppingPlans.Count);
+                AppState.ShoppingPlans.Count,
+                totalElapsed.ElapsedMilliseconds,
+                loadElapsed.ElapsedMilliseconds,
+                planDeserializeElapsed.ElapsedMilliseconds,
+                stateLoadElapsed.ElapsedMilliseconds);
+            return StartupAutoSaveRestoreResult.Restored(warning);
         }
         catch (Exception ex)
         {
             Logger?.LogError(ex, "Failed to restore auto-save");
+            return StartupAutoSaveRestoreResult.Restored($"Failed to restore autosave: {ex.Message}");
         }
     }
 
@@ -367,28 +386,21 @@
     {
         try
         {
-            var storedPlan = await IndexedDb.LoadPlanAsync(planId);
-            if (storedPlan == null)
+            var result = await PlanPersistence.LoadPlanIntoSessionAsync(planId);
+            if (result == null)
             {
                 Snackbar.Add("Plan not found", Severity.Error);
                 return;
             }
-            
-            CraftingPlan? plan = null;
-            if (!string.IsNullOrEmpty(storedPlan.PlanJson))
+            if (!string.IsNullOrWhiteSpace(result.Warning))
             {
-                try
-                {
-                    plan = System.Text.Json.JsonSerializer.Deserialize<CraftingPlan>(storedPlan.PlanJson);
-                }
-                catch { /* Plan JSON may be incompatible, that's ok */ }
+                Snackbar.Add($"Warning: {result.Warning}", Severity.Warning);
             }
-            
-            AppState.LoadStoredPlan(storedPlan, plan);
-            Snackbar.Add($"Loaded '{storedPlan.Name}'", Severity.Success);
+
+            Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
             
             // Navigate to planner if we have a plan
-            if (plan != null || AppState.ProjectItems.Any())
+            if (result.Plan != null || AppState.ProjectItems.Any())
             {
                 // Use relative path (no leading slash) so it resolves against base href correctly
                 NavigationManager.NavigateTo("./");
@@ -402,18 +414,9 @@
     
     private async Task RefreshSavedPlansListAsync()
     {
-        var plans = await IndexedDb.LoadAllPlansAsync();
-        AppState.SavedPlans = plans
+        var summaries = await PlanPersistence.LoadPlanSummariesAsync();
+        AppState.SavedPlans = summaries
             .Where(p => p.Id != "autosave")
-            .Select(p => new StoredPlanSummary
-            {
-                Id = p.Id,
-                Name = p.Name,
-                ModifiedAt = p.ModifiedAt,
-                SavedAt = p.SavedAt,
-                DataCenter = p.DataCenter,
-                ItemCount = p.ProjectItems.Count
-            })
             .ToList();
         AppState.NotifySavedPlansChanged();
     }
@@ -778,6 +781,7 @@
         if (!_disposed)
         {
             NavigationManager.LocationChanged -= OnLocationChanged;
+            StartupInitialization.StatusChanged -= OnStartupStatusChanged;
             
             // Stop auto-save timer
             AppState.StopAutoSaveTimer();
@@ -785,10 +789,22 @@
             // Final auto-save on dispose
             if (AppState.IsAutoSaveEnabled)
             {
-            _ = IndexedDb.AutoSaveStateAsync(AppState);
+                _ = FinalAutoSaveAsync();
             }
             
             _disposed = true;
+        }
+    }
+
+    private async Task FinalAutoSaveAsync()
+    {
+        try
+        {
+            await IndexedDb.AutoSaveStateAsync(AppState);
+        }
+        catch (Exception ex)
+        {
+            Logger?.LogError(ex, "Final auto-save failed");
         }
     }
     

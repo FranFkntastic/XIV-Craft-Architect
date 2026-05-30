@@ -1,5 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Tests;
 
@@ -564,6 +565,112 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void GetAvailableSources_UsesSingleAcquisitionAvailabilityRule()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Flexible Item",
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            CanBuyFromVendor = true,
+            CanBeHq = true
+        };
+        node.Children.Add(new PlanNode
+        {
+            ItemId = 200,
+            Name = "Ingredient",
+            Parent = node
+        });
+
+        var sources = AcquisitionPlanningService.GetAvailableSources(node);
+
+        Assert.Equal(
+            [
+                AcquisitionSource.Craft,
+                AcquisitionSource.MarketBuyNq,
+                AcquisitionSource.MarketBuyHq,
+                AcquisitionSource.VendorBuy
+            ],
+            sources);
+    }
+
+    [Fact]
+    public void EnsureValidAcquisitionSource_InvalidMarketBuyFallsBackToCraftBeforeUnknown()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Craftable Only",
+            Source = AcquisitionSource.MarketBuyNq,
+            CanCraft = true,
+            CanBuyFromMarket = false
+        };
+        node.Children.Add(new PlanNode
+        {
+            ItemId = 200,
+            Name = "Ingredient",
+            Parent = node
+        });
+
+        AcquisitionPlanningService.EnsureValidAcquisitionSource(node);
+
+        Assert.Equal(AcquisitionSource.Craft, node.Source);
+        Assert.NotEqual(PriceSource.Untradeable, node.PriceSource);
+    }
+
+    [Fact]
+    public void TryGetSelectedAcquisitionCost_SumsCraftCostsAcrossOccurrences()
+    {
+        var first = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Shared Craft",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Yield = 1
+        };
+        first.Children.Add(new PlanNode
+        {
+            ItemId = 200,
+            Name = "Cheap Ingredient",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 50,
+            Parent = first
+        });
+        var second = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Shared Craft",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Yield = 1
+        };
+        second.Children.Add(new PlanNode
+        {
+            ItemId = 300,
+            Name = "Expensive Ingredient",
+            Quantity = 3,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 100,
+            Parent = second
+        });
+
+        var hasCost = AcquisitionPlanningService.TryGetSelectedAcquisitionCost(
+            [first, second],
+            Array.Empty<DetailedShoppingPlan>(),
+            out var cost);
+
+        Assert.True(hasCost);
+        Assert.Equal(400, cost);
+    }
+
+    [Fact]
     public void ApplyCheapestAcquisitionDefaults_RootCraftBeatsExpensiveMarket_SelectsCraft()
     {
         var root = new PlanNode
@@ -674,6 +781,466 @@ public class AcquisitionPlanningServiceTests
 
         Assert.Equal(1, changed);
         Assert.Equal(AcquisitionSource.VendorBuy, root.Source);
+    }
+
+    [Fact]
+    public void ApplyCheapestAcquisitionDefaults_SystemDefaultVendorCanChangeToCheaperCraft()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Craftable Vendor Default",
+            Quantity = 1,
+            Source = AcquisitionSource.VendorBuy,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanCraft = true,
+            CanBuyFromVendor = true,
+            VendorPrice = 1_000,
+            Yield = 1
+        };
+        root.Children.Add(new PlanNode
+        {
+            ItemId = 200,
+            Name = "Cheap Child",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanBuyFromMarket = true,
+            MarketPrice = 50,
+            Parent = root
+        });
+        var plan = new CraftingPlan { RootItems = [root] };
+
+        var changed = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(plan, Array.Empty<DetailedShoppingPlan>());
+
+        Assert.Equal(1, changed);
+        Assert.Equal(AcquisitionSource.Craft, root.Source);
+        Assert.Equal(AcquisitionSourceReason.SystemDefault, root.SourceReason);
+    }
+
+    [Fact]
+    public void ApplyCheapestAcquisitionDefaults_UserSelectedVendorIsPreservedWhenCraftIsCheaper()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "User Vendor Choice",
+            Quantity = 1,
+            Source = AcquisitionSource.VendorBuy,
+            SourceReason = AcquisitionSourceReason.UserSelected,
+            CanCraft = true,
+            CanBuyFromVendor = true,
+            VendorPrice = 1_000,
+            Yield = 1
+        };
+        root.Children.Add(new PlanNode
+        {
+            ItemId = 200,
+            Name = "Cheap Child",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 50,
+            Parent = root
+        });
+        var plan = new CraftingPlan { RootItems = [root] };
+
+        var changed = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(plan, Array.Empty<DetailedShoppingPlan>());
+
+        Assert.Equal(0, changed);
+        Assert.Equal(AcquisitionSource.VendorBuy, root.Source);
+        Assert.Equal(AcquisitionSourceReason.UserSelected, root.SourceReason);
+    }
+
+    [Fact]
+    public void SetAcquisitionSource_UserSelectionRecordsReason()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Selectable",
+            Source = AcquisitionSource.Craft,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanBuyFromVendor = true,
+            CanCraft = true
+        };
+
+        AcquisitionPlanningService.SetAcquisitionSource(
+            node,
+            AcquisitionSource.VendorBuy,
+            AcquisitionSourceReason.UserSelected);
+
+        Assert.Equal(AcquisitionSource.VendorBuy, node.Source);
+        Assert.Equal(AcquisitionSourceReason.UserSelected, node.SourceReason);
+    }
+
+    [Fact]
+    public void ReconcileAcquisitionDecisions_InvalidSourceCoercionCountsAsChange()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Invalid Selection",
+            Quantity = 1,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.UserSelected,
+            CanCraft = true,
+            CanBuyFromMarket = false,
+            Yield = 1
+        };
+        root.Children.Add(new PlanNode
+        {
+            ItemId = 200,
+            Name = "Child",
+            Quantity = 1,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 10,
+            Parent = root
+        });
+        var plan = new CraftingPlan { RootItems = [root] };
+
+        var changed = AcquisitionPlanningService.ReconcileAcquisitionDecisions(plan, Array.Empty<DetailedShoppingPlan>());
+
+        Assert.Equal(1, changed);
+        Assert.Equal(AcquisitionSource.Craft, root.Source);
+        Assert.Equal(AcquisitionSourceReason.RequiredByAvailability, root.SourceReason);
+    }
+
+    [Fact]
+    public void GetAvailableSources_PreservesSpecialCurrencyVendor()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Token Item",
+            Quantity = 1,
+            Source = AcquisitionSource.VendorSpecialCurrency,
+            SourceReason = AcquisitionSourceReason.UserSelected,
+            CanBuyFromVendor = true,
+            VendorOptions =
+            [
+                new VendorInfo
+                {
+                    Name = "Token Vendor",
+                    Price = 10,
+                    Currency = "bicolor gemstone"
+                }
+            ]
+        };
+
+        node.EnsureValidAcquisitionSource();
+
+        Assert.Contains(AcquisitionSource.VendorSpecialCurrency, AcquisitionPlanningService.GetAvailableSources(node));
+        Assert.Equal(AcquisitionSource.VendorSpecialCurrency, node.Source);
+        Assert.Equal(AcquisitionSourceReason.UserSelected, node.SourceReason);
+    }
+
+    [Fact]
+    public void GetAvailableSources_CraftWithoutChildren_DoesNotAdvertiseCraft()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Incomplete Craft",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            CanBuyFromMarket = true
+        };
+
+        var sources = AcquisitionPlanningService.GetAvailableSources(node);
+
+        Assert.DoesNotContain(AcquisitionSource.Craft, sources);
+        Assert.Contains(AcquisitionSource.MarketBuyNq, sources);
+    }
+
+    [Fact]
+    public void TryGetAcquisitionCost_MarketBuyHq_UsesShoppingPlanHqListings()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 100,
+            Name = "HQ Buy",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyHq,
+            MustBeHq = true,
+            CanBeHq = true,
+            CanBuyFromMarket = true,
+            HqMarketPrice = 10_000
+        };
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 100,
+                Name = "HQ Buy",
+                QuantityNeeded = 2,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 20_000,
+                    TotalQuantityPurchased = 2,
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 2,
+                            PricePerUnit = 100,
+                            IsHq = true
+                        }
+                    ]
+                }
+            }
+        };
+
+        var hasCost = AcquisitionPlanningService.TryGetAcquisitionCost(
+            node,
+            AcquisitionSource.MarketBuyHq,
+            marketPlans,
+            out var cost);
+
+        Assert.True(hasCost);
+        Assert.Equal(200, cost);
+    }
+
+    [Fact]
+    public void TryGetAcquisitionCost_MarketBuyHq_OnlyChargesNeededQuantityFromLargeListing()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 100,
+            Name = "HQ Buy",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyHq,
+            MustBeHq = true,
+            CanBeHq = true,
+            CanBuyFromMarket = true,
+            HqMarketPrice = 10_000
+        };
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 100,
+                Name = "HQ Buy",
+                QuantityNeeded = 2,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 20_000,
+                    TotalQuantityPurchased = 99,
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 99,
+                            PricePerUnit = 100,
+                            IsHq = true
+                        }
+                    ]
+                }
+            }
+        };
+
+        var hasCost = AcquisitionPlanningService.TryGetAcquisitionCost(
+            node,
+            AcquisitionSource.MarketBuyHq,
+            marketPlans,
+            out var cost);
+
+        Assert.True(hasCost);
+        Assert.Equal(200, cost);
+    }
+
+    [Fact]
+    public void TryGetSelectedAcquisitionCost_WithCostContext_UsesMarketEvidence()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Craft Root",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Yield = 1
+        };
+        var child = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Market Child",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 10_000,
+            Parent = root
+        };
+        root.Children.Add(child);
+
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 200,
+                Name = "Market Child",
+                QuantityNeeded = 2,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 150,
+                    TotalQuantityPurchased = 2
+                }
+            }
+        };
+
+        var context = AcquisitionPlanningService.CreateCostContext(marketPlans);
+
+        var hasCost = AcquisitionPlanningService.TryGetSelectedAcquisitionCost([root], context, out var cost);
+
+        Assert.True(hasCost);
+        Assert.Equal(150, cost);
+    }
+
+    [Fact]
+    public void AcquisitionCostContext_TryGetShoppingPlan_ReturnsPlanByItemId()
+    {
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new() { ItemId = 200, Name = "Market Child", QuantityNeeded = 2 }
+        };
+
+        var context = AcquisitionPlanningService.CreateCostContext(marketPlans);
+
+        Assert.True(context.TryGetShoppingPlan(200, out var shoppingPlan));
+        Assert.Equal("Market Child", shoppingPlan!.Name);
+        Assert.False(context.TryGetShoppingPlan(999, out _));
+    }
+
+    [Fact]
+    public void DetermineCheapestAcquisitionSource_WithCostContext_MatchesEnumerableApi()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 500,
+            Name = "Comparable Item",
+            Quantity = 3,
+            Source = AcquisitionSource.UnknownSource,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            CanBuyFromVendor = true,
+            VendorPrice = 400,
+            MarketPrice = 100,
+            HqMarketPrice = 500
+        };
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 500,
+                Name = "Comparable Item",
+                QuantityNeeded = 3,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 180,
+                    TotalQuantityPurchased = 3
+                }
+            }
+        };
+
+        var context = AcquisitionPlanningService.CreateCostContext(marketPlans);
+
+        var oldResult = AcquisitionPlanningService.DetermineCheapestAcquisitionSource(node, marketPlans);
+        var contextResult = AcquisitionPlanningService.DetermineCheapestAcquisitionSource(node, context);
+
+        Assert.Equal(oldResult, contextResult);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, contextResult);
+    }
+
+    [Fact]
+    public void TryGetSelectedAcquisitionCost_WithCostContext_ReusesMemoizedCraftCost()
+    {
+        var root = CreateTwoLevelCraftTree();
+        var context = AcquisitionPlanningService.CreateCostContext(Array.Empty<DetailedShoppingPlan>());
+
+        Assert.True(AcquisitionPlanningService.TryGetSelectedAcquisitionCost([root], context, out var firstCost));
+        var cachedEntriesAfterFirstCall = context.CachedCostEntryCount;
+        Assert.True(AcquisitionPlanningService.TryGetSelectedAcquisitionCost([root], context, out var secondCost));
+
+        Assert.Equal(firstCost, secondCost);
+        Assert.Equal(cachedEntriesAfterFirstCall, context.CachedCostEntryCount);
+        Assert.True(cachedEntriesAfterFirstCall > 1);
+    }
+
+    [Fact]
+    public void TryGetSelectedAcquisitionCost_WithCostContext_PricesDirectChildrenBySelectedSourceWhenCapabilityFlagsAreStale()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Craft Root",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Yield = 1
+        };
+        var child = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Restored Vendor Child",
+            Quantity = 2,
+            Source = AcquisitionSource.VendorBuy,
+            VendorPrice = 25,
+            CanBuyFromVendor = false,
+            Parent = root
+        };
+        root.Children.Add(child);
+        var context = AcquisitionPlanningService.CreateCostContext(Array.Empty<DetailedShoppingPlan>());
+
+        var hasCost = AcquisitionPlanningService.TryGetSelectedAcquisitionCost([root], context, out var cost);
+
+        Assert.True(hasCost);
+        Assert.Equal(50, cost);
+    }
+
+    [Fact]
+    public void DeserializePlan_CraftNodeKeepsSourceAfterChildrenAreLinked()
+    {
+        var service = new RecipeCalculationService(
+            new GarlandService(new HttpClient()),
+            new StubVendorCacheService());
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Craft Root",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            SourceReason = AcquisitionSourceReason.UserSelected,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            MarketPrice = 10_000,
+            Yield = 1
+        };
+        var child = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Child",
+            Quantity = 1,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            Parent = root,
+            MarketPrice = 100
+        };
+        root.Children.Add(child);
+        var plan = new CraftingPlan { RootItems = [root] };
+
+        var json = service.SerializePlan(plan);
+        var deserialized = service.DeserializePlan(json);
+
+        var restoredRoot = Assert.Single(deserialized!.RootItems);
+        Assert.Equal(AcquisitionSource.Craft, restoredRoot.Source);
+        Assert.Equal(AcquisitionSourceReason.UserSelected, restoredRoot.SourceReason);
+        Assert.Single(restoredRoot.Children);
     }
 
     [Fact]
@@ -809,6 +1376,43 @@ public class AcquisitionPlanningServiceTests
         };
     }
 
+    private static PlanNode CreateTwoLevelCraftTree()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Root",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Yield = 1
+        };
+        var intermediate = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Intermediate",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Yield = 1,
+            Parent = root
+        };
+        var raw = new PlanNode
+        {
+            ItemId = 300,
+            Name = "Raw",
+            Quantity = 5,
+            Source = AcquisitionSource.VendorBuy,
+            CanBuyFromVendor = true,
+            VendorPrice = 4,
+            Parent = intermediate
+        };
+
+        intermediate.Children.Add(raw);
+        root.Children.Add(intermediate);
+        return root;
+    }
+
     private static DetailedShoppingPlan CreateMarketPlan(
         int itemId,
         string name,
@@ -839,5 +1443,45 @@ public class AcquisitionPlanningServiceTests
                 }
             ]
         };
+    }
+
+    private sealed class StubVendorCacheService : IVendorCacheService
+    {
+        public int Count => 0;
+
+        public void Clear()
+        {
+        }
+
+        public VendorCacheEntry? Get(int itemId)
+        {
+            return null;
+        }
+
+        public Task<VendorCacheEntry?> GetOrFetchAsync(int itemId, CancellationToken ct = default)
+        {
+            return Task.FromResult<VendorCacheEntry?>(null);
+        }
+
+        public Task<Dictionary<int, VendorCacheEntry>> GetOrFetchBatchAsync(
+            IEnumerable<int> itemIds,
+            CancellationToken ct = default)
+        {
+            return Task.FromResult(new Dictionary<int, VendorCacheEntry>());
+        }
+
+        public Task LoadAsync(CancellationToken ct = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task SaveAsync(CancellationToken ct = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public void Set(int itemId, VendorCacheEntry entry)
+        {
+        }
     }
 }

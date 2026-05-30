@@ -1,4 +1,3 @@
-using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 
@@ -73,6 +72,23 @@ namespace FFXIV_Craft_Architect.Web.Services;
 /// </summary>
 public class AppState
 {
+    private long _planStructureVersion;
+    private long _planDecisionVersion;
+    private long _planPriceVersion;
+    private long _planCoreVersion;
+    private long _marketAnalysisVersion;
+    private long _procurementOverlayVersion;
+    private long _settingsVersion;
+    private long _statusVersion;
+    private long _lastPersistedPlanCoreVersion = -1;
+    private long _lastPersistedMarketAnalysisVersion = -1;
+    private readonly SemaphoreSlim _autoSaveSemaphore = new(1, 1);
+    private int _changeBatchDepth;
+    private AppStateChangeScope _batchedScopes = AppStateChangeScope.None;
+    private bool _raisePlanChanged;
+    private bool _raiseShoppingListChanged;
+    private bool _raiseStatusChanged;
+
     // Recipe Planner State
     public CraftingPlan? CurrentPlan { get; set; }
     public List<ProjectItem> ProjectItems { get; set; } = new();
@@ -159,6 +175,17 @@ public class AppState
     public event Action? OnSavedPlansChanged;
     public event Action? OnStatusChanged;
     public event Action? OnRecipeTreeExpandChanged;
+    public event Action<AppStateChange>? OnStateChanged;
+
+    public AppStateVersionSnapshot CurrentVersions => new(
+        _planStructureVersion,
+        _planDecisionVersion,
+        _planPriceVersion,
+        _planCoreVersion,
+        _marketAnalysisVersion,
+        _procurementOverlayVersion,
+        _settingsVersion,
+        _statusVersion);
     
     // Recipe tree expand/collapse state (incremented to trigger re-evaluation)
     private int _recipeTreeExpandVersion = 0;
@@ -176,12 +203,39 @@ public class AppState
     
     public void NotifyPlanChanged()
     {
-        OnPlanChanged?.Invoke();
+        PublishChange(AppStateChangeScope.PlanStructure, raisePlanChanged: true);
     }
     
     public void NotifyShoppingListChanged()
     {
-        OnShoppingListChanged?.Invoke();
+        PublishChange(
+            AppStateChangeScope.MarketAnalysis | AppStateChangeScope.ShoppingItems,
+            raiseShoppingListChanged: true);
+    }
+
+    public void NotifyShoppingItemsChanged()
+    {
+        PublishChange(AppStateChangeScope.ShoppingItems, raiseShoppingListChanged: true);
+    }
+
+    public void NotifyPlanDecisionChanged()
+    {
+        PublishChange(AppStateChangeScope.PlanDecision, raisePlanChanged: true);
+    }
+
+    public void NotifyPlanPriceChanged()
+    {
+        PublishChange(AppStateChangeScope.PlanPrice, raisePlanChanged: true);
+    }
+
+    public void NotifyProcurementOverlayChanged()
+    {
+        PublishChange(AppStateChangeScope.ProcurementOverlay, raiseShoppingListChanged: true);
+    }
+
+    public void NotifySettingsChanged()
+    {
+        PublishChange(AppStateChangeScope.Settings);
     }
 
     public void SetUnavailableMarketItems(IReadOnlyList<MarketDataUnavailableItem> items)
@@ -200,7 +254,10 @@ public class AppState
         ShoppingPlans.Clear();
         MarketItemAnalyses.Clear();
         ProcurementShoppingPlans.Clear();
-        ClearUnavailableMarketItems();
+        UnavailableMarketItems = Array.Empty<MarketDataUnavailableItem>();
+        PublishChange(
+            AppStateChangeScope.MarketAnalysis | AppStateChangeScope.ProcurementOverlay,
+            raiseShoppingListChanged: true);
     }
 
     public void BlacklistMarketWorldTemporarily(MarketWorldKey world)
@@ -209,14 +266,14 @@ public class AppState
         TemporaryMarketWorldBlacklist.Add(world, duration);
         SyncTemporaryBlacklistSets();
         ProcurementShoppingPlans.Clear();
-        NotifyShoppingListChanged();
+        NotifyProcurementOverlayChanged();
     }
 
     public void ExcludeItemWorldTemporarily(int itemId, MarketWorldKey world)
     {
         TemporarilyExcludedItemWorlds.Add(new MarketItemWorldKey(itemId, world));
         ProcurementShoppingPlans.Clear();
-        NotifyShoppingListChanged();
+        NotifyProcurementOverlayChanged();
     }
 
     public int ActiveTemporaryExclusionCount =>
@@ -260,7 +317,7 @@ public class AppState
         TemporarilyBlacklistedWorlds.Clear();
         TemporarilyExcludedItemWorlds.Clear();
         ProcurementShoppingPlans.Clear();
-        NotifyShoppingListChanged();
+        NotifyProcurementOverlayChanged();
     }
 
     public bool PruneExpiredTemporaryMarketWorldBlacklists()
@@ -273,6 +330,7 @@ public class AppState
         }
 
         ProcurementShoppingPlans.Clear();
+        NotifyProcurementOverlayChanged();
         return true;
     }
     
@@ -284,7 +342,7 @@ public class AppState
     public void NotifyStatusChanged()
     {
         LastStatusUpdate = DateTime.Now;
-        OnStatusChanged?.Invoke();
+        PublishChange(AppStateChangeScope.Status, raiseStatusChanged: true);
     }
     
     /// <summary>
@@ -412,35 +470,12 @@ public class AppState
         DateTime? savedAt = null,
         bool includeSourcePlanIdentity = false)
     {
-        return new StoredPlan
-        {
-            Id = planId,
-            Name = planName,
-            DataCenter = SelectedDataCenter,
-            ModifiedAt = DateTime.UtcNow,
-            SavedAt = savedAt ?? DateTime.UtcNow,
-            ProjectItems = ProjectItems.Select(p => new StoredProjectItem
-            {
-                Id = p.Id,
-                Name = p.Name,
-                IconId = p.IconId,
-                Quantity = p.Quantity,
-                MustBeHq = p.MustBeHq
-            }).ToList(),
-            PlanJson = CurrentPlan != null
-                ? JsonSerializer.Serialize(CurrentPlan)
-                : null,
-            MarketPlansJson = ShoppingPlans.Any()
-                ? JsonSerializer.Serialize(ShoppingPlans)
-                : null,
-            MarketItemAnalysesJson = MarketItemAnalyses.Any()
-                ? JsonSerializer.Serialize(MarketItemAnalyses)
-                : null,
-            SavedRecommendationMode = RecommendationMode,
-            SavedMarketAnalysisLens = MarketAnalysisLens,
-            SourcePlanId = includeSourcePlanIdentity ? CurrentPlanId : null,
-            SourcePlanName = includeSourcePlanIdentity ? CurrentPlanName : null
-        };
+        return StoredPlanSnapshotBuilder.Build(
+            this,
+            planId,
+            planName,
+            savedAt,
+            includeSourcePlanIdentity);
     }
 
     /// <summary>
@@ -451,29 +486,23 @@ public class AppState
         CraftingPlan? deserializedPlan,
         bool trackStoredPlanIdentity = true)
     {
-        SelectedDataCenter = storedPlan.DataCenter;
-        
-        ProjectItems = storedPlan.ProjectItems.Select(p => new ProjectItem
-        {
-            Id = p.Id,
-            Name = p.Name,
-            IconId = p.IconId,
-            Quantity = p.Quantity,
-            MustBeHq = p.MustBeHq
-        }).ToList();
-        
-        CurrentPlan = deserializedPlan;
-        MarketItemAnalyses = DeserializeOrEmpty<MarketItemAnalysis>(storedPlan.MarketItemAnalysesJson);
-        if (!RestoredMarketAnalysisMatchesCurrentPlan(MarketItemAnalyses))
-        {
-            MarketItemAnalyses.Clear();
-        }
+        ApplyLoadedPlanSession(
+            PlanSessionLoadService.Prepare(storedPlan, deserializedPlan),
+            trackStoredPlanIdentity);
+    }
 
-        var restoredShoppingPlans = DeserializeOrEmpty<DetailedShoppingPlan>(storedPlan.MarketPlansJson);
-        ShoppingPlans = MarketItemAnalyses.Count > 0 &&
-                        RestoredShoppingPlansMatchMarketAnalysis(restoredShoppingPlans, MarketItemAnalyses)
-            ? restoredShoppingPlans
-            : new List<DetailedShoppingPlan>();
+    public void ApplyLoadedPlanSession(
+        PlanSessionLoadResult session,
+        bool trackStoredPlanIdentity = true)
+    {
+        using var batch = BeginStateChangeBatch();
+        var storedPlan = session.StoredPlan;
+
+        SelectedDataCenter = storedPlan.DataCenter;
+        ProjectItems = session.ProjectItems.ToList();
+        CurrentPlan = session.Plan;
+        MarketItemAnalyses = session.MarketItemAnalyses.ToList();
+        ShoppingPlans = session.ShoppingPlans.ToList();
         RecommendationMode = storedPlan.SavedRecommendationMode;
         MarketAnalysisLens = storedPlan.SavedMarketAnalysisLens;
         ProcurementShoppingPlans.Clear();
@@ -497,49 +526,128 @@ public class AppState
         NotifyShoppingListChanged();
     }
 
-    private bool RestoredMarketAnalysisMatchesCurrentPlan(IReadOnlyList<MarketItemAnalysis> analyses)
+    public IDisposable BeginStateChangeBatch()
     {
-        if (analyses.Count == 0)
+        _changeBatchDepth++;
+        return new StateChangeBatch(this);
+    }
+
+    public PersistedStateBucket GetDirtyPersistedBuckets()
+    {
+        var dirtyBuckets = PersistedStateBucket.None;
+
+        if (IsDirtyVersion(_planCoreVersion, _lastPersistedPlanCoreVersion, CurrentPlan != null || ProjectItems.Any()))
+        {
+            dirtyBuckets |= PersistedStateBucket.PlanCore;
+        }
+
+        if (IsDirtyVersion(_marketAnalysisVersion, _lastPersistedMarketAnalysisVersion, ShoppingPlans.Any() || MarketItemAnalyses.Any()))
+        {
+            dirtyBuckets |= PersistedStateBucket.MarketAnalysis;
+        }
+
+        return dirtyBuckets;
+    }
+
+    public bool IsPersistedBucketDirty(PersistedStateBucket bucket)
+    {
+        return (GetDirtyPersistedBuckets() & bucket) != PersistedStateBucket.None;
+    }
+
+    public void MarkPersisted(PersistedStateBucket buckets, AppStateVersionSnapshot versions)
+    {
+        if (buckets.HasFlag(PersistedStateBucket.PlanCore) &&
+            versions.PlanCoreVersion == _planCoreVersion)
+        {
+            _lastPersistedPlanCoreVersion = versions.PlanCoreVersion;
+        }
+
+        if (buckets.HasFlag(PersistedStateBucket.MarketAnalysis) &&
+            versions.MarketAnalysisVersion == _marketAnalysisVersion)
+        {
+            _lastPersistedMarketAnalysisVersion = versions.MarketAnalysisVersion;
+        }
+    }
+
+    public bool TryBeginAutoSave(
+        out AppStateVersionSnapshot capturedVersions,
+        out PersistedStateBucket dirtyBuckets)
+    {
+        capturedVersions = CurrentVersions;
+        dirtyBuckets = PersistedStateBucket.None;
+
+        if (CurrentPlan == null && !ProjectItems.Any())
         {
             return false;
         }
 
-        var candidates = CurrentPlan != null
-            ? AcquisitionPlanningService.GetMarketAnalysisCandidates(CurrentPlan)
-            : ProjectItems
-                .Where(item => item.Quantity > 0)
-                .Select(item => new MaterialAggregate
-                {
-                    ItemId = item.Id,
-                    Name = item.Name,
-                    IconId = item.IconId,
-                    TotalQuantity = item.Quantity
-                })
-                .ToList();
-        var expected = candidates.ToDictionary(candidate => candidate.ItemId, candidate => candidate.TotalQuantity);
-
-        return expected.Count == analyses.Count &&
-               analyses.All(analysis =>
-                   expected.TryGetValue(analysis.ItemId, out var quantityNeeded) &&
-                   quantityNeeded == analysis.QuantityNeeded);
-    }
-
-    private static bool RestoredShoppingPlansMatchMarketAnalysis(
-        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
-        IReadOnlyList<MarketItemAnalysis> analyses)
-    {
-        if (shoppingPlans.Count == 0)
+        if (!_autoSaveSemaphore.WaitAsync(0).GetAwaiter().GetResult())
         {
             return false;
         }
 
-        var expected = analyses.ToDictionary(analysis => analysis.ItemId, analysis => analysis.QuantityNeeded);
-        return expected.Count == shoppingPlans.Count &&
-               shoppingPlans.All(plan =>
-                   expected.TryGetValue(plan.ItemId, out var quantityNeeded) &&
-                   quantityNeeded == plan.QuantityNeeded);
+        dirtyBuckets = GetDirtyPersistedBuckets();
+        if (dirtyBuckets == PersistedStateBucket.None)
+        {
+            _autoSaveSemaphore.Release();
+            return false;
+        }
+
+        return true;
     }
-    
+
+    public async Task<AppStateAutoSaveLease?> BeginAutoSaveAsync(bool skipIfInFlight = false)
+    {
+        if (CurrentPlan == null && !ProjectItems.Any())
+        {
+            return null;
+        }
+
+        bool acquired;
+        if (skipIfInFlight)
+        {
+            acquired = await _autoSaveSemaphore.WaitAsync(0);
+        }
+        else
+        {
+            await _autoSaveSemaphore.WaitAsync();
+            acquired = true;
+        }
+
+        if (!acquired)
+        {
+            return null;
+        }
+
+        var capturedVersions = CurrentVersions;
+        var dirtyBuckets = GetDirtyPersistedBuckets();
+        if (dirtyBuckets == PersistedStateBucket.None)
+        {
+            _autoSaveSemaphore.Release();
+            return null;
+        }
+
+        return new AppStateAutoSaveLease(capturedVersions, dirtyBuckets);
+    }
+
+    public void CompleteAutoSave(
+        bool succeeded,
+        AppStateVersionSnapshot capturedVersions,
+        PersistedStateBucket dirtyBuckets)
+    {
+        try
+        {
+            if (succeeded)
+            {
+                MarkPersisted(dirtyBuckets, capturedVersions);
+            }
+        }
+        finally
+        {
+            _autoSaveSemaphore.Release();
+        }
+    }
+
     /// <summary>
     /// Clear the current plan ID (called when starting a new plan or after explicit "Save As")
     /// </summary>
@@ -624,23 +732,197 @@ public class AppState
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
-    private static List<T> DeserializeOrEmpty<T>(string? json)
+    private static bool IsDirtyVersion(long currentVersion, long persistedVersion, bool hasPersistableData)
     {
-        if (string.IsNullOrWhiteSpace(json))
+        return currentVersion != persistedVersion &&
+               (persistedVersion >= 0 || currentVersion > 0 || hasPersistableData);
+    }
+
+    private void PublishChange(
+        AppStateChangeScope scopes,
+        bool raisePlanChanged = false,
+        bool raiseShoppingListChanged = false,
+        bool raiseStatusChanged = false)
+    {
+        if (_changeBatchDepth > 0)
         {
-            return new List<T>();
+            var newScopes = scopes & ~_batchedScopes;
+            IncrementVersions(newScopes);
+            _batchedScopes |= scopes;
+            _raisePlanChanged |= raisePlanChanged;
+            _raiseShoppingListChanged |= raiseShoppingListChanged;
+            _raiseStatusChanged |= raiseStatusChanged;
+            return;
         }
 
-        try
+        IncrementVersions(scopes);
+        EmitChange(scopes, raisePlanChanged, raiseShoppingListChanged, raiseStatusChanged);
+    }
+
+    private void IncrementVersions(AppStateChangeScope scopes)
+    {
+        if (scopes.HasFlag(AppStateChangeScope.PlanStructure))
         {
-            return JsonSerializer.Deserialize<List<T>>(json) ?? new List<T>();
+            _planStructureVersion++;
         }
-        catch
+
+        if (scopes.HasFlag(AppStateChangeScope.PlanDecision))
         {
-            return new List<T>();
+            _planDecisionVersion++;
+        }
+
+        if (scopes.HasFlag(AppStateChangeScope.PlanPrice))
+        {
+            _planPriceVersion++;
+        }
+
+        if (scopes.HasFlag(AppStateChangeScope.MarketAnalysis))
+        {
+            _marketAnalysisVersion++;
+        }
+
+        if (scopes.HasFlag(AppStateChangeScope.ProcurementOverlay))
+        {
+            _procurementOverlayVersion++;
+        }
+
+        if (scopes.HasFlag(AppStateChangeScope.Settings))
+        {
+            _settingsVersion++;
+        }
+
+        if (scopes.HasFlag(AppStateChangeScope.Status))
+        {
+            _statusVersion++;
+        }
+
+        if ((scopes & AppStateChangeScope.PlanCore) != AppStateChangeScope.None)
+        {
+            _planCoreVersion++;
         }
     }
+
+    private void EndStateChangeBatch()
+    {
+        if (_changeBatchDepth == 0)
+        {
+            return;
+        }
+
+        _changeBatchDepth--;
+        if (_changeBatchDepth > 0 || _batchedScopes == AppStateChangeScope.None)
+        {
+            return;
+        }
+
+        var scopes = _batchedScopes;
+        var raisePlanChanged = _raisePlanChanged;
+        var raiseShoppingListChanged = _raiseShoppingListChanged;
+        var raiseStatusChanged = _raiseStatusChanged;
+
+        _batchedScopes = AppStateChangeScope.None;
+        _raisePlanChanged = false;
+        _raiseShoppingListChanged = false;
+        _raiseStatusChanged = false;
+
+        EmitChange(scopes, raisePlanChanged, raiseShoppingListChanged, raiseStatusChanged);
+    }
+
+    private void EmitChange(
+        AppStateChangeScope scopes,
+        bool raisePlanChanged,
+        bool raiseShoppingListChanged,
+        bool raiseStatusChanged)
+    {
+        OnStateChanged?.Invoke(new AppStateChange(scopes, CurrentVersions));
+
+        if (raisePlanChanged)
+        {
+            OnPlanChanged?.Invoke();
+        }
+
+        if (raiseShoppingListChanged)
+        {
+            OnShoppingListChanged?.Invoke();
+        }
+
+        if (raiseStatusChanged)
+        {
+            OnStatusChanged?.Invoke();
+        }
+    }
+
+    private sealed class StateChangeBatch : IDisposable
+    {
+        private readonly AppState _state;
+        private bool _disposed;
+
+        public StateChangeBatch(AppState state)
+        {
+            _state = state;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _state.EndStateChangeBatch();
+        }
+    }
+
 }
+
+[Flags]
+public enum AppStateChangeScope
+{
+    None = 0,
+    PlanStructure = 1 << 0,
+    PlanDecision = 1 << 1,
+    PlanPrice = 1 << 2,
+    MarketAnalysis = 1 << 3,
+    ProcurementOverlay = 1 << 4,
+    ShoppingItems = 1 << 5,
+    Settings = 1 << 6,
+    Status = 1 << 7,
+    PlanCore = PlanStructure | PlanDecision | PlanPrice | Settings
+}
+
+[Flags]
+public enum PersistedStateBucket
+{
+    None = 0,
+    PlanCore = 1 << 0,
+    MarketAnalysis = 1 << 1,
+    All = PlanCore | MarketAnalysis
+}
+
+public sealed record AppStateVersionSnapshot(
+    long PlanStructureVersion,
+    long PlanDecisionVersion,
+    long PlanPriceVersion,
+    long PlanCoreVersion,
+    long MarketAnalysisVersion,
+    long ProcurementOverlayVersion,
+    long SettingsVersion,
+    long StatusVersion);
+
+public sealed record AppStateChange(
+    AppStateChangeScope Scopes,
+    AppStateVersionSnapshot Versions)
+{
+    public bool HasScope(AppStateChangeScope scope)
+    {
+        return (Scopes & scope) == scope;
+    }
+}
+
+public sealed record AppStateAutoSaveLease(
+    AppStateVersionSnapshot CapturedVersions,
+    PersistedStateBucket DirtyBuckets);
 
 // PlannerProjectItem removed - now using FFXIV_Craft_Architect.Core.Models.ProjectItem
 

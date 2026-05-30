@@ -1,5 +1,6 @@
 @using FFXIV_Craft_Architect.Core.Helpers
 @using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
 @implements IDisposable
@@ -52,7 +53,7 @@
     [Parameter] public bool IsSelected { get; set; }
     [Parameter] public string? SelectedNodeId { get; set; }
     [Parameter] public EventCallback<PlanNode> OnNodeSelected { get; set; }
-    [Parameter] public EventCallback<PlanNode> OnHqChanged { get; set; }
+    [Parameter] public EventCallback<PlanNodeHqChangeRequest> OnHqChanged { get; set; }
     
     private bool _isExpanded = true;
     private int _lastExpandVersion = -1;
@@ -132,18 +133,7 @@
     {
         if (Node != null && Node.CanBeHq)
         {
-            Node.MustBeHq = !Node.MustBeHq;
-            // If switching to HQ and currently buying NQ, switch to HQ buy
-            if (Node.CanBuyFromMarket && Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyNq)
-            {
-                Node.Source = AcquisitionSource.MarketBuyHq;
-            }
-            // If switching to NQ and currently buying HQ, switch to NQ buy
-            else if (Node.CanBuyFromMarket && !Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyHq)
-            {
-                Node.Source = AcquisitionSource.MarketBuyNq;
-            }
-            await OnHqChanged.InvokeAsync(Node);
+            await OnHqChanged.InvokeAsync(new PlanNodeHqChangeRequest(Node, !Node.MustBeHq));
         }
     }
 
@@ -227,65 +217,9 @@
     private string GetPriceDisplay()
     {
         if (Node == null) return "";
-        
-        return Node.Source switch
-        {
-            AcquisitionSource.Craft => $"{CalculateCraftCost():N0}g",
-            AcquisitionSource.MarketBuyNq => Node.MarketPrice > 0 ? $"{(Node.MarketPrice * Node.Quantity):N0}g" : "",
-            AcquisitionSource.MarketBuyHq => Node.HqMarketPrice > 0 ? $"{(Node.HqMarketPrice * Node.Quantity):N0}g" : "",
-            AcquisitionSource.VendorBuy => Node.VendorPrice > 0 ? $"{(Node.VendorPrice * Node.Quantity):N0}g" : "",
-            _ => ""
-        };
-    }
 
-    private decimal CalculateCraftCost()
-    {
-        if (Node?.Children == null) return 0;
-        
-        decimal cost = 0;
-        foreach (var child in Node.Children)
-        {
-            cost += child.Source switch
-            {
-                AcquisitionSource.Craft => CalculateChildCraftCost(child),
-                AcquisitionSource.MarketBuyNq => child.MarketPrice * child.Quantity,
-                AcquisitionSource.MarketBuyHq => child.HqMarketPrice * child.Quantity,
-                AcquisitionSource.VendorBuy => child.VendorPrice > 0 ? child.VendorPrice * child.Quantity : 0,
-                _ => 0
-            };
-        }
-        
-        // Account for recipe yield: cost per item = total ingredient cost / yield
-        if (Node.Yield > 1)
-        {
-            return cost / Node.Yield;
-        }
-        
-        return cost;
-    }
-
-    private static decimal CalculateChildCraftCost(PlanNode node)
-    {
-        if (node.Children == null || !node.Children.Any()) 
-        {
-            // Leaf node: prefer vendor price if available, otherwise use market price
-            if (node.Source == AcquisitionSource.VendorBuy && node.VendorPrice > 0)
-                return node.VendorPrice * node.Quantity;
-            return node.MarketPrice * node.Quantity;
-        }
-        
-        decimal cost = 0;
-        foreach (var child in node.Children)
-        {
-            cost += child.Source switch
-            {
-                AcquisitionSource.Craft => CalculateChildCraftCost(child),
-                AcquisitionSource.MarketBuyNq => child.MarketPrice * child.Quantity,
-                AcquisitionSource.MarketBuyHq => child.HqMarketPrice * child.Quantity,
-                AcquisitionSource.VendorBuy => child.VendorPrice > 0 ? child.VendorPrice * child.Quantity : 0,
-                _ => 0
-            };
-        }
-        return cost;
+        return AcquisitionPlanningService.TryGetAcquisitionCost(Node, Node.Source, AppState.ShoppingPlans, out var cost)
+            ? $"{cost:N0}g"
+            : "";
     }
 }

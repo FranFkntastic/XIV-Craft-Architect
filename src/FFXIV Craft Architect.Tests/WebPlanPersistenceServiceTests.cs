@@ -1,0 +1,181 @@
+using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Web.Services;
+using Microsoft.JSInterop;
+
+namespace FFXIV_Craft_Architect.Tests;
+
+public class WebPlanPersistenceServiceTests
+{
+    [Fact]
+    public async Task LoadPlanSummariesAsync_UsesSummaryEndpoint()
+    {
+        var jsRuntime = new RecordingJsRuntime();
+        var service = CreateService(jsRuntime);
+
+        var summaries = await service.LoadPlanSummariesAsync();
+
+        Assert.Single(summaries);
+        Assert.Equal("IndexedDB.loadPlanSummaries", jsRuntime.LastIdentifier);
+        Assert.Equal(0, jsRuntime.LoadPlanCallCount);
+        Assert.Equal(0, jsRuntime.LoadAllPlansCallCount);
+    }
+
+    [Fact]
+    public async Task SaveCurrentPlanAsync_DoesNotLoadFullPayload()
+    {
+        var jsRuntime = new RecordingJsRuntime();
+        var appState = new AppState
+        {
+            ProjectItems =
+            [
+                new ProjectItem
+                {
+                    Id = 100,
+                    Name = "Saved Item",
+                    Quantity = 12
+                }
+            ]
+        };
+        var service = CreateService(jsRuntime, appState);
+
+        var saved = await service.SaveCurrentPlanAsync(
+            "plan-id",
+            "Saved Plan",
+            new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc));
+
+        Assert.True(saved);
+        Assert.Equal(0, jsRuntime.LoadPlanCallCount);
+        Assert.NotNull(jsRuntime.LastSavedPlan);
+        Assert.Equal("plan-id", jsRuntime.LastSavedPlan.Id);
+        Assert.Equal("Saved Plan", jsRuntime.LastSavedPlan.Name);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc), jsRuntime.LastSavedPlan.SavedAt);
+    }
+
+    [Fact]
+    public void PlanSessionLoadService_Prepare_InvalidPlanJsonReturnsWarning()
+    {
+        var storedPlan = new StoredPlan
+        {
+            Id = "broken",
+            Name = "Broken",
+            PlanJson = "{ this is not valid plan json"
+        };
+
+        var result = PlanSessionLoadService.Prepare(storedPlan);
+
+        Assert.Null(result.Plan);
+        Assert.Contains("Could not load full plan data", result.Warning);
+    }
+
+    [Fact]
+    public void PlanSessionLoadService_Prepare_RestoresPlanNodeParentLinks()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Final Craft",
+            NodeId = "root"
+        };
+        var child = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Intermediate",
+            NodeId = "child",
+            Parent = root
+        };
+        var grandchild = new PlanNode
+        {
+            ItemId = 300,
+            Name = "Raw Material",
+            NodeId = "grandchild",
+            Parent = child
+        };
+        child.Children.Add(grandchild);
+        root.Children.Add(child);
+
+        var storedPlan = new StoredPlan
+        {
+            Id = "saved",
+            Name = "Saved",
+            PlanJson = System.Text.Json.JsonSerializer.Serialize(new CraftingPlan { RootItems = [root] })
+        };
+
+        var result = PlanSessionLoadService.Prepare(storedPlan);
+
+        var restoredRoot = Assert.Single(result.Plan!.RootItems);
+        var restoredChild = Assert.Single(restoredRoot.Children);
+        var restoredGrandchild = Assert.Single(restoredChild.Children);
+        Assert.Null(restoredRoot.Parent);
+        Assert.Same(restoredRoot, restoredChild.Parent);
+        Assert.Equal(restoredRoot.NodeId, restoredChild.ParentNodeId);
+        Assert.Same(restoredChild, restoredGrandchild.Parent);
+        Assert.Equal(restoredChild.NodeId, restoredGrandchild.ParentNodeId);
+    }
+
+    private static WebPlanPersistenceService CreateService(RecordingJsRuntime jsRuntime, AppState? appState = null)
+    {
+        appState ??= new AppState();
+        var indexedDb = new IndexedDbService(jsRuntime);
+        return new WebPlanPersistenceService(
+            indexedDb,
+            new StoredPlanSnapshotBuilder(appState),
+            new PlanSessionLoadService(appState));
+    }
+
+    private sealed class RecordingJsRuntime : IJSRuntime
+    {
+        public int LoadPlanCallCount { get; private set; }
+        public int LoadAllPlansCallCount { get; private set; }
+        public string? LastIdentifier { get; private set; }
+        public StoredPlan? LastSavedPlan { get; private set; }
+
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
+        {
+            LastIdentifier = identifier;
+
+            if (identifier == "IndexedDB.loadPlanSummaries")
+            {
+                var summaries = new List<StoredPlanSummary>
+                {
+                    new()
+                    {
+                        Id = "saved-plan",
+                        Name = "Saved Plan",
+                        DataCenter = "Aether",
+                        ItemCount = 1
+                    }
+                };
+
+                return new ValueTask<TValue>((TValue)(object)summaries);
+            }
+
+            if (identifier == "IndexedDB.loadPlan")
+            {
+                LoadPlanCallCount++;
+                return new ValueTask<TValue>((TValue)(object?)null!);
+            }
+
+            if (identifier == "IndexedDB.loadAllPlans")
+            {
+                LoadAllPlansCallCount++;
+                return new ValueTask<TValue>((TValue)(object)new List<StoredPlan>());
+            }
+
+            if (identifier == "IndexedDB.savePlan")
+            {
+                LastSavedPlan = Assert.IsType<StoredPlan>(Assert.Single(args ?? []));
+                return new ValueTask<TValue>((TValue)(object)true);
+            }
+
+            throw new InvalidOperationException($"Unexpected JS invocation: {identifier}");
+        }
+
+        public ValueTask<TValue> InvokeAsync<TValue>(
+            string identifier,
+            CancellationToken cancellationToken,
+            object?[]? args)
+        {
+            return InvokeAsync<TValue>(identifier, args);
+        }
+    }
+}

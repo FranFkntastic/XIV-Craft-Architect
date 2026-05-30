@@ -107,12 +107,12 @@ public static class PlanBulkEditService
         {
             if (mustBeHq && node.Source == AcquisitionSource.MarketBuyNq)
             {
-                node.Source = AcquisitionSource.MarketBuyHq;
+                AcquisitionPlanningService.SetAcquisitionSource(node, AcquisitionSource.MarketBuyHq);
                 result.SwitchedMarketBuys++;
             }
             else if (!mustBeHq && node.Source == AcquisitionSource.MarketBuyHq)
             {
-                node.Source = AcquisitionSource.MarketBuyNq;
+                AcquisitionPlanningService.SetAcquisitionSource(node, AcquisitionSource.MarketBuyNq);
                 result.SwitchedMarketBuys++;
             }
         }
@@ -125,21 +125,12 @@ public static class PlanBulkEditService
         AcquisitionSource source,
         PlanBulkEditResult result)
     {
-        if (!CanApplySource(node, source) || node.Source == source)
+        if (!AcquisitionPlanningService.CanUseAcquisitionSource(node, source) || node.Source == source)
         {
             return false;
         }
 
-        node.Source = source;
-        if (source == AcquisitionSource.MarketBuyHq)
-        {
-            node.MustBeHq = true;
-        }
-        else if (source == AcquisitionSource.MarketBuyNq)
-        {
-            node.MustBeHq = false;
-        }
-
+        AcquisitionPlanningService.SetAcquisitionSource(node, source);
         return true;
     }
 
@@ -167,7 +158,7 @@ public static class PlanBulkEditService
 
             if (node.Source == AcquisitionSource.MarketBuyNq && node.CanBuyFromMarket)
             {
-                node.Source = AcquisitionSource.MarketBuyHq;
+                AcquisitionPlanningService.SetAcquisitionSource(node, AcquisitionSource.MarketBuyHq);
                 wasChanged = true;
                 result.SwitchedMarketBuys++;
             }
@@ -208,18 +199,6 @@ public static class PlanBulkEditService
         };
     }
 
-    private static bool CanApplySource(PlanNode node, AcquisitionSource source)
-    {
-        return source switch
-        {
-            AcquisitionSource.Craft => node.Children.Any() || node.CanCraft,
-            AcquisitionSource.MarketBuyNq => node.CanBuyFromMarket,
-            AcquisitionSource.MarketBuyHq => node.CanBuyFromMarket && node.CanBeHq,
-            AcquisitionSource.VendorBuy => node.CanBuyFromVendor,
-            AcquisitionSource.UnknownSource => !node.CanBuyFromMarket && !node.CanBuyFromVendor && !node.Children.Any(),
-            _ => false
-        };
-    }
 }
 
 public sealed class PlanBulkEditResult

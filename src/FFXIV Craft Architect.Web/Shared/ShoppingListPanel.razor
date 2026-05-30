@@ -11,10 +11,15 @@
     }
     else
     {
-        var materials = CurrentPlan.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList();
+        var materials = (Materials ?? CurrentPlan.AggregatedMaterials)
+            .Where(m => m.TotalQuantity > 0)
+            .ToList();
         var hqMaterials = materials.Count(m => m.RequiresHq);
         var pricedMaterials = materials.Count(m => m.UnitPrice > 0);
-        var unavailableMarketItems = UnavailableMarketItems.Where(i => materials.Any(m => m.ItemId == i.ItemId)).ToList();
+        var materialItemIds = materials.Select(m => m.ItemId).ToHashSet();
+        var unavailableMarketItems = UnavailableMarketItems
+            .Where(i => materialItemIds.Contains(i.ItemId))
+            .ToList();
         var unpricedMaterials = materials.Count - pricedMaterials;
 
         <div class="rp-panel">
@@ -87,5 +92,6 @@
 
 @code {
     [Parameter] public CraftingPlan? CurrentPlan { get; set; }
+    [Parameter] public IReadOnlyList<MaterialAggregate>? Materials { get; set; }
     [Parameter] public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<MarketDataUnavailableItem>();
 }

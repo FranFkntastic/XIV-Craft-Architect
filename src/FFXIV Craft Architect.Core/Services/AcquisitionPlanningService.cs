@@ -173,11 +173,7 @@ public static class AcquisitionPlanningService
         PlanNode node,
         IEnumerable<DetailedShoppingPlan> shoppingPlans)
     {
-        var planByItemId = shoppingPlans
-            .GroupBy(shoppingPlan => shoppingPlan.ItemId)
-            .ToDictionary(group => group.Key, group => group.First());
-
-        return CalculateCraftCost(node, planByItemId);
+        return CalculateCraftCost(node, CreateCostContext(shoppingPlans));
     }
 
     public static int ApplyCheapestAcquisitionDefaults(
@@ -189,11 +185,22 @@ public static class AcquisitionPlanningService
             return 0;
         }
 
-        var planByItemId = CreatePlanLookup(shoppingPlans);
+        return ApplyCheapestAcquisitionDefaults(plan, CreateCostContext(shoppingPlans));
+    }
+
+    public static int ApplyCheapestAcquisitionDefaults(
+        CraftingPlan? plan,
+        AcquisitionCostContext context)
+    {
+        if (plan == null)
+        {
+            return 0;
+        }
+
         var changed = 0;
         foreach (var root in plan.RootItems)
         {
-            changed += ApplyCheapestAcquisitionDefaults(root, planByItemId);
+            changed += ApplyCheapestAcquisitionDefaults(root, context);
         }
 
         return changed;
@@ -203,7 +210,14 @@ public static class AcquisitionPlanningService
         PlanNode node,
         IEnumerable<DetailedShoppingPlan> shoppingPlans)
     {
-        return DetermineCheapestAcquisitionSource(node, CreatePlanLookup(shoppingPlans));
+        return DetermineCheapestAcquisitionSource(node, CreateCostContext(shoppingPlans));
+    }
+
+    public static AcquisitionSource? DetermineCheapestAcquisitionSource(
+        PlanNode node,
+        AcquisitionCostContext context)
+    {
+        return DetermineCheapestAcquisitionSource(node, context.PlanByItemId, context);
     }
 
     public static bool TryGetAcquisitionCost(
@@ -212,12 +226,182 @@ public static class AcquisitionPlanningService
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
         out decimal cost)
     {
-        return TryGetAcquisitionCost(node, source, CreatePlanLookup(shoppingPlans), out cost);
+        return TryGetAcquisitionCost(node, source, CreateCostContext(shoppingPlans), out cost);
+    }
+
+    public static bool TryGetAcquisitionCost(
+        PlanNode node,
+        AcquisitionSource source,
+        AcquisitionCostContext context,
+        out decimal cost)
+    {
+        return TryGetAcquisitionCost(node, source, context.PlanByItemId, context, out cost);
+    }
+
+    public static int ReconcileAcquisitionDecisions(
+        CraftingPlan? plan,
+        IEnumerable<DetailedShoppingPlan> shoppingPlans)
+    {
+        return ApplyCheapestAcquisitionDefaults(plan, shoppingPlans);
+    }
+
+    public static int ReconcileAcquisitionDecisions(
+        CraftingPlan? plan,
+        AcquisitionCostContext context)
+    {
+        return ApplyCheapestAcquisitionDefaults(plan, context);
+    }
+
+    public static bool TryGetSelectedAcquisitionCost(
+        IEnumerable<PlanNode> nodes,
+        IEnumerable<DetailedShoppingPlan> shoppingPlans,
+        out decimal cost)
+    {
+        return TryGetSelectedAcquisitionCost(nodes, CreateCostContext(shoppingPlans), out cost);
+    }
+
+    public static bool TryGetSelectedAcquisitionCost(
+        IEnumerable<PlanNode> nodes,
+        AcquisitionCostContext context,
+        out decimal cost)
+    {
+        cost = 0;
+        var hasAnyCost = false;
+
+        foreach (var node in nodes)
+        {
+            if (!TryGetAcquisitionCost(node, node.Source, context, out var nodeCost))
+            {
+                continue;
+            }
+
+            cost += nodeCost;
+            hasAnyCost = true;
+        }
+
+        return hasAnyCost;
+    }
+
+    public static AcquisitionCostContext CreateCostContext(IEnumerable<DetailedShoppingPlan> shoppingPlans)
+    {
+        return new AcquisitionCostContext(CreatePlanLookup(shoppingPlans));
+    }
+
+    public static List<AcquisitionSource> GetAvailableSources(PlanNode node)
+    {
+        var sources = new List<AcquisitionSource>();
+
+        if (node.CanCraft && node.Children.Any())
+        {
+            sources.Add(AcquisitionSource.Craft);
+        }
+
+        if (node.CanBuyFromMarket)
+        {
+            if (!node.MustBeHq)
+            {
+                sources.Add(AcquisitionSource.MarketBuyNq);
+            }
+
+            if (node.CanBeHq)
+            {
+                sources.Add(AcquisitionSource.MarketBuyHq);
+            }
+        }
+
+        if (node.CanBuyFromVendor)
+        {
+            sources.Add(AcquisitionSource.VendorBuy);
+        }
+
+        if (HasSpecialCurrencyVendor(node) || node.Source == AcquisitionSource.VendorSpecialCurrency)
+        {
+            sources.Add(AcquisitionSource.VendorSpecialCurrency);
+        }
+
+        if (sources.Count == 0)
+        {
+            sources.Add(AcquisitionSource.UnknownSource);
+        }
+
+        return sources;
+    }
+
+    public static bool CanUseAcquisitionSource(PlanNode node, AcquisitionSource source)
+    {
+        return GetAvailableSources(node).Contains(source);
+    }
+
+    public static void SetAcquisitionSource(
+        PlanNode node,
+        AcquisitionSource source,
+        AcquisitionSourceReason reason = AcquisitionSourceReason.UserSelected)
+    {
+        var availableSources = GetAvailableSources(node);
+        if (availableSources.Contains(source))
+        {
+            node.Source = source;
+            node.SourceReason = availableSources.Count == 1
+                ? AcquisitionSourceReason.RequiredByAvailability
+                : reason;
+        }
+        else
+        {
+            node.Source = availableSources[0];
+            node.SourceReason = availableSources.Count == 1
+                ? AcquisitionSourceReason.RequiredByAvailability
+                : AcquisitionSourceReason.Coerced;
+        }
+
+        if (node.Source == AcquisitionSource.MarketBuyHq)
+        {
+            node.MustBeHq = true;
+        }
+        else if (node.Source == AcquisitionSource.MarketBuyNq)
+        {
+            node.MustBeHq = false;
+        }
+
+        EnsureValidAcquisitionSource(node);
+    }
+
+    public static void EnsureValidAcquisitionSource(PlanNode node)
+    {
+        var availableSources = GetAvailableSources(node);
+        if (availableSources.Contains(node.Source))
+        {
+            if (availableSources.Count == 1 && node.SourceReason != AcquisitionSourceReason.UserSelected)
+            {
+                node.SourceReason = AcquisitionSourceReason.RequiredByAvailability;
+            }
+
+            return;
+        }
+
+        node.Source = availableSources[0];
+        node.SourceReason = availableSources.Count == 1
+            ? AcquisitionSourceReason.RequiredByAvailability
+            : AcquisitionSourceReason.Coerced;
+        if (node.Source == AcquisitionSource.UnknownSource)
+        {
+            node.PriceSource = PriceSource.Untradeable;
+            node.PriceSourceDetails = "Unknown acquisition source";
+        }
     }
 
     public static bool TryGetMarketBoardPurchase(
         DetailedShoppingPlan? shoppingPlan,
         int quantity,
+        out WorldShoppingSummary? world,
+        out decimal cost)
+    {
+        return TryGetMarketBoardPurchase(shoppingPlan, quantity, hqOnly: false, out world, out cost);
+    }
+
+    private static bool TryGetMarketBoardPurchase(
+        DetailedShoppingPlan? shoppingPlan,
+        int quantity,
+        bool hqOnly,
         out WorldShoppingSummary? world,
         out decimal cost)
     {
@@ -227,6 +411,11 @@ public static class AcquisitionPlanningService
         if (shoppingPlan == null || quantity <= 0 || shoppingPlan.QuantityNeeded <= 0)
         {
             return false;
+        }
+
+        if (hqOnly)
+        {
+            return TryGetHqMarketBoardPurchase(shoppingPlan, quantity, out world, out cost);
         }
 
         var hasSplitCost = TryGetMarketBoardSplitCost(shoppingPlan, quantity, out var splitCost);
@@ -275,6 +464,70 @@ public static class AcquisitionPlanningService
 
         cost = worldCost;
         return true;
+    }
+
+    private static bool TryGetHqMarketBoardPurchase(
+        DetailedShoppingPlan shoppingPlan,
+        int quantity,
+        out WorldShoppingSummary? world,
+        out decimal cost)
+    {
+        world = null;
+        cost = 0;
+
+        var recommendedWorld = shoppingPlan.RecommendedWorld;
+        if (recommendedWorld != null &&
+            IsMarketWorld(recommendedWorld) &&
+            TryGetListingsCost(recommendedWorld.Listings, quantity, hqOnly: true, out cost))
+        {
+            world = recommendedWorld;
+            return true;
+        }
+
+        if (shoppingPlan.RecommendedSplit != null &&
+            TryGetListingsCost(
+                shoppingPlan.RecommendedSplit.SelectMany(split => split.Listings),
+                quantity,
+                hqOnly: true,
+                out cost))
+        {
+            return true;
+        }
+
+        var worldCosts = shoppingPlan.WorldOptions
+            .Where(IsMarketWorld)
+            .Select(option => new
+            {
+                World = option,
+                HasCost = TryGetListingsCost(option.Listings, quantity, hqOnly: true, out var worldCost),
+                Cost = worldCost
+            })
+            .Where(option => option.HasCost)
+            .OrderBy(option => option.Cost)
+            .ToList();
+        if (worldCosts.Any())
+        {
+            world = worldCosts[0].World;
+            cost = worldCosts[0].Cost;
+            return true;
+        }
+
+        if (TryGetListingsCost(
+            shoppingPlan.WorldOptions.Where(IsMarketWorld).SelectMany(option => option.Listings),
+            quantity,
+            hqOnly: true,
+            out cost))
+        {
+            return true;
+        }
+
+        if (shoppingPlan.HQAveragePrice is > 0)
+        {
+            cost = shoppingPlan.HQAveragePrice.Value * quantity;
+            return true;
+        }
+
+        return false;
     }
 
     private static void CollectMarketCandidate(PlanNode node, Dictionary<int, MaterialAggregate> aggregates)
@@ -400,28 +653,59 @@ public static class AcquisitionPlanningService
         PlanNode node,
         IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
     {
+        return ApplyCheapestAcquisitionDefaults(node, new AcquisitionCostContext(planByItemId));
+    }
+
+    private static int ApplyCheapestAcquisitionDefaults(
+        PlanNode node,
+        AcquisitionCostContext context)
+    {
         var changed = 0;
         foreach (var child in node.Children)
         {
-            changed += ApplyCheapestAcquisitionDefaults(child, planByItemId);
+            changed += ApplyCheapestAcquisitionDefaults(child, context);
         }
 
-        var bestSource = DetermineCheapestAcquisitionSource(node, planByItemId);
-        if (bestSource.HasValue && node.Source != bestSource.Value)
+        var originalSource = node.Source;
+        var bestSource = DetermineCheapestAcquisitionSource(node, context);
+        if (bestSource.HasValue &&
+            node.Source != bestSource.Value &&
+            CanAutomaticallyChangeSource(node))
         {
-            node.Source = bestSource.Value;
-            changed++;
+            SetAcquisitionSource(node, bestSource.Value, AcquisitionSourceReason.SystemDefault);
         }
 
         node.EnsureValidAcquisitionSource();
+        if (node.Source != originalSource)
+        {
+            changed++;
+        }
+
         return changed;
+    }
+
+    private static bool CanAutomaticallyChangeSource(PlanNode node)
+    {
+        return node.SourceReason is
+            AcquisitionSourceReason.SystemDefault or
+            AcquisitionSourceReason.Restored or
+            AcquisitionSourceReason.Coerced or
+            AcquisitionSourceReason.RequiredByAvailability;
     }
 
     private static AcquisitionSource? DetermineCheapestAcquisitionSource(
         PlanNode node,
         IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
     {
-        var candidates = GetAcquisitionCostCandidates(node, planByItemId)
+        return DetermineCheapestAcquisitionSource(node, planByItemId, context: null);
+    }
+
+    private static AcquisitionSource? DetermineCheapestAcquisitionSource(
+        PlanNode node,
+        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
+        AcquisitionCostContext? context)
+    {
+        var candidates = GetAcquisitionCostCandidates(node, planByItemId, context)
             .OrderBy(candidate => candidate.Cost)
             .ThenBy(candidate => GetSourceTieBreak(candidate.Source))
             .ToList();
@@ -433,38 +717,20 @@ public static class AcquisitionPlanningService
         PlanNode node,
         IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
     {
+        return GetAcquisitionCostCandidates(node, planByItemId, context: null);
+    }
+
+    private static IEnumerable<(AcquisitionSource Source, decimal Cost)> GetAcquisitionCostCandidates(
+        PlanNode node,
+        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
+        AcquisitionCostContext? context)
+    {
         foreach (var source in GetAvailableSources(node))
         {
-            if (TryGetAcquisitionCost(node, source, planByItemId, out var cost))
+            if (TryGetAcquisitionCost(node, source, planByItemId, context, out var cost))
             {
                 yield return (source, cost);
             }
-        }
-    }
-
-    private static IEnumerable<AcquisitionSource> GetAvailableSources(PlanNode node)
-    {
-        if (node.Children.Any() && node.CanCraft)
-        {
-            yield return AcquisitionSource.Craft;
-        }
-
-        if (node.CanBuyFromMarket)
-        {
-            if (!node.MustBeHq)
-            {
-                yield return AcquisitionSource.MarketBuyNq;
-            }
-
-            if (node.CanBeHq)
-            {
-                yield return AcquisitionSource.MarketBuyHq;
-            }
-        }
-
-        if (node.CanBuyFromVendor)
-        {
-            yield return AcquisitionSource.VendorBuy;
         }
     }
 
@@ -474,26 +740,48 @@ public static class AcquisitionPlanningService
         IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
         out decimal cost)
     {
+        return TryGetAcquisitionCost(node, source, planByItemId, context: null, out cost);
+    }
+
+    private static bool TryGetAcquisitionCost(
+        PlanNode node,
+        AcquisitionSource source,
+        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
+        AcquisitionCostContext? context,
+        out decimal cost)
+    {
+        if (context != null && context.TryGetCachedCost(node, source, out cost))
+        {
+            return cost > 0;
+        }
+
         cost = source switch
         {
-            AcquisitionSource.Craft when node.Children.Any() && node.CanCraft => CalculateCraftCost(node, planByItemId),
-            AcquisitionSource.MarketBuyNq when node.CanBuyFromMarket && !node.MustBeHq => GetMarketBuyCost(node, planByItemId),
-            AcquisitionSource.MarketBuyHq when node.CanBuyFromMarket && node.CanBeHq => node.HqMarketPrice * node.Quantity,
+            AcquisitionSource.Craft when node.Children.Any() && node.CanCraft => CalculateCraftCost(node, context ?? new AcquisitionCostContext(planByItemId)),
+            AcquisitionSource.MarketBuyNq when node.CanBuyFromMarket && !node.MustBeHq => GetMarketBuyCost(node, planByItemId, hqOnly: false),
+            AcquisitionSource.MarketBuyHq when node.CanBuyFromMarket && node.CanBeHq => GetMarketBuyCost(node, planByItemId, hqOnly: true),
             AcquisitionSource.VendorBuy when node.CanBuyFromVendor => node.VendorPrice * node.Quantity,
             _ => 0
         };
 
-        return cost > 0;
+        var hasCost = cost > 0;
+        if (context != null && hasCost)
+        {
+            context.SetCachedCost(node, source, cost);
+        }
+
+        return hasCost;
     }
 
     private static decimal GetMarketBuyCost(
         PlanNode node,
-        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
+        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
+        bool hqOnly)
     {
         return planByItemId.TryGetValue(node.ItemId, out var shoppingPlan) &&
-            TryGetMarketBoardPurchase(shoppingPlan, node.Quantity, out _, out var evidenceCost)
+            TryGetMarketBoardPurchase(shoppingPlan, node.Quantity, hqOnly, out _, out var evidenceCost)
                 ? evidenceCost
-                : node.MarketPrice * node.Quantity;
+                : (hqOnly ? node.HqMarketPrice : node.MarketPrice) * node.Quantity;
     }
 
     private static int GetSourceTieBreak(AcquisitionSource source)
@@ -512,20 +800,49 @@ public static class AcquisitionPlanningService
         PlanNode node,
         IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
     {
+        return CalculateCraftCost(node, new AcquisitionCostContext(planByItemId));
+    }
+
+    private static decimal CalculateCraftCost(
+        PlanNode node,
+        AcquisitionCostContext context)
+    {
+        if (context.TryGetCachedCost(node, AcquisitionSource.Craft, out var cached))
+        {
+            return cached;
+        }
+
         if (!node.Children.Any())
         {
-            return GetDirectAcquisitionCost(node, planByItemId);
+            var direct = GetDirectAcquisitionCost(node, context.PlanByItemId);
+            context.SetCachedCost(node, AcquisitionSource.Craft, direct);
+            return direct;
         }
 
         decimal cost = 0;
         foreach (var child in node.Children)
         {
-            cost += child.Source == AcquisitionSource.Craft
-                ? CalculateCraftCost(child, planByItemId)
-                : GetDirectAcquisitionCost(child, planByItemId);
+            if (child.Source == AcquisitionSource.Craft)
+            {
+                if (TryGetAcquisitionCost(child, child.Source, context, out var childCost))
+                {
+                    cost += childCost;
+                }
+
+                continue;
+            }
+
+            var directCost = GetDirectAcquisitionCost(child, context.PlanByItemId);
+            if (directCost > 0)
+            {
+                context.SetCachedCost(child, child.Source, directCost);
+                cost += directCost;
+            }
         }
 
-        return node.Yield > 1 ? cost / node.Yield : cost;
+        var result = node.Yield > 1 ? cost / node.Yield : cost;
+        context.SetCachedCost(node, AcquisitionSource.Craft, result);
+        return result;
     }
 
     private static decimal GetDirectAcquisitionCost(
@@ -534,7 +851,14 @@ public static class AcquisitionPlanningService
     {
         if (node.Source is AcquisitionSource.MarketBuyNq &&
             planByItemId.TryGetValue(node.ItemId, out var shoppingPlan) &&
-            TryGetMarketBoardPurchase(shoppingPlan, node.Quantity, out _, out var evidenceCost))
+            TryGetMarketBoardPurchase(shoppingPlan, node.Quantity, hqOnly: false, out _, out var evidenceCost))
+        {
+            return evidenceCost;
+        }
+
+        if (node.Source is AcquisitionSource.MarketBuyHq &&
+            planByItemId.TryGetValue(node.ItemId, out var hqShoppingPlan) &&
+            TryGetMarketBoardPurchase(hqShoppingPlan, node.Quantity, hqOnly: true, out _, out evidenceCost))
         {
             return evidenceCost;
         }
@@ -546,6 +870,37 @@ public static class AcquisitionPlanningService
             AcquisitionSource.VendorBuy => node.VendorPrice * node.Quantity,
             _ => 0
         };
+    }
+
+    private static bool HasSpecialCurrencyVendor(PlanNode node)
+    {
+        return node.VendorOptions.Any(vendor => !vendor.IsGilVendor);
+    }
+
+    private static bool TryGetListingsCost(
+        IEnumerable<ShoppingListingEntry> listings,
+        int quantity,
+        bool hqOnly,
+        out decimal cost)
+    {
+        cost = 0;
+        var remaining = quantity;
+        foreach (var listing in listings
+            .Where(listing => !hqOnly || listing.IsHq)
+            .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
+            .OrderBy(listing => listing.PricePerUnit))
+        {
+            var quantityToBuy = Math.Min(remaining, listing.Quantity);
+            cost += quantityToBuy * listing.PricePerUnit;
+            remaining -= quantityToBuy;
+            if (remaining <= 0)
+            {
+                return true;
+            }
+        }
+
+        cost = 0;
+        return false;
     }
 
     private static bool IsMarketWorld(WorldShoppingSummary? world)
@@ -597,3 +952,32 @@ public sealed record ProcurementEvidenceSummary(
 public sealed record ProcurementEvidenceSelection(
     IReadOnlyList<DetailedShoppingPlan> ReusablePlans,
     IReadOnlyList<MaterialAggregate> MissingItems);
+
+public sealed class AcquisitionCostContext
+{
+    private readonly Dictionary<(string NodeId, AcquisitionSource Source), decimal> _costByNodeAndSource = new();
+
+    internal AcquisitionCostContext(IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
+    {
+        PlanByItemId = planByItemId;
+    }
+
+    internal IReadOnlyDictionary<int, DetailedShoppingPlan> PlanByItemId { get; }
+
+    public int CachedCostEntryCount => _costByNodeAndSource.Count;
+
+    internal bool TryGetCachedCost(PlanNode node, AcquisitionSource source, out decimal cost)
+    {
+        return _costByNodeAndSource.TryGetValue((node.NodeId, source), out cost);
+    }
+
+    internal void SetCachedCost(PlanNode node, AcquisitionSource source, decimal cost)
+    {
+        _costByNodeAndSource[(node.NodeId, source)] = cost;
+    }
+
+    public bool TryGetShoppingPlan(int itemId, out DetailedShoppingPlan? shoppingPlan)
+    {
+        return PlanByItemId.TryGetValue(itemId, out shoppingPlan);
+    }
+}
