@@ -7,35 +7,11 @@ namespace FFXIV_Craft_Architect.Tests;
 public class WebPlanPersistenceServiceTests
 {
     [Fact]
-    public async Task LoadPlanSummariesAsync_UsesSummaryEndpoint()
-    {
-        var jsRuntime = new RecordingJsRuntime();
-        var service = CreateService(jsRuntime);
-
-        var summaries = await service.LoadPlanSummariesAsync();
-
-        Assert.Single(summaries);
-        Assert.Equal("IndexedDB.loadPlanSummaries", jsRuntime.LastIdentifier);
-        Assert.Equal(0, jsRuntime.LoadPlanCallCount);
-        Assert.Equal(0, jsRuntime.LoadAllPlansCallCount);
-    }
-
-    [Fact]
     public async Task SaveCurrentPlanAsync_DoesNotLoadFullPayload()
     {
         var jsRuntime = new RecordingJsRuntime();
-        var appState = new AppState
-        {
-            ProjectItems =
-            [
-                new ProjectItem
-                {
-                    Id = 100,
-                    Name = "Saved Item",
-                    Quantity = 12
-                }
-            ]
-        };
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 100, Name = "Saved Item", Quantity = 12 }]);
         var service = CreateService(jsRuntime, appState);
 
         var saved = await service.SaveCurrentPlanAsync(
@@ -125,40 +101,14 @@ public class WebPlanPersistenceServiceTests
     private sealed class RecordingJsRuntime : IJSRuntime
     {
         public int LoadPlanCallCount { get; private set; }
-        public int LoadAllPlansCallCount { get; private set; }
-        public string? LastIdentifier { get; private set; }
         public StoredPlan? LastSavedPlan { get; private set; }
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
         {
-            LastIdentifier = identifier;
-
-            if (identifier == "IndexedDB.loadPlanSummaries")
-            {
-                var summaries = new List<StoredPlanSummary>
-                {
-                    new()
-                    {
-                        Id = "saved-plan",
-                        Name = "Saved Plan",
-                        DataCenter = "Aether",
-                        ItemCount = 1
-                    }
-                };
-
-                return new ValueTask<TValue>((TValue)(object)summaries);
-            }
-
             if (identifier == "IndexedDB.loadPlan")
             {
                 LoadPlanCallCount++;
                 return new ValueTask<TValue>((TValue)(object?)null!);
-            }
-
-            if (identifier == "IndexedDB.loadAllPlans")
-            {
-                LoadAllPlansCallCount++;
-                return new ValueTask<TValue>((TValue)(object)new List<StoredPlan>());
             }
 
             if (identifier == "IndexedDB.savePlan")

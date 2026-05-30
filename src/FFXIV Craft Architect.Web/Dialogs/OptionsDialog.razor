@@ -173,12 +173,6 @@
         _defaultMarketFetchScope = ParseMarketFetchScope(
             await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.SelectedDataCenter)));
 
-        // Also sync to AppState for runtime use
-        AppState.IsAutoSaveEnabled = _autoSaveEnabled;
-        AppState.SelectedDataCenter = _defaultDataCenter;
-        AppState.SelectedRegion = _selectedRegion;
-        AppState.AutoFetchPricesOnRebuild = _autoFetchPricesOnRebuild;
-        AppState.DefaultMarketFetchScope = _defaultMarketFetchScope;
     }
     
     private List<string> GetAvailableDataCenters()
@@ -207,8 +201,7 @@
             if (result)
             {
                 Snackbar.Add("All plans deleted", Severity.Success);
-                AppState.SavedPlans.Clear();
-                AppState.NotifySavedPlansChanged();
+                AppState.ClearSavedPlans();
             }
             else
             {
@@ -223,12 +216,13 @@
     
     private async Task Save()
     {
-        // Update AppState for runtime use
-        AppState.IsAutoSaveEnabled = _autoSaveEnabled;
-        AppState.SelectedDataCenter = _defaultDataCenter;
-        AppState.SelectedRegion = _selectedRegion;
-        AppState.AutoFetchPricesOnRebuild = _autoFetchPricesOnRebuild;
-        AppState.DefaultMarketFetchScope = _defaultMarketFetchScope;
+        AppState.SetAutoSaveEnabled(_autoSaveEnabled);
+        AppState.SetMarketEvidenceSettings(
+            _defaultDataCenter,
+            _selectedRegion,
+            _defaultMarketFetchScope,
+            _defaultMarketFetchScope == MarketFetchScope.EntireRegion,
+            _autoFetchPricesOnRebuild);
 
         // Persist settings via ISettingsService
         await Settings.SetAsync("ui.auto_save_enabled", _autoSaveEnabled);

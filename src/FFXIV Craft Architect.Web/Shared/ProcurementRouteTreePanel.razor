@@ -126,7 +126,7 @@
 </div>
 
 @code {
-    [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
     [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnExcludeWorldForItemRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnRefreshItemRequested { get; set; }
@@ -135,8 +135,6 @@
 
     protected override void OnParametersSet()
     {
-        ShoppingPlans ??= new List<DetailedShoppingPlan>();
-
         if (_expandedWorlds.Count == 0)
         {
             foreach (var world in GetRouteCards().Take(3))
@@ -299,7 +297,7 @@
 
     private void GoToMarketAnalysis(WorldItemPurchase item)
     {
-        AppState.AutoExpandItemId = item.ItemId;
+        AppState.RequestMarketItemAutoExpand(item.ItemId);
         NavigationManager.NavigateTo("market");
     }
 

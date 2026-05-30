@@ -74,7 +74,8 @@
                             @item.Name
                         </div>
                         <input type="number"
-                               @bind="item.Quantity"
+                               value="@item.Quantity"
+                               @onchange="args => OnQuantityChanged(item, args)"
                                min="1"
                                max="9999"
                                class="lp-qty-input" />
@@ -133,13 +134,14 @@
     [Parameter] public DateTime? LastAutoSave { get; set; }
 
     [Parameter] public IReadOnlyList<GarlandSearchResult> SearchResults { get; set; } = Array.Empty<GarlandSearchResult>();
-    [Parameter] public IList<ProjectItem> ProjectItems { get; set; } = new List<ProjectItem>();
+    [Parameter] public IReadOnlyList<ProjectItem> ProjectItems { get; set; } = Array.Empty<ProjectItem>();
 
     [Parameter] public EventCallback OnSearchRequested { get; set; }
     [Parameter] public EventCallback OnOpenPlanBuilderRequested { get; set; }
     [Parameter] public EventCallback<GarlandSearchResult> OnAddProjectItem { get; set; }
     [Parameter] public EventCallback<ProjectItem> OnToggleItemHq { get; set; }
     [Parameter] public EventCallback<ProjectItem> OnRemoveProjectItem { get; set; }
+    [Parameter] public EventCallback<ProjectItemQuantityChangeRequest> OnUpdateItemQuantity { get; set; }
     [Parameter] public EventCallback OnBuildPlanRequested { get; set; }
     [Parameter] public EventCallback OnSavePlanRequested { get; set; }
     [Parameter] public EventCallback OnExportPlanRequested { get; set; }
@@ -148,4 +150,15 @@
     {
         return SearchQueryChanged.InvokeAsync(e.Value?.ToString() ?? string.Empty);
     }
+
+    private Task OnQuantityChanged(ProjectItem item, ChangeEventArgs args)
+    {
+        var quantity = int.TryParse(args.Value?.ToString(), out var parsed)
+            ? parsed
+            : item.Quantity;
+
+        return OnUpdateItemQuantity.InvokeAsync(new ProjectItemQuantityChangeRequest(item, quantity));
+    }
+
+    public sealed record ProjectItemQuantityChangeRequest(ProjectItem Item, int Quantity);
 }

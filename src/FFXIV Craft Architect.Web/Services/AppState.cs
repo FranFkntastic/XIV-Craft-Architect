@@ -1,12 +1,9 @@
+using System.Collections.Frozen;
+
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.Web.Services;
-
-/// <summary>
-/// Global application state that persists across pages.
-/// Centralizes WorldData, auto-save, and plan state management.
-/// </summary>
 
 /// <summary>
 /// Singleton application state service for the Blazor WebAssembly app.
@@ -21,31 +18,30 @@ namespace FFXIV_Craft_Architect.Web.Services;
 ///
 /// DATA FLOW:
 /// 1. Recipe Planner (Index.razor):
-///    - User adds items to ProjectItems list
+///    - User edits project items through AppState methods
 ///    - User clicks "Build Plan" → RecipeCalculationService.BuildPlanAsync()
-///    - Result stored in CurrentPlan
-///    - NotifyPlanChanged() triggers UI updates
+///    - Plan changes advance PlanSessionVersion so stale async work can be ignored
+///    - Plan-scoped notifications trigger UI updates
 ///
 /// 2. Market Analysis (MarketAnalysis.razor):
-///    - Reads CurrentPlan.AggregatedMaterials
-///    - Calls MarketCacheService.EnsurePopulatedAsync()
-///    - Calls MarketShoppingService.CalculateDetailedShoppingPlansAsync()
-///    - Stores results in ShoppingPlans
-///    - NotifyShoppingListChanged() triggers updates
+///    - Reads CurrentPlan materials
+///    - MarketAnalysisWorkflowService publishes evidence through AppState replacement methods
+///    - Stale analysis output is ignored when the active plan session or market context changes
+///    - Shopping-list notifications trigger result updates
 ///
 /// 3. Procurement Plan (ProcurementPlan.razor):
-///    - Reads ShoppingPlans from AppState (no re-fetch)
-///    - Groups by world for display
-///    - Can temporarily blacklist worlds (session-only)
+///    - Reads market evidence from AppState
+///    - ProcurementWorkflowService publishes route overlays through AppState
+///    - Temporary exclusions are session-only and clear derived procurement overlays
 ///
 /// 4. Auto-Save Flow:
-///    - 30-second timer in MainLayout
-///    - Calls IndexedDbService.SavePlanAsync() with complete state
-///    - Saves: CurrentPlan, ProjectItems, ShoppingPlans, settings
+///    - Timer lifecycle is owned by AppState and started by MainLayout
+///    - Dirty persisted buckets are computed from AppState version counters
+///    - Saves plan core, market analysis, and settings through IndexedDB
 ///
 /// STATE CATEGORIES:
-/// - Recipe Planner: CurrentPlan, ProjectItems
-/// - Procurement: ShoppingItems, ShoppingPlans
+/// - Recipe Planner: CurrentPlan, ProjectItems snapshots
+/// - Procurement: ShoppingItems, ShoppingPlans, ProcurementShoppingPlans
 /// - Settings: SelectedDataCenter, RecommendationMode, market scope preferences
 /// - UI State: StatusMessage, IsBusy, ProgressPercent
 /// - Session: TemporarilyBlacklistedWorlds (NOT persisted)
@@ -53,7 +49,7 @@ namespace FFXIV_Craft_Architect.Web.Services;
 /// EVENTS:
 /// Components subscribe to events for reactive updates:
 /// - OnPlanChanged: Recipe tree structure modified
-/// - OnShoppingListChanged: Market analysis results updated
+/// - OnShoppingListChanged: Market analysis, shopping items, or procurement overlay updated
 /// - OnStatusChanged: Status bar needs update
 /// - OnRecipeTreeExpandChanged: Expand/collapse state changed
 ///
@@ -76,10 +72,13 @@ public class AppState
     private long _planDecisionVersion;
     private long _planPriceVersion;
     private long _planCoreVersion;
+    private long _planSessionVersion;
     private long _marketAnalysisVersion;
     private long _procurementOverlayVersion;
     private long _settingsVersion;
     private long _statusVersion;
+    private long _nextOperationId;
+    private long? _currentOperationId;
     private long _lastPersistedPlanCoreVersion = -1;
     private long _lastPersistedMarketAnalysisVersion = -1;
     private readonly SemaphoreSlim _autoSaveSemaphore = new(1, 1);
@@ -88,86 +87,101 @@ public class AppState
     private bool _raisePlanChanged;
     private bool _raiseShoppingListChanged;
     private bool _raiseStatusChanged;
+    private System.Threading.Timer? _autoSaveTimer;
+    private readonly List<DetailedShoppingPlan> _shoppingPlans = [];
+    private readonly List<MarketItemAnalysis> _marketItemAnalyses = [];
+    private readonly List<DetailedShoppingPlan> _procurementShoppingPlans = [];
+    private readonly List<MarketShoppingItem> _shoppingItems = [];
+    private readonly List<ProjectItem> _projectItems = [];
+    private HashSet<string> _temporarilyBlacklistedWorlds = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<MarketWorldKey> _temporarilyBlacklistedMarketWorlds = [];
+    private HashSet<MarketItemWorldKey> _temporarilyExcludedItemWorlds = [];
+    private IReadOnlySet<string> _temporarilyBlacklistedWorldsView = new HashSet<string>(StringComparer.OrdinalIgnoreCase).ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlySet<MarketWorldKey> _temporarilyBlacklistedMarketWorldsView = FrozenSet<MarketWorldKey>.Empty;
+    private IReadOnlySet<MarketItemWorldKey> _temporarilyExcludedItemWorldsView = FrozenSet<MarketItemWorldKey>.Empty;
 
     // Recipe Planner State
-    public CraftingPlan? CurrentPlan { get; set; }
-    public List<ProjectItem> ProjectItems { get; set; } = new();
-    public string SelectedDataCenter { get; set; } = "Aether";
-    public string SelectedRegion { get; set; } = "North America";
+    public CraftingPlan? CurrentPlan { get; private set; }
+    public IReadOnlyList<ProjectItem> ProjectItems => _projectItems.Select(CloneProjectItem).ToArray();
+    public int ProjectItemCount => _projectItems.Count;
+    public bool HasProjectItems => _projectItems.Count > 0;
+    public bool HasPlanOrProjectItems => CurrentPlan != null || _projectItems.Count > 0;
+    public string SelectedDataCenter { get; private set; } = "Aether";
+    public string SelectedRegion { get; private set; } = "North America";
     
     // Procurement Planner State
-    public List<MarketShoppingItem> ShoppingItems { get; set; } = new();
+    public IReadOnlyList<MarketShoppingItem> ShoppingItems => _shoppingItems.AsReadOnly();
 
     /// <summary>
     /// Full market analysis evidence for every market-listable candidate in the recipe plan.
     /// Procurement may derive from this list, but must not delete or replace entries for inactive choices.
     /// </summary>
-    public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans => _shoppingPlans.AsReadOnly();
 
     /// <summary>
     /// Immutable market-analysis analytics for every market-listable candidate in the recipe plan.
     /// Acquisition and procurement views may project from this data, but should not mutate or filter it.
     /// </summary>
-    public List<MarketItemAnalysis> MarketItemAnalyses { get; set; } = new();
+    public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses => _marketItemAnalyses.AsReadOnly();
 
     /// <summary>
     /// Mutable procurement overlay derived from ShoppingPlans and current acquisition choices.
     /// This may be filtered, re-routed, or affected by temporary world exclusions.
     /// </summary>
-    public List<DetailedShoppingPlan> ProcurementShoppingPlans { get; set; } = new();
+    public IReadOnlyList<DetailedShoppingPlan> ProcurementShoppingPlans => _procurementShoppingPlans.AsReadOnly();
     public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; private set; } = Array.Empty<MarketDataUnavailableItem>();
-    public RecommendationMode RecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
-    public MarketAcquisitionLens MarketAnalysisLens { get; set; } = MarketAcquisitionLens.MinimumUpfrontCost;
+    public RecommendationMode RecommendationMode { get; private set; } = RecommendationMode.MinimizeTotalCost;
+    public MarketAcquisitionLens MarketAnalysisLens { get; private set; } = MarketAcquisitionLens.MinimumUpfrontCost;
     
     /// <summary>
     /// Temporarily blacklisted worlds for the current session.
     /// These worlds are excluded from procurement recommendations.
     /// Cleared on page reload - NOT persisted.
     /// </summary>
-    public HashSet<string> TemporarilyBlacklistedWorlds { get; set; } = new();
+    public IReadOnlySet<string> TemporarilyBlacklistedWorlds => _temporarilyBlacklistedWorldsView;
 
     /// <summary>
     /// Structured temporary market-world exclusions for region-wide procurement analysis.
     /// </summary>
-    public HashSet<MarketWorldKey> TemporarilyBlacklistedMarketWorlds { get; set; } = new();
+    public IReadOnlySet<MarketWorldKey> TemporarilyBlacklistedMarketWorlds => _temporarilyBlacklistedMarketWorldsView;
 
     public MarketWorldBlacklist TemporaryMarketWorldBlacklist { get; } = new();
 
-    public HashSet<MarketItemWorldKey> TemporarilyExcludedItemWorlds { get; set; } = new();
+    public IReadOnlySet<MarketItemWorldKey> TemporarilyExcludedItemWorlds => _temporarilyExcludedItemWorldsView;
 
-    public int TemporaryWorldBlacklistDurationMinutes { get; set; } = 60;
+    public int TemporaryWorldBlacklistDurationMinutes { get; private set; } = 60;
     
     // Auto-expand item ID when navigating from procurement to market analysis
-    public int? AutoExpandItemId { get; set; }
+    public int? AutoExpandItemId { get; private set; }
     
     // Persistence state
-    public bool IsAutoSaveEnabled { get; set; } = true;
-    public bool AutoFetchPricesOnRebuild { get; set; } = true;
-    public MarketFetchScope DefaultMarketFetchScope { get; set; } = MarketFetchScope.SelectedDataCenter;
-    public DateTime? LastAutoSave { get; set; }
-    public List<StoredPlanSummary> SavedPlans { get; set; } = new();
+    public bool IsAutoSaveEnabled { get; private set; } = true;
+    public bool AutoFetchPricesOnRebuild { get; private set; } = true;
+    public MarketFetchScope DefaultMarketFetchScope { get; private set; } = MarketFetchScope.SelectedDataCenter;
+    public DateTime? LastAutoSave { get; private set; }
+    public IReadOnlyList<StoredPlanSummary> SavedPlans { get; private set; } = Array.AsReadOnly(Array.Empty<StoredPlanSummary>());
     
     // Market Analysis Settings (persist across page navigations)
-    public bool EnableMultiWorldSplits { get; set; } = false;
-    public int MaxWorldsPerItem { get; set; } = 0; // 0 = unlimited
-    public bool SearchEntireRegion { get; set; } = false;
-    public MarketSortOption MarketSortPreference { get; set; } = MarketSortOption.ByRecommended;
+    public bool EnableMultiWorldSplits { get; private set; } = false;
+    public int MaxWorldsPerItem { get; private set; } = 0; // 0 = unlimited
+    public bool SearchEntireRegion { get; private set; } = false;
+    public MarketSortOption MarketSortPreference { get; private set; } = MarketSortOption.ByRecommended;
 
     // Procurement Planning Settings
-    public bool ProcurementSearchEntireRegion { get; set; } = false;
-    public bool ProcurementEnableSplitWorldPurchases { get; set; } = false;
-    public int ProcurementTravelTolerance { get; set; } = 0; // 0 = shortest route, 11 = cheapest
+    public bool ProcurementSearchEntireRegion { get; private set; } = false;
+    public bool ProcurementEnableSplitWorldPurchases { get; private set; } = false;
+    public int ProcurementTravelTolerance { get; private set; } = 0; // 0 = shortest route, 11 = cheapest
     
     // Current plan tracking for save-overwrite behavior
-    public string? CurrentPlanId { get; set; }
-    public string? CurrentPlanName { get; set; }
+    public string? CurrentPlanId { get; private set; }
+    public string? CurrentPlanName { get; private set; }
     
     // Status Bar State
-    public string StatusMessage { get; set; } = "Ready";
-    public bool IsBusy { get; set; } = false;
-    public double ProgressPercent { get; set; } = 0;
-    public string? CurrentOperation { get; set; } = null;
-    public DateTime LastStatusUpdate { get; set; } = DateTime.Now;
+    public string StatusMessage { get; private set; } = "Ready";
+    public bool IsBusy { get; private set; } = false;
+    public double ProgressPercent { get; private set; } = 0;
+    public string? CurrentOperation { get; private set; } = null;
+    public DateTime LastStatusUpdate { get; private set; } = DateTime.Now;
     
     // Event to notify subscribers when plan changes
     public event Action? OnPlanChanged;
@@ -186,6 +200,8 @@ public class AppState
         _procurementOverlayVersion,
         _settingsVersion,
         _statusVersion);
+
+    public long PlanSessionVersion => _planSessionVersion;
     
     // Recipe tree expand/collapse state (incremented to trigger re-evaluation)
     private int _recipeTreeExpandVersion = 0;
@@ -204,6 +220,77 @@ public class AppState
     public void NotifyPlanChanged()
     {
         PublishChange(AppStateChangeScope.PlanStructure, raisePlanChanged: true);
+    }
+
+    public bool AddProjectItem(ProjectItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+
+        if (_projectItems.Any(existing => existing.Id == item.Id))
+        {
+            return false;
+        }
+
+        _projectItems.Add(CloneProjectItem(item));
+        NotifyPlanChanged();
+        return true;
+    }
+
+    public bool RemoveProjectItem(ProjectItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+
+        var existingItem = _projectItems.FirstOrDefault(existing => existing.Id == item.Id);
+        var removed = existingItem != null && _projectItems.Remove(existingItem);
+        if (removed)
+        {
+            NotifyPlanChanged();
+        }
+
+        return removed;
+    }
+
+    public void ReplaceProjectItems(IEnumerable<ProjectItem> items)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+
+        ReplaceListContents(_projectItems, items.Select(CloneProjectItem));
+        NotifyPlanChanged();
+    }
+
+    public void ToggleProjectItemHq(ProjectItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+
+        var existingItem = _projectItems.FirstOrDefault(existing => existing.Id == item.Id);
+        if (existingItem == null)
+        {
+            return;
+        }
+
+        existingItem.MustBeHq = !existingItem.MustBeHq;
+        NotifyPlanChanged();
+    }
+
+    public bool UpdateProjectItemQuantity(ProjectItem item, int quantity)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+
+        var existingItem = _projectItems.FirstOrDefault(existing => existing.Id == item.Id);
+        if (existingItem == null)
+        {
+            return false;
+        }
+
+        var normalizedQuantity = Math.Clamp(quantity, 1, 9999);
+        if (existingItem.Quantity == normalizedQuantity)
+        {
+            return false;
+        }
+
+        existingItem.Quantity = normalizedQuantity;
+        NotifyPlanChanged();
+        return true;
     }
     
     public void NotifyShoppingListChanged()
@@ -233,14 +320,291 @@ public class AppState
         PublishChange(AppStateChangeScope.ProcurementOverlay, raiseShoppingListChanged: true);
     }
 
+    public void ReplaceMarketAnalysis(
+        IEnumerable<MarketItemAnalysis> analyses,
+        IEnumerable<DetailedShoppingPlan> shoppingPlans)
+    {
+        ArgumentNullException.ThrowIfNull(analyses);
+        ArgumentNullException.ThrowIfNull(shoppingPlans);
+
+        ReplaceListContents(_marketItemAnalyses, analyses);
+        ReplaceListContents(_shoppingPlans, shoppingPlans);
+        _procurementShoppingPlans.Clear();
+        using (BeginStateChangeBatch())
+        {
+            NotifyShoppingListChanged();
+            NotifyProcurementOverlayChanged();
+        }
+    }
+
+    public void ReplaceMarketAnalysisItem(
+        MarketItemAnalysis analysis,
+        DetailedShoppingPlan shoppingPlan)
+    {
+        ArgumentNullException.ThrowIfNull(analysis);
+        ArgumentNullException.ThrowIfNull(shoppingPlan);
+
+        ReplaceListContents(_marketItemAnalyses, ReplaceAnalysisByItemId(_marketItemAnalyses, analysis));
+        ReplaceListContents(_shoppingPlans, ReplaceShoppingPlanByItemId(_shoppingPlans, shoppingPlan));
+        _procurementShoppingPlans.Clear();
+        using (BeginStateChangeBatch())
+        {
+            NotifyShoppingListChanged();
+            NotifyProcurementOverlayChanged();
+        }
+    }
+
+    public void ClearProcurementOverlay()
+    {
+        _procurementShoppingPlans.Clear();
+        NotifyProcurementOverlayChanged();
+    }
+
+    public void ReplaceProcurementOverlay(IEnumerable<DetailedShoppingPlan> shoppingPlans)
+    {
+        ReplaceListContents(_procurementShoppingPlans, shoppingPlans);
+        NotifyProcurementOverlayChanged();
+    }
+
+    public void ReplaceShoppingItemsFromActivePlan()
+    {
+        ReplaceListContents(_shoppingItems, AcquisitionPlanningService.GetActiveProcurementItems(CurrentPlan)
+            .Where(item => item.TotalQuantity > 0)
+            .Select(item => new MarketShoppingItem
+            {
+                Id = item.ItemId,
+                Name = item.Name,
+                IconId = item.IconId,
+                Quantity = item.TotalQuantity
+            }));
+        NotifyShoppingItemsChanged();
+    }
+
+    public void ApplyBuiltRecipePlan(CraftingPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+
+        CurrentPlan = plan;
+        AdvancePlanSession();
+        AutoExpandItemId = null;
+        using (BeginStateChangeBatch())
+        {
+            ClearMarketAnalysisState();
+            ReplaceShoppingItemsFromActivePlan();
+            NotifyPlanChanged();
+        }
+    }
+
+    public void ApplyImportedProjectItems(IEnumerable<ProjectItem> projectItems)
+    {
+        ArgumentNullException.ThrowIfNull(projectItems);
+
+        using (BeginStateChangeBatch())
+        {
+            ReplaceProjectItems(projectItems);
+            CurrentPlan = null;
+            AdvancePlanSession();
+            AutoExpandItemId = null;
+            ClearCurrentPlanId();
+            _shoppingItems.Clear();
+            NotifyShoppingItemsChanged();
+            ClearMarketAnalysisState();
+        }
+    }
+
+    public void ActivateRecipePlan(
+        CraftingPlan plan,
+        IEnumerable<ProjectItem> projectItems,
+        string? selectedDataCenter,
+        bool clearCurrentPlanId)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(projectItems);
+
+        using (BeginStateChangeBatch())
+        {
+            CurrentPlan = plan;
+            AdvancePlanSession();
+            AutoExpandItemId = null;
+            ReplaceProjectItems(projectItems);
+
+            if (!string.IsNullOrWhiteSpace(selectedDataCenter))
+            {
+                SelectedDataCenter = selectedDataCenter;
+            }
+
+            if (clearCurrentPlanId)
+            {
+                ClearCurrentPlanId();
+            }
+
+            ClearMarketAnalysisState();
+            ReplaceShoppingItemsFromActivePlan();
+        }
+    }
+
+    public bool IsCurrentPlanSession(CraftingPlan? plan, long planSessionVersion)
+    {
+        return ReferenceEquals(CurrentPlan, plan) &&
+               _planSessionVersion == planSessionVersion;
+    }
+
     public void NotifySettingsChanged()
     {
         PublishChange(AppStateChangeScope.Settings);
     }
 
+    public void SetMarketEvidenceSettings(
+        string dataCenter,
+        string region,
+        MarketFetchScope defaultFetchScope,
+        bool searchEntireRegion,
+        bool autoFetchPricesOnRebuild)
+    {
+        var changesMarketContext =
+            !string.Equals(SelectedDataCenter, dataCenter, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(SelectedRegion, region, StringComparison.OrdinalIgnoreCase) ||
+            SearchEntireRegion != searchEntireRegion;
+        var changesSettings =
+            changesMarketContext ||
+            DefaultMarketFetchScope != defaultFetchScope ||
+            AutoFetchPricesOnRebuild != autoFetchPricesOnRebuild;
+
+        if (!changesSettings)
+        {
+            return;
+        }
+
+        SelectedDataCenter = dataCenter;
+        SelectedRegion = region;
+        DefaultMarketFetchScope = defaultFetchScope;
+        SearchEntireRegion = searchEntireRegion;
+        AutoFetchPricesOnRebuild = autoFetchPricesOnRebuild;
+
+        if (changesMarketContext)
+        {
+            _shoppingPlans.Clear();
+            _marketItemAnalyses.Clear();
+            _procurementShoppingPlans.Clear();
+            UnavailableMarketItems = Array.Empty<MarketDataUnavailableItem>();
+            PublishChange(
+                AppStateChangeScope.Settings |
+                AppStateChangeScope.MarketAnalysis |
+                AppStateChangeScope.ProcurementOverlay,
+                raiseShoppingListChanged: true);
+            return;
+        }
+
+        NotifySettingsChanged();
+    }
+
+    public void SetProcurementSettings(
+        bool searchEntireRegion,
+        bool enableSplitWorldPurchases,
+        int travelTolerance,
+        int temporaryWorldBlacklistDurationMinutes)
+    {
+        var normalizedTravelTolerance = Math.Clamp(travelTolerance, 0, 11);
+        var normalizedDuration = Math.Max(1, temporaryWorldBlacklistDurationMinutes);
+        var changesRouteMeaning =
+            ProcurementSearchEntireRegion != searchEntireRegion ||
+            ProcurementEnableSplitWorldPurchases != enableSplitWorldPurchases ||
+            ProcurementTravelTolerance != normalizedTravelTolerance;
+        var changesSettings =
+            changesRouteMeaning ||
+            TemporaryWorldBlacklistDurationMinutes != normalizedDuration;
+
+        if (!changesSettings)
+        {
+            return;
+        }
+
+        ProcurementSearchEntireRegion = searchEntireRegion;
+        ProcurementEnableSplitWorldPurchases = enableSplitWorldPurchases;
+        ProcurementTravelTolerance = normalizedTravelTolerance;
+        TemporaryWorldBlacklistDurationMinutes = normalizedDuration;
+
+        if (changesRouteMeaning)
+        {
+            _procurementShoppingPlans.Clear();
+            PublishChange(
+                AppStateChangeScope.Settings | AppStateChangeScope.ProcurementOverlay,
+                raiseShoppingListChanged: true);
+            return;
+        }
+
+        NotifySettingsChanged();
+    }
+
+    public bool SetMarketAnalysisLens(MarketAcquisitionLens lens)
+    {
+        if (MarketAnalysisLens == lens)
+        {
+            return false;
+        }
+
+        MarketAnalysisLens = lens;
+        NotifySettingsChanged();
+        return true;
+    }
+
+    public bool SetRecommendationMode(RecommendationMode mode)
+    {
+        if (RecommendationMode == mode)
+        {
+            return false;
+        }
+
+        RecommendationMode = mode;
+        NotifySettingsChanged();
+        return true;
+    }
+
+    public bool SetMarketSplitSettings(bool enableMultiWorldSplits, int maxWorldsPerItem)
+    {
+        var normalizedMaxWorlds = Math.Max(0, maxWorldsPerItem);
+        if (EnableMultiWorldSplits == enableMultiWorldSplits &&
+            MaxWorldsPerItem == normalizedMaxWorlds)
+        {
+            return false;
+        }
+
+        EnableMultiWorldSplits = enableMultiWorldSplits;
+        MaxWorldsPerItem = normalizedMaxWorlds;
+        _procurementShoppingPlans.Clear();
+        PublishChange(
+            AppStateChangeScope.Settings | AppStateChangeScope.ProcurementOverlay,
+            raiseShoppingListChanged: true);
+        return true;
+    }
+
+    public bool SetAutoSaveEnabled(bool enabled)
+    {
+        if (IsAutoSaveEnabled == enabled)
+        {
+            return false;
+        }
+
+        IsAutoSaveEnabled = enabled;
+        NotifySettingsChanged();
+        return true;
+    }
+
+    public bool SetMarketSortPreference(MarketSortOption preference)
+    {
+        if (MarketSortPreference == preference)
+        {
+            return false;
+        }
+
+        MarketSortPreference = preference;
+        NotifySettingsChanged();
+        return true;
+    }
+
     public void SetUnavailableMarketItems(IReadOnlyList<MarketDataUnavailableItem> items)
     {
-        UnavailableMarketItems = items;
+        UnavailableMarketItems = items.ToArray();
         NotifyShoppingListChanged();
     }
 
@@ -249,11 +613,27 @@ public class AppState
         SetUnavailableMarketItems(Array.Empty<MarketDataUnavailableItem>());
     }
 
+    public void RequestMarketItemAutoExpand(int itemId)
+    {
+        AutoExpandItemId = itemId;
+    }
+
+    public bool ConsumeMarketItemAutoExpand(int itemId)
+    {
+        if (AutoExpandItemId != itemId)
+        {
+            return false;
+        }
+
+        AutoExpandItemId = null;
+        return true;
+    }
+
     public void ClearMarketAnalysisState()
     {
-        ShoppingPlans.Clear();
-        MarketItemAnalyses.Clear();
-        ProcurementShoppingPlans.Clear();
+        _shoppingPlans.Clear();
+        _marketItemAnalyses.Clear();
+        _procurementShoppingPlans.Clear();
         UnavailableMarketItems = Array.Empty<MarketDataUnavailableItem>();
         PublishChange(
             AppStateChangeScope.MarketAnalysis | AppStateChangeScope.ProcurementOverlay,
@@ -265,30 +645,29 @@ public class AppState
         var duration = TimeSpan.FromMinutes(Math.Max(1, TemporaryWorldBlacklistDurationMinutes));
         TemporaryMarketWorldBlacklist.Add(world, duration);
         SyncTemporaryBlacklistSets();
-        ProcurementShoppingPlans.Clear();
-        NotifyProcurementOverlayChanged();
+        ClearProcurementOverlay();
     }
 
     public void ExcludeItemWorldTemporarily(int itemId, MarketWorldKey world)
     {
-        TemporarilyExcludedItemWorlds.Add(new MarketItemWorldKey(itemId, world));
-        ProcurementShoppingPlans.Clear();
-        NotifyProcurementOverlayChanged();
+        _temporarilyExcludedItemWorlds.Add(new MarketItemWorldKey(itemId, world));
+        RefreshTemporaryExclusionViews();
+        ClearProcurementOverlay();
     }
 
     public int ActiveTemporaryExclusionCount =>
-        GetActiveBlacklistedMarketWorlds().Count + TemporarilyExcludedItemWorlds.Count;
+        GetActiveBlacklistedMarketWorlds().Count + _temporarilyExcludedItemWorlds.Count;
 
     public HashSet<MarketWorldKey> GetActiveBlacklistedMarketWorlds()
     {
         SyncTemporaryBlacklistSets();
-        return TemporarilyBlacklistedMarketWorlds.ToHashSet();
+        return _temporarilyBlacklistedMarketWorlds.ToHashSet();
     }
 
     public HashSet<string> GetActiveBlacklistedWorldNames()
     {
         SyncTemporaryBlacklistSets();
-        return TemporarilyBlacklistedWorlds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return _temporarilyBlacklistedWorlds.ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     public IReadOnlyDictionary<string, IReadOnlyList<string>> GetExpectedMarketWorlds(MarketFetchScope scope)
@@ -313,30 +692,48 @@ public class AppState
     public void ClearTemporaryMarketWorldBlacklists()
     {
         TemporaryMarketWorldBlacklist.Clear();
-        TemporarilyBlacklistedMarketWorlds.Clear();
-        TemporarilyBlacklistedWorlds.Clear();
-        TemporarilyExcludedItemWorlds.Clear();
-        ProcurementShoppingPlans.Clear();
-        NotifyProcurementOverlayChanged();
+        _temporarilyBlacklistedMarketWorlds.Clear();
+        _temporarilyBlacklistedWorlds.Clear();
+        _temporarilyExcludedItemWorlds.Clear();
+        RefreshTemporaryExclusionViews();
+        ClearProcurementOverlay();
     }
 
     public bool PruneExpiredTemporaryMarketWorldBlacklists()
     {
-        var previousCount = TemporarilyBlacklistedMarketWorlds.Count;
+        var previousCount = _temporarilyBlacklistedMarketWorlds.Count;
         SyncTemporaryBlacklistSets();
-        if (TemporarilyBlacklistedMarketWorlds.Count == previousCount)
+        if (_temporarilyBlacklistedMarketWorlds.Count == previousCount)
         {
             return false;
         }
 
-        ProcurementShoppingPlans.Clear();
-        NotifyProcurementOverlayChanged();
+        ClearProcurementOverlay();
         return true;
     }
     
     public void NotifySavedPlansChanged()
     {
         OnSavedPlansChanged?.Invoke();
+    }
+
+    public void ReplaceSavedPlans(IEnumerable<StoredPlanSummary> summaries)
+    {
+        ArgumentNullException.ThrowIfNull(summaries);
+
+        SavedPlans = Array.AsReadOnly(summaries.ToArray());
+        NotifySavedPlansChanged();
+    }
+
+    public void ClearSavedPlans()
+    {
+        if (SavedPlans.Count == 0)
+        {
+            return;
+        }
+
+        SavedPlans = Array.AsReadOnly(Array.Empty<StoredPlanSummary>());
+        NotifySavedPlansChanged();
     }
     
     public void NotifyStatusChanged()
@@ -386,10 +783,13 @@ public class AppState
     /// <summary>
     /// Start a long-running operation with a name.
     /// </summary>
-    public void BeginOperation(string operationName, string? message = null)
+    public AppStateOperation BeginOperation(string operationName, string? message = null)
     {
+        var operation = new AppStateOperation(++_nextOperationId, operationName);
+        _currentOperationId = operation.Id;
         CurrentOperation = operationName;
         SetStatus(message ?? $"{operationName}...", busy: true);
+        return operation;
     }
     
     /// <summary>
@@ -397,12 +797,126 @@ public class AppState
     /// </summary>
     public void EndOperation(string? message = null)
     {
+        _currentOperationId = null;
         CurrentOperation = null;
         IsBusy = false;
         ProgressPercent = 0;
         // Set status directly to avoid any race conditions with progress callbacks
         StatusMessage = message ?? "Ready";
         NotifyStatusChanged();
+    }
+
+    public bool EndOperation(AppStateOperation operation, string? message = null)
+    {
+        if (!IsCurrentOperation(operation))
+        {
+            return false;
+        }
+
+        EndOperation(message);
+        return true;
+    }
+
+    public bool SetStatusForOperation(
+        AppStateOperation operation,
+        string message,
+        bool busy = true,
+        double? progress = null)
+    {
+        if (!IsCurrentOperation(operation))
+        {
+            return false;
+        }
+
+        SetStatus(message, busy, progress);
+        return true;
+    }
+
+    public bool CancelOperation(AppStateOperation operation, string? message = null)
+    {
+        if (!IsCurrentOperation(operation))
+        {
+            return false;
+        }
+
+        EndOperation(message);
+        return true;
+    }
+
+    private bool IsCurrentOperation(AppStateOperation operation)
+    {
+        return _currentOperationId == operation.Id
+            && string.Equals(CurrentOperation, operation.Name, StringComparison.Ordinal);
+    }
+
+    private static void ReplaceListContents<T>(List<T> target, IEnumerable<T> items)
+    {
+        target.Clear();
+        target.AddRange(items);
+    }
+
+    private static ProjectItem CloneProjectItem(ProjectItem item)
+    {
+        return new ProjectItem
+        {
+            Id = item.Id,
+            Name = item.Name,
+            IconId = item.IconId,
+            Quantity = item.Quantity,
+            MustBeHq = item.MustBeHq
+        };
+    }
+
+    private static List<MarketItemAnalysis> ReplaceAnalysisByItemId(
+        IEnumerable<MarketItemAnalysis> analyses,
+        MarketItemAnalysis replacement)
+    {
+        var replaced = false;
+        var result = new List<MarketItemAnalysis>();
+        foreach (var analysis in analyses)
+        {
+            if (analysis.ItemId == replacement.ItemId)
+            {
+                result.Add(replacement);
+                replaced = true;
+                continue;
+            }
+
+            result.Add(analysis);
+        }
+
+        if (!replaced)
+        {
+            result.Add(replacement);
+        }
+
+        return result;
+    }
+
+    private static List<DetailedShoppingPlan> ReplaceShoppingPlanByItemId(
+        IEnumerable<DetailedShoppingPlan> shoppingPlans,
+        DetailedShoppingPlan replacement)
+    {
+        var replaced = false;
+        var result = new List<DetailedShoppingPlan>();
+        foreach (var shoppingPlan in shoppingPlans)
+        {
+            if (shoppingPlan.ItemId == replacement.ItemId)
+            {
+                result.Add(replacement);
+                replaced = true;
+                continue;
+            }
+
+            result.Add(shoppingPlan);
+        }
+
+        if (!replaced)
+        {
+            result.Add(replacement);
+        }
+
+        return result;
     }
     
     /// <summary>
@@ -423,14 +937,14 @@ public class AppState
     /// </summary>
     public void SyncShoppingToProject()
     {
-        ProjectItems = ShoppingItems.Select(s => new ProjectItem
+        ReplaceListContents(_projectItems, _shoppingItems.Select(s => new ProjectItem
         {
             Id = s.Id,
             Name = s.Name,
             IconId = s.IconId,
             Quantity = s.Quantity,
             MustBeHq = false
-        }).ToList();
+        }));
         NotifyPlanChanged();
     }
     
@@ -439,13 +953,13 @@ public class AppState
     /// </summary>
     public void SyncProjectToShopping()
     {
-        ShoppingItems = ProjectItems.Select(p => new MarketShoppingItem
+        ReplaceListContents(_shoppingItems, _projectItems.Select(p => new MarketShoppingItem
         {
             Id = p.Id,
             Name = p.Name,
             IconId = p.IconId,
             Quantity = p.Quantity
-        }).ToList();
+        }));
         NotifyShoppingListChanged();
     }
 
@@ -455,11 +969,12 @@ public class AppState
     public void ClearPlan()
     {
         CurrentPlan = null;
-        ProjectItems.Clear();
-        ShoppingItems.Clear();
+        AdvancePlanSession();
+        _projectItems.Clear();
+        _shoppingItems.Clear();
+        AutoExpandItemId = null;
         ClearMarketAnalysisState();
-        CurrentPlanId = null;  // Reset plan ID for new plan
-        CurrentPlanName = null;
+        ClearCurrentPlanId();
         NotifyPlanChanged();
         NotifyShoppingListChanged();
     }
@@ -499,13 +1014,15 @@ public class AppState
         var storedPlan = session.StoredPlan;
 
         SelectedDataCenter = storedPlan.DataCenter;
-        ProjectItems = session.ProjectItems.ToList();
+        ReplaceListContents(_projectItems, session.ProjectItems.Select(CloneProjectItem));
         CurrentPlan = session.Plan;
-        MarketItemAnalyses = session.MarketItemAnalyses.ToList();
-        ShoppingPlans = session.ShoppingPlans.ToList();
+        AdvancePlanSession();
+        AutoExpandItemId = null;
+        ReplaceListContents(_marketItemAnalyses, session.MarketItemAnalyses);
+        ReplaceListContents(_shoppingPlans, session.ShoppingPlans);
         RecommendationMode = storedPlan.SavedRecommendationMode;
         MarketAnalysisLens = storedPlan.SavedMarketAnalysisLens;
-        ProcurementShoppingPlans.Clear();
+        ClearProcurementOverlay();
         
         // Track the loaded plan ID for save-overwrite behavior
         if (trackStoredPlanIdentity)
@@ -519,9 +1036,10 @@ public class AppState
             CurrentPlanName = storedPlan.SourcePlanName;
         }
 
-        ShoppingItems.Clear();
+        _shoppingItems.Clear();
         SyncProjectToShopping();
 
+        NotifySettingsChanged();
         NotifyPlanChanged();
         NotifyShoppingListChanged();
     }
@@ -536,12 +1054,12 @@ public class AppState
     {
         var dirtyBuckets = PersistedStateBucket.None;
 
-        if (IsDirtyVersion(_planCoreVersion, _lastPersistedPlanCoreVersion, CurrentPlan != null || ProjectItems.Any()))
+        if (IsDirtyVersion(_planCoreVersion, _lastPersistedPlanCoreVersion, CurrentPlan != null || _projectItems.Any()))
         {
             dirtyBuckets |= PersistedStateBucket.PlanCore;
         }
 
-        if (IsDirtyVersion(_marketAnalysisVersion, _lastPersistedMarketAnalysisVersion, ShoppingPlans.Any() || MarketItemAnalyses.Any()))
+        if (IsDirtyVersion(_marketAnalysisVersion, _lastPersistedMarketAnalysisVersion, _shoppingPlans.Any() || _marketItemAnalyses.Any()))
         {
             dirtyBuckets |= PersistedStateBucket.MarketAnalysis;
         }
@@ -576,7 +1094,7 @@ public class AppState
         capturedVersions = CurrentVersions;
         dirtyBuckets = PersistedStateBucket.None;
 
-        if (CurrentPlan == null && !ProjectItems.Any())
+        if (CurrentPlan == null && !_projectItems.Any())
         {
             return false;
         }
@@ -598,7 +1116,7 @@ public class AppState
 
     public async Task<AppStateAutoSaveLease?> BeginAutoSaveAsync(bool skipIfInFlight = false)
     {
-        if (CurrentPlan == null && !ProjectItems.Any())
+        if (CurrentPlan == null && !_projectItems.Any())
         {
             return null;
         }
@@ -653,20 +1171,31 @@ public class AppState
     /// </summary>
     public void ClearCurrentPlanId()
     {
-        CurrentPlanId = null;
-        CurrentPlanName = null;
+        TrackCurrentPlanIdentity(null, null);
+    }
+
+    public void TrackCurrentPlanIdentity(string? planId, string? planName)
+    {
+        CurrentPlanId = planId;
+        CurrentPlanName = planName;
+    }
+
+    public bool RenameCurrentPlanIdentity(string planId, string name)
+    {
+        if (!string.Equals(CurrentPlanId, planId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        CurrentPlanName = name;
+        return true;
     }
     
     /// <summary>
     /// Cached world data for data center/world selection.
     /// Loaded once and shared across all pages.
     /// </summary>
-    public WorldData? WorldData { get; set; }
-    
-    /// <summary>
-    /// Auto-save timer reference for cleanup.
-    /// </summary>
-    public System.Threading.Timer? AutoSaveTimer { get; set; }
+    public WorldData? WorldData { get; private set; }
     
     /// <summary>
     /// Initialize the world data cache.
@@ -708,7 +1237,7 @@ public class AppState
     {
         StopAutoSaveTimer();
         
-        AutoSaveTimer = new System.Threading.Timer(
+        _autoSaveTimer = new System.Threading.Timer(
             async _ => await saveCallback(),
             null,
             TimeSpan.FromSeconds(intervalSeconds),
@@ -720,22 +1249,40 @@ public class AppState
     /// </summary>
     public void StopAutoSaveTimer()
     {
-        AutoSaveTimer?.Dispose();
-        AutoSaveTimer = null;
+        _autoSaveTimer?.Dispose();
+        _autoSaveTimer = null;
+    }
+
+    public void RecordAutoSaveCompleted(DateTime completedAt)
+    {
+        LastAutoSave = completedAt;
     }
 
     private void SyncTemporaryBlacklistSets()
     {
-        TemporarilyBlacklistedMarketWorlds = TemporaryMarketWorldBlacklist.GetActiveWorlds();
-        TemporarilyBlacklistedWorlds = TemporarilyBlacklistedMarketWorlds
+        _temporarilyBlacklistedMarketWorlds = TemporaryMarketWorldBlacklist.GetActiveWorlds();
+        _temporarilyBlacklistedWorlds = _temporarilyBlacklistedMarketWorlds
             .Select(world => world.WorldName)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        RefreshTemporaryExclusionViews();
+    }
+
+    private void RefreshTemporaryExclusionViews()
+    {
+        _temporarilyBlacklistedWorldsView = _temporarilyBlacklistedWorlds.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+        _temporarilyBlacklistedMarketWorldsView = _temporarilyBlacklistedMarketWorlds.ToFrozenSet();
+        _temporarilyExcludedItemWorldsView = _temporarilyExcludedItemWorlds.ToFrozenSet();
     }
 
     private static bool IsDirtyVersion(long currentVersion, long persistedVersion, bool hasPersistableData)
     {
         return currentVersion != persistedVersion &&
                (persistedVersion >= 0 || currentVersion > 0 || hasPersistableData);
+    }
+
+    private void AdvancePlanSession()
+    {
+        _planSessionVersion++;
     }
 
     private void PublishChange(
@@ -919,6 +1466,8 @@ public sealed record AppStateChange(
         return (Scopes & scope) == scope;
     }
 }
+
+public sealed record AppStateOperation(long Id, string Name);
 
 public sealed record AppStateAutoSaveLease(
     AppStateVersionSnapshot CapturedVersions,

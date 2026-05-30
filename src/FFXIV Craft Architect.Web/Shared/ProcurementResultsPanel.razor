@@ -156,7 +156,7 @@
 
 @code {
     [Parameter]
-    public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
     
     /// <summary>
     /// Called when user requests re-analysis without a specific world (due to congestion).

@@ -26,7 +26,8 @@
                                  CurrentLens="CurrentLens"
                                  CurrentSort="CurrentSort"
                                  AutoExpandItemId="AutoExpandItemId"
-                                 ShowWorldsColumn="ShowWorldsColumn" />
+                                 ShowWorldsColumn="ShowWorldsColumn"
+                                 OnAutoExpandConsumed="OnAutoExpandConsumed" />
     }
     else
     {
@@ -61,8 +62,8 @@
 
 @code {
     [Parameter] public List<MaterialAggregate> BuyItems { get; set; } = new();
-    [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
-    [Parameter] public List<MarketItemAnalysis> MarketItemAnalyses { get; set; } = new();
+    [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
+    [Parameter] public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses { get; set; } = Array.Empty<MarketItemAnalysis>();
     [Parameter] public MarketAcquisitionLens CurrentLens { get; set; }
     [Parameter] public MarketSortOption CurrentSort { get; set; }
     [Parameter] public int? AutoExpandItemId { get; set; }
@@ -71,4 +72,5 @@
 
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
     [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
+    [Parameter] public EventCallback<int> OnAutoExpandConsumed { get; set; }
 }

@@ -1,6 +1,4 @@
-@using FFXIV_Craft_Architect.Core.Helpers
 @using FFXIV_Craft_Architect.Core.Models
-@using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
 @implements IDisposable
@@ -30,6 +28,7 @@
                                             Depth="Depth + 1"
                                             IsSelected="@(SelectedNodeId == child.NodeId)"
                                             SelectedNodeId="@SelectedNodeId"
+                                            DisplayStates="DisplayStates"
                                             OnNodeSelected="OnNodeSelected"
                                             OnHqChanged="OnHqChanged" />
                         }
@@ -52,6 +51,8 @@
     [Parameter] public int Depth { get; set; }
     [Parameter] public bool IsSelected { get; set; }
     [Parameter] public string? SelectedNodeId { get; set; }
+    [Parameter] public IReadOnlyDictionary<string, RecipeNodeDisplayState> DisplayStates { get; set; } =
+        new Dictionary<string, RecipeNodeDisplayState>();
     [Parameter] public EventCallback<PlanNode> OnNodeSelected { get; set; }
     [Parameter] public EventCallback<PlanNodeHqChangeRequest> OnHqChanged { get; set; }
     
@@ -104,8 +105,6 @@
 
     protected override void OnParametersSet()
     {
-        Node?.EnsureValidAcquisitionSource();
-
         // Sync with global expand state on initial render or when version changes
         if (_lastExpandVersion != AppState.RecipeTreeExpandVersion)
         {
@@ -141,8 +140,7 @@
     {
         if (Node == null) return;
 
-        var color = GetNodeColor();
-        var hqStar = Node.MustBeHq ? "★ " : "";
+        var display = GetDisplayState();
         
         // HQ Toggle button (if item can be HQ)
         if (Node.CanBeHq)
@@ -163,8 +161,8 @@
         
         // Item name and quantity
         __builder.OpenElement(6, "span");
-        __builder.AddAttribute(7, "style", $"color: {color}; flex: 1;");
-        __builder.AddContent(8, $"{hqStar}{Node.Name} x{Node.Quantity}");
+        __builder.AddAttribute(7, "style", $"color: {display.SourceColor}; flex: 1;");
+        __builder.AddContent(8, $"{display.HqPrefix}{Node.Name} x{Node.Quantity}");
         // Circular reference indicator
         if (Node.IsCircularReference)
         {
@@ -177,16 +175,15 @@
         __builder.CloseElement();
         
         // Recipe info (if craftable)
-        if (!string.IsNullOrEmpty(Node.Job) && Node.Job != "Company Workshop")
+        if (!string.IsNullOrEmpty(display.RecipeInfo))
         {
             __builder.OpenElement(9, "span");
             __builder.AddAttribute(10, "style", "color: #888; font-size: 12px;");
-            __builder.AddContent(11, $"Lv.{Node.RecipeLevel} {Node.Job}");
+            __builder.AddContent(11, display.RecipeInfo);
             __builder.CloseElement();
         }
         
         // Price display and details selector. Acquisition source edits now live in the right-hand panel.
-        var priceText = GetPriceDisplay();
         __builder.OpenElement(19, "button");
         __builder.AddAttribute(20, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, SelectNode));
         __builder.AddEventStopPropagationAttribute(21, "onclick", true);
@@ -196,7 +193,7 @@
 
         __builder.OpenElement(25, "span");
         __builder.AddAttribute(26, "style", "color: #4caf50; font-size: 12px; min-width: 92px; text-align: right;");
-        __builder.AddContent(27, priceText);
+        __builder.AddContent(27, display.PriceText);
         __builder.CloseElement();
 
         __builder.OpenElement(28, "span");
@@ -208,18 +205,15 @@
         __builder.CloseElement();
     };
 
-    private string GetNodeColor()
+    private RecipeNodeDisplayState GetDisplayState()
     {
-        if (Node == null) return "#ccc";
-        return RecipePlanDisplayHelpers.GetSourceHexColor(Node.Source);
-    }
+        if (Node != null && DisplayStates.TryGetValue(Node.NodeId, out var display))
+        {
+            return display;
+        }
 
-    private string GetPriceDisplay()
-    {
-        if (Node == null) return "";
-
-        return AcquisitionPlanningService.TryGetAcquisitionCost(Node, Node.Source, AppState.ShoppingPlans, out var cost)
-            ? $"{cost:N0}g"
-            : "";
+        return Node != null
+            ? RecipePlanTreeDisplayBuilder.BuildWithoutCost(Node)
+            : new RecipeNodeDisplayState(string.Empty, "#ccc", string.Empty, string.Empty, null);
     }
 }

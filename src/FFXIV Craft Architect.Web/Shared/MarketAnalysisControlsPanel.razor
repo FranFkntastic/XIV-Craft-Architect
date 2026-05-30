@@ -19,7 +19,8 @@
     <div class="ma-field-block">
         <div class="ma-field-label">Sort</div>
         <MudSelect T="MarketSortOption"
-                   @bind-Value="AppState.MarketSortPreference"
+                   Value="AppState.MarketSortPreference"
+                   ValueChanged="OnSortPreferenceChanged"
                    Variant="Variant.Outlined"
                    Dense="true"
                    Class="ma-full-width">
@@ -30,7 +31,8 @@
 
     <div class="ma-region-toggle-block">
         <MudCheckBox T="bool"
-                     @bind-Value="AppState.SearchEntireRegion"
+                     Value="AppState.SearchEntireRegion"
+                     ValueChanged="OnSearchEntireRegionChanged"
                      Dense="true"
                      Color="Color.Primary"
                      Class="ma-region-toggle">
@@ -110,4 +112,19 @@
     [Parameter] public EventCallback OnRefreshPricesRequested { get; set; }
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
     [Parameter] public EventCallback OnGoToProcurementRequested { get; set; }
+
+    private void OnSearchEntireRegionChanged(bool searchEntireRegion)
+    {
+        AppState.SetMarketEvidenceSettings(
+            AppState.SelectedDataCenter,
+            AppState.SelectedRegion,
+            AppState.DefaultMarketFetchScope,
+            searchEntireRegion,
+            AppState.AutoFetchPricesOnRebuild);
+    }
+
+    private void OnSortPreferenceChanged(MarketSortOption preference)
+    {
+        AppState.SetMarketSortPreference(preference);
+    }
 }

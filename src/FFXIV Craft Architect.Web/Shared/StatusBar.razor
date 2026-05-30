@@ -40,11 +40,11 @@
                 @AppState.ShoppingItems.Count items
             </span>
         }
-        @if (AppState.ProjectItems.Any())
+        @if (AppState.HasProjectItems)
         {
             <span class="status-badge">
                 <MudIcon Icon="@Icons.Material.Filled.ListAlt" Size="Size.Small" />
-                @AppState.ProjectItems.Count projects
+                @AppState.ProjectItemCount projects
             </span>
         }
     </div>

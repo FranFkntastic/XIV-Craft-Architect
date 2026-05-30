@@ -31,7 +31,7 @@ public class StartupInitializationServiceTests
             }));
 
         Assert.Equal(
-            ["settings", "world-data", "autosave-timer", "autosave-restore"],
+            ["settings", "world-data", "autosave-restore", "autosave-timer"],
             calls);
         Assert.Contains("Loading settings...", observedSteps);
         Assert.Contains("Loading world data...", observedSteps);
@@ -46,21 +46,28 @@ public class StartupInitializationServiceTests
     public async Task InitializeAsync_AutosaveRestoreWarning_RequiresContinueBeforeCompleting()
     {
         var service = new StartupInitializationService();
+        var calls = new List<string>();
 
         await service.InitializeAsync(new StartupInitializationSteps(
             LoadSettingsAsync: _ => Task.CompletedTask,
             InitializeWorldDataAsync: _ => Task.CompletedTask,
-            StartAutoSave: () => { },
-            RestoreAutoSaveAsync: _ => Task.FromResult(
-                StartupAutoSaveRestoreResult.Restored("Could not load market analysis data."))));
+            StartAutoSave: () => calls.Add("autosave-timer"),
+            RestoreAutoSaveAsync: _ =>
+            {
+                calls.Add("autosave-restore");
+                return Task.FromResult(
+                    StartupAutoSaveRestoreResult.Restored("Could not load market analysis data."));
+            }));
 
         Assert.True(service.Status.IsInitializing);
         Assert.True(service.Status.IsWarning);
         Assert.True(service.Status.CanContinue);
         Assert.Contains("Could not load market analysis data.", service.Status.WarningMessage);
+        Assert.Equal(["autosave-restore"], calls);
 
         service.ContinueAfterWarning();
 
+        Assert.Equal(["autosave-restore", "autosave-timer"], calls);
         Assert.False(service.Status.IsInitializing);
         Assert.False(service.Status.IsWarning);
         Assert.False(service.Status.CanContinue);

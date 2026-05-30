@@ -25,12 +25,15 @@ builder.Services.AddScoped<GarlandService>();
 builder.Services.AddScoped<IGarlandService>(sp => sp.GetRequiredService<GarlandService>());
 builder.Services.AddScoped<UniversalisService>();
 builder.Services.AddScoped<RecipeCalculationService>();
+builder.Services.AddScoped<IRecipePlanBuilder, RecipeCalculationPlanBuilder>();
 builder.Services.AddScoped<IVendorCacheService, VendorCacheService>();
 builder.Services.AddScoped<ITeamcraftRecipeService, TeamcraftRecipeService>();
 builder.Services.AddScoped<IArtisanService, ArtisanService>();
 builder.Services.AddScoped<IMarketCacheService, IndexedDbMarketCacheService>();
 builder.Services.AddScoped<MarketShoppingService>();
 builder.Services.AddScoped<IMarketPriceLadderAnalysisService, MarketPriceLadderAnalysisService>();
+builder.Services.AddScoped<IMarketAnalysisExecutionService, MarketAnalysisExecutionService>();
+builder.Services.AddScoped<IProcurementRouteExecutionService, ProcurementRouteExecutionService>();
 builder.Services.AddScoped<IndexedDbMarketCacheService>();
 
 // Register Settings Service (Web implementation)
@@ -43,6 +46,10 @@ builder.Services.AddScoped<StoredPlanSnapshotBuilder>();
 builder.Services.AddScoped<PlanSessionLoadService>();
 builder.Services.AddScoped<WebPlanPersistenceService>();
 builder.Services.AddScoped<StartupInitializationService>();
+builder.Services.AddScoped<CancellableOperationService>();
+builder.Services.AddScoped<RecipePlannerCommandService>();
+builder.Services.AddScoped<MarketAnalysisWorkflowService>();
+builder.Services.AddScoped<ProcurementWorkflowService>();
 
 // Register IndexedDB service for browser persistence
 builder.Services.AddScoped<IndexedDbService>();

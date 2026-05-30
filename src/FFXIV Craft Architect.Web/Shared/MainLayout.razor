@@ -17,7 +17,7 @@
 @inject IDialogService DialogService
 @inject RecipeCalculationService RecipeService
 @inject UniversalisService UniversalisService
-@inject IMarketCacheService MarketCache
+@inject RecipePlannerCommandService RecipePlannerCommandService
 @inject ILogger<MainLayout> Logger
 @inject Microsoft.AspNetCore.Components.WebAssembly.Hosting.IWebAssemblyHostEnvironment HostEnvironment
 @implements IDisposable
@@ -228,8 +228,9 @@
             var success = await IndexedDb.AutoSaveStateAsync(AppState, skipIfInFlight: true);
             if (success)
             {
-                AppState.LastAutoSave = DateTime.Now;
-                Logger?.LogDebug("Auto-saved state at {Time}", AppState.LastAutoSave.Value.ToString("HH:mm:ss"));
+                var completedAt = DateTime.Now;
+                AppState.RecordAutoSaveCompleted(completedAt);
+                Logger?.LogDebug("Auto-saved state at {Time}", completedAt.ToString("HH:mm:ss"));
             }
         }
         catch (Exception ex)
@@ -248,17 +249,17 @@
             var autoFetch = await Settings.GetAsync("market.auto_fetch_prices", true);
             var defaultScope = ParseMarketFetchScope(
                 await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.SelectedDataCenter)));
+            var selectedDataCenter = string.IsNullOrEmpty(AppState.SelectedDataCenter)
+                ? defaultDc
+                : AppState.SelectedDataCenter;
 
-            AppState.IsAutoSaveEnabled = autoSave;
-            AppState.AutoFetchPricesOnRebuild = autoFetch;
-            AppState.DefaultMarketFetchScope = defaultScope;
-            AppState.SelectedRegion = region;
-            AppState.SearchEntireRegion = defaultScope == MarketFetchScope.EntireRegion;
-            
-            if (string.IsNullOrEmpty(AppState.SelectedDataCenter))
-            {
-                AppState.SelectedDataCenter = defaultDc;
-            }
+            AppState.SetAutoSaveEnabled(autoSave);
+            AppState.SetMarketEvidenceSettings(
+                selectedDataCenter,
+                region,
+                defaultScope,
+                defaultScope == MarketFetchScope.EntireRegion,
+                autoFetch);
         }
         catch { /* Ignore settings load errors */ }
     }
@@ -270,7 +271,7 @@
             var totalElapsed = System.Diagnostics.Stopwatch.StartNew();
 
             // Only restore if no plan is currently loaded
-            if (AppState.CurrentPlan != null || AppState.ProjectItems.Any())
+            if (AppState.HasPlanOrProjectItems)
                 return StartupAutoSaveRestoreResult.NoAutoSave();
 
             var loadElapsed = System.Diagnostics.Stopwatch.StartNew();
@@ -290,7 +291,7 @@
                 Logger?.LogWarning("Failed to deserialize plan JSON from auto-save: {Warning}", loadResult.Warning);
             }
 
-            if (AppState.CurrentPlan != null || AppState.ProjectItems.Any())
+            if (AppState.HasPlanOrProjectItems)
             {
                 Logger?.LogInformation("Skipped auto-save restore because a plan was loaded while restore was pending");
                 return StartupAutoSaveRestoreResult.NoAutoSave();
@@ -400,7 +401,7 @@
             Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
             
             // Navigate to planner if we have a plan
-            if (result.Plan != null || AppState.ProjectItems.Any())
+            if (result.Plan != null || AppState.HasProjectItems)
             {
                 // Use relative path (no leading slash) so it resolves against base href correctly
                 NavigationManager.NavigateTo("./");
@@ -415,10 +416,7 @@
     private async Task RefreshSavedPlansListAsync()
     {
         var summaries = await PlanPersistence.LoadPlanSummariesAsync();
-        AppState.SavedPlans = summaries
-            .Where(p => p.Id != "autosave")
-            .ToList();
-        AppState.NotifySavedPlansChanged();
+        AppState.ReplaceSavedPlans(summaries.Where(p => p.Id != "autosave"));
     }
 
     private async Task OnViewLogs()
@@ -451,58 +449,37 @@
             }
             else
             {
-                // Clear existing project items before importing (replace current plan)
-                AppState.ProjectItems.Clear();
-                AppState.CurrentPlan = null;
-                AppState.ClearCurrentPlanId();
-                AppState.ClearMarketAnalysisState();
-                 
-                // Add imported items to project (for non-native formats)
-                foreach (var item in items)
-                {
-                    AppState.ProjectItems.Add(new ProjectItem
+                var projectItems = items
+                    .Select(item => new ProjectItem
                     {
                         Id = item.Id,
                         Name = item.Name,
                         IconId = item.IconId,
                         Quantity = item.Quantity,
                         MustBeHq = item.MustBeHq
-                    });
-                }
-                 
-                AppState.NotifyPlanChanged();
+                    })
+                    .ToList();
+                var importCommandResult = await RecipePlannerCommandService.ImportProjectItemsAsync(
+                    new ImportProjectItemsRequest(
+                        projectItems,
+                        AppState.SelectedDataCenter,
+                        AppState.SelectedRegion,
+                        AppState.DefaultMarketFetchScope));
+
                 Snackbar.Add($"Imported {items.Count} items", Severity.Success);
-                 
-                // Rebuild plan from new project items
-                if (AppState.ProjectItems.Any())
+                if (items.Count > 0)
                 {
-                    AppState.SetStatus("Rebuilding plan...", busy: true);
-                    try
+                    if (importCommandResult.BuildResult.Built)
                     {
-                        // Convert ProjectItems to BuildPlanAsync format
-                        var targetItems = AppState.ProjectItems
-                            .Select(p => (p.Id, p.Name, p.Quantity, p.MustBeHq))
-                            .ToList();
-                        
-                        var newPlan = await RecipeService.BuildPlanAsync(
-                            targetItems,
-                            AppState.SelectedDataCenter ?? "Aether",
-                            string.Empty);
-                        
-                        AppState.CurrentPlan = newPlan;
-                        AppState.NotifyPlanChanged();
-                        
-                        // Market prices will be fetched when user navigates to the planner page
                         Snackbar.Add("Plan rebuilt from imported items", Severity.Success);
                     }
-                    catch (Exception ex)
+                    else if (importCommandResult.MessageLevel == RecipePlannerCommandMessageLevel.Error)
                     {
-                        Snackbar.Add($"Failed to rebuild plan: {ex.Message}", Severity.Error);
-                        Logger.LogError(ex, "Failed to rebuild plan from imported items");
+                        Snackbar.Add($"Failed to rebuild plan: {importCommandResult.BuildResult.Message}", Severity.Error);
                     }
-                    finally
+                    else
                     {
-                        AppState.SetStatus("Ready", busy: false);
+                        Snackbar.Add(importCommandResult.BuildResult.Message, Severity.Info);
                     }
                 }
             }
@@ -557,63 +534,39 @@
         bool refreshPrices,
         bool clearCurrentPlanId)
     {
-        AppState.CurrentPlan = plan;
-        AppState.ProjectItems = CraftPlanStateMapper.GetRootProjectItems(plan);
-        AppState.ClearMarketAnalysisState();
-
-        if (!string.IsNullOrEmpty(plan.DataCenter))
-        {
-            AppState.SelectedDataCenter = plan.DataCenter;
-        }
-
-        if (clearCurrentPlanId)
-        {
-            AppState.ClearCurrentPlanId();
-        }
-
-        AppState.NotifyPlanChanged();
-        Snackbar.Add(successMessage, Severity.Success);
-
-        if (!refreshPrices || AppState.CurrentPlan == null)
-        {
-            AppState.SetStatus("Ready", busy: false);
-            return;
-        }
-
-        AppState.SetStatus("Rebuilding plan...", busy: true);
         try
         {
-            await RecipeService.FetchVendorPricesAsync(AppState.CurrentPlan);
-            Snackbar.Add("Vendor prices updated", Severity.Success);
-
-            if (AppState.AutoFetchPricesOnRebuild)
-            {
-                AppState.SetStatus("Fetching market prices...", busy: true);
-                var allItemIds = AppState.CurrentPlan.GetAllItemIds().ToList();
-                var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, allItemIds);
-                var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
-                var marketEntries = await MarketScopedPriceLoader.LoadBestEntriesAsync(
-                    MarketCache,
-                    marketItemIds,
+            var result = await RecipePlannerCommandService.ActivatePlanAsync(
+                new ActivateRecipePlanRequest(
+                    plan,
+                    clearCurrentPlanId,
+                    RefreshVendorPrices: refreshPrices,
+                    RefreshMarketPrices: refreshPrices && AppState.AutoFetchPricesOnRebuild,
                     AppState.DefaultMarketFetchScope,
                     AppState.SelectedDataCenter,
-                    AppState.SelectedRegion,
-                    progress: progress);
+                    AppState.SelectedRegion));
 
-                UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, marketEntries);
-                Logger.LogInformation("Loaded {Count} market entries from cache scope {Scope}", marketEntries.Count, AppState.DefaultMarketFetchScope);
-                Snackbar.Add("Market prices updated", Severity.Success);
+            Snackbar.Add(successMessage, Severity.Success);
+            if (result.MessageLevel == RecipePlannerCommandMessageLevel.Warning)
+            {
+                Snackbar.Add(result.Message, Severity.Warning);
             }
-
-            AppState.NotifyPlanChanged();
+            else if (refreshPrices)
+            {
+                Snackbar.Add("Vendor prices updated", Severity.Success);
+                if (AppState.AutoFetchPricesOnRebuild)
+                {
+                    Logger.LogInformation(
+                        "Loaded {Count} market entries from cache scope {Scope}",
+                        result.PriceRefresh.FetchedCount,
+                        AppState.DefaultMarketFetchScope);
+                    Snackbar.Add("Market prices updated", Severity.Success);
+                }
+            }
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Failed to rebuild plan: {ex.Message}", Severity.Warning);
-        }
-        finally
-        {
-            AppState.SetStatus("Ready", busy: false);
         }
     }
 
@@ -623,30 +576,6 @@
         return path.StartsWith("dev-plans/", StringComparison.OrdinalIgnoreCase)
             ? path
             : $"dev-plans/{path}";
-    }
-    
-    private void UpdateNodeMarketPrices(List<PlanNode> nodes, IReadOnlyDictionary<int, CachedMarketData> marketEntries)
-    {
-        foreach (var node in nodes)
-        {
-            if (marketEntries.TryGetValue(node.ItemId, out var entry))
-            {
-                node.MarketPrice = MarketScopedPriceLoader.GetComparableAveragePrice(entry);
-                
-                // Calculate HQ price if available
-                var hqListings = entry.Worlds.SelectMany(world => world.Listings).Where(listing => listing.IsHq).ToList();
-                if (hqListings.Any())
-                {
-                    node.HqMarketPrice = (decimal)hqListings.Average(listing => listing.PricePerUnit);
-                }
-            }
-            
-            // Recursively update children
-            if (node.Children?.Any() == true)
-            {
-                UpdateNodeMarketPrices(node.Children, marketEntries);
-            }
-        }
     }
 
     // ==================== EXPORT MENU ====================

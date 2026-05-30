@@ -105,19 +105,8 @@ public sealed class AcquisitionDecisionService
 
         var costContext = AcquisitionPlanningService.CreateCostContext(_appState.ShoppingPlans);
         AcquisitionPlanningService.ReconcileAcquisitionDecisions(_appState.CurrentPlan, costContext);
-        _appState.ShoppingItems = AcquisitionPlanningService.GetActiveProcurementItems(_appState.CurrentPlan)
-            .Where(item => item.TotalQuantity > 0)
-            .Select(item => new MarketShoppingItem
-            {
-                Id = item.ItemId,
-                Name = item.Name,
-                IconId = item.IconId,
-                Quantity = item.TotalQuantity
-            })
-            .ToList();
-        _appState.NotifyShoppingItemsChanged();
-        _appState.ProcurementShoppingPlans.Clear();
-        _appState.NotifyProcurementOverlayChanged();
+        _appState.ReplaceShoppingItemsFromActivePlan();
+        _appState.ClearProcurementOverlay();
         _appState.NotifyPlanDecisionChanged();
         ClearStaleProcurementStatus();
     }
