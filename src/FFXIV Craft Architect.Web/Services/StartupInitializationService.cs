@@ -3,6 +3,7 @@ namespace FFXIV_Craft_Architect.Web.Services;
 public sealed class StartupInitializationService
 {
     private bool _hasStarted;
+    private Action? _pendingStartAutoSave;
 
     public StartupStatus Status { get; private set; } = StartupStatus.InProgress("Starting...");
 
@@ -24,7 +25,7 @@ public sealed class StartupInitializationService
             await RunStepAsync("Loading settings...", steps.LoadSettingsAsync, cancellationToken);
             await RunStepAsync("Loading world data...", steps.InitializeWorldDataAsync, cancellationToken);
 
-            steps.StartAutoSave();
+            _pendingStartAutoSave = steps.StartAutoSave;
 
             UpdateStatus(StartupStatus.InProgress("Checking autosave..."));
             UpdateStatus(StartupStatus.InProgress("Restoring autosave..."));
@@ -38,6 +39,7 @@ public sealed class StartupInitializationService
                 return;
             }
 
+            StartAutoSaveIfPending();
             UpdateStatus(StartupStatus.Complete());
         }
         catch (OperationCanceledException)
@@ -57,7 +59,20 @@ public sealed class StartupInitializationService
             return;
         }
 
+        StartAutoSaveIfPending();
         UpdateStatus(StartupStatus.Complete());
+    }
+
+    private void StartAutoSaveIfPending()
+    {
+        var startAutoSave = _pendingStartAutoSave;
+        if (startAutoSave == null)
+        {
+            return;
+        }
+
+        _pendingStartAutoSave = null;
+        startAutoSave();
     }
 
     private async Task RunStepAsync(

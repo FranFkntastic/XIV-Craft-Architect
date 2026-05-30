@@ -28,7 +28,7 @@
         OnSearchKeyUp="OnSearchKeyUp"
         IsSearching="@_isSearching"
         IsBuildingPlan="@_isBuildingPlan"
-        ShowPlanActions="@(AppState.CurrentPlan != null || AppState.ProjectItems.Any())"
+        ShowPlanActions="@AppState.HasPlanOrProjectItems"
         LastAutoSave="@AppState.LastAutoSave"
         SearchResults="@_searchResults"
         ProjectItems="@AppState.ProjectItems"
@@ -37,6 +37,7 @@
         OnAddProjectItem="AddProjectItem"
         OnToggleItemHq="ToggleItemHq"
         OnRemoveProjectItem="RemoveProjectItem"
+        OnUpdateItemQuantity="UpdateItemQuantity"
         OnBuildPlanRequested="BuildPlanAsync"
         OnSavePlanRequested="SaveToBrowserAsync"
         OnExportPlanRequested="ExportPlanAsync" />
@@ -93,10 +94,7 @@
     private async Task RefreshSavedPlansListAsync()
     {
         var summaries = await PlanPersistence.LoadPlanSummariesAsync();
-        AppState.SavedPlans = summaries
-            .Where(p => p.Id != "autosave") // Don't show autosave in list
-            .ToList();
-        AppState.NotifySavedPlansChanged();
+        AppState.ReplaceSavedPlans(summaries.Where(p => p.Id != "autosave")); // Don't show autosave in list
     }
 
     private async Task SearchItemsAsync()
@@ -174,13 +172,16 @@
         AppState.ToggleProjectItemHq(item);
     }
 
+    private void UpdateItemQuantity(ProjectItemsPanel.ProjectItemQuantityChangeRequest request)
+    {
+        AppState.UpdateProjectItemQuantity(request.Item, request.Quantity);
+    }
+
     private async Task OpenPlanBuilderAsync()
     {
         var parameters = new DialogParameters
         {
             ["InitialItems"] = AppState.ProjectItems
-                .Select(CloneProjectItem)
-                .ToList()
         };
 
         var options = new DialogOptions
@@ -204,18 +205,6 @@
         {
             await BuildPlanAsync();
         }
-    }
-
-    private static ProjectItem CloneProjectItem(ProjectItem item)
-    {
-        return new ProjectItem
-        {
-            Id = item.Id,
-            Name = item.Name,
-            IconId = item.IconId,
-            Quantity = item.Quantity,
-            MustBeHq = item.MustBeHq
-        };
     }
 
     private async Task OpenPlanEditorAsync()
@@ -253,7 +242,7 @@
 
     private async Task BuildPlanAsync()
     {
-        if (!AppState.ProjectItems.Any() || _isBuildingPlan)
+        if (!AppState.HasProjectItems || _isBuildingPlan)
             return;
 
         _isBuildingPlan = true;
@@ -322,7 +311,7 @@
 
     private async Task SaveToBrowserAsync()
     {
-        if (!AppState.ProjectItems.Any())
+        if (!AppState.HasProjectItems)
             return;
 
         try
@@ -330,12 +319,12 @@
             // Use existing plan ID if available (overwrite), otherwise generate new
             var planId = AppState.CurrentPlanId ?? Guid.NewGuid().ToString();
             var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name ?? $"Plan_{DateTime.Now:yyyyMMdd_HHmm}";
+            var isNewSave = AppState.CurrentPlanId == null;
 
             // If this is a new save (no CurrentPlanId), set it for future overwrites
-            if (AppState.CurrentPlanId == null)
+            if (isNewSave)
             {
-                AppState.CurrentPlanId = planId;
-                AppState.CurrentPlanName = planName;
+                AppState.TrackCurrentPlanIdentity(planId, planName);
             }
 
             var existingSummary = AppState.SavedPlans.FirstOrDefault(plan => plan.Id == planId);
@@ -345,7 +334,7 @@
                 existingSummary?.SavedAt);
             if (success)
             {
-                var action = AppState.CurrentPlanId == planId ? "Updated" : "Saved";
+                var action = isNewSave ? "Saved" : "Updated";
                 Snackbar.Add($"{action} '{planName}' to browser storage", Severity.Success);
                 await RefreshSavedPlansListAsync();
             }

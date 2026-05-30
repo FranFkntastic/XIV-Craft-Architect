@@ -127,7 +127,7 @@
         _activeTab = ActiveTab;
     }
     
-    private bool CanExport => AppState.CurrentPlan != null || AppState.ProjectItems.Any();
+    private bool CanExport => AppState.HasPlanOrProjectItems;
 
     private void GenerateNativeJson()
     {
@@ -138,7 +138,7 @@
             {
                 _nativeJson = RecipeService.SerializePlan(AppState.CurrentPlan);
             }
-            else if (AppState.ProjectItems.Any())
+            else if (AppState.HasProjectItems)
             {
                 // Create a minimal plan from project items
                 var plan = new CraftingPlan
@@ -202,7 +202,7 @@
         {
             // Build a plan if needed
             CraftingPlan? plan = AppState.CurrentPlan;
-            if (plan == null && AppState.ProjectItems.Any())
+            if (plan == null && AppState.HasProjectItems)
             {
                 var targetItems = AppState.ProjectItems.Select(p => (p.Id, p.Name, p.Quantity, p.MustBeHq)).ToList();
                 plan = await RecipeService.BuildPlanAsync(targetItems, AppState.SelectedDataCenter, string.Empty);

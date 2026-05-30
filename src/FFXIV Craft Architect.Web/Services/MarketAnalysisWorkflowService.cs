@@ -44,6 +44,7 @@ public sealed class MarketAnalysisWorkflowService
         MarketAnalysisExecutionOptions? executionOptions = null)
     {
         var plan = _appState.CurrentPlan;
+        var planSessionVersion = _appState.PlanSessionVersion;
         var planId = _appState.CurrentPlanId;
         var materials = AcquisitionPlanningService.GetMarketAnalysisCandidates(plan);
         if (plan == null || materials.Count == 0 || string.IsNullOrWhiteSpace(_appState.SelectedDataCenter))
@@ -56,6 +57,11 @@ public sealed class MarketAnalysisWorkflowService
         var scope = _appState.SearchEntireRegion
             ? MarketFetchScope.EntireRegion
             : MarketFetchScope.SelectedDataCenter;
+        var requestSnapshot = new MarketAnalysisRequestSnapshot(
+            scope,
+            _appState.SelectedDataCenter,
+            _appState.SelectedRegion,
+            _appState.MarketAnalysisLens);
         var executionResult = await _marketAnalysisExecution.ExecuteAsync(
             new MarketAnalysisExecutionRequest
             {
@@ -73,13 +79,19 @@ public sealed class MarketAnalysisWorkflowService
             executionOptions: executionOptions);
         ct.ThrowIfCancellationRequested();
 
-        if (!ReferenceEquals(_appState.CurrentPlan, plan))
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        {
+            return new MarketAnalysisWorkflowResult(false, 0, 0, executionResult.Evidence.FetchedCount);
+        }
+
+        if (!IsCurrentRequest(requestSnapshot))
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, executionResult.Evidence.FetchedCount);
         }
 
         var published = await PublishMarketAnalysisAsync(
             plan,
+            planSessionVersion,
             planId,
             executionResult.Analyses,
             executionResult.ShoppingPlans,
@@ -100,21 +112,26 @@ public sealed class MarketAnalysisWorkflowService
         MarketAcquisitionLens lens,
         CancellationToken ct = default)
     {
-        _appState.MarketAnalysisLens = lens;
+        var changed = _appState.SetMarketAnalysisLens(lens);
         if (!_appState.MarketItemAnalyses.Any())
         {
-            _appState.NotifyShoppingListChanged();
-            await _indexedDb.AutoSaveStateAsync(_appState);
+            if (changed)
+            {
+                await _indexedDb.AutoSaveStateAsync(_appState);
+            }
+
             return new MarketAnalysisWorkflowResult(false, 0, 0, 0);
         }
 
         var plan = _appState.CurrentPlan;
+        var planSessionVersion = _appState.PlanSessionVersion;
         var planId = _appState.CurrentPlanId;
         var shoppingPlans = _appState.MarketItemAnalyses
             .Select(analysis => _marketPriceLadderAnalysis.ProjectToShoppingPlan(analysis, lens))
             .ToList();
         var published = await PublishMarketAnalysisAsync(
             plan,
+            planSessionVersion,
             planId,
             _appState.MarketItemAnalyses,
             shoppingPlans,
@@ -133,19 +150,26 @@ public sealed class MarketAnalysisWorkflowService
 
     private async Task<PublishMarketAnalysisResult?> PublishMarketAnalysisAsync(
         CraftingPlan? plan,
+        long planSessionVersion,
         string? planId,
         IEnumerable<MarketItemAnalysis> analyses,
         List<DetailedShoppingPlan> shoppingPlans,
         CancellationToken ct)
     {
-        if (plan == null || !ReferenceEquals(_appState.CurrentPlan, plan))
+        if (plan == null || !_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
             return null;
         }
 
+        ct.ThrowIfCancellationRequested();
         var analysisList = analyses.ToList();
         var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(plan, shoppingPlans);
         _marketShoppingService.ApplyVendorPurchaseOverrides(plan, shoppingPlans);
+
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        {
+            return null;
+        }
 
         using (_appState.BeginStateChangeBatch())
         {
@@ -161,7 +185,9 @@ public sealed class MarketAnalysisWorkflowService
             }
         }
 
-        if (!string.IsNullOrEmpty(planId) && string.Equals(_appState.CurrentPlanId, planId, StringComparison.Ordinal))
+        if (!string.IsNullOrEmpty(planId) &&
+            _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
+            string.Equals(_appState.CurrentPlanId, planId, StringComparison.Ordinal))
         {
             await _planPersistence.SaveMarketAnalysisAsync(
                 planId,
@@ -172,17 +198,35 @@ public sealed class MarketAnalysisWorkflowService
         }
 
         ct.ThrowIfCancellationRequested();
-        if (!ReferenceEquals(_appState.CurrentPlan, plan))
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
             return null;
         }
 
         await _indexedDb.AutoSaveStateAsync(_appState);
         ct.ThrowIfCancellationRequested();
-        return ReferenceEquals(_appState.CurrentPlan, plan)
+        return _appState.IsCurrentPlanSession(plan, planSessionVersion)
             ? new PublishMarketAnalysisResult(changedDecisions)
             : null;
     }
 
     private sealed record PublishMarketAnalysisResult(int ChangedDecisionCount);
+
+    private bool IsCurrentRequest(MarketAnalysisRequestSnapshot snapshot)
+    {
+        var currentScope = _appState.SearchEntireRegion
+            ? MarketFetchScope.EntireRegion
+            : MarketFetchScope.SelectedDataCenter;
+
+        return snapshot.Scope == currentScope &&
+               string.Equals(snapshot.SelectedDataCenter, _appState.SelectedDataCenter, StringComparison.Ordinal) &&
+               string.Equals(snapshot.SelectedRegion, _appState.SelectedRegion, StringComparison.Ordinal) &&
+               snapshot.Lens == _appState.MarketAnalysisLens;
+    }
+
+    private sealed record MarketAnalysisRequestSnapshot(
+        MarketFetchScope Scope,
+        string SelectedDataCenter,
+        string SelectedRegion,
+        MarketAcquisitionLens Lens);
 }

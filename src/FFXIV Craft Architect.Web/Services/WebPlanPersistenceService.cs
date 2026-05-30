@@ -83,8 +83,8 @@ public sealed class WebPlanPersistenceService
 
     public async Task<bool> SaveMarketAnalysisAsync(
         string planId,
-        List<DetailedShoppingPlan> shoppingPlans,
-        List<MarketItemAnalysis> marketItemAnalyses,
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
+        IReadOnlyList<MarketItemAnalysis> marketItemAnalyses,
         RecommendationMode mode,
         MarketAcquisitionLens lens)
     {

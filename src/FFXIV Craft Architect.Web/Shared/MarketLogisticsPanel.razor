@@ -109,7 +109,7 @@
 </div>
 
 @code {
-    [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
     [Parameter] public string? PurchaseSummaryText { get; set; }
     [Parameter] public RecommendationMode InitialMode { get; set; } = RecommendationMode.MinimizeTotalCost;
     [Parameter] public EventCallback OnRefreshMarketData { get; set; }
@@ -126,8 +126,6 @@
 
     protected override void OnParametersSet()
     {
-        ShoppingPlans ??= new List<DetailedShoppingPlan>();
-        
         // Handle auto-expand once when the parameter is set
         if (!_autoExpandProcessed && AutoExpandItemId.HasValue && ShoppingPlans.Any())
         {
@@ -165,7 +163,7 @@
 
     private IEnumerable<DetailedShoppingPlan> GetSortedPlans()
     {
-        var plans = ShoppingPlans ?? new List<DetailedShoppingPlan>();
+        var plans = ShoppingPlans;
         
         return CurrentSort switch
         {
@@ -192,16 +190,16 @@
         return GetSortedPlans().Where(p => p.RecommendedWorld?.WorldName != "Vendor");
     }
     
-    private decimal TotalDCAverage => ShoppingPlans?.Sum(p => p.DCAveragePrice * p.QuantityNeeded) ?? 0;
+    private decimal TotalDCAverage => ShoppingPlans.Sum(p => p.DCAveragePrice * p.QuantityNeeded);
     
-    private decimal TotalBestValue => ShoppingPlans?.Sum(p => 
+    private decimal TotalBestValue => ShoppingPlans.Sum(p =>
     {
         if (p.RecommendedWorld != null)
             return p.RecommendedWorld.TotalCost;
         if (p.WorldOptions.Any())
             return p.WorldOptions.OrderBy(w => w.TotalCost).First().TotalCost;
         return p.DCAveragePrice * p.QuantityNeeded;
-    }) ?? 0;
+    });
 
     private decimal TotalSavings => Math.Max(0, TotalDCAverage - TotalBestValue);
 }

@@ -145,6 +145,7 @@ public sealed class RecipePlannerCommandService
             .ToList();
         CraftingPlan? publishedPlan = null;
         PlanNode? selectedNode = null;
+        long? publishedPlanSessionVersion = null;
 
         try
         {
@@ -159,10 +160,11 @@ public sealed class RecipePlannerCommandService
             }
 
             _cancellableOperations.CancelPlanDependentOperations();
-            _appState.CurrentPlan = builtPlan;
+            _appState.ApplyBuiltRecipePlan(builtPlan);
+            var builtPlanSessionVersion = _appState.PlanSessionVersion;
+            publishedPlanSessionVersion = builtPlanSessionVersion;
             publishedPlan = builtPlan;
-            selectedNode = _appState.CurrentPlan.RootItems.FirstOrDefault();
-            ClearStaleMarketStateForCurrentPlan(notifyPlanChanged: true);
+            selectedNode = builtPlan.RootItems.FirstOrDefault();
             var priceRefresh = new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
             if (request.RefreshPrices)
             {
@@ -178,8 +180,13 @@ public sealed class RecipePlannerCommandService
                 }
             }
 
+            if (!_appState.IsCurrentPlanSession(builtPlan, builtPlanSessionVersion))
+            {
+                return CanceledBuildResult();
+            }
+
             var changedDefaults = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(
-                _appState.CurrentPlan,
+                builtPlan,
                 Array.Empty<DetailedShoppingPlan>());
 
             using (_appState.BeginStateChangeBatch())
@@ -209,7 +216,7 @@ public sealed class RecipePlannerCommandService
                     RecipePlannerCommandMessageLevel.Warning);
             }
 
-            var message = $"Plan built with {_appState.CurrentPlan.RootItems.Count} items. Go to Procurement Planner to analyze.";
+            var message = $"Plan built with {builtPlan.RootItems.Count} items. Go to Procurement Planner to analyze.";
             operation.Complete(message);
             return new BuildRecipePlanResult(
                 true,
@@ -224,7 +231,9 @@ public sealed class RecipePlannerCommandService
         catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
         {
             operation.Cancel();
-            if (publishedPlan != null && ReferenceEquals(_appState.CurrentPlan, publishedPlan))
+            if (publishedPlan != null &&
+                publishedPlanSessionVersion.HasValue &&
+                _appState.IsCurrentPlanSession(publishedPlan, publishedPlanSessionVersion.Value))
             {
                 return new BuildRecipePlanResult(
                     true,
@@ -265,25 +274,16 @@ public sealed class RecipePlannerCommandService
         ImportProjectItemsRequest request,
         CancellationToken ct = default)
     {
-        using (_appState.BeginStateChangeBatch())
+        _appState.ApplyImportedProjectItems(request.ProjectItems.Select(item => new ProjectItem
         {
-            _appState.ProjectItems = request.ProjectItems
-                .Select(item => new ProjectItem
-                {
-                    Id = item.Id,
-                    Name = item.Name,
-                    IconId = item.IconId,
-                    Quantity = item.Quantity,
-                    MustBeHq = item.MustBeHq
-                })
-                .ToList();
-            _appState.CurrentPlan = null;
-            _appState.ClearCurrentPlanId();
-            _appState.ClearMarketAnalysisState();
-            _appState.NotifyPlanChanged();
-        }
+            Id = item.Id,
+            Name = item.Name,
+            IconId = item.IconId,
+            Quantity = item.Quantity,
+            MustBeHq = item.MustBeHq
+        }));
 
-        if (_appState.ProjectItems.Count == 0)
+        if (!_appState.HasProjectItems)
         {
             var emptyResult = new BuildRecipePlanResult(
                 false,
@@ -310,7 +310,7 @@ public sealed class RecipePlannerCommandService
         return new ImportProjectItemsResult(
             buildResult,
             buildResult.Built
-                ? $"Imported {_appState.ProjectItems.Count} items and rebuilt the plan."
+                ? $"Imported {_appState.ProjectItemCount} items and rebuilt the plan."
                 : buildResult.Message,
             buildResult.MessageLevel);
     }
@@ -320,6 +320,7 @@ public sealed class RecipePlannerCommandService
         CancellationToken ct = default)
     {
         var plan = _appState.CurrentPlan;
+        var planSessionVersion = _appState.PlanSessionVersion;
         if (plan == null)
         {
             return new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
@@ -327,7 +328,7 @@ public sealed class RecipePlannerCommandService
 
         await _recipePlanBuilder.FetchVendorPricesAsync(plan, ct);
         ct.ThrowIfCancellationRequested();
-        if (!ReferenceEquals(_appState.CurrentPlan, plan))
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
             return new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
         }
@@ -343,7 +344,7 @@ public sealed class RecipePlannerCommandService
             request.SelectedRegion,
             ct: ct);
         ct.ThrowIfCancellationRequested();
-        if (!ReferenceEquals(_appState.CurrentPlan, plan))
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
             return new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
         }
@@ -360,7 +361,7 @@ public sealed class RecipePlannerCommandService
             UpdateNodePrices(root, marketEntries);
         }
 
-        if (!ReferenceEquals(_appState.CurrentPlan, plan))
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
             return new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
         }
@@ -377,25 +378,13 @@ public sealed class RecipePlannerCommandService
         ArgumentNullException.ThrowIfNull(request.Plan);
 
         var selectedNode = request.Plan.RootItems.FirstOrDefault();
-        using (_appState.BeginStateChangeBatch())
-        {
-            _cancellableOperations.CancelPlanDependentOperations();
-            _appState.CurrentPlan = request.Plan;
-            _appState.ProjectItems = CraftPlanStateMapper.GetRootProjectItems(request.Plan);
-            if (!string.IsNullOrWhiteSpace(request.Plan.DataCenter))
-            {
-                _appState.SelectedDataCenter = request.Plan.DataCenter;
-            }
-
-            if (request.ClearCurrentPlanId)
-            {
-                _appState.ClearCurrentPlanId();
-            }
-
-            _appState.ClearMarketAnalysisState();
-            _appState.ReplaceShoppingItemsFromActivePlan();
-            _appState.NotifyPlanChanged();
-        }
+        _cancellableOperations.CancelPlanDependentOperations();
+        _appState.ActivateRecipePlan(
+            request.Plan,
+            CraftPlanStateMapper.GetRootProjectItems(request.Plan),
+            request.Plan.DataCenter,
+            request.ClearCurrentPlanId);
+        var activatedPlanSessionVersion = _appState.PlanSessionVersion;
 
         if (!request.RefreshVendorPrices && !request.RefreshMarketPrices)
         {
@@ -430,16 +419,31 @@ public sealed class RecipePlannerCommandService
                 {
                     return CanceledActivationResult();
                 }
+
+                if (!_appState.IsCurrentPlanSession(request.Plan, activatedPlanSessionVersion))
+                {
+                    return CanceledActivationResult();
+                }
             }
             else
             {
-                await _recipePlanBuilder.FetchVendorPricesAsync(_appState.CurrentPlan, operation.Token);
+                if (!_appState.IsCurrentPlanSession(request.Plan, activatedPlanSessionVersion))
+                {
+                    return CanceledActivationResult();
+                }
+
+                await _recipePlanBuilder.FetchVendorPricesAsync(request.Plan, operation.Token);
                 if (!operation.IsCurrent)
                 {
                     return CanceledActivationResult();
                 }
 
-                _appState.CurrentPlan.PriceVersion++;
+                if (!_appState.IsCurrentPlanSession(request.Plan, activatedPlanSessionVersion))
+                {
+                    return CanceledActivationResult();
+                }
+
+                request.Plan.PriceVersion++;
                 _appState.NotifyPlanPriceChanged();
                 priceRefresh = new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
             }
@@ -516,19 +520,6 @@ public sealed class RecipePlannerCommandService
         return new ApplyPlanEditorEditResult(
             editResult,
             $"Updated {editResult.ChangedNodes} node{(editResult.ChangedNodes == 1 ? "" : "s")}; skipped {editResult.SkippedNodes}.");
-    }
-
-    private void ClearStaleMarketStateForCurrentPlan(bool notifyPlanChanged)
-    {
-        using (_appState.BeginStateChangeBatch())
-        {
-            _appState.ClearMarketAnalysisState();
-            _appState.ReplaceShoppingItemsFromActivePlan();
-            if (notifyPlanChanged)
-            {
-                _appState.NotifyPlanChanged();
-            }
-        }
     }
 
     private static void UpdateNodePrices(PlanNode node, IReadOnlyDictionary<int, CachedMarketData> marketEntries)

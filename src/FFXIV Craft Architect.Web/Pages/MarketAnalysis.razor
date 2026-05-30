@@ -34,6 +34,7 @@
             AutoExpandItemId="AppState.AutoExpandItemId"
             ShowWorldsColumn="AppState.SearchEntireRegion"
             IsAnalyzing="_isAnalyzing"
+            OnAutoExpandConsumed="ConsumeAutoExpand"
             OnGoToPlannerRequested="GoToPlanner"
             OnRunAnalysisRequested="RunMarketAnalysisAsync" />
     </div>
@@ -54,16 +55,6 @@
         AppState.OnShoppingListChanged += OnShoppingListChanged;
     }
 
-    protected override void OnAfterRender(bool firstRender)
-    {
-        // Clear the auto-expand item ID after the first render
-        // This ensures it doesn't persist if the user navigates away and back
-        if (firstRender && AppState.AutoExpandItemId.HasValue)
-        {
-            AppState.AutoExpandItemId = null;
-        }
-    }
-
     private void OnPlanChanged()
     {
         InvokeAsync(StateHasChanged);
@@ -72,6 +63,11 @@
     private void OnShoppingListChanged()
     {
         InvokeAsync(StateHasChanged);
+    }
+
+    private void ConsumeAutoExpand(int itemId)
+    {
+        AppState.ConsumeMarketItemAutoExpand(itemId);
     }
 
     public void Dispose()

@@ -228,8 +228,9 @@
             var success = await IndexedDb.AutoSaveStateAsync(AppState, skipIfInFlight: true);
             if (success)
             {
-                AppState.LastAutoSave = DateTime.Now;
-                Logger?.LogDebug("Auto-saved state at {Time}", AppState.LastAutoSave.Value.ToString("HH:mm:ss"));
+                var completedAt = DateTime.Now;
+                AppState.RecordAutoSaveCompleted(completedAt);
+                Logger?.LogDebug("Auto-saved state at {Time}", completedAt.ToString("HH:mm:ss"));
             }
         }
         catch (Exception ex)
@@ -248,17 +249,17 @@
             var autoFetch = await Settings.GetAsync("market.auto_fetch_prices", true);
             var defaultScope = ParseMarketFetchScope(
                 await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.SelectedDataCenter)));
+            var selectedDataCenter = string.IsNullOrEmpty(AppState.SelectedDataCenter)
+                ? defaultDc
+                : AppState.SelectedDataCenter;
 
-            AppState.IsAutoSaveEnabled = autoSave;
-            AppState.AutoFetchPricesOnRebuild = autoFetch;
-            AppState.DefaultMarketFetchScope = defaultScope;
-            AppState.SelectedRegion = region;
-            AppState.SearchEntireRegion = defaultScope == MarketFetchScope.EntireRegion;
-            
-            if (string.IsNullOrEmpty(AppState.SelectedDataCenter))
-            {
-                AppState.SelectedDataCenter = defaultDc;
-            }
+            AppState.SetAutoSaveEnabled(autoSave);
+            AppState.SetMarketEvidenceSettings(
+                selectedDataCenter,
+                region,
+                defaultScope,
+                defaultScope == MarketFetchScope.EntireRegion,
+                autoFetch);
         }
         catch { /* Ignore settings load errors */ }
     }
@@ -270,7 +271,7 @@
             var totalElapsed = System.Diagnostics.Stopwatch.StartNew();
 
             // Only restore if no plan is currently loaded
-            if (AppState.CurrentPlan != null || AppState.ProjectItems.Any())
+            if (AppState.HasPlanOrProjectItems)
                 return StartupAutoSaveRestoreResult.NoAutoSave();
 
             var loadElapsed = System.Diagnostics.Stopwatch.StartNew();
@@ -290,7 +291,7 @@
                 Logger?.LogWarning("Failed to deserialize plan JSON from auto-save: {Warning}", loadResult.Warning);
             }
 
-            if (AppState.CurrentPlan != null || AppState.ProjectItems.Any())
+            if (AppState.HasPlanOrProjectItems)
             {
                 Logger?.LogInformation("Skipped auto-save restore because a plan was loaded while restore was pending");
                 return StartupAutoSaveRestoreResult.NoAutoSave();
@@ -400,7 +401,7 @@
             Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
             
             // Navigate to planner if we have a plan
-            if (result.Plan != null || AppState.ProjectItems.Any())
+            if (result.Plan != null || AppState.HasProjectItems)
             {
                 // Use relative path (no leading slash) so it resolves against base href correctly
                 NavigationManager.NavigateTo("./");
@@ -415,10 +416,7 @@
     private async Task RefreshSavedPlansListAsync()
     {
         var summaries = await PlanPersistence.LoadPlanSummariesAsync();
-        AppState.SavedPlans = summaries
-            .Where(p => p.Id != "autosave")
-            .ToList();
-        AppState.NotifySavedPlansChanged();
+        AppState.ReplaceSavedPlans(summaries.Where(p => p.Id != "autosave"));
     }
 
     private async Task OnViewLogs()

@@ -62,7 +62,7 @@
                        Color="Color.Success"
                        Variant="Variant.Outlined"
                        Size="Size.Small"
-                       Disabled="@(!AppState.ProjectItems.Any())"
+                       Disabled="@(!AppState.HasProjectItems)"
                        StartIcon="@Icons.Material.Filled.Save"
                        title="Save current plan">
                 @(AppState.CurrentPlanId != null ? "Save" : "Save As")
@@ -156,7 +156,7 @@
 
     private async Task OnSaveCurrentPlan()
     {
-        if (!AppState.ProjectItems.Any())
+        if (!AppState.HasProjectItems)
         {
             Snackbar.Add("No items to save", Severity.Warning);
             return;
@@ -233,8 +233,7 @@
                 Snackbar.Add($"{action} '{planName}'", Severity.Success);
 
                 // Update current plan tracking
-                AppState.CurrentPlanId = planId;
-                AppState.CurrentPlanName = planName;
+                AppState.TrackCurrentPlanIdentity(planId, planName);
 
                 await RefreshSavedPlansListAsync();
 
@@ -278,10 +277,7 @@
                 Snackbar.Add($"Renamed '{renameResult.OldName}' to '{renameResult.NewName}'", Severity.Success);
 
                 // Update current plan name if this is the current plan
-                if (_selectedPlan.Id == AppState.CurrentPlanId)
-                {
-                    AppState.CurrentPlanName = newName;
-                }
+                AppState.RenameCurrentPlanIdentity(_selectedPlan.Id, newName);
 
                 await RefreshSavedPlansListAsync();
 

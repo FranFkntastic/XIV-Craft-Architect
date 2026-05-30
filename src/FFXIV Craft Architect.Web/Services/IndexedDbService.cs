@@ -199,7 +199,7 @@ public class IndexedDbService
         {
             var totalElapsed = Stopwatch.StartNew();
 
-            if (state.CurrentPlan == null && !state.ProjectItems.Any())
+            if (!state.HasPlanOrProjectItems)
                 return false;
 
             autoSaveLease = await state.BeginAutoSaveAsync(skipIfInFlight);
@@ -264,8 +264,8 @@ public class IndexedDbService
     /// </summary>
     public async Task<bool> SaveMarketAnalysisAsync(
         string planId,
-        List<DetailedShoppingPlan> shoppingPlans,
-        List<MarketItemAnalysis> marketItemAnalyses,
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
+        IReadOnlyList<MarketItemAnalysis> marketItemAnalyses,
         RecommendationMode mode,
         MarketAcquisitionLens lens)
     {

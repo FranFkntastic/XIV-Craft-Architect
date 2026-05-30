@@ -148,12 +148,13 @@
 </div>
 
 @code {
-    [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
-    [Parameter] public List<MarketItemAnalysis> MarketItemAnalyses { get; set; } = new();
+    [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
+    [Parameter] public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses { get; set; } = Array.Empty<MarketItemAnalysis>();
     [Parameter] public MarketAcquisitionLens CurrentLens { get; set; } = MarketAcquisitionLens.MinimumUpfrontCost;
     [Parameter] public MarketSortOption CurrentSort { get; set; } = MarketSortOption.ByRecommended;
     [Parameter] public int? AutoExpandItemId { get; set; }
     [Parameter] public bool ShowWorldsColumn { get; set; }
+    [Parameter] public EventCallback<int> OnAutoExpandConsumed { get; set; }
 
     private DetailedShoppingPlan? _selectedPlan;
     private bool _autoExpandProcessed;
@@ -168,13 +169,15 @@
 
     protected override void OnParametersSet()
     {
-        ShoppingPlans ??= new List<DetailedShoppingPlan>();
-        MarketItemAnalyses ??= new List<MarketItemAnalysis>();
-
         if (!_autoExpandProcessed && AutoExpandItemId.HasValue)
         {
-            _selectedPlan = ShoppingPlans.FirstOrDefault(p => p.ItemId == AutoExpandItemId.Value) ?? _selectedPlan;
-            _autoExpandProcessed = true;
+            var targetPlan = ShoppingPlans.FirstOrDefault(p => p.ItemId == AutoExpandItemId.Value);
+            if (targetPlan != null)
+            {
+                _selectedPlan = targetPlan;
+                _autoExpandProcessed = true;
+                _ = OnAutoExpandConsumed.InvokeAsync(targetPlan.ItemId);
+            }
         }
         else if (!AutoExpandItemId.HasValue)
         {
@@ -201,7 +204,7 @@
 
     private IEnumerable<DetailedShoppingPlan> GetGridPlans()
     {
-        var plans = ShoppingPlans ?? new List<DetailedShoppingPlan>();
+        var plans = ShoppingPlans;
 
         return CurrentSort switch
         {

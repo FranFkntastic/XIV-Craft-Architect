@@ -83,7 +83,7 @@
             .ToList();
     }
 
-    private List<DetailedShoppingPlan> GetProcurementShoppingPlans()
+    private IReadOnlyList<DetailedShoppingPlan> GetProcurementShoppingPlans()
     {
         AppState.PruneExpiredTemporaryMarketWorldBlacklists();
         return AppState.ProcurementShoppingPlans;

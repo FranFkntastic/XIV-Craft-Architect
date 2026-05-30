@@ -32,6 +32,7 @@ public sealed class ProcurementWorkflowService
         CancellationToken ct = default)
     {
         var plan = _appState.CurrentPlan;
+        var planSessionVersion = _appState.PlanSessionVersion;
         if (plan == null)
         {
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.NoPlan);
@@ -51,14 +52,16 @@ public sealed class ProcurementWorkflowService
         }
 
         var capturedDecisionVersion = _appState.CurrentVersions.PlanDecisionVersion;
+        var capturedMarketAnalysisVersion = _appState.CurrentVersions.MarketAnalysisVersion;
         var scope = _appState.ProcurementSearchEntireRegion
             ? MarketFetchScope.EntireRegion
             : MarketFetchScope.SelectedDataCenter;
+        var requestSnapshot = CreateRequestSnapshot(scope);
         var guardedProgress = progress == null
             ? null
             : new Progress<string>(message =>
             {
-                if (IsCurrent(plan, capturedDecisionVersion, request.IsCurrentOperation))
+                if (IsCurrent(plan, planSessionVersion, capturedDecisionVersion, requestSnapshot, request.IsCurrentOperation))
                 {
                     progress.Report(message);
                 }
@@ -83,14 +86,24 @@ public sealed class ProcurementWorkflowService
             ct,
             executionOptions: request.ExecutionOptions);
 
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        {
+            return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.StalePlan);
+        }
+
         if (_appState.CurrentVersions.PlanDecisionVersion != capturedDecisionVersion)
         {
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.StaleDecision);
         }
 
-        if (!ReferenceEquals(_appState.CurrentPlan, plan))
+        if (_appState.CurrentVersions.MarketAnalysisVersion != capturedMarketAnalysisVersion)
         {
-            return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.StalePlan);
+            return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.StaleConfiguration);
+        }
+
+        if (!IsCurrentRequest(requestSnapshot))
+        {
+            return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.StaleConfiguration);
         }
 
         if (request.IsCurrentOperation?.Invoke() == false)
@@ -108,6 +121,7 @@ public sealed class ProcurementWorkflowService
         CancellationToken ct = default)
     {
         var plan = _appState.CurrentPlan;
+        var planSessionVersion = _appState.PlanSessionVersion;
         if (plan == null)
         {
             return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.NoPlan);
@@ -122,14 +136,18 @@ public sealed class ProcurementWorkflowService
 
         var capturedPlanId = _appState.CurrentPlanId;
         var capturedDecisionVersion = _appState.CurrentVersions.PlanDecisionVersion;
+        var capturedMarketAnalysisVersion = _appState.CurrentVersions.MarketAnalysisVersion;
         var scope = _appState.ProcurementSearchEntireRegion
             ? MarketFetchScope.EntireRegion
             : MarketFetchScope.SelectedDataCenter;
+        var requestSnapshot = CreateRequestSnapshot(scope);
         var guardedProgress = progress == null
             ? null
             : new Progress<string>(message =>
             {
-                if (ReferenceEquals(_appState.CurrentPlan, plan) &&
+                if (IsCurrentRequest(requestSnapshot) &&
+                    _appState.CurrentVersions.MarketAnalysisVersion == capturedMarketAnalysisVersion &&
+                    _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
                     (request.IsCurrentOperation?.Invoke() ?? true))
                 {
                     progress.Report(message);
@@ -152,7 +170,7 @@ public sealed class ProcurementWorkflowService
             ct,
             executionOptions: request.ExecutionOptions);
 
-        if (!ReferenceEquals(_appState.CurrentPlan, plan))
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
             return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StalePlan);
         }
@@ -160,6 +178,16 @@ public sealed class ProcurementWorkflowService
         if (_appState.CurrentVersions.PlanDecisionVersion != capturedDecisionVersion)
         {
             return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StaleDecision);
+        }
+
+        if (_appState.CurrentVersions.MarketAnalysisVersion != capturedMarketAnalysisVersion)
+        {
+            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StaleConfiguration);
+        }
+
+        if (!IsCurrentRequest(requestSnapshot))
+        {
+            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StaleConfiguration);
         }
 
         if (request.IsCurrentOperation?.Invoke() == false)
@@ -175,10 +203,15 @@ public sealed class ProcurementWorkflowService
 
         var refreshedPlans = new List<DetailedShoppingPlan> { result.ShoppingPlans.Single() };
         _marketShoppingService.ApplyVendorPurchaseOverrides(plan, refreshedPlans);
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        {
+            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StalePlan);
+        }
+
         _appState.ReplaceMarketAnalysisItem(refreshedAnalysis, refreshedPlans[0]);
 
         if (!string.IsNullOrEmpty(capturedPlanId) &&
-            ReferenceEquals(_appState.CurrentPlan, plan) &&
+            _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
             string.Equals(_appState.CurrentPlanId, capturedPlanId, StringComparison.Ordinal))
         {
             await _planPersistence.SaveMarketAnalysisAsync(
@@ -189,7 +222,7 @@ public sealed class ProcurementWorkflowService
                 _appState.MarketAnalysisLens);
         }
 
-        if (!ReferenceEquals(_appState.CurrentPlan, plan))
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
             return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StalePlan);
         }
@@ -206,12 +239,44 @@ public sealed class ProcurementWorkflowService
 
     private bool IsCurrent(
         CraftingPlan plan,
+        long planSessionVersion,
         long capturedDecisionVersion,
+        ProcurementRequestSnapshot requestSnapshot,
         Func<bool>? isCurrentOperation)
     {
         return _appState.CurrentVersions.PlanDecisionVersion == capturedDecisionVersion &&
-               ReferenceEquals(_appState.CurrentPlan, plan) &&
+               IsCurrentRequest(requestSnapshot) &&
+               _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
                (isCurrentOperation?.Invoke() ?? true);
+    }
+
+    private ProcurementRequestSnapshot CreateRequestSnapshot(MarketFetchScope scope)
+    {
+        return new ProcurementRequestSnapshot(
+            scope,
+            _appState.SelectedDataCenter,
+            _appState.SelectedRegion,
+            _appState.MarketAnalysisLens,
+            _appState.ProcurementEnableSplitWorldPurchases,
+            _appState.ProcurementTravelTolerance,
+            _appState.GetActiveBlacklistedMarketWorlds(),
+            _appState.TemporarilyExcludedItemWorlds.ToHashSet());
+    }
+
+    private bool IsCurrentRequest(ProcurementRequestSnapshot snapshot)
+    {
+        var currentScope = _appState.ProcurementSearchEntireRegion
+            ? MarketFetchScope.EntireRegion
+            : MarketFetchScope.SelectedDataCenter;
+
+        return snapshot.Scope == currentScope &&
+               string.Equals(snapshot.SelectedDataCenter, _appState.SelectedDataCenter, StringComparison.Ordinal) &&
+               string.Equals(snapshot.SelectedRegion, _appState.SelectedRegion, StringComparison.Ordinal) &&
+               snapshot.Lens == _appState.MarketAnalysisLens &&
+               snapshot.IncludeSplitPurchases == _appState.ProcurementEnableSplitWorldPurchases &&
+               snapshot.TravelTolerance == _appState.ProcurementTravelTolerance &&
+               snapshot.BlacklistedWorlds.SetEquals(_appState.GetActiveBlacklistedMarketWorlds()) &&
+               snapshot.ExcludedItemWorlds.SetEquals(_appState.TemporarilyExcludedItemWorlds);
     }
 
     private MarketAnalysisConfig CreateProcurementMarketConfig()
@@ -223,6 +288,16 @@ public sealed class ProcurementWorkflowService
             TravelTolerance = _appState.ProcurementTravelTolerance
         };
     }
+
+    private sealed record ProcurementRequestSnapshot(
+        MarketFetchScope Scope,
+        string SelectedDataCenter,
+        string SelectedRegion,
+        MarketAcquisitionLens Lens,
+        bool IncludeSplitPurchases,
+        int TravelTolerance,
+        HashSet<MarketWorldKey> BlacklistedWorlds,
+        HashSet<MarketItemWorldKey> ExcludedItemWorlds);
 }
 
 public sealed record ProcurementWorkflowRequest(
@@ -246,6 +321,7 @@ public enum ProcurementWorkflowStatus
     MissingDataCenter,
     Published,
     StaleDecision,
+    StaleConfiguration,
     StalePlan,
     Superseded
 }
@@ -273,6 +349,7 @@ public enum ProcurementItemRefreshStatus
     NoData,
     Refreshed,
     StaleDecision,
+    StaleConfiguration,
     StalePlan,
     Superseded
 }

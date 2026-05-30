@@ -8,7 +8,8 @@
 
     <div class="pp-field-block">
         <MudCheckBox T="bool"
-                     @bind-Value="AppState.ProcurementSearchEntireRegion"
+                     Value="AppState.ProcurementSearchEntireRegion"
+                     ValueChanged="OnProcurementSearchEntireRegionChanged"
                      Dense="true"
                      Color="Color.Primary">
             <MudText Typo="Typo.body2">Use region-wide market evidence</MudText>
@@ -17,7 +18,8 @@
 
     <div class="pp-field-block">
         <MudCheckBox T="bool"
-                     @bind-Value="AppState.ProcurementEnableSplitWorldPurchases"
+                     Value="AppState.ProcurementEnableSplitWorldPurchases"
+                     ValueChanged="OnProcurementEnableSplitWorldPurchasesChanged"
                      Dense="true"
                      Color="Color.Secondary">
             <MudText Typo="Typo.body2">Allow split-world purchases</MudText>
@@ -27,7 +29,8 @@
     <div class="pp-field-block">
         <div class="pp-field-label">Travel tolerance: @GetTravelToleranceLabel()</div>
         <MudSlider T="int"
-                   @bind-Value="AppState.ProcurementTravelTolerance"
+                   Value="AppState.ProcurementTravelTolerance"
+                   ValueChanged="OnProcurementTravelToleranceChanged"
                    Min="0"
                    Max="11"
                    Step="1"
@@ -42,7 +45,8 @@
     <div class="pp-field-block">
         <div class="pp-field-label">World exclusion duration</div>
         <MudSelect T="int"
-                   @bind-Value="AppState.TemporaryWorldBlacklistDurationMinutes"
+                   Value="AppState.TemporaryWorldBlacklistDurationMinutes"
+                   ValueChanged="OnTemporaryWorldBlacklistDurationChanged"
                    Variant="Variant.Outlined"
                    Dense="true"
                    Class="pp-full-width">
@@ -135,7 +139,7 @@
 
 @code {
     [Parameter, EditorRequired] public AppState AppState { get; set; } = default!;
-    [Parameter] public List<DetailedShoppingPlan> ShoppingPlans { get; set; } = new();
+    [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
     [Parameter] public ProcurementEvidenceSummary EvidenceSummary { get; set; } = new(0, 0, 0, 0, 0);
     [Parameter] public bool IsAnalyzing { get; set; }
     [Parameter] public bool CanAnalyze { get; set; }
@@ -164,5 +168,38 @@
     private void ClearWorldExclusions()
     {
         AppState.ClearTemporaryMarketWorldBlacklists();
+    }
+
+    private void OnProcurementSearchEntireRegionChanged(bool searchEntireRegion)
+    {
+        ApplyProcurementSettings(searchEntireRegion: searchEntireRegion);
+    }
+
+    private void OnProcurementEnableSplitWorldPurchasesChanged(bool enableSplitWorldPurchases)
+    {
+        ApplyProcurementSettings(enableSplitWorldPurchases: enableSplitWorldPurchases);
+    }
+
+    private void OnProcurementTravelToleranceChanged(int travelTolerance)
+    {
+        ApplyProcurementSettings(travelTolerance: travelTolerance);
+    }
+
+    private void OnTemporaryWorldBlacklistDurationChanged(int durationMinutes)
+    {
+        ApplyProcurementSettings(temporaryWorldBlacklistDurationMinutes: durationMinutes);
+    }
+
+    private void ApplyProcurementSettings(
+        bool? searchEntireRegion = null,
+        bool? enableSplitWorldPurchases = null,
+        int? travelTolerance = null,
+        int? temporaryWorldBlacklistDurationMinutes = null)
+    {
+        AppState.SetProcurementSettings(
+            searchEntireRegion ?? AppState.ProcurementSearchEntireRegion,
+            enableSplitWorldPurchases ?? AppState.ProcurementEnableSplitWorldPurchases,
+            travelTolerance ?? AppState.ProcurementTravelTolerance,
+            temporaryWorldBlacklistDurationMinutes ?? AppState.TemporaryWorldBlacklistDurationMinutes);
     }
 }
