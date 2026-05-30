@@ -13,6 +13,8 @@
             // Get the current path and repository name
             const path = window.location.pathname;
             const repoName = '/XIV-Craft-Architect';
+            const localDevBase = repoName + '/local-dev';
+            const activeBase = path === localDevBase || path.startsWith(localDevBase + '/') ? localDevBase : repoName;
             
             // Handle old route redirects for compatibility
             let cleanPath = path;
@@ -21,19 +23,13 @@
             }
             
             // Store the full path in sessionStorage so the app can pick it up after redirect
-            // Remove the repo name from the path if present
-            let routePath = path;
-            if (path.startsWith(repoName)) {
-                routePath = path.substring(repoName.length);
-            }
-            
-            // Store the target path for the app to read after loading
+            // Remove the active app base from the path if present
             // Use the cleaned path (handles old /market routes)
-            const finalPath = cleanPath.startsWith(repoName) ? cleanPath.substring(repoName.length) : cleanPath;
+            const finalPath = cleanPath.startsWith(activeBase) ? cleanPath.substring(activeBase.length) : cleanPath;
             sessionStorage.setItem('redirectPath', finalPath + window.location.search + window.location.hash);
             
             // Redirect to the root of the app
-            const baseUrl = window.location.origin + repoName + '/';
+            const baseUrl = window.location.origin + activeBase + '/';
             window.location.replace(baseUrl);
         })();
     </script>

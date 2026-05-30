@@ -2,7 +2,7 @@ name: Deploy Web App to GitHub Pages
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, local-dev ]
     paths:
       - 'src/FFXIV Craft Architect.Web/**'
       - 'src/FFXIV Craft Architect.Core/**'
@@ -22,19 +22,42 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main-source
+
+      - name: Checkout local-dev
+        uses: actions/checkout@v4
+        with:
+          ref: local-dev
+          path: local-dev-source
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      - name: Restore dependencies
-        run: dotnet restore "src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"
+      - name: Restore main dependencies
+        run: dotnet restore "main-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"
 
-      - name: Publish
-        run: dotnet publish "src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj" -c Release -o dist/web
+      - name: Publish main
+        run: dotnet publish "main-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj" -c Release -o dist/web/main
+
+      - name: Restore local-dev dependencies
+        run: dotnet restore "local-dev-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"
+
+      - name: Publish local-dev
+        run: dotnet publish "local-dev-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj" -c Release -o dist/web/local-dev
+
+      - name: Assemble Pages artifact
+        run: |
+          mkdir -p dist/pages/local-dev
+          cp -R dist/web/main/wwwroot/. dist/pages/
+          cp -R dist/web/local-dev/wwwroot/. dist/pages/local-dev/
+          cp dist/web/local-dev/wwwroot/404.html dist/pages/404.html
+          touch dist/pages/.nojekyll
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -42,7 +65,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dist/web/wwwroot
+          path: dist/pages
 
   deploy:
     environment:
