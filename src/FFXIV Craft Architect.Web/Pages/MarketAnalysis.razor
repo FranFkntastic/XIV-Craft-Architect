@@ -1,21 +1,14 @@
 @page "/market"
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
-@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
 @using static FFXIV_Craft_Architect.Core.Models.MarketSortOption
-@inject GarlandService GarlandService
-@inject RecipeCalculationService RecipeCalculationService
-@inject MarketShoppingService MarketShoppingService
-@inject IMarketPriceLadderAnalysisService MarketPriceLadderAnalysisService
-@inject IMarketCacheService MarketCache
-@inject ILogger<MarketAnalysis> Logger
-@inject IJSRuntime JSRuntime
+@inject RecipePlannerCommandService RecipePlannerCommandService
+@inject MarketAnalysisWorkflowService MarketAnalysisWorkflow
 @inject ISnackbar Snackbar
 @inject AppState AppState
-@inject IndexedDbService IndexedDb
-@inject WebPlanPersistenceService PlanPersistence
 @inject NavigationManager NavigationManager
+@inject CancellableOperationService CancellableOperations
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 ma-page-container">
@@ -49,6 +42,8 @@
 @code {
     private bool _isAnalyzing = false;
     private bool _isRefreshingPrices = false;
+    private CancellableOperationLease? _marketAnalysisOperation;
+    private CancellableOperationLease? _priceRefreshOperation;
 
     // Settings now stored in AppState for persistence across page navigations
 
@@ -81,6 +76,10 @@
 
     public void Dispose()
     {
+        CancellableOperations.Cancel(CancellableOperationWorkflow.MarketAnalysis);
+        CancellableOperations.Cancel(CancellableOperationWorkflow.PriceRefresh);
+        _marketAnalysisOperation = null;
+        _priceRefreshOperation = null;
         AppState.OnPlanChanged -= OnPlanChanged;
         AppState.OnShoppingListChanged -= OnShoppingListChanged;
     }
@@ -109,43 +108,36 @@
         if (AppState.CurrentPlan == null) return;
 
         _isRefreshingPrices = true;
-        AppState.SetStatus("Fetching latest market data...", busy: true);
+        using var operation = CancellableOperations.Start(
+            CancellableOperationWorkflow.PriceRefresh,
+            "Price Refresh",
+            "Fetching latest market data...");
+        _priceRefreshOperation = operation;
 
         try
         {
-            // Step 1: Fetch vendor prices
-            await RecipeCalculationService.FetchVendorPricesAsync(AppState.CurrentPlan);
-
-            // Step 2: Fetch market prices
-            var itemIds = AppState.CurrentPlan.GetAllItemIds().ToList();
-            if (itemIds.Any())
-            {
-                AppState.SetStatus("Fetching market prices...", busy: true);
-                var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(AppState.CurrentPlan, itemIds);
-                var nonMarketItemIds = MarketPriceAvailability.GetNonMarketListableItemIds(AppState.CurrentPlan, itemIds);
-                var marketEntries = await MarketScopedPriceLoader.LoadBestEntriesAsync(
-                    MarketCache,
-                    marketItemIds,
+            operation.ReportStatus("Fetching market prices...");
+            await RecipePlannerCommandService.RefreshPricesAsync(
+                new RefreshRecipePlanPricesRequest(
                     AppState.SearchEntireRegion ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter,
                     AppState.SelectedDataCenter,
-                    AppState.SelectedRegion,
-                    maxAge: TimeSpan.Zero);
-                var refreshResult = MarketPriceAvailability.FromCachedMarketData(AppState.CurrentPlan, marketItemIds, marketEntries, nonMarketItemIds);
-                AppState.SetUnavailableMarketItems(refreshResult.UnavailableItems);
-
-                // Update node prices
-                UpdateNodeMarketPrices(AppState.CurrentPlan.RootItems, marketEntries);
-
-                Logger.LogInformation("[Market Refresh] Loaded {Count} market entries from cache", marketEntries.Count);
+                    AppState.SelectedRegion),
+                operation.Token);
+            if (!operation.IsCurrent)
+            {
+                return;
             }
-
-            AppState.NotifyPlanChanged();
 
             // Recompute from the freshly updated cache so Procurement reflects the manual refresh.
             var canReanalyze = GetBuyItems().Any() && !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
             if (canReanalyze)
             {
                 var rebuilt = await RunMarketAnalysisAsync(forceRefreshData: false, showCompletionSnackbar: false);
+                if (!operation.IsCurrent)
+                {
+                    return;
+                }
+
                 if (rebuilt)
                 {
                     if (AppState.UnavailableMarketItems.Any())
@@ -165,7 +157,7 @@
             }
             else
             {
-                AppState.SetStatus("Prices refreshed", busy: false);
+                operation.Complete("Prices refreshed");
                 if (AppState.UnavailableMarketItems.Any())
                 {
                     Snackbar.Add(MarketPriceAvailability.FormatUnavailableMessage(AppState.UnavailableMarketItems), Severity.Warning);
@@ -176,37 +168,24 @@
                 }
             }
         }
+        catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
+        {
+            operation.Cancel();
+        }
         catch (Exception ex)
         {
-            AppState.SetStatus($"Price refresh failed: {ex.Message}");
-            Snackbar.Add($"Failed to refresh prices: {ex.Message}", Severity.Error);
+            if (operation.ShouldReportError(ex))
+            {
+                operation.Complete($"Price refresh failed: {ex.Message}");
+                Snackbar.Add($"Failed to refresh prices: {ex.Message}", Severity.Error);
+            }
         }
         finally
         {
-            _isRefreshingPrices = false;
-        }
-    }
-
-    private void UpdateNodeMarketPrices(List<PlanNode> nodes, IReadOnlyDictionary<int, CachedMarketData> marketEntries)
-    {
-        foreach (var node in nodes)
-        {
-            if (marketEntries.TryGetValue(node.ItemId, out var entry))
+            if (ReferenceEquals(_priceRefreshOperation, operation))
             {
-                node.MarketPrice = MarketScopedPriceLoader.GetComparableAveragePrice(entry);
-
-                // Calculate HQ price if available
-                var hqListings = entry.Worlds.SelectMany(world => world.Listings).Where(listing => listing.IsHq).ToList();
-                if (hqListings.Any())
-                {
-                    node.HqMarketPrice = (decimal)hqListings.Average(listing => listing.PricePerUnit);
-                }
-            }
-
-            // Recursively update children
-            if (node.Children?.Any() == true)
-            {
-                UpdateNodeMarketPrices(node.Children, marketEntries);
+                _priceRefreshOperation = null;
+                _isRefreshingPrices = false;
             }
         }
     }
@@ -222,85 +201,38 @@
 
         var plan = AppState.CurrentPlan;
         if (plan == null || !materials.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+        {
             return false;
+        }
 
         _isAnalyzing = true;
-        AppState.ShoppingPlans.Clear();
-        AppState.MarketItemAnalyses.Clear();
-        AppState.ProcurementShoppingPlans.Clear();
-        AppState.BeginOperation("Market Analysis", $"Analyzing {materials.Count} items on {AppState.SelectedDataCenter}...");
+        AppState.ClearMarketAnalysisState();
+        using var operation = CancellableOperations.Start(
+            CancellableOperationWorkflow.MarketAnalysis,
+            "Market Analysis",
+            $"Analyzing {materials.Count} items on {AppState.SelectedDataCenter}...");
+        _marketAnalysisOperation = operation;
 
         try
         {
-            var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
-            var executionOptions = MarketAnalysisExecutionOptions.Interactive;
-            var maxAge = forceRefreshData ? TimeSpan.Zero : (TimeSpan?)null;
-
-            var scope = AppState.SearchEntireRegion ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter;
-            var evidence = await MarketEvidenceLoader.LoadAsync(
-                MarketCache,
-                materials.Select(material => material.ItemId),
-                scope,
-                AppState.SelectedDataCenter,
-                AppState.SelectedRegion,
-                maxAge,
-                progress);
-
-            Logger.LogInformation("Market Analysis: {FetchedCount} items fetched from API", evidence.FetchedCount);
-
-            var request = new MarketAnalysisRequest
-            {
-                Items = materials,
-                Evidence = evidence,
-                RecommendationMode = GetEffectiveRecommendationMode(),
-                ExpectedWorldsByDataCenter = AppState.GetExpectedMarketWorlds(scope)
-            };
-            var analyses = await MarketPriceLadderAnalysisService.AnalyzeAsync(
-                request,
+            var progress = new Progress<string>(msg => operation.ReportStatus(msg));
+            var result = await MarketAnalysisWorkflow.RunAnalysisAsync(
+                new MarketAnalysisWorkflowRequest(forceRefreshData),
                 progress,
-                executionOptions: executionOptions);
-            var plans = ProjectShoppingPlans(analyses);
-            var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(AppState.CurrentPlan, plans);
-
-            // Apply hard-lock vendor overrides for vendor-buy items
-            MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, plans);
-
-            using (AppState.BeginStateChangeBatch())
+                operation.Token,
+                executionOptions: MarketAnalysisExecutionOptions.Interactive);
+            if (!operation.IsCurrent)
             {
-                AppState.MarketItemAnalyses = analyses;
-                AppState.ShoppingPlans = plans;
-                if (changedDecisions > 0)
-                {
-                    PopulateShoppingItemsFromPlan();
-                }
-                AppState.ProcurementShoppingPlans.Clear();
-                AppState.NotifyProcurementOverlayChanged();
-                AppState.NotifyShoppingListChanged();
-                if (changedDecisions > 0)
-                {
-                    AppState.NotifyPlanDecisionChanged();
-                }
-                else
-                {
-                    AppState.NotifyPlanChanged();
-                }
+                return false;
             }
 
-            // Save market analysis to the current plan for persistence
-            if (AppState.CurrentPlanId != null)
+            if (!result.Published)
             {
-                await PlanPersistence.SaveMarketAnalysisAsync(
-                    AppState.CurrentPlanId,
-                    plans,
-                    analyses,
-                    GetEffectiveRecommendationMode(),
-                    AppState.MarketAnalysisLens);
+                return false;
             }
-
-            await IndexedDb.AutoSaveStateAsync(AppState);
 
             // Ensure the status message is properly set to completion
-            AppState.EndOperation($"Analysis complete. {AppState.ShoppingPlans.Count} items analyzed.");
+            operation.Complete($"Analysis complete. {result.AnalyzedCount} items analyzed.");
             if (showCompletionSnackbar)
             {
                 Snackbar.Add("Market analysis complete!", Severity.Success);
@@ -308,50 +240,33 @@
 
             return true;
         }
+        catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
+        {
+            operation.Cancel();
+            return false;
+        }
         catch (Exception ex)
         {
-            AppState.SetStatus($"Analysis failed: {ex.Message}");
-            Snackbar.Add($"Market analysis failed: {ex.Message}", Severity.Error);
+            if (operation.ShouldReportError(ex))
+            {
+                operation.Complete($"Analysis failed: {ex.Message}");
+                Snackbar.Add($"Market analysis failed: {ex.Message}", Severity.Error);
+            }
             return false;
         }
         finally
         {
-            _isAnalyzing = false;
+            if (ReferenceEquals(_marketAnalysisOperation, operation))
+            {
+                _marketAnalysisOperation = null;
+                _isAnalyzing = false;
+            }
         }
     }
 
     private async Task OnLensChanged(MarketAcquisitionLens lens)
     {
-        AppState.MarketAnalysisLens = lens;
-        if (AppState.MarketItemAnalyses.Any())
-        {
-            using (AppState.BeginStateChangeBatch())
-            {
-                AppState.ShoppingPlans = ProjectShoppingPlans(AppState.MarketItemAnalyses);
-                var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(AppState.CurrentPlan, AppState.ShoppingPlans);
-                MarketShoppingService.ApplyVendorPurchaseOverrides(AppState.CurrentPlan, AppState.ShoppingPlans);
-                if (changedDecisions > 0)
-                {
-                    PopulateShoppingItemsFromPlan();
-                    AppState.NotifyPlanDecisionChanged();
-                }
-                AppState.ProcurementShoppingPlans.Clear();
-                AppState.NotifyProcurementOverlayChanged();
-            }
-        }
-
-        AppState.NotifyShoppingListChanged();
-        if (AppState.CurrentPlanId != null)
-        {
-            await PlanPersistence.SaveMarketAnalysisAsync(
-                AppState.CurrentPlanId,
-                AppState.ShoppingPlans,
-                AppState.MarketItemAnalyses,
-                GetEffectiveRecommendationMode(),
-                AppState.MarketAnalysisLens);
-        }
-
-        await IndexedDb.AutoSaveStateAsync(AppState);
+        await MarketAnalysisWorkflow.ApplyLensAsync(lens);
     }
 
     private void GoToPlanner()
@@ -366,39 +281,4 @@
         NavigationManager.NavigateTo("acquisition");
     }
 
-    private IReadOnlyList<string> GetCurrentRegionDataCenters()
-    {
-        return MarketFetchScopeResolver.GetDataCenters(
-            MarketFetchScope.EntireRegion,
-            AppState.SelectedDataCenter,
-            AppState.SelectedRegion);
-    }
-
-    private RecommendationMode GetEffectiveRecommendationMode()
-    {
-        return RecommendationMode.MinimizeTotalCost;
-    }
-
-    private List<DetailedShoppingPlan> ProjectShoppingPlans(IEnumerable<MarketItemAnalysis> analyses)
-    {
-        return analyses
-            .Select(analysis => MarketPriceLadderAnalysisService.ProjectToShoppingPlan(
-                analysis,
-                AppState.MarketAnalysisLens))
-            .ToList();
-    }
-
-    private void PopulateShoppingItemsFromPlan()
-    {
-        AppState.ShoppingItems = AcquisitionPlanningService.GetActiveProcurementItems(AppState.CurrentPlan)
-            .Where(item => item.TotalQuantity > 0)
-            .Select(item => new MarketShoppingItem
-            {
-                Id = item.ItemId,
-                Name = item.Name,
-                IconId = item.IconId,
-                Quantity = item.TotalQuantity
-            })
-            .ToList();
-    }
 }

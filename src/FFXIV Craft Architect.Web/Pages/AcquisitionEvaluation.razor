@@ -236,17 +236,7 @@
 
     private void PopulateShoppingListFromPlan()
     {
-        AppState.ShoppingItems = AcquisitionPlanningService.GetActiveProcurementItems(AppState.CurrentPlan)
-            .Where(item => item.TotalQuantity > 0)
-            .Select(item => new MarketShoppingItem
-            {
-                Id = item.ItemId,
-                Name = item.Name,
-                IconId = item.IconId,
-                Quantity = item.TotalQuantity
-            })
-            .ToList();
-        AppState.NotifyShoppingItemsChanged();
+        AppState.ReplaceShoppingItemsFromActivePlan();
     }
 
     private DetailedShoppingPlan? GetMarketPlan(PlanNode? node)
