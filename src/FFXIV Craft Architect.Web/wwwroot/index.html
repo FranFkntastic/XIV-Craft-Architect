@@ -9,6 +9,8 @@
         (function() {
             const hostname = window.location.hostname;
             const pathname = window.location.pathname;
+            const githubPagesRootBase = '/XIV-Craft-Architect/';
+            const githubPagesLocalDevBase = '/XIV-Craft-Architect/local-dev/';
             
             // Determine base href based on environment
             let baseHref;
@@ -16,10 +18,14 @@
                 // Local development
                 baseHref = '/';
                 console.log('[ENV] Local development detected, base href: /');
-            } else if (hostname.includes('github.io') || pathname.startsWith('/XIV-Craft-Architect/')) {
-                // GitHub Pages deployment
-                baseHref = '/XIV-Craft-Architect/';
-                console.log('[ENV] GitHub Pages detected, base href: /XIV-Craft-Architect/');
+            } else if (pathname.startsWith(githubPagesLocalDevBase)) {
+                // GitHub Pages local-dev branch deployment
+                baseHref = githubPagesLocalDevBase;
+                console.log('[ENV] GitHub Pages local-dev detected, base href: ' + githubPagesLocalDevBase);
+            } else if (hostname.includes('github.io') || pathname.startsWith(githubPagesRootBase)) {
+                // GitHub Pages main branch deployment
+                baseHref = githubPagesRootBase;
+                console.log('[ENV] GitHub Pages detected, base href: ' + githubPagesRootBase);
             } else {
                 // Default to root for other environments
                 baseHref = '/';
