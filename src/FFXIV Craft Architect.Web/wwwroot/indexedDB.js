@@ -2,8 +2,9 @@
 // Uses Unix timestamps (seconds since epoch) for serialization safety
 
 const DB_NAME = 'FFXIVCraftArchitect';
-const DB_VERSION = 3;  // Bumped for Unix timestamp migration
+const DB_VERSION = 4;  // Bumped for plan-summary store
 const STORE_PLANS = 'plans';
+const STORE_PLAN_SUMMARIES = 'planSummaries';
 const STORE_SETTINGS = 'settings';
 const STORE_MARKET_CACHE = 'marketCache';
 
@@ -21,18 +22,26 @@ async function initDB() {
         request.onerror = () => reject(request.error);
         request.onsuccess = () => {
             db = request.result;
-            console.log('[IndexedDB] Database opened successfully (v3 - Unix timestamps)');
+            console.log('[IndexedDB] Database opened successfully (v4 - plan summaries)');
             resolve(db);
         };
         
         request.onupgradeneeded = (event) => {
             const database = event.target.result;
+            const oldVersion = event.oldVersion || 0;
             
             // Plans store
             if (!database.objectStoreNames.contains(STORE_PLANS)) {
                 const planStore = database.createObjectStore(STORE_PLANS, { keyPath: 'id' });
                 planStore.createIndex('name', 'name', { unique: false });
                 planStore.createIndex('modifiedAt', 'modifiedAt', { unique: false });
+            }
+
+            if (!database.objectStoreNames.contains(STORE_PLAN_SUMMARIES)) {
+                const summaryStore = database.createObjectStore(STORE_PLAN_SUMMARIES, { keyPath: 'id' });
+                summaryStore.createIndex('name', 'name', { unique: false });
+                summaryStore.createIndex('modifiedAt', 'modifiedAt', { unique: false });
+                summaryStore.createIndex('savedAt', 'savedAt', { unique: false });
             }
             
             // Settings store
@@ -41,16 +50,30 @@ async function initDB() {
             }
             
             // Market cache store - migrate to Unix timestamps (v3)
-            if (database.objectStoreNames.contains(STORE_MARKET_CACHE)) {
+            if (oldVersion < 3 && database.objectStoreNames.contains(STORE_MARKET_CACHE)) {
                 database.deleteObjectStore(STORE_MARKET_CACHE);
                 console.log('[IndexedDB] Deleted old market cache store for migration');
             }
-            
-            const cacheStore = database.createObjectStore(STORE_MARKET_CACHE, { keyPath: 'key' });
-            cacheStore.createIndex('fetchedAtUnix', 'fetchedAtUnix', { unique: false });
-            console.log('[IndexedDB] Created market cache store with Unix timestamp index');
+
+            if (!database.objectStoreNames.contains(STORE_MARKET_CACHE)) {
+                const cacheStore = database.createObjectStore(STORE_MARKET_CACHE, { keyPath: 'key' });
+                cacheStore.createIndex('fetchedAtUnix', 'fetchedAtUnix', { unique: false });
+                console.log('[IndexedDB] Created market cache store with Unix timestamp index');
+            }
+
         };
     });
+}
+
+function toPlanSummary(planData) {
+    return {
+        id: planData.id,
+        name: planData.name || 'Saved Plan',
+        modifiedAt: planData.modifiedAt,
+        savedAt: planData.savedAt,
+        dataCenter: planData.dataCenter || 'Aether',
+        itemCount: Array.isArray(planData.projectItems) ? planData.projectItems.length : 0
+    };
 }
 
 /**
@@ -60,15 +83,18 @@ async function savePlan(planData) {
     const database = await initDB();
     
     return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_PLANS], 'readwrite');
+        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
+        const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
         
         const data = {
             ...planData,
-            savedAt: new Date().toISOString()
+            savedAt: planData.savedAt || new Date().toISOString(),
+            modifiedAt: planData.modifiedAt || new Date().toISOString()
         };
         
         store.put(data);
+        summaryStore.put(toPlanSummary(data));
 
         transaction.oncomplete = () => resolve(true);
         transaction.onerror = (event) => reject(transaction.error || event.target?.error);
@@ -89,6 +115,45 @@ async function loadPlan(planId) {
         
         request.onsuccess = () => resolve(request.result || null);
         request.onerror = () => reject(request.error);
+    });
+}
+
+/**
+ * Patch market analysis fields without transferring or rewriting the full plan payload.
+ */
+async function patchMarketAnalysis(planId, marketPlansJson, marketItemAnalysesJson, recommendationMode, marketAnalysisLens) {
+    const database = await initDB();
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
+        const store = transaction.objectStore(STORE_PLANS);
+        const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
+        const request = store.get(planId);
+
+        request.onsuccess = () => {
+            const plan = request.result;
+            if (!plan) {
+                resolve(false);
+                return;
+            }
+
+            const patched = {
+                ...plan,
+                marketPlansJson,
+                marketItemAnalysesJson,
+                savedRecommendationMode: recommendationMode,
+                savedMarketAnalysisLens: marketAnalysisLens,
+                modifiedAt: new Date().toISOString()
+            };
+
+            store.put(patched);
+            summaryStore.put(toPlanSummary(patched));
+        };
+
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
 }
 
@@ -121,15 +186,93 @@ async function loadAllPlans() {
 }
 
 /**
+ * Load plan summaries (sorted by modified date, newest first)
+ */
+async function loadPlanSummaries() {
+    const database = await initDB();
+
+    let summaries = await readPlanSummaries(database);
+    const planCount = await countStoreRecords(database, STORE_PLANS);
+    if (summaries.length >= planCount) {
+        return summaries;
+    }
+
+    await rebuildPlanSummaries(database);
+    return await readPlanSummaries(database);
+}
+
+async function readPlanSummaries(database) {
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_PLAN_SUMMARIES], 'readonly');
+        const store = transaction.objectStore(STORE_PLAN_SUMMARIES);
+        const index = store.index('modifiedAt');
+        const request = index.openCursor(null, 'prev');
+
+        const summaries = [];
+
+        request.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+                summaries.push(cursor.value);
+                cursor.continue();
+            } else {
+                resolve(summaries);
+            }
+        };
+
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function countStoreRecords(database, storeName) {
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([storeName], 'readonly');
+        const store = transaction.objectStore(storeName);
+        const request = store.count();
+
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function rebuildPlanSummaries(database) {
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
+        const planStore = transaction.objectStore(STORE_PLANS);
+        const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
+        const clearRequest = summaryStore.clear();
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+
+        clearRequest.onsuccess = () => {
+            const request = planStore.openCursor();
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (!cursor) {
+                    return;
+                }
+
+                summaryStore.put(toPlanSummary(cursor.value));
+                cursor.continue();
+            };
+        };
+    });
+}
+
+/**
  * Delete a plan by ID
  */
 async function deletePlan(planId) {
     const database = await initDB();
     
     return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_PLANS], 'readwrite');
+        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
+        const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
         store.delete(planId);
+        summaryStore.delete(planId);
 
         transaction.oncomplete = () => resolve(true);
         transaction.onerror = (event) => reject(transaction.error || event.target?.error);
@@ -180,9 +323,11 @@ async function clearAllPlans() {
     const database = await initDB();
     
     return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_PLANS], 'readwrite');
+        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
+        const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
         store.clear();
+        summaryStore.clear();
 
         transaction.oncomplete = () => resolve(true);
         transaction.onerror = (event) => reject(transaction.error || event.target?.error);
@@ -513,6 +658,8 @@ window.IndexedDB = {
     savePlan,
     loadPlan,
     loadAllPlans,
+    loadPlanSummaries,
+    patchMarketAnalysis,
     deletePlan,
     saveSetting,
     loadSetting,
@@ -526,4 +673,4 @@ window.IndexedDB = {
     getMarketCacheStats
 };
 
-console.log('[IndexedDB] Module loaded (v3 with Unix timestamps)');
+console.log('[IndexedDB] Module loaded (v4 with plan summaries)');

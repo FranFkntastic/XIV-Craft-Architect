@@ -14,7 +14,9 @@
 @inject IDialogService DialogService
 @inject AppState AppState
 @inject IndexedDbService IndexedDb
+@inject WebPlanPersistenceService PlanPersistence
 @inject IMarketCacheService MarketCache
+@inject AcquisitionDecisionService AcquisitionDecisionService
 @inject ILogger<Index> Logger
 @implements IDisposable
 
@@ -91,18 +93,9 @@
 
     private async Task RefreshSavedPlansListAsync()
     {
-        var plans = await IndexedDb.LoadAllPlansAsync();
-        AppState.SavedPlans = plans
+        var summaries = await PlanPersistence.LoadPlanSummariesAsync();
+        AppState.SavedPlans = summaries
             .Where(p => p.Id != "autosave") // Don't show autosave in list
-            .Select(p => new StoredPlanSummary
-            {
-                Id = p.Id,
-                Name = p.Name,
-                ModifiedAt = p.ModifiedAt,
-                SavedAt = p.SavedAt,
-                DataCenter = p.DataCenter,
-                ItemCount = p.ProjectItems.Count
-            })
             .ToList();
         AppState.NotifySavedPlansChanged();
     }
@@ -521,7 +514,7 @@
 
         if (!string.IsNullOrEmpty(AppState.CurrentPlanId))
         {
-            await IndexedDb.SaveMarketAnalysisAsync(
+            await PlanPersistence.SaveMarketAnalysisAsync(
                 AppState.CurrentPlanId,
                 AppState.ShoppingPlans,
                 AppState.MarketItemAnalyses,
@@ -596,14 +589,9 @@
         }
     }
 
-    private void OnNodeHqChanged(PlanNode node)
+    private void OnNodeHqChanged(PlanNodeHqChangeRequest request)
     {
-        using var batch = AppState.BeginStateChangeBatch();
-        AcquisitionPlanningService.ReconcileAcquisitionDecisions(AppState.CurrentPlan, AppState.ShoppingPlans);
-        PopulateShoppingListFromPlan();
-        AppState.ProcurementShoppingPlans.Clear();
-        AppState.NotifyProcurementOverlayChanged();
-        AppState.NotifyPlanDecisionChanged();
+        AcquisitionDecisionService.ChangeMarketHq(request.Node, request.MustBeHq);
     }
 
     private async Task SaveToBrowserAsync()
@@ -624,13 +612,11 @@
                 AppState.CurrentPlanName = planName;
             }
 
-            var existingPlan = await IndexedDb.LoadPlanAsync(planId);
-            var planData = AppState.CreateStoredPlanSnapshot(
+            var existingSummary = AppState.SavedPlans.FirstOrDefault(plan => plan.Id == planId);
+            var success = await PlanPersistence.SaveCurrentPlanAsync(
                 planId,
                 planName,
-                existingPlan?.SavedAt);
-
-            var success = await IndexedDb.SavePlanAsync(planData);
+                existingSummary?.SavedAt);
             if (success)
             {
                 var action = AppState.CurrentPlanId == planId ? "Updated" : "Saved";
@@ -652,30 +638,20 @@
     {
         try
         {
-            var storedPlan = await IndexedDb.LoadPlanAsync(planId);
-            if (storedPlan == null)
+            var result = await PlanPersistence.LoadPlanIntoSessionAsync(planId);
+            if (result == null)
             {
                 Snackbar.Add("Plan not found", Severity.Error);
                 return;
             }
-
-            CraftingPlan? plan = null;
-            if (!string.IsNullOrEmpty(storedPlan.PlanJson))
+            if (!string.IsNullOrWhiteSpace(result.Warning))
             {
-                try
-                {
-                    plan = System.Text.Json.JsonSerializer.Deserialize<CraftingPlan>(storedPlan.PlanJson);
-                }
-                catch (Exception ex)
-                {
-                    Snackbar.Add($"Warning: Could not load full plan data: {ex.Message}", Severity.Warning);
-                }
+                Snackbar.Add($"Warning: {result.Warning}", Severity.Warning);
             }
 
-            AppState.LoadStoredPlan(storedPlan, plan);
             _selectedNode = AppState.CurrentPlan?.RootItems.FirstOrDefault();
 
-            Snackbar.Add($"Loaded '{storedPlan.Name}'", Severity.Success);
+            Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -687,7 +663,7 @@
     {
         try
         {
-            var success = await IndexedDb.DeletePlanAsync(planId);
+            var success = await PlanPersistence.DeletePlanAsync(planId);
             if (success)
             {
                 Snackbar.Add("Plan deleted", Severity.Success);

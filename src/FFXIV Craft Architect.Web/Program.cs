@@ -38,6 +38,11 @@ builder.Services.AddScoped<ISettingsService, WebSettingsService>();
 
 // Register App State (singleton to persist across tab switches)
 builder.Services.AddSingleton<AppState>();
+builder.Services.AddScoped<AcquisitionDecisionService>();
+builder.Services.AddScoped<StoredPlanSnapshotBuilder>();
+builder.Services.AddScoped<PlanSessionLoadService>();
+builder.Services.AddScoped<WebPlanPersistenceService>();
+builder.Services.AddScoped<StartupInitializationService>();
 
 // Register IndexedDB service for browser persistence
 builder.Services.AddScoped<IndexedDbService>();

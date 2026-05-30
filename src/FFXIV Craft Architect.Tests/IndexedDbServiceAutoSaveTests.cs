@@ -7,6 +7,19 @@ namespace FFXIV_Craft_Architect.Tests;
 public class IndexedDbServiceAutoSaveTests
 {
     [Fact]
+    public async Task LoadPlanSummariesAsync_UsesSummaryEndpoint()
+    {
+        var jsRuntime = new RecordingJsRuntime();
+        var service = new IndexedDbService(jsRuntime);
+
+        var summaries = await service.LoadPlanSummariesAsync();
+
+        Assert.Single(summaries);
+        Assert.Equal("IndexedDB.loadPlanSummaries", jsRuntime.LastIdentifier);
+        Assert.Equal(0, jsRuntime.LoadAllPlansCallCount);
+    }
+
+    [Fact]
     public async Task AutoSaveStateAsync_SkipsSecondSaveWhenStateIsClean()
     {
         var jsRuntime = new RecordingJsRuntime();
@@ -70,6 +83,24 @@ public class IndexedDbServiceAutoSaveTests
         Assert.Equal(2, jsRuntime.SavePlanCallCount);
     }
 
+    [Fact]
+    public async Task SaveMarketAnalysisAsync_UsesPatchEndpointWithoutLoadingFullPlan()
+    {
+        var jsRuntime = new RecordingJsRuntime();
+        var service = new IndexedDbService(jsRuntime);
+
+        var saved = await service.SaveMarketAnalysisAsync(
+            "plan-id",
+            [new DetailedShoppingPlan { ItemId = 100, QuantityNeeded = 2 }],
+            [new MarketItemAnalysis { ItemId = 100, QuantityNeeded = 2 }],
+            RecommendationMode.MaximizeValue,
+            MarketAcquisitionLens.BulkValue);
+
+        Assert.True(saved);
+        Assert.Equal("IndexedDB.patchMarketAnalysis", jsRuntime.LastIdentifier);
+        Assert.Equal(0, jsRuntime.LoadPlanCallCount);
+    }
+
     private sealed class RecordingJsRuntime : IJSRuntime
     {
         private readonly bool _manualCompletion;
@@ -81,9 +112,14 @@ public class IndexedDbServiceAutoSaveTests
         }
 
         public int SavePlanCallCount { get; private set; }
+        public int LoadPlanCallCount { get; private set; }
+        public int LoadAllPlansCallCount { get; private set; }
+        public string? LastIdentifier { get; private set; }
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
         {
+            LastIdentifier = identifier;
+
             if (identifier == "IndexedDB.savePlan")
             {
                 SavePlanCallCount++;
@@ -95,6 +131,39 @@ public class IndexedDbServiceAutoSaveTests
                 var saveCompletion = new TaskCompletionSource<bool>();
                 _pendingSaves.Enqueue(saveCompletion);
                 return new ValueTask<TValue>(CompleteSaveAsync<TValue>(saveCompletion.Task));
+            }
+
+            if (identifier == "IndexedDB.loadPlanSummaries")
+            {
+                var summaries = new List<StoredPlanSummary>
+                {
+                    new()
+                    {
+                        Id = "saved-plan",
+                        Name = "Saved Plan",
+                        DataCenter = "Aether",
+                        ItemCount = 2
+                    }
+                };
+
+                return new ValueTask<TValue>((TValue)(object)summaries);
+            }
+
+            if (identifier == "IndexedDB.loadAllPlans")
+            {
+                LoadAllPlansCallCount++;
+                return new ValueTask<TValue>((TValue)(object)new List<StoredPlan>());
+            }
+
+            if (identifier == "IndexedDB.loadPlan")
+            {
+                LoadPlanCallCount++;
+                return new ValueTask<TValue>((TValue)(object?)null!);
+            }
+
+            if (identifier == "IndexedDB.patchMarketAnalysis")
+            {
+                return new ValueTask<TValue>((TValue)(object)true);
             }
 
             throw new InvalidOperationException($"Unexpected JS invocation: {identifier}");

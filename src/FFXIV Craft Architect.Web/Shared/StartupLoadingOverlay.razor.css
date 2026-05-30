@@ -1,0 +1,46 @@
+.startup-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1400;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(12, 12, 14, 0.92);
+}
+
+.startup-overlay__panel {
+    width: min(420px, 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    padding: 32px;
+    border: 1px solid rgba(212, 167, 58, 0.55);
+    border-radius: 8px;
+    background: #1f1f22;
+    color: #f2f0ea;
+    text-align: center;
+    box-shadow: 0 20px 54px rgba(0, 0, 0, 0.45);
+}
+
+.startup-overlay__brand {
+    color: #d4a73a;
+    font-size: 1.15rem;
+    font-weight: 700;
+}
+
+.startup-overlay__title {
+    color: #f2f0ea;
+    overflow-wrap: anywhere;
+}
+
+.startup-overlay__message {
+    max-width: 100%;
+    color: #d8d2c4;
+    overflow-wrap: anywhere;
+}
+
+.startup-overlay__warning-icon {
+    color: #ffca28;
+    font-size: 48px;
+}

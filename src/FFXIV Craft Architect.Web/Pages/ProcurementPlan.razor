@@ -13,6 +13,7 @@
 @inject ISnackbar Snackbar
 @inject AppState AppState
 @inject IndexedDbService IndexedDb
+@inject WebPlanPersistenceService PlanPersistence
 @inject NavigationManager NavigationManager
 @implements IDisposable
 
@@ -179,13 +180,20 @@
 
         try
         {
-            var progress = new Progress<string>(msg => AppState.SetStatus(msg, busy: true));
+            var capturedDecisionVersion = AppState.CurrentVersions.PlanDecisionVersion;
+            var progress = new Progress<string>(msg =>
+            {
+                if (IsCurrentProcurementAnalysis(capturedDecisionVersion))
+                {
+                    AppState.SetStatus(msg, busy: true);
+                }
+            });
             var executionOptions = MarketAnalysisExecutionOptions.Interactive;
             var scope = AppState.ProcurementSearchEntireRegion
                 ? MarketFetchScope.EntireRegion
                 : MarketFetchScope.SelectedDataCenter;
 
-            AppState.SetStatus("Selecting procurement market evidence...", busy: true);
+            SetProcurementStatusIfCurrent(capturedDecisionVersion, "Selecting procurement market evidence...");
             var selection = AcquisitionPlanningService.SelectActiveProcurementEvidence(
                 AppState.CurrentPlan,
                 AppState.ShoppingPlans,
@@ -195,7 +203,7 @@
             var refreshedPlans = new List<DetailedShoppingPlan>();
             if (selection.MissingItems.Count > 0)
             {
-                AppState.SetStatus($"Fetching procurement prices for {selection.MissingItems.Count} active items...", busy: true);
+                SetProcurementStatusIfCurrent(capturedDecisionVersion, $"Fetching procurement prices for {selection.MissingItems.Count} active items...");
                 refreshedPlans = await AnalyzeMarketItemsAsync(
                     selection.MissingItems.ToList(),
                     scope,
@@ -208,13 +216,20 @@
                 selection.ReusablePlans,
                 refreshedPlans);
             var scopedEvidence = PrepareProcurementEvidenceForCurrentScope(procurementEvidence);
-            AppState.SetStatus($"Optimizing procurement route for {scopedEvidence.Count} items...", busy: true);
+            SetProcurementStatusIfCurrent(capturedDecisionVersion, $"Optimizing procurement route for {scopedEvidence.Count} items...");
             var shoppingPlans = await MarketShoppingService.OptimizeProcurementRouteAsync(
                 scopedEvidence,
                 CreateProcurementMarketConfig(),
                 AppState.ProcurementEnableSplitWorldPurchases,
                 executionOptions,
                 progress);
+
+            if (!IsCurrentProcurementAnalysis(capturedDecisionVersion))
+            {
+                FinishStaleProcurementAnalysis();
+                Snackbar.Add("Procurement route was discarded because acquisition choices changed.", Severity.Info);
+                return;
+            }
 
             AppState.ProcurementShoppingPlans = shoppingPlans;
             AppState.NotifyProcurementOverlayChanged();
@@ -230,6 +245,32 @@
         finally
         {
             _isAnalyzing = false;
+        }
+    }
+
+    private bool IsCurrentProcurementAnalysis(long capturedDecisionVersion)
+    {
+        return AppState.CurrentVersions.PlanDecisionVersion == capturedDecisionVersion;
+    }
+
+    private void SetProcurementStatusIfCurrent(long capturedDecisionVersion, string message)
+    {
+        if (IsCurrentProcurementAnalysis(capturedDecisionVersion))
+        {
+            AppState.SetStatus(message, busy: true);
+        }
+    }
+
+    private void FinishStaleProcurementAnalysis()
+    {
+        const string message = "Acquisition choices changed; regenerate procurement route when ready.";
+        if (string.Equals(AppState.CurrentOperation, "Procurement Analysis", StringComparison.Ordinal))
+        {
+            AppState.EndOperation(message);
+        }
+        else if (!AppState.IsBusy)
+        {
+            AppState.SetStatus(message, busy: false);
         }
     }
 
@@ -551,7 +592,7 @@
     {
         if (!string.IsNullOrEmpty(AppState.CurrentPlanId))
         {
-            await IndexedDb.SaveMarketAnalysisAsync(
+            await PlanPersistence.SaveMarketAnalysisAsync(
                 AppState.CurrentPlanId,
                 AppState.ShoppingPlans,
                 AppState.MarketItemAnalyses,
