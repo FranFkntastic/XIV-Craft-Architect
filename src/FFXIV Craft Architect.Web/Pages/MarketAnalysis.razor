@@ -14,6 +14,7 @@
 @inject ISnackbar Snackbar
 @inject AppState AppState
 @inject IndexedDbService IndexedDb
+@inject WebPlanPersistenceService PlanPersistence
 @inject NavigationManager NavigationManager
 @implements IDisposable
 
@@ -288,7 +289,7 @@
             // Save market analysis to the current plan for persistence
             if (AppState.CurrentPlanId != null)
             {
-                await IndexedDb.SaveMarketAnalysisAsync(
+                await PlanPersistence.SaveMarketAnalysisAsync(
                     AppState.CurrentPlanId,
                     plans,
                     analyses,
@@ -342,7 +343,7 @@
         AppState.NotifyShoppingListChanged();
         if (AppState.CurrentPlanId != null)
         {
-            await IndexedDb.SaveMarketAnalysisAsync(
+            await PlanPersistence.SaveMarketAnalysisAsync(
                 AppState.CurrentPlanId,
                 AppState.ShoppingPlans,
                 AppState.MarketItemAnalyses,

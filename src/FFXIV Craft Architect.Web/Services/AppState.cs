@@ -1,4 +1,3 @@
-using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 
@@ -471,35 +470,12 @@ public class AppState
         DateTime? savedAt = null,
         bool includeSourcePlanIdentity = false)
     {
-        return new StoredPlan
-        {
-            Id = planId,
-            Name = planName,
-            DataCenter = SelectedDataCenter,
-            ModifiedAt = DateTime.UtcNow,
-            SavedAt = savedAt ?? DateTime.UtcNow,
-            ProjectItems = ProjectItems.Select(p => new StoredProjectItem
-            {
-                Id = p.Id,
-                Name = p.Name,
-                IconId = p.IconId,
-                Quantity = p.Quantity,
-                MustBeHq = p.MustBeHq
-            }).ToList(),
-            PlanJson = CurrentPlan != null
-                ? JsonSerializer.Serialize(CurrentPlan)
-                : null,
-            MarketPlansJson = ShoppingPlans.Any()
-                ? JsonSerializer.Serialize(ShoppingPlans)
-                : null,
-            MarketItemAnalysesJson = MarketItemAnalyses.Any()
-                ? JsonSerializer.Serialize(MarketItemAnalyses)
-                : null,
-            SavedRecommendationMode = RecommendationMode,
-            SavedMarketAnalysisLens = MarketAnalysisLens,
-            SourcePlanId = includeSourcePlanIdentity ? CurrentPlanId : null,
-            SourcePlanName = includeSourcePlanIdentity ? CurrentPlanName : null
-        };
+        return StoredPlanSnapshotBuilder.Build(
+            this,
+            planId,
+            planName,
+            savedAt,
+            includeSourcePlanIdentity);
     }
 
     /// <summary>
@@ -510,31 +486,23 @@ public class AppState
         CraftingPlan? deserializedPlan,
         bool trackStoredPlanIdentity = true)
     {
+        ApplyLoadedPlanSession(
+            PlanSessionLoadService.Prepare(storedPlan, deserializedPlan),
+            trackStoredPlanIdentity);
+    }
+
+    public void ApplyLoadedPlanSession(
+        PlanSessionLoadResult session,
+        bool trackStoredPlanIdentity = true)
+    {
         using var batch = BeginStateChangeBatch();
+        var storedPlan = session.StoredPlan;
 
         SelectedDataCenter = storedPlan.DataCenter;
-        
-        ProjectItems = storedPlan.ProjectItems.Select(p => new ProjectItem
-        {
-            Id = p.Id,
-            Name = p.Name,
-            IconId = p.IconId,
-            Quantity = p.Quantity,
-            MustBeHq = p.MustBeHq
-        }).ToList();
-        
-        CurrentPlan = deserializedPlan;
-        MarketItemAnalyses = DeserializeOrEmpty<MarketItemAnalysis>(storedPlan.MarketItemAnalysesJson);
-        if (!RestoredMarketAnalysisMatchesCurrentPlan(MarketItemAnalyses))
-        {
-            MarketItemAnalyses.Clear();
-        }
-
-        var restoredShoppingPlans = DeserializeOrEmpty<DetailedShoppingPlan>(storedPlan.MarketPlansJson);
-        ShoppingPlans = MarketItemAnalyses.Count > 0 &&
-                        RestoredShoppingPlansMatchMarketAnalysis(restoredShoppingPlans, MarketItemAnalyses)
-            ? restoredShoppingPlans
-            : new List<DetailedShoppingPlan>();
+        ProjectItems = session.ProjectItems.ToList();
+        CurrentPlan = session.Plan;
+        MarketItemAnalyses = session.MarketItemAnalyses.ToList();
+        ShoppingPlans = session.ShoppingPlans.ToList();
         RecommendationMode = storedPlan.SavedRecommendationMode;
         MarketAnalysisLens = storedPlan.SavedMarketAnalysisLens;
         ProcurementShoppingPlans.Clear();
@@ -680,49 +648,6 @@ public class AppState
         }
     }
 
-    private bool RestoredMarketAnalysisMatchesCurrentPlan(IReadOnlyList<MarketItemAnalysis> analyses)
-    {
-        if (analyses.Count == 0)
-        {
-            return false;
-        }
-
-        var candidates = CurrentPlan != null
-            ? AcquisitionPlanningService.GetMarketAnalysisCandidates(CurrentPlan)
-            : ProjectItems
-                .Where(item => item.Quantity > 0)
-                .Select(item => new MaterialAggregate
-                {
-                    ItemId = item.Id,
-                    Name = item.Name,
-                    IconId = item.IconId,
-                    TotalQuantity = item.Quantity
-                })
-                .ToList();
-        var expected = candidates.ToDictionary(candidate => candidate.ItemId, candidate => candidate.TotalQuantity);
-
-        return expected.Count == analyses.Count &&
-               analyses.All(analysis =>
-                   expected.TryGetValue(analysis.ItemId, out var quantityNeeded) &&
-                   quantityNeeded == analysis.QuantityNeeded);
-    }
-
-    private static bool RestoredShoppingPlansMatchMarketAnalysis(
-        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
-        IReadOnlyList<MarketItemAnalysis> analyses)
-    {
-        if (shoppingPlans.Count == 0)
-        {
-            return false;
-        }
-
-        var expected = analyses.ToDictionary(analysis => analysis.ItemId, analysis => analysis.QuantityNeeded);
-        return expected.Count == shoppingPlans.Count &&
-               shoppingPlans.All(plan =>
-                   expected.TryGetValue(plan.ItemId, out var quantityNeeded) &&
-                   quantityNeeded == plan.QuantityNeeded);
-    }
-    
     /// <summary>
     /// Clear the current plan ID (called when starting a new plan or after explicit "Save As")
     /// </summary>
@@ -949,22 +874,6 @@ public class AppState
         }
     }
 
-    private static List<T> DeserializeOrEmpty<T>(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json))
-        {
-            return new List<T>();
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<List<T>>(json) ?? new List<T>();
-        }
-        catch
-        {
-            return new List<T>();
-        }
-    }
 }
 
 [Flags]

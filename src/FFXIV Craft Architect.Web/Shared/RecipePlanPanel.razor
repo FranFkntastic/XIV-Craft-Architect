@@ -87,5 +87,5 @@
     [Parameter] public EventCallback<string> OnDeletePlanRequested { get; set; }
     [Parameter] public PlanNode? SelectedNode { get; set; }
     [Parameter] public EventCallback<PlanNode> OnNodeSelected { get; set; }
-    [Parameter] public EventCallback<PlanNode> OnNodeHqChanged { get; set; }
+    [Parameter] public EventCallback<PlanNodeHqChangeRequest> OnNodeHqChanged { get; set; }
 }

@@ -4,17 +4,19 @@
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
-@inject IndexedDbService IndexedDb
+@inject WebPlanPersistenceService PlanPersistence
 @inject MarketShoppingService MarketShoppingService
+@inject AcquisitionDecisionService AcquisitionDecisionService
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
+@inject ILogger<AcquisitionEvaluation> Logger
 @implements IDisposable
 
 @{
-    var rows = GetDecisionRows();
-    var visibleRows = GetVisibleRows(rows).ToList();
-    var marketCandidateCount = AcquisitionPlanningService.GetMarketAnalysisCandidates(AppState.CurrentPlan).Count;
-    var activeProcurementCount = AcquisitionPlanningService.GetActiveProcurementItems(AppState.CurrentPlan).Count(item => item.TotalQuantity > 0);
+    var rows = _snapshot.Rows;
+    var visibleRows = _snapshot.VisibleRows;
+    var marketCandidateCount = _snapshot.MarketAnalysisCandidates.Count;
+    var activeProcurementCount = _snapshot.ActiveProcurementItems.Count;
     var columnTemplate = GetColumnTemplate();
 }
 
@@ -144,6 +146,8 @@
         CurrentPlan="@AppState.CurrentPlan"
         MarketPlan="@GetMarketPlan(_selectedNode)"
         MarketPlans="@AppState.ShoppingPlans"
+        CostContext="@_snapshot.CostContext"
+        ActiveProcurementItems="@_snapshot.ActiveProcurementItems"
         UnavailableMarketItems="@AppState.UnavailableMarketItems"
         OnSourceChanged="OnNodeSourceChanged" />
 </div>
@@ -151,6 +155,12 @@
 @code {
     private PlanNode? _selectedNode;
     private AcquisitionFilter _filter = AcquisitionFilter.All;
+    private readonly AcquisitionEvaluationLedgerCache _ledgerCache = new();
+    private AcquisitionEvaluationSnapshot _snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
+        null,
+        Array.Empty<DetailedShoppingPlan>(),
+        Array.Empty<MarketDataUnavailableItem>(),
+        AcquisitionFilter.All);
     private readonly int[] _columnWidths = { 300, 150, 260, 150, 170, 110 };
     private static readonly string[] ColumnHeaders = { "Item", "Source", "Used In", "Role", "Market Evidence", "Estimate" };
     private int? _resizingColumnIndex;
@@ -159,68 +169,45 @@
 
     protected override async Task OnInitializedAsync()
     {
-        AppState.OnPlanChanged += OnPlanChanged;
-        await RefreshSavedPlansListAsync();
-        EnsureSelectedNode();
+        AppState.OnStateChanged += OnStateChanged;
+        RefreshLedgerSnapshot();
+        await Task.CompletedTask;
     }
 
     public void Dispose()
     {
-        AppState.OnPlanChanged -= OnPlanChanged;
+        AppState.OnStateChanged -= OnStateChanged;
     }
 
-    private void OnPlanChanged()
+    private void OnStateChanged(AppStateChange change)
     {
-        EnsureSelectedNode();
+        if (!AcquisitionEvaluationLedgerCache.IsRelevantStateChange(change.Scopes))
+        {
+            return;
+        }
+
+        InvalidateLedgerSnapshot();
+        RefreshLedgerSnapshot();
         InvokeAsync(StateHasChanged);
-    }
-
-    private async Task RefreshSavedPlansListAsync()
-    {
-        var plans = await IndexedDb.LoadAllPlansAsync();
-        AppState.SavedPlans = plans
-            .Where(p => p.Id != "autosave")
-            .Select(p => new StoredPlanSummary
-            {
-                Id = p.Id,
-                Name = p.Name,
-                ModifiedAt = p.ModifiedAt,
-                SavedAt = p.SavedAt,
-                DataCenter = p.DataCenter,
-                ItemCount = p.ProjectItems.Count
-            })
-            .ToList();
-        AppState.NotifySavedPlansChanged();
     }
 
     private async Task LoadSavedPlanAsync(string planId)
     {
-        var storedPlan = await IndexedDb.LoadPlanAsync(planId);
-        if (storedPlan == null)
+        var result = await PlanPersistence.LoadPlanIntoSessionAsync(planId);
+        if (result == null)
         {
             Snackbar.Add("Plan not found", Severity.Error);
             return;
         }
-
-        CraftingPlan? plan = null;
-        if (!string.IsNullOrEmpty(storedPlan.PlanJson))
+        if (!string.IsNullOrWhiteSpace(result.Warning))
         {
-            try
-            {
-                plan = System.Text.Json.JsonSerializer.Deserialize<CraftingPlan>(storedPlan.PlanJson);
-            }
-            catch (Exception ex)
-            {
-                Snackbar.Add($"Warning: Could not load full plan data: {ex.Message}", Severity.Warning);
-            }
+            Snackbar.Add($"Warning: {result.Warning}", Severity.Warning);
         }
 
-        AppState.LoadStoredPlan(storedPlan, plan);
-
-        EnsureSelectedNode();
         PopulateShoppingListFromPlan();
+        RefreshLedgerSnapshot();
 
-        Snackbar.Add($"Loaded '{storedPlan.Name}'", Severity.Success);
+        Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
     }
 
     private void SelectNode(PlanNode node)
@@ -228,9 +215,9 @@
         _selectedNode = node;
     }
 
-    private void OnNodeSourceChanged(PlanNode node)
+    private void OnNodeSourceChanged(AcquisitionSourceChangeRequest request)
     {
-        ApplyNodeSourceChange(node, node.Source);
+        ApplyNodeSourceChange(request.Node, request.Source);
     }
 
     private void OnNodeSourceSelected(PlanNode node, ChangeEventArgs args)
@@ -243,17 +230,8 @@
 
     private void ApplyNodeSourceChange(PlanNode node, AcquisitionSource source)
     {
-        using var batch = AppState.BeginStateChangeBatch();
-        foreach (var occurrence in FindNodesByItemId(node.ItemId))
-        {
-            AcquisitionPlanningService.SetAcquisitionSource(occurrence, source);
-        }
-
-        AcquisitionPlanningService.ReconcileAcquisitionDecisions(AppState.CurrentPlan, AppState.ShoppingPlans);
-        PopulateShoppingListFromPlan();
-        AppState.ProcurementShoppingPlans.Clear();
-        AppState.NotifyProcurementOverlayChanged();
-        AppState.NotifyPlanDecisionChanged();
+        AcquisitionDecisionService.ChangeSource(node, source);
+        RefreshLedgerSnapshot();
     }
 
     private void PopulateShoppingListFromPlan()
@@ -273,104 +251,13 @@
 
     private DetailedShoppingPlan? GetMarketPlan(PlanNode? node)
     {
-        return node == null
-            ? null
-            : AppState.ShoppingPlans.FirstOrDefault(plan => plan.ItemId == node.ItemId);
-    }
-
-    private List<DecisionRow> GetDecisionRows()
-    {
-        if (AppState.CurrentPlan == null)
+        if (node == null)
         {
-            return new List<DecisionRow>();
+            return null;
         }
 
-        var rowsByItemId = new Dictionary<int, DecisionAggregate>();
-        foreach (var root in AppState.CurrentPlan.RootItems)
-        {
-            AddDecisionRows(root, suppressedBy: null, rowsByItemId);
-        }
-
-        return rowsByItemId.Values
-            .Select(ToDecisionRow)
-            .OrderBy(row => row.Node.Name)
-            .ToList();
-    }
-
-    private void AddDecisionRows(PlanNode node, string? suppressedBy, Dictionary<int, DecisionAggregate> rowsByItemId)
-    {
-        var isSuppressed = !string.IsNullOrEmpty(suppressedBy);
-        var isDirectSource = node.Source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq or AcquisitionSource.VendorBuy or AcquisitionSource.UnknownSource;
-        var isActiveProcurement = !isSuppressed && (isDirectSource || !node.Children.Any());
-
-        if (!rowsByItemId.TryGetValue(node.ItemId, out var aggregate))
-        {
-            aggregate = new DecisionAggregate(node);
-            rowsByItemId[node.ItemId] = aggregate;
-        }
-
-        aggregate.Occurrences.Add(new DecisionOccurrence(
-            node,
-            node.Parent?.Name ?? "Project item",
-            node.Quantity,
-            isSuppressed,
-            suppressedBy,
-            isActiveProcurement));
-
-        var childSuppression = isSuppressed
-            ? suppressedBy
-            : isDirectSource
-                ? node.Name
-                : null;
-
-        foreach (var child in node.Children)
-        {
-            AddDecisionRows(child, childSuppression, rowsByItemId);
-        }
-    }
-
-    private DecisionRow ToDecisionRow(DecisionAggregate aggregate)
-    {
-        var node = aggregate.PrimaryNode;
-        var activeQuantity = aggregate.Occurrences
-            .Where(occurrence => occurrence.IsActiveProcurement)
-            .Sum(occurrence => occurrence.Quantity);
-        var totalQuantity = aggregate.Occurrences.Sum(occurrence => occurrence.Quantity);
-        var suppressedBy = aggregate.Occurrences
-            .Where(occurrence => occurrence.IsSuppressed)
-            .Select(occurrence => occurrence.SuppressedBy)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Select(name => name!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        var marketPlan = AppState.ShoppingPlans.FirstOrDefault(plan => plan.ItemId == node.ItemId);
-
-        return new DecisionRow(
-            node,
-            totalQuantity,
-            activeQuantity,
-            GetUsedInText(aggregate.Occurrences),
-            aggregate.Occurrences.Any(occurrence => occurrence.IsSuppressed),
-            aggregate.Occurrences.All(occurrence => occurrence.IsSuppressed),
-            suppressedBy,
-            aggregate.Occurrences.Any(occurrence => occurrence.IsActiveProcurement),
-            aggregate.Occurrences.Any(occurrence => !occurrence.IsSuppressed),
-            node.CanBuyFromMarket,
-            GetMarketEvidence(marketPlan),
-            GetEstimatedCost(aggregate.Occurrences, AppState.ShoppingPlans));
-    }
-
-    private IEnumerable<DecisionRow> GetVisibleRows(List<DecisionRow> rows)
-    {
-        var filtered = _filter switch
-        {
-            AcquisitionFilter.Active => rows.Where(row => row.IsActiveProcurement),
-            AcquisitionFilter.Market => rows.Where(row => row.IsMarketCandidate),
-            AcquisitionFilter.Suppressed => rows.Where(row => row.HasSuppressedOccurrences),
-            _ => rows
-        };
-
-        return filtered;
+        _snapshot.CostContext.TryGetShoppingPlan(node.ItemId, out var marketPlan);
+        return marketPlan;
     }
 
     private string GetFilterClass(AcquisitionFilter filter)
@@ -381,6 +268,7 @@
     private void SetFilter(AcquisitionFilter filter)
     {
         _filter = filter;
+        RefreshLedgerSnapshot();
     }
 
     private bool IsSelected(PlanNode node)
@@ -423,29 +311,43 @@
         _resizingColumnIndex = null;
     }
 
-    private static string GetMarketEvidence(DetailedShoppingPlan? marketPlan)
+    private void RefreshLedgerSnapshot()
     {
-        if (marketPlan == null)
-        {
-            return "Not analyzed";
-        }
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        _snapshot = _ledgerCache.GetOrBuild(
+            CreateLedgerKey(),
+            _filter,
+            () => AcquisitionEvaluationSnapshotBuilder.Build(
+                AppState.CurrentPlan,
+                AppState.ShoppingPlans,
+                AppState.UnavailableMarketItems,
+                _filter));
+        EnsureSelectedNodeFromSnapshot();
+        elapsed.Stop();
 
-        if (!string.IsNullOrEmpty(marketPlan.Error))
+        if (elapsed.ElapsedMilliseconds > 100)
         {
-            return "Needs data";
+            Logger.LogInformation(
+                "Acquisition evaluation snapshot ensured in {ElapsedMs} ms with {RowCount} rows and {VisibleRowCount} visible rows",
+                elapsed.ElapsedMilliseconds,
+                _snapshot.Rows.Count,
+                _snapshot.VisibleRows.Count);
         }
+    }
 
-        if (marketPlan.RecommendedWorld != null)
-        {
-            return $"{marketPlan.RecommendedWorld.WorldName} - {marketPlan.RecommendedWorld.TotalQuantityPurchased}/{marketPlan.QuantityNeeded}";
-        }
+    private AcquisitionEvaluationLedgerKey CreateLedgerKey()
+    {
+        var versions = AppState.CurrentVersions;
+        return new AcquisitionEvaluationLedgerKey(
+            versions.PlanStructureVersion,
+            versions.PlanDecisionVersion,
+            versions.PlanPriceVersion,
+            versions.MarketAnalysisVersion);
+    }
 
-        if (marketPlan.RecommendedSplit?.Any() == true)
-        {
-            return $"{marketPlan.RecommendedSplit.Count} world split";
-        }
-
-        return "Analyzed";
+    private void InvalidateLedgerSnapshot()
+    {
+        _ledgerCache.Invalidate();
     }
 
     private static string GetDecisionStatus(DecisionRow row)
@@ -491,79 +393,7 @@
         return options;
     }
 
-    private static string GetEstimatedCost(IReadOnlyList<DecisionOccurrence> occurrences, IReadOnlyList<DetailedShoppingPlan> marketPlans)
-    {
-        var primaryNode = occurrences.FirstOrDefault()?.Node;
-        if (primaryNode == null)
-        {
-            return "-";
-        }
-
-        var costNodes = primaryNode.Source == AcquisitionSource.Craft
-            ? occurrences.Where(occurrence => !occurrence.IsSuppressed).Select(occurrence => occurrence.Node).ToList()
-            : occurrences.Where(occurrence => occurrence.IsActiveProcurement).Select(occurrence => occurrence.Node).ToList();
-        if (costNodes.Count == 0)
-        {
-            costNodes = occurrences
-                .Where(occurrence => !occurrence.IsSuppressed)
-                .Select(occurrence => occurrence.Node)
-                .ToList();
-        }
-
-        return AcquisitionPlanningService.TryGetSelectedAcquisitionCost(costNodes, marketPlans, out var cost)
-            ? $"{cost:N0}g"
-            : "-";
-    }
-
-    private static string GetUsedInText(IReadOnlyList<DecisionOccurrence> occurrences)
-    {
-        var usages = occurrences
-            .GroupBy(occurrence => occurrence.ParentItemName, StringComparer.OrdinalIgnoreCase)
-            .Select(group => new
-            {
-                Name = group.Key,
-                Quantity = group.Sum(occurrence => occurrence.Quantity)
-            })
-            .OrderBy(usage => usage.Name == "Project item" ? 0 : 1)
-            .ThenBy(usage => usage.Name)
-            .ToList();
-
-        return string.Join(", ", usages.Select(usage => $"{usage.Name} x{usage.Quantity}"));
-    }
-
-    private IEnumerable<PlanNode> FindNodesByItemId(int itemId)
-    {
-        if (AppState.CurrentPlan == null)
-        {
-            yield break;
-        }
-
-        foreach (var root in AppState.CurrentPlan.RootItems)
-        {
-            foreach (var node in FindNodesByItemId(root, itemId))
-            {
-                yield return node;
-            }
-        }
-    }
-
-    private static IEnumerable<PlanNode> FindNodesByItemId(PlanNode node, int itemId)
-    {
-        if (node.ItemId == itemId)
-        {
-            yield return node;
-        }
-
-        foreach (var child in node.Children)
-        {
-            foreach (var match in FindNodesByItemId(child, itemId))
-            {
-                yield return match;
-            }
-        }
-    }
-
-    private void EnsureSelectedNode()
+    private void EnsureSelectedNodeFromSnapshot()
     {
         if (AppState.CurrentPlan == null)
         {
@@ -571,9 +401,9 @@
             return;
         }
 
-        if (_selectedNode == null || AppState.CurrentPlan.FindNode(_selectedNode.ItemId) == null)
+        if (_selectedNode == null || !_snapshot.Rows.Any(row => row.Node.NodeId == _selectedNode.NodeId))
         {
-            _selectedNode = GetDecisionRows().FirstOrDefault()?.Node;
+            _selectedNode = _snapshot.Rows.FirstOrDefault()?.Node;
         }
     }
 
@@ -587,38 +417,4 @@
         NavigationManager.NavigateTo("procurement");
     }
 
-    private enum AcquisitionFilter
-    {
-        All,
-        Active,
-        Market,
-        Suppressed
-    }
-
-    private sealed record DecisionRow(
-        PlanNode Node,
-        int TotalQuantity,
-        int ActiveQuantity,
-        string UsedIn,
-        bool HasSuppressedOccurrences,
-        bool IsFullySuppressed,
-        IReadOnlyList<string> SuppressedBy,
-        bool IsActiveProcurement,
-        bool HasEditableOccurrences,
-        bool IsMarketCandidate,
-        string MarketEvidence,
-        string EstimatedCost);
-
-    private sealed record DecisionAggregate(PlanNode PrimaryNode)
-    {
-        public List<DecisionOccurrence> Occurrences { get; } = new();
-    }
-
-    private sealed record DecisionOccurrence(
-        PlanNode Node,
-        string ParentItemName,
-        int Quantity,
-        bool IsSuppressed,
-        string? SuppressedBy,
-        bool IsActiveProcurement);
 }

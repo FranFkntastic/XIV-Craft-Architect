@@ -62,6 +62,7 @@
 
         <ShoppingListPanel
             CurrentPlan="@CurrentPlan"
+            Materials="@ActiveProcurementItems"
             UnavailableMarketItems="@UnavailableMarketItems" />
     }
 </div>
@@ -71,8 +72,11 @@
     [Parameter] public CraftingPlan? CurrentPlan { get; set; }
     [Parameter] public DetailedShoppingPlan? MarketPlan { get; set; }
     [Parameter] public IReadOnlyList<DetailedShoppingPlan> MarketPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
+    [Parameter] public AcquisitionCostContext CostContext { get; set; } =
+        AcquisitionPlanningService.CreateCostContext(Array.Empty<DetailedShoppingPlan>());
+    [Parameter] public IReadOnlyList<MaterialAggregate>? ActiveProcurementItems { get; set; }
     [Parameter] public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<MarketDataUnavailableItem>();
-    [Parameter] public EventCallback<PlanNode> OnSourceChanged { get; set; }
+    [Parameter] public EventCallback<AcquisitionSourceChangeRequest> OnSourceChanged { get; set; }
 
     private bool IsMarketUnavailable => Node != null && UnavailableMarketItems.Any(i => i.ItemId == Node.ItemId);
 
@@ -83,8 +87,7 @@
             return;
         }
 
-        AcquisitionPlanningService.SetAcquisitionSource(Node, source);
-        await OnSourceChanged.InvokeAsync(Node);
+        await OnSourceChanged.InvokeAsync(new AcquisitionSourceChangeRequest(Node, source));
     }
 
     private List<AcquisitionOptionView> GetOptions()
@@ -159,20 +162,26 @@
 
     private string GetMarketPlanDetail(string quality)
     {
-        if (AcquisitionPlanningService.TryGetMarketBoardPurchase(MarketPlan, Node?.Quantity ?? 0, out var marketWorld, out _) &&
+        var marketPlan = MarketPlan;
+        if (marketPlan == null && Node != null)
+        {
+            CostContext.TryGetShoppingPlan(Node.ItemId, out marketPlan);
+        }
+
+        if (AcquisitionPlanningService.TryGetMarketBoardPurchase(marketPlan, Node?.Quantity ?? 0, out var marketWorld, out _) &&
             marketWorld != null)
         {
-            return $"{marketWorld.WorldName} can cover {marketWorld.TotalQuantityPurchased}/{MarketPlan?.QuantityNeeded}.";
+            return $"{marketWorld.WorldName} can cover {marketWorld.TotalQuantityPurchased}/{marketPlan?.QuantityNeeded}.";
         }
 
-        if (MarketPlan?.RecommendedSplit?.Any() == true)
+        if (marketPlan?.RecommendedSplit?.Any() == true)
         {
-            return $"{MarketPlan.RecommendedSplit.Count} world split can cover market purchase.";
+            return $"{marketPlan.RecommendedSplit.Count} world split can cover market purchase.";
         }
 
-        if (!string.IsNullOrWhiteSpace(MarketPlan?.Error))
+        if (!string.IsNullOrWhiteSpace(marketPlan?.Error))
         {
-            return MarketPlan.Error;
+            return marketPlan.Error;
         }
 
         return Node?.MarketPrice > 0
@@ -203,7 +212,7 @@
             return false;
         }
 
-        return AcquisitionPlanningService.TryGetAcquisitionCost(Node, source, MarketPlans, out cost);
+        return AcquisitionPlanningService.TryGetAcquisitionCost(Node, source, CostContext, out cost);
     }
 
     private record AcquisitionOptionView(

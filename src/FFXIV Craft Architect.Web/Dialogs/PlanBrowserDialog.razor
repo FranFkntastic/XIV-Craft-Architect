@@ -1,7 +1,7 @@
 @using FFXIV_Craft_Architect.Web.Services
 @using FFXIV_Craft_Architect.Core.Models
 @inject AppState AppState
-@inject IndexedDbService IndexedDb
+@inject WebPlanPersistenceService PlanPersistence
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 
@@ -118,18 +118,9 @@
     {
         try
         {
-            var plans = await IndexedDb.LoadAllPlansAsync();
-            _savedPlans = plans
+            var summaries = await PlanPersistence.LoadPlanSummariesAsync();
+            _savedPlans = summaries
                 .Where(p => p.Id != "autosave")
-                .Select(p => new StoredPlanSummary
-                {
-                    Id = p.Id,
-                    Name = p.Name,
-                    ModifiedAt = p.ModifiedAt,
-                    SavedAt = p.SavedAt,
-                    DataCenter = p.DataCenter,
-                    ItemCount = p.ProjectItems.Count
-                })
                 .ToList();
             
             // Clear selection if plan no longer exists
@@ -231,15 +222,11 @@
     {
         try
         {
-            // Load existing plan to preserve any extra data
-            var existingPlan = await IndexedDb.LoadPlanAsync(planId);
-
-            var planData = AppState.CreateStoredPlanSnapshot(
+            var existingSummary = _savedPlans.FirstOrDefault(plan => plan.Id == planId);
+            var success = await PlanPersistence.SaveCurrentPlanAsync(
                 planId,
                 planName,
-                existingPlan?.SavedAt);
-
-            var success = await IndexedDb.SavePlanAsync(planData);
+                existingSummary?.SavedAt);
             if (success)
             {
                 var action = AppState.CurrentPlanId == planId ? "Updated" : "Saved";
@@ -281,38 +268,25 @@
         {
             try
             {
-                // Load, rename, and save
-                var plan = await IndexedDb.LoadPlanAsync(_selectedPlan.Id);
-                if (plan == null)
-                {
-                    Snackbar.Add("Plan not found", Severity.Error);
-                    return;
-                }
-                
-                var oldName = plan.Name;
-                plan.Name = newName;
-                plan.ModifiedAt = DateTime.UtcNow;
-                
-                var success = await IndexedDb.SavePlanAsync(plan);
-                if (success)
-                {
-                    Snackbar.Add($"Renamed '{oldName}' to '{newName}'", Severity.Success);
-                    
-                    // Update current plan name if this is the current plan
-                    if (_selectedPlan.Id == AppState.CurrentPlanId)
-                    {
-                        AppState.CurrentPlanName = newName;
-                    }
-                    
-                    await RefreshSavedPlansListAsync();
-                    
-                    // Re-select the renamed plan
-                    _selectedPlan = _savedPlans.FirstOrDefault(p => p.Id == _selectedPlan.Id);
-                }
-                else
+                var renameResult = await PlanPersistence.RenamePlanAsync(_selectedPlan.Id, newName);
+                if (!renameResult.Success)
                 {
                     Snackbar.Add("Failed to rename plan", Severity.Error);
+                    return;
                 }
+
+                Snackbar.Add($"Renamed '{renameResult.OldName}' to '{renameResult.NewName}'", Severity.Success);
+
+                // Update current plan name if this is the current plan
+                if (_selectedPlan.Id == AppState.CurrentPlanId)
+                {
+                    AppState.CurrentPlanName = newName;
+                }
+
+                await RefreshSavedPlansListAsync();
+
+                // Re-select the renamed plan
+                _selectedPlan = _savedPlans.FirstOrDefault(p => p.Id == _selectedPlan.Id);
             }
             catch (Exception ex)
             {
@@ -341,7 +315,7 @@
         {
             try
             {
-                var success = await IndexedDb.DeletePlanAsync(_selectedPlan.Id);
+                var success = await PlanPersistence.DeletePlanAsync(_selectedPlan.Id);
                 if (success)
                 {
                     Snackbar.Add($"Deleted '{_selectedPlan.Name}'", Severity.Success);
@@ -373,25 +347,18 @@
         
         try
         {
-            var storedPlan = await IndexedDb.LoadPlanAsync(_selectedPlan.Id);
-            if (storedPlan == null)
+            var result = await PlanPersistence.LoadPlanIntoSessionAsync(_selectedPlan.Id);
+            if (result == null)
             {
                 Snackbar.Add("Plan not found", Severity.Error);
                 return;
             }
-            
-            CraftingPlan? plan = null;
-            if (!string.IsNullOrEmpty(storedPlan.PlanJson))
+            if (!string.IsNullOrWhiteSpace(result.Warning))
             {
-                try
-                {
-                    plan = System.Text.Json.JsonSerializer.Deserialize<CraftingPlan>(storedPlan.PlanJson);
-                }
-                catch { /* Plan JSON may be incompatible, that's ok */ }
+                Snackbar.Add($"Warning: {result.Warning}", Severity.Warning);
             }
-            
-            AppState.LoadStoredPlan(storedPlan, plan);
-            Snackbar.Add($"Loaded '{storedPlan.Name}'", Severity.Success);
+
+            Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
             MudDialog.Close(DialogResult.Ok(true));
         }
         catch (Exception ex)

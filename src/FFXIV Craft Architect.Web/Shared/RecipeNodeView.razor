@@ -53,7 +53,7 @@
     [Parameter] public bool IsSelected { get; set; }
     [Parameter] public string? SelectedNodeId { get; set; }
     [Parameter] public EventCallback<PlanNode> OnNodeSelected { get; set; }
-    [Parameter] public EventCallback<PlanNode> OnHqChanged { get; set; }
+    [Parameter] public EventCallback<PlanNodeHqChangeRequest> OnHqChanged { get; set; }
     
     private bool _isExpanded = true;
     private int _lastExpandVersion = -1;
@@ -133,18 +133,7 @@
     {
         if (Node != null && Node.CanBeHq)
         {
-            Node.MustBeHq = !Node.MustBeHq;
-            // If switching to HQ and currently buying NQ, switch to HQ buy
-            if (Node.CanBuyFromMarket && Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyNq)
-            {
-                AcquisitionPlanningService.SetAcquisitionSource(Node, AcquisitionSource.MarketBuyHq);
-            }
-            // If switching to NQ and currently buying HQ, switch to NQ buy
-            else if (Node.CanBuyFromMarket && !Node.MustBeHq && Node.Source == AcquisitionSource.MarketBuyHq)
-            {
-                AcquisitionPlanningService.SetAcquisitionSource(Node, AcquisitionSource.MarketBuyNq);
-            }
-            await OnHqChanged.InvokeAsync(Node);
+            await OnHqChanged.InvokeAsync(new PlanNodeHqChangeRequest(Node, !Node.MustBeHq));
         }
     }
 

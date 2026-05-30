@@ -30,7 +30,10 @@ public class IndexedDbService
         try
         {
             await EnsureInitialized();
-            plan.SavedAt = DateTime.UtcNow;
+            if (plan.SavedAt == default)
+            {
+                plan.SavedAt = DateTime.UtcNow;
+            }
             var result = await _jsRuntime.InvokeAsync<bool>("IndexedDB.savePlan", plan);
             _logger?.LogInformation("Saved plan '{PlanName}' ({PlanId}) to IndexedDB", plan.Name, plan.Id);
             return result;
@@ -80,6 +83,25 @@ public class IndexedDbService
         {
             _logger?.LogError(ex, "Failed to load plans from IndexedDB");
             return new List<StoredPlan>();
+        }
+    }
+
+    /// <summary>
+    /// Load saved plan summaries without transferring full serialized plan payloads.
+    /// </summary>
+    public async Task<List<StoredPlanSummary>> LoadPlanSummariesAsync()
+    {
+        try
+        {
+            await EnsureInitialized();
+            var summaries = await _jsRuntime.InvokeAsync<List<StoredPlanSummary>>("IndexedDB.loadPlanSummaries");
+            _logger?.LogInformation("Loaded {Count} plan summaries from IndexedDB", summaries.Count);
+            return summaries;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to load plan summaries from IndexedDB");
+            return new List<StoredPlanSummary>();
         }
     }
 
@@ -250,20 +272,13 @@ public class IndexedDbService
         try
         {
             await EnsureInitialized();
-            
-            // Load existing plan first
-            var existingPlan = await LoadPlanAsync(planId);
-            if (existingPlan == null)
-                return false;
-            
-            // Update with market data
-            existingPlan.MarketPlansJson = System.Text.Json.JsonSerializer.Serialize(shoppingPlans);
-            existingPlan.MarketItemAnalysesJson = System.Text.Json.JsonSerializer.Serialize(marketItemAnalyses);
-            existingPlan.SavedRecommendationMode = mode;
-            existingPlan.SavedMarketAnalysisLens = lens;
-            existingPlan.ModifiedAt = DateTime.UtcNow;
-            
-            return await SavePlanAsync(existingPlan);
+            return await _jsRuntime.InvokeAsync<bool>(
+                "IndexedDB.patchMarketAnalysis",
+                planId,
+                JsonSerializer.Serialize(shoppingPlans),
+                JsonSerializer.Serialize(marketItemAnalyses),
+                mode,
+                lens);
         }
         catch (Exception ex)
         {

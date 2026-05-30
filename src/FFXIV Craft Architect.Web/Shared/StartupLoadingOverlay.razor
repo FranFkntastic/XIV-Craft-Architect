@@ -1,0 +1,32 @@
+@using FFXIV_Craft_Architect.Web.Services
+
+@if (Status.IsInitializing)
+{
+    <div class="startup-overlay" role="status" aria-live="polite">
+        <div class="startup-overlay__panel">
+            <div class="startup-overlay__brand">FFXIV Craft Architect</div>
+            @if (Status.IsWarning)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.WarningAmber" Class="startup-overlay__warning-icon" />
+                <MudText Typo="Typo.h6" Class="startup-overlay__title">@Status.StepText</MudText>
+                <MudText Class="startup-overlay__message">@Status.WarningMessage</MudText>
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Warning"
+                           StartIcon="@Icons.Material.Filled.PlayArrow"
+                           OnClick="OnContinue">
+                    Continue
+                </MudButton>
+            }
+            else
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Large" Color="Color.Primary" />
+                <MudText Typo="Typo.h6" Class="startup-overlay__title">@Status.StepText</MudText>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public StartupStatus Status { get; set; } = StartupStatus.InProgress("Starting...");
+    [Parameter] public EventCallback OnContinue { get; set; }
+}
