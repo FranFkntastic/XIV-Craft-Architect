@@ -495,6 +495,7 @@ public class AppState
             _marketItemAnalyses.Clear();
             _procurementShoppingPlans.Clear();
             UnavailableMarketItems = Array.Empty<MarketDataUnavailableItem>();
+            ClearMarketAnalysisViewState(publishChange: false);
             PublishChange(
                 AppStateChangeScope.Settings |
                 AppStateChangeScope.MarketAnalysis |
@@ -1114,6 +1115,7 @@ public class AppState
         AutoExpandItemId = null;
         ReplaceListContents(_marketItemAnalyses, session.MarketItemAnalyses);
         ReplaceListContents(_shoppingPlans, session.ShoppingPlans);
+        ClearMarketAnalysisViewState(publishChange: false);
         RecommendationMode = storedPlan.SavedRecommendationMode;
         MarketAnalysisLens = storedPlan.SavedMarketAnalysisLens;
         ClearProcurementOverlay();

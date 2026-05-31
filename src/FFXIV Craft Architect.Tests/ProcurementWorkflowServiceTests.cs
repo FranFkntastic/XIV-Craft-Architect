@@ -53,6 +53,74 @@ public class ProcurementWorkflowServiceTests
     }
 
     [Fact]
+    public async Task RunAnalysisAsync_DisplayOnlyScopeFields_DoNotChangeSourcePlans()
+    {
+        var appState = CreateAppState();
+        var sourcePlan = ShoppingPlan(101, "Siren");
+        sourcePlan.RecommendedWorld!.TotalCost = 1010;
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 101,
+                    Name = "Item 101",
+                    QuantityNeeded = 5,
+                    AnalysisScopeBaselineUnitPrice = 100,
+                    SaneThresholdUnitPrice = 200,
+                    Worlds =
+                    [
+                        new WorldMarketAnalysis
+                        {
+                            DataCenter = "Aether",
+                            WorldName = "Siren",
+                            QuantityNeeded = 5,
+                            AnalysisScopeBaselineUnitPrice = 100,
+                            SaneThresholdUnitPrice = 200,
+                            ScopeSaneQuantity = 5,
+                            ScopeInsaneQuantity = 99,
+                            ScopeCompetitiveQuantity = 1
+                        }
+                    ]
+                }
+            ],
+            [sourcePlan]);
+        ProcurementRouteExecutionRequest? capturedRequest = null;
+        var execution = new Mock<IProcurementRouteExecutionService>();
+        execution.Setup(e => e.AnalyzeAsync(
+                It.IsAny<ProcurementRouteExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback<ProcurementRouteExecutionRequest, IProgress<string>?, CancellationToken, MarketAnalysisExecutionOptions?>(
+                (request, _, _, _) => capturedRequest = request)
+            .ReturnsAsync(new ProcurementRouteExecutionResult([ShoppingPlan(101, "Faerie")], [], [], [], []));
+        var service = CreateService(appState, procurementExecution: execution.Object);
+
+        var result = await service.RunAnalysisAsync(
+            new ProcurementWorkflowRequest(() => true, MarketAnalysisExecutionOptions.Synchronous));
+
+        Assert.Equal(ProcurementWorkflowStatus.Published, result.Status);
+        Assert.NotNull(capturedRequest);
+        var requestPlan = Assert.Single(capturedRequest.SourceShoppingPlans);
+        Assert.Same(sourcePlan, requestPlan);
+        Assert.Equal("Siren", requestPlan.RecommendedWorld?.WorldName);
+        Assert.Equal(1010, requestPlan.RecommendedWorld?.TotalCost);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_DisplayOnlyScopeFields_DoNotChangeRealRouteOutput()
+    {
+        var withoutDisplayFields = await RunRealRouteWithDisplayFieldsAsync(includeDisplayFields: false);
+        var withDisplayFields = await RunRealRouteWithDisplayFieldsAsync(includeDisplayFields: true);
+
+        Assert.Equal(withoutDisplayFields.Status, withDisplayFields.Status);
+        Assert.Equal(withoutDisplayFields.ShoppingPlanCount, withDisplayFields.ShoppingPlanCount);
+        Assert.Equal(
+            withoutDisplayFields.Output.Select(ToRouteSummary).ToArray(),
+            withDisplayFields.Output.Select(ToRouteSummary).ToArray());
+    }
+
+    [Fact]
     public async Task RunAnalysisAsync_WhenDecisionVersionChanges_DoesNotPublish()
     {
         var appState = CreateAppState();
@@ -352,9 +420,31 @@ public class ProcurementWorkflowServiceTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>(),
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
-            .Callback(() => appState.ReplaceMarketAnalysis(
-                [new MarketItemAnalysis { ItemId = 303, Name = "New Evidence" }],
-                [ShoppingPlan(303)]))
+            .Callback(() =>
+            {
+                appState.ReplaceMarketAnalysis(
+                    [
+                        new MarketItemAnalysis
+                        {
+                            ItemId = 303,
+                            Name = "New Evidence",
+                            QuantityNeeded = 5,
+                            Worlds =
+                            [
+                                new WorldMarketAnalysis
+                                {
+                                    DataCenter = "Aether",
+                                    WorldName = "Siren"
+                                }
+                            ]
+                        }
+                    ],
+                    [ShoppingPlan(303)]);
+                appState.SelectMarketAnalysisItem(303);
+                appState.ToggleMarketAnalysisWorld(303, "Aether", "Siren");
+                appState.SetMarketAnalysisGridSort(MarketAnalysisGridSortColumn.Total, descending: true);
+                appState.ReplaceProcurementOverlay([ShoppingPlan(303)]);
+            })
             .ReturnsAsync(new MarketAnalysisExecutionResult(
                 CreateEmptyEvidence(),
                 [new MarketItemAnalysis { ItemId = 101, Name = "Item 101", QuantityNeeded = 5 }],
@@ -371,6 +461,10 @@ public class ProcurementWorkflowServiceTests
         Assert.Equal(ProcurementItemRefreshStatus.StaleConfiguration, result.Status);
         Assert.Equal(303, Assert.Single(appState.MarketItemAnalyses).ItemId);
         Assert.Equal(303, Assert.Single(appState.ShoppingPlans).ItemId);
+        Assert.Equal(303, Assert.Single(appState.ProcurementShoppingPlans).ItemId);
+        Assert.Equal(303, appState.SelectedMarketAnalysisItemId);
+        Assert.Equal([new MarketAnalysisExpandedWorldKey(303, "Aether", "Siren")], appState.ExpandedMarketAnalysisWorlds);
+        Assert.Equal(MarketAnalysisGridSortColumn.Total, appState.MarketAnalysisGridSortColumn);
         Assert.Empty(jsRuntime.PatchedPlanIds);
     }
 
@@ -395,7 +489,7 @@ public class ProcurementWorkflowServiceTests
             persistence);
     }
 
-    private static AppState CreateAppState()
+    private static AppState CreateAppState(params int[] itemIds)
     {
         var appState = new AppState();
         appState.SetProcurementSettings(
@@ -403,7 +497,7 @@ public class ProcurementWorkflowServiceTests
             enableSplitWorldPurchases: false,
             travelTolerance: 7,
             temporaryWorldBlacklistDurationMinutes: appState.TemporaryWorldBlacklistDurationMinutes);
-        appState.ApplyBuiltRecipePlan(CreatePlan());
+        appState.ApplyBuiltRecipePlan(CreatePlan(itemIds));
         return appState;
     }
 
@@ -445,6 +539,101 @@ public class ProcurementWorkflowServiceTests
             }
         };
     }
+
+    private static DetailedShoppingPlan CompleteShoppingPlan(int itemId, string worldName, long totalCost)
+    {
+        var world = new WorldShoppingSummary
+        {
+            DataCenter = "Aether",
+            WorldName = worldName,
+            TotalCost = totalCost,
+            AveragePricePerUnit = totalCost / 5m,
+            TotalQuantityPurchased = 5,
+            HasSufficientStock = true,
+            Listings =
+            [
+                new ShoppingListingEntry
+                {
+                    Quantity = 5,
+                    NeededFromStack = 5,
+                    PricePerUnit = totalCost / 5,
+                    RetainerName = $"{worldName} Retainer"
+                }
+            ]
+        };
+
+        return new DetailedShoppingPlan
+        {
+            ItemId = itemId,
+            Name = $"Item {itemId}",
+            QuantityNeeded = 5,
+            WorldOptions = [world],
+            RecommendedWorld = world
+        };
+    }
+
+    private static async Task<RealRouteResult> RunRealRouteWithDisplayFieldsAsync(bool includeDisplayFields)
+    {
+        var appState = CreateAppState(101);
+        var sourcePlan = CompleteShoppingPlan(101, "Siren", totalCost: 500);
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 101,
+                    Name = "Item 101",
+                    QuantityNeeded = 5,
+                    AnalysisScopeBaselineUnitPrice = includeDisplayFields ? 100 : 0,
+                    SaneThresholdUnitPrice = includeDisplayFields ? 200 : 0,
+                    Worlds =
+                    [
+                        new WorldMarketAnalysis
+                        {
+                            DataCenter = "Aether",
+                            WorldName = "Siren",
+                            QuantityNeeded = 5,
+                            AnalysisScopeBaselineUnitPrice = includeDisplayFields ? 100 : 0,
+                            SaneThresholdUnitPrice = includeDisplayFields ? 200 : 0,
+                            ScopeSaneQuantity = includeDisplayFields ? 5 : 0,
+                            ScopeInsaneQuantity = includeDisplayFields ? 99 : 0,
+                            ScopeCompetitiveQuantity = includeDisplayFields ? 1 : 0
+                        }
+                    ]
+                }
+            ],
+            [sourcePlan]);
+        var marketExecution = new Mock<IMarketAnalysisExecutionService>(MockBehavior.Strict);
+        var routeExecution = new ProcurementRouteExecutionService(
+            marketExecution.Object,
+            new MarketShoppingService(Mock.Of<IMarketCacheService>()));
+        var service = CreateService(appState, procurementExecution: routeExecution);
+
+        var result = await service.RunAnalysisAsync(
+            new ProcurementWorkflowRequest(() => true, MarketAnalysisExecutionOptions.Synchronous));
+
+        marketExecution.VerifyNoOtherCalls();
+        return new RealRouteResult(result.Status, result.ShoppingPlanCount, appState.ProcurementShoppingPlans.ToList());
+    }
+
+    private static object ToRouteSummary(DetailedShoppingPlan plan)
+    {
+        return new
+        {
+            plan.ItemId,
+            plan.QuantityNeeded,
+            RecommendedWorld = plan.RecommendedWorld?.WorldName,
+            RecommendedDataCenter = plan.RecommendedWorld?.DataCenter,
+            RecommendedCost = plan.RecommendedWorld?.TotalCost,
+            SplitWorlds = plan.RecommendedSplit?
+                .Select(split => new { split.DataCenter, split.WorldName, split.QuantityToBuy, split.TotalCost })
+                .ToArray()
+        };
+    }
+
+    private sealed record RealRouteResult(
+        ProcurementWorkflowStatus Status,
+        int ShoppingPlanCount,
+        IReadOnlyList<DetailedShoppingPlan> Output);
 
     private static MarketEvidenceSet CreateEmptyEvidence()
     {

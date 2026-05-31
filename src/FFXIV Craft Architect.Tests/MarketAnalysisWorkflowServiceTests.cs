@@ -98,6 +98,94 @@ public class MarketAnalysisWorkflowServiceTests
         Assert.Equal(0, jsRuntime.SavePlanCallCount);
     }
 
+    [Theory]
+    [InlineData("scope")]
+    [InlineData("data-center")]
+    [InlineData("region")]
+    [InlineData("lens")]
+    public async Task RunAnalysisAsync_WhenMarketContextChangesDuringExecution_RejectsOldResult(string changedContext)
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(CreatePlan());
+        var jsRuntime = new RecordingJsRuntime();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(() => ChangeMarketContext(appState, changedContext))
+            .ReturnsAsync(CreateExecutionResult());
+        var service = CreateService(appState, execution.Object, jsRuntime);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.False(result.Published);
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Empty(appState.ShoppingPlans);
+        Assert.Empty(appState.ProcurementShoppingPlans);
+        Assert.Null(appState.SelectedMarketAnalysisItemId);
+        Assert.Empty(appState.ExpandedMarketAnalysisWorlds);
+        Assert.Equal(0, jsRuntime.PatchMarketAnalysisCallCount);
+        Assert.Equal(0, jsRuntime.SavePlanCallCount);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_WhenNewerMarketStateExists_DoesNotPruneViewStateOrClearProcurementOverlay()
+    {
+        var originalPlan = CreatePlan(itemId: 1);
+        var replacementPlan = CreatePlan(itemId: 2);
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(originalPlan);
+        var jsRuntime = new RecordingJsRuntime();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(() =>
+            {
+                appState.ApplyBuiltRecipePlan(replacementPlan);
+                appState.ReplaceMarketAnalysis(
+                    [
+                        new MarketItemAnalysis
+                        {
+                            ItemId = 2,
+                            Name = "Replacement Material",
+                            QuantityNeeded = 2,
+                            Worlds =
+                            [
+                                new WorldMarketAnalysis
+                                {
+                                    DataCenter = "Aether",
+                                    WorldName = "Siren"
+                                }
+                            ]
+                        }
+                    ],
+                    [ShoppingPlan(itemId: 2)]);
+                appState.SelectMarketAnalysisItem(2);
+                appState.ToggleMarketAnalysisWorld(2, "Aether", "Siren");
+                appState.SetMarketAnalysisGridSort(MarketAnalysisGridSortColumn.Total, descending: true);
+                appState.ReplaceProcurementOverlay([ShoppingPlan(itemId: 2, worldName: "Siren")]);
+            })
+            .ReturnsAsync(CreateExecutionResult());
+        var service = CreateService(appState, execution.Object, jsRuntime);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.False(result.Published);
+        Assert.Equal(2, Assert.Single(appState.MarketItemAnalyses).ItemId);
+        Assert.Equal(2, Assert.Single(appState.ShoppingPlans).ItemId);
+        Assert.Equal(2, Assert.Single(appState.ProcurementShoppingPlans).ItemId);
+        Assert.Equal(2, appState.SelectedMarketAnalysisItemId);
+        Assert.Equal([new MarketAnalysisExpandedWorldKey(2, "Aether", "Siren")], appState.ExpandedMarketAnalysisWorlds);
+        Assert.Equal(MarketAnalysisGridSortColumn.Total, appState.MarketAnalysisGridSortColumn);
+        Assert.Equal(0, jsRuntime.PatchMarketAnalysisCallCount);
+        Assert.Equal(0, jsRuntime.SavePlanCallCount);
+    }
+
     [Fact]
     public async Task ApplyLensAsync_ReprojectsExistingAnalysisAndPersists()
     {
@@ -184,6 +272,59 @@ public class MarketAnalysisWorkflowServiceTests
                     }
                 }
             ]);
+    }
+
+    private static DetailedShoppingPlan ShoppingPlan(int itemId, string worldName = "Siren")
+    {
+        return new DetailedShoppingPlan
+        {
+            ItemId = itemId,
+            Name = "Replacement Material",
+            QuantityNeeded = 2,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                DataCenter = "Aether",
+                WorldName = worldName,
+                TotalQuantityPurchased = 2,
+                TotalCost = 20
+            }
+        };
+    }
+
+    private static void ChangeMarketContext(AppState appState, string changedContext)
+    {
+        switch (changedContext)
+        {
+            case "scope":
+                appState.SetMarketEvidenceSettings(
+                    "Aether",
+                    "North America",
+                    MarketFetchScope.SelectedDataCenter,
+                    searchEntireRegion: true,
+                    autoFetchPricesOnRebuild: true);
+                break;
+            case "data-center":
+                appState.SetMarketEvidenceSettings(
+                    "Primal",
+                    "North America",
+                    MarketFetchScope.SelectedDataCenter,
+                    searchEntireRegion: false,
+                    autoFetchPricesOnRebuild: true);
+                break;
+            case "region":
+                appState.SetMarketEvidenceSettings(
+                    "Aether",
+                    "Europe",
+                    MarketFetchScope.SelectedDataCenter,
+                    searchEntireRegion: false,
+                    autoFetchPricesOnRebuild: true);
+                break;
+            case "lens":
+                appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(changedContext), changedContext, null);
+        }
     }
 
     private sealed class RecordingJsRuntime : IJSRuntime

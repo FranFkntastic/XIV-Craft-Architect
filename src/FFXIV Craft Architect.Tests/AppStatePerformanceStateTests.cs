@@ -223,6 +223,40 @@ public class AppStatePerformanceStateTests
     }
 
     [Fact]
+    public void SetMarketEvidenceSettings_WhenMarketContextChanges_ClearsMarketAnalysisViewState()
+    {
+        var appState = new AppState();
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 100,
+                    Name = "Market Item",
+                    Worlds = [new WorldMarketAnalysis { DataCenter = "Aether", WorldName = "Siren" }]
+                }
+            ],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Market Item" }]);
+        appState.SelectMarketAnalysisItem(100);
+        appState.ToggleMarketAnalysisWorld(100, "Aether", "Siren");
+        appState.SetMarketAnalysisGridSort(MarketAnalysisGridSortColumn.Total, descending: true);
+
+        appState.SetMarketEvidenceSettings(
+            "Primal",
+            "North America",
+            MarketFetchScope.SelectedDataCenter,
+            searchEntireRegion: false,
+            autoFetchPricesOnRebuild: true);
+
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Empty(appState.ShoppingPlans);
+        Assert.Empty(appState.ProcurementShoppingPlans);
+        Assert.Null(appState.SelectedMarketAnalysisItemId);
+        Assert.Empty(appState.ExpandedMarketAnalysisWorlds);
+        Assert.Null(appState.MarketAnalysisGridSortColumn);
+        Assert.False(appState.MarketAnalysisGridSortDescending);
+    }
+
+    [Fact]
     public void ReplaceMarketAnalysis_PreservesValidMarketAnalysisViewStateAndPrunesInvalidKeys()
     {
         var appState = new AppState();
