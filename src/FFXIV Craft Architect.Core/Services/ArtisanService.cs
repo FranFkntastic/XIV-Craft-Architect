@@ -19,19 +19,22 @@ public class ArtisanService : IArtisanService
     private readonly RecipeCalculationService _recipeCalcService;
     private readonly ITeamcraftRecipeService _teamcraftService;
     private readonly HttpClient _httpClient;
+    private readonly IRecipeOperationSnapshotService _recipeOperationSnapshotService;
 
     public ArtisanService(
         ILogger<ArtisanService> logger, 
         GarlandService garlandService, 
         RecipeCalculationService recipeCalcService,
         ITeamcraftRecipeService teamcraftService,
-        HttpClient httpClient)
+        HttpClient httpClient,
+        IRecipeOperationSnapshotService recipeOperationSnapshotService)
     {
         _logger = logger;
         _garlandService = garlandService;
         _recipeCalcService = recipeCalcService;
         _teamcraftService = teamcraftService;
         _httpClient = httpClient;
+        _recipeOperationSnapshotService = recipeOperationSnapshotService;
     }
 
     #region Import FROM Artisan
@@ -320,27 +323,18 @@ public class ArtisanService : IArtisanService
             Recipes = new List<ArtisanListItem>()
         };
 
-        foreach (var node in EnumerateNodesForArtisanExport(plan, includePrecrafts))
+        var snapshot = await _recipeOperationSnapshotService.BuildAsync(plan, ct);
+        foreach (var operation in EnumerateOperationsForArtisanExport(snapshot, includePrecrafts))
         {
-            try
+            if (operation.RecipeId == null || !CanExportToArtisan(operation))
             {
-                var artisanItem = await ConvertToArtisanItemAsync(node, ct);
-                if (artisanItem != null)
-                {
-                    AddOrMergeRecipe(artisanList.Recipes, artisanItem);
-                }
-                else
-                {
-                    result.MissingRecipes.Add(node.Name);
-                    _logger.LogWarning("[Artisan] Could not find recipe for item: {ItemName} (ID: {ItemId})", 
-                        node.Name, node.ItemId);
-                }
+                result.MissingRecipes.Add(operation.ResultItemName);
+                _logger.LogWarning("[Artisan] Could not find recipe for item: {ItemName} (ID: {ItemId})",
+                    operation.ResultItemName, operation.ResultItemId);
+                continue;
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[Artisan] Error converting item {ItemName} to Artisan format", node.Name);
-                result.MissingRecipes.Add(node.Name);
-            }
+
+            AddOrMergeRecipe(artisanList.Recipes, ConvertToArtisanItem(operation));
         }
 
         foreach (var recipe in artisanList.Recipes)
@@ -364,99 +358,30 @@ public class ArtisanService : IArtisanService
         return result;
     }
 
-    private static IEnumerable<PlanNode> EnumerateNodesForArtisanExport(CraftingPlan plan, bool includePrecrafts)
+    private static IEnumerable<RecipeOperation> EnumerateOperationsForArtisanExport(
+        RecipeOperationSnapshot snapshot,
+        bool includePrecrafts)
     {
-        foreach (var rootItem in plan.RootItems)
-        {
-            yield return rootItem;
-
-            if (!includePrecrafts)
-            {
-                continue;
-            }
-
-            foreach (var child in EnumerateCraftedDescendants(rootItem))
-            {
-                yield return child;
-            }
-        }
+        return snapshot.GetArtisanExportOperations(includePrecrafts);
     }
 
-    private static IEnumerable<PlanNode> EnumerateCraftedDescendants(PlanNode node)
+    private static bool CanExportToArtisan(RecipeOperation operation)
     {
-        foreach (var child in node.Children)
-        {
-            if (child.Source != AcquisitionSource.Craft)
-            {
-                continue;
-            }
-
-            yield return child;
-
-            foreach (var descendant in EnumerateCraftedDescendants(child))
-            {
-                yield return descendant;
-            }
-        }
+        return operation.ResolutionConfidence is RecipeResolutionConfidence.Exact or RecipeResolutionConfidence.AmbiguousExact;
     }
 
-    private async Task<ArtisanListItem?> ConvertToArtisanItemAsync(PlanNode node, CancellationToken ct)
+    private static ArtisanListItem ConvertToArtisanItem(RecipeOperation operation)
     {
-        var itemData = await _garlandService.GetItemAsync(node.ItemId, ct);
-        
-        if (itemData?.Crafts?.Any() != true)
+        return new ArtisanListItem
         {
-            return null;
-        }
-
-        var recipe = SelectRecipeForNode(node, itemData);
-        if (recipe == null || !uint.TryParse(recipe.Id, out var recipeId))
-        {
-            return null;
-        }
-        
-        var yield = Math.Max(1, recipe.Yield);
-        var recipeCount = (int)Math.Ceiling((double)node.Quantity / yield);
-
-        var artisanItem = new ArtisanListItem
-        {
-            ID = recipeId,
-            Quantity = recipeCount,
+            ID = operation.RecipeId!.Value,
+            Quantity = operation.CraftCount,
             ListItemOptions = new ArtisanListItemOptions
             {
                 NQOnly = false,
                 Skipping = false
             }
         };
-
-        _logger.LogDebug("[Artisan] Mapped item {ItemName} (ID: {ItemId}) to recipe ID {RecipeId}",
-            node.Name, node.ItemId, recipe.Id);
-
-        return artisanItem;
-    }
-
-    private static GarlandCraft? SelectRecipeForNode(PlanNode node, GarlandItem itemData)
-    {
-        var numericRecipes = itemData.Crafts?
-            .Where(recipe => uint.TryParse(recipe.Id, out _))
-            .ToList() ?? new List<GarlandCraft>();
-
-        if (numericRecipes.Count == 0)
-        {
-            return null;
-        }
-
-        var matchingRecipe = numericRecipes
-            .Where(recipe => recipe.RecipeLevel == node.RecipeLevel && Math.Max(1, recipe.Yield) == Math.Max(1, node.Yield))
-            .OrderBy(recipe => recipe.RecipeLevel)
-            .FirstOrDefault();
-
-        matchingRecipe ??= numericRecipes
-            .Where(recipe => Math.Max(1, recipe.Yield) == Math.Max(1, node.Yield))
-            .OrderBy(recipe => recipe.RecipeLevel)
-            .FirstOrDefault();
-
-        return matchingRecipe ?? numericRecipes.OrderBy(recipe => recipe.RecipeLevel).First();
     }
 
     private static void AddOrMergeRecipe(List<ArtisanListItem> recipes, ArtisanListItem recipe)

@@ -187,6 +187,42 @@ public class MarketAnalysisWorkflowServiceTests
     }
 
     [Fact]
+    public async Task RunAnalysisAsync_UsesRecipeDemandProjectionForMarketInputs()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlan(CreatePlan());
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateExecutionResult(quantityNeeded: 9));
+        var projection = CreateProjection(
+            marketCandidates:
+            [
+                CreateDemandRow(1, "Material", quantity: 9, RecipeDemandViewKind.MarketAnalysisCandidate)
+            ],
+            activeProcurement: []);
+        var service = CreateService(
+            appState,
+            execution.Object,
+            new RecordingJsRuntime(),
+            new StubRecipeDemandProjectionService(projection));
+
+        await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        execution.Verify(e => e.ExecuteAsync(
+            It.Is<MarketAnalysisExecutionRequest>(request =>
+                request.Items.Count == 1 &&
+                request.Items[0].ItemId == 1 &&
+                request.Items[0].TotalQuantity == 9),
+            It.IsAny<IProgress<string>?>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<MarketAnalysisExecutionOptions?>()));
+    }
+
+    [Fact]
     public async Task ApplyLensAsync_ReprojectsExistingAnalysisAndPersists()
     {
         var appState = new AppState();
@@ -210,7 +246,8 @@ public class MarketAnalysisWorkflowServiceTests
     private static MarketAnalysisWorkflowService CreateService(
         AppState appState,
         IMarketAnalysisExecutionService execution,
-        RecordingJsRuntime jsRuntime)
+        RecordingJsRuntime jsRuntime,
+        IRecipeDemandProjectionService? demandProjectionService = null)
     {
         var indexedDb = new IndexedDbService(jsRuntime);
         var persistence = new WebPlanPersistenceService(
@@ -223,7 +260,8 @@ public class MarketAnalysisWorkflowServiceTests
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
             new MarketPriceLadderAnalysisService(),
             persistence,
-            indexedDb);
+            indexedDb,
+            demandProjectionService ?? new RecipeDemandProjectionService());
     }
 
     private static CraftingPlan CreatePlan(int itemId = 1)
@@ -244,7 +282,7 @@ public class MarketAnalysisWorkflowServiceTests
         };
     }
 
-    private static MarketAnalysisExecutionResult CreateExecutionResult()
+    private static MarketAnalysisExecutionResult CreateExecutionResult(int quantityNeeded = 2)
     {
         return new MarketAnalysisExecutionResult(
             new MarketEvidenceSet(
@@ -257,13 +295,13 @@ public class MarketAnalysisWorkflowServiceTests
                 TimeSpan.Zero,
                 fetchedCount: 1,
                 DateTime.UtcNow),
-            [new MarketItemAnalysis { ItemId = 1, Name = "Material", QuantityNeeded = 2 }],
+            [new MarketItemAnalysis { ItemId = 1, Name = "Material", QuantityNeeded = quantityNeeded }],
             [
                 new DetailedShoppingPlan
                 {
                     ItemId = 1,
                     Name = "Material",
-                    QuantityNeeded = 2,
+                    QuantityNeeded = quantityNeeded,
                     RecommendedWorld = new WorldShoppingSummary
                     {
                         WorldName = "Siren",
@@ -324,6 +362,64 @@ public class MarketAnalysisWorkflowServiceTests
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(changedContext), changedContext, null);
+        }
+    }
+
+    private static RecipeDemandProjection CreateProjection(
+        IReadOnlyList<RecipeDemandRow> marketCandidates,
+        IReadOnlyList<RecipeDemandRow> activeProcurement)
+    {
+        return new RecipeDemandProjection(
+            AllPlanDemand: Array.Empty<RecipeDemandRow>(),
+            MarketAnalysisCandidates: marketCandidates,
+            ActiveProcurementDemand: activeProcurement,
+            SuppressedDemand: Array.Empty<RecipeDemandRow>());
+    }
+
+    private static RecipeDemandRow CreateDemandRow(
+        int itemId,
+        string itemName,
+        int quantity,
+        RecipeDemandViewKind viewKind)
+    {
+        return new RecipeDemandRow(
+            viewKind,
+            $"node-{itemId}",
+            itemId,
+            itemName,
+            0,
+            quantity,
+            RecipeDemandQuantityBasis.PlanNodeQuantity,
+            false,
+            AcquisitionSource.MarketBuyNq,
+            AcquisitionSourceReason.SystemDefault,
+            false,
+            true,
+            false,
+            0,
+            null,
+            "Direct",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
+    }
+
+    private sealed class StubRecipeDemandProjectionService : IRecipeDemandProjectionService
+    {
+        private readonly RecipeDemandProjection _projection;
+
+        public StubRecipeDemandProjectionService(RecipeDemandProjection projection)
+        {
+            _projection = projection;
+        }
+
+        public RecipeDemandProjection Build(CraftingPlan? plan, RecipeOperationSnapshot? snapshot)
+        {
+            return _projection;
         }
     }
 

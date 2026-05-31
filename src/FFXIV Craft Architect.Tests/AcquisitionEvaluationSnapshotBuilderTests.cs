@@ -85,6 +85,94 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         Assert.Equal("50g", row.EstimatedCost);
     }
 
+    [Fact]
+    public void Build_UsesRecipeDemandProjectionRowsForDecisionQuantities()
+    {
+        var root = CreateRoot(100, "Final Craft");
+        var material = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Projected Material",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 10,
+            Parent = root
+        };
+        root.Children.Add(material);
+        var plan = new CraftingPlan { RootItems = [root] };
+        var projection = new RecipeDemandProjection(
+            AllPlanDemand:
+            [
+                CreateDemandRow(RecipeDemandViewKind.PlanOccurrence, material, quantity: 7),
+                CreateDemandRow(RecipeDemandViewKind.PlanOccurrence, material, quantity: 5, suppressedByNodeId: root.NodeId, suppressedByItemId: root.ItemId, suppressedByItemName: root.Name)
+            ],
+            MarketAnalysisCandidates: [CreateDemandRow(RecipeDemandViewKind.MarketAnalysisCandidate, material, quantity: 11)],
+            ActiveProcurementDemand: [CreateDemandRow(RecipeDemandViewKind.ActiveProcurement, material, quantity: 7)],
+            SuppressedDemand: [CreateDemandRow(RecipeDemandViewKind.Suppressed, material, quantity: 5, suppressedByNodeId: root.NodeId, suppressedByItemId: root.ItemId, suppressedByItemName: root.Name)]);
+
+        var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
+            plan,
+            shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
+            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            AcquisitionFilter.All,
+            projection);
+
+        var row = snapshot.Rows.Single(row => row.Node.ItemId == 200);
+
+        Assert.Equal(12, row.TotalQuantity);
+        Assert.Equal(7, row.ActiveQuantity);
+        Assert.True(row.IsActiveProcurement);
+        Assert.True(row.HasSuppressedOccurrences);
+        Assert.False(row.IsFullySuppressed);
+        Assert.Equal(["Final Craft"], row.SuppressedBy);
+        Assert.Equal("Final Craft x12", row.UsedIn);
+        Assert.Equal(11, snapshot.MarketAnalysisCandidates.Single(item => item.ItemId == 200).TotalQuantity);
+        Assert.Equal(7, snapshot.ActiveProcurementItems.Single(item => item.ItemId == 200).TotalQuantity);
+    }
+
+    [Fact]
+    public void Build_UsesRecipeDemandProjectionMembershipForDecisionRoles()
+    {
+        var root = CreateRoot(100, "Final Craft");
+        var material = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Projected Material",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 10,
+            Parent = root
+        };
+        root.Children.Add(material);
+        var plan = new CraftingPlan { RootItems = [root] };
+        var projection = new RecipeDemandProjection(
+            AllPlanDemand:
+            [
+                CreateDemandRow(RecipeDemandViewKind.PlanOccurrence, material, quantity: 2)
+            ],
+            MarketAnalysisCandidates: Array.Empty<RecipeDemandRow>(),
+            ActiveProcurementDemand: Array.Empty<RecipeDemandRow>(),
+            SuppressedDemand: Array.Empty<RecipeDemandRow>());
+
+        var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
+            plan,
+            shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
+            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            AcquisitionFilter.All,
+            projection);
+
+        var row = snapshot.Rows.Single(row => row.Node.ItemId == 200);
+
+        Assert.False(row.IsActiveProcurement);
+        Assert.False(row.IsMarketCandidate);
+        Assert.Empty(snapshot.MarketAnalysisCandidates);
+        Assert.Empty(snapshot.ActiveProcurementItems);
+        Assert.Empty(AcquisitionEvaluationSnapshotBuilder.ApplyFilter(snapshot.Rows, AcquisitionFilter.Active));
+        Assert.Empty(AcquisitionEvaluationSnapshotBuilder.ApplyFilter(snapshot.Rows, AcquisitionFilter.Market));
+    }
+
     private static CraftingPlan CreatePlan()
     {
         var root = CreateRoot(100, "Final Craft");
@@ -153,5 +241,39 @@ public class AcquisitionEvaluationSnapshotBuilderTests
             Parent = shared
         });
         return shared;
+    }
+
+    private static RecipeDemandRow CreateDemandRow(
+        RecipeDemandViewKind viewKind,
+        PlanNode node,
+        int quantity,
+        string? suppressedByNodeId = null,
+        int? suppressedByItemId = null,
+        string? suppressedByItemName = null)
+    {
+        return new RecipeDemandRow(
+            viewKind,
+            node.NodeId,
+            node.ItemId,
+            node.Name,
+            node.IconId,
+            quantity,
+            RecipeDemandQuantityBasis.PlanNodeQuantity,
+            node.MustBeHq,
+            node.Source,
+            node.SourceReason,
+            node.Children.Count > 0,
+            node.CanBuyFromMarket,
+            node.CanBuyFromVendor,
+            node.MarketPrice,
+            node.Parent?.NodeId,
+            node.Parent?.Name,
+            null,
+            null,
+            null,
+            null,
+            suppressedByNodeId,
+            suppressedByItemId,
+            suppressedByItemName);
     }
 }

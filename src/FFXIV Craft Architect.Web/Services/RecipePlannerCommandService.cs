@@ -1,5 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -107,17 +108,20 @@ public sealed class RecipePlannerCommandService
     private readonly IRecipePlanBuilder _recipePlanBuilder;
     private readonly IMarketCacheService _marketCache;
     private readonly CancellableOperationService _cancellableOperations;
+    private readonly IRecipeDemandProjectionService _demandProjectionService;
 
     public RecipePlannerCommandService(
         AppState appState,
         IRecipePlanBuilder recipePlanBuilder,
         IMarketCacheService marketCache,
-        CancellableOperationService cancellableOperations)
+        CancellableOperationService cancellableOperations,
+        IRecipeDemandProjectionService? demandProjectionService = null)
     {
         _appState = appState;
         _recipePlanBuilder = recipePlanBuilder;
         _marketCache = marketCache;
         _cancellableOperations = cancellableOperations;
+        _demandProjectionService = demandProjectionService ?? new RecipeDemandProjectionService();
     }
 
     public async Task<BuildRecipePlanResult> BuildPlanAsync(
@@ -200,7 +204,7 @@ public sealed class RecipePlannerCommandService
                     _appState.NotifyPlanChanged();
                 }
 
-                _appState.ReplaceShoppingItemsFromActivePlan();
+                _appState.ReplaceShoppingItemsFromActivePlan(GetActiveProcurementItems(builtPlan));
             }
 
             if (priceRefresh.HasUnavailableItems)
@@ -512,7 +516,7 @@ public sealed class RecipePlannerCommandService
         using (_appState.BeginStateChangeBatch())
         {
             AcquisitionPlanningService.ReconcileAcquisitionDecisions(_appState.CurrentPlan, _appState.ShoppingPlans);
-            _appState.ReplaceShoppingItemsFromActivePlan();
+            _appState.ReplaceShoppingItemsFromActivePlan(GetActiveProcurementItems(_appState.CurrentPlan));
             _appState.ClearProcurementOverlay();
             _appState.NotifyPlanDecisionChanged();
         }
@@ -520,6 +524,13 @@ public sealed class RecipePlannerCommandService
         return new ApplyPlanEditorEditResult(
             editResult,
             $"Updated {editResult.ChangedNodes} node{(editResult.ChangedNodes == 1 ? "" : "s")}; skipped {editResult.SkippedNodes}.");
+    }
+
+    private IReadOnlyList<MaterialAggregate> GetActiveProcurementItems(CraftingPlan? plan)
+    {
+        return _demandProjectionService
+            .Build(plan, snapshot: null)
+            .ToActiveProcurementMaterialAggregates();
     }
 
     private static void UpdateNodePrices(PlanNode node, IReadOnlyDictionary<int, CachedMarketData> marketEntries)

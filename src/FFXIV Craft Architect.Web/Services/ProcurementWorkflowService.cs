@@ -11,19 +11,22 @@ public sealed class ProcurementWorkflowService
     private readonly IMarketAnalysisExecutionService _marketAnalysisExecutionService;
     private readonly MarketShoppingService _marketShoppingService;
     private readonly WebPlanPersistenceService _planPersistence;
+    private readonly IRecipeDemandProjectionService _demandProjectionService;
 
     public ProcurementWorkflowService(
         AppState appState,
         IProcurementRouteExecutionService procurementRouteExecutionService,
         IMarketAnalysisExecutionService marketAnalysisExecutionService,
         MarketShoppingService marketShoppingService,
-        WebPlanPersistenceService planPersistence)
+        WebPlanPersistenceService planPersistence,
+        IRecipeDemandProjectionService demandProjectionService)
     {
         _appState = appState;
         _procurementRouteExecutionService = procurementRouteExecutionService;
         _marketAnalysisExecutionService = marketAnalysisExecutionService;
         _marketShoppingService = marketShoppingService;
         _planPersistence = planPersistence;
+        _demandProjectionService = demandProjectionService;
     }
 
     public async Task<ProcurementWorkflowResult> RunAnalysisAsync(
@@ -38,7 +41,8 @@ public sealed class ProcurementWorkflowService
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.NoPlan);
         }
 
-        var activeItems = AcquisitionPlanningService.GetActiveProcurementItems(plan)
+        var demandProjection = _demandProjectionService.Build(plan, snapshot: null);
+        var activeItems = demandProjection.ToActiveProcurementMaterialAggregates()
             .Where(item => item.TotalQuantity > 0)
             .ToList();
         if (activeItems.Count == 0)
@@ -71,6 +75,7 @@ public sealed class ProcurementWorkflowService
             new ProcurementRouteExecutionRequest
             {
                 Plan = plan,
+                ActiveProcurementItems = activeItems,
                 SourceShoppingPlans = _appState.ShoppingPlans,
                 Scope = scope,
                 SelectedDataCenter = _appState.SelectedDataCenter,
@@ -127,7 +132,9 @@ public sealed class ProcurementWorkflowService
             return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.NoPlan);
         }
 
-        var candidate = AcquisitionPlanningService.GetMarketAnalysisCandidates(plan)
+        var candidate = _demandProjectionService
+            .Build(plan, snapshot: null)
+            .ToMarketAnalysisMaterialAggregates()
             .FirstOrDefault(item => item.ItemId == request.ItemId);
         if (candidate == null)
         {

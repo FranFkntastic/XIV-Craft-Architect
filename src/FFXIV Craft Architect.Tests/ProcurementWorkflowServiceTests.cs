@@ -188,6 +188,81 @@ public class ProcurementWorkflowServiceTests
     }
 
     [Fact]
+    public async Task RunAnalysisAsync_UsesRecipeDemandProjectionForActiveItemGate()
+    {
+        var appState = CreateAppState();
+        var execution = new Mock<IProcurementRouteExecutionService>();
+        var service = CreateService(
+            appState,
+            procurementExecution: execution.Object,
+            demandProjectionService: new StubRecipeDemandProjectionService(CreateProjection(
+                marketCandidates: [],
+                activeProcurement: [])));
+
+        var result = await service.RunAnalysisAsync(
+            new ProcurementWorkflowRequest(() => true, MarketAnalysisExecutionOptions.Synchronous));
+
+        Assert.Equal(ProcurementWorkflowStatus.NoActiveProcurementItems, result.Status);
+        execution.Verify(e => e.AnalyzeAsync(
+            It.IsAny<ProcurementRouteExecutionRequest>(),
+            It.IsAny<IProgress<string>?>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<MarketAnalysisExecutionOptions?>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RefreshItemMarketDataAsync_UsesRecipeDemandProjectionForCandidateLookup()
+    {
+        var appState = CreateAppState();
+        var marketExecution = new Mock<IMarketAnalysisExecutionService>();
+        marketExecution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(new MarketAnalysisExecutionResult(
+                new MarketEvidenceSet(
+                    new Dictionary<(int itemId, string dataCenter), CachedMarketData>(),
+                    [(909, "Aether")],
+                    MarketFetchScope.SelectedDataCenter,
+                    ["Aether"],
+                    "Aether",
+                    "North America",
+                    TimeSpan.Zero,
+                    fetchedCount: 1,
+                    DateTime.UtcNow),
+                [new MarketItemAnalysis { ItemId = 909, Name = "Projected Item", QuantityNeeded = 4 }],
+                [ShoppingPlan(909)]));
+        var service = CreateService(
+            appState,
+            marketExecution: marketExecution.Object,
+            demandProjectionService: new StubRecipeDemandProjectionService(CreateProjection(
+                marketCandidates:
+                [
+                    CreateDemandRow(909, "Projected Item", quantity: 4, RecipeDemandViewKind.MarketAnalysisCandidate)
+                ],
+                activeProcurement: [])));
+
+        var result = await service.RefreshItemMarketDataAsync(
+            new ProcurementItemRefreshWorkflowRequest(
+                ItemId: 909,
+                ItemName: "Projected Item",
+                IsCurrentOperation: () => true,
+                ExecutionOptions: MarketAnalysisExecutionOptions.Synchronous));
+
+        Assert.Equal(ProcurementItemRefreshStatus.Refreshed, result.Status);
+        marketExecution.Verify(e => e.ExecuteAsync(
+            It.Is<MarketAnalysisExecutionRequest>(request =>
+                request.Items.Count == 1 &&
+                request.Items[0].ItemId == 909 &&
+                request.Items[0].TotalQuantity == 4),
+            It.IsAny<IProgress<string>?>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<MarketAnalysisExecutionOptions?>()));
+    }
+
+    [Fact]
     public async Task RunAnalysisAsync_WhenProcurementSettingsChange_DoesNotPublish()
     {
         var appState = CreateAppState();
@@ -472,7 +547,8 @@ public class ProcurementWorkflowServiceTests
         AppState appState,
         IProcurementRouteExecutionService? procurementExecution = null,
         IMarketAnalysisExecutionService? marketExecution = null,
-        RecordingJsRuntime? jsRuntime = null)
+        RecordingJsRuntime? jsRuntime = null,
+        IRecipeDemandProjectionService? demandProjectionService = null)
     {
         jsRuntime ??= new RecordingJsRuntime();
         var indexedDb = new IndexedDbService(jsRuntime);
@@ -486,7 +562,8 @@ public class ProcurementWorkflowServiceTests
             procurementExecution ?? Mock.Of<IProcurementRouteExecutionService>(),
             marketExecution ?? Mock.Of<IMarketAnalysisExecutionService>(),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
-            persistence);
+            persistence,
+            demandProjectionService ?? new RecipeDemandProjectionService());
     }
 
     private static AppState CreateAppState(params int[] itemIds)
@@ -634,6 +711,64 @@ public class ProcurementWorkflowServiceTests
         ProcurementWorkflowStatus Status,
         int ShoppingPlanCount,
         IReadOnlyList<DetailedShoppingPlan> Output);
+
+    private static RecipeDemandProjection CreateProjection(
+        IReadOnlyList<RecipeDemandRow> marketCandidates,
+        IReadOnlyList<RecipeDemandRow> activeProcurement)
+    {
+        return new RecipeDemandProjection(
+            AllPlanDemand: Array.Empty<RecipeDemandRow>(),
+            MarketAnalysisCandidates: marketCandidates,
+            ActiveProcurementDemand: activeProcurement,
+            SuppressedDemand: Array.Empty<RecipeDemandRow>());
+    }
+
+    private static RecipeDemandRow CreateDemandRow(
+        int itemId,
+        string itemName,
+        int quantity,
+        RecipeDemandViewKind viewKind)
+    {
+        return new RecipeDemandRow(
+            viewKind,
+            $"node-{itemId}",
+            itemId,
+            itemName,
+            0,
+            quantity,
+            RecipeDemandQuantityBasis.PlanNodeQuantity,
+            false,
+            AcquisitionSource.MarketBuyNq,
+            AcquisitionSourceReason.SystemDefault,
+            false,
+            true,
+            false,
+            0,
+            null,
+            "Direct",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
+    }
+
+    private sealed class StubRecipeDemandProjectionService : IRecipeDemandProjectionService
+    {
+        private readonly RecipeDemandProjection _projection;
+
+        public StubRecipeDemandProjectionService(RecipeDemandProjection projection)
+        {
+            _projection = projection;
+        }
+
+        public RecipeDemandProjection Build(CraftingPlan? plan, RecipeOperationSnapshot? snapshot)
+        {
+            return _projection;
+        }
+    }
 
     private static MarketEvidenceSet CreateEmptyEvidence()
     {

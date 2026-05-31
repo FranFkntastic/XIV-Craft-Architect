@@ -103,6 +103,61 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void GetProcurementEvidenceSummary_WithExplicitDemandViews_UsesProvidedDemand()
+    {
+        var activeItems = new List<MaterialAggregate>
+        {
+            new()
+            {
+                ItemId = 202,
+                Name = "Active Item",
+                TotalQuantity = 5
+            }
+        };
+        var marketCandidates = new List<MaterialAggregate>
+        {
+            new()
+            {
+                ItemId = 202,
+                Name = "Active Item",
+                TotalQuantity = 5
+            },
+            new()
+            {
+                ItemId = 303,
+                Name = "Suppressed Item",
+                TotalQuantity = 2
+            }
+        };
+        var shoppingPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 202,
+                Name = "Active Item",
+                QuantityNeeded = 5,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalQuantityPurchased = 5
+                }
+            }
+        };
+
+        var summary = AcquisitionPlanningService.GetProcurementEvidenceSummary(
+            activeItems,
+            marketCandidates,
+            shoppingPlans);
+
+        Assert.Equal(1, summary.ActiveProcurementItemCount);
+        Assert.Equal(1, summary.AnalyzedCandidateCount);
+        Assert.Equal(1, summary.ActiveItemsWithEvidence);
+        Assert.Equal(0, summary.ActiveItemsMissingEvidence);
+        Assert.Equal(1, summary.SuppressedMarketCandidateCount);
+        Assert.True(summary.HasCompleteActiveEvidence);
+    }
+
+    [Fact]
     public void GetProcurementEvidenceSummary_TreatsErroredPlanAsMissingEvidence()
     {
         var plan = CreatePlanWithBoughtIntermediate();

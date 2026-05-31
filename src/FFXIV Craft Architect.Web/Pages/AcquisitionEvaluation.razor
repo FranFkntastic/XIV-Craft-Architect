@@ -2,11 +2,13 @@
 @using FFXIV_Craft_Architect.Core.Helpers
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
 @inject WebPlanPersistenceService PlanPersistence
 @inject MarketShoppingService MarketShoppingService
 @inject AcquisitionDecisionService AcquisitionDecisionService
+@inject IRecipeDemandProjectionService RecipeDemandProjectionService
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
 @inject ILogger<AcquisitionEvaluation> Logger
@@ -236,7 +238,9 @@
 
     private void PopulateShoppingListFromPlan()
     {
-        AppState.ReplaceShoppingItemsFromActivePlan();
+        AppState.ReplaceShoppingItemsFromActivePlan(RecipeDemandProjectionService
+            .Build(AppState.CurrentPlan, snapshot: null)
+            .ToActiveProcurementMaterialAggregates());
     }
 
     private DetailedShoppingPlan? GetMarketPlan(PlanNode? node)
@@ -311,7 +315,8 @@
                 AppState.CurrentPlan,
                 AppState.ShoppingPlans,
                 AppState.UnavailableMarketItems,
-                _filter));
+                _filter,
+                RecipeDemandProjectionService.Build(AppState.CurrentPlan, snapshot: null)));
         EnsureSelectedNodeFromSnapshot();
         elapsed.Stop();
 

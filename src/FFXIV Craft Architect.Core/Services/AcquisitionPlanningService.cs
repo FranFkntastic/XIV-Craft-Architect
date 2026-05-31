@@ -79,6 +79,35 @@ public static class AcquisitionPlanningService
             suppressedCandidateCount);
     }
 
+    public static ProcurementEvidenceSummary GetProcurementEvidenceSummary(
+        IReadOnlyList<MaterialAggregate> activeItems,
+        IReadOnlyList<MaterialAggregate> marketCandidates,
+        IEnumerable<DetailedShoppingPlan> shoppingPlans)
+    {
+        var activeItemsWithQuantity = activeItems
+            .Where(item => item.TotalQuantity > 0)
+            .ToList();
+        var activeItemIds = activeItemsWithQuantity
+            .Select(item => item.ItemId)
+            .ToHashSet();
+        var planByItemId = shoppingPlans
+            .GroupBy(shoppingPlan => shoppingPlan.ItemId)
+            .ToDictionary(group => group.Key, group => group.First());
+        var activeWithEvidence = activeItemIds.Count(itemId =>
+            planByItemId.TryGetValue(itemId, out var shoppingPlan) && HasUsableEvidence(shoppingPlan));
+        var candidateItemIds = marketCandidates
+            .Select(item => item.ItemId)
+            .ToHashSet();
+        var suppressedCandidateCount = candidateItemIds.Count(itemId => !activeItemIds.Contains(itemId));
+
+        return new ProcurementEvidenceSummary(
+            activeItemsWithQuantity.Count,
+            planByItemId.Count,
+            activeWithEvidence,
+            activeItemsWithQuantity.Count - activeWithEvidence,
+            suppressedCandidateCount);
+    }
+
     public static bool HasCompleteProcurementEvidence(
         CraftingPlan? plan,
         IEnumerable<DetailedShoppingPlan> shoppingPlans)
@@ -578,7 +607,7 @@ public static class AcquisitionPlanningService
              shoppingPlan.Vendors.Any());
     }
 
-    private static bool HasUsableEvidenceForScope(
+    internal static bool HasUsableEvidenceForScope(
         DetailedShoppingPlan shoppingPlan,
         MarketFetchScope requiredScope,
         string selectedDataCenter)

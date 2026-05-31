@@ -154,6 +154,11 @@ public partial class App : Application
         services.AddSingleton<CoreIPlanPersistenceService>(sp => sp.GetRequiredService<CorePlanPersistenceService>());
         services.AddSingleton<TeamcraftService>();
         services.AddSingleton<ITeamcraftService>(sp => sp.GetRequiredService<TeamcraftService>());
+        services.AddSingleton<IRecipeResolutionService, RecipeResolutionService>();
+        services.AddSingleton<IRecipeOperationSnapshotService, RecipeOperationSnapshotService>();
+        services.AddSingleton<IRecipeOperationSnapshotLifecycleService, RecipeOperationSnapshotLifecycleService>();
+        services.AddSingleton<IRecipeDemandProjectionService, RecipeDemandProjectionService>();
+        services.AddSingleton<IRecipeDemandProjectionParityService, RecipeDemandProjectionParityService>();
         services.AddSingleton<ArtisanService>();
         services.AddSingleton<IArtisanService>(sp => sp.GetRequiredService<ArtisanService>());
         services.AddSingleton<PriceCheckService>();

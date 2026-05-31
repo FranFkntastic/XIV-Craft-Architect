@@ -46,6 +46,66 @@ public class ProcurementRouteExecutionServiceTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_UsesRequestActiveProcurementItemsForEvidenceSelection()
+    {
+        var plan = new CraftingPlan
+        {
+            RootItems =
+            [
+                new PlanNode
+                {
+                    ItemId = 101,
+                    Name = "Plan Item",
+                    Quantity = 5,
+                    Source = AcquisitionSource.MarketBuyNq,
+                    CanBuyFromMarket = true
+                }
+            ]
+        };
+        var sourcePlans = new[]
+        {
+            ShoppingPlan(
+                101,
+                "Plan Item",
+                World("Aether", "Siren", 500, 5)),
+            ShoppingPlan(
+                202,
+                "Projected Active Item",
+                World("Aether", "Faerie", 700, 5))
+        };
+        var marketExecution = new Mock<IMarketAnalysisExecutionService>(MockBehavior.Strict);
+        var service = new ProcurementRouteExecutionService(
+            marketExecution.Object,
+            new MarketShoppingService(Mock.Of<IMarketCacheService>()));
+
+        var result = await service.AnalyzeAsync(
+            new ProcurementRouteExecutionRequest
+            {
+                Plan = plan,
+                ActiveProcurementItems =
+                [
+                    new MaterialAggregate
+                    {
+                        ItemId = 202,
+                        Name = "Projected Active Item",
+                        TotalQuantity = 5
+                    }
+                ],
+                SourceShoppingPlans = sourcePlans,
+                Scope = MarketFetchScope.SelectedDataCenter,
+                SelectedDataCenter = "Aether",
+                SelectedRegion = "North America",
+                Lens = MarketAcquisitionLens.MinimumUpfrontCost,
+                ProcurementConfig = new MarketAnalysisConfig { TravelTolerance = 0 }
+            },
+            executionOptions: MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.Empty(result.MissingItems);
+        Assert.Equal([202], result.EvidencePlans.Select(plan => plan.ItemId));
+        Assert.Equal([202], result.ShoppingPlans.Select(plan => plan.ItemId));
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_FetchesOnlyMissingActiveEvidenceAndFiltersSelectedDataCenter()
     {
         var plan = CreatePlan();

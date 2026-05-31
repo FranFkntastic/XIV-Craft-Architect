@@ -374,9 +374,9 @@ public class AppState
         NotifyProcurementOverlayChanged();
     }
 
-    public void ReplaceShoppingItemsFromActivePlan()
+    public void ReplaceShoppingItemsFromActivePlan(IReadOnlyList<MaterialAggregate>? activeProcurementItems = null)
     {
-        ReplaceListContents(_shoppingItems, AcquisitionPlanningService.GetActiveProcurementItems(CurrentPlan)
+        ReplaceListContents(_shoppingItems, (activeProcurementItems ?? AcquisitionPlanningService.GetActiveProcurementItems(CurrentPlan))
             .Where(item => item.TotalQuantity > 0)
             .Select(item => new MarketShoppingItem
             {

@@ -10,17 +10,19 @@ public static class AcquisitionEvaluationSnapshotBuilder
         CraftingPlan? plan,
         IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
         IReadOnlyList<MarketDataUnavailableItem> unavailableMarketItems,
-        AcquisitionFilter filter)
+        AcquisitionFilter filter,
+        RecipeDemandProjection? demandProjection = null)
     {
         var costContext = AcquisitionPlanningService.CreateCostContext(shoppingPlans);
-        var marketCandidates = AcquisitionPlanningService.GetMarketAnalysisCandidates(plan);
-        var activeProcurementItems = AcquisitionPlanningService.GetActiveProcurementItems(plan)
+        var projection = demandProjection ?? new RecipeDemandProjectionService().Build(plan, snapshot: null);
+        var marketCandidates = projection.ToMarketAnalysisMaterialAggregates().ToList();
+        var activeProcurementItems = projection.ToActiveProcurementMaterialAggregates()
             .Where(item => item.TotalQuantity > 0)
             .ToList();
         var unavailableMarketItemIds = unavailableMarketItems
             .Select(item => item.ItemId)
             .ToHashSet();
-        var rows = BuildRows(plan, costContext, unavailableMarketItemIds);
+        var rows = BuildRows(plan, projection, costContext, unavailableMarketItemIds);
         var visibleRows = ApplyFilter(rows, filter).ToList();
 
         return new AcquisitionEvaluationSnapshot(
@@ -33,6 +35,7 @@ public static class AcquisitionEvaluationSnapshotBuilder
 
     private static List<DecisionRow> BuildRows(
         CraftingPlan? plan,
+        RecipeDemandProjection demandProjection,
         AcquisitionCostContext costContext,
         IReadOnlySet<int> unavailableMarketItemIds)
     {
@@ -41,10 +44,42 @@ public static class AcquisitionEvaluationSnapshotBuilder
             return new List<DecisionRow>();
         }
 
+        var nodesByNodeId = BuildNodeIndex(plan);
+        var activeNodeIds = demandProjection.ActiveProcurementDemand
+            .Select(row => row.NodeId)
+            .ToHashSet(StringComparer.Ordinal);
+        var marketCandidateItemIds = demandProjection.MarketAnalysisCandidates
+            .Select(row => row.ItemId)
+            .ToHashSet();
         var rowsByItemId = new Dictionary<int, DecisionAggregate>();
-        foreach (var root in plan.RootItems)
+        foreach (var demandRow in demandProjection.AllPlanDemand)
         {
-            AddDecisionRows(root, suppressedBy: null, rowsByItemId);
+            if (!nodesByNodeId.TryGetValue(demandRow.NodeId, out var node))
+            {
+                continue;
+            }
+
+            var isSuppressed = demandRow.SuppressedByItemId.HasValue;
+            var isActiveProcurement = !isSuppressed && activeNodeIds.Contains(demandRow.NodeId);
+
+            if (!rowsByItemId.TryGetValue(demandRow.ItemId, out var aggregate))
+            {
+                aggregate = new DecisionAggregate(node, marketCandidateItemIds.Contains(demandRow.ItemId));
+                rowsByItemId[demandRow.ItemId] = aggregate;
+            }
+
+            aggregate.Occurrences.Add(new DecisionOccurrence(
+                node,
+                demandRow.ParentItemName ?? "Project item",
+                demandRow.Quantity,
+                isSuppressed,
+                demandRow.SuppressedByItemName,
+                isActiveProcurement));
+        }
+
+        if (rowsByItemId.Count == 0)
+        {
+            return new List<DecisionRow>();
         }
 
         return rowsByItemId.Values
@@ -53,35 +88,24 @@ public static class AcquisitionEvaluationSnapshotBuilder
             .ToList();
     }
 
-    private static void AddDecisionRows(PlanNode node, string? suppressedBy, Dictionary<int, DecisionAggregate> rowsByItemId)
+    private static Dictionary<string, PlanNode> BuildNodeIndex(CraftingPlan plan)
     {
-        var isSuppressed = !string.IsNullOrEmpty(suppressedBy);
-        var isDirectSource = node.Source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq or AcquisitionSource.VendorBuy or AcquisitionSource.UnknownSource;
-        var isActiveProcurement = !isSuppressed && (isDirectSource || !node.Children.Any());
-
-        if (!rowsByItemId.TryGetValue(node.ItemId, out var aggregate))
+        var nodesByNodeId = new Dictionary<string, PlanNode>();
+        foreach (var root in plan.RootItems)
         {
-            aggregate = new DecisionAggregate(node);
-            rowsByItemId[node.ItemId] = aggregate;
+            CollectNode(root, nodesByNodeId);
         }
 
-        aggregate.Occurrences.Add(new DecisionOccurrence(
-            node,
-            node.Parent?.Name ?? "Project item",
-            node.Quantity,
-            isSuppressed,
-            suppressedBy,
-            isActiveProcurement));
+        return nodesByNodeId;
+    }
 
-        var childSuppression = isSuppressed
-            ? suppressedBy
-            : isDirectSource
-                ? node.Name
-                : null;
+    private static void CollectNode(PlanNode node, Dictionary<string, PlanNode> nodesByNodeId)
+    {
+        nodesByNodeId[node.NodeId] = node;
 
         foreach (var child in node.Children)
         {
-            AddDecisionRows(child, childSuppression, rowsByItemId);
+            CollectNode(child, nodesByNodeId);
         }
     }
 
@@ -126,7 +150,7 @@ public static class AcquisitionEvaluationSnapshotBuilder
             suppressedBy,
             aggregate.Occurrences.Any(occurrence => occurrence.IsActiveProcurement),
             aggregate.Occurrences.Any(occurrence => !occurrence.IsSuppressed),
-            node.CanBuyFromMarket,
+            aggregate.IsMarketCandidate,
             GetMarketEvidence(node.ItemId, marketPlan, unavailableMarketItemIds),
             GetEstimatedCost(aggregate.Occurrences, costContext));
     }
@@ -203,12 +227,14 @@ public sealed record AcquisitionEvaluationSnapshot(
 
 internal sealed class DecisionAggregate
 {
-    public DecisionAggregate(PlanNode primaryNode)
+    public DecisionAggregate(PlanNode primaryNode, bool isMarketCandidate)
     {
         PrimaryNode = primaryNode;
+        IsMarketCandidate = isMarketCandidate;
     }
 
     public PlanNode PrimaryNode { get; }
+    public bool IsMarketCandidate { get; }
     public List<DecisionOccurrence> Occurrences { get; } = new();
 }
 

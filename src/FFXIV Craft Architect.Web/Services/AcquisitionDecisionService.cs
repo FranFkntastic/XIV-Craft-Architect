@@ -1,15 +1,20 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed class AcquisitionDecisionService
 {
     private readonly AppState _appState;
+    private readonly IRecipeDemandProjectionService _demandProjectionService;
 
-    public AcquisitionDecisionService(AppState appState)
+    public AcquisitionDecisionService(
+        AppState appState,
+        IRecipeDemandProjectionService? demandProjectionService = null)
     {
         _appState = appState;
+        _demandProjectionService = demandProjectionService ?? new RecipeDemandProjectionService();
     }
 
     public AcquisitionDecisionResult ChangeSource(PlanNode node, AcquisitionSource source)
@@ -105,10 +110,17 @@ public sealed class AcquisitionDecisionService
 
         var costContext = AcquisitionPlanningService.CreateCostContext(_appState.ShoppingPlans);
         AcquisitionPlanningService.ReconcileAcquisitionDecisions(_appState.CurrentPlan, costContext);
-        _appState.ReplaceShoppingItemsFromActivePlan();
+        _appState.ReplaceShoppingItemsFromActivePlan(GetActiveProcurementItems());
         _appState.ClearProcurementOverlay();
         _appState.NotifyPlanDecisionChanged();
         ClearStaleProcurementStatus();
+    }
+
+    private IReadOnlyList<MaterialAggregate> GetActiveProcurementItems()
+    {
+        return _demandProjectionService
+            .Build(_appState.CurrentPlan, snapshot: null)
+            .ToActiveProcurementMaterialAggregates();
     }
 
     private void ClearStaleProcurementStatus()
