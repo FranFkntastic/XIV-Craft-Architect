@@ -20,6 +20,7 @@ public sealed class MarketAnalysisWorkflowService
     private readonly IMarketPriceLadderAnalysisService _marketPriceLadderAnalysis;
     private readonly WebPlanPersistenceService _planPersistence;
     private readonly IndexedDbService _indexedDb;
+    private readonly IRecipeDemandProjectionService _demandProjectionService;
 
     public MarketAnalysisWorkflowService(
         AppState appState,
@@ -27,7 +28,8 @@ public sealed class MarketAnalysisWorkflowService
         MarketShoppingService marketShoppingService,
         IMarketPriceLadderAnalysisService marketPriceLadderAnalysis,
         WebPlanPersistenceService planPersistence,
-        IndexedDbService indexedDb)
+        IndexedDbService indexedDb,
+        IRecipeDemandProjectionService demandProjectionService)
     {
         _appState = appState;
         _marketAnalysisExecution = marketAnalysisExecution;
@@ -35,6 +37,7 @@ public sealed class MarketAnalysisWorkflowService
         _marketPriceLadderAnalysis = marketPriceLadderAnalysis;
         _planPersistence = planPersistence;
         _indexedDb = indexedDb;
+        _demandProjectionService = demandProjectionService;
     }
 
     public async Task<MarketAnalysisWorkflowResult> RunAnalysisAsync(
@@ -46,7 +49,10 @@ public sealed class MarketAnalysisWorkflowService
         var plan = _appState.CurrentPlan;
         var planSessionVersion = _appState.PlanSessionVersion;
         var planId = _appState.CurrentPlanId;
-        var materials = AcquisitionPlanningService.GetMarketAnalysisCandidates(plan);
+        var materials = _demandProjectionService
+            .Build(plan, snapshot: null)
+            .ToMarketAnalysisMaterialAggregates()
+            .ToList();
         if (plan == null || materials.Count == 0 || string.IsNullOrWhiteSpace(_appState.SelectedDataCenter))
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, 0);
@@ -176,7 +182,9 @@ public sealed class MarketAnalysisWorkflowService
             _appState.ReplaceMarketAnalysis(analysisList, shoppingPlans);
             if (changedDecisions > 0)
             {
-                _appState.ReplaceShoppingItemsFromActivePlan();
+                _appState.ReplaceShoppingItemsFromActivePlan(_demandProjectionService
+                    .Build(plan, snapshot: null)
+                    .ToActiveProcurementMaterialAggregates());
                 _appState.NotifyPlanDecisionChanged();
             }
             else

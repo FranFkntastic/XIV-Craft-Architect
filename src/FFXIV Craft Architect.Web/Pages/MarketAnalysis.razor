@@ -1,6 +1,6 @@
 @page "/market"
 @using FFXIV_Craft_Architect.Core.Models
-@using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
 @using static FFXIV_Craft_Architect.Core.Models.MarketSortOption
 @inject RecipePlannerCommandService RecipePlannerCommandService
@@ -9,6 +9,7 @@
 @inject AppState AppState
 @inject NavigationManager NavigationManager
 @inject CancellableOperationService CancellableOperations
+@inject IRecipeDemandProjectionService RecipeDemandProjectionService
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 ma-page-container">
@@ -86,7 +87,10 @@
     /// </summary>
     private List<MaterialAggregate> GetBuyItems()
     {
-        return AcquisitionPlanningService.GetMarketAnalysisCandidates(AppState.CurrentPlan);
+        return RecipeDemandProjectionService
+            .Build(AppState.CurrentPlan, snapshot: null)
+            .ToMarketAnalysisMaterialAggregates()
+            .ToList();
     }
 
     private bool CanAnalyze()

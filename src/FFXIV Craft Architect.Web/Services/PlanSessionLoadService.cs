@@ -128,7 +128,9 @@ public sealed class PlanSessionLoadService
         }
 
         var candidates = plan != null
-            ? AcquisitionPlanningService.GetMarketAnalysisCandidates(plan)
+            ? new RecipeDemandProjectionService()
+                .Build(plan, snapshot: null)
+                .ToMarketAnalysisMaterialAggregates()
             : projectItems
                 .Where(item => item.Quantity > 0)
                 .Select(item => new MaterialAggregate

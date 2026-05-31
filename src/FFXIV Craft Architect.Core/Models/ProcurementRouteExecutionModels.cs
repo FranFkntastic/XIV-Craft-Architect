@@ -6,6 +6,8 @@ public sealed class ProcurementRouteExecutionRequest
 {
     public CraftingPlan? Plan { get; init; }
 
+    public IReadOnlyList<MaterialAggregate> ActiveProcurementItems { get; init; } = Array.Empty<MaterialAggregate>();
+
     public IReadOnlyList<DetailedShoppingPlan> SourceShoppingPlans { get; init; } = Array.Empty<DetailedShoppingPlan>();
 
     public MarketFetchScope Scope { get; init; } = MarketFetchScope.SelectedDataCenter;
