@@ -31,9 +31,16 @@
             MarketItemAnalyses="AppState.MarketItemAnalyses"
             CurrentLens="AppState.MarketAnalysisLens"
             CurrentSort="AppState.MarketSortPreference"
+            SortColumn="AppState.MarketAnalysisGridSortColumn"
+            SortDescending="AppState.MarketAnalysisGridSortDescending"
+            SelectedItemId="AppState.SelectedMarketAnalysisItemId"
+            ExpandedWorldKeys="AppState.ExpandedMarketAnalysisWorlds"
             AutoExpandItemId="AppState.AutoExpandItemId"
             ShowWorldsColumn="AppState.SearchEntireRegion"
             IsAnalyzing="_isAnalyzing"
+            OnSelectedItemChanged="SelectMarketAnalysisItem"
+            OnWorldExpansionToggled="ToggleMarketAnalysisWorld"
+            OnSortChanged="SetMarketAnalysisSort"
             OnAutoExpandConsumed="ConsumeAutoExpand"
             OnGoToPlannerRequested="GoToPlanner"
             OnRunAnalysisRequested="RunMarketAnalysisAsync" />
@@ -68,6 +75,21 @@
     private void ConsumeAutoExpand(int itemId)
     {
         AppState.ConsumeMarketItemAutoExpand(itemId);
+    }
+
+    private void SelectMarketAnalysisItem(int? itemId)
+    {
+        AppState.SelectMarketAnalysisItem(itemId);
+    }
+
+    private void ToggleMarketAnalysisWorld(MarketAnalysisExpandedWorldKey key)
+    {
+        AppState.ToggleMarketAnalysisWorld(key.ItemId, key.DataCenter, key.WorldName);
+    }
+
+    private void SetMarketAnalysisSort(MarketAnalysisGridSortState sort)
+    {
+        AppState.SetMarketAnalysisGridSort(sort.Column, sort.Descending);
     }
 
     public void Dispose()

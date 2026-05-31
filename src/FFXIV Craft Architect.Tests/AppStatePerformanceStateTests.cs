@@ -177,6 +177,97 @@ public class AppStatePerformanceStateTests
     }
 
     [Fact]
+    public void MarketAnalysisViewStateChanges_EmitViewScopeWithoutDirtyingPersistedBucketsOrCoreVersions()
+    {
+        var appState = new AppState();
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 100, Name = "Market Item" }],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Market Item" }]);
+        appState.MarkPersisted(PersistedStateBucket.All, appState.CurrentVersions);
+        var beforeVersions = appState.CurrentVersions;
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        appState.SelectMarketAnalysisItem(100);
+        appState.ToggleMarketAnalysisWorld(100, "Aether", "Siren");
+        appState.SetMarketAnalysisGridSort(MarketAnalysisGridSortColumn.Total, descending: true);
+
+        Assert.Equal(3, changes.Count);
+        Assert.All(changes, change => Assert.True(change.HasScope(AppStateChangeScope.MarketAnalysisView)));
+        Assert.All(changes, change => Assert.False(change.HasScope(AppStateChangeScope.MarketAnalysis)));
+        Assert.Equal(beforeVersions, appState.CurrentVersions);
+        Assert.Equal(100, appState.SelectedMarketAnalysisItemId);
+        Assert.Contains(new MarketAnalysisExpandedWorldKey(100, "Aether", "Siren"), appState.ExpandedMarketAnalysisWorlds);
+        Assert.Equal(MarketAnalysisGridSortColumn.Total, appState.MarketAnalysisGridSortColumn);
+        Assert.True(appState.MarketAnalysisGridSortDescending);
+        Assert.Equal(PersistedStateBucket.None, appState.GetDirtyPersistedBuckets());
+    }
+
+    [Fact]
+    public void ClearMarketAnalysisState_ClearsMarketAnalysisViewState()
+    {
+        var appState = new AppState();
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 100, Name = "Market Item" }],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Market Item" }]);
+        appState.SelectMarketAnalysisItem(100);
+        appState.ToggleMarketAnalysisWorld(100, "Aether", "Siren");
+        appState.SetMarketAnalysisGridSort(MarketAnalysisGridSortColumn.Total, descending: true);
+
+        appState.ClearMarketAnalysisState();
+
+        Assert.Null(appState.SelectedMarketAnalysisItemId);
+        Assert.Empty(appState.ExpandedMarketAnalysisWorlds);
+        Assert.Null(appState.MarketAnalysisGridSortColumn);
+        Assert.False(appState.MarketAnalysisGridSortDescending);
+    }
+
+    [Fact]
+    public void ReplaceMarketAnalysis_PreservesValidMarketAnalysisViewStateAndPrunesInvalidKeys()
+    {
+        var appState = new AppState();
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 100,
+                    Name = "Keep",
+                    Worlds = [new WorldMarketAnalysis { DataCenter = "Aether", WorldName = "Siren" }]
+                },
+                new MarketItemAnalysis
+                {
+                    ItemId = 200,
+                    Name = "Remove",
+                    Worlds = [new WorldMarketAnalysis { DataCenter = "Aether", WorldName = "Faerie" }]
+                }
+            ],
+            [
+                new DetailedShoppingPlan { ItemId = 100, Name = "Keep" },
+                new DetailedShoppingPlan { ItemId = 200, Name = "Remove" }
+            ]);
+        appState.SelectMarketAnalysisItem(100);
+        appState.ToggleMarketAnalysisWorld(100, "Aether", "Siren");
+        appState.ToggleMarketAnalysisWorld(200, "Aether", "Faerie");
+        appState.SetMarketAnalysisGridSort(MarketAnalysisGridSortColumn.Total, descending: true);
+
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 100,
+                    Name = "Keep Updated",
+                    Worlds = [new WorldMarketAnalysis { DataCenter = "Aether", WorldName = "Siren" }]
+                }
+            ],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Keep Updated" }]);
+
+        Assert.Equal(100, appState.SelectedMarketAnalysisItemId);
+        Assert.Equal([new MarketAnalysisExpandedWorldKey(100, "Aether", "Siren")], appState.ExpandedMarketAnalysisWorlds);
+        Assert.Equal(MarketAnalysisGridSortColumn.Total, appState.MarketAnalysisGridSortColumn);
+        Assert.True(appState.MarketAnalysisGridSortDescending);
+    }
+
+    [Fact]
     public void ReplaceMarketAnalysisItem_ReplacesSingleAnalysisPlanAndClearsProcurementOverlay()
     {
         var appState = new AppState();

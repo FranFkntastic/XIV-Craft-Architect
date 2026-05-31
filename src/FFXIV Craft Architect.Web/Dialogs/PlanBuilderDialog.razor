@@ -148,7 +148,7 @@
 
 @code {
     [CascadingParameter] public MudDialogInstance MudDialog { get; set; } = null!;
-    [Parameter] public List<ProjectItem> InitialItems { get; set; } = new();
+    [Parameter] public IReadOnlyList<ProjectItem> InitialItems { get; set; } = Array.Empty<ProjectItem>();
 
     private readonly HashSet<int> _selectedSearchIds = new();
     private readonly HashSet<int> _selectedTargetIds = new();

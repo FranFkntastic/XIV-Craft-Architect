@@ -47,6 +47,10 @@ public sealed class MarketItemAnalysis
     public int QuantityNeeded { get; init; }
     public MarketFetchScope Scope { get; init; }
     public DateTime LoadedAtUtc { get; init; }
+    public decimal AnalysisScopeBaselineUnitPrice { get; init; }
+    public decimal AnalysisScopeAverageUnitPrice { get; init; }
+    public decimal AnalysisScopeMedianUnitPrice { get; init; }
+    public decimal SaneThresholdUnitPrice { get; init; }
     public IReadOnlyList<string> RequestedDataCenters { get; init; } = [];
     public IReadOnlyList<string> PresentDataCenters { get; init; } = [];
     public IReadOnlyList<string> MissingDataCenters { get; init; } = [];
@@ -62,10 +66,20 @@ public sealed class WorldMarketAnalysis
     public string WorldName { get; init; } = string.Empty;
     public int QuantityNeeded { get; init; }
     public int CompetitiveQuantity { get; init; }
+    public int LocalCompetitiveQuantity { get; init; }
+    public int ScopeCompetitiveQuantity { get; init; }
+    public int ScopeSaneQuantity { get; init; }
+    public int ScopeInsaneQuantity { get; init; }
     public int TotalSaneQuantity { get; init; }
     public int TotalListingQuantity { get; init; }
     public decimal CompetitiveCoverageRatio { get; init; }
+    public decimal ScopeCompetitiveCoverageRatio { get; init; }
+    public decimal ScopeSaneCoverageRatio { get; init; }
     public decimal SaneCoverageRatio { get; init; }
+    public decimal AnalysisScopeBaselineUnitPrice { get; init; }
+    public decimal AnalysisScopeAverageUnitPrice { get; init; }
+    public decimal AnalysisScopeMedianUnitPrice { get; init; }
+    public decimal SaneThresholdUnitPrice { get; init; }
     public MarketCoverageBucket CoverageBucket { get; init; }
     public DateTime? FetchedAtUtc { get; init; }
     public DateTime? MarketUploadedAtUtc { get; init; }

@@ -96,9 +96,11 @@ public class AppState
     private HashSet<string> _temporarilyBlacklistedWorlds = new(StringComparer.OrdinalIgnoreCase);
     private HashSet<MarketWorldKey> _temporarilyBlacklistedMarketWorlds = [];
     private HashSet<MarketItemWorldKey> _temporarilyExcludedItemWorlds = [];
+    private HashSet<MarketAnalysisExpandedWorldKey> _expandedMarketAnalysisWorlds = [];
     private IReadOnlySet<string> _temporarilyBlacklistedWorldsView = new HashSet<string>(StringComparer.OrdinalIgnoreCase).ToFrozenSet(StringComparer.OrdinalIgnoreCase);
     private IReadOnlySet<MarketWorldKey> _temporarilyBlacklistedMarketWorldsView = FrozenSet<MarketWorldKey>.Empty;
     private IReadOnlySet<MarketItemWorldKey> _temporarilyExcludedItemWorldsView = FrozenSet<MarketItemWorldKey>.Empty;
+    private IReadOnlySet<MarketAnalysisExpandedWorldKey> _expandedMarketAnalysisWorldsView = FrozenSet<MarketAnalysisExpandedWorldKey>.Empty;
 
     // Recipe Planner State
     public CraftingPlan? CurrentPlan { get; private set; }
@@ -153,6 +155,10 @@ public class AppState
     
     // Auto-expand item ID when navigating from procurement to market analysis
     public int? AutoExpandItemId { get; private set; }
+    public int? SelectedMarketAnalysisItemId { get; private set; }
+    public IReadOnlySet<MarketAnalysisExpandedWorldKey> ExpandedMarketAnalysisWorlds => _expandedMarketAnalysisWorldsView;
+    public MarketAnalysisGridSortColumn? MarketAnalysisGridSortColumn { get; private set; }
+    public bool MarketAnalysisGridSortDescending { get; private set; }
     
     // Persistence state
     public bool IsAutoSaveEnabled { get; private set; } = true;
@@ -330,6 +336,7 @@ public class AppState
         ReplaceListContents(_marketItemAnalyses, analyses);
         ReplaceListContents(_shoppingPlans, shoppingPlans);
         _procurementShoppingPlans.Clear();
+        PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses);
         using (BeginStateChangeBatch())
         {
             NotifyShoppingListChanged();
@@ -347,6 +354,7 @@ public class AppState
         ReplaceListContents(_marketItemAnalyses, ReplaceAnalysisByItemId(_marketItemAnalyses, analysis));
         ReplaceListContents(_shoppingPlans, ReplaceShoppingPlanByItemId(_shoppingPlans, shoppingPlan));
         _procurementShoppingPlans.Clear();
+        PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses);
         using (BeginStateChangeBatch())
         {
             NotifyShoppingListChanged();
@@ -629,15 +637,101 @@ public class AppState
         return true;
     }
 
+    public void SelectMarketAnalysisItem(int? itemId)
+    {
+        if (SelectedMarketAnalysisItemId == itemId)
+        {
+            return;
+        }
+
+        SelectedMarketAnalysisItemId = itemId;
+        PublishChange(AppStateChangeScope.MarketAnalysisView);
+    }
+
+    public void ToggleMarketAnalysisWorld(int itemId, string dataCenter, string worldName)
+    {
+        var key = new MarketAnalysisExpandedWorldKey(itemId, dataCenter, worldName);
+        if (!_expandedMarketAnalysisWorlds.Add(key))
+        {
+            _expandedMarketAnalysisWorlds.Remove(key);
+        }
+
+        RefreshMarketAnalysisViewState();
+        PublishChange(AppStateChangeScope.MarketAnalysisView);
+    }
+
+    public void SetMarketAnalysisGridSort(MarketAnalysisGridSortColumn? column, bool descending)
+    {
+        if (MarketAnalysisGridSortColumn == column && MarketAnalysisGridSortDescending == descending)
+        {
+            return;
+        }
+
+        MarketAnalysisGridSortColumn = column;
+        MarketAnalysisGridSortDescending = column.HasValue && descending;
+        PublishChange(AppStateChangeScope.MarketAnalysisView);
+    }
+
     public void ClearMarketAnalysisState()
     {
         _shoppingPlans.Clear();
         _marketItemAnalyses.Clear();
         _procurementShoppingPlans.Clear();
         UnavailableMarketItems = Array.Empty<MarketDataUnavailableItem>();
+        ClearMarketAnalysisViewState(publishChange: false);
         PublishChange(
             AppStateChangeScope.MarketAnalysis | AppStateChangeScope.ProcurementOverlay,
             raiseShoppingListChanged: true);
+    }
+
+    public void ClearMarketAnalysisViewState()
+    {
+        ClearMarketAnalysisViewState(publishChange: true);
+    }
+
+    public void PruneMarketAnalysisViewState(
+        IEnumerable<DetailedShoppingPlan> shoppingPlans,
+        IEnumerable<MarketItemAnalysis> analyses)
+    {
+        ArgumentNullException.ThrowIfNull(shoppingPlans);
+        ArgumentNullException.ThrowIfNull(analyses);
+
+        var itemIds = shoppingPlans
+            .Select(plan => plan.ItemId)
+            .ToHashSet();
+        if (SelectedMarketAnalysisItemId.HasValue && !itemIds.Contains(SelectedMarketAnalysisItemId.Value))
+        {
+            SelectedMarketAnalysisItemId = null;
+        }
+
+        var validWorldKeys = analyses
+            .SelectMany(analysis => analysis.Worlds.Select(world => new MarketAnalysisExpandedWorldKey(
+                analysis.ItemId,
+                world.DataCenter,
+                world.WorldName)))
+            .ToHashSet();
+        _expandedMarketAnalysisWorlds = _expandedMarketAnalysisWorlds
+            .Where(validWorldKeys.Contains)
+            .ToHashSet();
+        RefreshMarketAnalysisViewState();
+    }
+
+    private void ClearMarketAnalysisViewState(bool publishChange)
+    {
+        var changed = SelectedMarketAnalysisItemId.HasValue ||
+            _expandedMarketAnalysisWorlds.Count > 0 ||
+            MarketAnalysisGridSortColumn.HasValue ||
+            MarketAnalysisGridSortDescending;
+        SelectedMarketAnalysisItemId = null;
+        _expandedMarketAnalysisWorlds.Clear();
+        MarketAnalysisGridSortColumn = null;
+        MarketAnalysisGridSortDescending = false;
+        RefreshMarketAnalysisViewState();
+
+        if (changed && publishChange)
+        {
+            PublishChange(AppStateChangeScope.MarketAnalysisView);
+        }
     }
 
     public void BlacklistMarketWorldTemporarily(MarketWorldKey world)
@@ -1274,6 +1368,11 @@ public class AppState
         _temporarilyExcludedItemWorldsView = _temporarilyExcludedItemWorlds.ToFrozenSet();
     }
 
+    private void RefreshMarketAnalysisViewState()
+    {
+        _expandedMarketAnalysisWorldsView = _expandedMarketAnalysisWorlds.ToFrozenSet();
+    }
+
     private static bool IsDirtyVersion(long currentVersion, long persistedVersion, bool hasPersistableData)
     {
         return currentVersion != persistedVersion &&
@@ -1435,6 +1534,7 @@ public enum AppStateChangeScope
     ShoppingItems = 1 << 5,
     Settings = 1 << 6,
     Status = 1 << 7,
+    MarketAnalysisView = 1 << 8,
     PlanCore = PlanStructure | PlanDecision | PlanPrice | Settings
 }
 
@@ -1468,6 +1568,24 @@ public sealed record AppStateChange(
 }
 
 public sealed record AppStateOperation(long Id, string Name);
+
+public enum MarketAnalysisGridSortColumn
+{
+    Item,
+    Quantity,
+    Coverage,
+    Worlds,
+    Total
+}
+
+public readonly record struct MarketAnalysisExpandedWorldKey(
+    int ItemId,
+    string DataCenter,
+    string WorldName);
+
+public readonly record struct MarketAnalysisGridSortState(
+    MarketAnalysisGridSortColumn Column,
+    bool Descending);
 
 public sealed record AppStateAutoSaveLease(
     AppStateVersionSnapshot CapturedVersions,

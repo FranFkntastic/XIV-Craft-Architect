@@ -27,7 +27,7 @@
                 <tr class="@GetWorldRowClass(world)">
                     <td>
                         <button type="button" class="ma-world-toggle" @onclick="() => ToggleWorld(key)">
-                            <MudIcon Icon="@(_expandedWorlds.Contains(key) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
+                            <MudIcon Icon="@(IsExpanded(key) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
                             <span>@world.WorldName</span>
                             @if (!string.IsNullOrWhiteSpace(world.DataCenter))
                             {
@@ -36,16 +36,16 @@
                         </button>
                     </td>
                     <td>
-                        <span>@world.CompetitiveQuantity.ToString("N0") comp.</span>
-                        <span class="ma-world-muted">@world.TotalSaneQuantity.ToString("N0") sane</span>
+                        <span>@GetCompetitiveQuantity(world).ToString("N0") comp.</span>
+                        <span class="ma-world-muted">@FormatSaneStock(world)</span>
                     </td>
                     <td>
                         <span>@FormatCoverage(world)</span>
-                        <span class="ma-world-muted">@FormatCoverageBucket(world.CoverageBucket)</span>
+                        <span class="ma-world-muted">@FormatCoverageBucket(GetDisplayCoverageBucket(world))</span>
                     </td>
                     <td>
-                        <span class="ma-world-score @GetScoreClass(GetScore(world).ScoreBucket)">@FormatScoreBucket(GetScore(world).ScoreBucket)</span>
-                        <span class="ma-world-muted">@GetScore(world).Summary</span>
+                        <span class="ma-world-score @GetScoreClass(GetDisplayScoreBucket(world))">@FormatScoreBucket(GetDisplayScoreBucket(world))</span>
+                        <span class="ma-world-muted">@FormatScopePriceSummary(world)</span>
                     </td>
                     <td>@FormatBreak(world)</td>
                     <td title="@FormatDataTooltip(world)">
@@ -54,7 +54,7 @@
                     </td>
                 </tr>
 
-                @if (_expandedWorlds.Contains(key))
+                @if (IsExpanded(key))
                 {
                     <tr class="ma-world-expanded-row">
                         <td colspan="6">
@@ -70,18 +70,15 @@
 @code {
     [Parameter, EditorRequired] public MarketItemAnalysis Analysis { get; set; } = default!;
     [Parameter] public MarketAcquisitionLens Lens { get; set; }
-
-    private readonly HashSet<string> _expandedWorlds = new(StringComparer.OrdinalIgnoreCase);
-
-    protected override void OnParametersSet()
-    {
-        _expandedWorlds.RemoveWhere(key => Analysis.Worlds.All(world => !string.Equals(GetWorldKey(world), key, StringComparison.OrdinalIgnoreCase)));
-    }
+    [Parameter] public int ItemId { get; set; }
+    [Parameter] public IReadOnlySet<MarketAnalysisExpandedWorldKey> ExpandedWorldKeys { get; set; } = new HashSet<MarketAnalysisExpandedWorldKey>();
+    [Parameter] public EventCallback<MarketAnalysisExpandedWorldKey> OnWorldExpansionToggled { get; set; }
 
     private IEnumerable<WorldMarketAnalysis> GetWorlds()
     {
         return Analysis.Worlds
             .OrderBy(world => world.DataQualityBucket == MarketDataQualityBucket.Missing)
+            .ThenBy(world => GetDisplayScoreRank(world))
             .ThenBy(world => GetScore(world).Rank == 0 ? int.MaxValue : GetScore(world).Rank)
             .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase);
@@ -94,22 +91,24 @@
             ?? new WorldLensScore { Lens = Lens, ScoreBucket = MarketScoreBucket.Unavailable };
     }
 
-    private void ToggleWorld(string key)
+    private async Task ToggleWorld(MarketAnalysisExpandedWorldKey key)
     {
-        if (!_expandedWorlds.Add(key))
-        {
-            _expandedWorlds.Remove(key);
-        }
+        await OnWorldExpansionToggled.InvokeAsync(key);
     }
 
-    private static string GetWorldKey(WorldMarketAnalysis world)
+    private MarketAnalysisExpandedWorldKey GetWorldKey(WorldMarketAnalysis world)
     {
-        return $"{world.DataCenter.Trim()}|{world.WorldName.Trim()}";
+        return new MarketAnalysisExpandedWorldKey(ItemId, world.DataCenter.Trim(), world.WorldName.Trim());
+    }
+
+    private bool IsExpanded(MarketAnalysisExpandedWorldKey key)
+    {
+        return ExpandedWorldKeys.Contains(key);
     }
 
     private string GetWorldRowClass(WorldMarketAnalysis world)
     {
-        return $"ma-world-row {GetScoreClass(GetScore(world).ScoreBucket)}";
+        return $"ma-world-row {GetScoreClass(GetDisplayScoreBucket(world))}";
     }
 
     private static string GetScoreClass(MarketScoreBucket bucket)
@@ -143,7 +142,7 @@
             return "0/0";
         }
 
-        return $"{Math.Min(world.TotalSaneQuantity, world.QuantityNeeded):N0}/{world.QuantityNeeded:N0}";
+        return $"{Math.Min(GetSaneQuantity(world), world.QuantityNeeded):N0}/{world.QuantityNeeded:N0}";
     }
 
     private static string FormatCoverageBucket(MarketCoverageBucket bucket)
@@ -167,6 +166,100 @@
         return firstBreak.HasValue
             ? $"+{firstBreak.Value:N0}%"
             : "-";
+    }
+
+    private static bool HasScopePriceContext(WorldMarketAnalysis world)
+    {
+        return world.SaneThresholdUnitPrice > 0;
+    }
+
+    private static int GetCompetitiveQuantity(WorldMarketAnalysis world)
+    {
+        return HasScopePriceContext(world)
+            ? world.ScopeCompetitiveQuantity
+            : world.CompetitiveQuantity;
+    }
+
+    private static int GetSaneQuantity(WorldMarketAnalysis world)
+    {
+        return HasScopePriceContext(world)
+            ? world.ScopeSaneQuantity
+            : world.TotalSaneQuantity;
+    }
+
+    private static MarketCoverageBucket GetDisplayCoverageBucket(WorldMarketAnalysis world)
+    {
+        var saneQuantity = GetSaneQuantity(world);
+        if (world.QuantityNeeded <= 0 || saneQuantity <= 0)
+        {
+            return MarketCoverageBucket.None;
+        }
+
+        if (saneQuantity >= world.QuantityNeeded)
+        {
+            return MarketCoverageBucket.Full;
+        }
+
+        return GetCompetitiveQuantity(world) >= Math.Max(world.QuantityNeeded / 2, 1)
+            ? MarketCoverageBucket.PartialDeep
+            : MarketCoverageBucket.PartialThin;
+    }
+
+    private MarketScoreBucket GetDisplayScoreBucket(WorldMarketAnalysis world)
+    {
+        if (!HasScopePriceContext(world))
+        {
+            return GetScore(world).ScoreBucket;
+        }
+
+        if (world.DataQualityBucket == MarketDataQualityBucket.Missing)
+        {
+            return MarketScoreBucket.Unavailable;
+        }
+
+        if (world.QuantityNeeded <= 0 || world.ScopeCompetitiveQuantity >= world.QuantityNeeded)
+        {
+            return MarketScoreBucket.Optimal;
+        }
+
+        if (world.ScopeSaneQuantity >= world.QuantityNeeded)
+        {
+            return MarketScoreBucket.Competitive;
+        }
+
+        return world.ScopeSaneQuantity > 0
+            ? MarketScoreBucket.PoorFit
+            : MarketScoreBucket.Unavailable;
+    }
+
+    private int GetDisplayScoreRank(WorldMarketAnalysis world)
+    {
+        return GetDisplayScoreBucket(world) switch
+        {
+            MarketScoreBucket.Optimal => 0,
+            MarketScoreBucket.Competitive => 1,
+            MarketScoreBucket.Expensive => 2,
+            MarketScoreBucket.PoorFit => 3,
+            _ => 4
+        };
+    }
+
+    private static string FormatSaneStock(WorldMarketAnalysis world)
+    {
+        var stock = $"{GetSaneQuantity(world):N0} sane";
+        return world.ScopeInsaneQuantity > 0
+            ? $"{stock}, {world.ScopeInsaneQuantity:N0} insane"
+            : stock;
+    }
+
+    private string FormatScopePriceSummary(WorldMarketAnalysis world)
+    {
+        if (!HasScopePriceContext(world))
+        {
+            return GetScore(world).Summary;
+        }
+
+        return $"base ~{world.AnalysisScopeBaselineUnitPrice:N0}g; sane <= {world.SaneThresholdUnitPrice:N0}g";
     }
 
     private static string FormatDataAge(WorldMarketAnalysis world)

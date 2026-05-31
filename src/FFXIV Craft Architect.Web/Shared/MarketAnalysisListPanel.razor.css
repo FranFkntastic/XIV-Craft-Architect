@@ -159,6 +159,34 @@
     color: #c7d6e2;
 }
 
+.ma-sort-header {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    text-transform: inherit;
+    cursor: pointer;
+}
+
+.ma-sort-header:hover,
+.ma-sort-header.is-active {
+    color: #c7d6e2;
+}
+
+.ma-sort-direction {
+    color: #90caf9;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
 .ma-recommendation-column span {
     display: -webkit-box;
     overflow: hidden;
