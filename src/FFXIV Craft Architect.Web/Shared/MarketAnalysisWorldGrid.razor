@@ -9,22 +9,32 @@
         </div>
     }
 
+    @if (!string.IsNullOrWhiteSpace(ScopePriceSummary))
+    {
+        <div class="ma-scope-price-context">
+            <MudIcon Icon="@Icons.Material.Filled.QueryStats" Size="Size.Small" />
+            <span>@ScopePriceSummary</span>
+        </div>
+    }
+
     <table class="ma-world-grid-table">
         <thead>
             <tr>
-                <th>World</th>
-                <th>Stock Depth</th>
-                <th>Coverage</th>
-                <th>Price / Value</th>
-                <th>Break</th>
-                <th>Data</th>
+                <th>@SortHeader("World", MarketAnalysisWorldGridSortColumn.World)</th>
+                <th>@SortHeader("Stock Depth", MarketAnalysisWorldGridSortColumn.StockDepth)</th>
+                <th>@SortHeader("Coverage", MarketAnalysisWorldGridSortColumn.Coverage)</th>
+                <th>@SortHeader("Price / Value", MarketAnalysisWorldGridSortColumn.PriceValue)</th>
+                <th>@SortHeader("Value", MarketAnalysisWorldGridSortColumn.Value)</th>
+                <th>@SortHeader("Data", MarketAnalysisWorldGridSortColumn.Data)</th>
             </tr>
         </thead>
         <tbody>
-            @foreach (var world in GetWorlds())
+            @foreach (var world in MarketAnalysisGridViewService.GetOrderedWorlds(Analysis, Lens, SortColumn, SortDescending))
             {
                 var key = GetWorldKey(world);
-                <tr class="@GetWorldRowClass(world)">
+                var scoreBucket = MarketAnalysisGridViewService.GetDisplayScoreBucket(world, Lens);
+                var coverageBucket = MarketAnalysisGridViewService.GetDisplayCoverageBucket(world);
+                <tr class="@MarketAnalysisGridViewService.GetWorldRowClass(world, Lens)">
                     <td>
                         <button type="button" class="ma-world-toggle" @onclick="() => ToggleWorld(key)">
                             <MudIcon Icon="@(IsExpanded(key) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
@@ -36,18 +46,18 @@
                         </button>
                     </td>
                     <td>
-                        <span>@GetCompetitiveQuantity(world).ToString("N0") comp.</span>
-                        <span class="ma-world-muted">@FormatSaneStock(world)</span>
+                        <span>@MarketAnalysisGridViewService.GetCompetitiveQuantity(world).ToString("N0") comp.</span>
+                        <span class="ma-world-muted">@MarketAnalysisGridViewService.FormatCompetitiveStock(world)</span>
                     </td>
                     <td>
-                        <span>@FormatCoverage(world)</span>
-                        <span class="ma-world-muted">@FormatCoverageBucket(GetDisplayCoverageBucket(world))</span>
+                        <span>@MarketAnalysisGridViewService.FormatCoverage(world)</span>
+                        <span class="ma-world-muted">@MarketAnalysisGridViewService.FormatCoverageBucket(coverageBucket)</span>
                     </td>
                     <td>
-                        <span class="ma-world-score @GetScoreClass(GetDisplayScoreBucket(world))">@FormatScoreBucket(GetDisplayScoreBucket(world))</span>
-                        <span class="ma-world-muted">@FormatScopePriceSummary(world)</span>
+                        <span class="ma-world-score @MarketAnalysisGridViewService.GetScoreClass(scoreBucket)">@MarketAnalysisGridViewService.FormatScoreBucket(scoreBucket)</span>
+                        <span class="ma-world-muted">@MarketAnalysisGridViewService.FormatWorldPriceSummary(world, Lens)</span>
                     </td>
-                    <td>@FormatBreak(world)</td>
+                    <td>@MarketAnalysisGridViewService.FormatCompetitiveValue(world)</td>
                     <td title="@FormatDataTooltip(world)">
                         <span>@FormatDataAge(world)</span>
                         <span class="ma-world-muted">@FormatDataQuality(world)</span>
@@ -71,29 +81,48 @@
     [Parameter, EditorRequired] public MarketItemAnalysis Analysis { get; set; } = default!;
     [Parameter] public MarketAcquisitionLens Lens { get; set; }
     [Parameter] public int ItemId { get; set; }
+    [Parameter] public MarketAnalysisWorldGridSortColumn? SortColumn { get; set; }
+    [Parameter] public bool SortDescending { get; set; }
     [Parameter] public IReadOnlySet<MarketAnalysisExpandedWorldKey> ExpandedWorldKeys { get; set; } = new HashSet<MarketAnalysisExpandedWorldKey>();
     [Parameter] public EventCallback<MarketAnalysisExpandedWorldKey> OnWorldExpansionToggled { get; set; }
+    [Parameter] public EventCallback<MarketAnalysisWorldGridSortState> OnSortChanged { get; set; }
 
-    private IEnumerable<WorldMarketAnalysis> GetWorlds()
-    {
-        return Analysis.Worlds
-            .OrderBy(world => world.DataQualityBucket == MarketDataQualityBucket.Missing)
-            .ThenBy(world => GetDisplayScoreRank(world))
-            .ThenBy(world => GetScore(world).Rank == 0 ? int.MaxValue : GetScore(world).Rank)
-            .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase);
-    }
-
-    private WorldLensScore GetScore(WorldMarketAnalysis world)
-    {
-        return world.Scores.FirstOrDefault(score => score.Lens == Lens)
-            ?? world.Scores.FirstOrDefault()
-            ?? new WorldLensScore { Lens = Lens, ScoreBucket = MarketScoreBucket.Unavailable };
-    }
+    private string ScopePriceSummary => MarketAnalysisGridViewService.FormatAnalysisScopePriceSummary(Analysis);
 
     private async Task ToggleWorld(MarketAnalysisExpandedWorldKey key)
     {
         await OnWorldExpansionToggled.InvokeAsync(key);
+    }
+
+    private RenderFragment SortHeader(string label, MarketAnalysisWorldGridSortColumn column) => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "button");
+        builder.AddAttribute(sequence++, "type", "button");
+        builder.AddAttribute(sequence++, "class", GetSortHeaderClass(column));
+        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => ToggleSort(column)));
+        builder.AddContent(sequence++, label);
+        if (SortColumn == column)
+        {
+            builder.OpenElement(sequence++, "span");
+            builder.AddAttribute(sequence++, "class", "ma-world-sort-direction");
+            builder.AddContent(sequence++, SortDescending ? "↓" : "↑");
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+    };
+
+    private string GetSortHeaderClass(MarketAnalysisWorldGridSortColumn column)
+    {
+        return SortColumn == column
+            ? "ma-world-sort-header is-active"
+            : "ma-world-sort-header";
+    }
+
+    private async Task ToggleSort(MarketAnalysisWorldGridSortColumn column)
+    {
+        var next = MarketAnalysisGridViewService.ToggleWorldSort(SortColumn, SortDescending, column);
+        await OnSortChanged.InvokeAsync(next);
     }
 
     private MarketAnalysisExpandedWorldKey GetWorldKey(WorldMarketAnalysis world)
@@ -104,162 +133,6 @@
     private bool IsExpanded(MarketAnalysisExpandedWorldKey key)
     {
         return ExpandedWorldKeys.Contains(key);
-    }
-
-    private string GetWorldRowClass(WorldMarketAnalysis world)
-    {
-        return $"ma-world-row {GetScoreClass(GetDisplayScoreBucket(world))}";
-    }
-
-    private static string GetScoreClass(MarketScoreBucket bucket)
-    {
-        return bucket switch
-        {
-            MarketScoreBucket.Optimal => "is-optimal",
-            MarketScoreBucket.Competitive => "is-competitive",
-            MarketScoreBucket.Expensive => "is-expensive",
-            MarketScoreBucket.PoorFit => "is-poor",
-            _ => "is-unavailable"
-        };
-    }
-
-    private static string FormatScoreBucket(MarketScoreBucket bucket)
-    {
-        return bucket switch
-        {
-            MarketScoreBucket.Optimal => "optimal",
-            MarketScoreBucket.Competitive => "average",
-            MarketScoreBucket.Expensive => "expensive",
-            MarketScoreBucket.PoorFit => "low stock",
-            _ => "unavailable"
-        };
-    }
-
-    private static string FormatCoverage(WorldMarketAnalysis world)
-    {
-        if (world.QuantityNeeded <= 0)
-        {
-            return "0/0";
-        }
-
-        return $"{Math.Min(GetSaneQuantity(world), world.QuantityNeeded):N0}/{world.QuantityNeeded:N0}";
-    }
-
-    private static string FormatCoverageBucket(MarketCoverageBucket bucket)
-    {
-        return bucket switch
-        {
-            MarketCoverageBucket.Full => "full",
-            MarketCoverageBucket.PartialDeep => "partial deep",
-            MarketCoverageBucket.PartialThin => "partial thin",
-            _ => "none"
-        };
-    }
-
-    private static string FormatBreak(WorldMarketAnalysis world)
-    {
-        var firstBreak = world.PriceBands
-            .Where(band => band.IsCompetitiveShelf)
-            .Select(band => band.NextBreakPercent)
-            .FirstOrDefault(percent => percent.HasValue);
-
-        return firstBreak.HasValue
-            ? $"+{firstBreak.Value:N0}%"
-            : "-";
-    }
-
-    private static bool HasScopePriceContext(WorldMarketAnalysis world)
-    {
-        return world.SaneThresholdUnitPrice > 0;
-    }
-
-    private static int GetCompetitiveQuantity(WorldMarketAnalysis world)
-    {
-        return HasScopePriceContext(world)
-            ? world.ScopeCompetitiveQuantity
-            : world.CompetitiveQuantity;
-    }
-
-    private static int GetSaneQuantity(WorldMarketAnalysis world)
-    {
-        return HasScopePriceContext(world)
-            ? world.ScopeSaneQuantity
-            : world.TotalSaneQuantity;
-    }
-
-    private static MarketCoverageBucket GetDisplayCoverageBucket(WorldMarketAnalysis world)
-    {
-        var saneQuantity = GetSaneQuantity(world);
-        if (world.QuantityNeeded <= 0 || saneQuantity <= 0)
-        {
-            return MarketCoverageBucket.None;
-        }
-
-        if (saneQuantity >= world.QuantityNeeded)
-        {
-            return MarketCoverageBucket.Full;
-        }
-
-        return GetCompetitiveQuantity(world) >= Math.Max(world.QuantityNeeded / 2, 1)
-            ? MarketCoverageBucket.PartialDeep
-            : MarketCoverageBucket.PartialThin;
-    }
-
-    private MarketScoreBucket GetDisplayScoreBucket(WorldMarketAnalysis world)
-    {
-        if (!HasScopePriceContext(world))
-        {
-            return GetScore(world).ScoreBucket;
-        }
-
-        if (world.DataQualityBucket == MarketDataQualityBucket.Missing)
-        {
-            return MarketScoreBucket.Unavailable;
-        }
-
-        if (world.QuantityNeeded <= 0 || world.ScopeCompetitiveQuantity >= world.QuantityNeeded)
-        {
-            return MarketScoreBucket.Optimal;
-        }
-
-        if (world.ScopeSaneQuantity >= world.QuantityNeeded)
-        {
-            return MarketScoreBucket.Competitive;
-        }
-
-        return world.ScopeSaneQuantity > 0
-            ? MarketScoreBucket.PoorFit
-            : MarketScoreBucket.Unavailable;
-    }
-
-    private int GetDisplayScoreRank(WorldMarketAnalysis world)
-    {
-        return GetDisplayScoreBucket(world) switch
-        {
-            MarketScoreBucket.Optimal => 0,
-            MarketScoreBucket.Competitive => 1,
-            MarketScoreBucket.Expensive => 2,
-            MarketScoreBucket.PoorFit => 3,
-            _ => 4
-        };
-    }
-
-    private static string FormatSaneStock(WorldMarketAnalysis world)
-    {
-        var stock = $"{GetSaneQuantity(world):N0} sane";
-        return world.ScopeInsaneQuantity > 0
-            ? $"{stock}, {world.ScopeInsaneQuantity:N0} insane"
-            : stock;
-    }
-
-    private string FormatScopePriceSummary(WorldMarketAnalysis world)
-    {
-        if (!HasScopePriceContext(world))
-        {
-            return GetScore(world).Summary;
-        }
-
-        return $"base ~{world.AnalysisScopeBaselineUnitPrice:N0}g; sane <= {world.SaneThresholdUnitPrice:N0}g";
     }
 
     private static string FormatDataAge(WorldMarketAnalysis world)

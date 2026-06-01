@@ -33,6 +33,7 @@ builder.Services.AddScoped<IRecipeOperationSnapshotService, RecipeOperationSnaps
 builder.Services.AddScoped<IRecipeOperationSnapshotLifecycleService, RecipeOperationSnapshotLifecycleService>();
 builder.Services.AddScoped<IRecipeDemandProjectionService, RecipeDemandProjectionService>();
 builder.Services.AddScoped<IRecipeDemandProjectionParityService, RecipeDemandProjectionParityService>();
+builder.Services.AddScoped<IRecipeLayerWorkflowService, RecipeLayerWorkflowService>();
 builder.Services.AddScoped<IArtisanService, ArtisanService>();
 builder.Services.AddScoped<IMarketCacheService, IndexedDbMarketCacheService>();
 builder.Services.AddScoped<MarketShoppingService>();
@@ -54,7 +55,9 @@ builder.Services.AddScoped<StartupInitializationService>();
 builder.Services.AddScoped<CancellableOperationService>();
 builder.Services.AddScoped<RecipePlannerCommandService>();
 builder.Services.AddScoped<MarketAnalysisWorkflowService>();
+builder.Services.AddScoped<MarketAnalysisDiagnosticDumpService>();
 builder.Services.AddScoped<ProcurementWorkflowService>();
+builder.Services.AddScoped<AcquisitionEvaluationWorkflowService>();
 
 // Register IndexedDB service for browser persistence
 builder.Services.AddScoped<IndexedDbService>();

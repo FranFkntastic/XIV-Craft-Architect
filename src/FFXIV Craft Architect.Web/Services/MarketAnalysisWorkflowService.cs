@@ -20,7 +20,7 @@ public sealed class MarketAnalysisWorkflowService
     private readonly IMarketPriceLadderAnalysisService _marketPriceLadderAnalysis;
     private readonly WebPlanPersistenceService _planPersistence;
     private readonly IndexedDbService _indexedDb;
-    private readonly IRecipeDemandProjectionService _demandProjectionService;
+    private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
 
     public MarketAnalysisWorkflowService(
         AppState appState,
@@ -29,7 +29,7 @@ public sealed class MarketAnalysisWorkflowService
         IMarketPriceLadderAnalysisService marketPriceLadderAnalysis,
         WebPlanPersistenceService planPersistence,
         IndexedDbService indexedDb,
-        IRecipeDemandProjectionService demandProjectionService)
+        IRecipeLayerWorkflowService recipeLayerWorkflow)
     {
         _appState = appState;
         _marketAnalysisExecution = marketAnalysisExecution;
@@ -37,7 +37,7 @@ public sealed class MarketAnalysisWorkflowService
         _marketPriceLadderAnalysis = marketPriceLadderAnalysis;
         _planPersistence = planPersistence;
         _indexedDb = indexedDb;
-        _demandProjectionService = demandProjectionService;
+        _recipeLayerWorkflow = recipeLayerWorkflow;
     }
 
     public async Task<MarketAnalysisWorkflowResult> RunAnalysisAsync(
@@ -49,10 +49,8 @@ public sealed class MarketAnalysisWorkflowService
         var plan = _appState.CurrentPlan;
         var planSessionVersion = _appState.PlanSessionVersion;
         var planId = _appState.CurrentPlanId;
-        var materials = _demandProjectionService
-            .Build(plan, snapshot: null)
-            .ToMarketAnalysisMaterialAggregates()
-            .ToList();
+        var materials = (await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidatesAsync(plan, ct))?
+            .ToList() ?? [];
         if (plan == null || materials.Count == 0 || string.IsNullOrWhiteSpace(_appState.SelectedDataCenter))
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, 0);
@@ -177,21 +175,11 @@ public sealed class MarketAnalysisWorkflowService
             return null;
         }
 
-        using (_appState.BeginStateChangeBatch())
-        {
-            _appState.ReplaceMarketAnalysis(analysisList, shoppingPlans);
-            if (changedDecisions > 0)
-            {
-                _appState.ReplaceShoppingItemsFromActivePlan(_demandProjectionService
-                    .Build(plan, snapshot: null)
-                    .ToActiveProcurementMaterialAggregates());
-                _appState.NotifyPlanDecisionChanged();
-            }
-            else
-            {
-                _appState.NotifyPlanChanged();
-            }
-        }
+        _appState.ApplyMarketAnalysisPublication(
+            analysisList,
+            shoppingPlans,
+            _recipeLayerWorkflow.BuildActiveProcurementItems(plan),
+            changedDecisions > 0);
 
         if (!string.IsNullOrEmpty(planId) &&
             _appState.IsCurrentPlanSession(plan, planSessionVersion) &&

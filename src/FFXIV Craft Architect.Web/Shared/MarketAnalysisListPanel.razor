@@ -3,105 +3,70 @@
 <div class="ma-ledger-shell">
     <div class="ma-ledger-workspace">
         <div class="ma-ledger-list">
-            <MudDataGrid T="DetailedShoppingPlan"
-                         Items="GetGridPlans()"
-                         Dense="true"
-                         Hover="true"
-                         Bordered="false"
-                         Striped="false"
-                         Square="true"
-                         Elevation="0"
-                         FixedHeader="true"
-                         Height="100%"
-                         SortMode="SortMode.Single"
-                         Filterable="false"
-                         Groupable="false"
-                         Hideable="false"
-                         ShowMenuIcon="false"
-                         ReadOnly="true"
-                         MultiSelection="false"
-                         SelectOnRowClick="true"
-                         SelectedItem="_selectedPlan"
-                         SelectedItemChanged="SelectPlan"
-                         ColumnResizeMode="ResizeMode.Column"
-                         HorizontalScrollbar="false"
-                         RowClassFunc="GetRowClass"
-                         Class="ma-data-grid">
-                <Columns>
-                    <TemplateColumn T="DetailedShoppingPlan"
-                                    HeaderStyle="@ItemColumnStyle"
-                                    CellStyle="@ItemColumnStyle"
-                                    CellClass="ma-item-column">
-                        <HeaderTemplate>
-                            @SortHeader("Item", MarketAnalysisGridSortColumn.Item)
-                        </HeaderTemplate>
-                        <CellTemplate>
-                            <span class="ma-item-cell">
-                                <a class="ma-item-name"
-                                   href="@context.Item.UniversalisUrl"
-                                   target="_blank"
-                                   rel="noopener noreferrer"
-                                   title="Open @context.Item.Name on Universalis"
-                                   @onclick:stopPropagation>
-                                    @context.Item.Name
-                                </a>
-                                <span class="ma-item-kind">@GetSourceLabel(context.Item)</span>
-                            </span>
-                        </CellTemplate>
-                    </TemplateColumn>
-
-                    <TemplateColumn T="DetailedShoppingPlan"
-                                    HeaderStyle="@QuantityColumnStyle"
-                                    CellStyle="@QuantityColumnStyle"
-                                    CellClass="ma-number-column">
-                        <HeaderTemplate>
-                            @SortHeader("Qty", MarketAnalysisGridSortColumn.Quantity)
-                        </HeaderTemplate>
-                        <CellTemplate>
-                            <span class="@GetStockClass(context.Item)">@GetQuantityLabel(context.Item)</span>
-                        </CellTemplate>
-                    </TemplateColumn>
-
-                    <TemplateColumn T="DetailedShoppingPlan"
-                                    HeaderStyle="@CoverageColumnStyle"
-                                    CellStyle="@CoverageColumnStyle"
-                                    CellClass="ma-recommendation-column">
-                        <HeaderTemplate>
-                            @SortHeader("Coverage", MarketAnalysisGridSortColumn.Coverage)
-                        </HeaderTemplate>
-                        <CellTemplate>
-                            <span title="@GetCoverageLabel(context.Item)">@GetCoverageLabel(context.Item)</span>
-                        </CellTemplate>
-                    </TemplateColumn>
-
-                    @if (ShowWorldsColumn)
-                    {
-                        <TemplateColumn T="DetailedShoppingPlan"
-                                        HeaderStyle="width: 7%;"
-                                        CellStyle="width: 7%;"
-                                        CellClass="ma-number-column">
-                            <HeaderTemplate>
-                                @SortHeader("Worlds", MarketAnalysisGridSortColumn.Worlds)
-                            </HeaderTemplate>
-                            <CellTemplate>
-                                @GetWorldCount(context.Item)
-                            </CellTemplate>
-                        </TemplateColumn>
-                    }
-
-                    <TemplateColumn T="DetailedShoppingPlan"
-                                    HeaderStyle="@TotalColumnStyle"
-                                    CellStyle="@TotalColumnStyle"
-                                    CellClass="ma-total-column">
-                        <HeaderTemplate>
-                            @SortHeader("Total", MarketAnalysisGridSortColumn.Total)
-                        </HeaderTemplate>
-                        <CellTemplate>
-                            @GetTotalCost(context.Item).ToString("N0")g
-                        </CellTemplate>
-                    </TemplateColumn>
-                </Columns>
-            </MudDataGrid>
+            <div class="ma-table-scroll">
+                <table class="ma-ledger-table">
+                    <thead>
+                        <tr>
+                            <th style="@ItemColumnStyle" class="ma-item-column">
+                                @SortHeader("Item", MarketAnalysisGridSortColumn.Item)
+                            </th>
+                            <th style="@QuantityColumnStyle" class="ma-number-column">
+                                @SortHeader("Qty", MarketAnalysisGridSortColumn.Quantity)
+                            </th>
+                            <th style="@CoverageColumnStyle" class="ma-recommendation-column">
+                                @SortHeader("Coverage", MarketAnalysisGridSortColumn.Coverage)
+                            </th>
+                            @if (ShowWorldsColumn)
+                            {
+                                <th style="width: 7%;" class="ma-number-column">
+                                    @SortHeader("Worlds", MarketAnalysisGridSortColumn.Worlds)
+                                </th>
+                            }
+                            <th style="@TotalColumnStyle" class="ma-total-column">
+                                @SortHeader("Total", MarketAnalysisGridSortColumn.Total)
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var plan in GetGridPlans())
+                        {
+                            var coverageLabel = MarketAnalysisGridViewService.FormatCoverageLabel(plan, _analysisByItemId);
+                            <tr @key="plan.ItemId"
+                                class="@GetRowClass(plan)"
+                                @onclick="() => SelectPlan(plan)">
+                                <td style="@ItemColumnStyle" class="ma-item-column">
+                                    <span class="ma-item-cell">
+                                        <a class="ma-item-name"
+                                           href="@plan.UniversalisUrl"
+                                           target="_blank"
+                                           rel="noopener noreferrer"
+                                           title="Open @plan.Name on Universalis"
+                                           @onclick:stopPropagation>
+                                            @plan.Name
+                                        </a>
+                                        <span class="ma-item-kind">@GetSourceLabel(plan)</span>
+                                    </span>
+                                </td>
+                                <td style="@QuantityColumnStyle" class="ma-number-column">
+                                    <span class="@GetStockClass(plan)">@GetQuantityLabel(plan)</span>
+                                </td>
+                                <td style="@CoverageColumnStyle" class="ma-recommendation-column">
+                                    <span title="@coverageLabel">@coverageLabel</span>
+                                </td>
+                                @if (ShowWorldsColumn)
+                                {
+                                    <td style="width: 7%;" class="ma-number-column">
+                                        @MarketAnalysisGridViewService.GetWorldCount(plan)
+                                    </td>
+                                }
+                                <td style="@TotalColumnStyle" class="ma-total-column">
+                                    @MarketAnalysisGridViewService.GetTotalCost(plan).ToString("N0")g
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <aside class="ma-detail-pane">
@@ -128,7 +93,7 @@
                         </MudText>
                     </div>
                     <MudText Typo="Typo.subtitle1" Class="ma-detail-total">
-                        @GetTotalCost(_selectedPlan).ToString("N0")g
+                        @MarketAnalysisGridViewService.GetTotalCost(_selectedPlan).ToString("N0")g
                     </MudText>
                 </div>
 
@@ -138,8 +103,11 @@
                         <MarketAnalysisWorldGrid Analysis="analysis"
                                                  Lens="CurrentLens"
                                                  ItemId="_selectedPlan.ItemId"
+                                                 SortColumn="WorldSortColumn"
+                                                 SortDescending="WorldSortDescending"
                                                  ExpandedWorldKeys="ExpandedWorldKeys"
-                                                 OnWorldExpansionToggled="OnWorldExpansionToggled" />
+                                                 OnWorldExpansionToggled="OnWorldExpansionToggled"
+                                                 OnSortChanged="OnWorldSortChanged" />
                     }
                     else
                     {
@@ -163,6 +131,8 @@
     [Parameter] public MarketSortOption CurrentSort { get; set; } = MarketSortOption.ByRecommended;
     [Parameter] public MarketAnalysisGridSortColumn? SortColumn { get; set; }
     [Parameter] public bool SortDescending { get; set; }
+    [Parameter] public MarketAnalysisWorldGridSortColumn? WorldSortColumn { get; set; }
+    [Parameter] public bool WorldSortDescending { get; set; }
     [Parameter] public int? SelectedItemId { get; set; }
     [Parameter] public IReadOnlySet<MarketAnalysisExpandedWorldKey> ExpandedWorldKeys { get; set; } = new HashSet<MarketAnalysisExpandedWorldKey>();
     [Parameter] public int? AutoExpandItemId { get; set; }
@@ -170,10 +140,12 @@
     [Parameter] public EventCallback<int?> OnSelectedItemChanged { get; set; }
     [Parameter] public EventCallback<MarketAnalysisExpandedWorldKey> OnWorldExpansionToggled { get; set; }
     [Parameter] public EventCallback<MarketAnalysisGridSortState> OnSortChanged { get; set; }
+    [Parameter] public EventCallback<MarketAnalysisWorldGridSortState> OnWorldSortChanged { get; set; }
     [Parameter] public EventCallback<int> OnAutoExpandConsumed { get; set; }
 
     private DetailedShoppingPlan? _selectedPlan;
     private bool _autoExpandProcessed;
+    private IReadOnlyDictionary<int, MarketItemAnalysis> _analysisByItemId = new Dictionary<int, MarketItemAnalysis>();
 
     private string ItemColumnStyle => ShowWorldsColumn ? "width: 27%;" : "width: 29%;";
 
@@ -185,6 +157,8 @@
 
     protected override void OnParametersSet()
     {
+        _analysisByItemId = MarketItemAnalyses.ToDictionary(analysis => analysis.ItemId);
+
         if (!_autoExpandProcessed && AutoExpandItemId.HasValue)
         {
             var targetPlan = ShoppingPlans.FirstOrDefault(p => p.ItemId == AutoExpandItemId.Value);
@@ -227,7 +201,7 @@
         {
             builder.OpenElement(sequence++, "span");
             builder.AddAttribute(sequence++, "class", "ma-sort-direction");
-            builder.AddContent(sequence++, SortDescending ? "desc" : "asc");
+            builder.AddContent(sequence++, SortDescending ? "↓" : "↑");
             builder.CloseElement();
         }
         builder.CloseElement();
@@ -287,34 +261,6 @@
         return "Market";
     }
 
-    private string GetCoverageLabel(DetailedShoppingPlan plan)
-    {
-        var analysis = MarketItemAnalyses.FirstOrDefault(item => item.ItemId == plan.ItemId);
-        if (analysis != null)
-        {
-            var full = analysis.Worlds.Count(world => GetDisplayCoverageBucket(world) == MarketCoverageBucket.Full);
-            var partial = analysis.Worlds.Count(world =>
-                GetDisplayCoverageBucket(world) is MarketCoverageBucket.PartialDeep or MarketCoverageBucket.PartialThin);
-            if (analysis.Worlds.Count == 0)
-            {
-                return analysis.Warning ?? "No market data";
-            }
-
-            return $"{full} full, {partial} partial across {analysis.Worlds.Count} worlds";
-        }
-
-        if (!string.IsNullOrWhiteSpace(plan.Error))
-            return plan.Error;
-        return "Analytics unavailable; rerun analysis";
-    }
-
-    private static int GetWorldCount(DetailedShoppingPlan plan)
-    {
-        if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
-            return plan.RecommendedSplit.Select(s => s.WorldName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        return plan.RecommendedWorld == null ? 0 : 1;
-    }
-
     private static string GetQuantityLabel(DetailedShoppingPlan plan)
     {
         if (IsVendorPlan(plan))
@@ -324,19 +270,12 @@
         return FormatQuantity(plan.QuantityNeeded);
     }
 
-    private static int GetAvailableSortValue(DetailedShoppingPlan plan)
-    {
-        if (IsVendorPlan(plan))
-            return int.MaxValue;
-        return plan.TotalAvailableQuantity;
-    }
-
     private static string FormatQuantity(int quantity)
     {
         return $"x{quantity:N0}";
     }
 
-    private string GetRowClass(DetailedShoppingPlan plan, int rowNumber)
+    private string GetRowClass(DetailedShoppingPlan plan)
     {
         var classes = new List<string>();
         if (_selectedPlan?.ItemId == plan.ItemId)
@@ -357,36 +296,6 @@
         return !plan.HasSufficientStock && !IsVendorPlan(plan)
             ? "ma-stock-warning"
             : "ma-stock-ok";
-    }
-
-    private static MarketCoverageBucket GetDisplayCoverageBucket(WorldMarketAnalysis world)
-    {
-        var saneQuantity = world.SaneThresholdUnitPrice > 0
-            ? world.ScopeSaneQuantity
-            : world.TotalSaneQuantity;
-        if (world.QuantityNeeded <= 0 || saneQuantity <= 0)
-        {
-            return MarketCoverageBucket.None;
-        }
-
-        if (saneQuantity >= world.QuantityNeeded)
-        {
-            return MarketCoverageBucket.Full;
-        }
-
-        var competitiveQuantity = world.SaneThresholdUnitPrice > 0
-            ? world.ScopeCompetitiveQuantity
-            : world.CompetitiveQuantity;
-        return competitiveQuantity >= Math.Max(world.QuantityNeeded / 2, 1)
-            ? MarketCoverageBucket.PartialDeep
-            : MarketCoverageBucket.PartialThin;
-    }
-
-    private static long GetTotalCost(DetailedShoppingPlan plan)
-    {
-        if (plan.SplitTotalCost.HasValue)
-            return plan.SplitTotalCost.Value;
-        return MarketAnalysisGridViewService.GetTotalCost(plan);
     }
 
 }

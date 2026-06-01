@@ -40,6 +40,14 @@ public enum MarketDataAgeSource
     Missing
 }
 
+public enum MarketListingPriceSanity
+{
+    Sane = 0,
+    LowOutlier = 1,
+    Outlier = 2,
+    Insane = 3
+}
+
 public sealed class MarketItemAnalysis
 {
     public int ItemId { get; init; }
@@ -49,7 +57,9 @@ public sealed class MarketItemAnalysis
     public DateTime LoadedAtUtc { get; init; }
     public decimal AnalysisScopeBaselineUnitPrice { get; init; }
     public decimal AnalysisScopeAverageUnitPrice { get; init; }
+    public decimal AnalysisScopeCompetitiveAverageUnitPrice { get; init; }
     public decimal AnalysisScopeMedianUnitPrice { get; init; }
+    public decimal CompetitiveThresholdUnitPrice { get; init; }
     public decimal SaneThresholdUnitPrice { get; init; }
     public IReadOnlyList<string> RequestedDataCenters { get; init; } = [];
     public IReadOnlyList<string> PresentDataCenters { get; init; } = [];
@@ -69,6 +79,7 @@ public sealed class WorldMarketAnalysis
     public int LocalCompetitiveQuantity { get; init; }
     public int ScopeCompetitiveQuantity { get; init; }
     public int ScopeSaneQuantity { get; init; }
+    public int ScopeUncompetitiveQuantity { get; init; }
     public int ScopeInsaneQuantity { get; init; }
     public int TotalSaneQuantity { get; init; }
     public int TotalListingQuantity { get; init; }
@@ -78,7 +89,10 @@ public sealed class WorldMarketAnalysis
     public decimal SaneCoverageRatio { get; init; }
     public decimal AnalysisScopeBaselineUnitPrice { get; init; }
     public decimal AnalysisScopeAverageUnitPrice { get; init; }
+    public decimal AnalysisScopeCompetitiveAverageUnitPrice { get; init; }
+    public decimal ScopeCompetitiveAverageUnitPrice { get; init; }
     public decimal AnalysisScopeMedianUnitPrice { get; init; }
+    public decimal CompetitiveThresholdUnitPrice { get; init; }
     public decimal SaneThresholdUnitPrice { get; init; }
     public MarketCoverageBucket CoverageBucket { get; init; }
     public DateTime? FetchedAtUtc { get; init; }
@@ -112,8 +126,10 @@ public sealed class AnalyzedMarketListing
     public long PricePerUnit { get; init; }
     public string RetainerName { get; init; } = string.Empty;
     public bool IsHq { get; init; }
-    public bool IsOutlier { get; init; }
+    public MarketListingPriceSanity PriceSanity { get; init; }
     public bool IsInCompetitiveShelf { get; init; }
+    public bool IsScopeCompetitive { get; init; }
+    public bool IsScopeUncompetitive { get; init; }
     public DateTime? LastReviewTimeUtc { get; init; }
 }
 

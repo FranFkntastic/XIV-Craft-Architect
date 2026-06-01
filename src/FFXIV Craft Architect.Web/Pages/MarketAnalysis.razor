@@ -9,7 +9,7 @@
 @inject AppState AppState
 @inject NavigationManager NavigationManager
 @inject CancellableOperationService CancellableOperations
-@inject IRecipeDemandProjectionService RecipeDemandProjectionService
+@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 ma-page-container">
@@ -34,6 +34,8 @@
             CurrentSort="AppState.MarketSortPreference"
             SortColumn="AppState.MarketAnalysisGridSortColumn"
             SortDescending="AppState.MarketAnalysisGridSortDescending"
+            WorldSortColumn="AppState.MarketAnalysisWorldGridSortColumn"
+            WorldSortDescending="AppState.MarketAnalysisWorldGridSortDescending"
             SelectedItemId="AppState.SelectedMarketAnalysisItemId"
             ExpandedWorldKeys="AppState.ExpandedMarketAnalysisWorlds"
             AutoExpandItemId="AppState.AutoExpandItemId"
@@ -42,6 +44,7 @@
             OnSelectedItemChanged="SelectMarketAnalysisItem"
             OnWorldExpansionToggled="ToggleMarketAnalysisWorld"
             OnSortChanged="SetMarketAnalysisSort"
+            OnWorldSortChanged="SetMarketAnalysisWorldSort"
             OnAutoExpandConsumed="ConsumeAutoExpand"
             OnGoToPlannerRequested="GoToPlanner"
             OnRunAnalysisRequested="RunMarketAnalysisAsync" />
@@ -59,8 +62,17 @@
     protected override void OnInitialized()
     {
         // Subscribe to plan changes (including restoration from auto-save)
+        AppState.OnStateChanged += OnStateChanged;
         AppState.OnPlanChanged += OnPlanChanged;
         AppState.OnShoppingListChanged += OnShoppingListChanged;
+    }
+
+    private void OnStateChanged(AppStateChange change)
+    {
+        if (change.HasScope(AppStateChangeScope.MarketAnalysisView))
+        {
+            InvokeAsync(StateHasChanged);
+        }
     }
 
     private void OnPlanChanged()
@@ -93,12 +105,18 @@
         AppState.SetMarketAnalysisGridSort(sort.Column, sort.Descending);
     }
 
+    private void SetMarketAnalysisWorldSort(MarketAnalysisWorldGridSortState sort)
+    {
+        AppState.SetMarketAnalysisWorldGridSort(sort.Column, sort.Descending);
+    }
+
     public void Dispose()
     {
         CancellableOperations.Cancel(CancellableOperationWorkflow.MarketAnalysis);
         CancellableOperations.Cancel(CancellableOperationWorkflow.PriceRefresh);
         _marketAnalysisOperation = null;
         _priceRefreshOperation = null;
+        AppState.OnStateChanged -= OnStateChanged;
         AppState.OnPlanChanged -= OnPlanChanged;
         AppState.OnShoppingListChanged -= OnShoppingListChanged;
     }
@@ -109,9 +127,8 @@
     /// </summary>
     private List<MaterialAggregate> GetBuyItems()
     {
-        return RecipeDemandProjectionService
-            .Build(AppState.CurrentPlan, snapshot: null)
-            .ToMarketAnalysisMaterialAggregates()
+        return RecipeLayerWorkflowService
+            .BuildMarketAnalysisCandidates(AppState.CurrentPlan)
             .ToList();
     }
 

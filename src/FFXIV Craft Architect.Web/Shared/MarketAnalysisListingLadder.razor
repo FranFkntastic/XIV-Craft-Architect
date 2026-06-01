@@ -16,11 +16,10 @@
         <tbody>
             @foreach (var listing in World.Listings.OrderBy(listing => listing.SortIndex))
             {
-                var priceBreakBefore = HasPriceBreakBefore(listing);
-                if (priceBreakBefore)
+                foreach (var divider in MarketAnalysisGridViewService.GetListingDividersBefore(World, listing))
                 {
                     <tr class="ma-ladder-break-row">
-                        <td colspan="7">Price break</td>
+                        <td colspan="7">@divider.Label</td>
                     </tr>
                 }
 
@@ -32,9 +31,21 @@
                     <td>@(listing.IsHq ? "HQ" : "NQ")</td>
                     <td title="@FormatReviewTooltip(listing)">@FormatReviewAge(listing)</td>
                     <td>
-                        @if (listing.IsOutlier)
+                        @if (listing.PriceSanity == MarketListingPriceSanity.Insane)
                         {
-                            <span class="ma-ladder-flag">outlier</span>
+                            <span class="ma-ladder-flag is-insane">insane</span>
+                        }
+                        else if (listing.PriceSanity == MarketListingPriceSanity.Outlier)
+                        {
+                            <span class="ma-ladder-flag is-outlier">outlier</span>
+                        }
+                        else if (listing.PriceSanity == MarketListingPriceSanity.LowOutlier)
+                        {
+                            <span class="ma-ladder-flag is-low-outlier">low outlier</span>
+                        }
+                        else if (listing.IsScopeUncompetitive)
+                        {
+                            <span class="ma-ladder-flag is-uncompetitive">uncompetitive</span>
                         }
                     </td>
                 </tr>
@@ -46,27 +57,30 @@
 @code {
     [Parameter, EditorRequired] public WorldMarketAnalysis World { get; set; } = default!;
 
-    private bool HasPriceBreakBefore(AnalyzedMarketListing listing)
-    {
-        var firstBreak = World.PriceBands
-            .Where(band => band.NextBreakPercent >= 10)
-            .OrderBy(band => band.LastListingIndex)
-            .FirstOrDefault();
-
-        return firstBreak != null && listing.SortIndex == firstBreak.LastListingIndex + 1;
-    }
-
     private static string GetListingClass(AnalyzedMarketListing listing)
     {
         var classes = new List<string>();
-        if (listing.IsInCompetitiveShelf)
+        if (listing.IsInCompetitiveShelf || listing.IsScopeCompetitive)
         {
             classes.Add("is-competitive");
         }
 
-        if (listing.IsOutlier)
+        if (listing.PriceSanity == MarketListingPriceSanity.Insane)
+        {
+            classes.Add("is-insane");
+        }
+        else if (listing.PriceSanity == MarketListingPriceSanity.Outlier)
         {
             classes.Add("is-outlier");
+        }
+        else if (listing.PriceSanity == MarketListingPriceSanity.LowOutlier)
+        {
+            classes.Add("is-low-outlier");
+        }
+
+        if (listing.IsScopeUncompetitive)
+        {
+            classes.Add("is-uncompetitive");
         }
 
         return string.Join(" ", classes);

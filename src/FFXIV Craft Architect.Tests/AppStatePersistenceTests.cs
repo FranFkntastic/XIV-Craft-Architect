@@ -560,7 +560,7 @@ public class AppStatePersistenceTests
     {
         var appState = new AppState();
         appState.SetRecommendationMode(RecommendationMode.MaximizeValue);
-        appState.ApplyBuiltRecipePlan(new CraftingPlan
+        appState.ApplyBuiltRecipePlanWithActiveItems(new CraftingPlan
         {
             Name = "Snapshot Plan",
             DataCenter = "Aether"

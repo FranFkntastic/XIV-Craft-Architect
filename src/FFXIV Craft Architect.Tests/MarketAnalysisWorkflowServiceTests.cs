@@ -13,7 +13,7 @@ public class MarketAnalysisWorkflowServiceTests
     public async Task RunAnalysisAsync_PublishesAnalysisPersistsAndAutosaves()
     {
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(CreatePlan());
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
         appState.TrackCurrentPlanIdentity("saved-plan", null);
         var jsRuntime = new RecordingJsRuntime();
         var execution = new Mock<IMarketAnalysisExecutionService>();
@@ -47,7 +47,7 @@ public class MarketAnalysisWorkflowServiceTests
         var originalPlan = CreatePlan();
         var replacementPlan = CreatePlan(itemId: 2);
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(originalPlan);
+        appState.ApplyBuiltRecipePlanWithActiveItems(originalPlan);
         var jsRuntime = new RecordingJsRuntime();
         var execution = new Mock<IMarketAnalysisExecutionService>();
         execution.Setup(e => e.ExecuteAsync(
@@ -55,7 +55,7 @@ public class MarketAnalysisWorkflowServiceTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>(),
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
-            .Callback(() => appState.ApplyBuiltRecipePlan(replacementPlan))
+            .Callback(() => appState.ApplyBuiltRecipePlanWithActiveItems(replacementPlan))
             .ReturnsAsync(CreateExecutionResult());
         var service = CreateService(appState, execution.Object, jsRuntime);
 
@@ -72,7 +72,7 @@ public class MarketAnalysisWorkflowServiceTests
     public async Task RunAnalysisAsync_WhenMarketScopeChangesDuringExecution_DoesNotPublishStaleResults()
     {
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(CreatePlan());
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
         var jsRuntime = new RecordingJsRuntime();
         var execution = new Mock<IMarketAnalysisExecutionService>();
         execution.Setup(e => e.ExecuteAsync(
@@ -106,7 +106,7 @@ public class MarketAnalysisWorkflowServiceTests
     public async Task RunAnalysisAsync_WhenMarketContextChangesDuringExecution_RejectsOldResult(string changedContext)
     {
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(CreatePlan());
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
         var jsRuntime = new RecordingJsRuntime();
         var execution = new Mock<IMarketAnalysisExecutionService>();
         execution.Setup(e => e.ExecuteAsync(
@@ -136,7 +136,7 @@ public class MarketAnalysisWorkflowServiceTests
         var originalPlan = CreatePlan(itemId: 1);
         var replacementPlan = CreatePlan(itemId: 2);
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(originalPlan);
+        appState.ApplyBuiltRecipePlanWithActiveItems(originalPlan);
         var jsRuntime = new RecordingJsRuntime();
         var execution = new Mock<IMarketAnalysisExecutionService>();
         execution.Setup(e => e.ExecuteAsync(
@@ -146,7 +146,7 @@ public class MarketAnalysisWorkflowServiceTests
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
             .Callback(() =>
             {
-                appState.ApplyBuiltRecipePlan(replacementPlan);
+                appState.ApplyBuiltRecipePlanWithActiveItems(replacementPlan);
                 appState.ReplaceMarketAnalysis(
                     [
                         new MarketItemAnalysis
@@ -190,7 +190,7 @@ public class MarketAnalysisWorkflowServiceTests
     public async Task RunAnalysisAsync_UsesRecipeDemandProjectionForMarketInputs()
     {
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(CreatePlan());
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
         var execution = new Mock<IMarketAnalysisExecutionService>();
         execution.Setup(e => e.ExecuteAsync(
                 It.IsAny<MarketAnalysisExecutionRequest>(),
@@ -208,7 +208,7 @@ public class MarketAnalysisWorkflowServiceTests
             appState,
             execution.Object,
             new RecordingJsRuntime(),
-            new StubRecipeDemandProjectionService(projection));
+            new StubRecipeLayerWorkflowService(projection));
 
         await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
 
@@ -226,7 +226,7 @@ public class MarketAnalysisWorkflowServiceTests
     public async Task ApplyLensAsync_ReprojectsExistingAnalysisAndPersists()
     {
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(CreatePlan());
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
         appState.TrackCurrentPlanIdentity("saved-plan", null);
         appState.ReplaceMarketAnalysis(
             [new MarketItemAnalysis { ItemId = 1, Name = "Material", QuantityNeeded = 2 }],
@@ -247,7 +247,7 @@ public class MarketAnalysisWorkflowServiceTests
         AppState appState,
         IMarketAnalysisExecutionService execution,
         RecordingJsRuntime jsRuntime,
-        IRecipeDemandProjectionService? demandProjectionService = null)
+        IRecipeLayerWorkflowService? recipeLayerWorkflow = null)
     {
         var indexedDb = new IndexedDbService(jsRuntime);
         var persistence = new WebPlanPersistenceService(
@@ -261,7 +261,7 @@ public class MarketAnalysisWorkflowServiceTests
             new MarketPriceLadderAnalysisService(),
             persistence,
             indexedDb,
-            demandProjectionService ?? new RecipeDemandProjectionService());
+            recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService());
     }
 
     private static CraftingPlan CreatePlan(int itemId = 1)
@@ -408,18 +408,54 @@ public class MarketAnalysisWorkflowServiceTests
             null);
     }
 
-    private sealed class StubRecipeDemandProjectionService : IRecipeDemandProjectionService
+    private sealed class StubRecipeLayerWorkflowService : IRecipeLayerWorkflowService
     {
-        private readonly RecipeDemandProjection _projection;
+        private readonly RecipeDemandProjection? _projection;
 
-        public StubRecipeDemandProjectionService(RecipeDemandProjection projection)
+        public StubRecipeLayerWorkflowService(RecipeDemandProjection? projection = null)
         {
             _projection = projection;
         }
 
-        public RecipeDemandProjection Build(CraftingPlan? plan, RecipeOperationSnapshot? snapshot)
+        public RecipeOperationSnapshotIdentity CreateSnapshotIdentity()
         {
-            return _projection;
+            return RecipeOperationSnapshotIdentity.Unspecified;
+        }
+
+        public RecipeDemandProjection BuildDemandProjection(CraftingPlan? plan)
+        {
+            return _projection ?? new RecipeDemandProjectionService().Build(plan, snapshot: null);
+        }
+
+        public IReadOnlyList<MaterialAggregate> BuildMarketAnalysisCandidates(CraftingPlan? plan)
+        {
+            return BuildDemandProjection(plan).ToMarketAnalysisMaterialAggregates();
+        }
+
+        public IReadOnlyList<MaterialAggregate> BuildActiveProcurementItems(CraftingPlan? plan)
+        {
+            return BuildDemandProjection(plan).ToActiveProcurementMaterialAggregates();
+        }
+
+        public Task<RecipeDemandProjection?> BuildCurrentDemandProjectionAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<RecipeDemandProjection?>(BuildDemandProjection(plan));
+        }
+
+        public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentMarketAnalysisCandidatesAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildMarketAnalysisCandidates(plan));
+        }
+
+        public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildActiveProcurementItems(plan));
         }
     }
 

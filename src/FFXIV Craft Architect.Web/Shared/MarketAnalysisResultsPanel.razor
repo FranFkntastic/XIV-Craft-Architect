@@ -27,6 +27,8 @@
                                  CurrentSort="CurrentSort"
                                  SortColumn="SortColumn"
                                  SortDescending="SortDescending"
+                                 WorldSortColumn="WorldSortColumn"
+                                 WorldSortDescending="WorldSortDescending"
                                  SelectedItemId="SelectedItemId"
                                  ExpandedWorldKeys="ExpandedWorldKeys"
                                  AutoExpandItemId="AutoExpandItemId"
@@ -34,6 +36,7 @@
                                  OnSelectedItemChanged="OnSelectedItemChanged"
                                  OnWorldExpansionToggled="OnWorldExpansionToggled"
                                  OnSortChanged="OnSortChanged"
+                                 OnWorldSortChanged="OnWorldSortChanged"
                                  OnAutoExpandConsumed="OnAutoExpandConsumed" />
     }
     else
@@ -75,6 +78,8 @@
     [Parameter] public MarketSortOption CurrentSort { get; set; }
     [Parameter] public MarketAnalysisGridSortColumn? SortColumn { get; set; }
     [Parameter] public bool SortDescending { get; set; }
+    [Parameter] public MarketAnalysisWorldGridSortColumn? WorldSortColumn { get; set; }
+    [Parameter] public bool WorldSortDescending { get; set; }
     [Parameter] public int? SelectedItemId { get; set; }
     [Parameter] public IReadOnlySet<MarketAnalysisExpandedWorldKey> ExpandedWorldKeys { get; set; } = new HashSet<MarketAnalysisExpandedWorldKey>();
     [Parameter] public int? AutoExpandItemId { get; set; }
@@ -86,5 +91,6 @@
     [Parameter] public EventCallback<int?> OnSelectedItemChanged { get; set; }
     [Parameter] public EventCallback<MarketAnalysisExpandedWorldKey> OnWorldExpansionToggled { get; set; }
     [Parameter] public EventCallback<MarketAnalysisGridSortState> OnSortChanged { get; set; }
+    [Parameter] public EventCallback<MarketAnalysisWorldGridSortState> OnWorldSortChanged { get; set; }
     [Parameter] public EventCallback<int> OnAutoExpandConsumed { get; set; }
 }
