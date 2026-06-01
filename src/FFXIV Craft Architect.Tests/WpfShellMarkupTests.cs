@@ -92,6 +92,91 @@ public class WpfShellMarkupTests
         Assert.DoesNotContain("_recipeCalcService.BuildPlanAsync", method);
     }
 
+    [Fact]
+    public void MainWindow_NativeImport_ActivatesPlanThroughCoreRecipePlannerCommandService()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect", "MainWindow.xaml.cs"));
+        var method = ExtractMethodBody(source, "OnImportNativeAsync");
+        var activationHelper = ExtractMethodBody(source, "ActivatePlanThroughCoreAsync");
+
+        Assert.Contains("ActivatePlanThroughCoreAsync", method);
+        Assert.Contains("_recipePlannerCommands.ActivatePlanAsync", activationHelper);
+        Assert.DoesNotContain("_recipeVm.LoadPlan", method);
+        Assert.DoesNotContain("_recipeVm.CurrentPlan", method);
+    }
+
+    [Fact]
+    public void MainWindow_WatchRestore_ActivatesPlanThroughCoreRecipePlannerCommandService()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect", "MainWindow.WatchState.cs"));
+        var method = ExtractMethodBody(source, "RestoreWatchStateAsync");
+
+        Assert.Contains("_recipePlannerCommands.ActivatePlanAsync", method);
+        Assert.DoesNotContain("_recipeVm.CurrentPlan =", method);
+        Assert.DoesNotContain("_recipeVm.LoadPlan", method);
+    }
+
+    [Fact]
+    public void MainWindow_BuildProcurementPlan_UsesCoreProcurementWorkflow()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect", "MainWindow.ProcurementPanels.cs"));
+        var method = ExtractMethodBody(source, "OnBuildProcurementPlan");
+
+        Assert.Contains("RunCoreProcurementAnalysisAsync", method);
+        Assert.DoesNotContain("BuildFromCurrentMarketEvidence", method);
+        Assert.DoesNotContain("PopulateProcurementPlanSummary();", method);
+    }
+
+    [Fact]
+    public void MainWindow_FetchPrices_UsesCoreRecipePlannerCommandService()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect", "MainWindow.MarketHandling.cs"));
+        var method = ExtractMethodBody(source, "OnFetchPricesAsync");
+
+        Assert.Contains("_recipePlannerCommands.RefreshPricesAsync", method);
+        Assert.Contains("CoreRefreshRecipePlanPricesRequest", method);
+        Assert.Contains("ForceRefreshData: forceRefresh", method);
+        Assert.Contains("refreshResult.Published", method);
+        Assert.DoesNotContain("_marketVm.RefreshPlanPricesAsync", method);
+        Assert.DoesNotContain("PriceRefreshProgressReported", method);
+    }
+
+    [Fact]
+    public void MainWindow_ObservesCoreOperationStateForStatusProjection()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect", "MainWindow.xaml.cs"));
+        var handler = ExtractMethodBody(source, "OnCoreOperationChanged");
+
+        Assert.Contains("CraftOperationState", source);
+        Assert.Contains("_operationState.Changed += OnCoreOperationChanged", source);
+        Assert.Contains("_operationState.Changed -= OnCoreOperationChanged", source);
+        Assert.Contains("StatusLabel.Text = snapshot.StatusMessage", handler);
+        Assert.Contains("Dispatcher.BeginInvoke", handler);
+    }
+
+    [Fact]
+    public void MainWindow_SplitWorldChangeInvalidatesCoreProcurementRouteSettings()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect", "MainWindow.Navigation.cs"));
+        var method = ExtractMethodBody(source, "OnEnableSplitWorldChanged");
+        var viewModelSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect", "ViewModels", "MarketAnalysisViewModel.cs"));
+
+        Assert.Contains("_marketVm.MarkProcurementRouteSettingsChanged", method);
+        Assert.Contains("_session?.MarkProcurementRouteSettingsChanged", viewModelSource);
+        Assert.DoesNotContain("_marketVm.MarkMarketContextChanged", method);
+    }
+
+    [Fact]
+    public void MainWindow_BlacklistWritesTemporaryWorldsToCoreSession()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect", "MainWindow.ProcurementPanels.cs"));
+        var method = ExtractMethodBody(source, "ShowBlacklistConfirmationDialog");
+
+        Assert.Contains("ResolveMarketWorldKeysForWorldName", method);
+        Assert.Contains("_mainVm.ProcurementPlanner.BlacklistMarketWorldTemporarily", method);
+        Assert.Contains("new MarketWorldKey", ExtractMethodBody(source, "ResolveMarketWorldKeysForWorldName"));
+    }
+
     private static void AssertModuleVisibility(string source, string moduleName, string expectedVisibility)
     {
         var pattern = $@"<modules:[^>]*x:Name=""{Regex.Escape(moduleName)}""[^>]*Visibility=""{Regex.Escape(expectedVisibility)}""";
@@ -100,10 +185,13 @@ public class WpfShellMarkupTests
 
     private static string ExtractMethodBody(string source, string methodName)
     {
-        var signatureIndex = source.IndexOf(methodName, StringComparison.Ordinal);
-        Assert.True(signatureIndex >= 0);
+        var signatureMatch = Regex.Match(
+            source,
+            $@"(?:private|public|internal|protected)\s+[^\{{;=]*\b{Regex.Escape(methodName)}\s*\(",
+            RegexOptions.Singleline);
+        Assert.True(signatureMatch.Success);
 
-        var bodyStart = source.IndexOf('{', signatureIndex);
+        var bodyStart = source.IndexOf('{', signatureMatch.Index);
         Assert.True(bodyStart >= 0);
 
         var depth = 0;

@@ -10,6 +10,11 @@ public static class CraftSessionServiceCollectionExtensions
         services.AddSingleton<CraftSessionState>();
         services.AddSingleton<CraftOperationState>();
         services.AddSingleton<ICraftOperationCoordinator, CraftOperationCoordinator>();
+        services.AddSingleton<CoreStoredPlanSnapshotBuilder>();
+        services.AddSingleton<CorePlanSessionLoadService>();
+        services.AddSingleton(CoreStoredPlanStoreOptions.CreateDefault());
+        services.AddSingleton<ICoreStoredPlanStore, FileCoreStoredPlanStore>();
+        services.AddSingleton<CoreSessionPersistenceService>();
         return services;
     }
 }

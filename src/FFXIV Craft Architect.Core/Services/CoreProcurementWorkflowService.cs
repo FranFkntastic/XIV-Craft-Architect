@@ -138,6 +138,12 @@ public sealed class CoreProcurementWorkflowService
             }
 
             var capturedVersions = _session.CaptureVersionStamp();
+            var blacklistedWorlds = request.BlacklistedWorlds
+                .Concat(_session.GetActiveBlacklistedMarketWorlds())
+                .ToHashSet();
+            var excludedItemWorlds = request.ExcludedItemWorlds
+                .Concat(_session.TemporarilyExcludedItemWorlds)
+                .ToHashSet();
             var guardedProgress = progress == null
                 ? null
                 : new Progress<string>(message =>
@@ -160,8 +166,8 @@ public sealed class CoreProcurementWorkflowService
                     Lens = request.Lens,
                     ProcurementConfig = request.ProcurementConfig,
                     IncludeSplitPurchases = request.IncludeSplitPurchases,
-                    BlacklistedWorlds = request.BlacklistedWorlds,
-                    ExcludedItemWorlds = request.ExcludedItemWorlds,
+                    BlacklistedWorlds = blacklistedWorlds,
+                    ExcludedItemWorlds = excludedItemWorlds,
                     ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter
                 },
                 guardedProgress,
@@ -181,7 +187,9 @@ public sealed class CoreProcurementWorkflowService
                 return CoreProcurementWorkflowResult.Noop(CoreProcurementWorkflowStatus.StaleDecision);
             }
 
-            if (currentVersions.MarketAnalysis != capturedVersions.MarketAnalysis)
+            if (currentVersions.MarketAnalysis != capturedVersions.MarketAnalysis ||
+                currentVersions.SettingsContext != capturedVersions.SettingsContext ||
+                currentVersions.Procurement != capturedVersions.Procurement)
             {
                 operation.Cancel();
                 return CoreProcurementWorkflowResult.Noop(CoreProcurementWorkflowStatus.StaleConfiguration);
@@ -194,13 +202,17 @@ public sealed class CoreProcurementWorkflowService
             }
 
             var shoppingPlans = result.ShoppingPlans.ToList();
+            var routeCards = ProcurementWorldCardBuilder.BuildWorldCards(
+                shoppingPlans,
+                request.SelectedDataCenter);
             var published = operation.CompleteIfCurrent(
                 () => _session.PublishProcurementOverlay(
                     new CraftSessionProcurementOverlay(
                         DateTime.UtcNow,
                         shoppingPlans.Select(plan => plan.ItemId).ToArray(),
                         "procurement route analysis",
-                        shoppingPlans),
+                        shoppingPlans,
+                        routeCards),
                     "procurement route published"),
                 "Procurement route published.");
             if (!published)
@@ -333,7 +345,9 @@ public sealed class CoreProcurementWorkflowService
                         shoppingPlans,
                         acquisitionDecisionsChanged: false,
                         "market item refreshed",
-                        existingEvidence.UnavailableMarketItemIds);
+                        existingEvidence.UnavailableMarketItemIds,
+                        existingEvidence.RecommendationMode,
+                        existingEvidence.Lens);
                 },
                 $"{request.ItemName} market data refreshed.");
             if (!completed || !published)
@@ -376,6 +390,8 @@ public sealed class CoreProcurementWorkflowService
 
         return currentVersions.PlanDecision == capturedVersions.PlanDecision &&
                currentVersions.MarketAnalysis == capturedVersions.MarketAnalysis &&
+               currentVersions.SettingsContext == capturedVersions.SettingsContext &&
+               currentVersions.Procurement == capturedVersions.Procurement &&
                (isCurrentOperation?.Invoke() ?? true);
     }
 
@@ -396,7 +412,8 @@ public sealed class CoreProcurementWorkflowService
         }
 
         if (currentVersions.MarketAnalysis != capturedVersions.MarketAnalysis ||
-            currentVersions.SettingsContext != capturedVersions.SettingsContext)
+            currentVersions.SettingsContext != capturedVersions.SettingsContext ||
+            currentVersions.Procurement != capturedVersions.Procurement)
         {
             return CoreProcurementItemRefreshStatus.StaleConfiguration;
         }

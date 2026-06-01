@@ -52,10 +52,13 @@ public class CoreMarketAnalysisWorkflowServiceTests
                 request.Scope == MarketFetchScope.SelectedDataCenter &&
                 request.SelectedDataCenter == "Aether" &&
                 request.SelectedRegion == "North America" &&
+                request.RecommendationMode == RecommendationMode.MaximizeValue &&
                 request.Lens == MarketAcquisitionLens.MinimumUpfrontCost),
             It.IsAny<IProgress<string>?>(),
             It.IsAny<CancellationToken>(),
             It.IsAny<MarketAnalysisExecutionOptions?>()));
+        Assert.Equal(RecommendationMode.MaximizeValue, service.Session.MarketEvidence.RecommendationMode);
+        Assert.Equal(MarketAcquisitionLens.MinimumUpfrontCost, service.Session.MarketEvidence.Lens);
     }
 
     [Fact]
@@ -163,12 +166,16 @@ public class CoreMarketAnalysisWorkflowServiceTests
         service.Session.PublishMarketAnalysis(
             [new MarketItemAnalysis { ItemId = 1, Name = "Material", QuantityNeeded = 2 }],
             [],
-            "existing analysis");
+            "existing analysis",
+            RecommendationMode.MaximizeValue,
+            MarketAcquisitionLens.MinimumUpfrontCost);
 
         var result = await service.ApplyLensAsync(new CoreApplyMarketAnalysisLensRequest(MarketAcquisitionLens.BulkValue));
 
         Assert.True(result.Published);
         Assert.Equal(1, Assert.Single(service.Session.MarketEvidence.ShoppingPlans!).ItemId);
+        Assert.Equal(RecommendationMode.MaximizeValue, service.Session.MarketEvidence.RecommendationMode);
+        Assert.Equal(MarketAcquisitionLens.BulkValue, service.Session.MarketEvidence.Lens);
         Assert.Null(service.Session.ProcurementOverlay);
         ladder.Verify(l => l.ProjectToShoppingPlan(
             It.Is<MarketItemAnalysis>(analysis => analysis.ItemId == 1),
@@ -194,7 +201,9 @@ public class CoreMarketAnalysisWorkflowServiceTests
         service.Session.PublishMarketAnalysis(
             [new MarketItemAnalysis { ItemId = 1, Name = "Material", QuantityNeeded = 2 }],
             [],
-            "existing analysis");
+            "existing analysis",
+            RecommendationMode.MaximizeValue,
+            MarketAcquisitionLens.MinimumUpfrontCost);
         var before = service.Session.CaptureVersionStamp();
 
         var result = await service.ApplyLensAsync(
@@ -231,6 +240,7 @@ public class CoreMarketAnalysisWorkflowServiceTests
             Scope: MarketFetchScope.SelectedDataCenter,
             SelectedDataCenter: "Aether",
             SelectedRegion: "North America",
+            RecommendationMode: RecommendationMode.MaximizeValue,
             Lens: MarketAcquisitionLens.MinimumUpfrontCost,
             ExpectedWorldsByDataCenter: new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
             ExecutionOptions: MarketAnalysisExecutionOptions.Synchronous);

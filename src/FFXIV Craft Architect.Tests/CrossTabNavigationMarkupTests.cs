@@ -3,11 +3,13 @@ namespace FFXIV_Craft_Architect.Tests;
 public class CrossTabNavigationMarkupTests
 {
     [Fact]
-    public void RecipeNodeView_PriceButtonNavigatesToAcquisitionEvaluationNode()
+    public void RecipeNodeView_PriceLinkHasConcreteAcquisitionEvaluationHref()
     {
         var source = File.ReadAllText(GetWebPath("Shared", "RecipeNodeView.razor"));
 
-        Assert.Contains("NavigationManager.NavigateTo($\"acquisition?nodeId={Uri.EscapeDataString(Node.NodeId)}\")", source);
+        Assert.Contains("__builder.OpenElement(19, \"a\");", source);
+        Assert.Contains("href", source);
+        Assert.Contains("GetAcquisitionEvaluationHref()", source);
         Assert.Contains("Open in Acquisition Evaluation", source);
     }
 

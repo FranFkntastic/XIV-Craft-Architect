@@ -29,6 +29,28 @@ public class CraftOperationStateTests
     }
 
     [Fact]
+    public void Changed_NotifiesWithSnapshotsForCurrentOperationTransitions()
+    {
+        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
+        var state = new CraftOperationState();
+        var coordinator = new CraftOperationCoordinator(session, state);
+        var snapshots = new List<CraftOperationSnapshot>();
+        state.Changed += snapshot => snapshots.Add(snapshot);
+
+        using var lease = coordinator.Start(
+            CraftOperationWorkflow.PriceRefresh,
+            "Price Refresh",
+            "Refreshing");
+        Assert.True(lease.ReportProgress(50, "Halfway"));
+        Assert.True(lease.CompleteIfCurrent(() => { }, "Done"));
+
+        Assert.Equal(["Refreshing", "Halfway", "Done"], snapshots.Select(snapshot => snapshot.StatusMessage).ToArray());
+        Assert.True(snapshots[0].IsBusy);
+        Assert.Equal(50, snapshots[1].ProgressPercent);
+        Assert.False(snapshots[2].IsBusy);
+    }
+
+    [Fact]
     public void SupersededOperation_CannotPublishCompletion()
     {
         var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());

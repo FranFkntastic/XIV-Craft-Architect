@@ -104,6 +104,7 @@ public partial class MainWindow
         }
 
         _blacklistService.ClearBlacklist();
+        _mainVm.ProcurementPlanner.ClearTemporaryProcurementExclusions("wpf temporary procurement exclusions cleared");
         StatusLabel.Text = "All blacklisted worlds cleared";
 
         if (IsMarketViewVisible())

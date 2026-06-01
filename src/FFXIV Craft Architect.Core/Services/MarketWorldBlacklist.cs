@@ -12,6 +12,11 @@ public sealed class MarketWorldBlacklist
     {
         var currentTime = now ?? DateTimeOffset.UtcNow;
         var expiresAt = currentTime.Add(duration);
+        AddUntil(world, expiresAt);
+    }
+
+    public void AddUntil(MarketWorldKey world, DateTimeOffset expiresAt)
+    {
         _entries.RemoveAll(entry => entry.World.Equals(world));
         _entries.Add(new MarketWorldBlacklistEntry(world, expiresAt));
     }
@@ -35,6 +40,17 @@ public sealed class MarketWorldBlacklist
     {
         var currentTime = now ?? DateTimeOffset.UtcNow;
         _entries.RemoveAll(entry => entry.ExpiresAt <= currentTime);
+    }
+
+    public MarketWorldBlacklist Clone()
+    {
+        var clone = new MarketWorldBlacklist();
+        foreach (var entry in _entries)
+        {
+            clone.AddUntil(entry.World, entry.ExpiresAt);
+        }
+
+        return clone;
     }
 }
 

@@ -10,7 +10,8 @@ public sealed record CoreMarketAnalysisWorkflowRequest(
     string SelectedRegion,
     MarketAcquisitionLens Lens,
     IReadOnlyDictionary<string, IReadOnlyList<string>> ExpectedWorldsByDataCenter,
-    MarketAnalysisExecutionOptions? ExecutionOptions = null);
+    MarketAnalysisExecutionOptions? ExecutionOptions = null,
+    RecommendationMode RecommendationMode = RecommendationMode.MinimizeTotalCost);
 
 public sealed record CoreApplyMarketAnalysisLensRequest(MarketAcquisitionLens Lens);
 
@@ -94,7 +95,7 @@ public sealed class CoreMarketAnalysisWorkflowService
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,
                     MaxAge = request.ForceRefreshData ? TimeSpan.Zero : null,
-                    RecommendationMode = RecommendationMode.MinimizeTotalCost,
+                    RecommendationMode = request.RecommendationMode,
                     Lens = request.Lens,
                     ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter
                 },
@@ -115,7 +116,9 @@ public sealed class CoreMarketAnalysisWorkflowService
                 planSessionVersion,
                 capturedVersions,
                 executionResult.Analyses,
-                executionResult.ShoppingPlans);
+                executionResult.ShoppingPlans,
+                request.RecommendationMode,
+                request.Lens);
             if (published == null)
             {
                 return new CoreMarketAnalysisWorkflowResult(false, 0, 0, executionResult.Evidence.FetchedCount);
@@ -175,7 +178,9 @@ public sealed class CoreMarketAnalysisWorkflowService
                 planSessionVersion,
                 capturedVersions,
                 evidence.ItemAnalyses,
-                shoppingPlans);
+                shoppingPlans,
+                evidence.RecommendationMode,
+                request.Lens);
             if (published == null)
             {
                 return new CoreMarketAnalysisWorkflowResult(false, 0, 0, 0);
@@ -211,7 +216,9 @@ public sealed class CoreMarketAnalysisWorkflowService
         long planSessionVersion,
         CraftSessionVersionStamp capturedVersions,
         IEnumerable<MarketItemAnalysis> analyses,
-        List<DetailedShoppingPlan> shoppingPlans)
+        List<DetailedShoppingPlan> shoppingPlans,
+        RecommendationMode recommendationMode,
+        MarketAcquisitionLens lens)
     {
         var currentVersions = _session.CaptureVersionStamp();
         if (currentVersions.PlanSession != capturedVersions.PlanSession)
@@ -247,7 +254,9 @@ public sealed class CoreMarketAnalysisWorkflowService
                     analysisList,
                     shoppingPlans,
                     changedDecisions > 0,
-                    "market analysis published");
+                    "market analysis published",
+                    recommendationMode: recommendationMode,
+                    lens: lens);
             },
             "Market analysis published.");
         if (!completed || !published)

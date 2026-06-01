@@ -83,6 +83,7 @@ public partial class MainWindow : Window
     private readonly ItemCacheService _itemCache;
     private readonly RecipeCalculationService _recipeCalcService;
     private readonly CoreRecipePlannerCommandService _recipePlannerCommands;
+    private readonly CraftOperationState _operationState;
     private readonly MarketShoppingService _marketShoppingService;
     private readonly WorldBlacklistService _blacklistService;
     private readonly IDialogService _dialogs;
@@ -120,6 +121,7 @@ public partial class MainWindow : Window
         ItemCacheService itemCache,
         RecipeCalculationService recipeCalcService,
         CoreRecipePlannerCommandService recipePlannerCommands,
+        CraftOperationState operationState,
         MarketShoppingService marketShoppingService,
         WorldBlacklistService blacklistService,
         DialogServiceFactory dialogFactory,
@@ -141,6 +143,7 @@ public partial class MainWindow : Window
         _itemCache = itemCache;
         _recipeCalcService = recipeCalcService;
         _recipePlannerCommands = recipePlannerCommands;
+        _operationState = operationState;
         _marketShoppingService = marketShoppingService;
         _blacklistService = blacklistService;
         _dialogFactory = dialogFactory;
@@ -162,6 +165,8 @@ public partial class MainWindow : Window
         _infoPanelBuilder = infoPanelBuilder;
         
         InitializeComponent();
+        _operationState.Changed += OnCoreOperationChanged;
+        Closed += (_, _) => _operationState.Changed -= OnCoreOperationChanged;
 
         RecipePlannerSidebarModule.ItemSearchKeyDownForwarded += OnItemSearchKeyDown;
         RecipePlannerSidebarModule.SearchClicked += OnSearchItem;
@@ -267,6 +272,26 @@ public partial class MainWindow : Window
         _logger.LogError(ex, "Async operation failed");
         StatusLabel.Text = $"Operation failed: {ex.Message}";
         await _dialogs.ShowErrorAsync($"Operation failed: {ex.Message}", ex);
+    }
+
+    private void OnCoreOperationChanged(CraftOperationSnapshot snapshot)
+    {
+        void ApplySnapshot()
+        {
+            if (!string.IsNullOrWhiteSpace(snapshot.StatusMessage))
+            {
+                StatusLabel.Text = snapshot.StatusMessage;
+            }
+        }
+
+        if (Dispatcher.CheckAccess())
+        {
+            ApplySnapshot();
+        }
+        else
+        {
+            Dispatcher.BeginInvoke(ApplySnapshot);
+        }
     }
     
     // ========================================================================
@@ -916,7 +941,12 @@ public partial class MainWindow : Window
     /// <summary>
     /// Imports a plan from native Craft Architect format.
     /// </summary>
-    private async void OnImportNative(object sender, RoutedEventArgs e)
+    private void OnImportNative(object sender, RoutedEventArgs e)
+    {
+        OnImportNativeAsync().SafeFireAndForget(OnAsyncError);
+    }
+
+    private async Task OnImportNativeAsync()
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
@@ -938,8 +968,11 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // Load the plan into the ViewModel
-            _recipeVm.LoadPlan(plan);
+            await ActivatePlanThroughCoreAsync(
+                plan,
+                clearCurrentPlanId: true,
+                refreshVendorPrices: false,
+                refreshMarketPrices: false);
             
             // Update UI
             ProjectList.ItemsSource = null;
@@ -959,6 +992,31 @@ public partial class MainWindow : Window
         {
             StatusLabel.Text = $"Import failed: {ex.Message}";
         }
+    }
+
+    private async Task<CoreActivateRecipePlanResult> ActivatePlanThroughCoreAsync(
+        CraftingPlan plan,
+        bool clearCurrentPlanId,
+        bool refreshVendorPrices,
+        bool refreshMarketPrices)
+    {
+        var selectedDataCenter = DcCombo.SelectedItem as string ?? plan.DataCenter ?? "Aether";
+        var selectedRegion = ResolveSelectedRegion(selectedDataCenter);
+        var priceFetchScope = ProcurementSearchAllNaCheck.IsChecked == true
+            ? MarketFetchScope.EntireRegion
+            : MarketFetchScope.SelectedDataCenter;
+
+        var result = await _recipePlannerCommands.ActivatePlanAsync(
+            new CoreActivateRecipePlanRequest(
+                plan,
+                clearCurrentPlanId,
+                refreshVendorPrices,
+                refreshMarketPrices,
+                priceFetchScope,
+                selectedDataCenter,
+                selectedRegion));
+        _recipeVm.RefreshFromCoreSession();
+        return result;
     }
 
     /// <summary>

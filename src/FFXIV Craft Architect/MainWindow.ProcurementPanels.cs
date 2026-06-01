@@ -4,6 +4,7 @@ using System.Windows.Media;
 using FFXIV_Craft_Architect.Coordinators;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Helpers;
 using FFXIV_Craft_Architect.Services;
 using FFXIV_Craft_Architect.ViewModels;
 using Microsoft.Extensions.Logging;
@@ -25,6 +26,14 @@ public partial class MainWindow
         {
             _marketLogisticsCoordinator.ClearSelection();
             _procurementBuilder?.ShowNoPlanPlaceholderSplitPane();
+            return;
+        }
+
+        var overlayPlans = _mainVm.ProcurementPlanner.CurrentOverlayShoppingPlans;
+        if (_activeTab == MainTab.ProcurementPlanner && overlayPlans.Any())
+        {
+            PopulateSplitPaneWithPlans(overlayPlans);
+            PopulateProcurementPlanSummary();
             return;
         }
 
@@ -50,12 +59,13 @@ public partial class MainWindow
     private void PopulateProcurementPlanSummary()
     {
         ProcurementPlanPanel.Children.Clear();
+        var procurementPlans = _mainVm.ProcurementPlanner.CurrentOverlayShoppingPlans;
 
-        if (_currentMarketPlans?.Any() != true)
+        if (procurementPlans.Any() != true)
         {
             ProcurementPlanPanel.Children.Add(new TextBlock
             {
-                Text = "No market analysis data found. Run Conduct Analysis in Market Analysis first.",
+                Text = "No Core procurement route found. Build a Procurement Plan after running market analysis.",
                 Foreground = ResolveBrush("GrayBrush", Brushes.Gray),
                 FontSize = 12,
                 TextWrapping = TextWrapping.Wrap
@@ -64,7 +74,7 @@ public partial class MainWindow
         }
 
         var worldCards = ProcurementWorldCardBuilder
-            .BuildWorldCards(_currentMarketPlans, GetCurrentDataCenter() ?? string.Empty);
+            .BuildWorldCards(procurementPlans, GetCurrentDataCenter() ?? string.Empty);
 
         if (!worldCards.Any())
         {
@@ -135,21 +145,27 @@ public partial class MainWindow
 
     private void PopulateSplitPaneWithMarketPlans()
     {
+        PopulateSplitPaneWithPlans(_currentMarketPlans);
+    }
+
+    private void PopulateSplitPaneWithPlans(IReadOnlyList<DetailedShoppingPlan> plans)
+    {
         _procurementBuilder?.SplitPaneCardsGrid.Children.Clear();
 
-        var grandTotal = _currentMarketPlans.Sum(ProcurementPlanCost.GetRecommendedCost);
-        var itemsWithOptions = _currentMarketPlans.Count(ProcurementPlanCost.HasRecommendation);
+        var displayPlans = plans.ToList();
+        var grandTotal = displayPlans.Sum(ProcurementPlanCost.GetRecommendedCost);
+        var itemsWithOptions = displayPlans.Count(ProcurementPlanCost.HasRecommendation);
 
         _procurementBuilder?.UpdateSplitPaneTotal(grandTotal, itemsWithOptions);
 
-        _marketLogisticsCoordinator.SetAvailablePlans(_currentMarketPlans);
+        _marketLogisticsCoordinator.SetAvailablePlans(displayPlans);
 
         // Separate vendor and market plans
-        var vendorPlans = _currentMarketPlans
+        var vendorPlans = displayPlans
             .Where(p => p.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName)
             .ToList();
 
-        var marketPlans = _currentMarketPlans
+        var marketPlans = displayPlans
             .Where(p => p.RecommendedWorld?.WorldName != MarketShoppingConstants.VendorWorldName)
             .ToList();
 
@@ -358,6 +374,13 @@ public partial class MainWindow
         }
 
         _blacklistService.AddToBlacklist(worldId, worldName, "Travel prohibited - user blacklisted");
+        foreach (var world in ResolveMarketWorldKeysForWorldName(worldName))
+        {
+            _mainVm.ProcurementPlanner.BlacklistMarketWorldTemporarily(
+                world,
+                "wpf temporary market world blacklisted");
+        }
+
         StatusLabel.Text = $"{worldName} blacklisted for 30 minutes";
 
         if (IsMarketViewVisible())
@@ -375,15 +398,72 @@ public partial class MainWindow
 
     private void OnBuildProcurementPlan(object sender, RoutedEventArgs e)
     {
+        RunCoreProcurementAnalysisAsync().SafeFireAndForget(OnAsyncError);
+    }
+
+    private async Task RunCoreProcurementAnalysisAsync()
+    {
         if (_currentPlan == null || _currentPlan.RootItems.Count == 0)
         {
             StatusLabel.Text = "No plan - build a plan first";
             return;
         }
 
-        _mainVm.ProcurementPlanner.BuildFromCurrentMarketEvidence();
-        PopulateProcurementPlanSummary();
+        var result = await _mainVm.ProcurementPlanner.RunCoreProcurementAnalysisAsync(
+            CreateCoreProcurementWorkflowRequest(),
+            new Progress<string>(message => StatusLabel.Text = message));
+        if (result.Status == CoreProcurementWorkflowStatus.Published)
+        {
+            PopulateSplitPaneWithPlans(_mainVm.ProcurementPlanner.CurrentOverlayShoppingPlans);
+            PopulateProcurementPlanSummary();
+        }
 
         StatusLabel.Text = _mainVm.ProcurementPlanner.StatusMessage;
+    }
+
+    private CoreProcurementWorkflowRequest CreateCoreProcurementWorkflowRequest()
+    {
+        var selectedDataCenter = GetCurrentDataCenter() ?? _currentPlan?.DataCenter ?? "Aether";
+        var selectedRegion = ResolveSelectedRegion(selectedDataCenter);
+        var scope = ProcurementSearchAllNaCheck.IsChecked == true
+            ? MarketFetchScope.EntireRegion
+            : MarketFetchScope.SelectedDataCenter;
+        var lens = ProcurementModeCombo.SelectedIndex == 1
+            ? MarketAcquisitionLens.BulkValue
+            : MarketAcquisitionLens.MinimumUpfrontCost;
+        var includeSplitPurchases = EnableSplitWorldCheck.IsChecked == true;
+        var config = MarketAnalysisConfig.FromSettings(_settingsService);
+        config.EnableSplitWorld = includeSplitPurchases;
+
+        return new CoreProcurementWorkflowRequest(
+            scope,
+            selectedDataCenter,
+            selectedRegion,
+            lens,
+            config,
+            includeSplitPurchases,
+            [],
+            new HashSet<MarketWorldKey>(),
+            new HashSet<MarketItemWorldKey>(),
+            BuildExpectedWorlds(scope, selectedDataCenter, selectedRegion));
+    }
+
+    private IReadOnlyList<MarketWorldKey> ResolveMarketWorldKeysForWorldName(string worldName)
+    {
+        var selectedDataCenter = GetCurrentDataCenter() ?? _currentPlan?.DataCenter ?? "Aether";
+        var selectedRegion = ResolveSelectedRegion(selectedDataCenter);
+        var scope = ProcurementSearchAllNaCheck.IsChecked == true
+            ? MarketFetchScope.EntireRegion
+            : MarketFetchScope.SelectedDataCenter;
+        var expectedWorlds = BuildExpectedWorlds(scope, selectedDataCenter, selectedRegion);
+        var matches = expectedWorlds
+            .SelectMany(pair => pair.Value
+                .Where(world => string.Equals(world, worldName, StringComparison.OrdinalIgnoreCase))
+                .Select(world => new MarketWorldKey(pair.Key, world)))
+            .ToList();
+
+        return matches.Count > 0
+            ? matches
+            : [new MarketWorldKey(selectedDataCenter, worldName)];
     }
 }

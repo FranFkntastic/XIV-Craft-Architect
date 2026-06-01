@@ -75,7 +75,11 @@ public partial class MainWindow
         if (forceRefresh)
         {
             StatusLabel.Text = "Force refetch enabled - fetching market data before analysis...";
-            await OnFetchPricesAsync(forceRefresh: true);
+            if (!await OnFetchPricesAsync(forceRefresh: true))
+            {
+                return;
+            }
+
             await RunMarketAnalysisFromCacheAsync(searchAllNA);
             return;
         }
@@ -106,7 +110,10 @@ public partial class MainWindow
             if (choice == DialogChoice.No)
             {
                 StatusLabel.Text = "Fetching missing market data before analysis...";
-                await OnFetchPricesAsync(forceRefresh: false);
+                if (!await OnFetchPricesAsync(forceRefresh: false))
+                {
+                    return;
+                }
             }
         }
 
@@ -134,7 +141,7 @@ public partial class MainWindow
         OnCheckMarketCacheAsync().SafeFireAndForget(OnAsyncError);
     }
 
-    private async Task OnFetchPricesAsync(bool forceRefresh = false)
+    private async Task<bool> OnFetchPricesAsync(bool forceRefresh = false)
     {
         _logger.LogInformation("[OnFetchPricesAsync] START - forceRefresh={ForceRefresh}", forceRefresh);
 
@@ -142,18 +149,19 @@ public partial class MainWindow
         {
             _logger.LogWarning("[OnFetchPricesAsync] ABORT - No plan available");
             StatusLabel.Text = "No plan - build a plan first";
-            return;
+            return false;
         }
 
         var dc = DcCombo.SelectedItem as string ?? "Aether";
-        var world = WorldCombo.SelectedItem as string ?? string.Empty;
-        var worldOrDc = string.IsNullOrEmpty(world) || world == "Entire Data Center" ? dc : world;
         var searchAllNA = ProcurementSearchAllNaCheck?.IsChecked ?? false;
+        var priceFetchScope = searchAllNA
+            ? MarketFetchScope.EntireRegion
+            : MarketFetchScope.SelectedDataCenter;
+        var selectedRegion = ResolveSelectedRegion(dc);
 
         _logger.LogInformation(
-            "[OnFetchPricesAsync] DC={DC}, World={World}, SearchAllNA={SearchAllNA}, PlanItems={ItemCount}",
+            "[OnFetchPricesAsync] DC={DC}, SearchAllNA={SearchAllNA}, PlanItems={ItemCount}",
             dc,
-            world,
             searchAllNA,
             _currentPlan.RootItems.Count);
 
@@ -190,91 +198,55 @@ public partial class MainWindow
         _marketDataStatusWindow.RefreshView();
         _marketDataStatusWindow.Show();
         _marketDataStatusWindow.Activate();
-
-        void ProgressHandler(object? _, PriceRefreshProgress p)
-        {
-            StatusLabel.Text = p.Message ?? p.Stage switch
-            {
-                PriceRefreshStage.Starting => $"Checking cache... {p.Current}/{p.Total}",
-                PriceRefreshStage.Fetching when string.IsNullOrWhiteSpace(p.ItemName) =>
-                    $"Fetching market prices... {p.Current}/{p.Total}",
-                PriceRefreshStage.Fetching => $"Loading item data: {p.ItemName} ({p.Current}/{p.Total})",
-                PriceRefreshStage.Updating => $"Processing results... {p.Current}/{p.Total}",
-                PriceRefreshStage.Complete => $"Complete! ({p.Total} items)",
-                _ => $"Fetching prices... {p.Current}/{p.Total}"
-            };
-
-            if (p.Stage == PriceRefreshStage.Fetching && !string.IsNullOrEmpty(p.ItemName))
-            {
-                var item = allItems.FirstOrDefault(i => i.name == p.ItemName);
-                if (item.itemId > 0)
-                {
-                    _marketDataStatusSession.SetItemFetching(item.itemId);
-                    _marketDataStatusWindow?.RefreshView();
-                }
-            }
-        }
-
-        _marketVm.PriceRefreshProgressReported += ProgressHandler;
+        StatusLabel.Text = forceRefresh
+            ? "Refreshing prices through Core workflow..."
+            : "Refreshing missing or stale prices through Core workflow...";
 
         try
         {
-            var refreshResult = await _marketVm.RefreshPlanPricesAsync(
-                _currentPlan,
-                dc,
-                worldOrDc,
-                searchAllNA,
-                forceRefresh,
-                default);
+            var refreshResult = await _recipePlannerCommands.RefreshPricesAsync(
+                new CoreRefreshRecipePlanPricesRequest(
+                    priceFetchScope,
+                    dc,
+                    selectedRegion,
+                    ForceRefreshData: forceRefresh));
+            _recipeVm.RefreshFromCoreSession();
 
-            allItems = refreshResult.AllItems;
-            var prices = refreshResult.Prices;
-
-            foreach (var kvp in prices)
+            if (!refreshResult.Published)
             {
-                var itemId = kvp.Key;
-                var priceInfo = kvp.Value;
-
-                if (priceInfo.Source == PriceSource.Unknown)
+                StatusLabel.Text = refreshResult.Status switch
                 {
-                    if (!refreshResult.WarmCacheForCraftedItems && !refreshResult.CacheCandidateItemIds.Contains(itemId))
-                    {
-                        _marketDataStatusSession.SetItemSkipped(itemId, "Skipped (crafted item; market warming disabled)");
-                    }
-                    else
-                    {
-                        _marketDataStatusSession.SetItemFailed(itemId, priceInfo.SourceDetails, dataTypeText: "Unknown");
-                    }
-                }
-                else if (priceInfo.Source == PriceSource.Market)
-                {
-                    var isFetchedThisRun = refreshResult.ScopeDataCenters.Any(itemDc =>
-                        refreshResult.FetchedThisRunKeys.Contains((itemId, itemDc)));
-                    var dataScopeText = BuildMarketDataScopeText(itemId, refreshResult.DataScopeByItemId, refreshResult.ScopeDataCenters.Count);
-
-                    if (isFetchedThisRun)
-                    {
-                        _marketDataStatusSession.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, dataScopeText, "Universalis (this run)", "Market");
-                    }
-                    else
-                    {
-                        _marketDataStatusSession.SetItemCached(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, dataScopeText, "Market", priceInfo.LastUpdated);
-                    }
-                }
-                else if (priceInfo.Source == PriceSource.Vendor)
-                {
-                    _marketDataStatusSession.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, "N/A", "Garland", MarketShoppingConstants.VendorWorldName);
-                }
-                else if (priceInfo.Source == PriceSource.Untradeable)
-                {
-                    _marketDataStatusSession.SetItemSuccess(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, "N/A", "N/A", "Untradeable");
-                }
-                else
-                {
-                    _marketDataStatusSession.SetItemCached(itemId, priceInfo.UnitPrice, priceInfo.SourceDetails, "N/A", GetDataTypeText(priceInfo.Source), priceInfo.LastUpdated);
-                }
+                    CoreMarketPriceRefreshStatus.NoPlan => "No plan - build a plan first",
+                    CoreMarketPriceRefreshStatus.StalePlan => "Price refresh skipped because the active plan changed.",
+                    _ => "Price refresh skipped."
+                };
+                _marketDataStatusWindow?.RefreshView();
+                return false;
             }
 
+            var unavailableIds = refreshResult.UnavailableItems
+                .Select(item => item.ItemId)
+                .ToHashSet();
+            foreach (var (itemId, _, _) in allItems)
+            {
+                if (unavailableIds.Contains(itemId))
+                {
+                    var unavailable = refreshResult.UnavailableItems.First(item => item.ItemId == itemId);
+                    _marketDataStatusSession.SetItemFailed(
+                        itemId,
+                        $"Core price refresh did not find market data for {unavailable.Name}.",
+                        dataTypeText: "Market");
+                    continue;
+                }
+
+                _marketDataStatusSession.SetItemSuccess(
+                    itemId,
+                    0,
+                    "Price status is now owned by Core recipe workflow.",
+                    searchAllNA ? selectedRegion : dc,
+                    "Core",
+                    "Market");
+            }
             _marketDataStatusWindow?.RefreshView();
 
             if (_currentPlan != null)
@@ -282,7 +254,20 @@ public partial class MainWindow
                 DisplayPlanInTreeView(_currentPlan);
             }
 
-            StatusLabel.Text = $"{refreshResult.Message} Run Conduct Analysis to update market recommendations.";
+            StatusLabel.Text = refreshResult.HasUnavailableItems
+                ? $"{CoreMarketPriceAvailability.FormatUnavailableMessage(refreshResult.UnavailableItems)} Run Conduct Analysis to update market recommendations."
+                : $"Prices refreshed for {refreshResult.FetchedCount}/{refreshResult.RequestedCount} market entries. Run Conduct Analysis to update market recommendations.";
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusLabel.Text = "Price refresh canceled.";
+            foreach (var item in allItems)
+            {
+                _marketDataStatusSession.SetItemSkipped(item.itemId, "Core price refresh canceled");
+            }
+            _marketDataStatusWindow?.RefreshView();
+            return false;
         }
         catch (Exception ex)
         {
@@ -294,13 +279,12 @@ public partial class MainWindow
                 _marketDataStatusSession.SetItemFailed(item.itemId, ex.Message, dataTypeText: "Unknown");
             }
             _marketDataStatusWindow?.RefreshView();
+            return false;
         }
         finally
         {
-            _marketVm.PriceRefreshProgressReported -= ProgressHandler;
+            _logger.LogInformation("[OnFetchPricesAsync] END");
         }
-
-        _logger.LogInformation("[OnFetchPricesAsync] END");
     }
 
     private async Task RunMarketAnalysisFromCacheAsync(bool searchAllNA)
@@ -400,18 +384,6 @@ public partial class MainWindow
         }
 
         return $"{scope.CachedDataCenterCount}/{totalDataCenterCount} DC / {scope.CachedWorldCount} worlds";
-    }
-
-    private static string GetDataTypeText(PriceSource source)
-    {
-        return source switch
-        {
-            PriceSource.Market => "Market",
-            PriceSource.Vendor => "Vendor",
-            PriceSource.Untradeable => "Untradeable",
-            PriceSource.Unknown => "Unknown",
-            _ => source.ToString()
-        };
     }
 
     /// <summary>
@@ -776,6 +748,7 @@ public partial class MainWindow
             Scope: scope,
             SelectedDataCenter: selectedDataCenter,
             SelectedRegion: selectedRegion,
+            RecommendationMode: mode,
             Lens: lens,
             ExpectedWorldsByDataCenter: BuildExpectedWorlds(scope, selectedDataCenter, selectedRegion));
     }
