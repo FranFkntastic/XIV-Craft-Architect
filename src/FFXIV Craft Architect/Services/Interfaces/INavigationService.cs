@@ -9,6 +9,7 @@ public enum ApplicationTab
 {
     RecipePlanner,
     MarketAnalysis,
+    AcquisitionEvaluation,
     ProcurementPlanner
 }
 

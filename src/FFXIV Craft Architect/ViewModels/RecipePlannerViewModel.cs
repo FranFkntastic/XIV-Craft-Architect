@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Coordinators;
 using Microsoft.Extensions.Logging;
 
@@ -58,16 +59,22 @@ public partial class RecipePlannerViewModel : ViewModelBase
     private readonly PlanPersistenceCoordinator _planCoordinator;
     private readonly ExportCoordinator _exportCoordinator;
     private readonly ImportCoordinator _importCoordinator;
+    private readonly CraftSessionState? _session;
+    private readonly CoreAcquisitionDecisionService? _decisionService;
     private string _currentPlanPath = string.Empty;
 
     public RecipePlannerViewModel(
         PlanPersistenceCoordinator planCoordinator,
         ExportCoordinator exportCoordinator,
-        ImportCoordinator importCoordinator)
+        ImportCoordinator importCoordinator,
+        CraftSessionState? session = null,
+        CoreAcquisitionDecisionService? decisionService = null)
     {
         _planCoordinator = planCoordinator;
         _exportCoordinator = exportCoordinator;
         _importCoordinator = importCoordinator;
+        _session = session;
+        _decisionService = decisionService;
         _projectItems.CollectionChanged += OnProjectItemsCollectionChanged;
         _rootNodes.CollectionChanged += OnRootNodesCollectionChanged;
     }
@@ -141,6 +148,7 @@ public partial class RecipePlannerViewModel : ViewModelBase
                 // Now notify property changes AFTER RootNodes is populated
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(AggregatedMaterials));
+                PublishCurrentPlanToSession();
             }
             else
             {
@@ -297,6 +305,20 @@ public partial class RecipePlannerViewModel : ViewModelBase
             return;
         }
 
+        if (_decisionService != null)
+        {
+            var result = _decisionService.ChangeSource(node.ItemId, source);
+            if (!result.Changed)
+            {
+                return;
+            }
+
+            RefreshFromCoreSession();
+            var updatedNode = FindNodeById(nodeId) ?? node;
+            NodeAcquisitionChanged?.Invoke(this, new NodeChangedEventArgs(nodeId, updatedNode));
+            return;
+        }
+
         var sourceChanged = node.Source != source;
         var vendorChanged = source == AcquisitionSource.VendorBuy
             && selectedVendorIndex.HasValue
@@ -315,6 +337,7 @@ public partial class RecipePlannerViewModel : ViewModelBase
             node.SelectedVendorIndex = selectedVendorIndex.Value;
         }
 
+        PublishCurrentDecisionStateToSession("wpf recipe node acquisition changed");
         NodeAcquisitionChanged?.Invoke(this, new NodeChangedEventArgs(nodeId, node));
     }
 
@@ -327,6 +350,7 @@ public partial class RecipePlannerViewModel : ViewModelBase
         if (node != null && node.CanBeHq)
         {
             node.MustBeHq = !node.MustBeHq;
+            PublishCurrentDecisionStateToSession("wpf recipe node hq changed");
             NodeHqChanged?.Invoke(this, new NodeChangedEventArgs(nodeId, node));
         }
     }
@@ -339,6 +363,20 @@ public partial class RecipePlannerViewModel : ViewModelBase
         var node = FindNodeById(nodeId);
         if (node == null || !node.CanBeHq) return;
 
+        if (_decisionService != null)
+        {
+            var result = _decisionService.ChangeMarketHq(node.ItemId, mustBeHq);
+            if (!result.Changed)
+            {
+                return;
+            }
+
+            RefreshFromCoreSession();
+            var updatedNode = FindNodeById(nodeId) ?? node;
+            NodeHqChanged?.Invoke(this, new NodeChangedEventArgs(nodeId, updatedNode));
+            return;
+        }
+
         node.MustBeHq = mustBeHq;
 
         if (propagationMode != HqPropagationMode.None)
@@ -346,7 +384,21 @@ public partial class RecipePlannerViewModel : ViewModelBase
             PropagateHqRequirement(node, propagationMode, mustBeHq);
         }
 
+        PublishCurrentDecisionStateToSession("wpf recipe node hq changed");
         NodeHqChanged?.Invoke(this, new NodeChangedEventArgs(nodeId, node));
+    }
+
+    public void RefreshFromCoreSession()
+    {
+        if (_session == null)
+        {
+            return;
+        }
+
+        _currentPlan = _session.ActivePlan;
+        SyncRootNodesFromPlan();
+        OnPropertyChanged(nameof(CurrentPlan));
+        OnPropertyChanged(nameof(AggregatedMaterials));
     }
 
     /// <summary>
@@ -469,6 +521,77 @@ public partial class RecipePlannerViewModel : ViewModelBase
         foreach (var vm in _rootNodes)
         {
             vm.IsExpanded = isExpanded;
+        }
+    }
+
+    private void PublishCurrentPlanToSession()
+    {
+        _session?.ActivatePlan(
+            _currentPlan,
+            _projectItems.ToList(),
+            new CraftSessionActiveContext(
+                null,
+                _currentPlan?.DataCenter,
+                _currentPlan?.World,
+                null),
+            _currentPlan == null ? "wpf recipe plan cleared" : "wpf recipe plan activated");
+    }
+
+    private void PublishCurrentDecisionStateToSession(string reason)
+    {
+        if (_session == null || _currentPlan == null)
+        {
+            return;
+        }
+
+        var sessionPlan = _session.ActivePlan;
+        if (sessionPlan == null)
+        {
+            PublishCurrentPlanToSession();
+            return;
+        }
+
+        var planSessionVersion = _session.PlanSessionVersion;
+        SyncDecisionState(_currentPlan.RootItems, sessionPlan.RootItems);
+        _session.TryReplaceActivePlanDecisions(
+            _session.CaptureVersionStamp(),
+            sessionPlan,
+            planSessionVersion,
+            reason);
+    }
+
+    private static void SyncDecisionState(
+        IReadOnlyList<PlanNode> sourceNodes,
+        IReadOnlyList<PlanNode> targetNodes)
+    {
+        var sourceByNodeId = sourceNodes
+            .SelectMany(FlattenNodes)
+            .ToDictionary(node => node.NodeId, StringComparer.Ordinal);
+
+        foreach (var target in targetNodes.SelectMany(FlattenNodes))
+        {
+            if (!sourceByNodeId.TryGetValue(target.NodeId, out var source))
+            {
+                continue;
+            }
+
+            target.Source = source.Source;
+            target.SourceReason = source.SourceReason;
+            target.MustBeHq = source.MustBeHq;
+            target.SelectedVendorIndex = source.SelectedVendorIndex;
+        }
+    }
+
+    private static IEnumerable<PlanNode> FlattenNodes(PlanNode node)
+    {
+        yield return node;
+
+        foreach (var child in node.Children)
+        {
+            foreach (var descendant in FlattenNodes(child))
+            {
+                yield return descendant;
+            }
         }
     }
 
@@ -756,14 +879,14 @@ public partial class RecipePlannerViewModel : ViewModelBase
     private void ApplyImportResult(ImportCoordinator.ImportResult result)
     {
         if (result.Plan == null || result.ProjectItems == null) return;
-        
-        CurrentPlan = result.Plan;
-        
+
         _projectItems.Clear();
         foreach (var item in result.ProjectItems)
         {
             _projectItems.Add(item);
         }
+
+        CurrentPlan = result.Plan;
     }
 
 }

@@ -12,6 +12,8 @@ public partial class MainViewModel : ViewModelBase
 {
     private readonly RecipePlannerViewModel _recipePlanner;
     private readonly MarketAnalysisViewModel _marketAnalysis;
+    private readonly AcquisitionEvaluationViewModel _acquisitionEvaluation;
+    private readonly ProcurementPlannerViewModel _procurementPlanner;
     private readonly WorldBlacklistService _blacklistService;
 
     /// <summary>
@@ -20,10 +22,14 @@ public partial class MainViewModel : ViewModelBase
     public MainViewModel(
         RecipePlannerViewModel recipePlanner, 
         MarketAnalysisViewModel marketAnalysis,
+        AcquisitionEvaluationViewModel acquisitionEvaluation,
+        ProcurementPlannerViewModel procurementPlanner,
         WorldBlacklistService blacklistService)
     {
         _recipePlanner = recipePlanner;
         _marketAnalysis = marketAnalysis;
+        _acquisitionEvaluation = acquisitionEvaluation;
+        _procurementPlanner = procurementPlanner;
         _blacklistService = blacklistService;
     }
 
@@ -36,6 +42,16 @@ public partial class MainViewModel : ViewModelBase
     /// ViewModel for the Market Analysis tab.
     /// </summary>
     public MarketAnalysisViewModel MarketAnalysis => _marketAnalysis;
+
+    /// <summary>
+    /// ViewModel for the Acquisition Evaluation tab.
+    /// </summary>
+    public AcquisitionEvaluationViewModel AcquisitionEvaluation => _acquisitionEvaluation;
+
+    /// <summary>
+    /// ViewModel for the Procurement Planner tab.
+    /// </summary>
+    public ProcurementPlannerViewModel ProcurementPlanner => _procurementPlanner;
 
     /// <summary>
     /// Gets the count of blacklisted worlds.

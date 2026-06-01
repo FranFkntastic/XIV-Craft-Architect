@@ -98,6 +98,13 @@ public static class MarketAnalysisGridViewService
     {
         ArgumentNullException.ThrowIfNull(world);
 
+        if (HasScopePriceContext(world))
+        {
+            return world.ScopeCompetitiveAverageUnitPrice > 0
+                ? $"{world.ScopeCompetitiveQuantity:N0} competitive at ~{world.ScopeCompetitiveAverageUnitPrice:N0}g"
+                : $"{world.ScopeCompetitiveQuantity:N0} competitive";
+        }
+
         var lensSummary = world.Scores.FirstOrDefault(score => score.Lens == lens)?.Summary
             ?? world.Scores.FirstOrDefault()?.Summary;
         if (!string.IsNullOrWhiteSpace(lensSummary))
@@ -120,6 +127,12 @@ public static class MarketAnalysisGridViewService
     public static string FormatAnalysisScopePriceSummary(MarketItemAnalysis analysis)
     {
         ArgumentNullException.ThrowIfNull(analysis);
+
+        if (analysis.PriceEvaluation is { } evaluation &&
+            evaluation.Thresholds.InsaneFloorUnitPrice > 0)
+        {
+            return $"good avg ~{analysis.AnalysisScopeCompetitiveAverageUnitPrice:N0}g; avg ~{evaluation.CentralRegion.WeightedAverageUnitPrice:N0}g; competitive <= {evaluation.Thresholds.CompetitiveCeilingUnitPrice:N0}g; insane >= {evaluation.Thresholds.InsaneFloorUnitPrice:N0}g";
+        }
 
         return analysis.SaneThresholdUnitPrice > 0
             ? $"good avg ~{analysis.AnalysisScopeCompetitiveAverageUnitPrice:N0}g; base ~{analysis.AnalysisScopeBaselineUnitPrice:N0}g; avg ~{analysis.AnalysisScopeAverageUnitPrice:N0}g; competitive <= {analysis.CompetitiveThresholdUnitPrice:N0}g; insane >= {analysis.SaneThresholdUnitPrice:N0}g"
@@ -240,14 +253,13 @@ public static class MarketAnalysisGridViewService
         };
     }
 
-    public static string FormatCompetitiveStock(WorldMarketAnalysis world)
+    public static string FormatCompetitiveStockDetail(WorldMarketAnalysis world)
     {
         ArgumentNullException.ThrowIfNull(world);
 
-        var stock = $"{GetCompetitiveQuantity(world):N0} competitive";
         return world.ScopeInsaneQuantity > 0
-            ? $"{stock}, {world.ScopeInsaneQuantity:N0} insane"
-            : stock;
+            ? $"{world.ScopeInsaneQuantity:N0} insane"
+            : string.Empty;
     }
 
     public static string FormatCompetitiveValue(WorldMarketAnalysis world)
@@ -261,15 +273,29 @@ public static class MarketAnalysisGridViewService
         }
 
         var percent = (world.ScopeCompetitiveAverageUnitPrice - referencePrice) / referencePrice * 100m;
-        var rounded = Math.Round(Math.Abs(percent), 0, MidpointRounding.AwayFromZero);
-        if (rounded == 0)
+        var rounded = Math.Round(percent, 0, MidpointRounding.AwayFromZero);
+        return $"{rounded:+0;-0;0}%";
+    }
+
+    public static string FormatCompetitiveValueTooltip(WorldMarketAnalysis world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+
+        var (referencePrice, referenceLabel) = GetCompetitiveValueReference(world);
+        if (referencePrice <= 0 || world.ScopeCompetitiveAverageUnitPrice <= 0)
         {
-            return $"at {referenceLabel}";
+            return "No competitive average is available for comparison.";
         }
 
-        return percent < 0
-            ? $"{rounded:N0}% below {referenceLabel}"
-            : $"{rounded:N0}% above {referenceLabel}";
+        var percent = (world.ScopeCompetitiveAverageUnitPrice - referencePrice) / referencePrice * 100m;
+        var rounded = Math.Round(Math.Abs(percent), 0, MidpointRounding.AwayFromZero);
+        var relationship = percent < 0
+            ? "less than"
+            : percent > 0
+                ? "greater than"
+                : "equal to";
+
+        return $"{world.WorldName}'s competitive average is {rounded:N0}% {relationship} the regional {referenceLabel} average: {world.ScopeCompetitiveAverageUnitPrice:N0}g vs {referencePrice:N0}g.";
     }
 
     public static IReadOnlyList<MarketListingDivider> GetListingDividersBefore(
@@ -485,7 +511,10 @@ public static class MarketAnalysisGridViewService
 
     private static bool HasScopePriceContext(WorldMarketAnalysis world)
     {
-        return world.SaneThresholdUnitPrice > 0;
+        return world.ScopeSaneQuantity > 0 ||
+            world.ScopeCompetitiveQuantity > 0 ||
+            world.ScopeInsaneQuantity > 0 ||
+            world.ScopeCompetitiveAverageUnitPrice > 0;
     }
 
     private static int GetSaneQuantity(WorldMarketAnalysis world)

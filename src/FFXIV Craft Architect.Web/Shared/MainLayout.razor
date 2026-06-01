@@ -150,22 +150,24 @@
                         <MudMenuItem OnClick="OnLoadDevCraftPlanFixture" Icon="@Icons.Material.Filled.BugReport">
                             Load Dev Craftplan...
                         </MudMenuItem>
-                        <MudMenu Dense="true"
-                                 AnchorOrigin="Origin.TopRight"
-                                 TransformOrigin="Origin.TopLeft">
-                            <ActivatorContent>
-                                <MudMenuItem Icon="@Icons.Material.Filled.BugReport">
-                                    Debug
-                                </MudMenuItem>
-                            </ActivatorContent>
-                            <ChildContent>
-                                <MudMenuItem OnClick="OnDumpSelectedMarketAnalysisItem"
-                                             Icon="@Icons.Material.Filled.Download"
-                                             Disabled="@(!CanDumpSelectedMarketAnalysisItem)">
-                                    Dump Selected Market Analysis Item
-                                </MudMenuItem>
-                            </ChildContent>
-                        </MudMenu>
+                        <MudMenuItem OnClick="ToggleDebugToolsMenu"
+                                     Icon="@Icons.Material.Filled.BugReport"
+                                     AutoClose="false">
+                            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 24px;">
+                                <span>Debug</span>
+                                <MudIcon Icon="@(_debugToolsMenuOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" />
+                            </div>
+                        </MudMenuItem>
+                        @if (_debugToolsMenuOpen)
+                        {
+                            <MudMenuItem OnClick="OnDumpSelectedMarketAnalysisItem"
+                                         Icon="@Icons.Material.Filled.Download"
+                                         Disabled="@(!CanDumpSelectedMarketAnalysisItem)"
+                                         Style="padding-left: 32px;">
+                                Dump Selected Market Analysis Item
+                            </MudMenuItem>
+                        }
                     }
                 </ChildContent>
             </MudMenu>
@@ -194,6 +196,7 @@
     private MudThemeProvider _mudThemeProvider = null!;
     private string _activeTab = "market";
     private bool _disposed = false;
+    private bool _debugToolsMenuOpen;
     private bool IsDevelopment => string.Equals(HostEnvironment.Environment, "Development", StringComparison.OrdinalIgnoreCase);
     private bool CanDumpSelectedMarketAnalysisItem => AppState.MarketItemAnalyses.Any();
     
@@ -234,6 +237,11 @@
     private void OnStartupStatusChanged()
     {
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void ToggleDebugToolsMenu()
+    {
+        _debugToolsMenuOpen = !_debugToolsMenuOpen;
     }
     
     private async Task AutoSaveCallback()

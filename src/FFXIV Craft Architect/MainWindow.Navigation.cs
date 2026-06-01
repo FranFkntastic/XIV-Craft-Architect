@@ -3,6 +3,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Helpers;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIV_Craft_Architect;
@@ -13,6 +15,7 @@ public partial class MainWindow
     {
         RecipePlanner,
         MarketAnalysis,
+        AcquisitionEvaluation,
         ProcurementPlanner
     }
 
@@ -35,6 +38,14 @@ public partial class MainWindow
     }
 
     /// <summary>
+    /// Switches to the Acquisition Evaluation tab.
+    /// </summary>
+    private void OnAcquisitionEvaluationTabClick(object sender, MouseButtonEventArgs e)
+    {
+        ActivateTab(MainTab.AcquisitionEvaluation);
+    }
+
+    /// <summary>
     /// Switches to the Procurement Planner tab.
     /// </summary>
     private void OnProcurementPlannerTabClick(object sender, MouseButtonEventArgs e)
@@ -51,14 +62,22 @@ public partial class MainWindow
 
         SetTabActiveState(RecipePlannerTab, tab == MainTab.RecipePlanner);
         SetTabActiveState(MarketAnalysisTab, tab == MainTab.MarketAnalysis);
+        SetTabActiveState(AcquisitionEvaluationTab, tab == MainTab.AcquisitionEvaluation);
         SetTabActiveState(ProcurementPlannerTab, tab == MainTab.ProcurementPlanner);
 
         RecipePlannerContent.Visibility = tab == MainTab.RecipePlanner ? Visibility.Visible : Visibility.Collapsed;
         MarketAnalysisContent.Visibility = tab == MainTab.MarketAnalysis ? Visibility.Visible : Visibility.Collapsed;
+        AcquisitionEvaluationContent.Visibility = tab == MainTab.AcquisitionEvaluation ? Visibility.Visible : Visibility.Collapsed;
         ProcurementPlannerContent.Visibility = tab == MainTab.ProcurementPlanner ? Visibility.Visible : Visibility.Collapsed;
+
+        RecipePlannerModule.Visibility = tab == MainTab.RecipePlanner ? Visibility.Visible : Visibility.Collapsed;
+        MarketAnalysisModule.Visibility = tab == MainTab.MarketAnalysis ? Visibility.Visible : Visibility.Collapsed;
+        AcquisitionEvaluationModule.Visibility = tab == MainTab.AcquisitionEvaluation ? Visibility.Visible : Visibility.Collapsed;
+        ProcurementPlannerModule.Visibility = tab == MainTab.ProcurementPlanner ? Visibility.Visible : Visibility.Collapsed;
 
         RecipePlannerSidebarModule.Visibility = tab == MainTab.RecipePlanner ? Visibility.Visible : Visibility.Collapsed;
         MarketAnalysisSidebarModule.Visibility = tab == MainTab.MarketAnalysis ? Visibility.Visible : Visibility.Collapsed;
+        AcquisitionEvaluationSidebarModule.Visibility = tab == MainTab.AcquisitionEvaluation ? Visibility.Visible : Visibility.Collapsed;
         ProcurementPlannerSidebarModule.Visibility = tab == MainTab.ProcurementPlanner ? Visibility.Visible : Visibility.Collapsed;
 
         switch (tab)
@@ -74,6 +93,11 @@ public partial class MainWindow
                 }
 
                 StatusLabel.Text = "Market Analysis";
+                break;
+            case MainTab.AcquisitionEvaluation:
+                MarketTotalCostText.Text = string.Empty;
+                _mainVm.AcquisitionEvaluation.RefreshCommand.Execute(null);
+                StatusLabel.Text = "Acquisition Evaluation";
                 break;
             case MainTab.ProcurementPlanner:
                 MarketTotalCostText.Text = string.Empty;
@@ -121,7 +145,7 @@ public partial class MainWindow
     /// </summary>
     private bool IsMarketViewVisible()
     {
-        return _activeTab is MainTab.MarketAnalysis or MainTab.ProcurementPlanner;
+        return _activeTab is MainTab.MarketAnalysis or MainTab.AcquisitionEvaluation or MainTab.ProcurementPlanner;
     }
 
     /// <summary>
@@ -155,11 +179,24 @@ public partial class MainWindow
             var mode = ProcurementModeCombo.SelectedIndex == 1 ? "MaximizeValue" : "MinimizeTotalCost";
             _logger.LogInformation("[OnProcurementModeChanged] User changed mode to '{Mode}', saving setting", mode);
             _settingsService.Set("planning.default_recommendation_mode", mode);
+            var lens = ProcurementModeCombo.SelectedIndex == 1
+                ? MarketAcquisitionLens.BulkValue
+                : MarketAcquisitionLens.MinimumUpfrontCost;
+            ApplyMarketLensAndRefreshAsync(lens).SafeFireAndForget(OnAsyncError);
+        }
+    }
 
-            if (IsMarketViewVisible() && _currentPlan != null)
-            {
-                PopulateProcurementPanel();
-            }
+    private async Task ApplyMarketLensAndRefreshAsync(MarketAcquisitionLens lens)
+    {
+        await _marketVm.ApplyCoreMarketLensAsync(lens);
+        if (_currentPlan != null)
+        {
+            _currentPlan.SavedMarketPlans = _marketVm.ShoppingPlans.Select(vm => vm.Plan).ToList();
+        }
+
+        if (IsMarketViewVisible() && _currentPlan != null)
+        {
+            PopulateProcurementPanel();
         }
     }
 

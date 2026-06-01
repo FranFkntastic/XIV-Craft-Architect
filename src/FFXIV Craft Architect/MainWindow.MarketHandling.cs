@@ -4,6 +4,7 @@ using System.Windows.Media;
 using FFXIV_Craft_Architect.Coordinators;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Coordinators;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Helpers;
 using FFXIV_Craft_Architect.Models;
 using FFXIV_Craft_Architect.Services.Interfaces;
@@ -458,6 +459,8 @@ public partial class MainWindow
             vendorPlans = CreateVendorShoppingPlansForViewModel(categorized.VendorItems, prices);
         }
 
+        var displayOnlyShoppingPlans = false;
+
         // Handle market items
         List<DetailedShoppingPlan> marketPlans = new();
         if (categorized.MarketItems.Any())
@@ -490,6 +493,7 @@ public partial class MainWindow
             {
                 _logger.LogInformation("[UpdateMarketLogisticsAsync] Fetching live market data for {Count} items (SearchAllNA={SearchAllNA})", categorized.MarketItems.Count, searchAllNA);
                 marketPlans = await FetchAndDisplayLiveMarketDataForPlansAsync(categorized.MarketItems, searchAllNA);
+                displayOnlyShoppingPlans = true;
             }
         }
         else
@@ -501,7 +505,14 @@ public partial class MainWindow
         var allPlans = new List<DetailedShoppingPlan>();
         allPlans.AddRange(vendorPlans);
         allPlans.AddRange(marketPlans);
-        _marketVm.SetShoppingPlans(allPlans);
+        if (displayOnlyShoppingPlans)
+        {
+            _marketVm.DisplayShoppingPlans(allPlans);
+        }
+        else
+        {
+            _marketVm.SetShoppingPlans(allPlans);
+        }
 
         if (categorized.UntradeableItems.Any())
         {
@@ -514,7 +525,7 @@ public partial class MainWindow
 
     private void ClearMarketLogisticsPanels()
     {
-        _marketVm.Clear();
+        _marketVm.ClearDisplay();
         ProcurementPanel.Children.Clear();
     }
 
@@ -697,32 +708,39 @@ public partial class MainWindow
         try
         {
             var mode = GetCurrentRecommendationMode();
-            var result = await _marketVm.AnalyzeLiveMarketDataAsync(
-                marketItems,
-                dc,
-                searchAllNA,
-                mode,
+            var result = await _marketVm.RunCoreMarketAnalysisAsync(
+                CreateCoreMarketAnalysisWorkflowRequest(dc, searchAllNA, mode),
                 default);
 
-            if (!result.Success)
+            if (!result.Published)
             {
                 ProcurementPanel.Children.Remove(loadingCard);
-                var errorCard = CreateMarketInfoCard("Error", result.Message, MarketInfoCardKind.Error);
+                var message = string.IsNullOrWhiteSpace(_marketVm.StatusMessage)
+                    ? "Market analysis did not publish."
+                    : _marketVm.StatusMessage;
+                var errorCard = CreateMarketInfoCard("Error", message, MarketInfoCardKind.Error);
                 ProcurementPanel.Children.Add(errorCard);
-                StatusLabel.Text = result.Message;
+                StatusLabel.Text = message;
                 return new List<DetailedShoppingPlan>();
             }
 
+            var marketItemIds = marketItems
+                .Select(item => item.ItemId)
+                .ToHashSet();
+            var plans = _marketVm.ShoppingPlans
+                .Select(vm => vm.Plan)
+                .Where(plan => marketItemIds.Contains(plan.ItemId))
+                .ToList();
             if (_currentPlan != null)
             {
-                _currentPlan.SavedMarketPlans = result.Plans;
+                _currentPlan.SavedMarketPlans = plans;
             }
 
             ProcurementPanel.Children.Remove(loadingCard);
-            StatusLabel.Text = result.Message;
+            StatusLabel.Text = _marketVm.StatusMessage;
 
-            _logger.LogInformation("[FetchAndDisplayLiveMarketDataForPlansAsync] END - {Count} plans returned", result.Plans.Count);
-            return result.Plans;
+            _logger.LogInformation("[FetchAndDisplayLiveMarketDataForPlansAsync] END - {Count} plans returned", plans.Count);
+            return plans;
         }
         catch (Exception ex)
         {
@@ -738,6 +756,69 @@ public partial class MainWindow
             LeftPanelViewMarketStatusButton.IsEnabled = true;
             MenuViewMarketStatus.IsEnabled = true;
         }
+    }
+
+    private CoreMarketAnalysisWorkflowRequest CreateCoreMarketAnalysisWorkflowRequest(
+        string selectedDataCenter,
+        bool searchAllNA,
+        RecommendationMode mode)
+    {
+        var scope = searchAllNA
+            ? MarketFetchScope.EntireRegion
+            : MarketFetchScope.SelectedDataCenter;
+        var selectedRegion = ResolveSelectedRegion(selectedDataCenter);
+        var lens = mode == RecommendationMode.MaximizeValue
+            ? MarketAcquisitionLens.BulkValue
+            : MarketAcquisitionLens.MinimumUpfrontCost;
+
+        return new CoreMarketAnalysisWorkflowRequest(
+            ForceRefreshData: false,
+            Scope: scope,
+            SelectedDataCenter: selectedDataCenter,
+            SelectedRegion: selectedRegion,
+            Lens: lens,
+            ExpectedWorldsByDataCenter: BuildExpectedWorlds(scope, selectedDataCenter, selectedRegion));
+    }
+
+    private IReadOnlyDictionary<string, IReadOnlyList<string>> BuildExpectedWorlds(
+        MarketFetchScope scope,
+        string selectedDataCenter,
+        string selectedRegion)
+    {
+        var dataCenters = MarketFetchScopeResolver.GetDataCenters(scope, selectedDataCenter, selectedRegion);
+        return dataCenters.ToDictionary(
+            dataCenter => dataCenter,
+            dataCenter => (IReadOnlyList<string>)_worldDataCoordinator.GetWorldsForDataCenter(dataCenter),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveSelectedRegion(string selectedDataCenter)
+    {
+        if (MarketFetchScopeResolver.GetDataCenters(MarketFetchScope.EntireRegion, selectedDataCenter, "North America")
+            .Contains(selectedDataCenter, StringComparer.OrdinalIgnoreCase))
+        {
+            return "North America";
+        }
+
+        if (MarketFetchScopeResolver.GetDataCenters(MarketFetchScope.EntireRegion, selectedDataCenter, "Europe")
+            .Contains(selectedDataCenter, StringComparer.OrdinalIgnoreCase))
+        {
+            return "Europe";
+        }
+
+        if (MarketFetchScopeResolver.GetDataCenters(MarketFetchScope.EntireRegion, selectedDataCenter, "Japan")
+            .Contains(selectedDataCenter, StringComparer.OrdinalIgnoreCase))
+        {
+            return "Japan";
+        }
+
+        if (MarketFetchScopeResolver.GetDataCenters(MarketFetchScope.EntireRegion, selectedDataCenter, "Oceania")
+            .Contains(selectedDataCenter, StringComparer.OrdinalIgnoreCase))
+        {
+            return "Oceania";
+        }
+
+        return "North America";
     }
 
     private void AddUntradeableItemsCard(List<MaterialAggregate> untradeableItems)

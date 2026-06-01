@@ -37,6 +37,7 @@ builder.Services.AddScoped<IRecipeLayerWorkflowService, RecipeLayerWorkflowServi
 builder.Services.AddScoped<IArtisanService, ArtisanService>();
 builder.Services.AddScoped<IMarketCacheService, IndexedDbMarketCacheService>();
 builder.Services.AddScoped<MarketShoppingService>();
+builder.Services.AddScoped<IMarketPriceEvaluationService, MarketPriceEvaluationService>();
 builder.Services.AddScoped<IMarketPriceLadderAnalysisService, MarketPriceLadderAnalysisService>();
 builder.Services.AddScoped<IMarketAnalysisExecutionService, MarketAnalysisExecutionService>();
 builder.Services.AddScoped<IProcurementRouteExecutionService, ProcurementRouteExecutionService>();

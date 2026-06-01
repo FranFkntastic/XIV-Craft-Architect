@@ -43,7 +43,7 @@
                         {
                             <span class="ma-ladder-flag is-low-outlier">low outlier</span>
                         }
-                        else if (listing.IsScopeUncompetitive)
+                        else if (IsUncompetitive(listing))
                         {
                             <span class="ma-ladder-flag is-uncompetitive">uncompetitive</span>
                         }
@@ -60,7 +60,7 @@
     private static string GetListingClass(AnalyzedMarketListing listing)
     {
         var classes = new List<string>();
-        if (listing.IsInCompetitiveShelf || listing.IsScopeCompetitive)
+        if (listing.IsInCompetitiveShelf || IsCompetitive(listing))
         {
             classes.Add("is-competitive");
         }
@@ -78,12 +78,32 @@
             classes.Add("is-low-outlier");
         }
 
-        if (listing.IsScopeUncompetitive)
+        if (IsUncompetitive(listing))
         {
             classes.Add("is-uncompetitive");
         }
 
         return string.Join(" ", classes);
+    }
+
+    private static bool IsCompetitive(AnalyzedMarketListing listing)
+    {
+        return listing.Competitiveness switch
+        {
+            MarketListingCompetitiveness.Deal or MarketListingCompetitiveness.Competitive => true,
+            MarketListingCompetitiveness.Unknown => listing.IsScopeCompetitive,
+            _ => false
+        };
+    }
+
+    private static bool IsUncompetitive(AnalyzedMarketListing listing)
+    {
+        return listing.Competitiveness switch
+        {
+            MarketListingCompetitiveness.Fair or MarketListingCompetitiveness.Uncompetitive => true,
+            MarketListingCompetitiveness.Unknown => listing.IsScopeUncompetitive,
+            _ => false
+        };
     }
 
     private static string FormatReviewAge(AnalyzedMarketListing listing)

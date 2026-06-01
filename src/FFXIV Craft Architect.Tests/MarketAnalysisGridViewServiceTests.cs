@@ -238,9 +238,9 @@ public class MarketAnalysisGridViewServiceTests
     }
 
     [Theory]
-    [InlineData(80, "20% below good")]
-    [InlineData(100, "at good")]
-    [InlineData(110, "10% above good")]
+    [InlineData(80, "-20%")]
+    [InlineData(100, "0%")]
+    [InlineData(110, "+10%")]
     public void FormatCompetitiveValue_DescribesDistanceFromGoodAverage(decimal worldAverage, string expected)
     {
         var world = ScopeWorld("Siren", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, goodAverage: 100, worldCompetitiveAverage: worldAverage);
@@ -253,7 +253,27 @@ public class MarketAnalysisGridViewServiceTests
     {
         var world = ScopeWorld("Zalera", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, goodAverage: 100, worldCompetitiveAverage: 1);
 
-        Assert.Equal("99% below good", MarketAnalysisGridViewService.FormatCompetitiveValue(world));
+        Assert.Equal("-99%", MarketAnalysisGridViewService.FormatCompetitiveValue(world));
+    }
+
+    [Fact]
+    public void FormatCompetitiveValueTooltip_ExplainsSignedDifferenceFromGoodAverage()
+    {
+        var world = ScopeWorld("Siren", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, goodAverage: 1_100, worldCompetitiveAverage: 1_055);
+
+        var tooltip = MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world);
+
+        Assert.Equal("Siren's competitive average is 4% less than the regional good average: 1,055g vs 1,100g.", tooltip);
+    }
+
+    [Fact]
+    public void FormatCompetitiveValueTooltip_ExplainsSignedDifferenceAboveGoodAverage()
+    {
+        var world = ScopeWorld("Siren", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, goodAverage: 1_100, worldCompetitiveAverage: 1_210);
+
+        var tooltip = MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world);
+
+        Assert.Equal("Siren's competitive average is 10% greater than the regional good average: 1,210g vs 1,100g.", tooltip);
     }
 
     [Fact]
@@ -351,6 +371,35 @@ public class MarketAnalysisGridViewServiceTests
     }
 
     [Fact]
+    public void FormatWorldPriceSummary_WithScopeCompetitiveAverage_IgnoresStaleShelfSummary()
+    {
+        var world = new WorldMarketAnalysis
+        {
+            DataCenter = "Dynamis",
+            WorldName = "Kraken",
+            QuantityNeeded = 500,
+            CompetitiveThresholdUnitPrice = 1_661,
+            SaneThresholdUnitPrice = 2_215,
+            ScopeCompetitiveQuantity = 603,
+            ScopeCompetitiveAverageUnitPrice = 907,
+            Scores =
+            [
+                new WorldLensScore
+                {
+                    Lens = MarketAcquisitionLens.BulkValue,
+                    Summary = "0 competitive at ~602g"
+                }
+            ]
+        };
+
+        var summary = MarketAnalysisGridViewService.FormatWorldPriceSummary(
+            world,
+            MarketAcquisitionLens.BulkValue);
+
+        Assert.Equal("603 competitive at ~907g", summary);
+    }
+
+    [Fact]
     public void FormatAnalysisScopePriceSummary_ShowsCompetitiveAverageAndThresholds()
     {
         var analysis = new MarketItemAnalysis
@@ -366,6 +415,36 @@ public class MarketAnalysisGridViewServiceTests
         var summary = MarketAnalysisGridViewService.FormatAnalysisScopePriceSummary(analysis);
 
         Assert.Equal("good avg ~110g; base ~100g; avg ~125g; competitive <= 150g; insane >= 200g", summary);
+    }
+
+    [Fact]
+    public void FormatAnalysisScopePriceSummary_PrefersStoredPriceEvaluation()
+    {
+        var analysis = new MarketItemAnalysis
+        {
+            AnalysisScopeBaselineUnitPrice = 1,
+            AnalysisScopeAverageUnitPrice = 1,
+            AnalysisScopeCompetitiveAverageUnitPrice = 100,
+            CompetitiveThresholdUnitPrice = 1,
+            SaneThresholdUnitPrice = 1,
+            PriceEvaluation = new MarketPriceEvaluation
+            {
+                CentralRegion = new MarketCentralPriceRegion
+                {
+                    WeightedAverageUnitPrice = 125
+                },
+                Thresholds = new MarketPriceThresholds
+                {
+                    DealCeilingUnitPrice = 100,
+                    CompetitiveCeilingUnitPrice = 150,
+                    InsaneFloorUnitPrice = 200
+                }
+            }
+        };
+
+        var summary = MarketAnalysisGridViewService.FormatAnalysisScopePriceSummary(analysis);
+
+        Assert.Equal("good avg ~100g; avg ~125g; competitive <= 150g; insane >= 200g", summary);
     }
 
     [Fact]

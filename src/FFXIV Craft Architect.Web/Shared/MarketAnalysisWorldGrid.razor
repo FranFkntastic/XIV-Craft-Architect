@@ -24,7 +24,7 @@
                 <th>@SortHeader("Stock Depth", MarketAnalysisWorldGridSortColumn.StockDepth)</th>
                 <th>@SortHeader("Coverage", MarketAnalysisWorldGridSortColumn.Coverage)</th>
                 <th>@SortHeader("Price / Value", MarketAnalysisWorldGridSortColumn.PriceValue)</th>
-                <th>@SortHeader("Value", MarketAnalysisWorldGridSortColumn.Value)</th>
+                <th>@SortHeader("% Diff", MarketAnalysisWorldGridSortColumn.Value)</th>
                 <th>@SortHeader("Data", MarketAnalysisWorldGridSortColumn.Data)</th>
             </tr>
         </thead>
@@ -34,6 +34,7 @@
                 var key = GetWorldKey(world);
                 var scoreBucket = MarketAnalysisGridViewService.GetDisplayScoreBucket(world, Lens);
                 var coverageBucket = MarketAnalysisGridViewService.GetDisplayCoverageBucket(world);
+                var stockDetail = MarketAnalysisGridViewService.FormatCompetitiveStockDetail(world);
                 <tr class="@MarketAnalysisGridViewService.GetWorldRowClass(world, Lens)">
                     <td>
                         <button type="button" class="ma-world-toggle" @onclick="() => ToggleWorld(key)">
@@ -46,8 +47,11 @@
                         </button>
                     </td>
                     <td>
-                        <span>@MarketAnalysisGridViewService.GetCompetitiveQuantity(world).ToString("N0") comp.</span>
-                        <span class="ma-world-muted">@MarketAnalysisGridViewService.FormatCompetitiveStock(world)</span>
+                        <span>@($"{MarketAnalysisGridViewService.GetCompetitiveQuantity(world):N0} competitive")</span>
+                        @if (!string.IsNullOrWhiteSpace(stockDetail))
+                        {
+                            <span class="ma-world-muted">@stockDetail</span>
+                        }
                     </td>
                     <td>
                         <span>@MarketAnalysisGridViewService.FormatCoverage(world)</span>
@@ -57,7 +61,7 @@
                         <span class="ma-world-score @MarketAnalysisGridViewService.GetScoreClass(scoreBucket)">@MarketAnalysisGridViewService.FormatScoreBucket(scoreBucket)</span>
                         <span class="ma-world-muted">@MarketAnalysisGridViewService.FormatWorldPriceSummary(world, Lens)</span>
                     </td>
-                    <td>@MarketAnalysisGridViewService.FormatCompetitiveValue(world)</td>
+                    <td title="@MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world)">@MarketAnalysisGridViewService.FormatCompetitiveValue(world)</td>
                     <td title="@FormatDataTooltip(world)">
                         <span>@FormatDataAge(world)</span>
                         <span class="ma-world-muted">@FormatDataQuality(world)</span>

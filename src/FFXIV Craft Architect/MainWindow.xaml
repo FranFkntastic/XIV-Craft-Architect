@@ -79,6 +79,18 @@
                                    FontWeight="SemiBold"
                                    Foreground="{StaticResource AccentGoldBrush}"/>
                     </Border>
+                    <Border x:Name="AcquisitionEvaluationTab"
+                            Background="Transparent"
+                            CornerRadius="4"
+                            Padding="12,6"
+                            Margin="0,0,8,0"
+                            Cursor="Hand"
+                            MouseLeftButtonDown="OnAcquisitionEvaluationTabClick">
+                        <TextBlock Text="ACQUISITION EVALUATION"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource AccentGoldBrush}"/>
+                    </Border>
                     <Border x:Name="ProcurementPlannerTab"
                             Background="Transparent"
                             CornerRadius="4"
@@ -192,13 +204,15 @@
                 <Grid>
                     <modules:RecipePlannerSidebarView x:Name="RecipePlannerSidebarModule" Visibility="Visible"/>
                     <modules:MarketAnalysisSidebarView x:Name="MarketAnalysisSidebarModule" Visibility="Collapsed"/>
+                    <modules:AcquisitionEvaluationSidebarView x:Name="AcquisitionEvaluationSidebarModule" Visibility="Collapsed"/>
                     <modules:ProcurementPlannerSidebarView x:Name="ProcurementPlannerSidebarModule" Visibility="Collapsed"/>
                 </Grid>
             </Border>
 
-            <modules:RecipePlannerView x:Name="RecipePlannerModule" Grid.Column="1"/>
-            <modules:MarketAnalysisView x:Name="MarketAnalysisModule" Grid.Column="1"/>
-            <modules:ProcurementPlannerView x:Name="ProcurementPlannerModule" Grid.Column="1"/>
+            <modules:RecipePlannerView x:Name="RecipePlannerModule" Grid.Column="1" Visibility="Visible"/>
+            <modules:MarketAnalysisView x:Name="MarketAnalysisModule" Grid.Column="1" Visibility="Collapsed"/>
+            <modules:AcquisitionEvaluationView x:Name="AcquisitionEvaluationModule" Grid.Column="1" Visibility="Collapsed"/>
+            <modules:ProcurementPlannerView x:Name="ProcurementPlannerModule" Grid.Column="1" Visibility="Collapsed"/>
         </Grid>
 
         <!-- Status Bar -->

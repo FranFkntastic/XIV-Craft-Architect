@@ -6,7 +6,7 @@ namespace FFXIV_Craft_Architect.Tests;
 public class MarketPriceLadderAnalysisServiceTests
 {
     [Fact]
-    public async Task AnalyzeAsync_TinyCheapBaitListing_DoesNotCreateStrongBulkStock()
+    public async Task AnalyzeAsync_TinyCheapLeadListing_DoesNotCreateLocalShelfButUsesScopeCompetitiveStock()
     {
         var service = CreateService();
         var request = CreateRequest(
@@ -22,11 +22,13 @@ public class MarketPriceLadderAnalysisServiceTests
         var world = Assert.Single(Assert.Single(analyses).Worlds);
         Assert.NotEqual(100, world.CompetitiveQuantity);
         Assert.Equal(MarketCoverageBucket.Full, world.CoverageBucket);
-        Assert.Equal(MarketScoreBucket.Unavailable, world.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).ScoreBucket);
+        Assert.Equal(100, world.ScopeCompetitiveQuantity);
+        Assert.Equal(MarketScoreBucket.Optimal, world.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).ScoreBucket);
+        Assert.Equal("100 competitive at ~99g", world.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).Summary);
     }
 
     [Fact]
-    public async Task AnalyzeAsync_BulkValueRanksDeepCompetitiveStockAboveTinyBait()
+    public async Task AnalyzeAsync_BulkValueRanksFullScopeCompetitiveStockAbovePartialDiscountStock()
     {
         var service = CreateService();
         var request = CreateRequest(
@@ -49,8 +51,8 @@ public class MarketPriceLadderAnalysisServiceTests
         var bait = analysis.Worlds.Single(world => world.WorldName == "BaitWorld");
         var deep = analysis.Worlds.Single(world => world.WorldName == "DeepWorld");
         Assert.True(
-            deep.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).Score >
-            bait.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).Score);
+            bait.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).Score >
+            deep.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).Score);
     }
 
     [Fact]
@@ -159,6 +161,38 @@ public class MarketPriceLadderAnalysisServiceTests
         Assert.True(analysis.AnalysisScopeCompetitiveAverageUnitPrice < analysis.AnalysisScopeAverageUnitPrice);
         Assert.Contains(world.Listings, listing => listing.RetainerName == "Uncompetitive Ask" && listing.IsScopeUncompetitive && listing.PriceSanity == MarketListingPriceSanity.Sane);
         Assert.Contains(world.Listings, listing => listing.RetainerName == "Insane Ask" && listing.PriceSanity == MarketListingPriceSanity.Insane);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ClassifiesListingCompetitivenessAndRetainsBooleanShims()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            quantityNeeded: 100,
+            listings:
+            [
+                Listing(quantity: 100, price: 100, retainer: "Deal Anchor"),
+                Listing(quantity: 10, price: 140, retainer: "Competitive Stretch"),
+                Listing(quantity: 10, price: 175, retainer: "Uncompetitive Ask"),
+                Listing(quantity: 5, price: 250, retainer: "Insane Ask")
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        var world = Assert.Single(analysis.Worlds);
+        var deal = world.Listings.Single(listing => listing.RetainerName == "Deal Anchor");
+        var competitive = world.Listings.Single(listing => listing.RetainerName == "Competitive Stretch");
+        var uncompetitive = world.Listings.Single(listing => listing.RetainerName == "Uncompetitive Ask");
+        var excluded = world.Listings.Single(listing => listing.RetainerName == "Insane Ask");
+        Assert.Equal(MarketListingCompetitiveness.Deal, deal.Competitiveness);
+        Assert.True(deal.IsScopeCompetitive);
+        Assert.Equal(MarketListingCompetitiveness.Competitive, competitive.Competitiveness);
+        Assert.True(competitive.IsScopeCompetitive);
+        Assert.Equal(MarketListingCompetitiveness.Uncompetitive, uncompetitive.Competitiveness);
+        Assert.True(uncompetitive.IsScopeUncompetitive);
+        Assert.Equal(MarketListingCompetitiveness.Excluded, excluded.Competitiveness);
+        Assert.False(excluded.IsScopeCompetitive);
+        Assert.False(excluded.IsScopeUncompetitive);
     }
 
     [Fact]
@@ -273,6 +307,218 @@ public class MarketPriceLadderAnalysisServiceTests
         Assert.Equal(0, world.Listings.Where(listing => listing.PriceSanity == MarketListingPriceSanity.LowOutlier).Sum(listing => listing.Quantity));
         Assert.Equal(MarketListingPriceSanity.Insane, world.Listings.Single(listing => listing.RetainerName == "Tiny High Shelf").PriceSanity);
         Assert.Equal(14, world.Listings.Where(listing => listing.PriceSanity == MarketListingPriceSanity.Insane).Sum(listing => listing.Quantity));
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_RegionalEvaluation_DoesNotChangeWithRequestedQuantity()
+    {
+        var service = CreateService();
+        var worlds =
+            new[]
+            {
+                World("Siren",
+                [
+                    Listing(quantity: 50, price: 1, retainer: "Suspicious Single Seller"),
+                    Listing(quantity: 100, price: 100, retainer: "Normal Seller")
+                ])
+            };
+
+        var smallNeed = Assert.Single(await service.AnalyzeAsync(CreateRequest(quantityNeeded: 10, worlds: worlds)));
+        var largeNeed = Assert.Single(await service.AnalyzeAsync(CreateRequest(quantityNeeded: 100, worlds: worlds)));
+
+        Assert.Equal(smallNeed.AnalysisScopeMedianUnitPrice, largeNeed.AnalysisScopeMedianUnitPrice);
+        Assert.Equal(smallNeed.AnalysisScopeAverageUnitPrice, largeNeed.AnalysisScopeAverageUnitPrice);
+        Assert.Equal(smallNeed.AnalysisScopeBaselineUnitPrice, largeNeed.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(smallNeed.CompetitiveThresholdUnitPrice, largeNeed.CompetitiveThresholdUnitPrice);
+        Assert.Equal(100, smallNeed.AnalysisScopeBaselineUnitPrice);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_FullStackLowRegion_CanContributeToRegionalAverage()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            quantityNeeded: 999,
+            listings:
+            [
+                Listing(quantity: 99, price: 10, retainer: "Full Stack Seller"),
+                Listing(quantity: 99, price: 100, retainer: "Higher Seller")
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        Assert.True(analysis.AnalysisScopeAverageUnitPrice < 100);
+        Assert.Equal(10, analysis.PriceEvaluation?.CentralRegion.MinUnitPrice);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ElementalCommoditySingleSmallStackLowRegion_DoesNotDefineRegionalAverage()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            quantityNeeded: 999,
+            itemId: 8,
+            listings:
+            [
+                Listing(quantity: 99, price: 10, retainer: "Small Crystal Stack"),
+                Listing(quantity: 999, price: 100, retainer: "Higher Crystal Seller")
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        Assert.Equal(100, analysis.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(100, analysis.PriceEvaluation?.CentralRegion.MinUnitPrice);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ElementalCommodityDeepLowRegion_CanDefineRegionalAverage()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            quantityNeeded: 999,
+            itemId: 8,
+            listings:
+            [
+                Listing(quantity: 1_000, price: 10, retainer: "Deep Crystal Seller"),
+                Listing(quantity: 999, price: 100, retainer: "Higher Crystal Seller")
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        Assert.True(analysis.AnalysisScopeAverageUnitPrice < 100);
+        Assert.Equal(10, analysis.PriceEvaluation?.CentralRegion.MinUnitPrice);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_SplitLowRegionWithSubstantialStacks_CanContributeToRegionalAverage()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            quantityNeeded: 999,
+            listings:
+            [
+                Listing(quantity: 40, price: 10, retainer: "Low Stack One"),
+                Listing(quantity: 40, price: 12, retainer: "Low Stack Two"),
+                Listing(quantity: 99, price: 100, retainer: "Higher Seller")
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        Assert.True(analysis.AnalysisScopeAverageUnitPrice < 100);
+        Assert.Equal(10, analysis.PriceEvaluation?.CentralRegion.MinUnitPrice);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ManyTinyLowListings_DoNotDefineRegionalAverage()
+    {
+        var service = CreateService();
+        var tinyListings = Enumerable.Range(1, 50)
+            .Select(index => Listing(quantity: 1, price: 10, retainer: $"Tiny Seller {index}"))
+            .ToList();
+        var request = CreateRequest(
+            quantityNeeded: 999,
+            listings: [.. tinyListings, Listing(quantity: 99, price: 100, retainer: "Higher Seller")]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        Assert.Equal(100, analysis.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(100, analysis.PriceEvaluation?.CentralRegion.MinUnitPrice);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_PopulatesPriceEvaluationFromCurrentScopeContext()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            quantityNeeded: 100,
+            worlds:
+            [
+                World("Siren",
+                [
+                    Listing(quantity: 100, price: 100, retainer: "Anchor"),
+                    Listing(quantity: 25, price: 130, retainer: "Stretch")
+                ]),
+                World("Faerie",
+                [
+                    Listing(quantity: 40, price: 120, retainer: "Neighbor")
+                ])
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        var evaluation = Assert.IsType<MarketPriceEvaluation>(analysis.PriceEvaluation);
+        Assert.Equal(analysis.ItemId, evaluation.ItemId);
+        Assert.Equal(analysis.Scope, evaluation.Scope);
+        Assert.Equal(MarketPriceQualityPolicy.NqOnly, evaluation.QualityPolicy);
+        Assert.Equal(analysis.LoadedAtUtc, evaluation.EvaluatedAtUtc);
+        Assert.Equal(analysis.AnalysisScopeMedianUnitPrice, evaluation.CentralRegion.MedianUnitPrice);
+        Assert.Equal(analysis.AnalysisScopeAverageUnitPrice, evaluation.CentralRegion.WeightedAverageUnitPrice);
+        Assert.Equal(analysis.CompetitiveThresholdUnitPrice, evaluation.Thresholds.CompetitiveCeilingUnitPrice);
+        Assert.Equal(analysis.SaneThresholdUnitPrice, evaluation.Thresholds.SaneCeilingUnitPrice);
+        Assert.Equal(analysis.SaneThresholdUnitPrice, evaluation.Thresholds.InsaneFloorUnitPrice);
+        Assert.Equal(3, evaluation.CentralRegion.ListingCount);
+        Assert.Equal(165, evaluation.CentralRegion.TotalQuantity);
+        Assert.Equal(3, evaluation.CentralRegion.DistinctRetainerCount);
+        Assert.Equal(2, evaluation.CentralRegion.DistinctWorldCount);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_MixedQualityListings_RecordCombinedQualityFallback()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            listings:
+            [
+                Listing(quantity: 10, price: 100, retainer: "NQ Seller"),
+                Listing(quantity: 10, price: 110, retainer: "HQ Seller", isHq: true)
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        var evaluation = Assert.IsType<MarketPriceEvaluation>(analysis.PriceEvaluation);
+        Assert.Equal(MarketPriceQualityPolicy.Combined, evaluation.QualityPolicy);
+        Assert.Contains(
+            MarketPriceEvaluationReasonCode.QualityChannelFallbackToCombined,
+            evaluation.Diagnostics.CompactReasonCodes);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_SingleQualityListings_RecordSpecificQualityPolicy()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            listings:
+            [
+                Listing(quantity: 10, price: 100, retainer: "HQ Seller", isHq: true)
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        var evaluation = Assert.IsType<MarketPriceEvaluation>(analysis.PriceEvaluation);
+        Assert.Equal(MarketPriceQualityPolicy.HqOnly, evaluation.QualityPolicy);
+        Assert.DoesNotContain(
+            MarketPriceEvaluationReasonCode.QualityChannelFallbackToCombined,
+            evaluation.Diagnostics.CompactReasonCodes);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ExcludedQualityTail_DoesNotDriveCentralQualityPolicy()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            listings:
+            [
+                Listing(quantity: 99, price: 100, retainer: "NQ Seller"),
+                Listing(quantity: 1, price: 1_000, retainer: "HQ Scam", isHq: true)
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        var evaluation = Assert.IsType<MarketPriceEvaluation>(analysis.PriceEvaluation);
+        Assert.Equal(MarketPriceQualityPolicy.NqOnly, evaluation.QualityPolicy);
+        Assert.DoesNotContain(
+            MarketPriceEvaluationReasonCode.QualityChannelFallbackToCombined,
+            evaluation.Diagnostics.CompactReasonCodes);
     }
 
     [Fact]
@@ -415,6 +661,21 @@ public class MarketPriceLadderAnalysisServiceTests
         Assert.Equal(MarketDataAgeSource.LocalFetchFallback, world.DataAgeSource);
         Assert.Equal(MarketDataQualityBucket.Aging, world.DataQualityBucket);
         Assert.True(world.DataQualityScore <= 70);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_PriceEvaluationCentralRegion_UsesWorstCentralListingDataQuality()
+    {
+        var service = CreateService();
+        var now = DateTime.UtcNow;
+        var analysis = Assert.Single(await service.AnalyzeAsync(CreateRequest(
+            fetchedAtUtc: now.AddMinutes(-2),
+            worlds:
+            [
+                World("StaleWorld", [Listing(10, 100, "Stale")], uploadedAtUtc: now.AddHours(-8))
+            ])));
+
+        Assert.Equal(MarketDataQualityBucket.VeryOld, analysis.PriceEvaluation?.CentralRegion.DataQualityBucket);
     }
 
     [Fact]
@@ -577,11 +838,12 @@ public class MarketPriceLadderAnalysisServiceTests
         DateTime? fetchedAtUtc = null,
         DateTime? responseUploadedAtUtc = null,
         IReadOnlyList<CachedListing>? listings = null,
-        IReadOnlyList<CachedWorldData>? worlds = null)
+        IReadOnlyList<CachedWorldData>? worlds = null,
+        int itemId = 123)
     {
         var material = new MaterialAggregate
         {
-            ItemId = 123,
+            ItemId = itemId,
             Name = "Test Item",
             TotalQuantity = quantityNeeded
         };
@@ -645,13 +907,19 @@ public class MarketPriceLadderAnalysisServiceTests
         };
     }
 
-    private static CachedListing Listing(int quantity, long price, string retainer, DateTime? reviewedAtUtc = null)
+    private static CachedListing Listing(
+        int quantity,
+        long price,
+        string retainer,
+        DateTime? reviewedAtUtc = null,
+        bool isHq = false)
     {
         return new CachedListing
         {
             Quantity = quantity,
             PricePerUnit = price,
             RetainerName = retainer,
+            IsHq = isHq,
             LastReviewTimeUnix = reviewedAtUtc.HasValue
                 ? new DateTimeOffset(CacheTimeHelper.NormalizeToUtc(reviewedAtUtc.Value)).ToUnixTimeSeconds()
                 : null
