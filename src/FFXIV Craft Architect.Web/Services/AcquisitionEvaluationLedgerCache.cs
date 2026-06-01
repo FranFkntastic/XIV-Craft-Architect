@@ -25,18 +25,15 @@ public sealed class AcquisitionEvaluationLedgerCache
         return (scopes & RelevantScopes) != AppStateChangeScope.None;
     }
 
-    public AcquisitionEvaluationSnapshot GetOrBuild(
+    public bool TryGet(
         AcquisitionEvaluationLedgerKey key,
         AcquisitionFilter filter,
-        Func<AcquisitionEvaluationSnapshot> build)
+        out AcquisitionEvaluationSnapshot snapshot)
     {
         if (_snapshot == null || _key != key)
         {
-            _snapshot = build();
-            _key = key;
-            _filter = filter;
-            BuildCount++;
-            return _snapshot;
+            snapshot = null!;
+            return false;
         }
 
         if (_filter != filter)
@@ -48,7 +45,30 @@ public sealed class AcquisitionEvaluationLedgerCache
             _filter = filter;
         }
 
-        return _snapshot;
+        snapshot = _snapshot;
+        return true;
+    }
+
+    public AcquisitionEvaluationSnapshot Store(
+        AcquisitionEvaluationLedgerKey key,
+        AcquisitionFilter filter,
+        AcquisitionEvaluationSnapshot snapshot)
+    {
+        _snapshot = snapshot;
+        _key = key;
+        _filter = filter;
+        BuildCount++;
+        return snapshot;
+    }
+
+    public AcquisitionEvaluationSnapshot GetOrBuild(
+        AcquisitionEvaluationLedgerKey key,
+        AcquisitionFilter filter,
+        Func<AcquisitionEvaluationSnapshot> build)
+    {
+        return TryGet(key, filter, out var snapshot)
+            ? snapshot
+            : Store(key, filter, build());
     }
 
     public void Invalidate()

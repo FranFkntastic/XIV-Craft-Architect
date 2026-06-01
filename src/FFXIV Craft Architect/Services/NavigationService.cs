@@ -30,6 +30,7 @@ public class NavigationService : INavigationService
     /// <inheritdoc />
     public bool IsMarketViewVisible => 
         CurrentTab == ApplicationTab.MarketAnalysis || 
+        CurrentTab == ApplicationTab.AcquisitionEvaluation ||
         CurrentTab == ApplicationTab.ProcurementPlanner;
 
     /// <inheritdoc />

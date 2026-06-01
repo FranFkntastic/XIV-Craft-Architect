@@ -1,6 +1,6 @@
 @page "/market"
 @using FFXIV_Craft_Architect.Core.Models
-@using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
 @using static FFXIV_Craft_Architect.Core.Models.MarketSortOption
 @inject RecipePlannerCommandService RecipePlannerCommandService
@@ -9,6 +9,7 @@
 @inject AppState AppState
 @inject NavigationManager NavigationManager
 @inject CancellableOperationService CancellableOperations
+@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 ma-page-container">
@@ -31,9 +32,19 @@
             MarketItemAnalyses="AppState.MarketItemAnalyses"
             CurrentLens="AppState.MarketAnalysisLens"
             CurrentSort="AppState.MarketSortPreference"
+            SortColumn="AppState.MarketAnalysisGridSortColumn"
+            SortDescending="AppState.MarketAnalysisGridSortDescending"
+            WorldSortColumn="AppState.MarketAnalysisWorldGridSortColumn"
+            WorldSortDescending="AppState.MarketAnalysisWorldGridSortDescending"
+            SelectedItemId="AppState.SelectedMarketAnalysisItemId"
+            ExpandedWorldKeys="AppState.ExpandedMarketAnalysisWorlds"
             AutoExpandItemId="AppState.AutoExpandItemId"
             ShowWorldsColumn="AppState.SearchEntireRegion"
             IsAnalyzing="_isAnalyzing"
+            OnSelectedItemChanged="SelectMarketAnalysisItem"
+            OnWorldExpansionToggled="ToggleMarketAnalysisWorld"
+            OnSortChanged="SetMarketAnalysisSort"
+            OnWorldSortChanged="SetMarketAnalysisWorldSort"
             OnAutoExpandConsumed="ConsumeAutoExpand"
             OnGoToPlannerRequested="GoToPlanner"
             OnRunAnalysisRequested="RunMarketAnalysisAsync" />
@@ -51,8 +62,17 @@
     protected override void OnInitialized()
     {
         // Subscribe to plan changes (including restoration from auto-save)
+        AppState.OnStateChanged += OnStateChanged;
         AppState.OnPlanChanged += OnPlanChanged;
         AppState.OnShoppingListChanged += OnShoppingListChanged;
+    }
+
+    private void OnStateChanged(AppStateChange change)
+    {
+        if (change.HasScope(AppStateChangeScope.MarketAnalysisView))
+        {
+            InvokeAsync(StateHasChanged);
+        }
     }
 
     private void OnPlanChanged()
@@ -70,12 +90,33 @@
         AppState.ConsumeMarketItemAutoExpand(itemId);
     }
 
+    private void SelectMarketAnalysisItem(int? itemId)
+    {
+        AppState.SelectMarketAnalysisItem(itemId);
+    }
+
+    private void ToggleMarketAnalysisWorld(MarketAnalysisExpandedWorldKey key)
+    {
+        AppState.ToggleMarketAnalysisWorld(key.ItemId, key.DataCenter, key.WorldName);
+    }
+
+    private void SetMarketAnalysisSort(MarketAnalysisGridSortState sort)
+    {
+        AppState.SetMarketAnalysisGridSort(sort.Column, sort.Descending);
+    }
+
+    private void SetMarketAnalysisWorldSort(MarketAnalysisWorldGridSortState sort)
+    {
+        AppState.SetMarketAnalysisWorldGridSort(sort.Column, sort.Descending);
+    }
+
     public void Dispose()
     {
         CancellableOperations.Cancel(CancellableOperationWorkflow.MarketAnalysis);
         CancellableOperations.Cancel(CancellableOperationWorkflow.PriceRefresh);
         _marketAnalysisOperation = null;
         _priceRefreshOperation = null;
+        AppState.OnStateChanged -= OnStateChanged;
         AppState.OnPlanChanged -= OnPlanChanged;
         AppState.OnShoppingListChanged -= OnShoppingListChanged;
     }
@@ -86,7 +127,9 @@
     /// </summary>
     private List<MaterialAggregate> GetBuyItems()
     {
-        return AcquisitionPlanningService.GetMarketAnalysisCandidates(AppState.CurrentPlan);
+        return RecipeLayerWorkflowService
+            .BuildMarketAnalysisCandidates(AppState.CurrentPlan)
+            .ToList();
     }
 
     private bool CanAnalyze()

@@ -1,12 +1,14 @@
 @page "/procurement"
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
 @inject ISnackbar Snackbar
 @inject AppState AppState
 @inject NavigationManager NavigationManager
 @inject CancellableOperationService CancellableOperations
 @inject ProcurementWorkflowService ProcurementWorkflow
+@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @implements IDisposable
 
 @{
@@ -78,7 +80,8 @@
     /// </summary>
     private List<MaterialAggregate> GetBuyItems()
     {
-        return AcquisitionPlanningService.GetActiveProcurementItems(AppState.CurrentPlan)
+        return RecipeLayerWorkflowService
+            .BuildActiveProcurementItems(AppState.CurrentPlan)
             .Where(m => m.TotalQuantity > 0)
             .ToList();
     }
@@ -92,14 +95,16 @@
     private ProcurementEvidenceSummary GetEvidenceSummary()
     {
         return AcquisitionPlanningService.GetProcurementEvidenceSummary(
-            AppState.CurrentPlan,
+            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan),
+            RecipeLayerWorkflowService.BuildMarketAnalysisCandidates(AppState.CurrentPlan),
             AppState.ShoppingPlans);
     }
 
     private Severity GetProcurementNoticeSeverity(ProcurementEvidenceSummary evidenceSummary)
     {
         var overlaySummary = AcquisitionPlanningService.GetProcurementEvidenceSummary(
-            AppState.CurrentPlan,
+            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan),
+            RecipeLayerWorkflowService.BuildMarketAnalysisCandidates(AppState.CurrentPlan),
             AppState.ProcurementShoppingPlans);
         if (overlaySummary.HasCompleteActiveEvidence)
         {

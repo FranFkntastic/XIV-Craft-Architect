@@ -165,7 +165,7 @@ public class AcquisitionDecisionServiceTests
         rootB.Children.Add(childB);
 
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(new CraftingPlan { RootItems = [rootA, rootB] });
+        appState.ApplyBuiltRecipePlanWithActiveItems(new CraftingPlan { RootItems = [rootA, rootB] });
         appState.ReplaceMarketAnalysis([], [CreateSharedChildShoppingPlan(quantityNeeded: 4, totalCost: 400)]);
         return appState;
     }
@@ -176,7 +176,7 @@ public class AcquisitionDecisionServiceTests
         root.Children.Add(CreateSharedChild(root));
 
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(new CraftingPlan { RootItems = [root] });
+        appState.ApplyBuiltRecipePlanWithActiveItems(new CraftingPlan { RootItems = [root] });
         appState.ReplaceMarketAnalysis([], [CreateSharedChildShoppingPlan(quantityNeeded: 2, totalCost: 200)]);
         return appState;
     }

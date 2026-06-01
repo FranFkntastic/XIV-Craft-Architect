@@ -6,10 +6,14 @@ namespace FFXIV_Craft_Architect.Web.Services;
 public sealed class AcquisitionDecisionService
 {
     private readonly AppState _appState;
+    private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
 
-    public AcquisitionDecisionService(AppState appState)
+    public AcquisitionDecisionService(
+        AppState appState,
+        IRecipeLayerWorkflowService? recipeLayerWorkflow = null)
     {
         _appState = appState;
+        _recipeLayerWorkflow = recipeLayerWorkflow ?? new LightweightRecipeLayerWorkflowService();
     }
 
     public AcquisitionDecisionResult ChangeSource(PlanNode node, AcquisitionSource source)
@@ -105,10 +109,13 @@ public sealed class AcquisitionDecisionService
 
         var costContext = AcquisitionPlanningService.CreateCostContext(_appState.ShoppingPlans);
         AcquisitionPlanningService.ReconcileAcquisitionDecisions(_appState.CurrentPlan, costContext);
-        _appState.ReplaceShoppingItemsFromActivePlan();
-        _appState.ClearProcurementOverlay();
-        _appState.NotifyPlanDecisionChanged();
+        _appState.ApplyPlanDecisionChange(GetActiveProcurementItems(), clearProcurementOverlay: true);
         ClearStaleProcurementStatus();
+    }
+
+    private IReadOnlyList<MaterialAggregate> GetActiveProcurementItems()
+    {
+        return _recipeLayerWorkflow.BuildActiveProcurementItems(_appState.CurrentPlan);
     }
 
     private void ClearStaleProcurementStatus()

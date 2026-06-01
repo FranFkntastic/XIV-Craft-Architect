@@ -50,17 +50,17 @@
                         <ComboBoxItem Content="Price (High to Low)"/>
                     </ComboBox>
 
-                    <TextBlock Text="Mode"
+                    <TextBlock Text="Acquisition Lens"
                                Foreground="{StaticResource Brush.Text.Secondary}"
                                Margin="0,0,0,4"/>
                     <ComboBox x:Name="ProcurementModeCombo"
                               Margin="0,0,0,8">
-                        <ComboBoxItem Content="Minimize Total Cost"/>
-                        <ComboBoxItem Content="Maximize Value"/>
+                        <ComboBoxItem Content="Minimum Upfront Cost"/>
+                        <ComboBoxItem Content="Best Value / Bulk Acquisition"/>
                     </ComboBox>
 
                      <CheckBox x:Name="ProcurementSearchAllNaCheck"
-                               Content="Search all NA DCs"
+                               Content="Search entire region"
                                Foreground="{StaticResource Brush.Text.Secondary}"/>
 
                      <Separator Margin="0,12"/>

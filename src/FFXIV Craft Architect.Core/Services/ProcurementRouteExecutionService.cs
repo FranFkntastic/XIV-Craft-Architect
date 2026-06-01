@@ -25,8 +25,9 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         ArgumentNullException.ThrowIfNull(request);
 
         progress?.Report("Selecting procurement market evidence...");
+        var activeProcurementItems = GetActiveProcurementItems(request);
         var selection = AcquisitionPlanningService.SelectActiveProcurementEvidence(
-            request.Plan,
+            activeProcurementItems,
             request.SourceShoppingPlans,
             request.Scope,
             request.SelectedDataCenter);
@@ -35,7 +36,7 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         if (request.Scope == MarketFetchScope.EntireRegion &&
             request.ExpectedWorldsByDataCenter.Count > 0)
         {
-            var activeItemsByItemId = AcquisitionPlanningService.GetActiveProcurementItems(request.Plan)
+            var activeItemsByItemId = activeProcurementItems
                 .Where(item => item.TotalQuantity > 0)
                 .GroupBy(item => item.ItemId)
                 .ToDictionary(group => group.Key, group => group.First());
@@ -78,7 +79,7 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         }
 
         var evidencePlans = AcquisitionPlanningService.MergeActiveProcurementEvidence(
-            request.Plan,
+            activeProcurementItems,
             reusableEvidence,
             refreshedEvidence);
         _marketShoppingService.ApplyVendorPurchaseOverrides(request.Plan, evidencePlans);
@@ -99,6 +100,13 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             reusableEvidence,
             refreshedEvidence,
             missingItems);
+    }
+
+    private static IReadOnlyList<MaterialAggregate> GetActiveProcurementItems(ProcurementRouteExecutionRequest request)
+    {
+        return request.ActiveProcurementItems.Count > 0
+            ? request.ActiveProcurementItems
+            : AcquisitionPlanningService.GetActiveProcurementItems(request.Plan);
     }
 
     private static bool HasExpectedRegionEvidence(
@@ -148,9 +156,12 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         IEnumerable<DetailedShoppingPlan> sourcePlans,
         ProcurementRouteExecutionRequest request)
     {
-        var activePlans = AcquisitionPlanningService.FilterShoppingPlansForActiveProcurement(
-            request.Plan,
-            sourcePlans);
+        var activeItemIds = GetActiveProcurementItems(request)
+            .Select(item => item.ItemId)
+            .ToHashSet();
+        var activePlans = sourcePlans
+            .Where(plan => activeItemIds.Contains(plan.ItemId))
+            .ToList();
         activePlans = MarketAnalysisPlanAdjuster.ExcludeWorlds(
             activePlans,
             request.BlacklistedWorlds);

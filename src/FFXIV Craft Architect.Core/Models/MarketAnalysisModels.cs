@@ -40,6 +40,59 @@ public enum MarketDataAgeSource
     Missing
 }
 
+public enum MarketListingPriceSanity
+{
+    Sane = 0,
+    LowOutlier = 1,
+    Outlier = 2,
+    Insane = 3
+}
+
+public enum MarketListingCompetitiveness
+{
+    Unknown = 0,
+    Deal = 1,
+    Competitive = 2,
+    Fair = 3,
+    Uncompetitive = 4,
+    Excluded = 5
+}
+
+public enum MarketPriceQualityPolicy
+{
+    Unknown = 0,
+    NqOnly = 1,
+    HqOnly = 2,
+    Combined = 3,
+    DualChannel = 4
+}
+
+public enum MarketPriceRegionCredibility
+{
+    Unknown = 0,
+    Thin = 1,
+    Credible = 2,
+    Strong = 3
+}
+
+public enum MarketPriceEvaluationConfidence
+{
+    Unknown = 0,
+    Low = 1,
+    Medium = 2,
+    High = 3
+}
+
+public enum MarketPriceEvaluationReasonCode
+{
+    Unknown = 0,
+    AcceptedDueToQuantityDespiteLowDiversity = 1,
+    ExcludedFromCentralRegionButProcurementEligible = 2,
+    RejectedAsThinLowRegion = 3,
+    RejectedAsHighOutlierRegion = 4,
+    QualityChannelFallbackToCombined = 5
+}
+
 public sealed class MarketItemAnalysis
 {
     public int ItemId { get; init; }
@@ -47,13 +100,105 @@ public sealed class MarketItemAnalysis
     public int QuantityNeeded { get; init; }
     public MarketFetchScope Scope { get; init; }
     public DateTime LoadedAtUtc { get; init; }
+    public decimal AnalysisScopeBaselineUnitPrice { get; init; }
+    public decimal AnalysisScopeAverageUnitPrice { get; init; }
+    public decimal AnalysisScopeCompetitiveAverageUnitPrice { get; init; }
+    public decimal AnalysisScopeMedianUnitPrice { get; init; }
+    public decimal CompetitiveThresholdUnitPrice { get; init; }
+    public decimal SaneThresholdUnitPrice { get; init; }
     public IReadOnlyList<string> RequestedDataCenters { get; init; } = [];
     public IReadOnlyList<string> PresentDataCenters { get; init; } = [];
     public IReadOnlyList<string> MissingDataCenters { get; init; } = [];
     public bool HasCompleteScopeData => MissingDataCenters.Count == 0;
     public MarketDataQualityBucket WorstDataQualityBucket { get; init; } = MarketDataQualityBucket.Missing;
+    public MarketPriceEvaluation? PriceEvaluation { get; init; }
     public List<WorldMarketAnalysis> Worlds { get; init; } = new();
     public string? Warning { get; init; }
+}
+
+public sealed class MarketPriceEvaluation
+{
+    public int ItemId { get; init; }
+    public MarketFetchScope Scope { get; init; }
+    public MarketPriceQualityPolicy QualityPolicy { get; init; }
+    public DateTime EvaluatedAtUtc { get; init; }
+    public MarketCentralPriceRegion CentralRegion { get; init; } = new();
+    public MarketPriceThresholds Thresholds { get; init; } = new();
+    public MarketListingClassCounts ListingClassCounts { get; init; } = new();
+    public MarketPriceEvaluationConfidence Confidence { get; init; }
+    public MarketPriceEvaluationDiagnostics Diagnostics { get; init; } = new();
+}
+
+public sealed class MarketPriceEvaluationContext
+{
+    public decimal BaselineUnitPrice { get; init; }
+    public decimal AverageUnitPrice { get; init; }
+    public decimal CompetitiveAverageUnitPrice { get; init; }
+    public decimal MedianUnitPrice { get; init; }
+    public decimal CompetitiveThresholdUnitPrice { get; init; }
+    public decimal SaneThresholdUnitPrice { get; init; }
+    public long LowOutlierMaxUnitPrice { get; init; }
+    public MarketPriceEvaluation PriceEvaluation { get; init; } = new();
+}
+
+public sealed class MarketCentralPriceRegion
+{
+    public long MinUnitPrice { get; init; }
+    public long MaxUnitPrice { get; init; }
+    public decimal MedianUnitPrice { get; init; }
+    public decimal WeightedAverageUnitPrice { get; init; }
+    public int ListingCount { get; init; }
+    public int TotalQuantity { get; init; }
+    public int DistinctRetainerCount { get; init; }
+    public int DistinctWorldCount { get; init; }
+    public MarketDataQualityBucket DataQualityBucket { get; init; } = MarketDataQualityBucket.Missing;
+    public MarketPriceRegionCredibility Credibility { get; init; }
+}
+
+public sealed class MarketPriceThresholds
+{
+    public decimal DealCeilingUnitPrice { get; init; }
+    public decimal CompetitiveCeilingUnitPrice { get; init; }
+    public decimal SaneCeilingUnitPrice { get; init; }
+    public decimal InsaneFloorUnitPrice { get; init; }
+}
+
+public sealed class MarketListingClassCounts
+{
+    public int DealCount { get; init; }
+    public int CompetitiveCount { get; init; }
+    public int FairCount { get; init; }
+    public int UncompetitiveCount { get; init; }
+    public int ExcludedCount { get; init; }
+    public int LowOutlierCount { get; init; }
+    public int SaneCount { get; init; }
+    public int OutlierCount { get; init; }
+    public int InsaneCount { get; init; }
+}
+
+public sealed class MarketPriceEvaluationDiagnostics
+{
+    public List<MarketPriceEvaluationReasonCode> CompactReasonCodes { get; init; } = new();
+    public List<MarketPriceRegionSummary> CompactRegionSummaries { get; init; } = new();
+    public List<MarketPriceGapSummary> DetectedPriceGapSummaries { get; init; } = new();
+    public bool DebugDetailAvailable { get; init; }
+}
+
+public sealed class MarketPriceRegionSummary
+{
+    public long MinUnitPrice { get; init; }
+    public long MaxUnitPrice { get; init; }
+    public int ListingCount { get; init; }
+    public int TotalQuantity { get; init; }
+    public MarketPriceRegionCredibility Credibility { get; init; }
+    public MarketPriceEvaluationReasonCode ReasonCode { get; init; }
+}
+
+public sealed class MarketPriceGapSummary
+{
+    public long BeforeUnitPrice { get; init; }
+    public long AfterUnitPrice { get; init; }
+    public decimal BreakPercent { get; init; }
 }
 
 public sealed class WorldMarketAnalysis
@@ -62,10 +207,24 @@ public sealed class WorldMarketAnalysis
     public string WorldName { get; init; } = string.Empty;
     public int QuantityNeeded { get; init; }
     public int CompetitiveQuantity { get; init; }
+    public int LocalCompetitiveQuantity { get; init; }
+    public int ScopeCompetitiveQuantity { get; init; }
+    public int ScopeSaneQuantity { get; init; }
+    public int ScopeUncompetitiveQuantity { get; init; }
+    public int ScopeInsaneQuantity { get; init; }
     public int TotalSaneQuantity { get; init; }
     public int TotalListingQuantity { get; init; }
     public decimal CompetitiveCoverageRatio { get; init; }
+    public decimal ScopeCompetitiveCoverageRatio { get; init; }
+    public decimal ScopeSaneCoverageRatio { get; init; }
     public decimal SaneCoverageRatio { get; init; }
+    public decimal AnalysisScopeBaselineUnitPrice { get; init; }
+    public decimal AnalysisScopeAverageUnitPrice { get; init; }
+    public decimal AnalysisScopeCompetitiveAverageUnitPrice { get; init; }
+    public decimal ScopeCompetitiveAverageUnitPrice { get; init; }
+    public decimal AnalysisScopeMedianUnitPrice { get; init; }
+    public decimal CompetitiveThresholdUnitPrice { get; init; }
+    public decimal SaneThresholdUnitPrice { get; init; }
     public MarketCoverageBucket CoverageBucket { get; init; }
     public DateTime? FetchedAtUtc { get; init; }
     public DateTime? MarketUploadedAtUtc { get; init; }
@@ -98,8 +257,11 @@ public sealed class AnalyzedMarketListing
     public long PricePerUnit { get; init; }
     public string RetainerName { get; init; } = string.Empty;
     public bool IsHq { get; init; }
-    public bool IsOutlier { get; init; }
+    public MarketListingPriceSanity PriceSanity { get; init; }
+    public MarketListingCompetitiveness Competitiveness { get; init; }
     public bool IsInCompetitiveShelf { get; init; }
+    public bool IsScopeCompetitive { get; init; }
+    public bool IsScopeUncompetitive { get; init; }
     public DateTime? LastReviewTimeUtc { get; init; }
 }
 

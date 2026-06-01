@@ -57,106 +57,93 @@
     font-size: 11px;
 }
 
-.ma-number-cell,
-.ma-total-cell {
-    text-align: left;
-}
-
-.ma-total-cell {
-    color: #d4a73a;
-    font-weight: 700;
-}
-
-.ma-recommendation-cell {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.ma-data-grid {
+.ma-table-scroll {
     height: 100%;
     min-height: 0;
-    background: transparent;
-    color: #d7d7d7;
-}
-
-::deep .ma-data-grid .mud-table-container {
-    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
     background: transparent;
 }
 
-::deep .ma-data-grid .mud-table-root {
-    background: transparent;
-    table-layout: fixed !important;
-    width: 100% !important;
-    min-width: 0 !important;
+.ma-ledger-table {
+    width: 100%;
+    min-width: 0;
+    border-collapse: collapse;
+    table-layout: fixed;
 }
 
-::deep .ma-data-grid thead {
+.ma-ledger-table thead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
     background: #252a2e;
 }
 
-::deep .ma-data-grid .mud-table-cell {
-    padding: 5px 5px !important;
+.ma-ledger-table th,
+.ma-ledger-table td {
+    min-width: 0;
+    padding: 5px 5px;
+    border-bottom: 1px solid #2c3135;
+    color: #d7d7d7;
+    text-align: left;
+    vertical-align: middle;
 }
 
-::deep .ma-data-grid th {
+.ma-ledger-table th {
+    padding: 4px 5px;
+    border-bottom-color: #343a40;
     color: #888;
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    border-bottom: 1px solid #343a40;
-    background: #252a2e;
     white-space: nowrap;
-    padding: 4px 5px !important;
+    background: #252a2e;
 }
 
-::deep .ma-data-grid td {
-    color: #d7d7d7;
-    border-bottom: 1px solid #2c3135;
-    padding: 5px 5px !important;
-    min-width: 0;
-}
-
-::deep .ma-data-grid .column-header {
-    gap: 2px;
-    min-width: 0;
-}
-
-::deep .ma-data-grid .sortable-column-header {
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-::deep .ma-data-grid .column-options .mud-menu {
-    display: none;
-}
-
-::deep .ma-data-grid tbody tr {
+.ma-ledger-table tbody tr {
     background: transparent;
     cursor: pointer;
 }
 
-::deep .ma-data-grid tbody tr:hover,
-::deep .ma-data-grid tbody tr.is-selected {
+.ma-ledger-table tbody tr:hover,
+.ma-ledger-table tbody tr.is-selected {
     background: #28323a;
 }
 
-::deep .ma-data-grid tbody tr.is-selected {
+.ma-ledger-table tbody tr.is-selected {
     box-shadow: inset 3px 0 0 #90caf9;
 }
 
-::deep .ma-data-grid tbody tr.has-warning:not(.is-selected) {
+.ma-ledger-table tbody tr.has-warning:not(.is-selected) {
     box-shadow: inset 3px 0 0 #ff9800;
 }
 
-::deep .ma-data-grid .mud-table-sort-label {
+.ma-sort-header {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    border: 0;
     color: inherit;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    text-transform: inherit;
+    cursor: pointer;
 }
 
-::deep .ma-data-grid .mud-table-sort-label:hover,
-::deep .ma-data-grid .mud-table-sort-label-icon {
+.ma-sort-header:hover,
+.ma-sort-header.is-active {
     color: #c7d6e2;
+}
+
+.ma-sort-direction {
+    color: #90caf9;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
 }
 
 .ma-recommendation-column span {
@@ -171,7 +158,6 @@
 }
 
 .ma-number-column,
-.ma-stock-column,
 .ma-total-column {
     text-align: left;
     white-space: nowrap;

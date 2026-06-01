@@ -87,6 +87,292 @@ public class AppStatePersistenceTests
     }
 
     [Fact]
+    public void LoadStoredPlan_RestoresScopeAwareMarketAnalysisFields()
+    {
+        var appState = new AppState();
+        var storedPlan = new StoredPlan
+        {
+            Id = "autosave",
+            Name = "AutoSave",
+            DataCenter = "Aether",
+            ProjectItems =
+            [
+                new StoredProjectItem
+                {
+                    Id = 123,
+                    Name = "Scope Item",
+                    Quantity = 10
+                }
+            ],
+            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
+            {
+                new()
+                {
+                    ItemId = 123,
+                    Name = "Scope Item",
+                    QuantityNeeded = 10
+                }
+            }),
+            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
+            {
+                new()
+                {
+                    ItemId = 123,
+                    Name = "Scope Item",
+                    QuantityNeeded = 10,
+                    AnalysisScopeBaselineUnitPrice = 640,
+                    AnalysisScopeAverageUnitPrice = 650,
+                    AnalysisScopeMedianUnitPrice = 630,
+                    SaneThresholdUnitPrice = 1280,
+                    Worlds =
+                    [
+                        new WorldMarketAnalysis
+                        {
+                            DataCenter = "Aether",
+                            WorldName = "Siren",
+                            QuantityNeeded = 10,
+                            AnalysisScopeBaselineUnitPrice = 640,
+                            AnalysisScopeAverageUnitPrice = 650,
+                            AnalysisScopeMedianUnitPrice = 630,
+                            SaneThresholdUnitPrice = 1280,
+                            LocalCompetitiveQuantity = 2,
+                            ScopeCompetitiveQuantity = 8,
+                            ScopeSaneQuantity = 10,
+                            ScopeInsaneQuantity = 3,
+                            ScopeCompetitiveCoverageRatio = 0.8m,
+                            ScopeSaneCoverageRatio = 1.0m
+                        }
+                    ]
+                }
+            })
+        };
+
+        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
+
+        var analysis = Assert.Single(appState.MarketItemAnalyses);
+        Assert.Equal(640, analysis.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(650, analysis.AnalysisScopeAverageUnitPrice);
+        Assert.Equal(630, analysis.AnalysisScopeMedianUnitPrice);
+        Assert.Equal(1280, analysis.SaneThresholdUnitPrice);
+
+        var world = Assert.Single(analysis.Worlds);
+        Assert.Equal(640, world.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(650, world.AnalysisScopeAverageUnitPrice);
+        Assert.Equal(630, world.AnalysisScopeMedianUnitPrice);
+        Assert.Equal(1280, world.SaneThresholdUnitPrice);
+        Assert.Equal(2, world.LocalCompetitiveQuantity);
+        Assert.Equal(8, world.ScopeCompetitiveQuantity);
+        Assert.Equal(10, world.ScopeSaneQuantity);
+        Assert.Equal(3, world.ScopeInsaneQuantity);
+        Assert.Equal(0.8m, world.ScopeCompetitiveCoverageRatio);
+        Assert.Equal(1.0m, world.ScopeSaneCoverageRatio);
+    }
+
+    [Fact]
+    public void LoadStoredPlan_LegacyAnalysisMissingScopeAwareFields_LoadsDefaults()
+    {
+        var appState = new AppState();
+        var storedPlan = new StoredPlan
+        {
+            Id = "legacy",
+            Name = "Legacy",
+            DataCenter = "Aether",
+            ProjectItems =
+            [
+                new StoredProjectItem
+                {
+                    Id = 123,
+                    Name = "Legacy Item",
+                    Quantity = 10
+                }
+            ],
+            MarketPlansJson = """
+                [
+                  {
+                    "ItemId": 123,
+                    "Name": "Legacy Item",
+                    "QuantityNeeded": 10
+                  }
+                ]
+                """,
+            MarketItemAnalysesJson = """
+                [
+                  {
+                    "ItemId": 123,
+                    "Name": "Legacy Item",
+                    "QuantityNeeded": 10,
+                    "Worlds": [
+                      {
+                        "DataCenter": "Aether",
+                        "WorldName": "Siren",
+                        "QuantityNeeded": 10
+                      }
+                    ]
+                  }
+                ]
+                """
+        };
+
+        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
+
+        var analysis = Assert.Single(appState.MarketItemAnalyses);
+        Assert.Equal(0, analysis.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(0, analysis.AnalysisScopeAverageUnitPrice);
+        Assert.Equal(0, analysis.AnalysisScopeMedianUnitPrice);
+        Assert.Equal(0, analysis.SaneThresholdUnitPrice);
+
+        var world = Assert.Single(analysis.Worlds);
+        Assert.Equal(0, world.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(0, world.AnalysisScopeAverageUnitPrice);
+        Assert.Equal(0, world.AnalysisScopeMedianUnitPrice);
+        Assert.Equal(0, world.SaneThresholdUnitPrice);
+        Assert.Equal(0, world.ScopeCompetitiveQuantity);
+        Assert.Equal(0, world.ScopeSaneQuantity);
+        Assert.Equal(0, world.ScopeInsaneQuantity);
+    }
+
+    [Fact]
+    public void LoadStoredPlan_LegacyAnalysisWithOutlierListingField_ClearsAnalysis()
+    {
+        var appState = new AppState();
+        var storedPlan = new StoredPlan
+        {
+            Id = "legacy-outlier",
+            Name = "Legacy Outlier",
+            DataCenter = "Aether",
+            ProjectItems =
+            [
+                new StoredProjectItem
+                {
+                    Id = 123,
+                    Name = "Legacy Item",
+                    Quantity = 10
+                }
+            ],
+            MarketPlansJson = """
+                [
+                  {
+                    "ItemId": 123,
+                    "Name": "Legacy Item",
+                    "QuantityNeeded": 10
+                  }
+                ]
+                """,
+            MarketItemAnalysesJson = """
+                [
+                  {
+                    "ItemId": 123,
+                    "Name": "Legacy Item",
+                    "QuantityNeeded": 10,
+                    "Worlds": [
+                      {
+                        "DataCenter": "Aether",
+                        "WorldName": "Siren",
+                        "QuantityNeeded": 10,
+                        "Listings": [
+                          {
+                            "Quantity": 1,
+                            "PricePerUnit": 999999999,
+                            "RetainerName": "Legacy Scam",
+                            "IsOutlier": true
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+                """
+        };
+
+        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
+
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Empty(appState.ShoppingPlans);
+    }
+
+    [Fact]
+    public void LoadStoredPlan_ClearsMarketAnalysisViewState()
+    {
+        var appState = new AppState();
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 123,
+                    Name = "Existing Item",
+                    QuantityNeeded = 10,
+                    Worlds =
+                    [
+                        new WorldMarketAnalysis
+                        {
+                            DataCenter = "Aether",
+                            WorldName = "Siren"
+                        }
+                    ]
+                }
+            ],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 123,
+                    Name = "Existing Item",
+                    QuantityNeeded = 10
+                }
+            ]);
+        appState.SelectMarketAnalysisItem(123);
+        appState.ToggleMarketAnalysisWorld(123, "Aether", "Siren");
+        appState.SetMarketAnalysisGridSort(MarketAnalysisGridSortColumn.Total, descending: true);
+        var storedPlan = new StoredPlan
+        {
+            Id = "plan",
+            Name = "Plan",
+            DataCenter = "Aether",
+            ProjectItems =
+            [
+                new StoredProjectItem
+                {
+                    Id = 123,
+                    Name = "Loaded Item",
+                    Quantity = 10
+                }
+            ],
+            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
+            {
+                new()
+                {
+                    ItemId = 123,
+                    Name = "Loaded Item",
+                    QuantityNeeded = 10
+                }
+            }),
+            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
+            {
+                new()
+                {
+                    ItemId = 123,
+                    Name = "Loaded Item",
+                    QuantityNeeded = 10,
+                    Worlds =
+                    [
+                        new WorldMarketAnalysis
+                        {
+                            DataCenter = "Aether",
+                            WorldName = "Siren"
+                        }
+                    ]
+                }
+            })
+        };
+
+        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
+
+        Assert.Null(appState.SelectedMarketAnalysisItemId);
+        Assert.Empty(appState.ExpandedMarketAnalysisWorlds);
+        Assert.Null(appState.MarketAnalysisGridSortColumn);
+        Assert.False(appState.MarketAnalysisGridSortDescending);
+    }
+
+    [Fact]
     public void LoadStoredPlan_LegacyMarketPlansWithoutAnalysisSource_ClearsProjectionAndDefaultLens()
     {
         var appState = new AppState();
@@ -333,7 +619,7 @@ public class AppStatePersistenceTests
     {
         var appState = new AppState();
         appState.SetRecommendationMode(RecommendationMode.MaximizeValue);
-        appState.ApplyBuiltRecipePlan(new CraftingPlan
+        appState.ApplyBuiltRecipePlanWithActiveItems(new CraftingPlan
         {
             Name = "Snapshot Plan",
             DataCenter = "Aether"
@@ -371,6 +657,356 @@ public class AppStatePersistenceTests
         Assert.Equal(MarketAcquisitionLens.BulkValue, snapshot.SavedMarketAnalysisLens);
         Assert.Equal("named-plan", snapshot.SourcePlanId);
         Assert.Equal("Named Plan", snapshot.SourcePlanName);
+    }
+
+    [Fact]
+    public void CreateStoredPlanSnapshot_RoundTripPreservesScopeAwareMarketAnalysisFields()
+    {
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 123, Name = "Snapshot Item", Quantity = 10 }]);
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 123,
+                    Name = "Snapshot Item",
+                    QuantityNeeded = 10,
+                    AnalysisScopeBaselineUnitPrice = 640,
+                    AnalysisScopeAverageUnitPrice = 650,
+                    AnalysisScopeMedianUnitPrice = 630,
+                    SaneThresholdUnitPrice = 1280,
+                    Worlds =
+                    [
+                        new WorldMarketAnalysis
+                        {
+                            DataCenter = "Aether",
+                            WorldName = "Siren",
+                            QuantityNeeded = 10,
+                            AnalysisScopeBaselineUnitPrice = 640,
+                            AnalysisScopeAverageUnitPrice = 650,
+                            AnalysisScopeMedianUnitPrice = 630,
+                            SaneThresholdUnitPrice = 1280,
+                            LocalCompetitiveQuantity = 2,
+                            ScopeCompetitiveQuantity = 8,
+                            ScopeSaneQuantity = 10,
+                            ScopeInsaneQuantity = 3,
+                            ScopeCompetitiveCoverageRatio = 0.8m,
+                            ScopeSaneCoverageRatio = 1.0m
+                        }
+                    ]
+                }
+            ],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 123,
+                    Name = "Snapshot Item",
+                    QuantityNeeded = 10
+                }
+            ]);
+        var snapshot = appState.CreateStoredPlanSnapshot("autosave", "AutoSave");
+        var restored = new AppState();
+
+        restored.LoadStoredPlan(snapshot, deserializedPlan: null);
+
+        var analysis = Assert.Single(restored.MarketItemAnalyses);
+        Assert.Equal(640, analysis.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(650, analysis.AnalysisScopeAverageUnitPrice);
+        Assert.Equal(630, analysis.AnalysisScopeMedianUnitPrice);
+        Assert.Equal(1280, analysis.SaneThresholdUnitPrice);
+
+        var world = Assert.Single(analysis.Worlds);
+        Assert.Equal(640, world.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(650, world.AnalysisScopeAverageUnitPrice);
+        Assert.Equal(630, world.AnalysisScopeMedianUnitPrice);
+        Assert.Equal(1280, world.SaneThresholdUnitPrice);
+        Assert.Equal(2, world.LocalCompetitiveQuantity);
+        Assert.Equal(8, world.ScopeCompetitiveQuantity);
+        Assert.Equal(10, world.ScopeSaneQuantity);
+        Assert.Equal(3, world.ScopeInsaneQuantity);
+        Assert.Equal(0.8m, world.ScopeCompetitiveCoverageRatio);
+        Assert.Equal(1.0m, world.ScopeSaneCoverageRatio);
+        Assert.Single(restored.ShoppingPlans);
+    }
+
+    [Fact]
+    public void CreateStoredPlanSnapshot_RoundTripPreservesMarketPriceEvaluation()
+    {
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 123, Name = "Snapshot Item", Quantity = 10 }]);
+        var evaluatedAtUtc = new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc);
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 123,
+                    Name = "Snapshot Item",
+                    QuantityNeeded = 10,
+                    Scope = MarketFetchScope.SelectedDataCenter,
+                    PriceEvaluation = new MarketPriceEvaluation
+                    {
+                        ItemId = 123,
+                        Scope = MarketFetchScope.SelectedDataCenter,
+                        QualityPolicy = MarketPriceQualityPolicy.DualChannel,
+                        EvaluatedAtUtc = evaluatedAtUtc,
+                        CentralRegion = new MarketCentralPriceRegion
+                        {
+                            MinUnitPrice = 100,
+                            MaxUnitPrice = 120,
+                            MedianUnitPrice = 110,
+                            WeightedAverageUnitPrice = 112,
+                            ListingCount = 3,
+                            TotalQuantity = 99,
+                            DistinctRetainerCount = 3,
+                            DistinctWorldCount = 2,
+                            DataQualityBucket = MarketDataQualityBucket.Current,
+                            Credibility = MarketPriceRegionCredibility.Credible
+                        },
+                        Thresholds = new MarketPriceThresholds
+                        {
+                            DealCeilingUnitPrice = 95,
+                            CompetitiveCeilingUnitPrice = 150,
+                            SaneCeilingUnitPrice = 220,
+                            InsaneFloorUnitPrice = 400
+                        },
+                        ListingClassCounts = new MarketListingClassCounts
+                        {
+                            DealCount = 1,
+                            CompetitiveCount = 2,
+                            FairCount = 3,
+                            UncompetitiveCount = 4,
+                            ExcludedCount = 5,
+                            LowOutlierCount = 6,
+                            SaneCount = 7,
+                            OutlierCount = 8,
+                            InsaneCount = 9
+                        },
+                        Confidence = MarketPriceEvaluationConfidence.High,
+                        Diagnostics = new MarketPriceEvaluationDiagnostics
+                        {
+                            CompactReasonCodes =
+                            [
+                                MarketPriceEvaluationReasonCode.AcceptedDueToQuantityDespiteLowDiversity
+                            ],
+                            CompactRegionSummaries =
+                            [
+                                new MarketPriceRegionSummary
+                                {
+                                    MinUnitPrice = 100,
+                                    MaxUnitPrice = 120,
+                                    ListingCount = 3,
+                                    TotalQuantity = 99,
+                                    Credibility = MarketPriceRegionCredibility.Credible,
+                                    ReasonCode = MarketPriceEvaluationReasonCode.AcceptedDueToQuantityDespiteLowDiversity
+                                }
+                            ],
+                            DetectedPriceGapSummaries =
+                            [
+                                new MarketPriceGapSummary
+                                {
+                                    BeforeUnitPrice = 120,
+                                    AfterUnitPrice = 300,
+                                    BreakPercent = 150
+                                }
+                            ],
+                            DebugDetailAvailable = true
+                        }
+                    },
+                    Worlds =
+                    [
+                        new WorldMarketAnalysis
+                        {
+                            DataCenter = "Aether",
+                            WorldName = "Siren",
+                            Listings =
+                            [
+                                new AnalyzedMarketListing
+                                {
+                                    Quantity = 99,
+                                    PricePerUnit = 110,
+                                    RetainerName = "Seller",
+                                    Competitiveness = MarketListingCompetitiveness.Competitive
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 123,
+                    Name = "Snapshot Item",
+                    QuantityNeeded = 10
+                }
+            ]);
+        var snapshot = appState.CreateStoredPlanSnapshot("autosave", "AutoSave");
+        var restored = new AppState();
+
+        restored.LoadStoredPlan(snapshot, deserializedPlan: null);
+
+        var analysis = Assert.Single(restored.MarketItemAnalyses);
+        Assert.NotNull(analysis.PriceEvaluation);
+        var evaluation = analysis.PriceEvaluation!;
+        Assert.Equal(123, evaluation.ItemId);
+        Assert.Equal(MarketFetchScope.SelectedDataCenter, evaluation.Scope);
+        Assert.Equal(MarketPriceQualityPolicy.DualChannel, evaluation.QualityPolicy);
+        Assert.Equal(evaluatedAtUtc, evaluation.EvaluatedAtUtc);
+        Assert.Equal(100, evaluation.CentralRegion.MinUnitPrice);
+        Assert.Equal(120, evaluation.CentralRegion.MaxUnitPrice);
+        Assert.Equal(110, evaluation.CentralRegion.MedianUnitPrice);
+        Assert.Equal(MarketPriceRegionCredibility.Credible, evaluation.CentralRegion.Credibility);
+        Assert.Equal(112, evaluation.CentralRegion.WeightedAverageUnitPrice);
+        Assert.Equal(3, evaluation.CentralRegion.ListingCount);
+        Assert.Equal(99, evaluation.CentralRegion.TotalQuantity);
+        Assert.Equal(3, evaluation.CentralRegion.DistinctRetainerCount);
+        Assert.Equal(2, evaluation.CentralRegion.DistinctWorldCount);
+        Assert.Equal(MarketDataQualityBucket.Current, evaluation.CentralRegion.DataQualityBucket);
+        Assert.Equal(95, evaluation.Thresholds.DealCeilingUnitPrice);
+        Assert.Equal(150, evaluation.Thresholds.CompetitiveCeilingUnitPrice);
+        Assert.Equal(220, evaluation.Thresholds.SaneCeilingUnitPrice);
+        Assert.Equal(400, evaluation.Thresholds.InsaneFloorUnitPrice);
+        Assert.Equal(1, evaluation.ListingClassCounts.DealCount);
+        Assert.Equal(2, evaluation.ListingClassCounts.CompetitiveCount);
+        Assert.Equal(3, evaluation.ListingClassCounts.FairCount);
+        Assert.Equal(4, evaluation.ListingClassCounts.UncompetitiveCount);
+        Assert.Equal(5, evaluation.ListingClassCounts.ExcludedCount);
+        Assert.Equal(6, evaluation.ListingClassCounts.LowOutlierCount);
+        Assert.Equal(7, evaluation.ListingClassCounts.SaneCount);
+        Assert.Equal(8, evaluation.ListingClassCounts.OutlierCount);
+        Assert.Equal(9, evaluation.ListingClassCounts.InsaneCount);
+        Assert.Equal(MarketPriceEvaluationConfidence.High, evaluation.Confidence);
+        Assert.Equal(
+            MarketPriceEvaluationReasonCode.AcceptedDueToQuantityDespiteLowDiversity,
+            Assert.Single(evaluation.Diagnostics.CompactReasonCodes));
+        var regionSummary = Assert.Single(evaluation.Diagnostics.CompactRegionSummaries);
+        Assert.Equal(100, regionSummary.MinUnitPrice);
+        Assert.Equal(120, regionSummary.MaxUnitPrice);
+        Assert.Equal(3, regionSummary.ListingCount);
+        Assert.Equal(99, regionSummary.TotalQuantity);
+        Assert.Equal(MarketPriceRegionCredibility.Credible, regionSummary.Credibility);
+        Assert.Equal(MarketPriceEvaluationReasonCode.AcceptedDueToQuantityDespiteLowDiversity, regionSummary.ReasonCode);
+        var gapSummary = Assert.Single(evaluation.Diagnostics.DetectedPriceGapSummaries);
+        Assert.Equal(120, gapSummary.BeforeUnitPrice);
+        Assert.Equal(300, gapSummary.AfterUnitPrice);
+        Assert.Equal(150, gapSummary.BreakPercent);
+        Assert.True(evaluation.Diagnostics.DebugDetailAvailable);
+        Assert.Equal(
+            MarketListingCompetitiveness.Competitive,
+            Assert.Single(Assert.Single(analysis.Worlds).Listings).Competitiveness);
+    }
+
+    [Fact]
+    public void LoadStoredPlan_LegacyAnalysisMissingPriceEvaluationAndCompetitiveness_UsesUnknownDefaults()
+    {
+        var appState = new AppState();
+        var storedPlan = new StoredPlan
+        {
+            Id = "legacy",
+            Name = "Legacy",
+            DataCenter = "Aether",
+            ProjectItems =
+            [
+                new StoredProjectItem
+                {
+                    Id = 123,
+                    Name = "Legacy Item",
+                    Quantity = 10
+                }
+            ],
+            MarketPlansJson = """
+                [
+                  {
+                    "ItemId": 123,
+                    "Name": "Legacy Item",
+                    "QuantityNeeded": 10
+                  }
+                ]
+                """,
+            MarketItemAnalysesJson = """
+                [
+                  {
+                    "ItemId": 123,
+                    "Name": "Legacy Item",
+                    "QuantityNeeded": 10,
+                    "Worlds": [
+                      {
+                        "DataCenter": "Aether",
+                        "WorldName": "Siren",
+                        "QuantityNeeded": 10,
+                        "Listings": [
+                          {
+                            "Quantity": 1,
+                            "PricePerUnit": 100,
+                            "RetainerName": "Legacy Seller"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+                """
+        };
+
+        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
+
+        var analysis = Assert.Single(appState.MarketItemAnalyses);
+        Assert.Null(analysis.PriceEvaluation);
+        var listing = Assert.Single(Assert.Single(analysis.Worlds).Listings);
+        Assert.Equal(MarketListingCompetitiveness.Unknown, listing.Competitiveness);
+    }
+
+    [Fact]
+    public void CreateStoredPlanSnapshot_DoesNotPersistMarketAnalysisViewState()
+    {
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 123, Name = "Snapshot Item", Quantity = 10 }]);
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 123,
+                    Name = "Snapshot Item",
+                    QuantityNeeded = 10,
+                    Worlds =
+                    [
+                        new WorldMarketAnalysis
+                        {
+                            DataCenter = "Aether",
+                            WorldName = "Siren"
+                        }
+                    ]
+                }
+            ],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 123,
+                    Name = "Snapshot Item",
+                    QuantityNeeded = 10
+                }
+            ]);
+        appState.SelectMarketAnalysisItem(123);
+        appState.ToggleMarketAnalysisWorld(123, "Aether", "Siren");
+        appState.SetMarketAnalysisGridSort(MarketAnalysisGridSortColumn.Total, descending: true);
+
+        var snapshot = appState.CreateStoredPlanSnapshot("autosave", "AutoSave");
+        var storedPlanJson = JsonSerializer.Serialize(snapshot);
+        var marketPlansJson = snapshot.MarketPlansJson ?? string.Empty;
+        var marketItemAnalysesJson = snapshot.MarketItemAnalysesJson ?? string.Empty;
+
+        Assert.DoesNotContain(nameof(AppState.SelectedMarketAnalysisItemId), storedPlanJson);
+        Assert.DoesNotContain(nameof(AppState.ExpandedMarketAnalysisWorlds), storedPlanJson);
+        Assert.DoesNotContain(nameof(AppState.MarketAnalysisGridSortColumn), storedPlanJson);
+        Assert.DoesNotContain(nameof(AppState.MarketAnalysisGridSortDescending), storedPlanJson);
+        Assert.DoesNotContain(nameof(AppState.SelectedMarketAnalysisItemId), marketPlansJson);
+        Assert.DoesNotContain(nameof(AppState.ExpandedMarketAnalysisWorlds), marketPlansJson);
+        Assert.DoesNotContain(nameof(AppState.MarketAnalysisGridSortColumn), marketPlansJson);
+        Assert.DoesNotContain(nameof(AppState.MarketAnalysisGridSortDescending), marketPlansJson);
+        Assert.DoesNotContain(nameof(AppState.SelectedMarketAnalysisItemId), marketItemAnalysesJson);
+        Assert.DoesNotContain(nameof(AppState.ExpandedMarketAnalysisWorlds), marketItemAnalysesJson);
+        Assert.DoesNotContain(nameof(AppState.MarketAnalysisGridSortColumn), marketItemAnalysesJson);
+        Assert.DoesNotContain(nameof(AppState.MarketAnalysisGridSortDescending), marketItemAnalysesJson);
     }
 
     [Fact]

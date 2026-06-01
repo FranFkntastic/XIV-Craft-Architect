@@ -11,7 +11,7 @@ public class RecipePlannerCommandServiceTests
     public async Task BuildPlanAsync_EmptyProjectItems_DoesNotMutateCurrentPlan()
     {
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(CreatePlan("Existing", 10));
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan("Existing", 10));
         var builder = new FakeRecipePlanBuilder();
         var service = CreateService(appState, builder);
 
@@ -147,7 +147,7 @@ public class RecipePlannerCommandServiceTests
     public async Task ImportProjectItemsAsync_ReplacesProjectItemsClearsPlanAndBuildsWithoutPriceRefresh()
     {
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(CreatePlan("Old Plan", 900));
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan("Old Plan", 900));
         appState.TrackCurrentPlanIdentity("old-plan", "Old Plan");
         appState.ReplaceProjectItems([new ProjectItem { Id = 900, Name = "Old", Quantity = 1 }]);
         AddStaleMarketState(appState);
@@ -270,7 +270,7 @@ public class RecipePlannerCommandServiceTests
                 It.IsAny<CancellationToken>()))
             .Callback(() =>
             {
-                appState.ApplyBuiltRecipePlan(builtPlan);
+                appState.ApplyBuiltRecipePlanWithActiveItems(builtPlan);
                 cancellation.Cancel();
             })
             .ThrowsAsync(new OperationCanceledException(cancellation.Token));
@@ -301,7 +301,7 @@ public class RecipePlannerCommandServiceTests
             PlanToReturn = builtPlan,
             FetchVendorAsync = _ =>
             {
-                appState.ApplyBuiltRecipePlan(replacementPlan);
+                appState.ApplyBuiltRecipePlanWithActiveItems(replacementPlan);
                 return Task.CompletedTask;
             }
         };
@@ -384,7 +384,7 @@ public class RecipePlannerCommandServiceTests
     public async Task RefreshPricesAsync_UpdatesNodePricesAndUnavailableItems()
     {
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(CreatePlan("Refresh Item", 100));
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan("Refresh Item", 100));
         appState.CurrentPlan!.RootItems.Add(new PlanNode
         {
             ItemId = 200,
@@ -436,12 +436,12 @@ public class RecipePlannerCommandServiceTests
         var oldPlan = CreatePlan("Old Plan", 100);
         var newPlan = CreatePlan("New Plan", 200);
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(oldPlan);
+        appState.ApplyBuiltRecipePlanWithActiveItems(oldPlan);
         var builder = new FakeRecipePlanBuilder
         {
             FetchVendorAsync = _ =>
             {
-                appState.ApplyBuiltRecipePlan(newPlan);
+                appState.ApplyBuiltRecipePlanWithActiveItems(newPlan);
                 return Task.CompletedTask;
             }
         };
@@ -498,7 +498,7 @@ public class RecipePlannerCommandServiceTests
             Children = [child]
         };
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(new CraftingPlan { RootItems = [root] });
+        appState.ApplyBuiltRecipePlanWithActiveItems(new CraftingPlan { RootItems = [root] });
         appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 999, Name = "Old Route" }]);
         var changes = new List<AppStateChange>();
         appState.OnStateChanged += changes.Add;
@@ -677,7 +677,7 @@ public class RecipePlannerCommandServiceTests
         {
             FetchVendorAsync = _ =>
             {
-                appState.ApplyBuiltRecipePlan(replacementPlan);
+                appState.ApplyBuiltRecipePlanWithActiveItems(replacementPlan);
                 return Task.CompletedTask;
             }
         };
@@ -708,7 +708,8 @@ public class RecipePlannerCommandServiceTests
             appState,
             builder,
             marketCache ?? Mock.Of<IMarketCacheService>(),
-            new CancellableOperationService(appState));
+            new CancellableOperationService(appState),
+            new StubRecipeLayerWorkflowService());
     }
 
     private static CraftingPlan CreatePlan(string name, int itemId, decimal marketPrice = 0)
@@ -728,6 +729,50 @@ public class RecipePlannerCommandServiceTests
                 }
             ]
         };
+    }
+
+    private sealed class StubRecipeLayerWorkflowService : IRecipeLayerWorkflowService
+    {
+        public RecipeOperationSnapshotIdentity CreateSnapshotIdentity()
+        {
+            return RecipeOperationSnapshotIdentity.Unspecified;
+        }
+
+        public RecipeDemandProjection BuildDemandProjection(CraftingPlan? plan)
+        {
+            return new RecipeDemandProjectionService().Build(plan, snapshot: null);
+        }
+
+        public IReadOnlyList<MaterialAggregate> BuildMarketAnalysisCandidates(CraftingPlan? plan)
+        {
+            return BuildDemandProjection(plan).ToMarketAnalysisMaterialAggregates();
+        }
+
+        public IReadOnlyList<MaterialAggregate> BuildActiveProcurementItems(CraftingPlan? plan)
+        {
+            return BuildDemandProjection(plan).ToActiveProcurementMaterialAggregates();
+        }
+
+        public Task<RecipeDemandProjection?> BuildCurrentDemandProjectionAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<RecipeDemandProjection?>(BuildDemandProjection(plan));
+        }
+
+        public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentMarketAnalysisCandidatesAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildMarketAnalysisCandidates(plan));
+        }
+
+        public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildActiveProcurementItems(plan));
+        }
     }
 
     private static void AddStaleMarketState(AppState appState)

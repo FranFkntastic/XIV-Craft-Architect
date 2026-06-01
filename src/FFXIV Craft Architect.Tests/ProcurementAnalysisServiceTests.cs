@@ -46,6 +46,122 @@ public class ProcurementRouteExecutionServiceTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_UsesRequestActiveProcurementItemsForEvidenceSelection()
+    {
+        var plan = new CraftingPlan
+        {
+            RootItems =
+            [
+                new PlanNode
+                {
+                    ItemId = 101,
+                    Name = "Plan Item",
+                    Quantity = 5,
+                    Source = AcquisitionSource.MarketBuyNq,
+                    CanBuyFromMarket = true
+                }
+            ]
+        };
+        var sourcePlans = new[]
+        {
+            ShoppingPlan(
+                101,
+                "Plan Item",
+                World("Aether", "Siren", 500, 5)),
+            ShoppingPlan(
+                202,
+                "Projected Active Item",
+                World("Aether", "Faerie", 700, 5))
+        };
+        var marketExecution = new Mock<IMarketAnalysisExecutionService>(MockBehavior.Strict);
+        var service = new ProcurementRouteExecutionService(
+            marketExecution.Object,
+            new MarketShoppingService(Mock.Of<IMarketCacheService>()));
+
+        var result = await service.AnalyzeAsync(
+            new ProcurementRouteExecutionRequest
+            {
+                Plan = plan,
+                ActiveProcurementItems =
+                [
+                    new MaterialAggregate
+                    {
+                        ItemId = 202,
+                        Name = "Projected Active Item",
+                        TotalQuantity = 5
+                    }
+                ],
+                SourceShoppingPlans = sourcePlans,
+                Scope = MarketFetchScope.SelectedDataCenter,
+                SelectedDataCenter = "Aether",
+                SelectedRegion = "North America",
+                Lens = MarketAcquisitionLens.MinimumUpfrontCost,
+                ProcurementConfig = new MarketAnalysisConfig { TravelTolerance = 0 }
+            },
+            executionOptions: MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.Empty(result.MissingItems);
+        Assert.Equal([202], result.EvidencePlans.Select(plan => plan.ItemId));
+        Assert.Equal([202], result.ShoppingPlans.Select(plan => plan.ItemId));
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_EquivalentExplicitActiveItems_MatchesLegacyPlanFallback()
+    {
+        var plan = CreatePlan();
+        var sourcePlans = new[]
+        {
+            ShoppingPlan(
+                101,
+                "Existing Item",
+                World("Aether", "Siren", 500, 5)),
+            ShoppingPlan(
+                202,
+                "Missing Item",
+                World("Aether", "Faerie", 700, 5))
+        };
+        var activeProcurementItems = new RecipeDemandProjectionService()
+            .Build(plan, snapshot: null)
+            .ToActiveProcurementMaterialAggregates();
+
+        var fallbackResult = await CreateService().AnalyzeAsync(
+            new ProcurementRouteExecutionRequest
+            {
+                Plan = plan,
+                SourceShoppingPlans = sourcePlans,
+                Scope = MarketFetchScope.SelectedDataCenter,
+                SelectedDataCenter = "Aether",
+                SelectedRegion = "North America",
+                Lens = MarketAcquisitionLens.MinimumUpfrontCost,
+                ProcurementConfig = new MarketAnalysisConfig { TravelTolerance = 0 }
+            },
+            executionOptions: MarketAnalysisExecutionOptions.Synchronous);
+        var explicitResult = await CreateService().AnalyzeAsync(
+            new ProcurementRouteExecutionRequest
+            {
+                Plan = plan,
+                ActiveProcurementItems = activeProcurementItems,
+                SourceShoppingPlans = sourcePlans,
+                Scope = MarketFetchScope.SelectedDataCenter,
+                SelectedDataCenter = "Aether",
+                SelectedRegion = "North America",
+                Lens = MarketAcquisitionLens.MinimumUpfrontCost,
+                ProcurementConfig = new MarketAnalysisConfig { TravelTolerance = 0 }
+            },
+            executionOptions: MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.Equal(
+            fallbackResult.EvidencePlans.Select(ToRouteSummary),
+            explicitResult.EvidencePlans.Select(ToRouteSummary));
+        Assert.Equal(
+            fallbackResult.ShoppingPlans.Select(ToRouteSummary),
+            explicitResult.ShoppingPlans.Select(ToRouteSummary));
+        Assert.Equal(
+            fallbackResult.MissingItems.Select(item => item.ItemId),
+            explicitResult.MissingItems.Select(item => item.ItemId));
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_FetchesOnlyMissingActiveEvidenceAndFiltersSelectedDataCenter()
     {
         var plan = CreatePlan();
@@ -276,6 +392,30 @@ public class ProcurementRouteExecutionServiceTests
                 }
             ]
         };
+    }
+
+    private static ProcurementRouteExecutionService CreateService()
+    {
+        return new ProcurementRouteExecutionService(
+            Mock.Of<IMarketAnalysisExecutionService>(),
+            new MarketShoppingService(Mock.Of<IMarketCacheService>()));
+    }
+
+    private static string ToRouteSummary(DetailedShoppingPlan plan)
+    {
+        var worlds = string.Join(
+            "|",
+            plan.WorldOptions.Select(world =>
+                $"{world.DataCenter}:{world.WorldName}:{world.TotalQuantityPurchased}:{world.TotalCost}"));
+
+        return string.Join(
+            ";",
+            plan.ItemId,
+            plan.QuantityNeeded,
+            plan.RecommendedWorld?.DataCenter,
+            plan.RecommendedWorld?.WorldName,
+            plan.RecommendedWorld?.TotalCost,
+            worlds);
     }
 
     private static DetailedShoppingPlan ShoppingPlan(

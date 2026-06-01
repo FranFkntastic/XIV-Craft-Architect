@@ -381,10 +381,9 @@ public partial class MainWindow
             return;
         }
 
+        _mainVm.ProcurementPlanner.BuildFromCurrentMarketEvidence();
         PopulateProcurementPlanSummary();
 
-        StatusLabel.Text = _currentMarketPlans.Any()
-            ? "Procurement plan built from existing market analysis data"
-            : "No market analysis data found. Run Conduct Analysis in Market Analysis first.";
+        StatusLabel.Text = _mainVm.ProcurementPlanner.StatusMessage;
     }
 }

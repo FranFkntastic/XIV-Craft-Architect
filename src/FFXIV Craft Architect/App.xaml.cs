@@ -140,8 +140,11 @@ public partial class App : Application
         
         // Services
         services.AddSingleton<SettingsService>();
+        services.AddCraftSessionFoundation();
+        services.AddSingleton<ICraftSessionDispatcher, WpfCraftSessionDispatcher>();
         services.AddSingleton<ISettingsService>(sp => sp.GetRequiredService<SettingsService>());
         services.AddSingleton<ThemeService>();
+        services.AddSingleton<INavigationService, NavigationService>();
         services.AddSingleton<GarlandService>();
         services.AddSingleton<CoreIGarlandService>(sp => sp.GetRequiredService<GarlandService>());
         services.AddSingleton<UniversalisService>();
@@ -150,10 +153,27 @@ public partial class App : Application
         services.AddSingleton<IMarketCacheService, SqliteMarketCacheService>();
         services.AddSingleton<CoreRecommendationCsvService>();
         services.AddSingleton<RecipeCalculationService>();
+        services.AddSingleton<ICoreRecipePlanBuilder, CoreRecipeCalculationPlanBuilder>();
         services.AddSingleton<CorePlanPersistenceService>();
         services.AddSingleton<CoreIPlanPersistenceService>(sp => sp.GetRequiredService<CorePlanPersistenceService>());
         services.AddSingleton<TeamcraftService>();
         services.AddSingleton<ITeamcraftService>(sp => sp.GetRequiredService<TeamcraftService>());
+        services.AddSingleton<IRecipeResolutionService, RecipeResolutionService>();
+        services.AddSingleton<IRecipeOperationSnapshotService, RecipeOperationSnapshotService>();
+        services.AddSingleton<IRecipeOperationSnapshotLifecycleService, RecipeOperationSnapshotLifecycleService>();
+        services.AddSingleton<IRecipeDemandProjectionService, RecipeDemandProjectionService>();
+        services.AddSingleton<IRecipeDemandProjectionParityService, RecipeDemandProjectionParityService>();
+        services.AddSingleton<ICoreRecipeLayerWorkflowService, CoreRecipeLayerWorkflowService>();
+        services.AddSingleton<CoreRecipePlannerCommandService>();
+        services.AddSingleton<IMarketPriceEvaluationService, MarketPriceEvaluationService>();
+        services.AddSingleton<IMarketPriceLadderAnalysisService, MarketPriceLadderAnalysisService>();
+        services.AddSingleton<IMarketAnalysisExecutionService, MarketAnalysisExecutionService>();
+        services.AddSingleton<IProcurementRouteExecutionService, ProcurementRouteExecutionService>();
+        services.AddSingleton<CoreMarketAnalysisWorkflowService>();
+        services.AddSingleton<CoreProcurementWorkflowService>();
+        services.AddSingleton<CoreAcquisitionEvaluationWorkflowService>();
+        services.AddSingleton<CoreAcquisitionEvaluationLedgerCache>();
+        services.AddSingleton<CoreAcquisitionDecisionService>();
         services.AddSingleton<ArtisanService>();
         services.AddSingleton<IArtisanService>(sp => sp.GetRequiredService<ArtisanService>());
         services.AddSingleton<PriceCheckService>();
@@ -191,6 +211,8 @@ public partial class App : Application
         
         // ViewModels
         services.AddSingleton<MarketAnalysisViewModel>();
+        services.AddSingleton<AcquisitionEvaluationViewModel>();
+        services.AddSingleton<ProcurementPlannerViewModel>();
         services.AddSingleton<RecipePlannerViewModel>();
         services.AddSingleton<MainViewModel>();
 

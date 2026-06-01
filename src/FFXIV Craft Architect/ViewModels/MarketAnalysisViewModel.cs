@@ -67,19 +67,25 @@ public partial class MarketAnalysisViewModel : ViewModelBase
     private readonly IPriceRefreshCoordinator _priceRefreshCoordinator;
     private readonly IMarketLogisticsCoordinator? _marketLogisticsCoordinator;
     private readonly ILogger<MarketAnalysisViewModel>? _logger;
+    private readonly CraftSessionState? _session;
+    private readonly CoreMarketAnalysisWorkflowService? _coreMarketAnalysisWorkflow;
 
     public MarketAnalysisViewModel(
         MarketShoppingService marketShoppingService,
         IPriceRefreshCoordinator priceRefreshCoordinator,
         RecipeCalculationService recipeCalcService,
         IMarketLogisticsCoordinator? marketLogisticsCoordinator = null,
-        ILogger<MarketAnalysisViewModel>? logger = null)
+        ILogger<MarketAnalysisViewModel>? logger = null,
+        CraftSessionState? session = null,
+        CoreMarketAnalysisWorkflowService? coreMarketAnalysisWorkflow = null)
     {
         _marketShoppingService = marketShoppingService;
         _priceRefreshCoordinator = priceRefreshCoordinator;
         _recipeCalcService = recipeCalcService;
         _marketLogisticsCoordinator = marketLogisticsCoordinator;
         _logger = logger;
+        _session = session;
+        _coreMarketAnalysisWorkflow = coreMarketAnalysisWorkflow;
         _shoppingPlans.CollectionChanged += OnShoppingPlansCollectionChanged;
         
         // Forward property changes from coordinator
@@ -329,17 +335,37 @@ public partial class MarketAnalysisViewModel : ViewModelBase
         }
 
         _logger?.LogInformation("[SetShoppingPlans] Clearing existing plans and adding {Count} new plans...", plans.Count);
+        ReplaceShoppingPlans(plans);
+        PublishShoppingPlansToSession(plans);
+        _logger?.LogInformation("[SetShoppingPlans] Firing PlansChanged event...");
+        PlansChanged?.Invoke(this, EventArgs.Empty);
+        _logger?.LogInformation("[SetShoppingPlans] END - _shoppingPlans.Count={Count}, HasData={HasData}",
+            _shoppingPlans.Count, HasData);
+    }
+
+    public void DisplayShoppingPlans(List<DetailedShoppingPlan> plans)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher != null && !dispatcher.CheckAccess())
+        {
+            dispatcher.Invoke(() => DisplayShoppingPlans(plans));
+            return;
+        }
+
+        ReplaceShoppingPlans(plans);
+        PlansChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ReplaceShoppingPlans(List<DetailedShoppingPlan> plans)
+    {
         _shoppingPlans.Clear();
         foreach (var plan in plans)
         {
             _shoppingPlans.Add(new ShoppingPlanViewModel(plan));
         }
-        _logger?.LogInformation("[SetShoppingPlans] Added {Count} plans, calling ApplySort...", _shoppingPlans.Count);
+
+        _logger?.LogInformation("[ReplaceShoppingPlans] Added {Count} plans, calling ApplySort...", _shoppingPlans.Count);
         ApplySort();
-        _logger?.LogInformation("[SetShoppingPlans] Firing PlansChanged event...");
-        PlansChanged?.Invoke(this, EventArgs.Empty);
-        _logger?.LogInformation("[SetShoppingPlans] END - _shoppingPlans.Count={Count}, HasData={HasData}", 
-            _shoppingPlans.Count, HasData);
     }
 
     /// <summary>
@@ -366,9 +392,49 @@ public partial class MarketAnalysisViewModel : ViewModelBase
     [RelayCommand]
     public void Clear()
     {
+        ClearDisplay();
+        _session?.ClearMarketAnalysis("wpf market analysis cleared");
+    }
+
+    public void ClearDisplay()
+    {
         _shoppingPlans.Clear();
         _groupedByWorld.Clear();
         _procurementItems.Clear();
+    }
+
+    public void MarkMarketContextChanged(string reason)
+    {
+        ClearDisplay();
+        _session?.MarkProcurementSettingsChanged(reason);
+    }
+
+    private void PublishShoppingPlansToSession(IEnumerable<DetailedShoppingPlan> plans)
+    {
+        if (_session == null)
+        {
+            return;
+        }
+
+        var plan = _session.ActivePlan;
+        if (plan == null)
+        {
+            return;
+        }
+
+        if (_session.MarketEvidence.ItemAnalyses.Count > 0)
+        {
+            return;
+        }
+
+        _session.TryPublishMarketAnalysis(
+            _session.CaptureVersionStamp(),
+            plan,
+            _session.PlanSessionVersion,
+            Array.Empty<MarketItemAnalysis>(),
+            plans,
+            acquisitionDecisionsChanged: false,
+            "wpf market shopping plans updated");
     }
 
     /// <summary>
@@ -619,6 +685,122 @@ public partial class MarketAnalysisViewModel : ViewModelBase
             IsLoading = false;
         }
     }
+
+    public async Task<CoreMarketAnalysisWorkflowResult> RunCoreMarketAnalysisAsync(
+        CoreMarketAnalysisWorkflowRequest request,
+        CancellationToken ct = default)
+    {
+        if (_coreMarketAnalysisWorkflow == null || _session == null)
+        {
+            const string unavailableMessage = "Core market analysis workflow is unavailable.";
+            StatusMessage = unavailableMessage;
+            return new CoreMarketAnalysisWorkflowResult(false, 0, 0, 0);
+        }
+
+        IsLoading = true;
+
+        try
+        {
+            var progress = new Progress<string>(message =>
+            {
+                StatusMessage = $"Analyzing market: {message}";
+            });
+
+            var result = await _coreMarketAnalysisWorkflow.RunAnalysisAsync(request, progress, ct);
+            if (result.Published)
+            {
+                DisplayShoppingPlans(_session.MarketEvidence.ShoppingPlans?.ToList() ?? []);
+                StatusMessage = $"Market analysis complete. {result.AnalyzedCount} items analyzed.";
+            }
+            else
+            {
+                StatusMessage = "Market analysis did not publish.";
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[RunCoreMarketAnalysisAsync] Failed to analyze market data");
+            StatusMessage = $"Error fetching listings: {ex.Message}";
+            return new CoreMarketAnalysisWorkflowResult(false, 0, 0, 0);
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    public async Task<CoreMarketAnalysisWorkflowResult> ApplyCoreMarketLensAsync(
+        MarketAcquisitionLens lens,
+        CancellationToken ct = default)
+    {
+        if (_coreMarketAnalysisWorkflow == null || _session == null)
+        {
+            const string unavailableMessage = "Core market analysis workflow is unavailable.";
+            StatusMessage = unavailableMessage;
+            return new CoreMarketAnalysisWorkflowResult(false, 0, 0, 0);
+        }
+
+        if (_session.MarketEvidence.ItemAnalyses.Count == 0)
+        {
+            _session.MarkMarketAnalysisSettingsChanged("wpf market acquisition lens changed");
+            return new CoreMarketAnalysisWorkflowResult(false, 0, 0, 0);
+        }
+
+        IsLoading = true;
+
+        try
+        {
+            _session.MarkMarketAnalysisSettingsChanged("wpf market acquisition lens changed");
+            var result = await _coreMarketAnalysisWorkflow.ApplyLensAsync(
+                new CoreApplyMarketAnalysisLensRequest(lens),
+                ct);
+            if (result.Published)
+            {
+                var displayPlans = PreserveFixedVendorDisplayPlans(
+                    _session.MarketEvidence.ShoppingPlans?.ToList() ?? []);
+                DisplayShoppingPlans(displayPlans);
+                StatusMessage = $"Market analysis lens applied. {result.AnalyzedCount} items analyzed.";
+            }
+            else
+            {
+                StatusMessage = "Market analysis lens was not applied.";
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[ApplyCoreMarketLensAsync] Failed to apply market lens");
+            StatusMessage = $"Error applying market lens: {ex.Message}";
+            return new CoreMarketAnalysisWorkflowResult(false, 0, 0, 0);
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    private List<DetailedShoppingPlan> PreserveFixedVendorDisplayPlans(List<DetailedShoppingPlan> marketPlans)
+    {
+        var marketItemIds = marketPlans
+            .Select(plan => plan.ItemId)
+            .ToHashSet();
+        var vendorPlans = _shoppingPlans
+            .Select(plan => plan.Plan)
+            .Where(plan => !marketItemIds.Contains(plan.ItemId) && IsFixedVendorDisplayPlan(plan))
+            .ToList();
+
+        vendorPlans.AddRange(marketPlans);
+        return vendorPlans;
+    }
+
+    private static bool IsFixedVendorDisplayPlan(DetailedShoppingPlan plan) =>
+        string.Equals(
+            plan.RecommendedWorld?.WorldName,
+            MarketShoppingConstants.VendorWorldName,
+            StringComparison.OrdinalIgnoreCase);
 
     private static string ComputeProgressStatusMessage(PriceRefreshProgress progress)
     {

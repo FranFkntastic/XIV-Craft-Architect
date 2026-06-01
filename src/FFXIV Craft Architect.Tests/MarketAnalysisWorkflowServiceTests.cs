@@ -13,7 +13,7 @@ public class MarketAnalysisWorkflowServiceTests
     public async Task RunAnalysisAsync_PublishesAnalysisPersistsAndAutosaves()
     {
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(CreatePlan());
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
         appState.TrackCurrentPlanIdentity("saved-plan", null);
         var jsRuntime = new RecordingJsRuntime();
         var execution = new Mock<IMarketAnalysisExecutionService>();
@@ -47,7 +47,7 @@ public class MarketAnalysisWorkflowServiceTests
         var originalPlan = CreatePlan();
         var replacementPlan = CreatePlan(itemId: 2);
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(originalPlan);
+        appState.ApplyBuiltRecipePlanWithActiveItems(originalPlan);
         var jsRuntime = new RecordingJsRuntime();
         var execution = new Mock<IMarketAnalysisExecutionService>();
         execution.Setup(e => e.ExecuteAsync(
@@ -55,7 +55,7 @@ public class MarketAnalysisWorkflowServiceTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>(),
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
-            .Callback(() => appState.ApplyBuiltRecipePlan(replacementPlan))
+            .Callback(() => appState.ApplyBuiltRecipePlanWithActiveItems(replacementPlan))
             .ReturnsAsync(CreateExecutionResult());
         var service = CreateService(appState, execution.Object, jsRuntime);
 
@@ -72,7 +72,7 @@ public class MarketAnalysisWorkflowServiceTests
     public async Task RunAnalysisAsync_WhenMarketScopeChangesDuringExecution_DoesNotPublishStaleResults()
     {
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(CreatePlan());
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
         var jsRuntime = new RecordingJsRuntime();
         var execution = new Mock<IMarketAnalysisExecutionService>();
         execution.Setup(e => e.ExecuteAsync(
@@ -98,11 +98,179 @@ public class MarketAnalysisWorkflowServiceTests
         Assert.Equal(0, jsRuntime.SavePlanCallCount);
     }
 
+    [Theory]
+    [InlineData("scope")]
+    [InlineData("data-center")]
+    [InlineData("region")]
+    [InlineData("lens")]
+    public async Task RunAnalysisAsync_WhenMarketContextChangesDuringExecution_RejectsOldResult(string changedContext)
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        var jsRuntime = new RecordingJsRuntime();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(() => ChangeMarketContext(appState, changedContext))
+            .ReturnsAsync(CreateExecutionResult());
+        var service = CreateService(appState, execution.Object, jsRuntime);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.False(result.Published);
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Empty(appState.ShoppingPlans);
+        Assert.Empty(appState.ProcurementShoppingPlans);
+        Assert.Null(appState.SelectedMarketAnalysisItemId);
+        Assert.Empty(appState.ExpandedMarketAnalysisWorlds);
+        Assert.Equal(0, jsRuntime.PatchMarketAnalysisCallCount);
+        Assert.Equal(0, jsRuntime.SavePlanCallCount);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_WhenNewerMarketStateExists_DoesNotPruneViewStateOrClearProcurementOverlay()
+    {
+        var originalPlan = CreatePlan(itemId: 1);
+        var replacementPlan = CreatePlan(itemId: 2);
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(originalPlan);
+        var jsRuntime = new RecordingJsRuntime();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(() =>
+            {
+                appState.ApplyBuiltRecipePlanWithActiveItems(replacementPlan);
+                appState.ReplaceMarketAnalysis(
+                    [
+                        new MarketItemAnalysis
+                        {
+                            ItemId = 2,
+                            Name = "Replacement Material",
+                            QuantityNeeded = 2,
+                            Worlds =
+                            [
+                                new WorldMarketAnalysis
+                                {
+                                    DataCenter = "Aether",
+                                    WorldName = "Siren"
+                                }
+                            ]
+                        }
+                    ],
+                    [ShoppingPlan(itemId: 2)]);
+                appState.SelectMarketAnalysisItem(2);
+                appState.ToggleMarketAnalysisWorld(2, "Aether", "Siren");
+                appState.SetMarketAnalysisGridSort(MarketAnalysisGridSortColumn.Total, descending: true);
+                appState.ReplaceProcurementOverlay([ShoppingPlan(itemId: 2, worldName: "Siren")]);
+            })
+            .ReturnsAsync(CreateExecutionResult());
+        var service = CreateService(appState, execution.Object, jsRuntime);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.False(result.Published);
+        Assert.Equal(2, Assert.Single(appState.MarketItemAnalyses).ItemId);
+        Assert.Equal(2, Assert.Single(appState.ShoppingPlans).ItemId);
+        Assert.Equal(2, Assert.Single(appState.ProcurementShoppingPlans).ItemId);
+        Assert.Equal(2, appState.SelectedMarketAnalysisItemId);
+        Assert.Equal([new MarketAnalysisExpandedWorldKey(2, "Aether", "Siren")], appState.ExpandedMarketAnalysisWorlds);
+        Assert.Equal(MarketAnalysisGridSortColumn.Total, appState.MarketAnalysisGridSortColumn);
+        Assert.Equal(0, jsRuntime.PatchMarketAnalysisCallCount);
+        Assert.Equal(0, jsRuntime.SavePlanCallCount);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_WhenPlanChangesAfterCandidateBuild_DoesNotClearNewerAnalysis()
+    {
+        var originalPlan = CreatePlan(itemId: 1);
+        var replacementPlan = CreatePlan(itemId: 2);
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(originalPlan);
+        var jsRuntime = new RecordingJsRuntime();
+        var workflow = new ChangingRecipeLayerWorkflowService(() =>
+        {
+            appState.ApplyBuiltRecipePlanWithActiveItems(replacementPlan);
+            appState.ReplaceMarketAnalysis(
+                [
+                    new MarketItemAnalysis
+                    {
+                        ItemId = 2,
+                        Name = "Replacement Material",
+                        QuantityNeeded = 2
+                    }
+                ],
+                [ShoppingPlan(itemId: 2)]);
+        });
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateExecutionResult());
+        var service = CreateService(appState, execution.Object, jsRuntime, workflow);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.False(result.Published);
+        Assert.Equal(2, Assert.Single(appState.MarketItemAnalyses).ItemId);
+        Assert.Equal(2, Assert.Single(appState.ShoppingPlans).ItemId);
+        execution.Verify(e => e.ExecuteAsync(
+            It.IsAny<MarketAnalysisExecutionRequest>(),
+            It.IsAny<IProgress<string>?>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<MarketAnalysisExecutionOptions?>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_UsesRecipeDemandProjectionForMarketInputs()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateExecutionResult(quantityNeeded: 9));
+        var projection = CreateProjection(
+            marketCandidates:
+            [
+                CreateDemandRow(1, "Material", quantity: 9, RecipeDemandViewKind.MarketAnalysisCandidate)
+            ],
+            activeProcurement: []);
+        var service = CreateService(
+            appState,
+            execution.Object,
+            new RecordingJsRuntime(),
+            new StubRecipeLayerWorkflowService(projection));
+
+        await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        execution.Verify(e => e.ExecuteAsync(
+            It.Is<MarketAnalysisExecutionRequest>(request =>
+                request.Items.Count == 1 &&
+                request.Items[0].ItemId == 1 &&
+                request.Items[0].TotalQuantity == 9),
+            It.IsAny<IProgress<string>?>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<MarketAnalysisExecutionOptions?>()));
+    }
+
     [Fact]
     public async Task ApplyLensAsync_ReprojectsExistingAnalysisAndPersists()
     {
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(CreatePlan());
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
         appState.TrackCurrentPlanIdentity("saved-plan", null);
         appState.ReplaceMarketAnalysis(
             [new MarketItemAnalysis { ItemId = 1, Name = "Material", QuantityNeeded = 2 }],
@@ -122,7 +290,8 @@ public class MarketAnalysisWorkflowServiceTests
     private static MarketAnalysisWorkflowService CreateService(
         AppState appState,
         IMarketAnalysisExecutionService execution,
-        RecordingJsRuntime jsRuntime)
+        RecordingJsRuntime jsRuntime,
+        IRecipeLayerWorkflowService? recipeLayerWorkflow = null)
     {
         var indexedDb = new IndexedDbService(jsRuntime);
         var persistence = new WebPlanPersistenceService(
@@ -135,7 +304,8 @@ public class MarketAnalysisWorkflowServiceTests
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
             new MarketPriceLadderAnalysisService(),
             persistence,
-            indexedDb);
+            indexedDb,
+            recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService());
     }
 
     private static CraftingPlan CreatePlan(int itemId = 1)
@@ -156,7 +326,7 @@ public class MarketAnalysisWorkflowServiceTests
         };
     }
 
-    private static MarketAnalysisExecutionResult CreateExecutionResult()
+    private static MarketAnalysisExecutionResult CreateExecutionResult(int quantityNeeded = 2)
     {
         return new MarketAnalysisExecutionResult(
             new MarketEvidenceSet(
@@ -169,13 +339,13 @@ public class MarketAnalysisWorkflowServiceTests
                 TimeSpan.Zero,
                 fetchedCount: 1,
                 DateTime.UtcNow),
-            [new MarketItemAnalysis { ItemId = 1, Name = "Material", QuantityNeeded = 2 }],
+            [new MarketItemAnalysis { ItemId = 1, Name = "Material", QuantityNeeded = quantityNeeded }],
             [
                 new DetailedShoppingPlan
                 {
                     ItemId = 1,
                     Name = "Material",
-                    QuantityNeeded = 2,
+                    QuantityNeeded = quantityNeeded,
                     RecommendedWorld = new WorldShoppingSummary
                     {
                         WorldName = "Siren",
@@ -184,6 +354,173 @@ public class MarketAnalysisWorkflowServiceTests
                     }
                 }
             ]);
+    }
+
+    private static DetailedShoppingPlan ShoppingPlan(int itemId, string worldName = "Siren")
+    {
+        return new DetailedShoppingPlan
+        {
+            ItemId = itemId,
+            Name = "Replacement Material",
+            QuantityNeeded = 2,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                DataCenter = "Aether",
+                WorldName = worldName,
+                TotalQuantityPurchased = 2,
+                TotalCost = 20
+            }
+        };
+    }
+
+    private static void ChangeMarketContext(AppState appState, string changedContext)
+    {
+        switch (changedContext)
+        {
+            case "scope":
+                appState.SetMarketEvidenceSettings(
+                    "Aether",
+                    "North America",
+                    MarketFetchScope.SelectedDataCenter,
+                    searchEntireRegion: true,
+                    autoFetchPricesOnRebuild: true);
+                break;
+            case "data-center":
+                appState.SetMarketEvidenceSettings(
+                    "Primal",
+                    "North America",
+                    MarketFetchScope.SelectedDataCenter,
+                    searchEntireRegion: false,
+                    autoFetchPricesOnRebuild: true);
+                break;
+            case "region":
+                appState.SetMarketEvidenceSettings(
+                    "Aether",
+                    "Europe",
+                    MarketFetchScope.SelectedDataCenter,
+                    searchEntireRegion: false,
+                    autoFetchPricesOnRebuild: true);
+                break;
+            case "lens":
+                appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(changedContext), changedContext, null);
+        }
+    }
+
+    private static RecipeDemandProjection CreateProjection(
+        IReadOnlyList<RecipeDemandRow> marketCandidates,
+        IReadOnlyList<RecipeDemandRow> activeProcurement)
+    {
+        return new RecipeDemandProjection(
+            AllPlanDemand: Array.Empty<RecipeDemandRow>(),
+            MarketAnalysisCandidates: marketCandidates,
+            ActiveProcurementDemand: activeProcurement,
+            SuppressedDemand: Array.Empty<RecipeDemandRow>());
+    }
+
+    private static RecipeDemandRow CreateDemandRow(
+        int itemId,
+        string itemName,
+        int quantity,
+        RecipeDemandViewKind viewKind)
+    {
+        return new RecipeDemandRow(
+            viewKind,
+            $"node-{itemId}",
+            itemId,
+            itemName,
+            0,
+            quantity,
+            RecipeDemandQuantityBasis.PlanNodeQuantity,
+            false,
+            AcquisitionSource.MarketBuyNq,
+            AcquisitionSourceReason.SystemDefault,
+            false,
+            true,
+            false,
+            0,
+            null,
+            "Direct",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
+    }
+
+    private class StubRecipeLayerWorkflowService : IRecipeLayerWorkflowService
+    {
+        private readonly RecipeDemandProjection? _projection;
+
+        public StubRecipeLayerWorkflowService(RecipeDemandProjection? projection = null)
+        {
+            _projection = projection;
+        }
+
+        public RecipeOperationSnapshotIdentity CreateSnapshotIdentity()
+        {
+            return RecipeOperationSnapshotIdentity.Unspecified;
+        }
+
+        public RecipeDemandProjection BuildDemandProjection(CraftingPlan? plan)
+        {
+            return _projection ?? new RecipeDemandProjectionService().Build(plan, snapshot: null);
+        }
+
+        public IReadOnlyList<MaterialAggregate> BuildMarketAnalysisCandidates(CraftingPlan? plan)
+        {
+            return BuildDemandProjection(plan).ToMarketAnalysisMaterialAggregates();
+        }
+
+        public IReadOnlyList<MaterialAggregate> BuildActiveProcurementItems(CraftingPlan? plan)
+        {
+            return BuildDemandProjection(plan).ToActiveProcurementMaterialAggregates();
+        }
+
+        public Task<RecipeDemandProjection?> BuildCurrentDemandProjectionAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<RecipeDemandProjection?>(BuildDemandProjection(plan));
+        }
+
+        public virtual Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentMarketAnalysisCandidatesAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildMarketAnalysisCandidates(plan));
+        }
+
+        public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildActiveProcurementItems(plan));
+        }
+    }
+
+    private sealed class ChangingRecipeLayerWorkflowService : StubRecipeLayerWorkflowService
+    {
+        private readonly Action _afterYield;
+
+        public ChangingRecipeLayerWorkflowService(Action afterYield)
+        {
+            _afterYield = afterYield;
+        }
+
+        public override async Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentMarketAnalysisCandidatesAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            var candidates = BuildMarketAnalysisCandidates(plan);
+            await Task.Yield();
+            _afterYield();
+            return candidates;
+        }
     }
 
     private sealed class RecordingJsRuntime : IJSRuntime

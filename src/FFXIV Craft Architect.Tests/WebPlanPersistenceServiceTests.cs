@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Web.Services;
 using Microsoft.JSInterop;
 
@@ -88,6 +89,39 @@ public class WebPlanPersistenceServiceTests
         Assert.Equal(restoredChild.NodeId, restoredGrandchild.ParentNodeId);
     }
 
+    [Fact]
+    public void PlanSessionLoadService_PrepareSession_UsesRecipeLayerWorkflowForMarketAnalysisValidation()
+    {
+        var plan = CreateSimplePlan();
+        var storedPlan = new StoredPlan
+        {
+            Id = "saved",
+            Name = "Saved",
+            PlanJson = System.Text.Json.JsonSerializer.Serialize(plan),
+            ProjectItems = [new StoredProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
+            MarketItemAnalysesJson = System.Text.Json.JsonSerializer.Serialize(new List<MarketItemAnalysis>
+            {
+                new() { ItemId = 200, Name = "Child", QuantityNeeded = 7 }
+            }),
+            MarketPlansJson = System.Text.Json.JsonSerializer.Serialize(new List<DetailedShoppingPlan>
+            {
+                new() { ItemId = 200, Name = "Child", QuantityNeeded = 7 }
+            })
+        };
+        var appState = new AppState();
+        var service = new PlanSessionLoadService(
+            appState,
+            new StubRecipeLayerWorkflowService(
+            [
+                new MaterialAggregate { ItemId = 200, Name = "Child", TotalQuantity = 7 }
+            ]));
+
+        var result = service.PrepareSession(storedPlan);
+
+        Assert.Single(result.MarketItemAnalyses);
+        Assert.Single(result.ShoppingPlans);
+    }
+
     private static WebPlanPersistenceService CreateService(RecordingJsRuntime jsRuntime, AppState? appState = null)
     {
         appState ??= new AppState();
@@ -95,7 +129,86 @@ public class WebPlanPersistenceServiceTests
         return new WebPlanPersistenceService(
             indexedDb,
             new StoredPlanSnapshotBuilder(appState),
-            new PlanSessionLoadService(appState));
+            new PlanSessionLoadService(appState, new StubRecipeLayerWorkflowService()));
+    }
+
+    private static CraftingPlan CreateSimplePlan()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Root",
+            NodeId = "root",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true
+        };
+        var child = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Child",
+            NodeId = "child",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            Parent = root
+        };
+        root.Children.Add(child);
+        return new CraftingPlan { RootItems = [root] };
+    }
+
+    private sealed class StubRecipeLayerWorkflowService : IRecipeLayerWorkflowService
+    {
+        private readonly IReadOnlyList<MaterialAggregate> _marketCandidates;
+        private readonly RecipeDemandProjectionService _projectionService = new();
+
+        public StubRecipeLayerWorkflowService(IReadOnlyList<MaterialAggregate>? marketCandidates = null)
+        {
+            _marketCandidates = marketCandidates ?? [];
+        }
+
+        public RecipeOperationSnapshotIdentity CreateSnapshotIdentity()
+        {
+            return RecipeOperationSnapshotIdentity.Unspecified;
+        }
+
+        public RecipeDemandProjection BuildDemandProjection(CraftingPlan? plan)
+        {
+            return _projectionService.Build(plan, snapshot: null);
+        }
+
+        public IReadOnlyList<MaterialAggregate> BuildMarketAnalysisCandidates(CraftingPlan? plan)
+        {
+            return _marketCandidates.Count > 0
+                ? _marketCandidates
+                : BuildDemandProjection(plan).ToMarketAnalysisMaterialAggregates();
+        }
+
+        public IReadOnlyList<MaterialAggregate> BuildActiveProcurementItems(CraftingPlan? plan)
+        {
+            return BuildDemandProjection(plan).ToActiveProcurementMaterialAggregates();
+        }
+
+        public Task<RecipeDemandProjection?> BuildCurrentDemandProjectionAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<RecipeDemandProjection?>(BuildDemandProjection(plan));
+        }
+
+        public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentMarketAnalysisCandidatesAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildMarketAnalysisCandidates(plan));
+        }
+
+        public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildActiveProcurementItems(plan));
+        }
     }
 
     private sealed class RecordingJsRuntime : IJSRuntime

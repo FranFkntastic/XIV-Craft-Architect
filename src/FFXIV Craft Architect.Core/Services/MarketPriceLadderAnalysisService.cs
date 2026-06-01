@@ -8,6 +8,20 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
     private const decimal BandTolerance = 0.10m;
     private const decimal OutlierMultiplier = 2.5m;
 
+    private readonly IMarketPriceEvaluationService _priceEvaluationService;
+
+    public MarketPriceLadderAnalysisService()
+        : this(new MarketPriceEvaluationService())
+    {
+    }
+
+    public MarketPriceLadderAnalysisService(IMarketPriceEvaluationService priceEvaluationService)
+    {
+        ArgumentNullException.ThrowIfNull(priceEvaluationService);
+
+        _priceEvaluationService = priceEvaluationService;
+    }
+
     public async Task<List<MarketItemAnalysis>> AnalyzeAsync(
         MarketAnalysisRequest request,
         IProgress<string>? progress = null,
@@ -33,6 +47,11 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             ct.ThrowIfCancellationRequested();
 
             var entries = request.Evidence.GetEntriesForItem(item.ItemId);
+            var scopePriceContext = _priceEvaluationService.Evaluate(
+                item.ItemId,
+                request.Evidence.Scope,
+                request.Evidence.LoadedAtUtc,
+                entries);
             var missingDataCenters = request.Evidence.MissingRequests
                 .Where(pair => pair.itemId == item.ItemId)
                 .Select(pair => pair.dataCenter)
@@ -41,7 +60,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 .ToList();
 
             var worlds = entries
-                .SelectMany(entry => AnalyzeEntryWorlds(entry, item.TotalQuantity, nowUtc))
+                .SelectMany(entry => AnalyzeEntryWorlds(entry, item.TotalQuantity, nowUtc, scopePriceContext))
                 .OrderBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -72,6 +91,13 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 QuantityNeeded = item.TotalQuantity,
                 Scope = request.Evidence.Scope,
                 LoadedAtUtc = request.Evidence.LoadedAtUtc,
+                AnalysisScopeBaselineUnitPrice = scopePriceContext.BaselineUnitPrice,
+                AnalysisScopeAverageUnitPrice = scopePriceContext.AverageUnitPrice,
+                AnalysisScopeCompetitiveAverageUnitPrice = scopePriceContext.CompetitiveAverageUnitPrice,
+                AnalysisScopeMedianUnitPrice = scopePriceContext.MedianUnitPrice,
+                CompetitiveThresholdUnitPrice = scopePriceContext.CompetitiveThresholdUnitPrice,
+                SaneThresholdUnitPrice = scopePriceContext.SaneThresholdUnitPrice,
+                PriceEvaluation = scopePriceContext.PriceEvaluation,
                 RequestedDataCenters = requestedDataCenters,
                 PresentDataCenters = presentDataCenters,
                 MissingDataCenters = missingDataCenters,
@@ -106,10 +132,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
         foreach (var world in GetSortedWorlds(analysis.Worlds, lens))
         {
-            var listings = world.Listings
-                .Where(listing => !listing.IsOutlier)
-                .OrderBy(listing => listing.SortIndex)
-                .ToList();
+            var listings = GetProcurementListings(world).ToList();
             var summary = CreateWorldSummary(world, listings, analysis.QuantityNeeded, lens);
             plan.WorldOptions.Add(summary);
         }
@@ -141,7 +164,8 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
     private static IEnumerable<WorldMarketAnalysis> AnalyzeEntryWorlds(
         CachedMarketData entry,
         int quantityNeeded,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        MarketPriceEvaluationContext scopePriceContext)
     {
         var dataCenter = entry.DataCenter;
 
@@ -158,7 +182,8 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 dataAge.Age,
                 dataAge.Source,
                 dataAge.Score,
-                dataAge.Bucket);
+                dataAge.Bucket,
+                scopePriceContext);
         }
     }
 
@@ -172,7 +197,8 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         TimeSpan age,
         MarketDataAgeSource dataAgeSource,
         decimal dataQualityScore,
-        MarketDataQualityBucket dataQualityBucket)
+        MarketDataQualityBucket dataQualityBucket,
+        MarketPriceEvaluationContext scopePriceContext)
     {
         var sorted = rawListings
             .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
@@ -192,32 +218,76 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 LastReviewTimeUtc = listing.LastReviewTimeUnix.HasValue
                     ? DateTimeOffset.FromUnixTimeSeconds(listing.LastReviewTimeUnix.Value).UtcDateTime
                     : null,
-                IsOutlier = outlierThreshold.HasValue && listing.PricePerUnit > outlierThreshold.Value
+                PriceSanity = ClassifyInitialPriceSanity(
+                    listing.PricePerUnit,
+                    scopePriceContext.LowOutlierMaxUnitPrice,
+                    outlierThreshold)
             })
             .ToList();
 
         var saneListings = analyzedListings
-            .Where(listing => !listing.IsOutlier)
+            .Where(listing => listing.PriceSanity is MarketListingPriceSanity.Sane or MarketListingPriceSanity.LowOutlier)
             .ToList();
         var bands = BuildPriceBands(saneListings);
         var competitiveBandIndexes = SelectCompetitiveShelf(bands, quantityNeeded);
         var competitiveQuantity = bands
             .Where((_, index) => competitiveBandIndexes.Contains(index))
             .Sum(band => band.Quantity);
+        var localCompetitiveQuantity = competitiveQuantity;
+        var saneThreshold = scopePriceContext.SaneThresholdUnitPrice;
+        var scopeSaneListings = saneThreshold > 0
+            ? analyzedListings.Where(listing => listing.PricePerUnit <= saneThreshold).ToList()
+            : saneListings;
+        var scopeSaneQuantity = scopeSaneListings.Sum(listing => listing.Quantity);
+        var scopeInsaneQuantity = saneThreshold > 0
+            ? analyzedListings.Where(listing => listing.PricePerUnit > saneThreshold).Sum(listing => listing.Quantity)
+            : 0;
+        var scopeCompetitiveThreshold = scopePriceContext.CompetitiveThresholdUnitPrice;
+        var scopeCompetitiveQuantity = scopeCompetitiveThreshold > 0
+            ? scopeSaneListings
+                .Where(listing => listing.PricePerUnit <= scopeCompetitiveThreshold)
+                .Sum(listing => listing.Quantity)
+            : competitiveQuantity;
+        var scopeCompetitiveAverageUnitPrice = scopeCompetitiveThreshold > 0
+            ? CalculateWeightedAverage(scopeSaneListings
+                .Where(listing => listing.PricePerUnit <= scopeCompetitiveThreshold)
+                .ToList())
+            : 0;
+        var scopeUncompetitiveQuantity = scopeCompetitiveThreshold > 0
+            ? scopeSaneListings
+                .Where(listing => listing.PricePerUnit > scopeCompetitiveThreshold)
+                .Sum(listing => listing.Quantity)
+            : 0;
         var competitiveSortIndexes = competitiveBandIndexes
             .SelectMany(index => Enumerable.Range(bands[index].FirstListingIndex, bands[index].LastListingIndex - bands[index].FirstListingIndex + 1))
             .ToHashSet();
+        var thresholds = scopePriceContext.PriceEvaluation.Thresholds;
         var listings = analyzedListings
-            .Select(listing => new AnalyzedMarketListing
+            .Select(listing =>
             {
-                SortIndex = listing.SortIndex,
-                Quantity = listing.Quantity,
-                PricePerUnit = listing.PricePerUnit,
-                RetainerName = listing.RetainerName,
-                IsHq = listing.IsHq,
-                IsOutlier = listing.IsOutlier,
-                LastReviewTimeUtc = listing.LastReviewTimeUtc,
-                IsInCompetitiveShelf = competitiveSortIndexes.Contains(listing.SortIndex)
+                var priceSanity = saneThreshold > 0 && listing.PricePerUnit > saneThreshold
+                    ? MarketListingPriceSanity.Insane
+                    : listing.PriceSanity;
+                var competitiveness = MarketListingClassification.ClassifyCompetitiveness(
+                    listing.PricePerUnit,
+                    priceSanity,
+                    thresholds,
+                    excludeOutliers: false);
+
+                return new AnalyzedMarketListing
+                {
+                    SortIndex = listing.SortIndex,
+                    Quantity = listing.Quantity,
+                    PricePerUnit = listing.PricePerUnit,
+                    RetainerName = listing.RetainerName,
+                    IsHq = listing.IsHq,
+                    PriceSanity = priceSanity,
+                    Competitiveness = competitiveness,
+                    LastReviewTimeUtc = listing.LastReviewTimeUtc,
+                    IsInCompetitiveShelf = competitiveSortIndexes.Contains(listing.SortIndex),
+                    IsScopeCompetitive = competitiveness is MarketListingCompetitiveness.Deal or MarketListingCompetitiveness.Competitive,
+                    IsScopeUncompetitive = competitiveness is MarketListingCompetitiveness.Fair or MarketListingCompetitiveness.Uncompetitive
+                };
             })
             .ToList();
         bands = bands
@@ -240,11 +310,12 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         var coverageBucket = GetCoverageBucket(competitiveQuantity, totalSaneQuantity, quantityNeeded);
         var scores = CreateScores(
             quantityNeeded,
-            competitiveQuantity,
+            scopeCompetitiveQuantity,
             totalSaneQuantity,
             saneListings,
             bands,
             coverageBucket,
+            scopeCompetitiveAverageUnitPrice,
             dataQualityScore);
 
         return new WorldMarketAnalysis
@@ -253,11 +324,25 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             WorldName = worldName,
             QuantityNeeded = quantityNeeded,
             CompetitiveQuantity = competitiveQuantity,
+            LocalCompetitiveQuantity = localCompetitiveQuantity,
+            ScopeCompetitiveQuantity = scopeCompetitiveQuantity,
+            ScopeSaneQuantity = scopeSaneQuantity,
+            ScopeUncompetitiveQuantity = scopeUncompetitiveQuantity,
+            ScopeInsaneQuantity = scopeInsaneQuantity,
             TotalSaneQuantity = totalSaneQuantity,
             TotalListingQuantity = totalListingQuantity,
             CompetitiveCoverageRatio = CalculateCoverageRatio(competitiveQuantity, quantityNeeded),
+            ScopeCompetitiveCoverageRatio = CalculateCoverageRatio(scopeCompetitiveQuantity, quantityNeeded),
+            ScopeSaneCoverageRatio = CalculateCoverageRatio(scopeSaneQuantity, quantityNeeded),
             SaneCoverageRatio = CalculateCoverageRatio(totalSaneQuantity, quantityNeeded),
             CoverageBucket = coverageBucket,
+            AnalysisScopeBaselineUnitPrice = scopePriceContext.BaselineUnitPrice,
+            AnalysisScopeAverageUnitPrice = scopePriceContext.AverageUnitPrice,
+            AnalysisScopeCompetitiveAverageUnitPrice = scopePriceContext.CompetitiveAverageUnitPrice,
+            ScopeCompetitiveAverageUnitPrice = scopeCompetitiveAverageUnitPrice,
+            AnalysisScopeMedianUnitPrice = scopePriceContext.MedianUnitPrice,
+            CompetitiveThresholdUnitPrice = scopePriceContext.CompetitiveThresholdUnitPrice,
+            SaneThresholdUnitPrice = scopePriceContext.SaneThresholdUnitPrice,
             FetchedAtUtc = fetchedAtUtc,
             MarketUploadedAtUtc = uploadedAtUtc,
             DataAgeSource = dataAgeSource,
@@ -349,6 +434,21 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             .ToList();
         var median = baselinePrices[baselinePrices.Count / 2];
         return median * OutlierMultiplier;
+    }
+
+    private static MarketListingPriceSanity ClassifyInitialPriceSanity(
+        long pricePerUnit,
+        long lowOutlierMaxUnitPrice,
+        decimal? highOutlierThreshold)
+    {
+        if (lowOutlierMaxUnitPrice > 0 && pricePerUnit <= lowOutlierMaxUnitPrice)
+        {
+            return MarketListingPriceSanity.LowOutlier;
+        }
+
+        return highOutlierThreshold.HasValue && pricePerUnit > highOutlierThreshold.Value
+            ? MarketListingPriceSanity.Outlier
+            : MarketListingPriceSanity.Sane;
     }
 
     private static List<MarketPriceBand> BuildPriceBands(IReadOnlyList<AnalyzedMarketListing> listings)
@@ -452,17 +552,20 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
     private static List<WorldLensScore> CreateScores(
         int quantityNeeded,
-        int competitiveQuantity,
+        int scopeCompetitiveQuantity,
         int totalSaneQuantity,
         IReadOnlyList<AnalyzedMarketListing> saneListings,
         IReadOnlyList<MarketPriceBand> bands,
         MarketCoverageBucket coverageBucket,
+        decimal scopeCompetitiveAverageUnitPrice,
         decimal dataQualityScore)
     {
         var costToCover = CalculateCostToCover(saneListings, quantityNeeded);
         var coverageRatio = CalculateCoverageRatio(totalSaneQuantity, quantityNeeded);
-        var competitiveRatio = CalculateCoverageRatio(competitiveQuantity, quantityNeeded);
-        var competitivePrice = bands.FirstOrDefault(band => band.IsCompetitiveShelf)?.WeightedAverageUnitPrice
+        var competitiveRatio = CalculateCoverageRatio(scopeCompetitiveQuantity, quantityNeeded);
+        var competitivePrice = scopeCompetitiveAverageUnitPrice > 0
+            ? scopeCompetitiveAverageUnitPrice
+            : bands.FirstOrDefault(band => band.IsCompetitiveShelf)?.WeightedAverageUnitPrice
             ?? saneListings.FirstOrDefault()?.PricePerUnit
             ?? 0;
         var minimumScore = costToCover.HasValue
@@ -472,7 +575,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         minimumScore *= dataQualityScore / 100m;
 
         var bulkScore = competitiveRatio * 10_000m
-            + Math.Min(competitiveQuantity, quantityNeeded) * 10m;
+            + Math.Min(scopeCompetitiveQuantity, quantityNeeded) * 10m;
         if (competitivePrice > 0)
         {
             bulkScore += 1_000m / competitivePrice;
@@ -495,10 +598,10 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             {
                 Lens = MarketAcquisitionLens.BulkValue,
                 Score = bulkScore,
-                ScoreBucket = ScoreBucketForBulkValue(competitiveQuantity, quantityNeeded, dataQualityScore),
+                ScoreBucket = ScoreBucketForBulkValue(scopeCompetitiveQuantity, quantityNeeded, dataQualityScore),
                 Summary = competitivePrice > 0
-                    ? $"{competitiveQuantity:N0} competitive at ~{competitivePrice:N0}g"
-                    : $"{competitiveQuantity:N0} competitive"
+                    ? $"{scopeCompetitiveQuantity:N0} competitive at ~{competitivePrice:N0}g"
+                    : $"{scopeCompetitiveQuantity:N0} competitive"
             }
         ];
     }
@@ -573,6 +676,20 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static IEnumerable<AnalyzedMarketListing> GetProcurementListings(WorldMarketAnalysis world)
+    {
+        var listings = HasScopePriceContext(world)
+            ? world.Listings.Where(listing => listing.IsScopeCompetitive)
+            : world.Listings.Where(listing => listing.PriceSanity is MarketListingPriceSanity.Sane or MarketListingPriceSanity.LowOutlier);
+
+        return listings.OrderBy(listing => listing.SortIndex);
+    }
+
+    private static bool HasScopePriceContext(WorldMarketAnalysis world)
+    {
+        return world.CompetitiveThresholdUnitPrice > 0 && world.SaneThresholdUnitPrice > 0;
     }
 
     private static WorldShoppingSummary CreateWorldSummary(

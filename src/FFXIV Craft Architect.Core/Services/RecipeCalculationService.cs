@@ -78,6 +78,7 @@ public class RecipeCalculationService
 {
     private readonly GarlandService _garlandService;
     private readonly IVendorCacheService _vendorCacheService;
+    private readonly IRecipeResolutionService _recipeResolutionService;
     private readonly ILogger<RecipeCalculationService>? _logger;
     
     // Cache to avoid fetching the same item multiple times during calculation
@@ -121,10 +122,12 @@ public class RecipeCalculationService
     public RecipeCalculationService(
         GarlandService garlandService,
         IVendorCacheService vendorCacheService,
-        ILogger<RecipeCalculationService>? logger = null)
+        ILogger<RecipeCalculationService>? logger = null,
+        IRecipeResolutionService? recipeResolutionService = null)
     {
         _garlandService = garlandService;
         _vendorCacheService = vendorCacheService;
+        _recipeResolutionService = recipeResolutionService ?? new RecipeResolutionService();
         _logger = logger;
     }
 
@@ -671,11 +674,9 @@ public class RecipeCalculationService
             return await BuildCompanyCraftNodeAsync(node, itemData!.CompanyCrafts!.First(), quantity, ct);
         }
 
-        // Use the first available traditional recipe
-        var recipe = itemData!.Crafts!.OrderBy(r => r.RecipeLevel).First();
-        node.RecipeLevel = recipe.RecipeLevel;
-        node.Job = JobHelper.GetJobName(recipe.JobId);
-        node.Yield = Math.Max(1, recipe.Yield);
+        var resolution = _recipeResolutionService.Resolve(node, itemData);
+        var recipe = resolution.StandardRecipe ?? itemData!.Crafts!.OrderBy(r => r.RecipeLevel).First();
+        ApplyStandardRecipeFacts(node, resolution, recipe);
 
         // Calculate how many times we need to craft
         var craftCount = (int)Math.Ceiling((double)quantity / node.Yield);
@@ -1476,11 +1477,12 @@ public class RecipeCalculationService
         // Return cached node if already built
         if (nodeCache.TryGetValue(itemId, out var cachedNode))
         {
-            var children = cachedNode.Children.Select(c => BuildTreeFromCache(
-                    c.ItemId, c.Quantity, depth + 1, c.MustBeHq, isRootItem: false, itemCache, nodeCache))
-                .Where(c => c != null)
-                .Cast<PlanNode>()
-                .ToList();
+            var children = BuildCachedNodeChildren(
+                cachedNode,
+                quantity,
+                depth,
+                itemCache,
+                nodeCache);
             var source = isRootItem && children.Any() && cachedNode.CanCraft
                 ? AcquisitionSource.Craft
                 : cachedNode.Source;
@@ -1560,15 +1562,14 @@ public class RecipeCalculationService
 
         if (hasCompanyCraft)
         {
-            node = BuildCompanyCraftNodeFromCache(node, itemData!.CompanyCrafts!.First(), quantity, itemCache, nodeCache);
+            node = BuildCompanyCraftNodeFromCache(node, itemData!.CompanyCrafts!.First(), quantity, depth, itemCache, nodeCache);
             nodeCache[itemId] = node;
             return node;
         }
 
-        var recipe = itemData!.Crafts!.OrderBy(r => r.RecipeLevel).First();
-        node.RecipeLevel = recipe.RecipeLevel;
-        node.Job = JobHelper.GetJobName(recipe.JobId);
-        node.Yield = Math.Max(1, recipe.Yield);
+        var resolution = _recipeResolutionService.Resolve(node, itemData);
+        var recipe = resolution.StandardRecipe ?? itemData!.Crafts!.OrderBy(r => r.RecipeLevel).First();
+        ApplyStandardRecipeFacts(node, resolution, recipe);
 
         var craftCount = (int)Math.Ceiling((double)quantity / node.Yield);
 
@@ -1598,10 +1599,61 @@ public class RecipeCalculationService
         return node;
     }
 
+    private List<PlanNode> BuildCachedNodeChildren(
+        PlanNode cachedNode,
+        int quantity,
+        int depth,
+        Dictionary<int, GarlandItem> itemCache,
+        Dictionary<int, PlanNode> nodeCache)
+    {
+        if (!itemCache.TryGetValue(cachedNode.ItemId, out var itemData))
+        {
+            return cachedNode.Children.Select(c => BuildTreeFromCache(
+                    c.ItemId, c.Quantity, depth + 1, c.MustBeHq, isRootItem: false, itemCache, nodeCache))
+                .Where(c => c != null)
+                .Cast<PlanNode>()
+                .ToList();
+        }
+
+        if (itemData.CompanyCrafts?.Any() == true)
+        {
+            return itemData.CompanyCrafts.First().Phases
+                .SelectMany(phase => phase.Items)
+                .Select(item =>
+                {
+                    var childQuantity = item.Amount * quantity;
+                    return BuildTreeFromCache(item.Id, childQuantity, depth + 1, false, isRootItem: false, itemCache, nodeCache);
+                })
+                .Where(child => child != null)
+                .Cast<PlanNode>()
+                .ToList();
+        }
+
+        var recipe = _recipeResolutionService.Resolve(cachedNode, itemData).StandardRecipe
+            ?? itemData.Crafts?.OrderBy(r => r.RecipeLevel).FirstOrDefault();
+        if (recipe == null)
+        {
+            return new List<PlanNode>();
+        }
+
+        var yield = Math.Max(1, recipe.Yield);
+        var craftCount = (int)Math.Ceiling((double)quantity / yield);
+        return recipe.Ingredients
+            .Select(ingredient =>
+            {
+                var childQuantity = ingredient.Amount * craftCount;
+                return BuildTreeFromCache(ingredient.Id, childQuantity, depth + 1, false, isRootItem: false, itemCache, nodeCache);
+            })
+            .Where(child => child != null)
+            .Cast<PlanNode>()
+            .ToList();
+    }
+
     private PlanNode BuildCompanyCraftNodeFromCache(
         PlanNode node,
         GarlandCompanyCraft companyCraft,
         int quantity,
+        int depth,
         Dictionary<int, GarlandItem> itemCache,
         Dictionary<int, PlanNode> nodeCache)
     {
@@ -1614,7 +1666,7 @@ public class RecipeCalculationService
             foreach (var item in phase.Items)
             {
                 var childQuantity = item.Amount * quantity;
-                var childNode = BuildTreeFromCache(item.Id, childQuantity, 0, false, isRootItem: false, itemCache, nodeCache);
+                var childNode = BuildTreeFromCache(item.Id, childQuantity, depth + 1, false, isRootItem: false, itemCache, nodeCache);
                 if (childNode != null)
                 {
                     childNode.Parent = node;
@@ -1626,6 +1678,16 @@ public class RecipeCalculationService
         node.Source = AcquisitionSource.Craft;
         node.SourceReason = AcquisitionSourceReason.SystemDefault;
         return node;
+    }
+
+    private static void ApplyStandardRecipeFacts(
+        PlanNode node,
+        RecipeResolutionResult resolution,
+        GarlandCraft recipe)
+    {
+        node.RecipeLevel = resolution.StandardRecipe == null ? recipe.RecipeLevel : resolution.RecipeLevel;
+        node.Job = resolution.StandardRecipe == null ? JobHelper.GetJobName(recipe.JobId) : resolution.JobName;
+        node.Yield = resolution.StandardRecipe == null ? Math.Max(1, recipe.Yield) : resolution.Yield;
     }
 
     #endregion

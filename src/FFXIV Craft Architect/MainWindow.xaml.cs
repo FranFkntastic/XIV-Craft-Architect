@@ -61,6 +61,7 @@ public partial class MainWindow : Window
 
     private Border RecipePlannerContent => RecipePlannerModule.RecipePlannerContent;
     private Border MarketAnalysisContent => MarketAnalysisModule.MarketAnalysisContent;
+    private Border AcquisitionEvaluationContent => AcquisitionEvaluationModule.AcquisitionEvaluationContent;
     private Border ProcurementPlannerContent => ProcurementPlannerModule.ProcurementPlannerContent;
     private StackPanel RecipePlanPanel => RecipePlannerModule.RecipePlanPanel;
     private Button ExpandAllButton => RecipePlannerModule.ExpandAllButton;
@@ -81,6 +82,7 @@ public partial class MainWindow : Window
     private readonly SettingsService _settingsService;
     private readonly ItemCacheService _itemCache;
     private readonly RecipeCalculationService _recipeCalcService;
+    private readonly CoreRecipePlannerCommandService _recipePlannerCommands;
     private readonly MarketShoppingService _marketShoppingService;
     private readonly WorldBlacklistService _blacklistService;
     private readonly IDialogService _dialogs;
@@ -117,6 +119,7 @@ public partial class MainWindow : Window
         SettingsService settingsService,
         ItemCacheService itemCache,
         RecipeCalculationService recipeCalcService,
+        CoreRecipePlannerCommandService recipePlannerCommands,
         MarketShoppingService marketShoppingService,
         WorldBlacklistService blacklistService,
         DialogServiceFactory dialogFactory,
@@ -137,6 +140,7 @@ public partial class MainWindow : Window
         _settingsService = settingsService;
         _itemCache = itemCache;
         _recipeCalcService = recipeCalcService;
+        _recipePlannerCommands = recipePlannerCommands;
         _marketShoppingService = marketShoppingService;
         _blacklistService = blacklistService;
         _dialogFactory = dialogFactory;
@@ -181,6 +185,8 @@ public partial class MainWindow : Window
         ExpandAllButton.Click += OnExpandAll;
         CollapseAllButton.Click += OnCollapseAll;
         DcCombo.SelectionChanged += OnDataCenterSelected;
+        ProcurementSearchAllNaCheck.Checked += OnMarketSearchScopeChanged;
+        ProcurementSearchAllNaCheck.Unchecked += OnMarketSearchScopeChanged;
         MarketAnalysisProcurementSortCombo.SelectionChanged += OnProcurementSortChanged;
         ProcurementModeCombo.SelectionChanged += OnProcurementModeChanged;
         
@@ -416,6 +422,16 @@ public partial class MainWindow : Window
                 WorldCombo.SelectedItem = "Entire Data Center";
             }
         }
+
+        if (e != null)
+        {
+            _marketVm.MarkMarketContextChanged("wpf market data center changed");
+        }
+    }
+
+    private void OnMarketSearchScopeChanged(object sender, RoutedEventArgs e)
+    {
+        _marketVm.MarkMarketContextChanged("wpf market search scope changed");
     }
 
     /// <summary>
@@ -534,7 +550,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Builds the crafting plan by calling RecipeCalculationService.
+    /// Builds the crafting plan through the Core recipe planner workflow.
     /// Note: MUST REMAIN in MainWindow - extensive UI coordination: BuildPlanButton/BrowsePlanButton state,
     ///       auto-fetch prices trigger, StatusLabel updates, and tree view display. Too UI-heavy for ViewModel.
     /// </summary>
@@ -547,7 +563,11 @@ public partial class MainWindow : Window
         }
 
         var dc = DcCombo.SelectedItem as string ?? "Aether";
-        var world = WorldCombo.SelectedItem as string ?? "";
+        var selectedRegion = ResolveSelectedRegion(dc);
+        var priceFetchScope = ProcurementSearchAllNaCheck.IsChecked == true
+            ? MarketFetchScope.EntireRegion
+            : MarketFetchScope.SelectedDataCenter;
+        var refreshPrices = _settingsService.Get<bool>("market.auto_fetch_prices", true);
 
         StatusLabel.Text = $"Building plan for {_recipeVm.ProjectItems.Count} items...";
         BuildPlanButton.IsEnabled = false;
@@ -555,36 +575,22 @@ public partial class MainWindow : Window
         
         try
         {
-            var targets = _recipeVm.ProjectItems.Select(p => (p.Id, p.Name, p.Quantity, p.IsHqRequired)).ToList();
-            _recipeVm.CurrentPlan = await _recipeCalcService.BuildPlanAsync(targets, dc, world);
-            
-            // Populate vendor options for all items in the plan
-            // This is separate from market data fetch - vendor data comes from Garland cache
-            if (_currentPlan != null)
-            {
-                await _recipeCalcService.FetchVendorPricesAsync(_currentPlan);
-            }
-             
+            var result = await _recipePlannerCommands.BuildPlanAsync(
+                new CoreBuildRecipePlanRequest(
+                    _recipeVm.ProjectItems.ToList(),
+                    dc,
+                    selectedRegion,
+                    priceFetchScope,
+                    refreshPrices));
+            _recipeVm.RefreshFromCoreSession();
+
             if (_currentPlan != null)
             {
                 DisplayPlanInTreeView(_currentPlan);
             }
             UpdateBuildPlanButtonText();
 
-            StatusLabel.Text = $"Plan built: {_currentPlan.RootItems.Count} root items, " +
-                               $"{_currentPlan.AggregatedMaterials.Count} unique materials";
-
-            var autoFetch = _settingsService.Get<bool>("market.auto_fetch_prices", true);
-            _logger.LogInformation("[OnBuildProjectPlan] market.auto_fetch_prices = {Value}", autoFetch);
-            if (autoFetch)
-            {
-                StatusLabel.Text += " - Auto-fetching prices...";
-                await Dispatcher.InvokeAsync(async () =>
-                {
-                    await Task.Delay(100);
-                    await OnFetchPricesAsync(forceRefresh: false);
-                });
-            }
+            StatusLabel.Text = result.Message;
         }
         catch (Exception ex)
         {

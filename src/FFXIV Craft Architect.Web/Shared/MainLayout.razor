@@ -18,6 +18,7 @@
 @inject RecipeCalculationService RecipeService
 @inject UniversalisService UniversalisService
 @inject RecipePlannerCommandService RecipePlannerCommandService
+@inject MarketAnalysisDiagnosticDumpService MarketAnalysisDiagnosticDumpService
 @inject ILogger<MainLayout> Logger
 @inject Microsoft.AspNetCore.Components.WebAssembly.Hosting.IWebAssemblyHostEnvironment HostEnvironment
 @implements IDisposable
@@ -149,6 +150,24 @@
                         <MudMenuItem OnClick="OnLoadDevCraftPlanFixture" Icon="@Icons.Material.Filled.BugReport">
                             Load Dev Craftplan...
                         </MudMenuItem>
+                        <MudMenuItem OnClick="ToggleDebugToolsMenu"
+                                     Icon="@Icons.Material.Filled.BugReport"
+                                     AutoClose="false">
+                            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 24px;">
+                                <span>Debug</span>
+                                <MudIcon Icon="@(_debugToolsMenuOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                         Size="Size.Small" />
+                            </div>
+                        </MudMenuItem>
+                        @if (_debugToolsMenuOpen)
+                        {
+                            <MudMenuItem OnClick="OnDumpSelectedMarketAnalysisItem"
+                                         Icon="@Icons.Material.Filled.Download"
+                                         Disabled="@(!CanDumpSelectedMarketAnalysisItem)"
+                                         Style="padding-left: 32px;">
+                                Dump Selected Market Analysis Item
+                            </MudMenuItem>
+                        }
                     }
                 </ChildContent>
             </MudMenu>
@@ -177,7 +196,9 @@
     private MudThemeProvider _mudThemeProvider = null!;
     private string _activeTab = "market";
     private bool _disposed = false;
+    private bool _debugToolsMenuOpen;
     private bool IsDevelopment => string.Equals(HostEnvironment.Environment, "Development", StringComparison.OrdinalIgnoreCase);
+    private bool CanDumpSelectedMarketAnalysisItem => AppState.MarketItemAnalyses.Any();
     
     private readonly MudTheme _theme = AppTheme.CreateTheme();
 
@@ -216,6 +237,11 @@
     private void OnStartupStatusChanged()
     {
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void ToggleDebugToolsMenu()
+    {
+        _debugToolsMenuOpen = !_debugToolsMenuOpen;
     }
     
     private async Task AutoSaveCallback()
@@ -282,7 +308,7 @@
 
             // Deserialize and validate the plan before applying state.
             var planDeserializeElapsed = System.Diagnostics.Stopwatch.StartNew();
-            var loadResult = PlanSessionLoadService.Prepare(autoSave);
+            var loadResult = PlanSessionLoad.PrepareSession(autoSave);
             planDeserializeElapsed.Stop();
             string? warning = null;
             if (!string.IsNullOrWhiteSpace(loadResult.Warning))
@@ -528,6 +554,63 @@
         }
     }
 
+    private async Task OnDumpSelectedMarketAnalysisItem()
+    {
+        if (!IsDevelopment)
+        {
+            Snackbar.Add("Debug dumps are only available in development builds.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var dump = MarketAnalysisDiagnosticDumpService.BuildDump(
+                AppState.MarketItemAnalyses,
+                AppState.ShoppingPlans,
+                new MarketAnalysisDiagnosticDumpContext(
+                    AppState.CurrentPlan?.Name,
+                    AppState.SelectedDataCenter,
+                    AppState.SelectedRegion,
+                    AppState.SearchEntireRegion,
+                    AppState.MarketAnalysisLens,
+                    AppState.MarketSortPreference,
+                    AppState.MarketAnalysisGridSortColumn,
+                    AppState.MarketAnalysisGridSortDescending,
+                    AppState.MarketAnalysisWorldGridSortColumn,
+                    AppState.MarketAnalysisWorldGridSortDescending,
+                    AppState.SelectedMarketAnalysisItemId));
+            if (dump == null)
+            {
+                Snackbar.Add("No market analysis to dump", Severity.Warning);
+                return;
+            }
+
+            var json = MarketAnalysisDiagnosticDumpService.Serialize(dump);
+            var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+            using var stream = new MemoryStream(bytes);
+            using var streamRef = new DotNetStreamReference(stream);
+            var fileName = CreateMarketAnalysisDumpFileName(dump);
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
+            Snackbar.Add($"Downloaded {fileName}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to dump market analysis: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private static string CreateMarketAnalysisDumpFileName(MarketAnalysisDiagnosticDump dump)
+    {
+        var timestamp = dump.ExportedAtUtc.ToString("yyyyMMdd-HHmmss");
+        var itemName = string.Join("_", dump.Selection.ExportedItemName.Split(Path.GetInvalidFileNameChars()));
+        if (itemName.Length > 48)
+        {
+            itemName = itemName[..48];
+        }
+
+        return $"market-analysis-{dump.Selection.ExportedItemId}-{itemName}-{timestamp}.json";
+    }
+
     private async Task LoadNativePlanAsync(
         CraftingPlan plan,
         string successMessage,
@@ -694,8 +777,7 @@
         }
         
         Snackbar.Add("Fetching prices...", Severity.Info);
-        AppState.NotifyShoppingListChanged();
-        AppState.NotifyPlanChanged();
+        AppState.RequestPlanAndMarketRefresh();
     }
 
     private async Task OnOptions()
