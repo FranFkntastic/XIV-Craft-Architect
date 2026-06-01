@@ -232,6 +232,65 @@ public class AppStatePersistenceTests
     }
 
     [Fact]
+    public void LoadStoredPlan_LegacyAnalysisWithOutlierListingField_ClearsAnalysis()
+    {
+        var appState = new AppState();
+        var storedPlan = new StoredPlan
+        {
+            Id = "legacy-outlier",
+            Name = "Legacy Outlier",
+            DataCenter = "Aether",
+            ProjectItems =
+            [
+                new StoredProjectItem
+                {
+                    Id = 123,
+                    Name = "Legacy Item",
+                    Quantity = 10
+                }
+            ],
+            MarketPlansJson = """
+                [
+                  {
+                    "ItemId": 123,
+                    "Name": "Legacy Item",
+                    "QuantityNeeded": 10
+                  }
+                ]
+                """,
+            MarketItemAnalysesJson = """
+                [
+                  {
+                    "ItemId": 123,
+                    "Name": "Legacy Item",
+                    "QuantityNeeded": 10,
+                    "Worlds": [
+                      {
+                        "DataCenter": "Aether",
+                        "WorldName": "Siren",
+                        "QuantityNeeded": 10,
+                        "Listings": [
+                          {
+                            "Quantity": 1,
+                            "PricePerUnit": 999999999,
+                            "RetainerName": "Legacy Scam",
+                            "IsOutlier": true
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+                """
+        };
+
+        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
+
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Empty(appState.ShoppingPlans);
+    }
+
+    [Fact]
     public void LoadStoredPlan_ClearsMarketAnalysisViewState()
     {
         var appState = new AppState();

@@ -80,7 +80,8 @@ public sealed class PlanSessionLoadService
         }).ToList();
 
         var marketAnalyses = DeserializeOrEmpty<MarketItemAnalysis>(storedPlan.MarketItemAnalysesJson);
-        if (!RestoredMarketAnalysisMatchesPlan(plan, projectItems, marketAnalyses, buildMarketAnalysisCandidates))
+        if (ContainsLegacyListingOutlierField(storedPlan.MarketItemAnalysesJson) ||
+            !RestoredMarketAnalysisMatchesPlan(plan, projectItems, marketAnalyses, buildMarketAnalysisCandidates))
         {
             marketAnalyses.Clear();
         }
@@ -121,6 +122,36 @@ public sealed class PlanSessionLoadService
         {
             RestoreParentLinks(child, node);
         }
+    }
+
+    private static bool ContainsLegacyListingOutlierField(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return ContainsLegacyListingOutlierField(document.RootElement);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool ContainsLegacyListingOutlierField(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Object => element.EnumerateObject().Any(property =>
+                string.Equals(property.Name, "IsOutlier", StringComparison.OrdinalIgnoreCase) ||
+                ContainsLegacyListingOutlierField(property.Value)),
+            JsonValueKind.Array => element.EnumerateArray().Any(ContainsLegacyListingOutlierField),
+            _ => false
+        };
     }
 
     private static List<T> DeserializeOrEmpty<T>(string? json)

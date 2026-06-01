@@ -187,6 +187,50 @@ public class MarketAnalysisWorkflowServiceTests
     }
 
     [Fact]
+    public async Task RunAnalysisAsync_WhenPlanChangesAfterCandidateBuild_DoesNotClearNewerAnalysis()
+    {
+        var originalPlan = CreatePlan(itemId: 1);
+        var replacementPlan = CreatePlan(itemId: 2);
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(originalPlan);
+        var jsRuntime = new RecordingJsRuntime();
+        var workflow = new ChangingRecipeLayerWorkflowService(() =>
+        {
+            appState.ApplyBuiltRecipePlanWithActiveItems(replacementPlan);
+            appState.ReplaceMarketAnalysis(
+                [
+                    new MarketItemAnalysis
+                    {
+                        ItemId = 2,
+                        Name = "Replacement Material",
+                        QuantityNeeded = 2
+                    }
+                ],
+                [ShoppingPlan(itemId: 2)]);
+        });
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateExecutionResult());
+        var service = CreateService(appState, execution.Object, jsRuntime, workflow);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.False(result.Published);
+        Assert.Equal(2, Assert.Single(appState.MarketItemAnalyses).ItemId);
+        Assert.Equal(2, Assert.Single(appState.ShoppingPlans).ItemId);
+        execution.Verify(e => e.ExecuteAsync(
+            It.IsAny<MarketAnalysisExecutionRequest>(),
+            It.IsAny<IProgress<string>?>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<MarketAnalysisExecutionOptions?>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task RunAnalysisAsync_UsesRecipeDemandProjectionForMarketInputs()
     {
         var appState = new AppState();
@@ -408,7 +452,7 @@ public class MarketAnalysisWorkflowServiceTests
             null);
     }
 
-    private sealed class StubRecipeLayerWorkflowService : IRecipeLayerWorkflowService
+    private class StubRecipeLayerWorkflowService : IRecipeLayerWorkflowService
     {
         private readonly RecipeDemandProjection? _projection;
 
@@ -444,7 +488,7 @@ public class MarketAnalysisWorkflowServiceTests
             return Task.FromResult<RecipeDemandProjection?>(BuildDemandProjection(plan));
         }
 
-        public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentMarketAnalysisCandidatesAsync(
+        public virtual Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentMarketAnalysisCandidatesAsync(
             CraftingPlan? plan,
             CancellationToken cancellationToken = default)
         {
@@ -456,6 +500,26 @@ public class MarketAnalysisWorkflowServiceTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildActiveProcurementItems(plan));
+        }
+    }
+
+    private sealed class ChangingRecipeLayerWorkflowService : StubRecipeLayerWorkflowService
+    {
+        private readonly Action _afterYield;
+
+        public ChangingRecipeLayerWorkflowService(Action afterYield)
+        {
+            _afterYield = afterYield;
+        }
+
+        public override async Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentMarketAnalysisCandidatesAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            var candidates = BuildMarketAnalysisCandidates(plan);
+            await Task.Yield();
+            _afterYield();
+            return candidates;
         }
     }
 

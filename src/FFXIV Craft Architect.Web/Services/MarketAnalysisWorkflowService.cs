@@ -51,6 +51,11 @@ public sealed class MarketAnalysisWorkflowService
         var planId = _appState.CurrentPlanId;
         var materials = (await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidatesAsync(plan, ct))?
             .ToList() ?? [];
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        {
+            return new MarketAnalysisWorkflowResult(false, 0, 0, 0);
+        }
+
         if (plan == null || materials.Count == 0 || string.IsNullOrWhiteSpace(_appState.SelectedDataCenter))
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, 0);
