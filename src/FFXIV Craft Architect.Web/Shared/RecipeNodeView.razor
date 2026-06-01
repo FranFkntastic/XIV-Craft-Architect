@@ -1,6 +1,7 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
+@inject NavigationManager NavigationManager
 @implements IDisposable
 
 @if (Node != null)
@@ -118,14 +119,14 @@
         _isExpanded = !_isExpanded;
     }
 
-    private async Task SelectNode()
+    private void OpenAcquisitionEvaluation()
     {
         if (Node == null)
         {
             return;
         }
 
-        await OnNodeSelected.InvokeAsync(Node);
+        NavigationManager.NavigateTo($"acquisition?nodeId={Uri.EscapeDataString(Node.NodeId)}");
     }
 
     private async Task OnHqToggle()
@@ -185,10 +186,10 @@
         
         // Price display and details selector. Acquisition source edits now live in the right-hand panel.
         __builder.OpenElement(19, "button");
-        __builder.AddAttribute(20, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, SelectNode));
+        __builder.AddAttribute(20, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, OpenAcquisitionEvaluation));
         __builder.AddEventStopPropagationAttribute(21, "onclick", true);
-        __builder.AddAttribute(22, "title", "Show acquisition details");
-        __builder.AddAttribute(23, "aria-label", $"Show acquisition details for {Node.Name}");
+        __builder.AddAttribute(22, "title", "Open in Acquisition Evaluation");
+        __builder.AddAttribute(23, "aria-label", $"Open Acquisition Evaluation for {Node.Name}");
         __builder.AddAttribute(24, "style", "margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: 132px; min-width: 132px; height: 24px; background: transparent; border: none; padding: 0 0 0 10px; cursor: pointer;");
 
         __builder.OpenElement(25, "span");

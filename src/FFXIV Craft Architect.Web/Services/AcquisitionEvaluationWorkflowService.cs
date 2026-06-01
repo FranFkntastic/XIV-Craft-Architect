@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -14,7 +15,7 @@ public sealed class AcquisitionEvaluationWorkflowService
     public async Task<AcquisitionEvaluationSnapshot?> BuildCurrentSnapshotAsync(
         CraftingPlan? plan,
         IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
-        IReadOnlyList<MarketDataUnavailableItem> unavailableMarketItems,
+        IReadOnlyList<CoreMarketDataUnavailableItem> unavailableMarketItems,
         AcquisitionFilter filter,
         CancellationToken cancellationToken = default)
     {

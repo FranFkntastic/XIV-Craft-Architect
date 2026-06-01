@@ -16,7 +16,7 @@ public class AcquisitionEvaluationWorkflowServiceTests
         var snapshot = await service.BuildCurrentSnapshotAsync(
             plan,
             shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             AcquisitionFilter.All);
 
         Assert.NotNull(snapshot);
@@ -34,7 +34,7 @@ public class AcquisitionEvaluationWorkflowServiceTests
         var snapshot = await service.BuildCurrentSnapshotAsync(
             plan,
             shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             AcquisitionFilter.All);
 
         Assert.Null(snapshot);

@@ -49,7 +49,7 @@ public sealed record BuildRecipePlanRequest(
 public sealed record BuildRecipePlanResult(
     bool Built,
     PlanNode? SelectedNode,
-    MarketPriceRefreshResult PriceRefresh,
+    CoreMarketPriceRefreshResult PriceRefresh,
     int ChangedDefaultDecisions,
     string Message,
     RecipePlannerCommandMessageLevel MessageLevel);
@@ -90,7 +90,7 @@ public sealed record ActivateRecipePlanRequest(
 
 public sealed record ActivateRecipePlanResult(
     PlanNode? SelectedNode,
-    MarketPriceRefreshResult PriceRefresh,
+    CoreMarketPriceRefreshResult PriceRefresh,
     string Message,
     RecipePlannerCommandMessageLevel MessageLevel);
 
@@ -133,7 +133,7 @@ public sealed class RecipePlannerCommandService
             return new BuildRecipePlanResult(
                 false,
                 null,
-                new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>()),
+                CoreMarketPriceAvailability.Empty,
                 0,
                 "No project items to build.",
                 RecipePlannerCommandMessageLevel.Info);
@@ -169,7 +169,7 @@ public sealed class RecipePlannerCommandService
             publishedPlanSessionVersion = builtPlanSessionVersion;
             publishedPlan = builtPlan;
             selectedNode = builtPlan.RootItems.FirstOrDefault();
-            var priceRefresh = new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
+            var priceRefresh = CoreMarketPriceAvailability.Empty;
             if (request.RefreshPrices)
             {
                 priceRefresh = await RefreshPricesAsync(
@@ -199,7 +199,7 @@ public sealed class RecipePlannerCommandService
 
             if (priceRefresh.HasUnavailableItems)
             {
-                var warning = MarketPriceAvailability.FormatUnavailableMessage(priceRefresh.UnavailableItems);
+                var warning = CoreMarketPriceAvailability.FormatUnavailableMessage(priceRefresh.UnavailableItems);
                 operation.Complete($"Plan built with partial market pricing. {warning}");
                 return new BuildRecipePlanResult(
                     true,
@@ -232,7 +232,7 @@ public sealed class RecipePlannerCommandService
                 return new BuildRecipePlanResult(
                     true,
                     selectedNode,
-                    new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>()),
+                    CoreMarketPriceAvailability.Empty,
                     0,
                     "Plan built; price refresh canceled.",
                     RecipePlannerCommandMessageLevel.Info);
@@ -246,7 +246,7 @@ public sealed class RecipePlannerCommandService
             return new BuildRecipePlanResult(
                 false,
                 _appState.CurrentPlan?.RootItems.FirstOrDefault(),
-                new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>()),
+                CoreMarketPriceAvailability.Empty,
                 0,
                 $"Failed to build plan: {ex.Message}",
                 RecipePlannerCommandMessageLevel.Error);
@@ -257,7 +257,7 @@ public sealed class RecipePlannerCommandService
             return new BuildRecipePlanResult(
                 false,
                 _appState.CurrentPlan?.RootItems.FirstOrDefault(),
-                new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>()),
+                CoreMarketPriceAvailability.Empty,
                 0,
                 "Plan build canceled.",
                 RecipePlannerCommandMessageLevel.Info);
@@ -282,7 +282,7 @@ public sealed class RecipePlannerCommandService
             var emptyResult = new BuildRecipePlanResult(
                 false,
                 null,
-                new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>()),
+                CoreMarketPriceAvailability.Empty,
                 0,
                 "Imported 0 items.",
                 RecipePlannerCommandMessageLevel.Info);
@@ -309,7 +309,7 @@ public sealed class RecipePlannerCommandService
             buildResult.MessageLevel);
     }
 
-    public async Task<MarketPriceRefreshResult> RefreshPricesAsync(
+    public async Task<CoreMarketPriceRefreshResult> RefreshPricesAsync(
         RefreshRecipePlanPricesRequest request,
         CancellationToken ct = default)
     {
@@ -317,19 +317,19 @@ public sealed class RecipePlannerCommandService
         var planSessionVersion = _appState.PlanSessionVersion;
         if (plan == null)
         {
-            return new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
+            return CoreMarketPriceAvailability.Empty;
         }
 
         await _recipePlanBuilder.FetchVendorPricesAsync(plan, ct);
         ct.ThrowIfCancellationRequested();
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
-            return new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
+            return CoreMarketPriceAvailability.Empty;
         }
 
         var allItemIds = plan.GetAllItemIds();
-        var marketItemIds = MarketPriceAvailability.GetMarketListableItemIds(plan, allItemIds);
-        var nonMarketItemIds = MarketPriceAvailability.GetNonMarketListableItemIds(plan, allItemIds);
+        var marketItemIds = CoreMarketPriceAvailability.GetMarketListableItemIds(plan, allItemIds);
+        var nonMarketItemIds = CoreMarketPriceAvailability.GetNonMarketListableItemIds(plan, allItemIds);
         var marketEntries = await MarketScopedPriceLoader.LoadBestEntriesAsync(
             _marketCache,
             marketItemIds,
@@ -340,10 +340,10 @@ public sealed class RecipePlannerCommandService
         ct.ThrowIfCancellationRequested();
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
-            return new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
+            return CoreMarketPriceAvailability.Empty;
         }
 
-        var refreshResult = MarketPriceAvailability.FromCachedMarketData(
+        var refreshResult = CoreMarketPriceAvailability.FromCachedMarketData(
             plan,
             marketItemIds,
             marketEntries,
@@ -357,7 +357,7 @@ public sealed class RecipePlannerCommandService
 
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
-            return new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
+            return CoreMarketPriceAvailability.Empty;
         }
 
         plan.PriceVersion++;
@@ -386,7 +386,7 @@ public sealed class RecipePlannerCommandService
             _appState.SetStatus("Ready", busy: false);
             return new ActivateRecipePlanResult(
                 selectedNode,
-                new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>()),
+                CoreMarketPriceAvailability.Empty,
                 "Plan loaded.",
                 RecipePlannerCommandMessageLevel.Success);
         }
@@ -401,7 +401,7 @@ public sealed class RecipePlannerCommandService
             var selectedDataCenter = !string.IsNullOrWhiteSpace(_appState.SelectedDataCenter)
                 ? _appState.SelectedDataCenter
                 : request.SelectedDataCenter;
-            MarketPriceRefreshResult priceRefresh;
+            CoreMarketPriceRefreshResult priceRefresh;
             if (request.RefreshMarketPrices)
             {
                 priceRefresh = await RefreshPricesAsync(
@@ -440,7 +440,7 @@ public sealed class RecipePlannerCommandService
 
                 request.Plan.PriceVersion++;
                 _appState.ApplyPlanPriceChange();
-                priceRefresh = new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>());
+                priceRefresh = CoreMarketPriceAvailability.Empty;
             }
 
             operation.Complete();
@@ -460,7 +460,7 @@ public sealed class RecipePlannerCommandService
             operation.Complete();
             return new ActivateRecipePlanResult(
                 selectedNode,
-                new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>()),
+                CoreMarketPriceAvailability.Empty,
                 $"Plan loaded, but price refresh failed: {ex.Message}",
                 RecipePlannerCommandMessageLevel.Warning);
         }
@@ -469,7 +469,7 @@ public sealed class RecipePlannerCommandService
         {
             return new ActivateRecipePlanResult(
                 selectedNode,
-                new MarketPriceRefreshResult(0, 0, Array.Empty<MarketDataUnavailableItem>()),
+                CoreMarketPriceAvailability.Empty,
                 "Plan loaded; price refresh canceled.",
                 RecipePlannerCommandMessageLevel.Info);
         }

@@ -157,13 +157,16 @@
 </div>
 
 @code {
+    [SupplyParameterFromQuery(Name = "nodeId")]
+    public string? RequestedNodeId { get; set; }
+
     private PlanNode? _selectedNode;
     private AcquisitionFilter _filter = AcquisitionFilter.All;
     private readonly AcquisitionEvaluationLedgerCache _ledgerCache = new();
     private AcquisitionEvaluationSnapshot _snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
         null,
         Array.Empty<DetailedShoppingPlan>(),
-        Array.Empty<MarketDataUnavailableItem>(),
+        Array.Empty<CoreMarketDataUnavailableItem>(),
         AcquisitionFilter.All,
         new RecipeDemandProjection([], [], [], []));
     private readonly int[] _columnWidths = { 300, 150, 260, 150, 170, 110 };
@@ -173,11 +176,20 @@
     private int _resizeStartWidth;
     private CancellationTokenSource? _refreshCts;
     private long _refreshRequestId;
+    private string? _appliedRequestedNodeId;
 
     protected override async Task OnInitializedAsync()
     {
         AppState.OnStateChanged += OnStateChanged;
         await RefreshLedgerSnapshotAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!string.Equals(RequestedNodeId, _appliedRequestedNodeId, StringComparison.Ordinal))
+        {
+            SelectRequestedNodeFromSnapshot();
+        }
     }
 
     public void Dispose()
@@ -464,10 +476,34 @@
             return;
         }
 
+        if (SelectRequestedNodeFromSnapshot())
+        {
+            return;
+        }
+
         if (_selectedNode == null || !_snapshot.Rows.Any(row => row.Node.NodeId == _selectedNode.NodeId))
         {
             _selectedNode = _snapshot.Rows.FirstOrDefault()?.Node;
         }
+    }
+
+    private bool SelectRequestedNodeFromSnapshot()
+    {
+        if (string.IsNullOrWhiteSpace(RequestedNodeId) ||
+            string.Equals(RequestedNodeId, _appliedRequestedNodeId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var row = _snapshot.Rows.FirstOrDefault(row => row.NodeId == RequestedNodeId);
+        if (row == null)
+        {
+            return false;
+        }
+
+        _selectedNode = row.Node;
+        _appliedRequestedNodeId = RequestedNodeId;
+        return true;
     }
 
     private void GoToMarket()

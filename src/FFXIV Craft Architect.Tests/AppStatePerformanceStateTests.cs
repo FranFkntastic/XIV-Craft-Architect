@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Web.Services;
 
 namespace FFXIV_Craft_Architect.Tests;
@@ -196,13 +197,13 @@ public class AppStatePerformanceStateTests
         appState.MarkPersisted(PersistedStateBucket.All, appState.CurrentVersions);
         var changes = new List<AppStateChange>();
         appState.OnStateChanged += changes.Add;
-        var source = new List<MarketDataUnavailableItem>
+        var source = new List<CoreMarketDataUnavailableItem>
         {
             new(123, "Unavailable Item")
         };
 
         appState.SetUnavailableMarketItems(source);
-        source.Add(new MarketDataUnavailableItem(456, "Late Mutation"));
+        source.Add(new CoreMarketDataUnavailableItem(456, "Late Mutation"));
 
         var change = Assert.Single(changes);
         Assert.True(change.HasScope(AppStateChangeScope.MarketAnalysis));
@@ -661,7 +662,7 @@ public class AppStatePerformanceStateTests
             [new MarketItemAnalysis { ItemId = 100, Name = "Old Analysis" }],
             [new DetailedShoppingPlan { ItemId = 100, Name = "Old Plan" }]);
         appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 100, Name = "Old Route" }]);
-        appState.SetUnavailableMarketItems([new MarketDataUnavailableItem(100, "Old Unavailable")]);
+        appState.SetUnavailableMarketItems([new CoreMarketDataUnavailableItem(100, "Old Unavailable")]);
         appState.RequestMarketItemAutoExpand(100);
         appState.ApplyBuiltRecipePlanWithActiveItems(oldPlan);
         var previousSession = appState.PlanSessionVersion;
@@ -1070,6 +1071,41 @@ public class AppStatePerformanceStateTests
         Assert.Equal(123, appState.AutoExpandItemId);
         Assert.True(appState.ConsumeMarketItemAutoExpand(123));
         Assert.Null(appState.AutoExpandItemId);
+    }
+
+    [Fact]
+    public void RequestMarketItemAutoExpand_SelectsExistingMarketAnalysisItem()
+    {
+        var appState = new AppState();
+        appState.ReplaceMarketAnalysis(
+            Array.Empty<MarketItemAnalysis>(),
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Target" }]);
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        appState.RequestMarketItemAutoExpand(123);
+
+        Assert.Equal(123, appState.SelectedMarketAnalysisItemId);
+        Assert.Null(appState.AutoExpandItemId);
+        var change = Assert.Single(changes);
+        Assert.True(change.HasScope(AppStateChangeScope.MarketAnalysisView));
+    }
+
+    [Fact]
+    public void ReplaceMarketAnalysis_AppliesPendingMarketItemAutoExpandWhenItemArrives()
+    {
+        var appState = new AppState();
+        appState.RequestMarketItemAutoExpand(123);
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        appState.ReplaceMarketAnalysis(
+            Array.Empty<MarketItemAnalysis>(),
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Target" }]);
+
+        Assert.Equal(123, appState.SelectedMarketAnalysisItemId);
+        Assert.Null(appState.AutoExpandItemId);
+        Assert.Contains(changes, change => change.HasScope(AppStateChangeScope.MarketAnalysisView));
     }
 
     private static void AssertSettingsOnlyChange(

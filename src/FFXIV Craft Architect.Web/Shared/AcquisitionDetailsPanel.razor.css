@@ -32,11 +32,31 @@
     background: #363636;
     padding: 12px;
     border-bottom: 1px solid #444;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
 }
 
 .rp-header-title {
     color: #cccccc;
     font-weight: 500;
+}
+
+.rp-header-action {
+    background: #1e1e1e;
+    border: 1px solid #555;
+    border-radius: 4px;
+    color: #d4a73a;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 8px;
+}
+
+.rp-header-action:hover {
+    background: #252525;
+    border-color: #777;
 }
 
 .rp-details-wrap {

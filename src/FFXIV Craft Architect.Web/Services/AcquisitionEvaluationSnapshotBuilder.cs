@@ -9,7 +9,7 @@ public static class AcquisitionEvaluationSnapshotBuilder
     public static AcquisitionEvaluationSnapshot Build(
         CraftingPlan? plan,
         IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
-        IReadOnlyList<MarketDataUnavailableItem> unavailableMarketItems,
+        IReadOnlyList<CoreMarketDataUnavailableItem> unavailableMarketItems,
         AcquisitionFilter filter,
         RecipeDemandProjection demandProjection)
     {
@@ -45,7 +45,7 @@ public static class AcquisitionEvaluationSnapshotBuilder
     public static AcquisitionEvaluationParityReport CompareWithLegacyTraversal(
         CraftingPlan? plan,
         IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
-        IReadOnlyList<MarketDataUnavailableItem> unavailableMarketItems,
+        IReadOnlyList<CoreMarketDataUnavailableItem> unavailableMarketItems,
         RecipeDemandProjection demandProjection)
     {
         var costContext = AcquisitionPlanningService.CreateCostContext(shoppingPlans);

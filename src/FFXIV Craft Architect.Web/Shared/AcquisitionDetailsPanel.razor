@@ -2,6 +2,8 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Web.Services
+@inject AppState AppState
+@inject NavigationManager NavigationManager
 
 <div class="rp-column">
     @if (Node == null && Row == null)
@@ -16,6 +18,15 @@
         <div class="rp-panel">
             <div class="rp-panel-header">
                 <div class="rp-header-title">Acquisition Details</div>
+                @if (CanOpenMarketAnalysis)
+                {
+                    <button type="button"
+                            class="rp-header-action"
+                            title="Open this item in Market Analysis"
+                            @onclick="GoToMarketAnalysis">
+                        Market
+                    </button>
+                }
             </div>
             <div class="rp-details-wrap">
                 <div class="rp-item-name">@ItemName</div>
@@ -76,7 +87,7 @@
     [Parameter] public AcquisitionCostContext CostContext { get; set; } =
         AcquisitionPlanningService.CreateCostContext(Array.Empty<DetailedShoppingPlan>());
     [Parameter] public IReadOnlyList<MaterialAggregate>? ActiveProcurementItems { get; set; }
-    [Parameter] public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<MarketDataUnavailableItem>();
+    [Parameter] public IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<CoreMarketDataUnavailableItem>();
     [Parameter] public EventCallback<AcquisitionSourceChangeRequest> OnSourceChanged { get; set; }
 
     private int ItemId => Row?.ItemId ?? Node?.ItemId ?? 0;
@@ -93,6 +104,7 @@
     private decimal UnitPrice => Row?.UnitPrice ?? Node?.MarketPrice ?? 0;
     private IReadOnlyList<RecipeDemandVendorOption> VendorOptions => Row?.VendorOptions ?? GetNodeVendorOptions();
     private bool IsMarketUnavailable => ItemId != 0 && UnavailableMarketItems.Any(i => i.ItemId == ItemId);
+    private bool CanOpenMarketAnalysis => ItemId != 0 && MarketPlans.Any(plan => plan.ItemId == ItemId);
 
     private async Task SelectSource(AcquisitionSource source)
     {
@@ -102,6 +114,17 @@
         }
 
         await OnSourceChanged.InvokeAsync(new AcquisitionSourceChangeRequest(Node, source));
+    }
+
+    private void GoToMarketAnalysis()
+    {
+        if (ItemId == 0)
+        {
+            return;
+        }
+
+        AppState.RequestMarketItemAutoExpand(ItemId);
+        NavigationManager.NavigateTo("market");
     }
 
     private List<AcquisitionOptionView> GetOptions()
