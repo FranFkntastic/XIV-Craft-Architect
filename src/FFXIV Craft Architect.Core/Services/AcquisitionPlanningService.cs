@@ -37,7 +37,14 @@ public static class AcquisitionPlanningService
             return new List<DetailedShoppingPlan>();
         }
 
-        var activeItemIds = GetActiveProcurementItems(plan)
+        return FilterShoppingPlansForActiveProcurement(GetActiveProcurementItems(plan), shoppingPlans);
+    }
+
+    public static List<DetailedShoppingPlan> FilterShoppingPlansForActiveProcurement(
+        IReadOnlyList<MaterialAggregate> activeItems,
+        IEnumerable<DetailedShoppingPlan> shoppingPlans)
+    {
+        var activeItemIds = activeItems
             .Select(item => item.ItemId)
             .ToHashSet();
 
@@ -129,12 +136,25 @@ public static class AcquisitionPlanningService
                 Array.Empty<MaterialAggregate>());
         }
 
+        return SelectActiveProcurementEvidence(
+            GetActiveProcurementItems(plan),
+            sourceShoppingPlans,
+            requiredScope,
+            selectedDataCenter);
+    }
+
+    public static ProcurementEvidenceSelection SelectActiveProcurementEvidence(
+        IReadOnlyList<MaterialAggregate> activeItems,
+        IEnumerable<DetailedShoppingPlan> sourceShoppingPlans,
+        MarketFetchScope requiredScope,
+        string selectedDataCenter)
+    {
         var sourcePlanByItemId = sourceShoppingPlans
             .GroupBy(shoppingPlan => shoppingPlan.ItemId)
             .ToDictionary(group => group.Key, group => group.First());
         var reusablePlans = new List<DetailedShoppingPlan>();
         var missingItems = new List<MaterialAggregate>();
-        foreach (var item in GetActiveProcurementItems(plan).Where(item => item.TotalQuantity > 0))
+        foreach (var item in activeItems.Where(item => item.TotalQuantity > 0))
         {
             if (!sourcePlanByItemId.TryGetValue(item.ItemId, out var shoppingPlan) ||
                 !HasUsableEvidenceForScope(shoppingPlan, requiredScope, selectedDataCenter))
@@ -159,7 +179,18 @@ public static class AcquisitionPlanningService
             return new List<DetailedShoppingPlan>();
         }
 
-        var activeItemIds = GetActiveProcurementItems(plan)
+        return MergeActiveProcurementEvidence(
+            GetActiveProcurementItems(plan),
+            reusablePlans,
+            fetchedMissingPlans);
+    }
+
+    public static List<DetailedShoppingPlan> MergeActiveProcurementEvidence(
+        IReadOnlyList<MaterialAggregate> activeItems,
+        IEnumerable<DetailedShoppingPlan> reusablePlans,
+        IEnumerable<DetailedShoppingPlan> fetchedMissingPlans)
+    {
+        var activeItemIds = activeItems
             .Select(item => item.ItemId)
             .ToHashSet();
         var resultByItemId = reusablePlans
@@ -172,7 +203,7 @@ public static class AcquisitionPlanningService
             resultByItemId[fetchedPlan.ItemId] = fetchedPlan;
         }
 
-        return GetActiveProcurementItems(plan)
+        return activeItems
             .Where(item => resultByItemId.ContainsKey(item.ItemId))
             .Select(item => resultByItemId[item.ItemId])
             .ToList();
@@ -187,11 +218,18 @@ public static class AcquisitionPlanningService
             return new List<MaterialAggregate>();
         }
 
+        return GetActiveProcurementItemsMissingEvidence(GetActiveProcurementItems(plan), shoppingPlans);
+    }
+
+    public static List<MaterialAggregate> GetActiveProcurementItemsMissingEvidence(
+        IReadOnlyList<MaterialAggregate> activeItems,
+        IEnumerable<DetailedShoppingPlan> shoppingPlans)
+    {
         var planByItemId = shoppingPlans
             .GroupBy(shoppingPlan => shoppingPlan.ItemId)
             .ToDictionary(group => group.Key, group => group.First());
 
-        return GetActiveProcurementItems(plan)
+        return activeItems
             .Where(item => item.TotalQuantity > 0)
             .Where(item => !planByItemId.TryGetValue(item.ItemId, out var shoppingPlan) ||
                 !HasUsableEvidence(shoppingPlan))
@@ -265,6 +303,39 @@ public static class AcquisitionPlanningService
         out decimal cost)
     {
         return TryGetAcquisitionCost(node, source, context.PlanByItemId, context, out cost);
+    }
+
+    public static bool TryGetAcquisitionCost(
+        PlanNode node,
+        AcquisitionSource source,
+        AcquisitionCostContext context,
+        int quantity,
+        out decimal cost)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (quantity <= 0)
+        {
+            cost = 0;
+            return false;
+        }
+
+        if (quantity == node.Quantity)
+        {
+            return TryGetAcquisitionCost(node, source, context, out cost);
+        }
+
+        cost = source switch
+        {
+            AcquisitionSource.Craft when node.Children.Any() && node.CanCraft => CalculateCraftCost(node, context, quantity),
+            AcquisitionSource.MarketBuyNq when node.CanBuyFromMarket && !node.MustBeHq => GetMarketBuyCost(node, context.PlanByItemId, hqOnly: false, quantity),
+            AcquisitionSource.MarketBuyHq when node.CanBuyFromMarket && node.CanBeHq => GetMarketBuyCost(node, context.PlanByItemId, hqOnly: true, quantity),
+            AcquisitionSource.VendorBuy when node.CanBuyFromVendor => node.VendorPrice * quantity,
+            _ => 0
+        };
+
+        return cost > 0;
     }
 
     public static int ReconcileAcquisitionDecisions(
@@ -427,7 +498,7 @@ public static class AcquisitionPlanningService
         return TryGetMarketBoardPurchase(shoppingPlan, quantity, hqOnly: false, out world, out cost);
     }
 
-    private static bool TryGetMarketBoardPurchase(
+    public static bool TryGetMarketBoardPurchase(
         DetailedShoppingPlan? shoppingPlan,
         int quantity,
         bool hqOnly,
@@ -807,10 +878,19 @@ public static class AcquisitionPlanningService
         IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
         bool hqOnly)
     {
+        return GetMarketBuyCost(node, planByItemId, hqOnly, node.Quantity);
+    }
+
+    private static decimal GetMarketBuyCost(
+        PlanNode node,
+        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
+        bool hqOnly,
+        int quantity)
+    {
         return planByItemId.TryGetValue(node.ItemId, out var shoppingPlan) &&
-            TryGetMarketBoardPurchase(shoppingPlan, node.Quantity, hqOnly, out _, out var evidenceCost)
+            TryGetMarketBoardPurchase(shoppingPlan, quantity, hqOnly, out _, out var evidenceCost)
                 ? evidenceCost
-                : (hqOnly ? node.HqMarketPrice : node.MarketPrice) * node.Quantity;
+                : (hqOnly ? node.HqMarketPrice : node.MarketPrice) * quantity;
     }
 
     private static int GetSourceTieBreak(AcquisitionSource source)
@@ -872,6 +952,17 @@ public static class AcquisitionPlanningService
         var result = node.Yield > 1 ? cost / node.Yield : cost;
         context.SetCachedCost(node, AcquisitionSource.Craft, result);
         return result;
+    }
+
+    private static decimal CalculateCraftCost(
+        PlanNode node,
+        AcquisitionCostContext context,
+        int quantity)
+    {
+        var baseCost = CalculateCraftCost(node, context);
+        return node.Quantity > 0
+            ? baseCost * quantity / node.Quantity
+            : baseCost;
     }
 
     private static decimal GetDirectAcquisitionCost(

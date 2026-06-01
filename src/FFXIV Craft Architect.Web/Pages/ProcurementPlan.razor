@@ -8,7 +8,7 @@
 @inject NavigationManager NavigationManager
 @inject CancellableOperationService CancellableOperations
 @inject ProcurementWorkflowService ProcurementWorkflow
-@inject IRecipeDemandProjectionService RecipeDemandProjectionService
+@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @implements IDisposable
 
 @{
@@ -80,8 +80,8 @@
     /// </summary>
     private List<MaterialAggregate> GetBuyItems()
     {
-        return GetDemandProjection()
-            .ToActiveProcurementMaterialAggregates()
+        return RecipeLayerWorkflowService
+            .BuildActiveProcurementItems(AppState.CurrentPlan)
             .Where(m => m.TotalQuantity > 0)
             .ToList();
     }
@@ -94,19 +94,17 @@
 
     private ProcurementEvidenceSummary GetEvidenceSummary()
     {
-        var projection = GetDemandProjection();
         return AcquisitionPlanningService.GetProcurementEvidenceSummary(
-            projection.ToActiveProcurementMaterialAggregates(),
-            projection.ToMarketAnalysisMaterialAggregates(),
+            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan),
+            RecipeLayerWorkflowService.BuildMarketAnalysisCandidates(AppState.CurrentPlan),
             AppState.ShoppingPlans);
     }
 
     private Severity GetProcurementNoticeSeverity(ProcurementEvidenceSummary evidenceSummary)
     {
-        var projection = GetDemandProjection();
         var overlaySummary = AcquisitionPlanningService.GetProcurementEvidenceSummary(
-            projection.ToActiveProcurementMaterialAggregates(),
-            projection.ToMarketAnalysisMaterialAggregates(),
+            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan),
+            RecipeLayerWorkflowService.BuildMarketAnalysisCandidates(AppState.CurrentPlan),
             AppState.ProcurementShoppingPlans);
         if (overlaySummary.HasCompleteActiveEvidence)
         {
@@ -119,11 +117,6 @@
         }
 
         return AppState.ShoppingPlans.Any() ? Severity.Info : Severity.Success;
-    }
-
-    private RecipeDemandProjection GetDemandProjection()
-    {
-        return RecipeDemandProjectionService.Build(AppState.CurrentPlan, snapshot: null);
     }
 
     private string GetProcurementNoticeMessage(ProcurementEvidenceSummary evidenceSummary)

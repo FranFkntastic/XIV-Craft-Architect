@@ -154,7 +154,7 @@ public class ProcurementWorkflowServiceTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>(),
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
-            .Callback(() => appState.ApplyBuiltRecipePlan(replacementPlan))
+            .Callback(() => appState.ApplyBuiltRecipePlanWithActiveItems(replacementPlan))
             .ReturnsAsync(new ProcurementRouteExecutionResult([ShoppingPlan(101)], [], [], [], []));
         var service = CreateService(appState, procurementExecution: execution.Object);
 
@@ -195,7 +195,7 @@ public class ProcurementWorkflowServiceTests
         var service = CreateService(
             appState,
             procurementExecution: execution.Object,
-            demandProjectionService: new StubRecipeDemandProjectionService(CreateProjection(
+            recipeLayerWorkflow: new StubRecipeLayerWorkflowService(CreateProjection(
                 marketCandidates: [],
                 activeProcurement: [])));
 
@@ -237,7 +237,7 @@ public class ProcurementWorkflowServiceTests
         var service = CreateService(
             appState,
             marketExecution: marketExecution.Object,
-            demandProjectionService: new StubRecipeDemandProjectionService(CreateProjection(
+            recipeLayerWorkflow: new StubRecipeLayerWorkflowService(CreateProjection(
                 marketCandidates:
                 [
                     CreateDemandRow(909, "Projected Item", quantity: 4, RecipeDemandViewKind.MarketAnalysisCandidate)
@@ -362,7 +362,7 @@ public class ProcurementWorkflowServiceTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>(),
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
-            .Callback(() => appState.ApplyBuiltRecipePlan(CreatePlan(303)))
+            .Callback(() => appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan(303)))
             .ReturnsAsync(new MarketAnalysisExecutionResult(
                 CreateEmptyEvidence(),
                 [new MarketItemAnalysis { ItemId = 101, Name = "Item 101", QuantityNeeded = 5 }],
@@ -548,7 +548,7 @@ public class ProcurementWorkflowServiceTests
         IProcurementRouteExecutionService? procurementExecution = null,
         IMarketAnalysisExecutionService? marketExecution = null,
         RecordingJsRuntime? jsRuntime = null,
-        IRecipeDemandProjectionService? demandProjectionService = null)
+        IRecipeLayerWorkflowService? recipeLayerWorkflow = null)
     {
         jsRuntime ??= new RecordingJsRuntime();
         var indexedDb = new IndexedDbService(jsRuntime);
@@ -563,7 +563,7 @@ public class ProcurementWorkflowServiceTests
             marketExecution ?? Mock.Of<IMarketAnalysisExecutionService>(),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
             persistence,
-            demandProjectionService ?? new RecipeDemandProjectionService());
+            recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService());
     }
 
     private static AppState CreateAppState(params int[] itemIds)
@@ -574,7 +574,7 @@ public class ProcurementWorkflowServiceTests
             enableSplitWorldPurchases: false,
             travelTolerance: 7,
             temporaryWorldBlacklistDurationMinutes: appState.TemporaryWorldBlacklistDurationMinutes);
-        appState.ApplyBuiltRecipePlan(CreatePlan(itemIds));
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan(itemIds));
         return appState;
     }
 
@@ -755,18 +755,54 @@ public class ProcurementWorkflowServiceTests
             null);
     }
 
-    private sealed class StubRecipeDemandProjectionService : IRecipeDemandProjectionService
+    private sealed class StubRecipeLayerWorkflowService : IRecipeLayerWorkflowService
     {
-        private readonly RecipeDemandProjection _projection;
+        private readonly RecipeDemandProjection? _projection;
 
-        public StubRecipeDemandProjectionService(RecipeDemandProjection projection)
+        public StubRecipeLayerWorkflowService(RecipeDemandProjection? projection = null)
         {
             _projection = projection;
         }
 
-        public RecipeDemandProjection Build(CraftingPlan? plan, RecipeOperationSnapshot? snapshot)
+        public RecipeOperationSnapshotIdentity CreateSnapshotIdentity()
         {
-            return _projection;
+            return RecipeOperationSnapshotIdentity.Unspecified;
+        }
+
+        public RecipeDemandProjection BuildDemandProjection(CraftingPlan? plan)
+        {
+            return _projection ?? new RecipeDemandProjectionService().Build(plan, snapshot: null);
+        }
+
+        public IReadOnlyList<MaterialAggregate> BuildMarketAnalysisCandidates(CraftingPlan? plan)
+        {
+            return BuildDemandProjection(plan).ToMarketAnalysisMaterialAggregates();
+        }
+
+        public IReadOnlyList<MaterialAggregate> BuildActiveProcurementItems(CraftingPlan? plan)
+        {
+            return BuildDemandProjection(plan).ToActiveProcurementMaterialAggregates();
+        }
+
+        public Task<RecipeDemandProjection?> BuildCurrentDemandProjectionAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<RecipeDemandProjection?>(BuildDemandProjection(plan));
+        }
+
+        public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentMarketAnalysisCandidatesAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildMarketAnalysisCandidates(plan));
+        }
+
+        public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildActiveProcurementItems(plan));
         }
     }
 

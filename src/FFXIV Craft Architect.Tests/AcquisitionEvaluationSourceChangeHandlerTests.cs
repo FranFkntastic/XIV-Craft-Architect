@@ -49,7 +49,7 @@ public class AcquisitionEvaluationSourceChangeHandlerTests
         root.Children.Add(child);
 
         var appState = new AppState();
-        appState.ApplyBuiltRecipePlan(new CraftingPlan { RootItems = [root] });
+        appState.ApplyBuiltRecipePlanWithActiveItems(new CraftingPlan { RootItems = [root] });
         appState.ReplaceMarketAnalysis(
             [],
             [

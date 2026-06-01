@@ -62,6 +62,27 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void FilterShoppingPlansForActiveProcurement_WithExplicitActiveItems_RemovesInactivePlans()
+    {
+        var activeItems = new List<MaterialAggregate>
+        {
+            new() { ItemId = 200, Name = "Active Item", TotalQuantity = 2 }
+        };
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new() { ItemId = 200, Name = "Active Item", QuantityNeeded = 2 },
+            new() { ItemId = 300, Name = "Inactive Item", QuantityNeeded = 6 }
+        };
+
+        var procurementPlans = AcquisitionPlanningService.FilterShoppingPlansForActiveProcurement(
+            activeItems,
+            marketPlans);
+
+        var planResult = Assert.Single(procurementPlans);
+        Assert.Equal(200, planResult.ItemId);
+    }
+
+    [Fact]
     public void GetProcurementEvidenceSummary_CountsActiveAnalyzedMissingAndSuppressedCandidates()
     {
         var plan = CreatePlanWithBoughtIntermediate();
@@ -365,6 +386,38 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void GetActiveProcurementItemsMissingEvidence_WithExplicitActiveItems_ReturnsOnlyMissingActiveItems()
+    {
+        var activeItems = new List<MaterialAggregate>
+        {
+            new() { ItemId = 200, Name = "Missing Active", TotalQuantity = 2 },
+            new() { ItemId = 300, Name = "Reusable Active", TotalQuantity = 6 }
+        };
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 300,
+                Name = "Reusable Active",
+                QuantityNeeded = 6,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 60,
+                    TotalQuantityPurchased = 6
+                }
+            }
+        };
+
+        var missingItems = AcquisitionPlanningService.GetActiveProcurementItemsMissingEvidence(
+            activeItems,
+            marketPlans);
+
+        var missingItem = Assert.Single(missingItems);
+        Assert.Equal(200, missingItem.ItemId);
+    }
+
+    [Fact]
     public void GetActiveProcurementItemsMissingEvidence_TreatsErroredActivePlanAsMissing()
     {
         var plan = CreatePlanWithBoughtIntermediate();
@@ -449,6 +502,32 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void SelectActiveProcurementEvidence_WithExplicitActiveItems_ReusesOnlyScopedEvidence()
+    {
+        var activeItems = new List<MaterialAggregate>
+        {
+            new() { ItemId = 200, Name = "Reusable Active", TotalQuantity = 2 },
+            new() { ItemId = 300, Name = "Missing Active", TotalQuantity = 6 }
+        };
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            CreateMarketPlan(200, "Reusable Active", "Aether", "Siren"),
+            CreateMarketPlan(300, "Missing Active", "Primal", "Leviathan")
+        };
+
+        var selection = AcquisitionPlanningService.SelectActiveProcurementEvidence(
+            activeItems,
+            marketPlans,
+            MarketFetchScope.SelectedDataCenter,
+            "Aether");
+
+        var reusablePlan = Assert.Single(selection.ReusablePlans);
+        var missingItem = Assert.Single(selection.MissingItems);
+        Assert.Equal(200, reusablePlan.ItemId);
+        Assert.Equal(300, missingItem.ItemId);
+    }
+
+    [Fact]
     public void MergeActiveProcurementEvidence_PrefersFetchedMissingPlansAndDoesNotIncludeInactiveCandidates()
     {
         var plan = CreatePlanWithBoughtIntermediate();
@@ -465,6 +544,28 @@ public class AcquisitionPlanningServiceTests
         Assert.Equal(200, mergedPlan.ItemId);
         Assert.Equal("Adamantoise", mergedPlan.RecommendedWorld?.WorldName);
         Assert.Equal(200, mergedPlan.RecommendedWorld?.TotalCost);
+    }
+
+    [Fact]
+    public void MergeActiveProcurementEvidence_WithExplicitActiveItems_PreservesActiveOrderAndExcludesInactivePlans()
+    {
+        var activeItems = new List<MaterialAggregate>
+        {
+            new() { ItemId = 300, Name = "Second Active", TotalQuantity = 6 },
+            new() { ItemId = 200, Name = "First Active", TotalQuantity = 2 }
+        };
+        var reusablePlan = CreateMarketPlan(200, "First Active", "Aether", "Siren", totalCost: 500);
+        var inactivePlan = CreateMarketPlan(400, "Inactive", "Aether", "Siren", totalCost: 100);
+        var fetchedPlan = CreateMarketPlan(300, "Second Active", "Aether", "Adamantoise", totalCost: 200);
+
+        var merged = AcquisitionPlanningService.MergeActiveProcurementEvidence(
+            activeItems,
+            [reusablePlan, inactivePlan],
+            [fetchedPlan]);
+
+        Assert.Equal([300, 200], merged.Select(plan => plan.ItemId));
+        Assert.Equal("Adamantoise", merged[0].RecommendedWorld?.WorldName);
+        Assert.Equal("Siren", merged[1].RecommendedWorld?.WorldName);
     }
 
     [Fact]
@@ -1057,6 +1158,119 @@ public class AcquisitionPlanningServiceTests
 
         Assert.True(hasCost);
         Assert.Equal(200, cost);
+    }
+
+    [Fact]
+    public void TryGetAcquisitionCost_MarketBuyNq_WithQuantityOverride_UsesOverrideForEvidence()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 100,
+            Name = "NQ Buy",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 10_000
+        };
+        var context = AcquisitionPlanningService.CreateCostContext(
+        [
+            new DetailedShoppingPlan
+            {
+                ItemId = 100,
+                Name = "NQ Buy",
+                QuantityNeeded = 10,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 1_000,
+                    TotalQuantityPurchased = 10
+                }
+            }
+        ]);
+
+        var hasCost = AcquisitionPlanningService.TryGetAcquisitionCost(
+            node,
+            AcquisitionSource.MarketBuyNq,
+            context,
+            quantity: 7,
+            out var cost);
+
+        Assert.True(hasCost);
+        Assert.Equal(700, cost);
+        Assert.Equal(2, node.Quantity);
+    }
+
+    [Fact]
+    public void TryGetAcquisitionCost_VendorBuy_WithQuantityOverride_UsesOverrideAndDoesNotMutateNodeQuantity()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Vendor Buy",
+            Quantity = 2,
+            Source = AcquisitionSource.VendorBuy,
+            CanBuyFromVendor = true,
+            VendorPrice = 12
+        };
+        var context = AcquisitionPlanningService.CreateCostContext(Array.Empty<DetailedShoppingPlan>());
+
+        var hasCost = AcquisitionPlanningService.TryGetAcquisitionCost(
+            node,
+            AcquisitionSource.VendorBuy,
+            context,
+            quantity: 7,
+            out var cost);
+
+        Assert.True(hasCost);
+        Assert.Equal(84, cost);
+        Assert.Equal(2, node.Quantity);
+    }
+
+    [Fact]
+    public void TryGetAcquisitionCost_WithQuantityOverride_DoesNotReuseDefaultQuantityCache()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Cached Buy",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 10_000
+        };
+        var context = AcquisitionPlanningService.CreateCostContext(
+        [
+            new DetailedShoppingPlan
+            {
+                ItemId = 100,
+                Name = "Cached Buy",
+                QuantityNeeded = 2,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 20,
+                    TotalQuantityPurchased = 2
+                }
+            }
+        ]);
+
+        var hasDefaultCost = AcquisitionPlanningService.TryGetAcquisitionCost(
+            node,
+            AcquisitionSource.MarketBuyNq,
+            context,
+            out var defaultCost);
+        var hasOverrideCost = AcquisitionPlanningService.TryGetAcquisitionCost(
+            node,
+            AcquisitionSource.MarketBuyNq,
+            context,
+            quantity: 1,
+            out var overrideCost);
+
+        Assert.True(hasDefaultCost);
+        Assert.True(hasOverrideCost);
+        Assert.Equal(20, defaultCost);
+        Assert.Equal(10, overrideCost);
+        Assert.Equal(1, context.CachedCostEntryCount);
     }
 
     [Fact]

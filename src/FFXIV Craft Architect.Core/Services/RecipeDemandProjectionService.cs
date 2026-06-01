@@ -39,7 +39,7 @@ public sealed class RecipeDemandProjectionService : IRecipeDemandProjectionServi
     private static void CollectPlanDemand(
         PlanNode node,
         RecipeOperationSnapshot? snapshot,
-        IReadOnlyDictionary<string, RecipeOperationIngredient> ingredientDemandByChildNodeId,
+        IReadOnlyDictionary<string, RecipeOperationIngredientEdge> ingredientDemandByChildNodeId,
         List<RecipeDemandRow> rows,
         SuppressingDemandAncestor? suppressingAncestor)
     {
@@ -65,7 +65,7 @@ public sealed class RecipeDemandProjectionService : IRecipeDemandProjectionServi
     private static void CollectMarketCandidates(
         PlanNode node,
         RecipeOperationSnapshot? snapshot,
-        IReadOnlyDictionary<string, RecipeOperationIngredient> ingredientDemandByChildNodeId,
+        IReadOnlyDictionary<string, RecipeOperationIngredientEdge> ingredientDemandByChildNodeId,
         List<RecipeDemandRow> rows)
     {
         if (node.Quantity > 0 && node.CanBuyFromMarket)
@@ -87,7 +87,7 @@ public sealed class RecipeDemandProjectionService : IRecipeDemandProjectionServi
     private static void CollectActiveProcurement(
         PlanNode node,
         RecipeOperationSnapshot? snapshot,
-        IReadOnlyDictionary<string, RecipeOperationIngredient> ingredientDemandByChildNodeId,
+        IReadOnlyDictionary<string, RecipeOperationIngredientEdge> ingredientDemandByChildNodeId,
         List<RecipeDemandRow> activeRows,
         List<RecipeDemandRow> suppressedRows,
         SuppressingDemandAncestor? suppressingAncestor)
@@ -148,22 +148,26 @@ public sealed class RecipeDemandProjectionService : IRecipeDemandProjectionServi
         RecipeDemandViewKind viewKind,
         PlanNode node,
         RecipeOperationSnapshot? snapshot,
-        IReadOnlyDictionary<string, RecipeOperationIngredient> ingredientDemandByChildNodeId,
+        IReadOnlyDictionary<string, RecipeOperationIngredientEdge> ingredientDemandByChildNodeId,
         SuppressingDemandAncestor? suppressingAncestor)
     {
         var operation = snapshot?.GetOperationsForNode(node.NodeId).FirstOrDefault();
-        var parentOperation = node.Parent == null
+        var ingredientEdge = ingredientDemandByChildNodeId.GetValueOrDefault(node.NodeId);
+        var parentOperation = ingredientEdge?.Operation ?? (node.Parent == null
             ? null
-            : snapshot?.GetOperationsForNode(node.Parent.NodeId).FirstOrDefault();
+            : snapshot?.GetOperationsForNode(node.Parent.NodeId).FirstOrDefault());
+        var ingredient = ingredientEdge?.Ingredient;
         var quantity = node.Quantity;
         var quantityBasis = RecipeDemandQuantityBasis.PlanNodeQuantity;
-        if (ingredientDemandByChildNodeId.TryGetValue(node.NodeId, out var ingredient))
+        if (ingredient != null)
         {
             quantity = ingredient.ExpectedTotalQuantity > 0
                 ? ingredient.ExpectedTotalQuantity
                 : ingredient.TotalQuantity;
             quantityBasis = RecipeDemandQuantityBasis.RecipeExpectedQuantity;
         }
+
+        var parentOutputQuantity = GetParentOutputQuantity(node, parentOperation, ingredientEdge);
 
         return new RecipeDemandRow(
             viewKind,
@@ -188,20 +192,49 @@ public sealed class RecipeDemandProjectionService : IRecipeDemandProjectionServi
             operation?.RecipeId,
             suppressingAncestor?.NodeId,
             suppressingAncestor?.ItemId,
-            suppressingAncestor?.ItemName);
+            suppressingAncestor?.ItemName,
+            node.CanCraft,
+            node.CanBeHq,
+            node.Yield,
+            node.HqMarketPrice,
+            node.VendorPrice,
+            node.SelectedVendorIndex,
+            node.VendorOptions.Select(ToDemandVendorOption).ToList(),
+            parentOutputQuantity);
     }
 
-    private static IReadOnlyDictionary<string, RecipeOperationIngredient> BuildIngredientDemandLookup(RecipeOperationSnapshot? snapshot)
+    private static int GetParentOutputQuantity(
+        PlanNode node,
+        RecipeOperation? parentOperation,
+        RecipeOperationIngredientEdge? ingredientEdge)
+    {
+        if (ingredientEdge != null && parentOperation != null)
+        {
+            return parentOperation.RequestedQuantity;
+        }
+
+        return node.Parent?.Quantity ?? node.Quantity;
+    }
+
+    private static RecipeDemandVendorOption ToDemandVendorOption(VendorInfo vendor)
+    {
+        return new RecipeDemandVendorOption(
+            vendor.Name,
+            vendor.Location,
+            vendor.Price,
+            vendor.Currency);
+    }
+
+    private static IReadOnlyDictionary<string, RecipeOperationIngredientEdge> BuildIngredientDemandLookup(RecipeOperationSnapshot? snapshot)
     {
         if (snapshot == null)
         {
-            return new Dictionary<string, RecipeOperationIngredient>();
+            return new Dictionary<string, RecipeOperationIngredientEdge>();
         }
 
         return snapshot.GetIngredientEdges()
-            .Select(edge => edge.Ingredient)
-            .Where(ingredient => !string.IsNullOrWhiteSpace(ingredient.ChildNodeId))
-            .GroupBy(ingredient => ingredient.ChildNodeId!, StringComparer.Ordinal)
+            .Where(edge => !string.IsNullOrWhiteSpace(edge.Ingredient.ChildNodeId))
+            .GroupBy(edge => edge.Ingredient.ChildNodeId!, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
     }
 

@@ -7,17 +7,29 @@ namespace FFXIV_Craft_Architect.Web.Services;
 public sealed class PlanSessionLoadService
 {
     private readonly AppState _appState;
+    private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
 
-    public PlanSessionLoadService(AppState appState)
+    public PlanSessionLoadService(
+        AppState appState,
+        IRecipeLayerWorkflowService? recipeLayerWorkflow = null)
     {
         _appState = appState;
+        _recipeLayerWorkflow = recipeLayerWorkflow ?? new LightweightRecipeLayerWorkflowService();
     }
 
     public PlanSessionLoadResult Load(StoredPlan storedPlan, bool trackStoredPlanIdentity = true)
     {
-        var result = Prepare(storedPlan);
+        var result = PrepareSession(storedPlan);
         _appState.ApplyLoadedPlanSession(result, trackStoredPlanIdentity);
         return result;
+    }
+
+    public PlanSessionLoadResult PrepareSession(StoredPlan storedPlan)
+    {
+        return Prepare(
+            storedPlan,
+            deserializedPlan: null,
+            buildMarketAnalysisCandidates: _recipeLayerWorkflow.BuildMarketAnalysisCandidates);
     }
 
     public static PlanSessionLoadResult Prepare(StoredPlan storedPlan)
@@ -26,6 +38,17 @@ public sealed class PlanSessionLoadService
     }
 
     public static PlanSessionLoadResult Prepare(StoredPlan storedPlan, CraftingPlan? deserializedPlan)
+    {
+        return Prepare(
+            storedPlan,
+            deserializedPlan,
+            buildMarketAnalysisCandidates: BuildLightweightMarketAnalysisCandidates);
+    }
+
+    private static PlanSessionLoadResult Prepare(
+        StoredPlan storedPlan,
+        CraftingPlan? deserializedPlan,
+        Func<CraftingPlan?, IReadOnlyList<MaterialAggregate>> buildMarketAnalysisCandidates)
     {
         CraftingPlan? plan = null;
         string? warning = null;
@@ -57,7 +80,7 @@ public sealed class PlanSessionLoadService
         }).ToList();
 
         var marketAnalyses = DeserializeOrEmpty<MarketItemAnalysis>(storedPlan.MarketItemAnalysesJson);
-        if (!RestoredMarketAnalysisMatchesPlan(plan, projectItems, marketAnalyses))
+        if (!RestoredMarketAnalysisMatchesPlan(plan, projectItems, marketAnalyses, buildMarketAnalysisCandidates))
         {
             marketAnalyses.Clear();
         }
@@ -120,7 +143,8 @@ public sealed class PlanSessionLoadService
     private static bool RestoredMarketAnalysisMatchesPlan(
         CraftingPlan? plan,
         IReadOnlyList<ProjectItem> projectItems,
-        IReadOnlyList<MarketItemAnalysis> analyses)
+        IReadOnlyList<MarketItemAnalysis> analyses,
+        Func<CraftingPlan?, IReadOnlyList<MaterialAggregate>> buildMarketAnalysisCandidates)
     {
         if (analyses.Count == 0)
         {
@@ -128,9 +152,7 @@ public sealed class PlanSessionLoadService
         }
 
         var candidates = plan != null
-            ? new RecipeDemandProjectionService()
-                .Build(plan, snapshot: null)
-                .ToMarketAnalysisMaterialAggregates()
+            ? buildMarketAnalysisCandidates(plan)
             : projectItems
                 .Where(item => item.Quantity > 0)
                 .Select(item => new MaterialAggregate
@@ -147,6 +169,13 @@ public sealed class PlanSessionLoadService
                analyses.All(analysis =>
                    expected.TryGetValue(analysis.ItemId, out var quantityNeeded) &&
                    quantityNeeded == analysis.QuantityNeeded);
+    }
+
+    private static IReadOnlyList<MaterialAggregate> BuildLightweightMarketAnalysisCandidates(CraftingPlan? plan)
+    {
+        return new RecipeDemandProjectionService()
+            .Build(plan, snapshot: null)
+            .ToMarketAnalysisMaterialAggregates();
     }
 
     private static bool RestoredShoppingPlansMatchMarketAnalysis(

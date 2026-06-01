@@ -99,8 +99,8 @@ public class AcquisitionEvaluationLedgerCacheTests
         };
         var rows = new List<DecisionRow>
         {
-            new(active, 1, 1, "Project item x1", false, false, Array.Empty<string>(), true, true, true, "Not analyzed", "1g"),
-            new(suppressed, 1, 0, "Parent x1", true, true, ["Parent"], false, false, false, "Not analyzed", "-")
+            CreateRow(active, 1, 1, "Project item x1", false, false, Array.Empty<string>(), true, true, true, "Not analyzed", "1g"),
+            CreateRow(suppressed, 1, 0, "Parent x1", true, true, ["Parent"], false, false, false, "Not analyzed", "-")
         };
 
         return new AcquisitionEvaluationSnapshot(
@@ -109,5 +109,51 @@ public class AcquisitionEvaluationLedgerCacheTests
             new List<MaterialAggregate>(),
             new List<MaterialAggregate>(),
             AcquisitionPlanningService.CreateCostContext(Array.Empty<DetailedShoppingPlan>()));
+    }
+
+    private static DecisionRow CreateRow(
+        PlanNode node,
+        int totalQuantity,
+        int activeQuantity,
+        string usedIn,
+        bool hasSuppressedOccurrences,
+        bool isFullySuppressed,
+        IReadOnlyList<string> suppressedBy,
+        bool isActiveProcurement,
+        bool hasEditableOccurrences,
+        bool isMarketCandidate,
+        string marketEvidence,
+        string estimatedCost)
+    {
+        return new DecisionRow(
+            node,
+            node.NodeId,
+            node.ItemId,
+            node.Name,
+            node.IconId,
+            node.Source,
+            node.SourceReason,
+            node.MustBeHq,
+            node.Children.Count > 0,
+            node.CanCraft,
+            node.CanBeHq,
+            node.Yield,
+            node.CanBuyFromMarket,
+            node.CanBuyFromVendor,
+            node.MarketPrice,
+            node.HqMarketPrice,
+            node.VendorPrice,
+            Array.Empty<RecipeDemandVendorOption>(),
+            totalQuantity,
+            activeQuantity,
+            usedIn,
+            hasSuppressedOccurrences,
+            isFullySuppressed,
+            suppressedBy,
+            isActiveProcurement,
+            hasEditableOccurrences,
+            isMarketCandidate,
+            marketEvidence,
+            estimatedCost);
     }
 }

@@ -4,7 +4,7 @@
 @using FFXIV_Craft_Architect.Web.Services
 
 <div class="rp-column">
-    @if (Node == null)
+    @if (Node == null && Row == null)
     {
         <div class="rp-empty-state">
             <div class="rp-empty-title">Acquisition Details</div>
@@ -18,13 +18,13 @@
                 <div class="rp-header-title">Acquisition Details</div>
             </div>
             <div class="rp-details-wrap">
-                <div class="rp-item-name">@Node.Name</div>
-                <div class="rp-item-meta">Quantity: @Node.Quantity</div>
+                <div class="rp-item-name">@ItemName</div>
+                <div class="rp-item-meta">Quantity: @DisplayQuantity</div>
 
                 <div class="rp-detail-row">
                     <span class="rp-detail-label">Current source</span>
-                    <span class="rp-detail-value" style="color: @RecipePlanDisplayHelpers.GetSourceHexColor(Node.Source)">
-                        @RecipePlanDisplayHelpers.GetSourceDisplayName(Node.Source)
+                    <span class="rp-detail-value" style="color: @RecipePlanDisplayHelpers.GetSourceHexColor(CurrentSource)">
+                        @RecipePlanDisplayHelpers.GetSourceDisplayName(CurrentSource)
                     </span>
                 </div>
             </div>
@@ -46,7 +46,7 @@
                 <div class="rp-method-list">
                     @foreach (var option in GetOptions())
                     {
-                        <button class="rp-method-row @(Node.Source == option.Source ? "selected" : "")"
+                        <button class="rp-method-row @(CurrentSource == option.Source ? "selected" : "")"
                                 disabled="@(!option.IsAvailable)"
                                 @onclick="() => SelectSource(option.Source)">
                             <span class="rp-method-main">
@@ -69,6 +69,7 @@
 
 @code {
     [Parameter] public PlanNode? Node { get; set; }
+    [Parameter] public DecisionRow? Row { get; set; }
     [Parameter] public CraftingPlan? CurrentPlan { get; set; }
     [Parameter] public DetailedShoppingPlan? MarketPlan { get; set; }
     [Parameter] public IReadOnlyList<DetailedShoppingPlan> MarketPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
@@ -78,7 +79,20 @@
     [Parameter] public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<MarketDataUnavailableItem>();
     [Parameter] public EventCallback<AcquisitionSourceChangeRequest> OnSourceChanged { get; set; }
 
-    private bool IsMarketUnavailable => Node != null && UnavailableMarketItems.Any(i => i.ItemId == Node.ItemId);
+    private int ItemId => Row?.ItemId ?? Node?.ItemId ?? 0;
+    private string ItemName => Row?.ItemName ?? Node?.Name ?? string.Empty;
+    private int DisplayQuantity => Row == null ? Node?.Quantity ?? 0 : AcquisitionEvaluationCostCalculator.GetCostQuantity(Row);
+    private AcquisitionSource CurrentSource => Row?.Source ?? Node?.Source ?? AcquisitionSource.UnknownSource;
+    private bool CanCraft => Row?.CanCraft ?? Node?.CanCraft ?? false;
+    private bool HasChildren => Row?.HasChildren ?? Node?.Children.Any() ?? false;
+    private bool CanBuyFromMarket => Row?.CanBuyFromMarket ?? Node?.CanBuyFromMarket ?? false;
+    private bool MustBeHq => Row?.MustBeHq ?? Node?.MustBeHq ?? false;
+    private bool CanBeHq => Row?.CanBeHq ?? Node?.CanBeHq ?? false;
+    private bool CanBuyFromVendor => Row?.CanBuyFromVendor ?? Node?.CanBuyFromVendor ?? false;
+    private decimal HqUnitPrice => Row?.HqUnitPrice ?? Node?.HqMarketPrice ?? 0;
+    private decimal UnitPrice => Row?.UnitPrice ?? Node?.MarketPrice ?? 0;
+    private IReadOnlyList<RecipeDemandVendorOption> VendorOptions => Row?.VendorOptions ?? GetNodeVendorOptions();
+    private bool IsMarketUnavailable => ItemId != 0 && UnavailableMarketItems.Any(i => i.ItemId == ItemId);
 
     private async Task SelectSource(AcquisitionSource source)
     {
@@ -98,7 +112,7 @@
             return options;
         }
 
-        if (Node.Children.Any() && Node.CanCraft)
+        if (HasChildren && CanCraft)
         {
             var hasCraftCost = TryGetOptionCost(AcquisitionSource.Craft, out var craftCost);
             options.Add(new AcquisitionOptionView(
@@ -111,9 +125,9 @@
                 true));
         }
 
-        if (Node.CanBuyFromMarket)
+        if (CanBuyFromMarket)
         {
-            if (!Node.MustBeHq)
+            if (!MustBeHq)
             {
                 var hasNqMarketCost = TryGetOptionCost(AcquisitionSource.MarketBuyNq, out var nqMarketCost);
                 options.Add(new AcquisitionOptionView(
@@ -124,19 +138,19 @@
                     hasNqMarketCost));
             }
 
-            if (Node.CanBeHq)
+            if (CanBeHq)
             {
                 var hasHqMarketCost = TryGetOptionCost(AcquisitionSource.MarketBuyHq, out var hqMarketCost);
                 options.Add(new AcquisitionOptionView(
                     AcquisitionSource.MarketBuyHq,
                     "Buy HQ",
-                    Node.HqMarketPrice > 0 ? "Uses the current planner HQ market price." : "No HQ price loaded.",
+                    HqUnitPrice > 0 ? "Uses the current planner HQ market price." : "No HQ price loaded.",
                     hasHqMarketCost ? $"{hqMarketCost:N0}g" : "-",
                     hasHqMarketCost));
             }
         }
 
-        if (Node.CanBuyFromVendor)
+        if (CanBuyFromVendor)
         {
             var hasVendorCost = TryGetOptionCost(AcquisitionSource.VendorBuy, out var vendorCost);
             options.Add(new AcquisitionOptionView(
@@ -147,7 +161,7 @@
                 hasVendorCost));
         }
 
-        if (!Node.CanBuyFromMarket && !Node.CanBuyFromVendor && !Node.Children.Any())
+        if (!CanBuyFromMarket && !CanBuyFromVendor && !HasChildren)
         {
             options.Add(new AcquisitionOptionView(
                 AcquisitionSource.UnknownSource,
@@ -163,12 +177,13 @@
     private string GetMarketPlanDetail(string quality)
     {
         var marketPlan = MarketPlan;
-        if (marketPlan == null && Node != null)
+        if (marketPlan == null && ItemId != 0)
         {
-            CostContext.TryGetShoppingPlan(Node.ItemId, out marketPlan);
+            CostContext.TryGetShoppingPlan(ItemId, out marketPlan);
         }
 
-        if (AcquisitionPlanningService.TryGetMarketBoardPurchase(marketPlan, Node?.Quantity ?? 0, out var marketWorld, out _) &&
+        var hqOnly = quality == "HQ";
+        if (AcquisitionPlanningService.TryGetMarketBoardPurchase(marketPlan, DisplayQuantity, hqOnly, out var marketWorld, out _) &&
             marketWorld != null)
         {
             return $"{marketWorld.WorldName} can cover {marketWorld.TotalQuantityPurchased}/{marketPlan?.QuantityNeeded}.";
@@ -184,21 +199,21 @@
             return marketPlan.Error;
         }
 
-        return Node?.MarketPrice > 0
+        return UnitPrice > 0
             ? $"Uses the current planner {quality} market price."
             : "Run Market Analysis for actionable market evidence.";
     }
 
     private string GetVendorDetail()
     {
-        if (Node?.VendorOptions?.Any(v => v.IsGilVendor) != true)
+        if (VendorOptions.Any(vendor => vendor.IsGilVendor) != true)
         {
             return "No gil vendor price loaded.";
         }
 
-        var vendor = Node.VendorOptions
-            .Where(v => v.IsGilVendor)
-            .OrderBy(v => v.Price)
+        var vendor = VendorOptions
+            .Where(vendor => vendor.IsGilVendor)
+            .OrderBy(vendor => vendor.Price)
             .First();
 
         return $"{vendor.Name} - {vendor.Location}";
@@ -212,7 +227,28 @@
             return false;
         }
 
+        if (Row != null)
+        {
+            return AcquisitionEvaluationCostCalculator.TryGetCost(Row, source, CostContext, out cost);
+        }
+
         return AcquisitionPlanningService.TryGetAcquisitionCost(Node, source, CostContext, out cost);
+    }
+
+    private IReadOnlyList<RecipeDemandVendorOption> GetNodeVendorOptions()
+    {
+        if (Node == null)
+        {
+            return Array.Empty<RecipeDemandVendorOption>();
+        }
+
+        return Node.VendorOptions
+            .Select(vendor => new RecipeDemandVendorOption(
+                vendor.Name,
+                vendor.Location,
+                vendor.Price,
+                vendor.Currency))
+            .ToList();
     }
 
     private record AcquisitionOptionView(

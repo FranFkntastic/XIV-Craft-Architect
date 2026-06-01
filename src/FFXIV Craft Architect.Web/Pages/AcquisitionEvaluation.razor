@@ -8,7 +8,8 @@
 @inject WebPlanPersistenceService PlanPersistence
 @inject MarketShoppingService MarketShoppingService
 @inject AcquisitionDecisionService AcquisitionDecisionService
-@inject IRecipeDemandProjectionService RecipeDemandProjectionService
+@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
+@inject AcquisitionEvaluationWorkflowService AcquisitionEvaluationWorkflow
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
 @inject ILogger<AcquisitionEvaluation> Logger
@@ -113,13 +114,13 @@
                              tabindex="0"
                              @onclick="() => SelectNode(row.Node)">
                             <span class="ae-item-cell">
-                                <span class="ae-item-name">@row.Node.Name</span>
+                                <span class="ae-item-name">@row.ItemName</span>
                                 <small>x@(row.TotalQuantity)</small>
                             </span>
                             <span class="ae-source-cell" @onclick:stopPropagation>
                                 <select class="ae-source-select"
-                                        style="border-color: @RecipePlanDisplayHelpers.GetSourceHexColor(row.Node.Source); color: @RecipePlanDisplayHelpers.GetSourceHexColor(row.Node.Source)"
-                                        value="@row.Node.Source"
+                                        style="border-color: @RecipePlanDisplayHelpers.GetSourceHexColor(row.Source); color: @RecipePlanDisplayHelpers.GetSourceHexColor(row.Source)"
+                                        value="@row.Source"
                                         disabled="@(!row.HasEditableOccurrences)"
                                         @onchange="args => OnNodeSourceSelected(row.Node, args)">
                                     @foreach (var option in GetSourceOptions(row.Node))
@@ -145,8 +146,9 @@
 
     <AcquisitionDetailsPanel
         Node="@_selectedNode"
+        Row="@GetSelectedRow()"
         CurrentPlan="@AppState.CurrentPlan"
-        MarketPlan="@GetMarketPlan(_selectedNode)"
+        MarketPlan="@GetMarketPlan(GetSelectedRow())"
         MarketPlans="@AppState.ShoppingPlans"
         CostContext="@_snapshot.CostContext"
         ActiveProcurementItems="@_snapshot.ActiveProcurementItems"
@@ -162,23 +164,27 @@
         null,
         Array.Empty<DetailedShoppingPlan>(),
         Array.Empty<MarketDataUnavailableItem>(),
-        AcquisitionFilter.All);
+        AcquisitionFilter.All,
+        new RecipeDemandProjection([], [], [], []));
     private readonly int[] _columnWidths = { 300, 150, 260, 150, 170, 110 };
     private static readonly string[] ColumnHeaders = { "Item", "Source", "Used In", "Role", "Market Evidence", "Estimate" };
     private int? _resizingColumnIndex;
     private double _resizeStartX;
     private int _resizeStartWidth;
+    private CancellationTokenSource? _refreshCts;
+    private long _refreshRequestId;
 
     protected override async Task OnInitializedAsync()
     {
         AppState.OnStateChanged += OnStateChanged;
-        RefreshLedgerSnapshot();
-        await Task.CompletedTask;
+        await RefreshLedgerSnapshotAsync();
     }
 
     public void Dispose()
     {
         AppState.OnStateChanged -= OnStateChanged;
+        _refreshCts?.Cancel();
+        _refreshCts?.Dispose();
     }
 
     private void OnStateChanged(AppStateChange change)
@@ -189,8 +195,11 @@
         }
 
         InvalidateLedgerSnapshot();
-        RefreshLedgerSnapshot();
-        InvokeAsync(StateHasChanged);
+        _ = InvokeAsync(async () =>
+        {
+            await RefreshLedgerSnapshotAsync();
+            StateHasChanged();
+        });
     }
 
     private async Task LoadSavedPlanAsync(string planId)
@@ -207,7 +216,7 @@
         }
 
         PopulateShoppingListFromPlan();
-        RefreshLedgerSnapshot();
+        await RefreshLedgerSnapshotAsync();
 
         Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
     }
@@ -233,14 +242,17 @@
     private void ApplyNodeSourceChange(PlanNode node, AcquisitionSource source)
     {
         AcquisitionDecisionService.ChangeSource(node, source);
-        RefreshLedgerSnapshot();
+        _ = InvokeAsync(async () =>
+        {
+            await RefreshLedgerSnapshotAsync();
+            StateHasChanged();
+        });
     }
 
     private void PopulateShoppingListFromPlan()
     {
-        AppState.ReplaceShoppingItemsFromActivePlan(RecipeDemandProjectionService
-            .Build(AppState.CurrentPlan, snapshot: null)
-            .ToActiveProcurementMaterialAggregates());
+        AppState.ReplaceShoppingItemsFromActivePlan(
+            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan));
     }
 
     private DetailedShoppingPlan? GetMarketPlan(PlanNode? node)
@@ -254,6 +266,28 @@
         return marketPlan;
     }
 
+    private DetailedShoppingPlan? GetMarketPlan(DecisionRow? row)
+    {
+        if (row == null)
+        {
+            return null;
+        }
+
+        _snapshot.CostContext.TryGetShoppingPlan(row.ItemId, out var marketPlan);
+        return marketPlan;
+    }
+
+    private DecisionRow? GetSelectedRow()
+    {
+        if (_selectedNode == null)
+        {
+            return null;
+        }
+
+        return _snapshot.Rows.FirstOrDefault(row => row.NodeId == _selectedNode.NodeId) ??
+            _snapshot.Rows.FirstOrDefault(row => row.ItemId == _selectedNode.ItemId);
+    }
+
     private string GetFilterClass(AcquisitionFilter filter)
     {
         return _filter == filter ? "selected" : string.Empty;
@@ -262,7 +296,11 @@
     private void SetFilter(AcquisitionFilter filter)
     {
         _filter = filter;
-        RefreshLedgerSnapshot();
+        _ = InvokeAsync(async () =>
+        {
+            await RefreshLedgerSnapshotAsync();
+            StateHasChanged();
+        });
     }
 
     private bool IsSelected(PlanNode node)
@@ -305,18 +343,48 @@
         _resizingColumnIndex = null;
     }
 
-    private void RefreshLedgerSnapshot()
+    private async Task RefreshLedgerSnapshotAsync()
     {
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
-        _snapshot = _ledgerCache.GetOrBuild(
-            CreateLedgerKey(),
-            _filter,
-            () => AcquisitionEvaluationSnapshotBuilder.Build(
-                AppState.CurrentPlan,
-                AppState.ShoppingPlans,
-                AppState.UnavailableMarketItems,
-                _filter,
-                RecipeDemandProjectionService.Build(AppState.CurrentPlan, snapshot: null)));
+        var requestId = Interlocked.Increment(ref _refreshRequestId);
+        _refreshCts?.Cancel();
+        _refreshCts?.Dispose();
+        _refreshCts = new CancellationTokenSource();
+        var token = _refreshCts.Token;
+        var plan = AppState.CurrentPlan;
+        var planSessionVersion = AppState.PlanSessionVersion;
+
+        var key = CreateLedgerKey();
+        if (_ledgerCache.TryGet(key, _filter, out var cachedSnapshot))
+        {
+            _snapshot = cachedSnapshot;
+        }
+        else
+        {
+            try
+            {
+                var snapshot = await AcquisitionEvaluationWorkflow.BuildCurrentSnapshotAsync(
+                    plan,
+                    AppState.ShoppingPlans,
+                    AppState.UnavailableMarketItems,
+                    _filter,
+                    token);
+                if (snapshot == null ||
+                    requestId != _refreshRequestId ||
+                    token.IsCancellationRequested ||
+                    !AppState.IsCurrentPlanSession(plan, planSessionVersion))
+                {
+                    return;
+                }
+
+                _snapshot = _ledgerCache.Store(key, _filter, snapshot);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return;
+            }
+        }
+
         EnsureSelectedNodeFromSnapshot();
         elapsed.Stop();
 
@@ -352,12 +420,12 @@
             return $"Skipped by {string.Join(", ", row.SuppressedBy)}";
         }
 
-        if (row.IsActiveProcurement && row.Node.CanBuyFromMarket && row.MarketEvidence == "Not analyzed")
+        if (row.IsActiveProcurement && row.CanBuyFromMarket && row.MarketEvidence == "Not analyzed")
         {
             return "Needs analysis";
         }
 
-        if (row.IsActiveProcurement && row.Node.CanBuyFromMarket && row.MarketEvidence == "Needs data")
+        if (row.IsActiveProcurement && row.CanBuyFromMarket && row.MarketEvidence == "Needs data")
         {
             return "Missing market data";
         }
@@ -369,7 +437,7 @@
                 : "Ready for procurement";
         }
 
-        if (row.Node.Source == AcquisitionSource.Craft)
+        if (row.Source == AcquisitionSource.Craft)
         {
             return "Craft path";
         }

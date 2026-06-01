@@ -11,7 +11,7 @@ public sealed class ProcurementWorkflowService
     private readonly IMarketAnalysisExecutionService _marketAnalysisExecutionService;
     private readonly MarketShoppingService _marketShoppingService;
     private readonly WebPlanPersistenceService _planPersistence;
-    private readonly IRecipeDemandProjectionService _demandProjectionService;
+    private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
 
     public ProcurementWorkflowService(
         AppState appState,
@@ -19,14 +19,14 @@ public sealed class ProcurementWorkflowService
         IMarketAnalysisExecutionService marketAnalysisExecutionService,
         MarketShoppingService marketShoppingService,
         WebPlanPersistenceService planPersistence,
-        IRecipeDemandProjectionService demandProjectionService)
+        IRecipeLayerWorkflowService recipeLayerWorkflow)
     {
         _appState = appState;
         _procurementRouteExecutionService = procurementRouteExecutionService;
         _marketAnalysisExecutionService = marketAnalysisExecutionService;
         _marketShoppingService = marketShoppingService;
         _planPersistence = planPersistence;
-        _demandProjectionService = demandProjectionService;
+        _recipeLayerWorkflow = recipeLayerWorkflow;
     }
 
     public async Task<ProcurementWorkflowResult> RunAnalysisAsync(
@@ -41,11 +41,16 @@ public sealed class ProcurementWorkflowService
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.NoPlan);
         }
 
-        var demandProjection = _demandProjectionService.Build(plan, snapshot: null);
-        var activeItems = demandProjection.ToActiveProcurementMaterialAggregates()
+        var activeItems = await _recipeLayerWorkflow.BuildCurrentActiveProcurementItemsAsync(plan, ct);
+        if (activeItems == null)
+        {
+            return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.StalePlan);
+        }
+
+        var activeItemsList = activeItems
             .Where(item => item.TotalQuantity > 0)
             .ToList();
-        if (activeItems.Count == 0)
+        if (activeItemsList.Count == 0)
         {
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.NoActiveProcurementItems);
         }
@@ -75,7 +80,7 @@ public sealed class ProcurementWorkflowService
             new ProcurementRouteExecutionRequest
             {
                 Plan = plan,
-                ActiveProcurementItems = activeItems,
+                ActiveProcurementItems = activeItemsList,
                 SourceShoppingPlans = _appState.ShoppingPlans,
                 Scope = scope,
                 SelectedDataCenter = _appState.SelectedDataCenter,
@@ -132,9 +137,13 @@ public sealed class ProcurementWorkflowService
             return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.NoPlan);
         }
 
-        var candidate = _demandProjectionService
-            .Build(plan, snapshot: null)
-            .ToMarketAnalysisMaterialAggregates()
+        var marketCandidates = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidatesAsync(plan, ct);
+        if (marketCandidates == null)
+        {
+            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StalePlan);
+        }
+
+        var candidate = marketCandidates
             .FirstOrDefault(item => item.ItemId == request.ItemId);
         if (candidate == null)
         {

@@ -159,6 +159,8 @@ public class AppState
     public IReadOnlySet<MarketAnalysisExpandedWorldKey> ExpandedMarketAnalysisWorlds => _expandedMarketAnalysisWorldsView;
     public MarketAnalysisGridSortColumn? MarketAnalysisGridSortColumn { get; private set; }
     public bool MarketAnalysisGridSortDescending { get; private set; }
+    public MarketAnalysisWorldGridSortColumn? MarketAnalysisWorldGridSortColumn { get; private set; }
+    public bool MarketAnalysisWorldGridSortDescending { get; private set; }
     
     // Persistence state
     public bool IsAutoSaveEnabled { get; private set; } = true;
@@ -326,6 +328,79 @@ public class AppState
         PublishChange(AppStateChangeScope.ProcurementOverlay, raiseShoppingListChanged: true);
     }
 
+    public void ApplyPlanDecisionChange(
+        IReadOnlyList<MaterialAggregate> activeProcurementItems,
+        bool clearProcurementOverlay)
+    {
+        ArgumentNullException.ThrowIfNull(activeProcurementItems);
+
+        using (BeginStateChangeBatch())
+        {
+            ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
+            if (clearProcurementOverlay)
+            {
+                ClearProcurementOverlay();
+            }
+
+            NotifyPlanDecisionChanged();
+        }
+    }
+
+    public void ApplyPlanDefaultsReconciled(
+        IReadOnlyList<MaterialAggregate> activeProcurementItems,
+        bool acquisitionDecisionsChanged)
+    {
+        ArgumentNullException.ThrowIfNull(activeProcurementItems);
+
+        using (BeginStateChangeBatch())
+        {
+            if (acquisitionDecisionsChanged)
+            {
+                NotifyPlanDecisionChanged();
+            }
+            else
+            {
+                NotifyPlanChanged();
+            }
+
+            ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
+        }
+    }
+
+    public void ApplyPlanPriceChange()
+    {
+        NotifyPlanPriceChanged();
+    }
+
+    public void RequestPlanAndMarketRefresh()
+    {
+        NotifyShoppingListChanged();
+        NotifyPlanChanged();
+    }
+
+    public void ApplyMarketAnalysisPublication(
+        IEnumerable<MarketItemAnalysis> analyses,
+        IEnumerable<DetailedShoppingPlan> shoppingPlans,
+        IReadOnlyList<MaterialAggregate> activeProcurementItems,
+        bool acquisitionDecisionsChanged)
+    {
+        ArgumentNullException.ThrowIfNull(activeProcurementItems);
+
+        using (BeginStateChangeBatch())
+        {
+            ReplaceMarketAnalysis(analyses, shoppingPlans);
+            if (acquisitionDecisionsChanged)
+            {
+                ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
+                NotifyPlanDecisionChanged();
+            }
+            else
+            {
+                NotifyPlanChanged();
+            }
+        }
+    }
+
     public void ReplaceMarketAnalysis(
         IEnumerable<MarketItemAnalysis> analyses,
         IEnumerable<DetailedShoppingPlan> shoppingPlans)
@@ -336,11 +411,15 @@ public class AppState
         ReplaceListContents(_marketItemAnalyses, analyses);
         ReplaceListContents(_shoppingPlans, shoppingPlans);
         _procurementShoppingPlans.Clear();
-        PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses);
+        var viewChanged = PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses, publishChange: false);
         using (BeginStateChangeBatch())
         {
             NotifyShoppingListChanged();
             NotifyProcurementOverlayChanged();
+            if (viewChanged)
+            {
+                PublishChange(AppStateChangeScope.MarketAnalysisView);
+            }
         }
     }
 
@@ -354,11 +433,15 @@ public class AppState
         ReplaceListContents(_marketItemAnalyses, ReplaceAnalysisByItemId(_marketItemAnalyses, analysis));
         ReplaceListContents(_shoppingPlans, ReplaceShoppingPlanByItemId(_shoppingPlans, shoppingPlan));
         _procurementShoppingPlans.Clear();
-        PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses);
+        var viewChanged = PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses, publishChange: false);
         using (BeginStateChangeBatch())
         {
             NotifyShoppingListChanged();
             NotifyProcurementOverlayChanged();
+            if (viewChanged)
+            {
+                PublishChange(AppStateChangeScope.MarketAnalysisView);
+            }
         }
     }
 
@@ -374,9 +457,11 @@ public class AppState
         NotifyProcurementOverlayChanged();
     }
 
-    public void ReplaceShoppingItemsFromActivePlan(IReadOnlyList<MaterialAggregate>? activeProcurementItems = null)
+    public void ReplaceShoppingItemsFromActivePlan(IReadOnlyList<MaterialAggregate> activeProcurementItems)
     {
-        ReplaceListContents(_shoppingItems, (activeProcurementItems ?? AcquisitionPlanningService.GetActiveProcurementItems(CurrentPlan))
+        ArgumentNullException.ThrowIfNull(activeProcurementItems);
+
+        ReplaceListContents(_shoppingItems, activeProcurementItems
             .Where(item => item.TotalQuantity > 0)
             .Select(item => new MarketShoppingItem
             {
@@ -388,9 +473,12 @@ public class AppState
         NotifyShoppingItemsChanged();
     }
 
-    public void ApplyBuiltRecipePlan(CraftingPlan plan)
+    public void ApplyBuiltRecipePlan(
+        CraftingPlan plan,
+        IReadOnlyList<MaterialAggregate> activeProcurementItems)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(activeProcurementItems);
 
         CurrentPlan = plan;
         AdvancePlanSession();
@@ -398,7 +486,7 @@ public class AppState
         using (BeginStateChangeBatch())
         {
             ClearMarketAnalysisState();
-            ReplaceShoppingItemsFromActivePlan();
+            ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
             NotifyPlanChanged();
         }
     }
@@ -424,10 +512,12 @@ public class AppState
         CraftingPlan plan,
         IEnumerable<ProjectItem> projectItems,
         string? selectedDataCenter,
-        bool clearCurrentPlanId)
+        bool clearCurrentPlanId,
+        IReadOnlyList<MaterialAggregate> activeProcurementItems)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(projectItems);
+        ArgumentNullException.ThrowIfNull(activeProcurementItems);
 
         using (BeginStateChangeBatch())
         {
@@ -447,7 +537,7 @@ public class AppState
             }
 
             ClearMarketAnalysisState();
-            ReplaceShoppingItemsFromActivePlan();
+            ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
         }
     }
 
@@ -673,6 +763,18 @@ public class AppState
         PublishChange(AppStateChangeScope.MarketAnalysisView);
     }
 
+    public void SetMarketAnalysisWorldGridSort(MarketAnalysisWorldGridSortColumn? column, bool descending)
+    {
+        if (MarketAnalysisWorldGridSortColumn == column && MarketAnalysisWorldGridSortDescending == descending)
+        {
+            return;
+        }
+
+        MarketAnalysisWorldGridSortColumn = column;
+        MarketAnalysisWorldGridSortDescending = column.HasValue && descending;
+        PublishChange(AppStateChangeScope.MarketAnalysisView);
+    }
+
     public void ClearMarketAnalysisState()
     {
         _shoppingPlans.Clear();
@@ -694,9 +796,19 @@ public class AppState
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
         IEnumerable<MarketItemAnalysis> analyses)
     {
+        _ = PruneMarketAnalysisViewState(shoppingPlans, analyses, publishChange: true);
+    }
+
+    private bool PruneMarketAnalysisViewState(
+        IEnumerable<DetailedShoppingPlan> shoppingPlans,
+        IEnumerable<MarketItemAnalysis> analyses,
+        bool publishChange)
+    {
         ArgumentNullException.ThrowIfNull(shoppingPlans);
         ArgumentNullException.ThrowIfNull(analyses);
 
+        var selectedItemId = SelectedMarketAnalysisItemId;
+        var expandedWorldKeys = _expandedMarketAnalysisWorlds.ToHashSet();
         var itemIds = shoppingPlans
             .Select(plan => plan.ItemId)
             .ToHashSet();
@@ -711,10 +823,20 @@ public class AppState
                 world.DataCenter,
                 world.WorldName)))
             .ToHashSet();
-        _expandedMarketAnalysisWorlds = _expandedMarketAnalysisWorlds
+        var prunedWorldKeys = _expandedMarketAnalysisWorlds
             .Where(validWorldKeys.Contains)
             .ToHashSet();
+        var changed = selectedItemId != SelectedMarketAnalysisItemId ||
+            !expandedWorldKeys.SetEquals(prunedWorldKeys);
+        _expandedMarketAnalysisWorlds = prunedWorldKeys;
         RefreshMarketAnalysisViewState();
+
+        if (changed && publishChange)
+        {
+            PublishChange(AppStateChangeScope.MarketAnalysisView);
+        }
+
+        return changed;
     }
 
     private void ClearMarketAnalysisViewState(bool publishChange)
@@ -722,11 +844,15 @@ public class AppState
         var changed = SelectedMarketAnalysisItemId.HasValue ||
             _expandedMarketAnalysisWorlds.Count > 0 ||
             MarketAnalysisGridSortColumn.HasValue ||
-            MarketAnalysisGridSortDescending;
+            MarketAnalysisGridSortDescending ||
+            MarketAnalysisWorldGridSortColumn.HasValue ||
+            MarketAnalysisWorldGridSortDescending;
         SelectedMarketAnalysisItemId = null;
         _expandedMarketAnalysisWorlds.Clear();
         MarketAnalysisGridSortColumn = null;
         MarketAnalysisGridSortDescending = false;
+        MarketAnalysisWorldGridSortColumn = null;
+        MarketAnalysisWorldGridSortDescending = false;
         RefreshMarketAnalysisViewState();
 
         if (changed && publishChange)
@@ -1580,6 +1706,16 @@ public enum MarketAnalysisGridSortColumn
     Total
 }
 
+public enum MarketAnalysisWorldGridSortColumn
+{
+    World,
+    StockDepth,
+    Coverage,
+    PriceValue,
+    Value,
+    Data
+}
+
 public readonly record struct MarketAnalysisExpandedWorldKey(
     int ItemId,
     string DataCenter,
@@ -1587,6 +1723,10 @@ public readonly record struct MarketAnalysisExpandedWorldKey(
 
 public readonly record struct MarketAnalysisGridSortState(
     MarketAnalysisGridSortColumn Column,
+    bool Descending);
+
+public readonly record struct MarketAnalysisWorldGridSortState(
+    MarketAnalysisWorldGridSortColumn Column,
     bool Descending);
 
 public sealed record AppStateAutoSaveLease(
