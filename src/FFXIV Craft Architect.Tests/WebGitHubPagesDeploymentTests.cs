@@ -13,7 +13,9 @@ public class WebGitHubPagesDeploymentTests
         Assert.Contains("dist/pages/local-dev", workflow);
         Assert.Contains("dist/web/local-dev/wwwroot/404.html dist/pages/404.html", workflow);
         Assert.Contains("path: dist/pages", workflow);
-        Assert.Contains("if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/local-dev'", workflow);
+        Assert.Contains("if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", workflow);
+        Assert.Contains("deploy-local-dev:", workflow);
+        Assert.Contains("if: github.ref == 'refs/heads/local-dev'", workflow);
     }
 
     [Fact]
