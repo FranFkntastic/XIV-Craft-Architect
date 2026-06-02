@@ -55,35 +55,45 @@
             {
                 Id = MarketAnalysisWorldGridSortColumn.World,
                 Header = "World",
-                Size = new WebTableColumnSize(220, 150),
+                Size = WebTableColumnSize.Percent(22m),
+                HeaderCssClass = "ma-world-column",
+                CellCssClass = "ma-world-cell",
                 CellTemplate = RenderWorldCell
             },
             new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
             {
                 Id = MarketAnalysisWorldGridSortColumn.StockDepth,
                 Header = "Stock Depth",
-                Size = new WebTableColumnSize(150, 120),
+                Size = WebTableColumnSize.Percent(15m),
+                HeaderCssClass = "ma-world-column",
+                CellCssClass = "ma-world-cell",
                 CellTemplate = RenderStockDepthCell
             },
             new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
             {
                 Id = MarketAnalysisWorldGridSortColumn.Coverage,
                 Header = "Coverage",
-                Size = new WebTableColumnSize(120, 100),
+                Size = WebTableColumnSize.Percent(14m),
+                HeaderCssClass = "ma-world-column",
+                CellCssClass = "ma-world-cell",
                 CellTemplate = RenderCoverageCell
             },
             new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
             {
                 Id = MarketAnalysisWorldGridSortColumn.PriceValue,
                 Header = "Price / Value",
-                Size = new WebTableColumnSize(220, 150),
+                Size = WebTableColumnSize.Percent(24m),
+                HeaderCssClass = "ma-world-column",
+                CellCssClass = "ma-world-cell",
                 CellTemplate = RenderPriceValueCell
             },
             new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
             {
                 Id = MarketAnalysisWorldGridSortColumn.Value,
                 Header = "% Diff",
-                Size = new WebTableColumnSize(90, 80),
+                Size = WebTableColumnSize.Percent(10m),
+                HeaderCssClass = "ma-world-column ma-world-value-column",
+                CellCssClass = "ma-world-cell ma-world-value-column",
                 CellTitleSelector = MarketAnalysisGridViewService.FormatCompetitiveValueTooltip,
                 CellTemplate = RenderCompetitiveValueCell
             },
@@ -91,7 +101,9 @@
             {
                 Id = MarketAnalysisWorldGridSortColumn.Data,
                 Header = "Data",
-                Size = new WebTableColumnSize(120, 100),
+                Size = WebTableColumnSize.Percent(15m),
+                HeaderCssClass = "ma-world-column ma-world-data-column",
+                CellCssClass = "ma-world-cell ma-world-data-column",
                 CellTitleSelector = FormatDataTooltip,
                 CellTemplate = RenderDataCell
             }

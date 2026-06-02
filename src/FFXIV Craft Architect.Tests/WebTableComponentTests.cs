@@ -76,6 +76,33 @@ public class WebTableComponentTests : BunitContext
     }
 
     [Fact]
+    public void DataTable_RendersColumnSizingAndCssHooks()
+    {
+        var columns = new[]
+        {
+            new WebTableColumn<TestRow, TestColumn>
+            {
+                Id = TestColumn.Name,
+                Header = "Name",
+                Size = WebTableColumnSize.Percent(22m),
+                ColCssClass = "name-col",
+                HeaderCssClass = "name-header",
+                CellCssClass = "name-cell",
+                CellTemplate = row => builder => builder.AddContent(0, row.Name)
+            }
+        };
+
+        var rendered = Render<WebDataTable<TestRow, TestColumn>>(parameters => parameters
+            .Add(parameter => parameter.Items, new[] { new TestRow("ore", "Ore", 4, 100) })
+            .Add(parameter => parameter.Columns, columns));
+
+        Assert.Contains("name-col", rendered.Find("col").GetAttribute("class"));
+        Assert.Contains("width: 22%", rendered.Find("col").GetAttribute("style"));
+        Assert.Contains("name-header", rendered.Find("th .web-table-header-cell").GetAttribute("class"));
+        Assert.Contains("name-cell", rendered.Find("td").GetAttribute("class"));
+    }
+
+    [Fact]
     public void GridTable_RendersAriaTableAndActivatesRows()
     {
         var rows = new[]
@@ -120,6 +147,28 @@ public class WebTableComponentTests : BunitContext
 
         Assert.Empty(rendered.FindAll(".web-grid-table-row"));
         Assert.Contains("Nothing here yet", rendered.Find(".web-grid-table-empty").TextContent);
+    }
+
+    [Fact]
+    public void GridTable_RejectsNonPixelColumnSizes()
+    {
+        var columns = new[]
+        {
+            new WebTableColumn<TestRow, TestColumn>
+            {
+                Id = TestColumn.Name,
+                Header = "Name",
+                Size = WebTableColumnSize.Percent(50m),
+                CellTemplate = row => builder => builder.AddContent(0, row.Name)
+            }
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            Render<WebGridTable<TestRow, TestColumn>>(parameters => parameters
+                .Add(parameter => parameter.Items, new[] { new TestRow("ore", "Ore", 4, 100) })
+                .Add(parameter => parameter.Columns, columns)));
+
+        Assert.Contains("WebGridTable requires pixel column sizes", exception.Message);
     }
 
     private static IReadOnlyList<WebTableColumn<TestRow, TestColumn>> CreateColumns()

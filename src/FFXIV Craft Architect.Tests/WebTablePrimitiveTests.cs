@@ -80,9 +80,30 @@ public class WebTablePrimitiveTests
     {
         var size = new WebTableColumnSize(widthPx: 80, minWidthPx: 120);
 
-        Assert.Equal(120, size.WidthPx);
+        Assert.Equal("120px", size.Width);
         Assert.Equal(120, size.MinWidthPx);
+        Assert.True(size.IsPixelWidth);
         Assert.Equal("120px", size.ToCssWidth());
+    }
+
+    [Fact]
+    public void ColumnSize_Percent_UsesPercentWidth()
+    {
+        var size = WebTableColumnSize.Percent(22m);
+
+        Assert.Equal("22%", size.ToCssWidth());
+        Assert.Equal(0, size.MinWidthPx);
+        Assert.False(size.IsPixelWidth);
+    }
+
+    [Fact]
+    public void ColumnSize_Css_UsesProvidedWidth()
+    {
+        var size = WebTableColumnSize.Css("minmax(120px, 1fr)", minWidthPx: 120);
+
+        Assert.Equal("minmax(120px, 1fr)", size.ToCssWidth());
+        Assert.Equal(120, size.MinWidthPx);
+        Assert.False(size.IsPixelWidth);
     }
 
     [Fact]

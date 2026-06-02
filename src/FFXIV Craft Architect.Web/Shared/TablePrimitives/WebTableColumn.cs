@@ -13,6 +13,10 @@ public sealed class WebTableColumn<TItem, TColumnId>
 
     public WebTableColumnSize Size { get; init; } = new(120);
 
+    public string ColCssClass { get; init; } = string.Empty;
+
+    public string? ColStyle { get; init; }
+
     public bool Sortable { get; init; } = true;
 
     public string HeaderCssClass { get; init; } = string.Empty;

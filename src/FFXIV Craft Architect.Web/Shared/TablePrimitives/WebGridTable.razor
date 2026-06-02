@@ -114,6 +114,18 @@
             $"--web-table-grid-gap: {ColumnGapPx.ToString(System.Globalization.CultureInfo.InvariantCulture)}px"
         ]);
 
+    protected override void OnParametersSet()
+    {
+        foreach (var column in Columns)
+        {
+            if (!column.Size.IsPixelWidth)
+            {
+                throw new InvalidOperationException(
+                    $"WebGridTable requires pixel column sizes because it calculates a resizable CSS grid width. Column '{column.Header}' uses '{column.Size.Width}'. Use WebDataTable for percentage/CSS widths or provide a pixel width.");
+            }
+        }
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!Resizable || _registeredResize)

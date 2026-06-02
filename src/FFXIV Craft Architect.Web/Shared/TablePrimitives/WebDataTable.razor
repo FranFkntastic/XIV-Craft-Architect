@@ -5,7 +5,8 @@
     <colgroup>
         @foreach (var column in Columns)
         {
-            <col style="width: @column.Size.ToCssWidth(); min-width: @column.Size.MinWidthPx.ToString(System.Globalization.CultureInfo.InvariantCulture)px" />
+            <col class="@column.ColCssClass"
+                 style="@GetColumnStyle(column)" />
         }
     </colgroup>
     <thead>
@@ -17,6 +18,7 @@
                                         ColumnId="@column.Id"
                                         Label="@column.Header"
                                         Tooltip="@column.HeaderTooltip"
+                                        CssClass="@column.HeaderCssClass"
                                         Sortable="@column.Sortable"
                                         SortState="@SortState"
                                         SortChanged="@SortChanged" />
@@ -73,6 +75,26 @@
     [Parameter] public string? CssClass { get; set; }
 
     private string TableClass => WebTableColumn<TItem, TColumnId>.CombineClasses("web-data-table", CssClass);
+
+    private static string GetColumnStyle(WebTableColumn<TItem, TColumnId> column)
+    {
+        var styles = new List<string>
+        {
+            $"width: {column.Size.ToCssWidth()}"
+        };
+
+        if (column.Size.MinWidthPx > 0)
+        {
+            styles.Add($"min-width: {column.Size.MinWidthPx.ToString(System.Globalization.CultureInfo.InvariantCulture)}px");
+        }
+
+        if (!string.IsNullOrWhiteSpace(column.ColStyle))
+        {
+            styles.Add(column.ColStyle);
+        }
+
+        return string.Join("; ", styles);
+    }
 
     private string GetBodyRowClass(TItem item)
     {
