@@ -17,10 +17,9 @@
 
 @{
     var rows = _snapshot.Rows;
-    var visibleRows = _snapshot.VisibleRows;
+    var visibleRows = GetOrderedVisibleRows();
     var marketCandidateCount = _snapshot.MarketAnalysisCandidates.Count;
     var activeProcurementCount = _snapshot.ActiveProcurementItems.Count;
-    var columnTemplate = GetColumnTemplate();
 }
 
 <div class="ae-page">
@@ -86,61 +85,19 @@
                 </div>
             </div>
 
-            <div class="ae-table" @onmousemove="OnColumnResizeMove" @onmouseup="StopColumnResize" @onmouseleave="StopColumnResize">
-                <div class="ae-table-inner" style="width: @GetTableWidth()px">
-                    <div class="ae-table-head" style="grid-template-columns: @columnTemplate">
-                        @for (var i = 0; i < ColumnHeaders.Length; i++)
-                        {
-                            var columnIndex = i;
-                            <span class="ae-head-cell" title="@GetColumnHeaderTooltip(ColumnHeaders[i])">
-                                @ColumnHeaders[i]
-                                @if (i < ColumnHeaders.Length - 1)
-                                {
-                                    <button type="button"
-                                            class="ae-resize-handle"
-                                            title="Resize column"
-                                            @onmousedown="args => StartColumnResize(columnIndex, args)"
-                                            @onmousedown:stopPropagation />
-                                }
-                            </span>
-                        }
-                    </div>
-
-                    @foreach (var row in visibleRows)
-                    {
-                        <div class="ae-row @(IsSelected(row.Node) ? "selected" : null) @(row.IsActiveProcurement ? "active" : null) @(row.IsFullySuppressed ? "suppressed" : null) @(row.HasSuppressedOccurrences && !row.IsFullySuppressed ? "partial" : null)"
-                             style="grid-template-columns: @columnTemplate"
-                             role="button"
-                             tabindex="0"
-                             @onclick="() => SelectNode(row.Node)">
-                            <span class="ae-item-cell">
-                                <span class="ae-item-name">@row.ItemName</span>
-                                <small>x@(row.TotalQuantity)</small>
-                            </span>
-                            <span class="ae-source-cell" @onclick:stopPropagation>
-                                <select class="ae-source-select"
-                                        style="border-color: @RecipePlanDisplayHelpers.GetSourceHexColor(row.Source); color: @RecipePlanDisplayHelpers.GetSourceHexColor(row.Source)"
-                                        value="@row.Source"
-                                        disabled="@(!row.HasEditableOccurrences)"
-                                        @onchange="args => OnNodeSourceSelected(row.Node, args)">
-                                    @foreach (var option in GetSourceOptions(row.Node))
-                                    {
-                                        <option value="@option">@RecipePlanDisplayHelpers.GetSourceDisplayName(option)</option>
-                                    }
-                                </select>
-                            </span>
-                            <span class="ae-used-cell" title="@row.UsedIn">@row.UsedIn</span>
-                            <span class="ae-role-cell">
-                                @GetDecisionStatus(row)
-                            </span>
-                            <span class="ae-market-cell">
-                                @row.MarketEvidence
-                            </span>
-                            <span class="@GetCalculatedTotalClass(row)" title="@GetCalculatedTotalTooltip(row)">@row.EstimatedCost</span>
-                        </div>
-                    }
-                </div>
-            </div>
+            <WebGridTable TItem="DecisionRow"
+                          TColumnId="AcquisitionDecisionLedgerSortColumn"
+                          CssClass="ae-table"
+                          Items="@visibleRows"
+                          Columns="@GetLedgerColumns()"
+                          GetRowKey="row => row.NodeId"
+                          GetRowClass="GetLedgerRowClass"
+                          Selection="@GetLedgerSelection()"
+                          RowActionLabel="@(row => $"Select {row.ItemName}")"
+                          RowActivated="SelectNodeFromRow"
+                          SortState="@_sortState"
+                          SortChanged="OnLedgerSortChanged"
+                          Resizable="true" />
         }
     </main>
 
@@ -169,12 +126,9 @@
         Array.Empty<CoreMarketDataUnavailableItem>(),
         AcquisitionFilter.All,
         new RecipeDemandProjection([], [], [], []));
-    private readonly int[] _columnWidths = { 300, 150, 260, 150, 170, 150 };
-    private static readonly string[] ColumnHeaders = { "Item", "Source", "Used In", "Role", "Market Evidence", "Calculated Total" };
     private const string CalculatedTotalHeaderTooltip = "Calculated Total is the gil cost computed for the row's selected source and needed quantity. Craft totals roll up selected child acquisition costs, market totals use market evidence when available, and vendor totals use loaded gil vendor prices.";
-    private int? _resizingColumnIndex;
-    private double _resizeStartX;
-    private int _resizeStartWidth;
+    private WebTableSortState<AcquisitionDecisionLedgerSortColumn> _sortState = WebTableSortState<AcquisitionDecisionLedgerSortColumn>.Unsorted;
+    private long? _sortPlanSessionVersion;
     private CancellationTokenSource? _refreshCts;
     private long _refreshRequestId;
     private string? _appliedRequestedNodeId;
@@ -321,40 +275,170 @@
         return _selectedNode?.NodeId == node.NodeId;
     }
 
-    private string GetColumnTemplate()
+    private IReadOnlyList<DecisionRow> GetOrderedVisibleRows()
     {
-        return string.Join(" ", _columnWidths.Select(width => $"{width}px"));
+        return _sortState.Column.HasValue
+            ? AcquisitionDecisionLedgerOrdering.GetOrderedRows(
+                _snapshot.VisibleRows,
+                _sortState.Column.Value,
+                _sortState.Descending)
+            : _snapshot.VisibleRows;
     }
 
-    private int GetTableWidth()
+    private IReadOnlyList<WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>> GetLedgerColumns()
     {
-        var gridGaps = (ColumnHeaders.Length - 1) * 8;
-        var rowPadding = 14;
-        return _columnWidths.Sum() + gridGaps + rowPadding;
+        return
+        [
+            new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
+            {
+                Id = AcquisitionDecisionLedgerSortColumn.Item,
+                Header = "Item",
+                Size = new WebTableColumnSize(300, 140),
+                HeaderCssClass = "ae-head-cell",
+                CellCssClass = "ae-item-cell",
+                CellTemplate = RenderItemCell
+            },
+            new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
+            {
+                Id = AcquisitionDecisionLedgerSortColumn.Source,
+                Header = "Source",
+                Size = new WebTableColumnSize(150, 120),
+                HeaderCssClass = "ae-head-cell",
+                CellCssClass = "ae-source-cell",
+                CellTemplate = RenderSourceCell
+            },
+            new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
+            {
+                Id = AcquisitionDecisionLedgerSortColumn.UsedIn,
+                Header = "Used In",
+                Size = new WebTableColumnSize(260, 120),
+                HeaderCssClass = "ae-head-cell",
+                CellCssClass = "ae-used-cell",
+                CellTitleSelector = row => row.UsedIn,
+                CellTemplate = RenderUsedInCell
+            },
+            new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
+            {
+                Id = AcquisitionDecisionLedgerSortColumn.Role,
+                Header = "Role",
+                Size = new WebTableColumnSize(150, 120),
+                HeaderCssClass = "ae-head-cell",
+                CellCssClass = "ae-role-cell",
+                CellTemplate = RenderRoleCell
+            },
+            new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
+            {
+                Id = AcquisitionDecisionLedgerSortColumn.MarketEvidence,
+                Header = "Market Evidence",
+                Size = new WebTableColumnSize(170, 130),
+                HeaderCssClass = "ae-head-cell",
+                CellCssClass = "ae-market-cell",
+                CellTemplate = RenderMarketEvidenceCell
+            },
+            new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
+            {
+                Id = AcquisitionDecisionLedgerSortColumn.CalculatedTotal,
+                Header = "Calculated Total",
+                HeaderTooltip = CalculatedTotalHeaderTooltip,
+                Size = new WebTableColumnSize(150, 120),
+                HeaderCssClass = "ae-head-cell",
+                CellCssClassSelector = GetCalculatedTotalClass,
+                CellTitleSelector = GetCalculatedTotalTooltip,
+                CellTemplate = RenderCalculatedTotalCell
+            }
+        ];
     }
 
-    private void StartColumnResize(int columnIndex, MouseEventArgs args)
+    private WebTableSelection<string> GetLedgerSelection()
     {
-        _resizingColumnIndex = columnIndex;
-        _resizeStartX = args.ClientX;
-        _resizeStartWidth = _columnWidths[columnIndex];
+        return _selectedNode == null
+            ? WebTableSelection<string>.None
+            : WebTableSelection<string>.Single(_selectedNode.NodeId);
     }
 
-    private void OnColumnResizeMove(MouseEventArgs args)
+    private string GetLedgerRowClass(DecisionRow row)
     {
-        if (_resizingColumnIndex is not { } columnIndex)
+        return WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>.CombineClasses(
+            "ae-row",
+            IsSelected(row.Node) ? "selected" : null,
+            row.IsActiveProcurement ? "active" : null,
+            row.IsFullySuppressed ? "suppressed" : null,
+            row.HasSuppressedOccurrences && !row.IsFullySuppressed ? "partial" : null);
+    }
+
+    private void SelectNodeFromRow(DecisionRow row)
+    {
+        SelectNode(row.Node);
+    }
+
+    private Task OnLedgerSortChanged(WebTableSortState<AcquisitionDecisionLedgerSortColumn> sortState)
+    {
+        _sortState = sortState;
+        return Task.CompletedTask;
+    }
+
+    private void ResetLedgerSortForPlanSession(long planSessionVersion)
+    {
+        if (_sortPlanSessionVersion == planSessionVersion)
         {
             return;
         }
 
-        var delta = args.ClientX - _resizeStartX;
-        _columnWidths[columnIndex] = Math.Max(90, _resizeStartWidth + (int)Math.Round(delta));
+        _sortPlanSessionVersion = planSessionVersion;
+        _sortState = WebTableSortState<AcquisitionDecisionLedgerSortColumn>.Unsorted;
     }
 
-    private void StopColumnResize()
+    private RenderFragment<DecisionRow> RenderItemCell => row => builder =>
     {
-        _resizingColumnIndex = null;
-    }
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "class", "ae-item-name");
+        builder.AddContent(2, row.ItemName);
+        builder.CloseElement();
+        builder.OpenElement(3, "small");
+        builder.AddContent(4, $"x{row.TotalQuantity}");
+        builder.CloseElement();
+    };
+
+    private RenderFragment<DecisionRow> RenderSourceCell => row => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "select");
+        builder.AddAttribute(sequence++, "class", "ae-source-select");
+        builder.AddAttribute(sequence++, "style", $"border-color: {RecipePlanDisplayHelpers.GetSourceHexColor(row.Source)}; color: {RecipePlanDisplayHelpers.GetSourceHexColor(row.Source)}");
+        builder.AddAttribute(sequence++, "value", row.Source.ToString());
+        builder.AddAttribute(sequence++, "disabled", !row.HasEditableOccurrences);
+        builder.AddAttribute(sequence++, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, args => OnNodeSourceSelected(row.Node, args)));
+
+        foreach (var option in GetSourceOptions(row.Node))
+        {
+            builder.OpenElement(sequence++, "option");
+            builder.AddAttribute(sequence++, "value", option.ToString());
+            builder.AddContent(sequence++, RecipePlanDisplayHelpers.GetSourceDisplayName(option));
+            builder.CloseElement();
+        }
+
+        builder.CloseElement();
+    };
+
+    private RenderFragment<DecisionRow> RenderUsedInCell => row => builder =>
+    {
+        builder.AddContent(0, row.UsedIn);
+    };
+
+    private RenderFragment<DecisionRow> RenderRoleCell => row => builder =>
+    {
+        builder.AddContent(0, GetDecisionStatus(row));
+    };
+
+    private RenderFragment<DecisionRow> RenderMarketEvidenceCell => row => builder =>
+    {
+        builder.AddContent(0, row.MarketEvidence);
+    };
+
+    private RenderFragment<DecisionRow> RenderCalculatedTotalCell => row => builder =>
+    {
+        builder.AddContent(0, row.EstimatedCost);
+    };
 
     private async Task RefreshLedgerSnapshotAsync()
     {
@@ -366,6 +450,7 @@
         var token = _refreshCts.Token;
         var plan = AppState.CurrentPlan;
         var planSessionVersion = AppState.PlanSessionVersion;
+        ResetLedgerSortForPlanSession(planSessionVersion);
 
         var key = CreateLedgerKey();
         if (_ledgerCache.TryGet(key, _filter, out var cachedSnapshot))
@@ -456,13 +541,6 @@
         }
 
         return "Reference";
-    }
-
-    private static string? GetColumnHeaderTooltip(string columnHeader)
-    {
-        return columnHeader == "Calculated Total"
-            ? CalculatedTotalHeaderTooltip
-            : null;
     }
 
     private static string GetCalculatedTotalClass(DecisionRow row)

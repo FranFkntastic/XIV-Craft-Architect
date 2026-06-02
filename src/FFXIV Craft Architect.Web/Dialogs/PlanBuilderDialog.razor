@@ -1,3 +1,4 @@
+@using System.Globalization
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
 @using Microsoft.AspNetCore.Components.Web
@@ -37,46 +38,14 @@
                     </MudButton>
                 </div>
 
-                <div class="pb-result-table">
-                    <div class="pb-table-head pb-result-grid">
-                        <span></span>
-                        <span>Item</span>
-                        <span>Qty</span>
-                        <span>Type</span>
-                        <span>Lvl</span>
-                        <span>ID</span>
-                    </div>
-                    <div class="pb-table-body">
-                        @if (_searchResults.Any())
-                        {
-                            @foreach (var result in _searchResults)
-                            {
-                                var alreadyAdded = _draftItems.Any(item => item.Id == result.Id);
-                                <div class="pb-table-row pb-result-grid @(alreadyAdded ? "is-disabled" : null)">
-                                    <input type="checkbox"
-                                           checked="@_selectedSearchIds.Contains(result.Id)"
-                                           disabled="@alreadyAdded"
-                                           @onchange="args => ToggleSearchSelection(result.Id, args)" />
-                                    <span class="pb-primary">@result.Object.Name</span>
-                                    <input class="pb-qty-input"
-                                           type="number"
-                                           min="1"
-                                           max="9999"
-                                           value="@GetSearchQuantity(result.Id)"
-                                           disabled="@alreadyAdded"
-                                           @onchange="args => SetSearchQuantity(result.Id, args)" />
-                                    <span>@result.Type</span>
-                                    <span>@(result.Object.Level?.ToString() ?? "-")</span>
-                                    <span>@result.Id</span>
-                                </div>
-                            }
-                        }
-                        else
-                        {
-                            <div class="pb-empty">Search for items to populate this list.</div>
-                        }
-                    </div>
-                </div>
+                <WebGridTable TItem="GarlandSearchResult"
+                              TColumnId="PlanBuilderSearchColumn"
+                              CssClass="pb-result-table"
+                              Items="@_searchResults"
+                              Columns="@GetSearchResultColumns()"
+                              GetRowKey="result => result.Id.ToString(CultureInfo.InvariantCulture)"
+                              GetRowClass="GetSearchResultRowClass"
+                              EmptyContent="RenderSearchEmptyContent" />
             </section>
 
             <section class="pb-target-panel">
@@ -93,49 +62,14 @@
                     </div>
                 </div>
 
-                <div class="pb-target-table">
-                    <div class="pb-table-head pb-target-grid">
-                        <span></span>
-                        <span>Item</span>
-                        <span>Qty</span>
-                        <span>HQ</span>
-                        <span></span>
-                    </div>
-                    <div class="pb-table-body">
-                        @if (_draftItems.Any())
-                        {
-                            @foreach (var item in _draftItems.OrderBy(item => item.Name).ToList())
-                            {
-                                <div class="pb-table-row pb-target-grid">
-                                    <input type="checkbox"
-                                           checked="@_selectedTargetIds.Contains(item.Id)"
-                                           @onchange="args => ToggleTargetSelection(item.Id, args)" />
-                                    <span class="pb-primary">@item.Name</span>
-                                    <input class="pb-qty-input"
-                                           type="number"
-                                           min="1"
-                                           max="9999"
-                                           value="@item.Quantity"
-                                           @onchange="args => SetQuantity(item, args)" />
-                                    <button class="pb-hq-toggle @(item.MustBeHq ? "is-active" : null)"
-                                            type="button"
-                                            @onclick="() => ToggleQuality(item)">
-                                        HQ
-                                    </button>
-                                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
-                                                   Size="Size.Small"
-                                                   Color="Color.Error"
-                                                   Title="Remove item"
-                                                   OnClick="() => RemoveItem(item)" />
-                                </div>
-                            }
-                        }
-                        else
-                        {
-                            <div class="pb-empty">Add one or more items from search results.</div>
-                        }
-                    </div>
-                </div>
+                <WebGridTable TItem="ProjectItem"
+                              TColumnId="PlanBuilderTargetColumn"
+                              CssClass="pb-target-table"
+                              Items="@_draftItems.OrderBy(item => item.Name).ToList()"
+                              Columns="@GetTargetItemColumns()"
+                              GetRowKey="item => item.Id.ToString(CultureInfo.InvariantCulture)"
+                              GetRowClass="GetTargetItemRowClass"
+                              EmptyContent="RenderTargetEmptyContent" />
             </section>
         </div>
     </DialogContent>
@@ -157,6 +91,224 @@
     private readonly List<GarlandSearchResult> _searchResults = new();
     private string _searchQuery = string.Empty;
     private bool _isSearching;
+
+    private enum PlanBuilderSearchColumn
+    {
+        Select,
+        Item,
+        Quantity,
+        Type,
+        Level,
+        Id
+    }
+
+    private enum PlanBuilderTargetColumn
+    {
+        Select,
+        Item,
+        Quantity,
+        Quality,
+        Remove
+    }
+
+    private IReadOnlyList<WebTableColumn<GarlandSearchResult, PlanBuilderSearchColumn>> GetSearchResultColumns()
+    {
+        return
+        [
+            new WebTableColumn<GarlandSearchResult, PlanBuilderSearchColumn>
+            {
+                Id = PlanBuilderSearchColumn.Select,
+                Header = string.Empty,
+                Size = new WebTableColumnSize(28, 28),
+                Sortable = false,
+                CellTemplate = result => builder =>
+                {
+                    var alreadyAdded = IsSearchResultAdded(result.Id);
+                    builder.OpenElement(0, "input");
+                    builder.AddAttribute(1, "type", "checkbox");
+                    builder.AddAttribute(2, "checked", _selectedSearchIds.Contains(result.Id));
+                    builder.AddAttribute(3, "disabled", alreadyAdded);
+                    builder.AddAttribute(4, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, args => ToggleSearchSelection(result.Id, args)));
+                    builder.CloseElement();
+                }
+            },
+            new WebTableColumn<GarlandSearchResult, PlanBuilderSearchColumn>
+            {
+                Id = PlanBuilderSearchColumn.Item,
+                Header = "Item",
+                Size = new WebTableColumnSize(260, 190),
+                Sortable = false,
+                CellTemplate = result => builder =>
+                {
+                    builder.OpenElement(0, "span");
+                    builder.AddAttribute(1, "class", "pb-primary");
+                    builder.AddContent(2, result.Object.Name);
+                    builder.CloseElement();
+                }
+            },
+            new WebTableColumn<GarlandSearchResult, PlanBuilderSearchColumn>
+            {
+                Id = PlanBuilderSearchColumn.Quantity,
+                Header = "Qty",
+                Size = new WebTableColumnSize(72, 72),
+                Sortable = false,
+                CellTemplate = result => builder =>
+                {
+                    var alreadyAdded = IsSearchResultAdded(result.Id);
+                    builder.OpenElement(0, "input");
+                    builder.AddAttribute(1, "class", "pb-qty-input");
+                    builder.AddAttribute(2, "type", "number");
+                    builder.AddAttribute(3, "min", "1");
+                    builder.AddAttribute(4, "max", "9999");
+                    builder.AddAttribute(5, "value", GetSearchQuantity(result.Id));
+                    builder.AddAttribute(6, "disabled", alreadyAdded);
+                    builder.AddAttribute(7, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, args => SetSearchQuantity(result.Id, args)));
+                    builder.CloseElement();
+                }
+            },
+            WebTableColumn<GarlandSearchResult, PlanBuilderSearchColumn>.Text(
+                PlanBuilderSearchColumn.Type,
+                "Type",
+                result => result.Type,
+                widthPx: 86,
+                minWidthPx: 70,
+                sortable: false),
+            WebTableColumn<GarlandSearchResult, PlanBuilderSearchColumn>.Text(
+                PlanBuilderSearchColumn.Level,
+                "Lvl",
+                result => result.Object.Level?.ToString(CultureInfo.InvariantCulture) ?? "-",
+                widthPx: 50,
+                minWidthPx: 44,
+                sortable: false),
+            WebTableColumn<GarlandSearchResult, PlanBuilderSearchColumn>.Text(
+                PlanBuilderSearchColumn.Id,
+                "ID",
+                result => result.Id.ToString(CultureInfo.InvariantCulture),
+                widthPx: 72,
+                minWidthPx: 60,
+                sortable: false)
+        ];
+    }
+
+    private IReadOnlyList<WebTableColumn<ProjectItem, PlanBuilderTargetColumn>> GetTargetItemColumns()
+    {
+        return
+        [
+            new WebTableColumn<ProjectItem, PlanBuilderTargetColumn>
+            {
+                Id = PlanBuilderTargetColumn.Select,
+                Header = string.Empty,
+                Size = new WebTableColumnSize(28, 28),
+                Sortable = false,
+                CellTemplate = item => builder =>
+                {
+                    builder.OpenElement(0, "input");
+                    builder.AddAttribute(1, "type", "checkbox");
+                    builder.AddAttribute(2, "checked", _selectedTargetIds.Contains(item.Id));
+                    builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, args => ToggleTargetSelection(item.Id, args)));
+                    builder.CloseElement();
+                }
+            },
+            new WebTableColumn<ProjectItem, PlanBuilderTargetColumn>
+            {
+                Id = PlanBuilderTargetColumn.Item,
+                Header = "Item",
+                Size = new WebTableColumnSize(260, 190),
+                Sortable = false,
+                CellTemplate = item => builder =>
+                {
+                    builder.OpenElement(0, "span");
+                    builder.AddAttribute(1, "class", "pb-primary");
+                    builder.AddContent(2, item.Name);
+                    builder.CloseElement();
+                }
+            },
+            new WebTableColumn<ProjectItem, PlanBuilderTargetColumn>
+            {
+                Id = PlanBuilderTargetColumn.Quantity,
+                Header = "Qty",
+                Size = new WebTableColumnSize(82, 72),
+                Sortable = false,
+                CellTemplate = item => builder =>
+                {
+                    builder.OpenElement(0, "input");
+                    builder.AddAttribute(1, "class", "pb-qty-input");
+                    builder.AddAttribute(2, "type", "number");
+                    builder.AddAttribute(3, "min", "1");
+                    builder.AddAttribute(4, "max", "9999");
+                    builder.AddAttribute(5, "value", item.Quantity);
+                    builder.AddAttribute(6, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, args => SetQuantity(item, args)));
+                    builder.CloseElement();
+                }
+            },
+            new WebTableColumn<ProjectItem, PlanBuilderTargetColumn>
+            {
+                Id = PlanBuilderTargetColumn.Quality,
+                Header = "HQ",
+                Size = new WebTableColumnSize(64, 56),
+                Sortable = false,
+                CellTemplate = item => builder =>
+                {
+                    builder.OpenElement(0, "button");
+                    builder.AddAttribute(1, "class", $"pb-hq-toggle{(item.MustBeHq ? " is-active" : string.Empty)}");
+                    builder.AddAttribute(2, "type", "button");
+                    builder.AddAttribute(3, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, () => ToggleQuality(item)));
+                    builder.AddContent(4, "HQ");
+                    builder.CloseElement();
+                }
+            },
+            new WebTableColumn<ProjectItem, PlanBuilderTargetColumn>
+            {
+                Id = PlanBuilderTargetColumn.Remove,
+                Header = string.Empty,
+                Size = new WebTableColumnSize(36, 36),
+                Sortable = false,
+                CellTemplate = item => builder =>
+                {
+                    builder.OpenComponent<MudIconButton>(0);
+                    builder.AddAttribute(1, "Icon", Icons.Material.Filled.Delete);
+                    builder.AddAttribute(2, "Size", Size.Small);
+                    builder.AddAttribute(3, "Color", Color.Error);
+                    builder.AddAttribute(4, "Title", "Remove item");
+                    builder.AddAttribute(5, "OnClick", EventCallback.Factory.Create<MouseEventArgs>(this, () => RemoveItem(item)));
+                    builder.CloseComponent();
+                }
+            }
+        ];
+    }
+
+    private RenderFragment RenderSearchEmptyContent => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "pb-empty");
+        builder.AddContent(2, "Search for items to populate this list.");
+        builder.CloseElement();
+    };
+
+    private RenderFragment RenderTargetEmptyContent => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "pb-empty");
+        builder.AddContent(2, "Add one or more items from search results.");
+        builder.CloseElement();
+    };
+
+    private bool IsSearchResultAdded(int itemId)
+    {
+        return _draftItems.Any(item => item.Id == itemId);
+    }
+
+    private string GetSearchResultRowClass(GarlandSearchResult result)
+    {
+        return IsSearchResultAdded(result.Id)
+            ? "pb-table-row is-disabled"
+            : "pb-table-row";
+    }
+
+    private static string GetTargetItemRowClass(ProjectItem item)
+    {
+        return "pb-table-row";
+    }
 
     protected override void OnInitialized()
     {

@@ -1,0 +1,160 @@
+@typeparam TItem
+@typeparam TColumnId where TColumnId : struct, Enum
+@inject IJSRuntime JsRuntime
+@implements IAsyncDisposable
+
+<div class="@RootClass"
+     role="table"
+     @ref="_rootElement"
+     style="@RootStyle"
+     data-column-widths="@ColumnWidths"
+     data-column-min-widths="@ColumnMinWidths">
+    <div class="web-grid-table-inner">
+        <div class="web-grid-table-head" role="row">
+            @for (var i = 0; i < Columns.Count; i++)
+            {
+                var column = Columns[i];
+                <WebTableHeaderCell TColumnId="TColumnId"
+                                    ColumnId="@column.Id"
+                                    Label="@column.Header"
+                                    Tooltip="@column.HeaderTooltip"
+                                    CssClass="@column.HeaderCssClass"
+                                    Sortable="@column.Sortable"
+                                    SortState="@SortState"
+                                    SortChanged="@SortChanged"
+                                    Resizable="@Resizable"
+                                    ColumnIndex="@i"
+                                    MinWidthPx="@column.Size.MinWidthPx" />
+            }
+        </div>
+
+        @if (Items.Count == 0 && EmptyContent != null)
+        {
+            <div class="web-grid-table-empty" role="row">
+                @EmptyContent
+            </div>
+        }
+        else
+        {
+            @foreach (var item in Items)
+            {
+                var key = GetRowKey?.Invoke(item) ?? string.Empty;
+                var isSelected = Selection.IsSelected(key);
+                <div class="@GetBodyRowClass(item, isSelected)"
+                     role="row"
+                     aria-selected="@isSelected.ToString().ToLowerInvariant()"
+                     @key="key">
+                    @for (var i = 0; i < Columns.Count; i++)
+                    {
+                        var column = Columns[i];
+                        var cellClass = WebTableColumn<TItem, TColumnId>.CombineClasses(
+                            "web-grid-table-cell",
+                            column.GetCellCssClass(item));
+                        if (i == 0 && RowActivated.HasDelegate)
+                        {
+                            <button type="button"
+                                    class="@GetRowActionClass(item, column)"
+                                    role="cell"
+                                    aria-label="@GetRowActionLabel(item)"
+                                    title="@column.CellTitleSelector?.Invoke(item)"
+                                    @onclick="() => RowActivated.InvokeAsync(item)">
+                                @column.CellTemplate(item)
+                            </button>
+                        }
+                        else
+                        {
+                            <div class="@cellClass" role="cell" title="@column.CellTitleSelector?.Invoke(item)">
+                                @column.CellTemplate(item)
+                            </div>
+                        }
+                    }
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private ElementReference _rootElement;
+    private bool _registeredResize;
+    private IJSObjectReference? _resizeModule;
+
+    [Parameter] public IReadOnlyList<TItem> Items { get; set; } = [];
+    [Parameter, EditorRequired] public IReadOnlyList<WebTableColumn<TItem, TColumnId>> Columns { get; set; } = [];
+    [Parameter] public Func<TItem, string>? GetRowKey { get; set; }
+    [Parameter] public Func<TItem, string>? GetRowClass { get; set; }
+    [Parameter] public WebTableSelection<string> Selection { get; set; } = WebTableSelection<string>.None;
+    [Parameter] public Func<TItem, string>? RowActionLabel { get; set; }
+    [Parameter] public EventCallback<TItem> RowActivated { get; set; }
+    [Parameter] public RenderFragment? EmptyContent { get; set; }
+    [Parameter] public WebTableSortState<TColumnId> SortState { get; set; } = WebTableSortState<TColumnId>.Unsorted;
+    [Parameter] public EventCallback<WebTableSortState<TColumnId>> SortChanged { get; set; }
+    [Parameter] public bool Resizable { get; set; }
+    [Parameter] public int ColumnGapPx { get; set; } = 8;
+    [Parameter] public int HorizontalPaddingPx { get; set; } = 14;
+    [Parameter] public string? CssClass { get; set; }
+
+    private string RootClass => WebTableColumn<TItem, TColumnId>.CombineClasses("web-grid-table", CssClass);
+
+    private string ColumnWidths => string.Join(",", Columns.Select(column => column.Size.WidthPx.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+    private string ColumnMinWidths => string.Join(",", Columns.Select(column => column.Size.MinWidthPx.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+    private string GridTemplate => string.Join(" ", Columns.Select(column => column.Size.ToCssWidth()));
+
+    private int TableWidthPx => Columns.Sum(column => column.Size.WidthPx) +
+        Math.Max(0, Columns.Count - 1) * ColumnGapPx +
+        HorizontalPaddingPx;
+
+    private string RootStyle => string.Join(
+        "; ",
+        [
+            $"--web-table-grid-template: {GridTemplate}",
+            $"--web-table-grid-width: {TableWidthPx.ToString(System.Globalization.CultureInfo.InvariantCulture)}px",
+            $"--web-table-grid-gap: {ColumnGapPx.ToString(System.Globalization.CultureInfo.InvariantCulture)}px"
+        ]);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!Resizable || _registeredResize)
+        {
+            return;
+        }
+
+        _resizeModule = await JsRuntime.InvokeAsync<IJSObjectReference>(
+            "import",
+            "./tablePrimitives.js");
+        await _resizeModule.InvokeVoidAsync("registerResizableGrid", _rootElement);
+        _registeredResize = true;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_resizeModule != null)
+        {
+            await _resizeModule.DisposeAsync();
+        }
+    }
+
+    private string GetBodyRowClass(TItem item, bool isSelected)
+    {
+        return WebTableColumn<TItem, TColumnId>.CombineClasses(
+            "web-grid-table-row",
+            isSelected ? "is-selected" : null,
+            GetRowClass?.Invoke(item));
+    }
+
+    private string GetRowActionLabel(TItem item)
+    {
+        return RowActionLabel?.Invoke(item) ?? "Select row";
+    }
+
+    private static string GetRowActionClass(
+        TItem item,
+        WebTableColumn<TItem, TColumnId> column)
+    {
+        return WebTableColumn<TItem, TColumnId>.CombineClasses(
+            "web-grid-table-cell web-grid-table-row-action",
+            column.GetCellCssClass(item));
+    }
+}

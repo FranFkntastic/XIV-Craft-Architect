@@ -17,68 +17,17 @@
         </div>
     }
 
-    <table class="ma-world-grid-table">
-        <thead>
-            <tr>
-                <th>@SortHeader("World", MarketAnalysisWorldGridSortColumn.World)</th>
-                <th>@SortHeader("Stock Depth", MarketAnalysisWorldGridSortColumn.StockDepth)</th>
-                <th>@SortHeader("Coverage", MarketAnalysisWorldGridSortColumn.Coverage)</th>
-                <th>@SortHeader("Price / Value", MarketAnalysisWorldGridSortColumn.PriceValue)</th>
-                <th>@SortHeader("% Diff", MarketAnalysisWorldGridSortColumn.Value)</th>
-                <th>@SortHeader("Data", MarketAnalysisWorldGridSortColumn.Data)</th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach (var world in MarketAnalysisGridViewService.GetOrderedWorlds(Analysis, Lens, SortColumn, SortDescending))
-            {
-                var key = GetWorldKey(world);
-                var scoreBucket = MarketAnalysisGridViewService.GetDisplayScoreBucket(world, Lens);
-                var coverageBucket = MarketAnalysisGridViewService.GetDisplayCoverageBucket(world);
-                var stockDetail = MarketAnalysisGridViewService.FormatCompetitiveStockDetail(world);
-                <tr class="@MarketAnalysisGridViewService.GetWorldRowClass(world, Lens)">
-                    <td>
-                        <button type="button" class="ma-world-toggle" @onclick="() => ToggleWorld(key)">
-                            <MudIcon Icon="@(IsExpanded(key) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ChevronRight)" Size="Size.Small" />
-                            <span>@world.WorldName</span>
-                            @if (!string.IsNullOrWhiteSpace(world.DataCenter))
-                            {
-                                <span class="ma-world-dc">@world.DataCenter</span>
-                            }
-                        </button>
-                    </td>
-                    <td>
-                        <span>@($"{MarketAnalysisGridViewService.GetCompetitiveQuantity(world):N0} competitive")</span>
-                        @if (!string.IsNullOrWhiteSpace(stockDetail))
-                        {
-                            <span class="ma-world-muted">@stockDetail</span>
-                        }
-                    </td>
-                    <td>
-                        <span>@MarketAnalysisGridViewService.FormatCoverage(world)</span>
-                        <span class="ma-world-muted">@MarketAnalysisGridViewService.FormatCoverageBucket(coverageBucket)</span>
-                    </td>
-                    <td>
-                        <span class="ma-world-score @MarketAnalysisGridViewService.GetScoreClass(scoreBucket)">@MarketAnalysisGridViewService.FormatScoreBucket(scoreBucket)</span>
-                        <span class="ma-world-muted">@MarketAnalysisGridViewService.FormatWorldPriceSummary(world, Lens)</span>
-                    </td>
-                    <td title="@MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world)">@MarketAnalysisGridViewService.FormatCompetitiveValue(world)</td>
-                    <td title="@FormatDataTooltip(world)">
-                        <span>@FormatDataAge(world)</span>
-                        <span class="ma-world-muted">@FormatDataQuality(world)</span>
-                    </td>
-                </tr>
-
-                @if (IsExpanded(key))
-                {
-                    <tr class="ma-world-expanded-row">
-                        <td colspan="6">
-                            <MarketAnalysisListingLadder World="world" />
-                        </td>
-                    </tr>
-                }
-            }
-        </tbody>
-    </table>
+    <WebDataTable TItem="WorldMarketAnalysis"
+                  TColumnId="MarketAnalysisWorldGridSortColumn"
+                  CssClass="ma-world-grid-table"
+                  Items="@MarketAnalysisGridViewService.GetOrderedWorlds(Analysis, Lens, SortColumn, SortDescending)"
+                  Columns="@GetWorldColumns()"
+                  GetRowKey="world => GetWorldKey(world).ToString()"
+                  GetRowClass="world => MarketAnalysisGridViewService.GetWorldRowClass(world, Lens)"
+                  IsRowExpanded="world => IsExpanded(GetWorldKey(world))"
+                  ExpandedContent="RenderExpandedWorld"
+                  SortState="@GetSortState()"
+                  SortChanged="OnTableSortChanged" />
 </div>
 
 @code {
@@ -98,36 +47,160 @@
         await OnWorldExpansionToggled.InvokeAsync(key);
     }
 
-    private RenderFragment SortHeader(string label, MarketAnalysisWorldGridSortColumn column) => builder =>
+    private IReadOnlyList<WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>> GetWorldColumns()
     {
+        return
+        [
+            new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
+            {
+                Id = MarketAnalysisWorldGridSortColumn.World,
+                Header = "World",
+                Size = new WebTableColumnSize(220, 150),
+                CellTemplate = RenderWorldCell
+            },
+            new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
+            {
+                Id = MarketAnalysisWorldGridSortColumn.StockDepth,
+                Header = "Stock Depth",
+                Size = new WebTableColumnSize(150, 120),
+                CellTemplate = RenderStockDepthCell
+            },
+            new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
+            {
+                Id = MarketAnalysisWorldGridSortColumn.Coverage,
+                Header = "Coverage",
+                Size = new WebTableColumnSize(120, 100),
+                CellTemplate = RenderCoverageCell
+            },
+            new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
+            {
+                Id = MarketAnalysisWorldGridSortColumn.PriceValue,
+                Header = "Price / Value",
+                Size = new WebTableColumnSize(220, 150),
+                CellTemplate = RenderPriceValueCell
+            },
+            new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
+            {
+                Id = MarketAnalysisWorldGridSortColumn.Value,
+                Header = "% Diff",
+                Size = new WebTableColumnSize(90, 80),
+                CellTitleSelector = MarketAnalysisGridViewService.FormatCompetitiveValueTooltip,
+                CellTemplate = RenderCompetitiveValueCell
+            },
+            new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
+            {
+                Id = MarketAnalysisWorldGridSortColumn.Data,
+                Header = "Data",
+                Size = new WebTableColumnSize(120, 100),
+                CellTitleSelector = FormatDataTooltip,
+                CellTemplate = RenderDataCell
+            }
+        ];
+    }
+
+    private WebTableSortState<MarketAnalysisWorldGridSortColumn> GetSortState()
+    {
+        return SortColumn.HasValue
+            ? new WebTableSortState<MarketAnalysisWorldGridSortColumn>(SortColumn.Value, SortDescending)
+            : WebTableSortState<MarketAnalysisWorldGridSortColumn>.Unsorted;
+    }
+
+    private async Task OnTableSortChanged(WebTableSortState<MarketAnalysisWorldGridSortColumn> state)
+    {
+        if (state.Column.HasValue)
+        {
+            await OnSortChanged.InvokeAsync(new MarketAnalysisWorldGridSortState(state.Column.Value, state.Descending));
+        }
+    }
+
+    private RenderFragment<WorldMarketAnalysis> RenderWorldCell => world => builder =>
+    {
+        var key = GetWorldKey(world);
         var sequence = 0;
         builder.OpenElement(sequence++, "button");
         builder.AddAttribute(sequence++, "type", "button");
-        builder.AddAttribute(sequence++, "class", GetSortHeaderClass(column));
-        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => ToggleSort(column)));
-        builder.AddContent(sequence++, label);
-        if (SortColumn == column)
+        builder.AddAttribute(sequence++, "class", "ma-world-toggle");
+        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => ToggleWorld(key)));
+        builder.OpenComponent<MudIcon>(sequence++);
+        builder.AddAttribute(sequence++, "Icon", IsExpanded(key) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ChevronRight);
+        builder.AddAttribute(sequence++, "Size", Size.Small);
+        builder.CloseComponent();
+        builder.OpenElement(sequence++, "span");
+        builder.AddContent(sequence++, world.WorldName);
+        builder.CloseElement();
+        if (!string.IsNullOrWhiteSpace(world.DataCenter))
         {
             builder.OpenElement(sequence++, "span");
-            builder.AddAttribute(sequence++, "class", "ma-world-sort-direction");
-            builder.AddContent(sequence++, SortDescending ? "↓" : "↑");
+            builder.AddAttribute(sequence++, "class", "ma-world-dc");
+            builder.AddContent(sequence++, world.DataCenter);
             builder.CloseElement();
         }
+
         builder.CloseElement();
     };
 
-    private string GetSortHeaderClass(MarketAnalysisWorldGridSortColumn column)
+    private RenderFragment<WorldMarketAnalysis> RenderStockDepthCell => world => builder =>
     {
-        return SortColumn == column
-            ? "ma-world-sort-header is-active"
-            : "ma-world-sort-header";
-    }
+        var stockDetail = MarketAnalysisGridViewService.FormatCompetitiveStockDetail(world);
+        builder.OpenElement(0, "span");
+        builder.AddContent(1, $"{MarketAnalysisGridViewService.GetCompetitiveQuantity(world):N0} competitive");
+        builder.CloseElement();
+        if (!string.IsNullOrWhiteSpace(stockDetail))
+        {
+            builder.OpenElement(2, "span");
+            builder.AddAttribute(3, "class", "ma-world-muted");
+            builder.AddContent(4, stockDetail);
+            builder.CloseElement();
+        }
+    };
 
-    private async Task ToggleSort(MarketAnalysisWorldGridSortColumn column)
+    private RenderFragment<WorldMarketAnalysis> RenderCoverageCell => world => builder =>
     {
-        var next = MarketAnalysisGridViewService.ToggleWorldSort(SortColumn, SortDescending, column);
-        await OnSortChanged.InvokeAsync(next);
-    }
+        var coverageBucket = MarketAnalysisGridViewService.GetDisplayCoverageBucket(world);
+        builder.OpenElement(0, "span");
+        builder.AddContent(1, MarketAnalysisGridViewService.FormatCoverage(world));
+        builder.CloseElement();
+        builder.OpenElement(2, "span");
+        builder.AddAttribute(3, "class", "ma-world-muted");
+        builder.AddContent(4, MarketAnalysisGridViewService.FormatCoverageBucket(coverageBucket));
+        builder.CloseElement();
+    };
+
+    private RenderFragment<WorldMarketAnalysis> RenderPriceValueCell => world => builder =>
+    {
+        var scoreBucket = MarketAnalysisGridViewService.GetDisplayScoreBucket(world, Lens);
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "class", $"ma-world-score {MarketAnalysisGridViewService.GetScoreClass(scoreBucket)}");
+        builder.AddContent(2, MarketAnalysisGridViewService.FormatScoreBucket(scoreBucket));
+        builder.CloseElement();
+        builder.OpenElement(3, "span");
+        builder.AddAttribute(4, "class", "ma-world-muted");
+        builder.AddContent(5, MarketAnalysisGridViewService.FormatWorldPriceSummary(world, Lens));
+        builder.CloseElement();
+    };
+
+    private RenderFragment<WorldMarketAnalysis> RenderCompetitiveValueCell => world => builder =>
+    {
+        builder.AddContent(0, MarketAnalysisGridViewService.FormatCompetitiveValue(world));
+    };
+
+    private RenderFragment<WorldMarketAnalysis> RenderDataCell => world => builder =>
+    {
+        builder.OpenElement(0, "span");
+        builder.AddContent(1, FormatDataAge(world));
+        builder.CloseElement();
+        builder.OpenElement(2, "span");
+        builder.AddAttribute(3, "class", "ma-world-muted");
+        builder.AddContent(4, FormatDataQuality(world));
+        builder.CloseElement();
+    };
+
+    private RenderFragment<WorldMarketAnalysis> RenderExpandedWorld => world => builder =>
+    {
+        builder.OpenComponent<MarketAnalysisListingLadder>(0);
+        builder.AddAttribute(1, "World", world);
+        builder.CloseComponent();
+    };
 
     private MarketAnalysisExpandedWorldKey GetWorldKey(WorldMarketAnalysis world)
     {

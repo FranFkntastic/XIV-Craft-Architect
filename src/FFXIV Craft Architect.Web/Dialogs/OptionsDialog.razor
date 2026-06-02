@@ -125,6 +125,23 @@
                     <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
                         Browser-based crafting and market planner
                     </MudText>
+
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        Build @WebBuildInfo.BuildVersion
+                    </MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-4">
+                        Branch @WebBuildInfo.BranchName
+                    </MudText>
+
+                    @if (AppState.SecretDebugToolsEnabled)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            Commit @WebBuildInfo.CommitSha
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-4">
+                            Dirty @WebBuildInfo.IsDirty
+                        </MudText>
+                    }
                     
                     <MudText Typo="Typo.body2" Align="Align.Center">
                         A crafting calculator for Final Fantasy XIV with market integration.

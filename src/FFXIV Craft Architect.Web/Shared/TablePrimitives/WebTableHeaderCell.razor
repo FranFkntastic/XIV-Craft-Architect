@@ -1,0 +1,56 @@
+@typeparam TColumnId where TColumnId : struct, Enum
+
+<span class="@HeaderClass"
+      role="columnheader"
+      aria-sort="@SortState.GetAriaSort(ColumnId)"
+      title="@Tooltip">
+    @if (Sortable)
+    {
+        <button type="button"
+                class="web-table-sort-button"
+                @onclick="ToggleSort">
+            <span class="web-table-header-label">@Label</span>
+            @if (SortState.IsSortedBy(ColumnId))
+            {
+                <span class="web-table-sort-indicator" aria-hidden="true">@(SortState.Descending ? "v" : "^")</span>
+            }
+        </button>
+    }
+    else
+    {
+        <span class="web-table-header-label">@Label</span>
+    }
+
+    @if (Resizable)
+    {
+        <button type="button"
+                class="web-table-resize-handle"
+                title="Resize column"
+                aria-label="Resize @Label column"
+                data-web-table-resize-index="@ColumnIndex"
+                data-web-table-min-width="@MinWidthPx" />
+    }
+</span>
+
+@code {
+    [Parameter, EditorRequired] public TColumnId ColumnId { get; set; }
+    [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
+    [Parameter] public string? Tooltip { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool Sortable { get; set; } = true;
+    [Parameter] public WebTableSortState<TColumnId> SortState { get; set; } = WebTableSortState<TColumnId>.Unsorted;
+    [Parameter] public EventCallback<WebTableSortState<TColumnId>> SortChanged { get; set; }
+    [Parameter] public bool Resizable { get; set; }
+    [Parameter] public int ColumnIndex { get; set; }
+    [Parameter] public int MinWidthPx { get; set; } = 80;
+
+    private string HeaderClass => WebTableColumn<object, TColumnId>.CombineClasses(
+        "web-table-header-cell",
+        SortState.IsSortedBy(ColumnId) ? "is-sorted" : null,
+        CssClass);
+
+    private async Task ToggleSort()
+    {
+        await SortChanged.InvokeAsync(SortState.Toggle(ColumnId));
+    }
+}

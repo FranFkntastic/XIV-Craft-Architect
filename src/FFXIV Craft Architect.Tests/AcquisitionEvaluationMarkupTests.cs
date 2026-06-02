@@ -10,9 +10,11 @@ public class AcquisitionEvaluationMarkupTests
 
         Assert.Contains("\"Calculated Total\"", markup);
         Assert.DoesNotContain("\"Estimate\"", markup);
-        Assert.Contains("GetColumnHeaderTooltip(ColumnHeaders[i])", markup);
-        Assert.Contains("GetCalculatedTotalClass(row)", markup);
-        Assert.Contains("GetCalculatedTotalTooltip(row)", markup);
+        Assert.Contains("WebGridTable", markup);
+        Assert.Contains("HeaderTooltip = CalculatedTotalHeaderTooltip", markup);
+        Assert.Contains("CellCssClassSelector = GetCalculatedTotalClass", markup);
+        Assert.Contains("CellTitleSelector = GetCalculatedTotalTooltip", markup);
+        Assert.Contains("AcquisitionDecisionLedgerOrdering.GetOrderedRows", markup);
         Assert.Contains("ae-cost-cell.projected-unsupported", styles);
     }
 

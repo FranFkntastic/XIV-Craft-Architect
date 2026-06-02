@@ -1,0 +1,18 @@
+.web-data-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.web-data-table th,
+.web-data-table td {
+    min-width: 0;
+}
+
+.web-data-table-expanded-cell {
+    width: 100%;
+}
+
+.web-data-table-empty-cell {
+    width: 100%;
+}

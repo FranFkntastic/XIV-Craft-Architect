@@ -1,5 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Web.Shared.TablePrimitives;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -212,21 +213,18 @@ public static class MarketAnalysisGridViewService
     {
         ArgumentNullException.ThrowIfNull(analysis);
 
-        IOrderedEnumerable<WorldMarketAnalysis> ordered = sortColumn switch
-        {
-            MarketAnalysisWorldGridSortColumn.World => OrderWorlds(analysis.Worlds, world => world.WorldName, sortDescending),
-            MarketAnalysisWorldGridSortColumn.StockDepth => OrderWorlds(analysis.Worlds, GetCompetitiveQuantity, sortDescending),
-            MarketAnalysisWorldGridSortColumn.Coverage => OrderWorlds(analysis.Worlds, GetWorldCoverageSortValue, sortDescending),
-            MarketAnalysisWorldGridSortColumn.PriceValue => OrderWorlds(analysis.Worlds, world => GetWorldPriceValueSortValue(world, lens), sortDescending),
-            MarketAnalysisWorldGridSortColumn.Value => OrderWorlds(analysis.Worlds, GetCompetitiveValueSortValue, sortDescending),
-            MarketAnalysisWorldGridSortColumn.Data => OrderWorlds(analysis.Worlds, world => world.DataAge ?? TimeSpan.MaxValue, sortDescending),
-            _ => GetDefaultWorldOrder(analysis.Worlds, lens)
-        };
+        var sortState = sortColumn.HasValue
+            ? new WebTableSortState<MarketAnalysisWorldGridSortColumn>(sortColumn.Value, sortDescending)
+            : WebTableSortState<MarketAnalysisWorldGridSortColumn>.Unsorted;
 
-        return ordered
-            .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        return WebTableOrdering.Apply(
+            analysis.Worlds,
+            sortState,
+            GetWorldSortRules(lens),
+            worlds => GetDefaultWorldOrder(worlds, lens),
+            ordered => ordered
+                .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase));
     }
 
     public static WorldLensScore GetScore(WorldMarketAnalysis world, MarketAcquisitionLens lens)
@@ -455,6 +453,33 @@ public static class MarketAnalysisGridViewService
         return descending
             ? worlds.OrderByDescending(selector)
             : worlds.OrderBy(selector);
+    }
+
+    private static IReadOnlyList<WebTableSortRule<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>> GetWorldSortRules(
+        MarketAcquisitionLens lens)
+    {
+        return
+        [
+            WebTableSortRule<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>.Create(
+                MarketAnalysisWorldGridSortColumn.World,
+                world => world.WorldName,
+                StringComparer.OrdinalIgnoreCase),
+            WebTableSortRule<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>.Create(
+                MarketAnalysisWorldGridSortColumn.StockDepth,
+                GetCompetitiveQuantity),
+            WebTableSortRule<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>.Create(
+                MarketAnalysisWorldGridSortColumn.Coverage,
+                GetWorldCoverageSortValue),
+            WebTableSortRule<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>.Create(
+                MarketAnalysisWorldGridSortColumn.PriceValue,
+                world => GetWorldPriceValueSortValue(world, lens)),
+            WebTableSortRule<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>.Create(
+                MarketAnalysisWorldGridSortColumn.Value,
+                GetCompetitiveValueSortValue),
+            WebTableSortRule<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>.Create(
+                MarketAnalysisWorldGridSortColumn.Data,
+                world => world.DataAge ?? TimeSpan.MaxValue)
+        ];
     }
 
     private static IOrderedEnumerable<WorldMarketAnalysis> GetDefaultWorldOrder(
