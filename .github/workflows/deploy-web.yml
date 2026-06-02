@@ -68,7 +68,7 @@ jobs:
           path: dist/pages
 
   deploy:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/local-dev'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
