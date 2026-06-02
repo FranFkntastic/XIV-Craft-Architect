@@ -31,8 +31,11 @@ public class ArtisanServiceTests
 
         var result = await service.ExportToArtisanAsync(plan);
 
-        var recipeIds = GetRecipeIds(result.Json);
-        Assert.Equal([1000u], recipeIds);
+        var artisanList = JsonSerializer.Deserialize<ArtisanCraftingList>(result.Json);
+        var recipe = Assert.Single(artisanList!.Recipes);
+        Assert.Equal(1000u, recipe.ID);
+        Assert.True(recipe.ListItemOptions.Skipping);
+        Assert.Empty(artisanList.ExpandedList);
     }
 
     [Fact]
@@ -50,7 +53,7 @@ public class ArtisanServiceTests
     }
 
     [Fact]
-    public async Task ExportToArtisanAsync_IncludePrecrafts_ExportsCraftedDescendants()
+    public async Task ExportToArtisanAsync_IncludePrecrafts_ExportsCraftableDescendants()
     {
         var service = CreateService();
         var plan = CreatePlan();
@@ -58,7 +61,73 @@ public class ArtisanServiceTests
         var result = await service.ExportToArtisanAsync(plan, includePrecrafts: true);
 
         var recipeIds = GetRecipeIds(result.Json);
-        Assert.Equal([1000u, 2000u], recipeIds.OrderBy(id => id).ToArray());
+        Assert.Equal([1000u, 2000u, 3000u], recipeIds.OrderBy(id => id).ToArray());
+    }
+
+    [Fact]
+    public async Task ExportToArtisanAsync_IncludePrecrafts_ExportsNonCraftPrecraftsAsSkipped()
+    {
+        var service = CreateService();
+        var plan = CreatePlan();
+
+        var result = await service.ExportToArtisanAsync(plan, includePrecrafts: true);
+
+        var artisanList = JsonSerializer.Deserialize<ArtisanCraftingList>(result.Json);
+        var purchasedPrecraft = Assert.Single(artisanList!.Recipes, recipe => recipe.ID == 3000u);
+        Assert.Equal(3, purchasedPrecraft.Quantity);
+        Assert.True(purchasedPrecraft.ListItemOptions.Skipping);
+        Assert.DoesNotContain(3000u, artisanList.ExpandedList);
+    }
+
+    [Fact]
+    public async Task ExportToArtisanAsync_IncludePrecrafts_KeepsSameRecipeActiveAndSkippedRowsSeparate()
+    {
+        var service = CreateService();
+        var activeRoot = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Root Craft",
+            Quantity = 2,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            RecipeLevel = 90,
+            Job = "Carpenter",
+            Yield = 1
+        };
+        var skippedRoot = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Root Craft",
+            Quantity = 5,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanCraft = true,
+            RecipeLevel = 90,
+            Job = "Carpenter",
+            Yield = 1
+        };
+        var plan = new CraftingPlan
+        {
+            Name = "Mixed Same Recipe Plan",
+            RootItems = [activeRoot, skippedRoot]
+        };
+
+        var result = await service.ExportToArtisanAsync(plan, includePrecrafts: true);
+
+        var artisanList = JsonSerializer.Deserialize<ArtisanCraftingList>(result.Json);
+        var recipes = artisanList!.Recipes.Where(recipe => recipe.ID == 1000u).ToList();
+        Assert.Collection(
+            recipes,
+            recipe =>
+            {
+                Assert.Equal(2, recipe.Quantity);
+                Assert.False(recipe.ListItemOptions.Skipping);
+            },
+            recipe =>
+            {
+                Assert.Equal(5, recipe.Quantity);
+                Assert.True(recipe.ListItemOptions.Skipping);
+            });
+        Assert.Equal([1000u, 1000u], artisanList.ExpandedList);
     }
 
     [Fact]

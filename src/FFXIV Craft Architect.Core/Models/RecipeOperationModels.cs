@@ -204,9 +204,15 @@ public sealed record RecipeOperationSnapshot
 
     public IEnumerable<RecipeOperation> GetArtisanExportOperations(bool includePrecrafts)
     {
-        return includePrecrafts
-            ? GetRootOperations().Concat(GetRequiredCrafts().Where(operation => !operation.IsRoot)).Distinct()
-            : GetRootOperations();
+        if (!includePrecrafts)
+        {
+            return GetRootOperations();
+        }
+
+        return GetRootOperations()
+            .Concat(GetRequiredCrafts().Where(operation => !operation.IsRoot))
+            .Concat(GetCraftableReferences().Where(operation => !operation.IsRoot))
+            .Distinct();
     }
 }
 

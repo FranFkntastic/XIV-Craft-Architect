@@ -23,11 +23,18 @@ public class RecipeOperationSnapshotQueryTests
         var activeChild = Operation("active-child", "root", 200, RecipeOperationState.Active);
         var suppressedChild = Operation("suppressed-child", "root", 300, RecipeOperationState.SuppressedByAncestor);
         var inactiveChild = Operation("inactive-child", "root", 400, RecipeOperationState.InactiveBySource);
-        var snapshot = Snapshot(root, activeChild, suppressedChild, inactiveChild);
+        var unresolvedChild = Operation(
+            "unresolved-child",
+            "root",
+            500,
+            RecipeOperationState.Unresolved,
+            kind: null,
+            recipeId: null);
+        var snapshot = Snapshot(root, activeChild, suppressedChild, inactiveChild, unresolvedChild);
 
         var operations = snapshot.GetArtisanExportOperations(includePrecrafts: true).ToList();
 
-        Assert.Equal([100, 200], operations.Select(operation => operation.ResultItemId));
+        Assert.Equal([100, 200, 300, 400], operations.Select(operation => operation.ResultItemId));
     }
 
     [Fact]

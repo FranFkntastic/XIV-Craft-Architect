@@ -337,7 +337,7 @@ public class ArtisanService : IArtisanService
             AddOrMergeRecipe(artisanList.Recipes, ConvertToArtisanItem(operation));
         }
 
-        foreach (var recipe in artisanList.Recipes)
+        foreach (var recipe in artisanList.Recipes.Where(recipe => !recipe.ListItemOptions.Skipping))
         {
             for (int i = 0; i < recipe.Quantity; i++)
             {
@@ -370,6 +370,11 @@ public class ArtisanService : IArtisanService
         return operation.ResolutionConfidence is RecipeResolutionConfidence.Exact or RecipeResolutionConfidence.AmbiguousExact;
     }
 
+    private static bool ShouldSkipInArtisan(RecipeOperation operation)
+    {
+        return operation.State != RecipeOperationState.Active;
+    }
+
     private static ArtisanListItem ConvertToArtisanItem(RecipeOperation operation)
     {
         return new ArtisanListItem
@@ -379,14 +384,17 @@ public class ArtisanService : IArtisanService
             ListItemOptions = new ArtisanListItemOptions
             {
                 NQOnly = false,
-                Skipping = false
+                Skipping = ShouldSkipInArtisan(operation)
             }
         };
     }
 
     private static void AddOrMergeRecipe(List<ArtisanListItem> recipes, ArtisanListItem recipe)
     {
-        var existing = recipes.FirstOrDefault(item => item.ID == recipe.ID);
+        var existing = recipes.FirstOrDefault(item =>
+            item.ID == recipe.ID &&
+            item.ListItemOptions.NQOnly == recipe.ListItemOptions.NQOnly &&
+            item.ListItemOptions.Skipping == recipe.ListItemOptions.Skipping);
         if (existing == null)
         {
             recipes.Add(recipe);
@@ -394,8 +402,6 @@ public class ArtisanService : IArtisanService
         }
 
         existing.Quantity += recipe.Quantity;
-        existing.ListItemOptions.NQOnly = existing.ListItemOptions.NQOnly && recipe.ListItemOptions.NQOnly;
-        existing.ListItemOptions.Skipping = existing.ListItemOptions.Skipping && recipe.ListItemOptions.Skipping;
     }
 
     private int GenerateArtisanListId()
