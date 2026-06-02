@@ -7,7 +7,10 @@ public class MarketAnalysisWorldGridMarkupTests
     {
         var source = File.ReadAllText(GetWorldGridPath());
 
-        Assert.Contains("<td title=\"@MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world)\">@MarketAnalysisGridViewService.FormatCompetitiveValue(world)</td>", source);
+        Assert.Contains("WebDataTable", source);
+        Assert.Contains("Header = \"% Diff\"", source);
+        Assert.Contains("CellTitleSelector = MarketAnalysisGridViewService.FormatCompetitiveValueTooltip", source);
+        Assert.Contains("MarketAnalysisGridViewService.FormatCompetitiveValue(world)", source);
     }
 
     private static string GetWorldGridPath()

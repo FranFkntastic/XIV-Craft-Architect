@@ -26,6 +26,21 @@
     <ProjectReference Include="..\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj" />
   </ItemGroup>
 
+  <PropertyGroup>
+    <BuildInfoShell Condition="'$(OS)' == 'Windows_NT'">powershell</BuildInfoShell>
+    <BuildInfoShell Condition="'$(OS)' != 'Windows_NT'">pwsh</BuildInfoShell>
+    <BuildInfoScript>$(MSBuildProjectDirectory)\Build\GenerateBuildInfo.ps1</BuildInfoScript>
+    <BuildInfoOutput>$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', 'obj', '$(Configuration)', '$(TargetFramework)', 'GeneratedBuildInfo.g.cs'))</BuildInfoOutput>
+  </PropertyGroup>
+
+  <Target Name="GenerateWebBuildInfo" BeforeTargets="CoreCompile">
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <Exec Command="&quot;$(BuildInfoShell)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(BuildInfoScript)&quot; -ProjectDirectory &quot;$(MSBuildProjectDirectory)&quot; -OutputPath &quot;$(BuildInfoOutput)&quot;" />
+    <ItemGroup>
+      <Compile Include="$(BuildInfoOutput)" Visible="false" />
+    </ItemGroup>
+  </Target>
+
   <!-- GitHub Pages deployment configuration -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <PublishTrimmed>true</PublishTrimmed>

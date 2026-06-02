@@ -166,3 +166,64 @@
     padding: 0 6px 8px 24px;
     background: #1a1d20;
 }
+
+::deep .ma-world-grid-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 12px;
+}
+
+::deep .ma-world-grid-table th,
+::deep .ma-world-grid-table td {
+    padding: 6px;
+    border-bottom: 1px solid #30363b;
+    color: #d7d7d7;
+    text-align: left;
+    vertical-align: top;
+}
+
+::deep .ma-world-grid-table th {
+    color: #8d949c;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    background: #252a2e;
+    white-space: nowrap;
+}
+
+::deep .ma-world-grid-table .web-table-sort-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    text-transform: inherit;
+    cursor: pointer;
+}
+
+::deep .ma-world-grid-table .web-table-sort-button:hover,
+::deep .ma-world-grid-table .web-table-header-cell.is-sorted .web-table-sort-button {
+    color: #c7d6e2;
+}
+
+::deep .ma-world-grid-table .web-data-table-expanded-cell {
+    padding: 0 6px 8px 24px;
+    background: #1a1d20;
+}
+
+::deep .ma-world-grid-table th:nth-child(1),
+::deep .ma-world-grid-table td:nth-child(1) {
+    width: 22%;
+}
+
+::deep .ma-world-grid-table th:nth-child(4),
+::deep .ma-world-grid-table td:nth-child(4) {
+    width: 24%;
+}

@@ -1,0 +1,39 @@
+.web-grid-table {
+    overflow: auto;
+    min-height: 0;
+}
+
+.web-grid-table-inner {
+    width: var(--web-table-grid-width);
+}
+
+.web-grid-table-head,
+.web-grid-table-row {
+    display: grid;
+    grid-template-columns: var(--web-table-grid-template);
+    align-items: center;
+    gap: var(--web-table-grid-gap);
+}
+
+.web-grid-table-cell {
+    min-width: 0;
+}
+
+.web-grid-table-row-action {
+    border: 0;
+    padding: 0;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-align: inherit;
+    cursor: pointer;
+}
+
+.web-grid-table-row-action:focus-visible {
+    outline: 2px solid #90caf9;
+    outline-offset: -2px;
+}
+
+.web-grid-table-empty {
+    min-width: 0;
+}

@@ -1,0 +1,81 @@
+@typeparam TItem
+@typeparam TColumnId where TColumnId : struct, Enum
+
+<table class="@TableClass" role="table">
+    <colgroup>
+        @foreach (var column in Columns)
+        {
+            <col style="width: @column.Size.ToCssWidth(); min-width: @column.Size.MinWidthPx.ToString(System.Globalization.CultureInfo.InvariantCulture)px" />
+        }
+    </colgroup>
+    <thead>
+        <tr class="web-data-table-head-row">
+            @foreach (var column in Columns)
+            {
+                <th class="@column.HeaderCssClass">
+                    <WebTableHeaderCell TColumnId="TColumnId"
+                                        ColumnId="@column.Id"
+                                        Label="@column.Header"
+                                        Tooltip="@column.HeaderTooltip"
+                                        Sortable="@column.Sortable"
+                                        SortState="@SortState"
+                                        SortChanged="@SortChanged" />
+                </th>
+            }
+        </tr>
+    </thead>
+    <tbody>
+        @if (Items.Count == 0 && EmptyContent != null)
+        {
+            <tr class="web-data-table-empty-row">
+                <td class="web-data-table-empty-cell" colspan="@Columns.Count">
+                    @EmptyContent
+                </td>
+            </tr>
+        }
+        else
+        {
+            @foreach (var item in Items)
+            {
+                var key = GetRowKey?.Invoke(item);
+                <tr class="@GetBodyRowClass(item)" @key="key">
+                    @foreach (var column in Columns)
+                    {
+                        <td class="@column.GetCellCssClass(item)" title="@column.CellTitleSelector?.Invoke(item)">
+                            @column.CellTemplate(item)
+                        </td>
+                    }
+                </tr>
+
+                @if (IsRowExpanded?.Invoke(item) == true && ExpandedContent != null)
+                {
+                    <tr class="web-data-table-expanded-row" @key="@($"{key}-expanded")">
+                        <td class="web-data-table-expanded-cell" colspan="@Columns.Count">
+                            @ExpandedContent(item)
+                        </td>
+                    </tr>
+                }
+            }
+        }
+    </tbody>
+</table>
+
+@code {
+    [Parameter] public IReadOnlyList<TItem> Items { get; set; } = [];
+    [Parameter, EditorRequired] public IReadOnlyList<WebTableColumn<TItem, TColumnId>> Columns { get; set; } = [];
+    [Parameter] public Func<TItem, string>? GetRowKey { get; set; }
+    [Parameter] public Func<TItem, string>? GetRowClass { get; set; }
+    [Parameter] public Func<TItem, bool>? IsRowExpanded { get; set; }
+    [Parameter] public RenderFragment<TItem>? ExpandedContent { get; set; }
+    [Parameter] public RenderFragment? EmptyContent { get; set; }
+    [Parameter] public WebTableSortState<TColumnId> SortState { get; set; } = WebTableSortState<TColumnId>.Unsorted;
+    [Parameter] public EventCallback<WebTableSortState<TColumnId>> SortChanged { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+
+    private string TableClass => WebTableColumn<TItem, TColumnId>.CombineClasses("web-data-table", CssClass);
+
+    private string GetBodyRowClass(TItem item)
+    {
+        return WebTableColumn<TItem, TColumnId>.CombineClasses("web-data-table-row", GetRowClass?.Invoke(item));
+    }
+}

@@ -1,3 +1,4 @@
+@using System.Globalization
 @using FFXIV_Craft_Architect.Core.Helpers
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
@@ -65,35 +66,13 @@
                 </label>
             </section>
 
-            <section class="pe-node-table">
-                <div class="pe-table-head pe-node-grid">
-                    <span></span>
-                    <span>Item</span>
-                    <span>Qty</span>
-                    <span>HQ</span>
-                    <span>Source</span>
-                    <span>Flags</span>
-                </div>
-                <div class="pe-table-body">
-                    @foreach (var row in VisibleRows)
-                    {
-                        <label class="pe-table-row pe-node-grid">
-                            <input type="checkbox"
-                                   checked="@_selectedNodeIds.Contains(row.Node.NodeId)"
-                                   @onchange="args => ToggleNode(row.Node.NodeId, args)" />
-                            <span class="pe-node-name" style="padding-left: @(row.Depth * 14)px">@row.Node.Name</span>
-                            <span>x@(row.Node.Quantity)</span>
-                            <span class="@(row.Node.MustBeHq ? "pe-hq" : "pe-muted-cell")">
-                                @(row.Node.MustBeHq ? "HQ" : "NQ")
-                            </span>
-                            <span style="color: @RecipePlanDisplayHelpers.GetSourceHexColor(row.Node.Source)">
-                                @RecipePlanDisplayHelpers.GetSourceShortName(row.Node.Source)
-                            </span>
-                            <span class="pe-flags">@GetFlags(row.Node)</span>
-                        </label>
-                    }
-                </div>
-            </section>
+            <WebGridTable TItem="PlanNodeEditRow"
+                          TColumnId="PlanEditorNodeColumn"
+                          CssClass="pe-node-table"
+                          Items="@VisibleRows"
+                          Columns="@GetNodeColumns()"
+                          GetRowKey="row => row.Node.NodeId"
+                          GetRowClass="GetNodeRowClass" />
 
             <div class="pe-summary">
                 @SummaryText
@@ -124,6 +103,102 @@
     private bool _requireHqMaterials;
 
     private List<PlanNodeEditRow> VisibleRows => PlanBulkEditService.FilterNodes(_rows, _filter).ToList();
+
+    private enum PlanEditorNodeColumn
+    {
+        Select,
+        Item,
+        Quantity,
+        Quality,
+        Source,
+        Flags
+    }
+
+    private IReadOnlyList<WebTableColumn<PlanNodeEditRow, PlanEditorNodeColumn>> GetNodeColumns()
+    {
+        return
+        [
+            new WebTableColumn<PlanNodeEditRow, PlanEditorNodeColumn>
+            {
+                Id = PlanEditorNodeColumn.Select,
+                Header = string.Empty,
+                Size = new WebTableColumnSize(34, 34),
+                Sortable = false,
+                CellTemplate = row => builder =>
+                {
+                    builder.OpenElement(0, "input");
+                    builder.AddAttribute(1, "type", "checkbox");
+                    builder.AddAttribute(2, "checked", _selectedNodeIds.Contains(row.Node.NodeId));
+                    builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, args => ToggleNode(row.Node.NodeId, args)));
+                    builder.CloseElement();
+                }
+            },
+            new WebTableColumn<PlanNodeEditRow, PlanEditorNodeColumn>
+            {
+                Id = PlanEditorNodeColumn.Item,
+                Header = "Item",
+                Size = new WebTableColumnSize(320, 260),
+                Sortable = false,
+                CellTemplate = row => builder =>
+                {
+                    builder.OpenElement(0, "span");
+                    builder.AddAttribute(1, "class", "pe-node-name");
+                    builder.AddAttribute(2, "style", $"padding-left: {(row.Depth * 14).ToString(CultureInfo.InvariantCulture)}px");
+                    builder.AddContent(3, row.Node.Name);
+                    builder.CloseElement();
+                }
+            },
+            WebTableColumn<PlanNodeEditRow, PlanEditorNodeColumn>.Text(
+                PlanEditorNodeColumn.Quantity,
+                "Qty",
+                row => $"x{row.Node.Quantity.ToString(CultureInfo.InvariantCulture)}",
+                widthPx: 70,
+                minWidthPx: 58,
+                sortable: false),
+            new WebTableColumn<PlanNodeEditRow, PlanEditorNodeColumn>
+            {
+                Id = PlanEditorNodeColumn.Quality,
+                Header = "HQ",
+                Size = new WebTableColumnSize(60, 54),
+                Sortable = false,
+                CellCssClassSelector = row => row.Node.MustBeHq ? "pe-hq" : "pe-muted-cell",
+                CellTemplate = row => builder => builder.AddContent(0, row.Node.MustBeHq ? "HQ" : "NQ")
+            },
+            new WebTableColumn<PlanNodeEditRow, PlanEditorNodeColumn>
+            {
+                Id = PlanEditorNodeColumn.Source,
+                Header = "Source",
+                Size = new WebTableColumnSize(90, 82),
+                Sortable = false,
+                CellTemplate = row => builder =>
+                {
+                    builder.OpenElement(0, "span");
+                    builder.AddAttribute(1, "style", $"color: {RecipePlanDisplayHelpers.GetSourceHexColor(row.Node.Source)}");
+                    builder.AddContent(2, RecipePlanDisplayHelpers.GetSourceShortName(row.Node.Source));
+                    builder.CloseElement();
+                }
+            },
+            new WebTableColumn<PlanNodeEditRow, PlanEditorNodeColumn>
+            {
+                Id = PlanEditorNodeColumn.Flags,
+                Header = "Flags",
+                Size = new WebTableColumnSize(210, 150),
+                Sortable = false,
+                CellTemplate = row => builder =>
+                {
+                    builder.OpenElement(0, "span");
+                    builder.AddAttribute(1, "class", "pe-flags");
+                    builder.AddContent(2, GetFlags(row.Node));
+                    builder.CloseElement();
+                }
+            }
+        ];
+    }
+
+    private static string GetNodeRowClass(PlanNodeEditRow row)
+    {
+        return "pe-table-row";
+    }
 
     private bool CanApply =>
         _selectedNodeIds.Any() &&

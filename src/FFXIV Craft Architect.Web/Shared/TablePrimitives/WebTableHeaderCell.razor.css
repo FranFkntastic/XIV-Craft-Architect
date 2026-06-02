@@ -1,0 +1,64 @@
+.web-table-header-cell {
+    position: relative;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+}
+
+.web-table-sort-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    text-transform: inherit;
+    cursor: pointer;
+}
+
+.web-table-header-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.web-table-sort-indicator {
+    color: #90caf9;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.web-table-resize-handle {
+    position: absolute;
+    top: 6px;
+    right: -6px;
+    width: 12px;
+    height: 24px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    cursor: col-resize;
+    z-index: 2;
+}
+
+.web-table-resize-handle::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 5px;
+    width: 2px;
+    background: #4b4b4b;
+}
+
+.web-table-resize-handle:hover::after,
+.web-table-resize-handle:focus-visible::after {
+    background: #d4a73a;
+}
