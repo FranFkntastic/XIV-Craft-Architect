@@ -125,9 +125,19 @@
                             <ItemsControl ItemsSource="{Binding OptionRows}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border BorderBrush="{StaticResource BorderBrush}"
-                                                BorderThickness="0,0,0,1"
+                                        <Border BorderThickness="0,0,0,1"
                                                 Padding="0,6">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsProjectedUnsupported}" Value="True">
+                                                            <Setter Property="Background" Value="#2b1717"/>
+                                                            <Setter Property="BorderBrush" Value="#8a4038"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*"/>
@@ -146,9 +156,19 @@
                                                 <TextBlock Grid.Column="1"
                                                            Text="{Binding CostText}"
                                                            FontSize="12"
-                                                           Foreground="{StaticResource AccentGoldBrush}"
                                                            Margin="10,0,0,0"
-                                                           VerticalAlignment="Top"/>
+                                                           VerticalAlignment="Top">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{StaticResource AccentGoldBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsProjectedUnsupported}" Value="True">
+                                                                    <Setter Property="Foreground" Value="#ff6b6b"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
                                             </Grid>
                                         </Border>
                                     </DataTemplate>

@@ -21,6 +21,20 @@ public class MarketAnalysisListPanelMarkupTests
         Assert.DoesNotContain("AutoExpandItemId", source);
     }
 
+    [Fact]
+    public void MarketAnalysisListPanel_TotalCostUsesProjectionWarningHelpers()
+    {
+        var source = File.ReadAllText(GetListPanelPath());
+
+        Assert.Contains("SortHeader(\"Calculated Total\", MarketAnalysisGridSortColumn.Total", source);
+        Assert.DoesNotContain("SortHeader(\"Total\", MarketAnalysisGridSortColumn.Total", source);
+        Assert.Contains("GetTotalCostClass(plan)", source);
+        Assert.Contains("GetTotalCostTooltip(plan)", source);
+        Assert.Contains("GetTotalCostClass(_selectedPlan)", source);
+        Assert.Contains("GetTotalCostTooltip(_selectedPlan)", source);
+        Assert.Contains("MarketAnalysisGridViewService.CalculatedTotalHeaderTooltip", source);
+    }
+
     private static string GetListPanelPath()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

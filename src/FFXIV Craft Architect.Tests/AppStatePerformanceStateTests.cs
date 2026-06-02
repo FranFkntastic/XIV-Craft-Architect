@@ -7,6 +7,15 @@ namespace FFXIV_Craft_Architect.Tests;
 public class AppStatePerformanceStateTests
 {
     [Fact]
+    public void Constructor_DefaultMarketSearchScopeIsEntireRegion()
+    {
+        var appState = new AppState();
+
+        Assert.Equal(MarketFetchScope.EntireRegion, appState.DefaultMarketFetchScope);
+        Assert.True(appState.SearchEntireRegion);
+    }
+
+    [Fact]
     public void NotifyPlanChanged_EmitsScopedChangeAndMarksPlanCoreDirty()
     {
         var appState = new AppState();

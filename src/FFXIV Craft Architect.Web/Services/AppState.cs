@@ -165,14 +165,15 @@ public class AppState
     // Persistence state
     public bool IsAutoSaveEnabled { get; private set; } = true;
     public bool AutoFetchPricesOnRebuild { get; private set; } = true;
-    public MarketFetchScope DefaultMarketFetchScope { get; private set; } = MarketFetchScope.SelectedDataCenter;
+    public bool SecretDebugToolsEnabled { get; private set; }
+    public MarketFetchScope DefaultMarketFetchScope { get; private set; } = MarketFetchScope.EntireRegion;
     public DateTime? LastAutoSave { get; private set; }
     public IReadOnlyList<StoredPlanSummary> SavedPlans { get; private set; } = Array.AsReadOnly(Array.Empty<StoredPlanSummary>());
     
     // Market Analysis Settings (persist across page navigations)
     public bool EnableMultiWorldSplits { get; private set; } = false;
     public int MaxWorldsPerItem { get; private set; } = 0; // 0 = unlimited
-    public bool SearchEntireRegion { get; private set; } = false;
+    public bool SearchEntireRegion { get; private set; } = true;
     public MarketSortOption MarketSortPreference { get; private set; } = MarketSortOption.ByRecommended;
 
     // Procurement Planning Settings
@@ -687,6 +688,18 @@ public class AppState
         }
 
         IsAutoSaveEnabled = enabled;
+        NotifySettingsChanged();
+        return true;
+    }
+
+    public bool SetSecretDebugToolsEnabled(bool enabled)
+    {
+        if (SecretDebugToolsEnabled == enabled)
+        {
+            return false;
+        }
+
+        SecretDebugToolsEnabled = enabled;
         NotifySettingsChanged();
         return true;
     }

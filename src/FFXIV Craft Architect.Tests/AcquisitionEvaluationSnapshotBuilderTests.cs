@@ -274,6 +274,64 @@ public class AcquisitionEvaluationSnapshotBuilderTests
     }
 
     [Fact]
+    public void Build_EstimateUsesUnsupportedMarketProjectionInsteadOfPlannerUnitPrice()
+    {
+        var root = CreateRoot(100, "Final Craft");
+        var material = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Cassia Lumber",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 3,
+            Parent = root
+        };
+        root.Children.Add(material);
+        var plan = new CraftingPlan { RootItems = [root] };
+        var projection = new RecipeDemandProjection(
+            AllPlanDemand:
+            [
+                CreateDemandRow(RecipeDemandViewKind.PlanOccurrence, material, quantity: 999)
+            ],
+            MarketAnalysisCandidates: [CreateDemandRow(RecipeDemandViewKind.MarketAnalysisCandidate, material, quantity: 999)],
+            ActiveProcurementDemand: [CreateDemandRow(RecipeDemandViewKind.ActiveProcurement, material, quantity: 999)],
+            SuppressedDemand: Array.Empty<RecipeDemandRow>());
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 200,
+                Name = "Cassia Lumber",
+                QuantityNeeded = 999,
+                DCAveragePrice = 6_408,
+                WorldOptions =
+                [
+                    new WorldShoppingSummary
+                    {
+                        DataCenter = "Aether",
+                        WorldName = "Adamantoise",
+                        TotalCost = 3_000,
+                        TotalQuantityPurchased = 1
+                    }
+                ]
+            }
+        };
+
+        var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
+            plan,
+            marketPlans,
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
+            AcquisitionFilter.All,
+            projection);
+
+        var row = snapshot.Rows.Single(row => row.Node.ItemId == 200);
+
+        Assert.Equal("Projected only", row.MarketEvidence);
+        Assert.Equal("6,401,592g", row.EstimatedCost);
+    }
+
+    [Fact]
     public void Build_UsesRecipeDemandProjectionMembershipForDecisionRoles()
     {
         var root = CreateRoot(100, "Final Craft");

@@ -23,7 +23,7 @@
                                 </th>
                             }
                             <th style="@TotalColumnStyle" class="ma-total-column">
-                                @SortHeader("Total", MarketAnalysisGridSortColumn.Total)
+                                @SortHeader("Calculated Total", MarketAnalysisGridSortColumn.Total, MarketAnalysisGridViewService.CalculatedTotalHeaderTooltip)
                             </th>
                         </tr>
                     </thead>
@@ -60,7 +60,10 @@
                                     </td>
                                 }
                                 <td style="@TotalColumnStyle" class="ma-total-column">
-                                    @MarketAnalysisGridViewService.GetTotalCost(plan).ToString("N0")g
+                                    <span class="@MarketAnalysisGridViewService.GetTotalCostClass(plan)"
+                                          title="@MarketAnalysisGridViewService.GetTotalCostTooltip(plan)">
+                                        @MarketAnalysisGridViewService.GetTotalCost(plan).ToString("N0")g
+                                    </span>
                                 </td>
                             </tr>
                         }
@@ -93,7 +96,10 @@
                         </MudText>
                     </div>
                     <MudText Typo="Typo.subtitle1" Class="ma-detail-total">
-                        @MarketAnalysisGridViewService.GetTotalCost(_selectedPlan).ToString("N0")g
+                        <span class="@MarketAnalysisGridViewService.GetTotalCostClass(_selectedPlan)"
+                              title="@MarketAnalysisGridViewService.GetTotalCostTooltip(_selectedPlan)">
+                            @MarketAnalysisGridViewService.GetTotalCost(_selectedPlan).ToString("N0")g
+                        </span>
                     </MudText>
                 </div>
 
@@ -166,12 +172,17 @@
         await OnSelectedItemChanged.InvokeAsync(plan.ItemId);
     }
 
-    private RenderFragment SortHeader(string label, MarketAnalysisGridSortColumn column) => builder =>
+    private RenderFragment SortHeader(string label, MarketAnalysisGridSortColumn column, string? title = null) => builder =>
     {
         var sequence = 0;
         builder.OpenElement(sequence++, "button");
         builder.AddAttribute(sequence++, "type", "button");
         builder.AddAttribute(sequence++, "class", GetSortHeaderClass(column));
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            builder.AddAttribute(sequence++, "title", title);
+        }
+
         builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => ToggleSort(column)));
         builder.AddContent(sequence++, label);
         if (SortColumn == column)

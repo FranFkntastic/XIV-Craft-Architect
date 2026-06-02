@@ -127,6 +127,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             ItemId = analysis.ItemId,
             Name = analysis.Name,
             QuantityNeeded = analysis.QuantityNeeded,
+            DCAveragePrice = GetProjectionUnitPrice(analysis),
             MarketDataWarning = analysis.Warning
         };
 
@@ -145,12 +146,9 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
 
-        if (plan.RecommendedWorld == null && plan.WorldOptions.Sum(world => world.TotalQuantityPurchased) >= analysis.QuantityNeeded)
+        if (plan.RecommendedWorld == null)
         {
-            plan.RecommendedSplit = MarketShoppingService.BuildSplitPurchase(
-                analysis.QuantityNeeded,
-                plan.WorldOptions
-                    .Where(world => world.TotalQuantityPurchased > 0));
+            plan.RecommendedSplit = BuildRecommendedSplit(plan);
         }
 
         if (plan.WorldOptions.Count == 0 && !string.IsNullOrWhiteSpace(analysis.Warning))
@@ -159,6 +157,71 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         }
 
         return plan;
+    }
+
+    private static decimal GetProjectionUnitPrice(MarketItemAnalysis analysis)
+    {
+        if (analysis.AnalysisScopeCompetitiveAverageUnitPrice > 0)
+        {
+            return analysis.AnalysisScopeCompetitiveAverageUnitPrice;
+        }
+
+        if (analysis.AnalysisScopeAverageUnitPrice > 0)
+        {
+            return analysis.AnalysisScopeAverageUnitPrice;
+        }
+
+        if (analysis.AnalysisScopeBaselineUnitPrice > 0)
+        {
+            return analysis.AnalysisScopeBaselineUnitPrice;
+        }
+
+        return 0;
+    }
+
+    private static List<SplitWorldPurchase>? BuildRecommendedSplit(DetailedShoppingPlan plan)
+    {
+        if (plan.WorldOptions.Sum(world => world.TotalQuantityPurchased) < plan.QuantityNeeded)
+        {
+            return null;
+        }
+
+        var candidateOrders = new List<IEnumerable<WorldShoppingSummary>>
+        {
+            plan.WorldOptions.Where(world => world.TotalQuantityPurchased > 0),
+            plan.WorldOptions
+                .Where(world => world.TotalQuantityPurchased > 0)
+                .OrderBy(world => world.ProcurementPriorityScore)
+                .ThenBy(world => world.TotalCost)
+                .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase),
+            plan.WorldOptions
+                .Where(world => world.TotalQuantityPurchased > 0)
+                .OrderBy(world => world.TotalCost)
+                .ThenBy(world => world.ProcurementPriorityScore)
+                .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase),
+            plan.WorldOptions
+                .Where(world => world.TotalQuantityPurchased > 0)
+                .OrderByDescending(world => world.TotalQuantityPurchased)
+                .ThenBy(world => world.TotalCost)
+                .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase),
+            plan.WorldOptions
+                .Where(world => world.TotalQuantityPurchased > 0)
+                .OrderBy(world => world.AveragePricePerUnit <= 0 ? decimal.MaxValue : world.AveragePricePerUnit)
+                .ThenByDescending(world => world.TotalQuantityPurchased)
+                .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
+        };
+
+        return candidateOrders
+            .Select(order => MarketShoppingService.BuildSplitPurchase(plan.QuantityNeeded, order))
+            .Where(split => split.Count > 1 && split.Sum(part => part.QuantityToBuy) >= plan.QuantityNeeded)
+            .OrderBy(split => split.Sum(part => part.TotalCost))
+            .ThenBy(split => split.Count)
+            .ThenBy(split => string.Join("|", split.Select(part => $"{part.DataCenter}:{part.WorldName}")), StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
     }
 
     private static IEnumerable<WorldMarketAnalysis> AnalyzeEntryWorlds(

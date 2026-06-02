@@ -92,7 +92,7 @@
                         @for (var i = 0; i < ColumnHeaders.Length; i++)
                         {
                             var columnIndex = i;
-                            <span class="ae-head-cell">
+                            <span class="ae-head-cell" title="@GetColumnHeaderTooltip(ColumnHeaders[i])">
                                 @ColumnHeaders[i]
                                 @if (i < ColumnHeaders.Length - 1)
                                 {
@@ -136,7 +136,7 @@
                             <span class="ae-market-cell">
                                 @row.MarketEvidence
                             </span>
-                            <span class="ae-cost-cell">@row.EstimatedCost</span>
+                            <span class="@GetCalculatedTotalClass(row)" title="@GetCalculatedTotalTooltip(row)">@row.EstimatedCost</span>
                         </div>
                     }
                 </div>
@@ -169,8 +169,9 @@
         Array.Empty<CoreMarketDataUnavailableItem>(),
         AcquisitionFilter.All,
         new RecipeDemandProjection([], [], [], []));
-    private readonly int[] _columnWidths = { 300, 150, 260, 150, 170, 110 };
-    private static readonly string[] ColumnHeaders = { "Item", "Source", "Used In", "Role", "Market Evidence", "Estimate" };
+    private readonly int[] _columnWidths = { 300, 150, 260, 150, 170, 150 };
+    private static readonly string[] ColumnHeaders = { "Item", "Source", "Used In", "Role", "Market Evidence", "Calculated Total" };
+    private const string CalculatedTotalHeaderTooltip = "Calculated Total is the gil cost computed for the row's selected source and needed quantity. Craft totals roll up selected child acquisition costs, market totals use market evidence when available, and vendor totals use loaded gil vendor prices.";
     private int? _resizingColumnIndex;
     private double _resizeStartX;
     private int _resizeStartWidth;
@@ -455,6 +456,45 @@
         }
 
         return "Reference";
+    }
+
+    private static string? GetColumnHeaderTooltip(string columnHeader)
+    {
+        return columnHeader == "Calculated Total"
+            ? CalculatedTotalHeaderTooltip
+            : null;
+    }
+
+    private static string GetCalculatedTotalClass(DecisionRow row)
+    {
+        return IsUnsupportedProjectedTotal(row)
+            ? "ae-cost-cell projected-unsupported"
+            : "ae-cost-cell";
+    }
+
+    private static string GetCalculatedTotalTooltip(DecisionRow row)
+    {
+        var quantity = AcquisitionEvaluationCostCalculator.GetCostQuantity(row);
+        var source = RecipePlanDisplayHelpers.GetSourceDisplayName(row.Source);
+        var baseText = $"Calculated Total is the gil cost computed for {quantity:N0} needed from {source}.";
+
+        if (IsUnsupportedProjectedTotal(row))
+        {
+            return $"{baseText} This row is projected because the current market search scope cannot support the purchase, so it is highlighted as unsupported.";
+        }
+
+        return row.Source switch
+        {
+            AcquisitionSource.Craft => $"{baseText} Craft totals roll up selected child acquisition costs from the current recipe tree.",
+            AcquisitionSource.VendorBuy => $"{baseText} Vendor totals use loaded gil vendor prices.",
+            AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq => $"{baseText} Market totals use loaded listing evidence for the selected market purchase.",
+            _ => baseText
+        };
+    }
+
+    private static bool IsUnsupportedProjectedTotal(DecisionRow row)
+    {
+        return string.Equals(row.MarketEvidence, "Projected only", StringComparison.Ordinal);
     }
 
     private static List<AcquisitionSource> GetSourceOptions(PlanNode node)

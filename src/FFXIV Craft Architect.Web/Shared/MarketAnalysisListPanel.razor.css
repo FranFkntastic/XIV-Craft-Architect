@@ -168,6 +168,17 @@
     font-weight: 700;
 }
 
+.ma-total-value {
+    color: inherit;
+}
+
+.ma-total-value.is-projected-unsupported {
+    color: #ff6b6b;
+    text-decoration: underline;
+    text-decoration-color: rgba(255, 107, 107, 0.9);
+    text-underline-offset: 2px;
+}
+
 .ma-stock-ok {
     color: #90ee90;
 }

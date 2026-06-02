@@ -24,6 +24,55 @@ public class MainLayoutMarkupTests
         Assert.DoesNotContain("<ActivatorContent>", debugActivator.Value);
     }
 
+    [Fact]
+    public void MainLayout_DebugMenu_IsAvailableForDevelopmentOrSecretToggle()
+    {
+        var source = File.ReadAllText(GetMainLayoutPath());
+
+        Assert.Contains("@if (IsDebugToolsAvailable)", source);
+        Assert.Contains(
+            "IsDevelopment || AppState.SecretDebugToolsEnabled",
+            source);
+        Assert.Contains("if (!IsDebugToolsAvailable)", source);
+    }
+
+    [Fact]
+    public void MainLayout_ReRendersWhenSettingsChange()
+    {
+        var source = File.ReadAllText(GetMainLayoutPath());
+
+        Assert.Contains("AppState.OnStateChanged += OnAppStateChanged", source);
+        Assert.Contains("AppState.OnStateChanged -= OnAppStateChanged", source);
+        Assert.Contains("change.HasScope(AppStateChangeScope.Settings)", source);
+    }
+
+    [Fact]
+    public void MarketSearchScope_DefaultsToEntireRegionWhenSettingIsMissing()
+    {
+        var mainLayout = File.ReadAllText(GetMainLayoutPath());
+        var webSettings = File.ReadAllText(GetWebSettingsServicePath());
+
+        Assert.Contains(
+            "Settings.GetAsync(\"market.default_search_scope\", nameof(MarketFetchScope.EntireRegion))",
+            mainLayout);
+        Assert.Contains(
+            ": MarketFetchScope.EntireRegion",
+            mainLayout);
+        Assert.Contains(
+            "[\"market.default_search_scope\"] = \"EntireRegion\"",
+            webSettings);
+    }
+
+    [Fact]
+    public void MainLayout_AppBar_DoesNotExposeArchivedAboutPage()
+    {
+        var source = File.ReadAllText(GetMainLayoutPath());
+
+        Assert.DoesNotContain("Href=\"about\"", source);
+        Assert.DoesNotContain(">About</MudLink>", source);
+        Assert.Contains("Href=\"https://github.com/FranFkntastic/XIV-Craft-Architect\"", source);
+    }
+
     private static string GetMainLayoutPath()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -34,5 +83,17 @@ public class MainLayoutMarkupTests
 
         Assert.NotNull(directory);
         return Path.Combine(directory.FullName, "src", "FFXIV Craft Architect.Web", "Shared", "MainLayout.razor");
+    }
+
+    private static string GetWebSettingsServicePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "FFXIV Craft Architect.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        Assert.NotNull(directory);
+        return Path.Combine(directory.FullName, "src", "FFXIV Craft Architect.Web", "Services", "WebSettingsService.cs");
     }
 }

@@ -395,15 +395,37 @@ public sealed partial class AcquisitionDecisionRowViewModel : ObservableObject
                     source,
                     costContext,
                     out var cost);
+                var isProjectedUnsupported = IsProjectedUnsupportedOption(row, source, costContext);
 
                 return new AcquisitionOptionRowViewModel(
                     source,
                     GetOptionName(source),
                     GetOptionDetail(row, source, costContext),
                     hasCost ? $"{cost:N0}g" : "-",
-                    source == AcquisitionSource.UnknownSource || hasCost);
+                    source == AcquisitionSource.UnknownSource || (hasCost && !isProjectedUnsupported),
+                    isProjectedUnsupported);
             })
             .ToList();
+    }
+
+    private static bool IsProjectedUnsupportedOption(
+        CoreDecisionRow row,
+        AcquisitionSource source,
+        AcquisitionCostContext costContext)
+    {
+        if (source is not (AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq) ||
+            !costContext.TryGetShoppingPlan(row.ItemId, out var marketPlan))
+        {
+            return false;
+        }
+
+        return MarketPurchaseCostProjectionService
+            .Estimate(
+                marketPlan,
+                row.TotalQuantity,
+                source == AcquisitionSource.MarketBuyHq,
+                includeVendor: false)
+            .IsUnsupportedProjection;
     }
 
     private static string GetOptionName(AcquisitionSource source) =>
@@ -444,21 +466,29 @@ public sealed partial class AcquisitionDecisionRowViewModel : ObservableObject
         AcquisitionCostContext costContext,
         bool hqOnly)
     {
-        if (costContext.TryGetShoppingPlan(row.ItemId, out var marketPlan) &&
-            AcquisitionPlanningService.TryGetMarketBoardPurchase(
+        if (costContext.TryGetShoppingPlan(row.ItemId, out var marketPlan))
+        {
+            var estimate = MarketPurchaseCostProjectionService.Estimate(
                 marketPlan,
                 row.TotalQuantity,
                 hqOnly,
-                out var marketWorld,
-                out _) &&
-            marketWorld != null)
-        {
-            return $"{marketWorld.WorldName} can cover {marketWorld.TotalQuantityPurchased}/{marketPlan?.QuantityNeeded ?? row.TotalQuantity}.";
+                includeVendor: false);
+            if (estimate.IsUnsupportedProjection)
+            {
+                return "Projected cost; current search scope cannot fill this purchase.";
+            }
+
+            if (estimate.World != null)
+            {
+                return $"{estimate.World.WorldName} can cover {estimate.World.TotalQuantityPurchased}/{marketPlan?.QuantityNeeded ?? row.TotalQuantity}.";
+            }
         }
 
-        if (marketPlan?.RecommendedSplit?.Any() == true)
+        var recommendedSplit = marketPlan?.RecommendedSplit;
+        if (recommendedSplit != null &&
+            recommendedSplit.Sum(split => split.QuantityToBuy) >= row.TotalQuantity)
         {
-            return $"{marketPlan.RecommendedSplit.Count} world split can cover market purchase.";
+            return $"{recommendedSplit.Count} world split can cover market purchase.";
         }
 
         if (!string.IsNullOrWhiteSpace(marketPlan?.Error))
@@ -512,4 +542,5 @@ public sealed record AcquisitionOptionRowViewModel(
     string Name,
     string Detail,
     string CostText,
-    bool IsAvailable);
+    bool IsAvailable,
+    bool IsProjectedUnsupported);

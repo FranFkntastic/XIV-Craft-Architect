@@ -771,6 +771,56 @@ public class MarketPriceLadderAnalysisServiceTests
     }
 
     [Fact]
+    public void ProjectToShoppingPlan_PartialWorldsChoosesLowestCostFullSplit()
+    {
+        var service = CreateService();
+        var analysis = new MarketItemAnalysis
+        {
+            ItemId = 123,
+            Name = "Test Item",
+            QuantityNeeded = 100,
+            Worlds =
+            [
+                WorldAnalysis("ExpensiveDeep", rank: 1, quantity: 80, price: 1_000),
+                WorldAnalysis("CheapOne", rank: 2, quantity: 60, price: 10),
+                WorldAnalysis("CheapTwo", rank: 3, quantity: 40, price: 20)
+            ]
+        };
+
+        var plan = service.ProjectToShoppingPlan(analysis, MarketAcquisitionLens.MinimumUpfrontCost);
+
+        Assert.Null(plan.RecommendedWorld);
+        Assert.NotNull(plan.RecommendedSplit);
+        Assert.Equal(100, plan.RecommendedSplit.Sum(split => split.QuantityToBuy));
+        Assert.Equal(1_400, plan.SplitTotalCost);
+        Assert.Equal(["CheapOne", "CheapTwo"], plan.RecommendedSplit.Select(split => split.WorldName).ToArray());
+    }
+
+    [Fact]
+    public void ProjectToShoppingPlan_CarriesGoodAverageForUnsupportedCostProjection()
+    {
+        var service = CreateService();
+        var analysis = new MarketItemAnalysis
+        {
+            ItemId = 123,
+            Name = "Test Item",
+            QuantityNeeded = 999,
+            AnalysisScopeCompetitiveAverageUnitPrice = 6_408,
+            AnalysisScopeAverageUnitPrice = 8_165,
+            Worlds =
+            [
+                WorldAnalysis("ThinWorld", rank: 1, quantity: 1, price: 3_000)
+            ]
+        };
+
+        var plan = service.ProjectToShoppingPlan(analysis, MarketAcquisitionLens.MinimumUpfrontCost);
+
+        Assert.Null(plan.RecommendedWorld);
+        Assert.Null(plan.RecommendedSplit);
+        Assert.Equal(6_408, plan.DCAveragePrice);
+    }
+
+    [Fact]
     public async Task ProjectToShoppingPlan_MinimumUpfront_DoesNotTreatPartialDeepAsFullPurchase()
     {
         var service = CreateService();
@@ -935,6 +985,38 @@ public class MarketPriceLadderAnalysisServiceTests
                 ? new DateTimeOffset(CacheTimeHelper.NormalizeToUtc(uploadedAtUtc.Value)).ToUnixTimeMilliseconds()
                 : null,
             Listings = listings.ToList()
+        };
+    }
+
+    private static WorldMarketAnalysis WorldAnalysis(string worldName, int rank, int quantity, long price)
+    {
+        return new WorldMarketAnalysis
+        {
+            DataCenter = "Aether",
+            WorldName = worldName,
+            QuantityNeeded = 100,
+            TotalSaneQuantity = quantity,
+            DataQualityBucket = MarketDataQualityBucket.Current,
+            DataQualityScore = 100,
+            Listings =
+            [
+                new AnalyzedMarketListing
+                {
+                    Quantity = quantity,
+                    PricePerUnit = price,
+                    RetainerName = worldName,
+                    PriceSanity = MarketListingPriceSanity.Sane
+                }
+            ],
+            Scores =
+            [
+                new WorldLensScore
+                {
+                    Lens = MarketAcquisitionLens.MinimumUpfrontCost,
+                    Rank = rank,
+                    ScoreBucket = MarketScoreBucket.PoorFit
+                }
+            ]
         };
     }
 }

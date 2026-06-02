@@ -144,7 +144,7 @@
                     <MudMenuItem OnClick="OnOptions" Icon="@Icons.Material.Filled.Settings">
                         Options...
                     </MudMenuItem>
-                    @if (IsDevelopment)
+                    @if (IsDebugToolsAvailable)
                     {
                         <MudDivider />
                         <MudMenuItem OnClick="OnLoadDevCraftPlanFixture" Icon="@Icons.Material.Filled.BugReport">
@@ -174,7 +174,7 @@
         </div>
         
         <MudSpacer />
-        
+
         <MudLink Href="https://github.com/FranFkntastic/XIV-Craft-Architect"
                  Target="_blank" 
                  Style="color: #d4a73a; text-decoration: none; font-size: 14px;">GitHub</MudLink>
@@ -198,6 +198,7 @@
     private bool _disposed = false;
     private bool _debugToolsMenuOpen;
     private bool IsDevelopment => string.Equals(HostEnvironment.Environment, "Development", StringComparison.OrdinalIgnoreCase);
+    private bool IsDebugToolsAvailable => IsDevelopment || AppState.SecretDebugToolsEnabled;
     private bool CanDumpSelectedMarketAnalysisItem => AppState.MarketItemAnalyses.Any();
     
     private readonly MudTheme _theme = AppTheme.CreateTheme();
@@ -212,6 +213,7 @@
         // Listen for navigation changes
         NavigationManager.LocationChanged += OnLocationChanged;
         StartupInitialization.StatusChanged += OnStartupStatusChanged;
+        AppState.OnStateChanged += OnAppStateChanged;
     }
     
     protected override void OnAfterRender(bool firstRender)
@@ -237,6 +239,14 @@
     private void OnStartupStatusChanged()
     {
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void OnAppStateChanged(AppStateChange change)
+    {
+        if (change.HasScope(AppStateChangeScope.Settings))
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
     }
 
     private void ToggleDebugToolsMenu()
@@ -273,13 +283,15 @@
             var defaultDc = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
             var region = await Settings.GetAsync("market.region", "North America") ?? "North America";
             var autoFetch = await Settings.GetAsync("market.auto_fetch_prices", true);
+            var secretDebugToolsEnabled = await Settings.GetAsync("debug.secret_tools_enabled", false);
             var defaultScope = ParseMarketFetchScope(
-                await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.SelectedDataCenter)));
+                await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
             var selectedDataCenter = string.IsNullOrEmpty(AppState.SelectedDataCenter)
                 ? defaultDc
                 : AppState.SelectedDataCenter;
 
             AppState.SetAutoSaveEnabled(autoSave);
+            AppState.SetSecretDebugToolsEnabled(secretDebugToolsEnabled);
             AppState.SetMarketEvidenceSettings(
                 selectedDataCenter,
                 region,
@@ -556,9 +568,9 @@
 
     private async Task OnDumpSelectedMarketAnalysisItem()
     {
-        if (!IsDevelopment)
+        if (!IsDebugToolsAvailable)
         {
-            Snackbar.Add("Debug dumps are only available in development builds.", Severity.Warning);
+            Snackbar.Add("Debug dumps are not available.", Severity.Warning);
             return;
         }
 
@@ -793,6 +805,7 @@
         {
             NavigationManager.LocationChanged -= OnLocationChanged;
             StartupInitialization.StatusChanged -= OnStartupStatusChanged;
+            AppState.OnStateChanged -= OnAppStateChanged;
             
             // Stop auto-save timer
             AppState.StopAutoSaveTimer();
@@ -823,6 +836,6 @@
     {
         return Enum.TryParse<MarketFetchScope>(value, ignoreCase: true, out var scope)
             ? scope
-            : MarketFetchScope.SelectedDataCenter;
+            : MarketFetchScope.EntireRegion;
     }
 }

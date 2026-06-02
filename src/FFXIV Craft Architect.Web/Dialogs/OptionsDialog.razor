@@ -120,10 +120,10 @@
             </MudTabPanel>
             
             <MudTabPanel Text="About">
-                <div class="d-flex flex-column align-center py-4">
+                <div class="d-flex flex-column align-center py-4" style="position: relative; min-height: 180px;">
                     <MudText Typo="Typo.h5" Class="mb-2">FFXIV Craft Architect</MudText>
                     <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
-                        Web Companion v0.2.0
+                        Browser-based crafting and market planner
                     </MudText>
                     
                     <MudText Typo="Typo.body2" Align="Align.Center">
@@ -135,6 +135,12 @@
                     <MudText Typo="Typo.caption" Color="Color.Secondary">
                         Data sources: Garland Tools, Universalis, XIVAPI
                     </MudText>
+
+                    <MudIconButton Icon="@Icons.Material.Filled.BugReport"
+                                   OnClick="ToggleSecretDebugToolsAsync"
+                                   Size="Size.Small"
+                                   Color="@(AppState.SecretDebugToolsEnabled ? Color.Warning : Color.Default)"
+                                   Style="position: absolute; bottom: 8px; left: 8px; opacity: 0.35;" />
                 </div>
             </MudTabPanel>
         </MudTabs>
@@ -152,7 +158,7 @@
     private string _defaultDataCenter = "Aether";
     private string _selectedRegion = "North America";
     private bool _autoFetchPricesOnRebuild = true;
-    private MarketFetchScope _defaultMarketFetchScope = MarketFetchScope.SelectedDataCenter;
+    private MarketFetchScope _defaultMarketFetchScope = MarketFetchScope.EntireRegion;
     private bool _isClearing = false;
     
     // Region to Data Centers mapping
@@ -171,7 +177,7 @@
         _selectedRegion = await Settings.GetAsync("market.region", "North America") ?? "North America";
         _autoFetchPricesOnRebuild = await Settings.GetAsync("market.auto_fetch_prices", true);
         _defaultMarketFetchScope = ParseMarketFetchScope(
-            await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.SelectedDataCenter)));
+            await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
 
     }
     
@@ -234,6 +240,14 @@
         Snackbar.Add("Settings saved", Severity.Success);
         MudDialog.Close(DialogResult.Ok(true));
     }
+
+    private async Task ToggleSecretDebugToolsAsync()
+    {
+        var enabled = !AppState.SecretDebugToolsEnabled;
+        AppState.SetSecretDebugToolsEnabled(enabled);
+        await Settings.SetAsync("debug.secret_tools_enabled", enabled);
+        Snackbar.Add(enabled ? "Debug tools enabled" : "Debug tools disabled", Severity.Info);
+    }
     
     private void Cancel()
     {
@@ -244,6 +258,6 @@
     {
         return Enum.TryParse<MarketFetchScope>(value, ignoreCase: true, out var scope)
             ? scope
-            : MarketFetchScope.SelectedDataCenter;
+            : MarketFetchScope.EntireRegion;
     }
 }

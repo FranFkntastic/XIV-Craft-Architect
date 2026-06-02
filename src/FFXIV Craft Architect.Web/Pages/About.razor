@@ -1,105 +1,89 @@
 @page "/about"
 
-<MudText Typo="Typo.h4" Class="mb-4">About FFXIV Craft Architect</MudText>
+<MudStack Spacing="3" Style="max-width: 1080px; margin: 0 auto;">
+    <MudPaper Elevation="0"
+              Class="pa-6"
+              Style="border: 1px solid rgba(212, 167, 58, 0.28); border-left: 4px solid #d4a73a; border-radius: 8px; background: #242424;">
+        <MudText Typo="Typo.h3" Class="mb-2">FFXIV Craft Architect</MudText>
+        <MudText Typo="Typo.h6" Style="color: #d4a73a;" Class="mb-4">
+            A market-aware crafting planner for messy, multi-step goals.
+        </MudText>
+        <MudText Typo="Typo.body1" Style="max-width: 820px; line-height: 1.7;">
+            FFXIV Craft Architect keeps the recipe tree, acquisition choices, market evidence,
+            and shopping route in one planning loop. It is built for the moment where a craft is
+            too tangled for mental math: quantities roll up, prices shift by world, vendor items
+            change the tradeoff, and the cheapest answer is rarely obvious until the whole plan is
+            compared together.
+        </MudText>
+    </MudPaper>
 
-<MudGrid>
-    <MudItem xs="12" md="6">
-        <MudCard Elevation="2">
-            <MudCardHeader>
-                <CardHeaderContent>
-                    <MudText Typo="Typo.h6">Web Companion</MudText>
-                </CardHeaderContent>
-            </MudCardHeader>
-            <MudCardContent>
-                <MudText Typo="Typo.body1">
-                    This web companion provides quick access to FFXIV market logistics without installing anything.
-                    Perfect for checking prices and planning shopping trips on any device.
+    <MudGrid>
+        <MudItem xs="12" md="6">
+            <MudPaper Elevation="0" Class="pa-4 h-100" Style="border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; background: #202020;">
+                <MudText Typo="Typo.h6" Class="mb-2">Plans that stay honest</MudText>
+                <MudText Typo="Typo.body2" Style="line-height: 1.65;">
+                    Item lists become a recipe tree with quantities carried through every layer.
+                    The planner keeps craft, vendor, or buy decisions visible so cost changes do
+                    not disappear inside a collapsed total.
                 </MudText>
-                <MudList T="string" Dense="true" Class="mt-3">
-                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
-                        No installation required
-                    </MudListItem>
-                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
-                        Works on mobile and desktop
-                    </MudListItem>
-                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
-                        Search items and get world recommendations
-                    </MudListItem>
-                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
-                        Export plans to desktop app
-                    </MudListItem>
-                </MudList>
-            </MudCardContent>
-        </MudCard>
-    </MudItem>
+            </MudPaper>
+        </MudItem>
 
-    <MudItem xs="12" md="6">
-        <MudCard Elevation="2">
-            <MudCardHeader>
-                <CardHeaderContent>
-                    <MudText Typo="Typo.h6">Desktop App</MudText>
-                </CardHeaderContent>
-            </MudCardHeader>
-            <MudCardContent>
-                <MudText Typo="Typo.body1">
-                    Get the full-featured Windows desktop application for the complete crafting experience.
+        <MudItem xs="12" md="6">
+            <MudPaper Elevation="0" Class="pa-4 h-100" Style="border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; background: #202020;">
+                <MudText Typo="Typo.h6" Class="mb-2">Market data with context</MudText>
+                <MudText Typo="Typo.body2" Style="line-height: 1.65;">
+                    Market analysis keeps listing evidence tied to the plan instead of treating
+                    prices as a flat lookup. World comparisons, vendor fallbacks, and unavailable
+                    data all stay close to the decisions they affect.
                 </MudText>
-                <MudList T="string" Dense="true" Class="mt-3">
-                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
-                        Full recipe tree visualization
-                    </MudListItem>
-                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
-                        Live inventory tracking (packet capture)
-                    </MudListItem>
-                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
-                        Craft vs Buy analysis with savings calculations
-                    </MudListItem>
-                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
-                        Import from Artisan and Teamcraft
-                    </MudListItem>
-                    <MudListItem T="string" Icon="@Icons.Material.Filled.Check" IconColor="Color.Success">
-                        Cross-DC market analysis
-                    </MudListItem>
-                </MudList>
-                <MudButton Variant="Variant.Outlined" 
-                           Color="Color.Primary" 
-                           Href="https://github.com/FranFkntastic/XIV-Craft-Architect/releases"
-                           Target="_blank"
-                           Class="mt-3"
-                           StartIcon="@Icons.Material.Filled.Download">
-                    Download Desktop App
-                </MudButton>
-            </MudCardContent>
-        </MudCard>
-    </MudItem>
-</MudGrid>
+            </MudPaper>
+        </MudItem>
 
-<MudCard Elevation="2" Class="mt-4">
-    <MudCardHeader>
-        <CardHeaderContent>
-            <MudText Typo="Typo.h6">Data Sources</MudText>
-        </CardHeaderContent>
-    </MudCardHeader>
-    <MudCardContent>
+        <MudItem xs="12" md="6">
+            <MudPaper Elevation="0" Class="pa-4 h-100" Style="border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; background: #202020;">
+                <MudText Typo="Typo.h6" Class="mb-2">A route, not just a receipt</MudText>
+                <MudText Typo="Typo.body2" Style="line-height: 1.65;">
+                    Procurement planning turns selected purchases into a shopping route. Split
+                    purchases, world choices, temporary exclusions, and refreshed item prices can
+                    be evaluated without rebuilding the plan from scratch.
+                </MudText>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Elevation="0" Class="pa-4 h-100" Style="border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; background: #202020;">
+                <MudText Typo="Typo.h6" Class="mb-2">Built for iteration</MudText>
+                <MudText Typo="Typo.body2" Style="line-height: 1.65;">
+                    Plans, market evidence, and settings are shaped as separate layers. That makes
+                    it easier to compare a new acquisition choice, refresh prices, or rebuild a route
+                    without losing the rest of the session.
+                </MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; background: #242424;">
+        <MudText Typo="Typo.h6" Class="mb-3">Data Sources</MudText>
         <MudGrid>
             <MudItem xs="12" sm="4">
                 <MudText Typo="Typo.subtitle1">Garland Tools</MudText>
-                <MudText Typo="Typo.caption" Class="mud-text-secondary">
-                    Item data, recipes, and search
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                    Recipes, item data, vendors, and search metadata.
                 </MudText>
             </MudItem>
             <MudItem xs="12" sm="4">
                 <MudText Typo="Typo.subtitle1">Universalis</MudText>
-                <MudText Typo="Typo.caption" Class="mud-text-secondary">
-                    Market board listings and prices
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                    Market board listings and world-level price evidence.
                 </MudText>
             </MudItem>
             <MudItem xs="12" sm="4">
                 <MudText Typo="Typo.subtitle1">XIVAPI</MudText>
-                <MudText Typo="Typo.caption" Class="mud-text-secondary">
-                    Item icons and images
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                    Item icons and supporting game data.
                 </MudText>
             </MudItem>
         </MudGrid>
-    </MudCardContent>
-</MudCard>
+    </MudPaper>
+</MudStack>

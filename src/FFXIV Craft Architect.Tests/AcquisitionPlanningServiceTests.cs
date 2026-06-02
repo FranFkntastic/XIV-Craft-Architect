@@ -1427,6 +1427,55 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void DetermineCheapestAcquisitionSource_IgnoresUnsupportedMarketProjection()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 500,
+            Name = "Unsupported HQ Buy",
+            Quantity = 10,
+            Source = AcquisitionSource.UnknownSource,
+            MustBeHq = true,
+            CanBeHq = true,
+            CanBuyFromMarket = true,
+            CanBuyFromVendor = true,
+            HqMarketPrice = 10_000,
+            VendorPrice = 500
+        };
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 500,
+                Name = "Unsupported HQ Buy",
+                QuantityNeeded = 10,
+                HQAveragePrice = 1,
+                WorldOptions =
+                [
+                    new WorldShoppingSummary
+                    {
+                        DataCenter = "Aether",
+                        WorldName = "Siren",
+                        Listings =
+                        [
+                            new ShoppingListingEntry
+                            {
+                                Quantity = 1,
+                                PricePerUnit = 1,
+                                IsHq = true
+                            }
+                        ]
+                    }
+                ]
+            }
+        };
+
+        var source = AcquisitionPlanningService.DetermineCheapestAcquisitionSource(node, marketPlans);
+
+        Assert.Equal(AcquisitionSource.VendorBuy, source);
+    }
+
+    [Fact]
     public void TryGetSelectedAcquisitionCost_WithCostContext_ReusesMemoizedCraftCost()
     {
         var root = CreateTwoLevelCraftTree();

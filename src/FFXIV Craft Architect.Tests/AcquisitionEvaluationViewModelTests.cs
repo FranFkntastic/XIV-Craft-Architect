@@ -49,6 +49,23 @@ public class AcquisitionEvaluationViewModelTests
     }
 
     [Fact]
+    public async Task RefreshAsync_MarksUnsupportedHqOptionAsProjectedUnavailable()
+    {
+        var host = CreateHost(CreateUnsupportedHqShoppingPlan());
+        var viewModel = host.ViewModel;
+
+        await viewModel.RefreshAsync();
+
+        var material = Assert.Single(viewModel.Rows, row => row.ItemId == 200);
+        var hqOption = Assert.Single(material.OptionRows, option => option.Source == AcquisitionSource.MarketBuyHq);
+
+        Assert.Equal("16,000g", hqOption.CostText);
+        Assert.False(hqOption.IsAvailable);
+        Assert.True(hqOption.IsProjectedUnsupported);
+        Assert.Contains("current search scope cannot fill", hqOption.Detail);
+    }
+
+    [Fact]
     public async Task CurrentFilter_ReprojectsVisibleRowsThroughLedgerCache()
     {
         var host = CreateHost();
@@ -152,7 +169,7 @@ public class AcquisitionEvaluationViewModelTests
         Assert.True(viewModel.HasPlan);
     }
 
-    private static TestHost CreateHost()
+    private static TestHost CreateHost(DetailedShoppingPlan? shoppingPlan = null)
     {
         var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
         var operationState = new CraftOperationState();
@@ -180,7 +197,7 @@ public class AcquisitionEvaluationViewModelTests
             currentPlan,
             session.PlanSessionVersion,
             [],
-            [CreateMaterialShoppingPlan()],
+            [shoppingPlan ?? CreateMaterialShoppingPlan()],
             acquisitionDecisionsChanged: false,
             "market analysis");
 
@@ -255,6 +272,32 @@ public class AcquisitionEvaluationViewModelTests
                 TotalCost = 400,
                 TotalQuantityPurchased = 2
             }
+        };
+
+    private static DetailedShoppingPlan CreateUnsupportedHqShoppingPlan() =>
+        new()
+        {
+            ItemId = 200,
+            Name = "Material",
+            QuantityNeeded = 2,
+            HQAveragePrice = 8_000,
+            WorldOptions =
+            [
+                new WorldShoppingSummary
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Siren",
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 1,
+                            PricePerUnit = 3_000,
+                            IsHq = true
+                        }
+                    ]
+                }
+            ]
         };
 
     private sealed class StubRecipeLayerWorkflowService : ICoreRecipeLayerWorkflowService

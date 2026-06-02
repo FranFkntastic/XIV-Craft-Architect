@@ -20,8 +20,18 @@ async function initDB() {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
         
         request.onerror = () => reject(request.error);
+        request.onblocked = () => {
+            const message = '[IndexedDB] Database upgrade blocked by another open tab. Close other FFXIV Craft Architect tabs and reload.';
+            console.warn(message);
+            reject(new Error(message));
+        };
         request.onsuccess = () => {
             db = request.result;
+            db.onversionchange = () => {
+                console.warn('[IndexedDB] Database version changed; closing stale connection.');
+                db?.close();
+                db = null;
+            };
             console.log('[IndexedDB] Database opened successfully (v4 - plan summaries)');
             resolve(db);
         };
