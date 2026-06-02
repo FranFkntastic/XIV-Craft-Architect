@@ -341,10 +341,106 @@ public class CoreRecipePlannerCommandServiceTests
             "Aether",
             "North America"));
 
+        Assert.Equal(CoreMarketPriceRefreshStatus.StalePlan, result.Status);
         Assert.Equal(0, result.RequestedCount);
         Assert.Equal(300, service.Session.ActivePlan?.RootItems[0].ItemId);
         Assert.Equal(0, service.Session.ActivePlan?.PriceVersion);
         Assert.Equal(0, service.Session.Versions.PlanPrice);
+    }
+
+    [Fact]
+    public async Task RefreshPricesAsync_WithNoActivePlan_ReturnsNoPlanStatus()
+    {
+        var service = CreateService();
+
+        var result = await service.RefreshPricesAsync(new CoreRefreshRecipePlanPricesRequest(
+            MarketFetchScope.SelectedDataCenter,
+            "Aether",
+            "North America"));
+
+        Assert.Equal(CoreMarketPriceRefreshStatus.NoPlan, result.Status);
+        Assert.False(result.Published);
+    }
+
+    [Fact]
+    public async Task RefreshPricesAsync_WhenPlanDataCenterOverridesRequest_UsesPlanDataCenterRegion()
+    {
+        var plan = CreatePlan();
+        plan.DataCenter = "Chaos";
+        plan.RootItems[0].Source = AcquisitionSource.MarketBuyNq;
+        plan.RootItems[0].CanBuyFromMarket = true;
+        IReadOnlyCollection<(int itemId, string dataCenter)>? requestedPairs = null;
+        var cache = new Mock<IMarketCacheService>();
+        cache.Setup(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<List<(int itemId, string dataCenter)>, TimeSpan?, IProgress<string>?, CancellationToken>(
+                (requests, _, _, _) => requestedPairs = requests)
+            .ReturnsAsync(1);
+        cache.Setup(c => c.GetManyAsync(
+                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>()))
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(100, "Chaos")] = CachedData(100, "Chaos", 88)
+            });
+        var service = CreateService(marketCache: cache.Object);
+        service.Session.ActivatePlan(
+            plan,
+            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
+            new CraftSessionActiveContext("Europe", "Chaos", string.Empty, MarketFetchScope.SelectedDataCenter),
+            "test plan");
+
+        var result = await service.RefreshPricesAsync(new CoreRefreshRecipePlanPricesRequest(
+            MarketFetchScope.EntireRegion,
+            "Aether",
+            "North America"));
+
+        Assert.Equal(88, service.Session.ActivePlan?.RootItems[0].MarketPrice);
+        Assert.Contains((100, "Chaos"), requestedPairs!);
+        Assert.DoesNotContain(requestedPairs!, pair => pair.dataCenter == "Aether");
+        Assert.Equal(1, result.FetchedCount);
+    }
+
+    [Fact]
+    public async Task RefreshPricesAsync_WhenForceRefreshRequested_PassesZeroMaxAgeToCachePopulation()
+    {
+        var plan = CreatePlan();
+        plan.RootItems[0].Source = AcquisitionSource.MarketBuyNq;
+        plan.RootItems[0].CanBuyFromMarket = true;
+        TimeSpan? requestedMaxAge = null;
+        var cache = new Mock<IMarketCacheService>();
+        cache.Setup(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<List<(int itemId, string dataCenter)>, TimeSpan?, IProgress<string>?, CancellationToken>(
+                (_, maxAge, _, _) => requestedMaxAge = maxAge)
+            .ReturnsAsync(1);
+        cache.Setup(c => c.GetManyAsync(
+                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>()))
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(100, "Aether")] = CachedData(100, "Aether", 88)
+            });
+        var service = CreateService(marketCache: cache.Object);
+        service.Session.ActivatePlan(
+            plan,
+            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
+            new CraftSessionActiveContext("North America", "Aether", string.Empty, MarketFetchScope.SelectedDataCenter),
+            "test plan");
+
+        await service.RefreshPricesAsync(new CoreRefreshRecipePlanPricesRequest(
+            MarketFetchScope.SelectedDataCenter,
+            "Aether",
+            "North America",
+            ForceRefreshData: true));
+
+        Assert.Equal(TimeSpan.Zero, requestedMaxAge);
     }
 
     [Fact]
@@ -371,6 +467,51 @@ public class CoreRecipePlannerCommandServiceTests
         Assert.Equal(100, Assert.Single(service.Session.ProjectItems).Id);
         Assert.Equal(1, service.Session.ActivePlan?.PriceVersion);
         Assert.Equal(1, service.Session.Versions.PlanPrice);
+    }
+
+    [Fact]
+    public async Task ActivatePlanAsync_WhenPlanDataCenterOverridesRequest_PublishesMatchingRegion()
+    {
+        var plan = CreatePlan();
+        plan.DataCenter = "Chaos";
+        var service = CreateService();
+
+        var result = await service.ActivatePlanAsync(new CoreActivateRecipePlanRequest(
+            plan,
+            ClearCurrentPlanId: true,
+            RefreshVendorPrices: false,
+            RefreshMarketPrices: false,
+            MarketFetchScope.EntireRegion,
+            "Aether",
+            "North America"));
+
+        Assert.Equal(CoreRecipePlannerCommandMessageLevel.Success, result.MessageLevel);
+        Assert.Equal("Chaos", service.Session.ActiveContext.DataCenter);
+        Assert.Equal("Europe", service.Session.ActiveContext.Region);
+    }
+
+    [Fact]
+    public async Task ActivatePlanAsync_WithSavedMarketPlans_RestoresCoreMarketEvidence()
+    {
+        var plan = CreatePlan();
+        plan.SavedMarketPlans.Add(CreateShoppingPlan(200));
+        var service = CreateService();
+
+        var result = await service.ActivatePlanAsync(new CoreActivateRecipePlanRequest(
+            plan,
+            ClearCurrentPlanId: true,
+            RefreshVendorPrices: false,
+            RefreshMarketPrices: false,
+            MarketFetchScope.SelectedDataCenter,
+            "Aether",
+            "North America"));
+
+        Assert.Equal(CoreRecipePlannerCommandMessageLevel.Success, result.MessageLevel);
+        Assert.Empty(service.Session.MarketEvidence.ItemAnalyses);
+        var savedPlan = Assert.Single(service.Session.MarketEvidence.ShoppingPlans!);
+        Assert.Equal(200, savedPlan.ItemId);
+        Assert.Equal(service.Session.PlanSessionVersion, service.Session.MarketEvidence.PublishedAgainstVersion?.PlanSession);
+        Assert.True(service.Session.IsDirty(CraftSessionDirtyBucket.MarketAnalysis));
     }
 
     [Fact]
@@ -433,6 +574,20 @@ public class CoreRecipePlannerCommandServiceTests
             ]
         };
     }
+
+    private static DetailedShoppingPlan CreateShoppingPlan(int itemId) =>
+        new()
+        {
+            ItemId = itemId,
+            Name = "Saved Market Plan",
+            QuantityNeeded = 2,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                WorldName = "Siren",
+                TotalCost = 500,
+                TotalQuantityPurchased = 2
+            }
+        };
 
     private sealed record TestServiceHost(
         CoreRecipePlannerCommandService Service,

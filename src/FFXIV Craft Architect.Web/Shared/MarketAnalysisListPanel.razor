@@ -23,12 +23,12 @@
                                 </th>
                             }
                             <th style="@TotalColumnStyle" class="ma-total-column">
-                                @SortHeader("Total", MarketAnalysisGridSortColumn.Total)
+                                @SortHeader("Calculated Total", MarketAnalysisGridSortColumn.Total, MarketAnalysisGridViewService.CalculatedTotalHeaderTooltip)
                             </th>
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var plan in GetGridPlans())
+                        @foreach (var plan in _orderedPlans)
                         {
                             var coverageLabel = MarketAnalysisGridViewService.FormatCoverageLabel(plan, _analysisByItemId);
                             <tr @key="plan.ItemId"
@@ -60,7 +60,10 @@
                                     </td>
                                 }
                                 <td style="@TotalColumnStyle" class="ma-total-column">
-                                    @MarketAnalysisGridViewService.GetTotalCost(plan).ToString("N0")g
+                                    <span class="@MarketAnalysisGridViewService.GetTotalCostClass(plan)"
+                                          title="@MarketAnalysisGridViewService.GetTotalCostTooltip(plan)">
+                                        @MarketAnalysisGridViewService.GetTotalCost(plan).ToString("N0")g
+                                    </span>
                                 </td>
                             </tr>
                         }
@@ -93,7 +96,10 @@
                         </MudText>
                     </div>
                     <MudText Typo="Typo.subtitle1" Class="ma-detail-total">
-                        @MarketAnalysisGridViewService.GetTotalCost(_selectedPlan).ToString("N0")g
+                        <span class="@MarketAnalysisGridViewService.GetTotalCostClass(_selectedPlan)"
+                              title="@MarketAnalysisGridViewService.GetTotalCostTooltip(_selectedPlan)">
+                            @MarketAnalysisGridViewService.GetTotalCost(_selectedPlan).ToString("N0")g
+                        </span>
                     </MudText>
                 </div>
 
@@ -135,16 +141,14 @@
     [Parameter] public bool WorldSortDescending { get; set; }
     [Parameter] public int? SelectedItemId { get; set; }
     [Parameter] public IReadOnlySet<MarketAnalysisExpandedWorldKey> ExpandedWorldKeys { get; set; } = new HashSet<MarketAnalysisExpandedWorldKey>();
-    [Parameter] public int? AutoExpandItemId { get; set; }
     [Parameter] public bool ShowWorldsColumn { get; set; }
     [Parameter] public EventCallback<int?> OnSelectedItemChanged { get; set; }
     [Parameter] public EventCallback<MarketAnalysisExpandedWorldKey> OnWorldExpansionToggled { get; set; }
     [Parameter] public EventCallback<MarketAnalysisGridSortState> OnSortChanged { get; set; }
     [Parameter] public EventCallback<MarketAnalysisWorldGridSortState> OnWorldSortChanged { get; set; }
-    [Parameter] public EventCallback<int> OnAutoExpandConsumed { get; set; }
 
     private DetailedShoppingPlan? _selectedPlan;
-    private bool _autoExpandProcessed;
+    private IReadOnlyList<DetailedShoppingPlan> _orderedPlans = Array.Empty<DetailedShoppingPlan>();
     private IReadOnlyDictionary<int, MarketItemAnalysis> _analysisByItemId = new Dictionary<int, MarketItemAnalysis>();
 
     private string ItemColumnStyle => ShowWorldsColumn ? "width: 27%;" : "width: 29%;";
@@ -158,29 +162,8 @@
     protected override void OnParametersSet()
     {
         _analysisByItemId = MarketItemAnalyses.ToDictionary(analysis => analysis.ItemId);
-
-        if (!_autoExpandProcessed && AutoExpandItemId.HasValue)
-        {
-            var targetPlan = ShoppingPlans.FirstOrDefault(p => p.ItemId == AutoExpandItemId.Value);
-            if (targetPlan != null)
-            {
-                _selectedPlan = targetPlan;
-                _autoExpandProcessed = true;
-                _ = OnSelectedItemChanged.InvokeAsync(targetPlan.ItemId);
-                _ = OnAutoExpandConsumed.InvokeAsync(targetPlan.ItemId);
-            }
-        }
-        else if (!AutoExpandItemId.HasValue)
-        {
-            _autoExpandProcessed = false;
-        }
-
-        var orderedPlans = GetGridPlans().ToList();
-        _selectedPlan = MarketAnalysisGridViewService.ResolveSelectedPlan(orderedPlans, SelectedItemId);
-        if (_selectedPlan?.ItemId != SelectedItemId)
-        {
-            _ = OnSelectedItemChanged.InvokeAsync(_selectedPlan?.ItemId);
-        }
+        _orderedPlans = GetGridPlans();
+        _selectedPlan = MarketAnalysisGridViewService.ResolveSelectedPlan(_orderedPlans, SelectedItemId);
     }
 
     private async Task SelectPlan(DetailedShoppingPlan plan)
@@ -189,12 +172,17 @@
         await OnSelectedItemChanged.InvokeAsync(plan.ItemId);
     }
 
-    private RenderFragment SortHeader(string label, MarketAnalysisGridSortColumn column) => builder =>
+    private RenderFragment SortHeader(string label, MarketAnalysisGridSortColumn column, string? title = null) => builder =>
     {
         var sequence = 0;
         builder.OpenElement(sequence++, "button");
         builder.AddAttribute(sequence++, "type", "button");
         builder.AddAttribute(sequence++, "class", GetSortHeaderClass(column));
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            builder.AddAttribute(sequence++, "title", title);
+        }
+
         builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => ToggleSort(column)));
         builder.AddContent(sequence++, label);
         if (SortColumn == column)
@@ -222,12 +210,12 @@
 
     private MarketItemAnalysis? GetSelectedAnalysis()
     {
-        return _selectedPlan == null
-            ? null
-            : MarketItemAnalyses.FirstOrDefault(analysis => analysis.ItemId == _selectedPlan.ItemId);
+        return _selectedPlan != null && _analysisByItemId.TryGetValue(_selectedPlan.ItemId, out var analysis)
+            ? analysis
+            : null;
     }
 
-    private IEnumerable<DetailedShoppingPlan> GetGridPlans()
+    private IReadOnlyList<DetailedShoppingPlan> GetGridPlans()
     {
         return MarketAnalysisGridViewService.GetOrderedPlans(
             ShoppingPlans,

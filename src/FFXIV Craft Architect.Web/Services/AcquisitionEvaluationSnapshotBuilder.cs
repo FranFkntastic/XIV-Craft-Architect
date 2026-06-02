@@ -9,7 +9,7 @@ public static class AcquisitionEvaluationSnapshotBuilder
     public static AcquisitionEvaluationSnapshot Build(
         CraftingPlan? plan,
         IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
-        IReadOnlyList<MarketDataUnavailableItem> unavailableMarketItems,
+        IReadOnlyList<CoreMarketDataUnavailableItem> unavailableMarketItems,
         AcquisitionFilter filter,
         RecipeDemandProjection demandProjection)
     {
@@ -45,7 +45,7 @@ public static class AcquisitionEvaluationSnapshotBuilder
     public static AcquisitionEvaluationParityReport CompareWithLegacyTraversal(
         CraftingPlan? plan,
         IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
-        IReadOnlyList<MarketDataUnavailableItem> unavailableMarketItems,
+        IReadOnlyList<CoreMarketDataUnavailableItem> unavailableMarketItems,
         RecipeDemandProjection demandProjection)
     {
         var costContext = AcquisitionPlanningService.CreateCostContext(shoppingPlans);
@@ -311,7 +311,11 @@ public static class AcquisitionEvaluationSnapshotBuilder
             aggregate.Occurrences.Any(occurrence => occurrence.IsActiveProcurement),
             aggregate.Occurrences.Any(occurrence => !occurrence.IsSuppressed),
             aggregate.IsMarketCandidate,
-            GetMarketEvidence(node.ItemId, marketPlan, unavailableMarketItemIds),
+            GetMarketEvidence(
+                node.ItemId,
+                marketPlan,
+                unavailableMarketItemIds,
+                aggregate.ReadState.Source == AcquisitionSource.MarketBuyHq),
             GetEstimatedCost(aggregate, totalQuantity, costContext));
     }
 
@@ -352,7 +356,8 @@ public static class AcquisitionEvaluationSnapshotBuilder
     private static string GetMarketEvidence(
         int itemId,
         DetailedShoppingPlan? marketPlan,
-        IReadOnlySet<int> unavailableMarketItemIds)
+        IReadOnlySet<int> unavailableMarketItemIds,
+        bool hqOnly)
     {
         if (marketPlan == null)
         {
@@ -367,6 +372,11 @@ public static class AcquisitionEvaluationSnapshotBuilder
         if (!string.IsNullOrEmpty(marketPlan.Error))
         {
             return "Needs data";
+        }
+
+        if (MarketPurchaseCostProjectionService.IsUnsupportedProjectedCost(marketPlan, hqOnly: hqOnly))
+        {
+            return "Projected only";
         }
 
         if (marketPlan.RecommendedWorld != null)
@@ -776,15 +786,17 @@ public static class AcquisitionEvaluationCostCalculator
         AcquisitionCostContext costContext,
         bool hqOnly)
     {
-        if (costContext.TryGetShoppingPlan(readState.ItemId, out var shoppingPlan) &&
-            AcquisitionPlanningService.TryGetMarketBoardPurchase(
+        if (costContext.TryGetShoppingPlan(readState.ItemId, out var shoppingPlan))
+        {
+            var estimate = MarketPurchaseCostProjectionService.Estimate(
                 shoppingPlan,
                 quantity,
                 hqOnly,
-                out _,
-                out var evidenceCost))
-        {
-            return evidenceCost;
+                includeVendor: false);
+            if (estimate.HasCost)
+            {
+                return estimate.Cost;
+            }
         }
 
         return (hqOnly ? readState.HqUnitPrice : readState.UnitPrice) * quantity;

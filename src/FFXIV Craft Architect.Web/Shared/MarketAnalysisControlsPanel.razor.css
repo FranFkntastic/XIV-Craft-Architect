@@ -41,36 +41,3 @@
     margin-top: 4px;
     margin-left: 32px;
 }
-
-.ma-items-title {
-    color: #d4a73a;
-}
-
-.ma-items-summary-paper {
-    background: #2a2a2a;
-    border-radius: 8px;
-    max-height: 200px;
-    overflow-y: auto;
-}
-
-.ma-item-summary-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 4px 8px;
-    background: #1e1e1e;
-    border-radius: 4px;
-}
-
-.ma-item-summary-name {
-    color: #ccc;
-}
-
-.ma-item-summary-qty {
-    color: #d4a73a;
-}
-
-.ma-item-summary-more {
-    color: #888;
-    text-align: center;
-}

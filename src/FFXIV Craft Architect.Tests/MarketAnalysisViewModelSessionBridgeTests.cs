@@ -103,6 +103,35 @@ public class MarketAnalysisViewModelSessionBridgeTests
     }
 
     [Fact]
+    public void SetShoppingPlans_DoesNotRepublishExistingCoreShoppingPlans()
+    {
+        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
+        var viewModel = CreateViewModel(session);
+        var plan = CreatePlan();
+        session.ActivatePlan(
+            plan,
+            [new ProjectItem { Id = 100, Name = "Final Craft", Quantity = 1 }],
+            new CraftSessionActiveContext(null, "Aether", "Siren", null),
+            "plan loaded");
+        Assert.True(session.TryPublishMarketAnalysis(
+            session.CaptureVersionStamp(),
+            session.ActivePlan!,
+            session.PlanSessionVersion,
+            Array.Empty<MarketItemAnalysis>(),
+            [CreateShoppingPlan(200)],
+            acquisitionDecisionsChanged: false,
+            "saved market plans restored"));
+        var before = session.CaptureVersionStamp();
+
+        viewModel.SetShoppingPlans([CreateShoppingPlan(200)]);
+
+        Assert.Equal(before.MarketAnalysis, session.Versions.MarketAnalysis);
+        Assert.Empty(session.MarketEvidence.ItemAnalyses);
+        Assert.Equal(200, Assert.Single(session.MarketEvidence.ShoppingPlans!).ItemId);
+        Assert.Equal(200, Assert.Single(viewModel.ShoppingPlans).ItemId);
+    }
+
+    [Fact]
     public void ClearDisplay_DoesNotClearCoreMarketEvidence()
     {
         var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
@@ -155,6 +184,39 @@ public class MarketAnalysisViewModelSessionBridgeTests
         Assert.Empty(viewModel.ShoppingPlans);
         Assert.Empty(session.MarketEvidence.ItemAnalyses);
         Assert.Empty(session.MarketEvidence.ShoppingPlans!);
+    }
+
+    [Fact]
+    public void MarkProcurementRouteSettingsChanged_PreservesMarketEvidenceAndClearsOverlay()
+    {
+        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
+        var viewModel = CreateViewModel(session);
+        session.ActivatePlan(
+            CreatePlan(),
+            [new ProjectItem { Id = 100, Name = "Final Craft", Quantity = 1 }],
+            new CraftSessionActiveContext(null, "Aether", "Siren", null),
+            "plan loaded");
+        Assert.True(session.TryPublishMarketAnalysis(
+            session.CaptureVersionStamp(),
+            session.ActivePlan!,
+            session.PlanSessionVersion,
+            [new MarketItemAnalysis { ItemId = 200, Name = "Material", QuantityNeeded = 2 }],
+            [CreateShoppingPlan(200)],
+            acquisitionDecisionsChanged: false,
+            "core market analysis"));
+        session.PublishProcurementOverlay(
+            new CraftSessionProcurementOverlay(DateTime.UtcNow, [200], "old route", [CreateShoppingPlan(200)]),
+            "old route");
+        var before = session.CaptureVersionStamp();
+
+        viewModel.MarkProcurementRouteSettingsChanged("test split-world setting changed");
+
+        Assert.Equal(before.SettingsContext, session.Versions.SettingsContext);
+        Assert.Equal(before.MarketAnalysis, session.Versions.MarketAnalysis);
+        Assert.True(session.Versions.Procurement > before.Procurement);
+        Assert.Equal(200, Assert.Single(session.MarketEvidence.ItemAnalyses).ItemId);
+        Assert.Equal(200, Assert.Single(session.MarketEvidence.ShoppingPlans!).ItemId);
+        Assert.Null(session.ProcurementOverlay);
     }
 
     [Fact]
@@ -326,7 +388,7 @@ public class MarketAnalysisViewModelSessionBridgeTests
     private static MarketAnalysisViewModel CreateViewModel(
         CraftSessionState session,
         CoreMarketAnalysisWorkflowService? workflow = null) =>
-        new(null!, null!, null!, session: session, coreMarketAnalysisWorkflow: workflow);
+        new(null!, null!, session: session, coreMarketAnalysisWorkflow: workflow);
 
     private static CoreMarketAnalysisWorkflowService CreateCoreMarketWorkflow(
         CraftSessionState session,

@@ -321,6 +321,13 @@
     font-weight: 700;
 }
 
+.ae-cost-cell.projected-unsupported {
+    color: #ff6b6b;
+    text-decoration: underline;
+    text-decoration-color: rgba(255, 107, 107, 0.9);
+    text-underline-offset: 2px;
+}
+
 .ae-empty {
     margin: 32px;
     border: 1px solid #3a3a3a;

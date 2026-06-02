@@ -2,6 +2,8 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Web.Services
+@inject AppState AppState
+@inject NavigationManager NavigationManager
 
 <div class="rp-column">
     @if (Node == null && Row == null)
@@ -16,6 +18,15 @@
         <div class="rp-panel">
             <div class="rp-panel-header">
                 <div class="rp-header-title">Acquisition Details</div>
+                @if (CanOpenMarketAnalysis)
+                {
+                    <button type="button"
+                            class="rp-header-action"
+                            title="Open this item in Market Analysis"
+                            @onclick="GoToMarketAnalysis">
+                        Market
+                    </button>
+                }
             </div>
             <div class="rp-details-wrap">
                 <div class="rp-item-name">@ItemName</div>
@@ -46,14 +57,15 @@
                 <div class="rp-method-list">
                     @foreach (var option in GetOptions())
                     {
-                        <button class="rp-method-row @(CurrentSource == option.Source ? "selected" : "")"
+                        <button class="@GetOptionClass(option)"
+                                title="@(option.IsProjectedUnsupported ? ProjectedUnsupportedOptionTooltip : null)"
                                 disabled="@(!option.IsAvailable)"
                                 @onclick="() => SelectSource(option.Source)">
                             <span class="rp-method-main">
                                 <span class="rp-method-name">@option.Name</span>
                                 <span class="rp-method-detail">@option.Detail</span>
                             </span>
-                            <span class="rp-method-cost">@option.CostText</span>
+                            <span class="rp-method-cost @(option.IsProjectedUnsupported ? "projected-unsupported" : null)">@option.CostText</span>
                         </button>
                     }
                 </div>
@@ -76,7 +88,7 @@
     [Parameter] public AcquisitionCostContext CostContext { get; set; } =
         AcquisitionPlanningService.CreateCostContext(Array.Empty<DetailedShoppingPlan>());
     [Parameter] public IReadOnlyList<MaterialAggregate>? ActiveProcurementItems { get; set; }
-    [Parameter] public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<MarketDataUnavailableItem>();
+    [Parameter] public IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<CoreMarketDataUnavailableItem>();
     [Parameter] public EventCallback<AcquisitionSourceChangeRequest> OnSourceChanged { get; set; }
 
     private int ItemId => Row?.ItemId ?? Node?.ItemId ?? 0;
@@ -93,6 +105,8 @@
     private decimal UnitPrice => Row?.UnitPrice ?? Node?.MarketPrice ?? 0;
     private IReadOnlyList<RecipeDemandVendorOption> VendorOptions => Row?.VendorOptions ?? GetNodeVendorOptions();
     private bool IsMarketUnavailable => ItemId != 0 && UnavailableMarketItems.Any(i => i.ItemId == ItemId);
+    private bool CanOpenMarketAnalysis => ItemId != 0 && MarketPlans.Any(plan => plan.ItemId == ItemId);
+    private const string ProjectedUnsupportedOptionTooltip = "This is a projected cost. The current search scope cannot support this purchase.";
 
     private async Task SelectSource(AcquisitionSource source)
     {
@@ -102,6 +116,17 @@
         }
 
         await OnSourceChanged.InvokeAsync(new AcquisitionSourceChangeRequest(Node, source));
+    }
+
+    private void GoToMarketAnalysis()
+    {
+        if (ItemId == 0)
+        {
+            return;
+        }
+
+        AppState.RequestMarketItemAutoExpand(ItemId);
+        NavigationManager.NavigateTo("market");
     }
 
     private List<AcquisitionOptionView> GetOptions()
@@ -122,7 +147,8 @@
                     ? "Uses the recipe tree with market evidence for child purchases."
                     : "Uses the recipe tree below this item.",
                 hasCraftCost ? $"{craftCost:N0}g" : "-",
-                true));
+                true,
+                IsProjectedUnsupported: false));
         }
 
         if (CanBuyFromMarket)
@@ -130,23 +156,27 @@
             if (!MustBeHq)
             {
                 var hasNqMarketCost = TryGetOptionCost(AcquisitionSource.MarketBuyNq, out var nqMarketCost);
+                var isProjectedUnsupported = IsProjectedUnsupportedOption(AcquisitionSource.MarketBuyNq);
                 options.Add(new AcquisitionOptionView(
                     AcquisitionSource.MarketBuyNq,
                     "Buy NQ",
                     GetMarketPlanDetail("NQ"),
                     hasNqMarketCost ? $"{nqMarketCost:N0}g" : "-",
-                    hasNqMarketCost));
+                    hasNqMarketCost && !isProjectedUnsupported,
+                    isProjectedUnsupported));
             }
 
             if (CanBeHq)
             {
                 var hasHqMarketCost = TryGetOptionCost(AcquisitionSource.MarketBuyHq, out var hqMarketCost);
+                var isProjectedUnsupported = IsProjectedUnsupportedOption(AcquisitionSource.MarketBuyHq);
                 options.Add(new AcquisitionOptionView(
                     AcquisitionSource.MarketBuyHq,
                     "Buy HQ",
-                    HqUnitPrice > 0 ? "Uses the current planner HQ market price." : "No HQ price loaded.",
+                    GetMarketPlanDetail("HQ"),
                     hasHqMarketCost ? $"{hqMarketCost:N0}g" : "-",
-                    hasHqMarketCost));
+                    hasHqMarketCost && !isProjectedUnsupported,
+                    isProjectedUnsupported));
             }
         }
 
@@ -158,7 +188,8 @@
                 "Vendor",
                 GetVendorDetail(),
                 hasVendorCost ? $"{vendorCost:N0}g" : "-",
-                hasVendorCost));
+                hasVendorCost,
+                IsProjectedUnsupported: false));
         }
 
         if (!CanBuyFromMarket && !CanBuyFromVendor && !HasChildren)
@@ -168,10 +199,27 @@
                 "Figure it out",
                 "No supported craft, market, or vendor source is known.",
                 "-",
-                true));
+                true,
+                IsProjectedUnsupported: false));
         }
 
         return options;
+    }
+
+    private string GetOptionClass(AcquisitionOptionView option)
+    {
+        var classes = new List<string> { "rp-method-row" };
+        if (CurrentSource == option.Source)
+        {
+            classes.Add("selected");
+        }
+
+        if (option.IsProjectedUnsupported)
+        {
+            classes.Add("projected-unsupported");
+        }
+
+        return string.Join(" ", classes);
     }
 
     private string GetMarketPlanDetail(string quality)
@@ -183,15 +231,27 @@
         }
 
         var hqOnly = quality == "HQ";
-        if (AcquisitionPlanningService.TryGetMarketBoardPurchase(marketPlan, DisplayQuantity, hqOnly, out var marketWorld, out _) &&
-            marketWorld != null)
+        var estimate = MarketPurchaseCostProjectionService.Estimate(
+            marketPlan,
+            DisplayQuantity,
+            hqOnly,
+            includeVendor: false);
+        if (estimate.IsUnsupportedProjection)
         {
-            return $"{marketWorld.WorldName} can cover {marketWorld.TotalQuantityPurchased}/{marketPlan?.QuantityNeeded}.";
+            return "Projected cost; current search scope cannot fill this purchase.";
         }
 
-        if (marketPlan?.RecommendedSplit?.Any() == true)
+        if (estimate.World != null)
         {
-            return $"{marketPlan.RecommendedSplit.Count} world split can cover market purchase.";
+            return $"{estimate.World.WorldName} can cover {estimate.World.TotalQuantityPurchased}/{marketPlan?.QuantityNeeded}.";
+        }
+
+        var recommendedSplit = marketPlan?.RecommendedSplit;
+        if (estimate.Kind == MarketPurchaseCostEstimateKind.SupportedEvidence &&
+            recommendedSplit != null &&
+            recommendedSplit.Sum(split => split.QuantityToBuy) >= DisplayQuantity)
+        {
+            return $"{recommendedSplit.Count} world split can cover market purchase.";
         }
 
         if (!string.IsNullOrWhiteSpace(marketPlan?.Error))
@@ -235,6 +295,25 @@
         return AcquisitionPlanningService.TryGetAcquisitionCost(Node, source, CostContext, out cost);
     }
 
+    private bool IsProjectedUnsupportedOption(AcquisitionSource source)
+    {
+        var hqOnly = source == AcquisitionSource.MarketBuyHq;
+        if (source is not (AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq))
+        {
+            return false;
+        }
+
+        var marketPlan = MarketPlan;
+        if (marketPlan == null && ItemId != 0)
+        {
+            CostContext.TryGetShoppingPlan(ItemId, out marketPlan);
+        }
+
+        return MarketPurchaseCostProjectionService
+            .Estimate(marketPlan, DisplayQuantity, hqOnly, includeVendor: false)
+            .IsUnsupportedProjection;
+    }
+
     private IReadOnlyList<RecipeDemandVendorOption> GetNodeVendorOptions()
     {
         if (Node == null)
@@ -256,5 +335,6 @@
         string Name,
         string Detail,
         string CostText,
-        bool IsAvailable);
+        bool IsAvailable,
+        bool IsProjectedUnsupported);
 }

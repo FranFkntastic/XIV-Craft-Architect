@@ -121,6 +121,25 @@ public class RecipePlannerViewModelSessionBridgeTests
     }
 
     [Fact]
+    public void ToggleNodeHq_WithCoreDecisionService_UsesCoreDecisionPath()
+    {
+        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
+        var viewModel = CreateViewModel(session);
+        var plan = CreatePlanWithDuplicateMaterial();
+        viewModel.CurrentPlan = plan;
+        var firstMaterial = plan.RootItems[0].Children[0];
+
+        viewModel.ToggleNodeHq(firstMaterial.NodeId);
+
+        Assert.All(FindNodesByItemId(session.ActivePlan!, firstMaterial.ItemId), node =>
+        {
+            Assert.True(node.MustBeHq);
+            Assert.Equal(AcquisitionSource.MarketBuyHq, node.Source);
+            Assert.Equal(AcquisitionSourceReason.UserSelected, node.SourceReason);
+        });
+    }
+
+    [Fact]
     public void ApplyImportResult_PublishesImportedProjectItemsToCoreSession()
     {
         var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());

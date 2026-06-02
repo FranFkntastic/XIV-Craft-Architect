@@ -84,7 +84,7 @@ public class MarketAnalysisWorkflowServiceTests
                 "Aether",
                 "North America",
                 MarketFetchScope.SelectedDataCenter,
-                searchEntireRegion: true,
+                searchEntireRegion: false,
                 autoFetchPricesOnRebuild: true))
             .ReturnsAsync(CreateExecutionResult());
         var service = CreateService(appState, execution.Object, jsRuntime);
@@ -382,7 +382,7 @@ public class MarketAnalysisWorkflowServiceTests
                     "Aether",
                     "North America",
                     MarketFetchScope.SelectedDataCenter,
-                    searchEntireRegion: true,
+                    searchEntireRegion: false,
                     autoFetchPricesOnRebuild: true);
                 break;
             case "data-center":

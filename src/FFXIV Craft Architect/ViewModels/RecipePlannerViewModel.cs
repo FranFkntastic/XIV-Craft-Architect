@@ -349,9 +349,7 @@ public partial class RecipePlannerViewModel : ViewModelBase
         var node = FindNodeById(nodeId);
         if (node != null && node.CanBeHq)
         {
-            node.MustBeHq = !node.MustBeHq;
-            PublishCurrentDecisionStateToSession("wpf recipe node hq changed");
-            NodeHqChanged?.Invoke(this, new NodeChangedEventArgs(nodeId, node));
+            SetNodeHq(nodeId, !node.MustBeHq);
         }
     }
 
@@ -395,8 +393,22 @@ public partial class RecipePlannerViewModel : ViewModelBase
             return;
         }
 
+        _projectItems.Clear();
+        foreach (var item in _session.ProjectItems)
+        {
+            _projectItems.Add(new ProjectItem
+            {
+                Id = item.Id,
+                Name = item.Name,
+                IconId = item.IconId,
+                Quantity = item.Quantity,
+                MustBeHq = item.MustBeHq
+            });
+        }
+
         _currentPlan = _session.ActivePlan;
         SyncRootNodesFromPlan();
+        OnPropertyChanged(nameof(ProjectItems));
         OnPropertyChanged(nameof(CurrentPlan));
         OnPropertyChanged(nameof(AggregatedMaterials));
     }

@@ -292,7 +292,11 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
             aggregate.Occurrences.Any(occurrence => occurrence.IsActiveProcurement),
             aggregate.Occurrences.Any(occurrence => !occurrence.IsSuppressed),
             aggregate.IsMarketCandidate,
-            GetMarketEvidence(node.ItemId, marketPlan, unavailableMarketItemIds),
+            GetMarketEvidence(
+                node.ItemId,
+                marketPlan,
+                unavailableMarketItemIds,
+                aggregate.ReadState.Source == AcquisitionSource.MarketBuyHq),
             GetEstimatedCost(aggregate, totalQuantity, costContext));
     }
 
@@ -333,7 +337,8 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
     private static string GetMarketEvidence(
         int itemId,
         DetailedShoppingPlan? marketPlan,
-        IReadOnlySet<int> unavailableMarketItemIds)
+        IReadOnlySet<int> unavailableMarketItemIds,
+        bool hqOnly)
     {
         if (marketPlan == null)
         {
@@ -343,6 +348,11 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
         if (!string.IsNullOrEmpty(marketPlan.Error))
         {
             return "Needs data";
+        }
+
+        if (MarketPurchaseCostProjectionService.IsUnsupportedProjectedCost(marketPlan, hqOnly: hqOnly))
+        {
+            return "Projected only";
         }
 
         if (marketPlan.RecommendedWorld != null)
@@ -706,15 +716,17 @@ public static class CoreAcquisitionEvaluationCostCalculator
         AcquisitionCostContext costContext,
         bool hqOnly)
     {
-        if (costContext.TryGetShoppingPlan(readState.ItemId, out var shoppingPlan) &&
-            AcquisitionPlanningService.TryGetMarketBoardPurchase(
+        if (costContext.TryGetShoppingPlan(readState.ItemId, out var shoppingPlan))
+        {
+            var estimate = MarketPurchaseCostProjectionService.Estimate(
                 shoppingPlan,
                 quantity,
                 hqOnly,
-                out _,
-                out var evidenceCost))
-        {
-            return evidenceCost;
+                includeVendor: false);
+            if (estimate.HasCost)
+            {
+                return estimate.Cost;
+            }
         }
 
         return (hqOnly ? readState.HqUnitPrice : readState.UnitPrice) * quantity;

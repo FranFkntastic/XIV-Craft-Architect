@@ -32,7 +32,8 @@ public sealed record CoreImportProjectItemsResult(
 public sealed record CoreRefreshRecipePlanPricesRequest(
     MarketFetchScope PriceFetchScope,
     string SelectedDataCenter,
-    string SelectedRegion);
+    string SelectedRegion,
+    bool ForceRefreshData = false);
 
 public sealed record CoreApplyPlanEditorEditRequest(
     IReadOnlyCollection<string> NodeIds,
@@ -155,6 +156,7 @@ public sealed class CoreRecipePlannerCommandService
                     request.PriceFetchScope,
                     request.SelectedDataCenter,
                     request.SelectedRegion,
+                    forceRefreshData: false,
                     linkedCancellation.Token);
                 if (!_session.IsCurrentPlanSession(builtPlan, publishedPlanSessionVersion.Value))
                 {
@@ -333,15 +335,23 @@ public sealed class CoreRecipePlannerCommandService
         var planSessionVersion = _session.PlanSessionVersion;
         if (plan == null)
         {
-            return CoreMarketPriceAvailability.Empty;
+            return CoreMarketPriceAvailability.NoPlan;
         }
+
+        var selectedDataCenter = !string.IsNullOrWhiteSpace(plan.DataCenter)
+            ? plan.DataCenter
+            : request.SelectedDataCenter;
+        var selectedRegion = MarketFetchScopeResolver.ResolveRegionForDataCenter(
+            selectedDataCenter,
+            request.SelectedRegion);
 
         return await RefreshPricesWithOperationAsync(
             plan,
             planSessionVersion,
             request.PriceFetchScope,
-            request.SelectedDataCenter,
-            request.SelectedRegion,
+            selectedDataCenter,
+            selectedRegion,
+            request.ForceRefreshData,
             ct);
     }
 
@@ -355,6 +365,9 @@ public sealed class CoreRecipePlannerCommandService
         var selectedDataCenter = !string.IsNullOrWhiteSpace(request.Plan.DataCenter)
             ? request.Plan.DataCenter
             : request.SelectedDataCenter;
+        var selectedRegion = MarketFetchScopeResolver.ResolveRegionForDataCenter(
+            selectedDataCenter,
+            request.SelectedRegion);
         using var activationOperation = _operationCoordinator.Start(
             CraftOperationWorkflow.PlanActivation,
             "Loading Plan",
@@ -364,7 +377,7 @@ public sealed class CoreRecipePlannerCommandService
                 request.Plan,
                 CraftPlanStateMapper.GetRootProjectItems(request.Plan),
                 new CraftSessionActiveContext(
-                    request.SelectedRegion,
+                    selectedRegion,
                     selectedDataCenter,
                     request.Plan.World,
                     request.PriceFetchScope),
@@ -385,6 +398,7 @@ public sealed class CoreRecipePlannerCommandService
 
         if (!request.RefreshVendorPrices && !request.RefreshMarketPrices)
         {
+            RestoreSavedMarketPlans(request.Plan, activatedPlanSessionVersion);
             return new CoreActivateRecipePlanResult(
                 selectedNode,
                 CoreMarketPriceAvailability.Empty,
@@ -407,7 +421,8 @@ public sealed class CoreRecipePlannerCommandService
                     activatedPlanSessionVersion,
                     request.PriceFetchScope,
                     selectedDataCenter,
-                    request.SelectedRegion,
+                    selectedRegion,
+                    forceRefreshData: false,
                     linkedCancellation.Token);
                 if (!_session.IsCurrentPlanSession(request.Plan, activatedPlanSessionVersion))
                 {
@@ -437,6 +452,12 @@ public sealed class CoreRecipePlannerCommandService
                 }
 
                 priceRefresh = CoreMarketPriceAvailability.Empty;
+                operation.RefreshSessionStamp();
+            }
+
+            if (!request.RefreshMarketPrices)
+            {
+                RestoreSavedMarketPlans(request.Plan, activatedPlanSessionVersion);
                 operation.RefreshSessionStamp();
             }
 
@@ -558,13 +579,14 @@ public sealed class CoreRecipePlannerCommandService
         MarketFetchScope priceFetchScope,
         string selectedDataCenter,
         string selectedRegion,
+        bool forceRefreshData,
         CancellationToken ct)
     {
         await _recipePlanBuilder.FetchVendorPricesAsync(plan, ct);
         ct.ThrowIfCancellationRequested();
         if (!_session.IsCurrentPlanSession(plan, planSessionVersion))
         {
-            return CoreMarketPriceAvailability.Empty;
+            return CoreMarketPriceAvailability.StalePlan;
         }
 
         var allItemIds = plan.GetAllItemIds();
@@ -576,11 +598,12 @@ public sealed class CoreRecipePlannerCommandService
             priceFetchScope,
             selectedDataCenter,
             selectedRegion,
+            forceRefreshData ? TimeSpan.Zero : null,
             ct: ct);
         ct.ThrowIfCancellationRequested();
         if (!_session.IsCurrentPlanSession(plan, planSessionVersion))
         {
-            return CoreMarketPriceAvailability.Empty;
+            return CoreMarketPriceAvailability.StalePlan;
         }
 
         var refreshResult = CoreMarketPriceAvailability.FromCachedMarketData(
@@ -595,7 +618,7 @@ public sealed class CoreRecipePlannerCommandService
 
         if (!_session.IsCurrentPlanSession(plan, planSessionVersion))
         {
-            return CoreMarketPriceAvailability.Empty;
+            return CoreMarketPriceAvailability.StalePlan;
         }
 
         plan.PriceVersion++;
@@ -607,7 +630,24 @@ public sealed class CoreRecipePlannerCommandService
             refreshResult.UnavailableItems.Select(item => item.ItemId),
             "recipe plan prices refreshed")
             ? refreshResult
-            : CoreMarketPriceAvailability.Empty;
+            : CoreMarketPriceAvailability.StalePlan;
+    }
+
+    private bool RestoreSavedMarketPlans(CraftingPlan plan, long planSessionVersion)
+    {
+        if (plan.SavedMarketPlans.Count == 0)
+        {
+            return false;
+        }
+
+        return _session.TryPublishMarketAnalysis(
+            _session.CaptureVersionStamp(),
+            plan,
+            planSessionVersion,
+            Array.Empty<MarketItemAnalysis>(),
+            plan.SavedMarketPlans,
+            acquisitionDecisionsChanged: false,
+            "saved market shopping plans restored");
     }
 
     private async Task<CoreMarketPriceRefreshResult> RefreshPricesWithOperationAsync(
@@ -616,6 +656,7 @@ public sealed class CoreRecipePlannerCommandService
         MarketFetchScope priceFetchScope,
         string selectedDataCenter,
         string selectedRegion,
+        bool forceRefreshData,
         CancellationToken ct)
     {
         using var operation = _operationCoordinator.Start(
@@ -632,12 +673,13 @@ public sealed class CoreRecipePlannerCommandService
                 priceFetchScope,
                 selectedDataCenter,
                 selectedRegion,
+                forceRefreshData,
                 linkedCancellation.Token);
 
             if (!_session.IsCurrentPlanSession(plan, planSessionVersion))
             {
                 operation.Cancel();
-                return CoreMarketPriceAvailability.Empty;
+                return CoreMarketPriceAvailability.StalePlan;
             }
 
             operation.RefreshSessionStamp();

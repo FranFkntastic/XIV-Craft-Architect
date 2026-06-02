@@ -1,9 +1,13 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
 public static class MarketAnalysisGridViewService
 {
+    public const string CalculatedTotalHeaderTooltip = "Calculated Total is the gil cost computed for the needed quantity from the current recommendation. Market totals use loaded listing evidence, split totals add the recommended route, and vendor totals use loaded gil vendor prices.";
+    public const string UnsupportedProjectedCostTooltip = "Calculated Total is projected because the current search scope cannot support this purchase. It scales from available market evidence or data-center average pricing, so it is highlighted as unsupported.";
+
     public static IReadOnlyList<DetailedShoppingPlan> GetOrderedPlans(
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
         IEnumerable<MarketItemAnalysis> analyses,
@@ -20,7 +24,7 @@ public static class MarketAnalysisGridViewService
         IOrderedEnumerable<DetailedShoppingPlan> ordered = sortColumn switch
         {
             MarketAnalysisGridSortColumn.Item => Order(plans, plan => plan.Name, sortDescending),
-            MarketAnalysisGridSortColumn.Quantity => Order(plans, GetAvailableSortValue, sortDescending),
+            MarketAnalysisGridSortColumn.Quantity => Order(plans, plan => plan.QuantityNeeded, sortDescending),
             MarketAnalysisGridSortColumn.Coverage => Order(plans, plan => GetCoverageSortValue(plan, analysisByItemId), sortDescending),
             MarketAnalysisGridSortColumn.Worlds => Order(plans, GetWorldCount, sortDescending),
             MarketAnalysisGridSortColumn.Total => Order(plans, GetTotalCost, sortDescending),
@@ -76,22 +80,55 @@ public static class MarketAnalysisGridViewService
 
     public static long GetTotalCost(DetailedShoppingPlan plan)
     {
-        if (plan.SplitTotalCost.HasValue)
+        ArgumentNullException.ThrowIfNull(plan);
+
+        var estimate = MarketPurchaseCostProjectionService.Estimate(
+            plan,
+            plan.QuantityNeeded,
+            hqOnly: false);
+        return estimate.HasCost ? (long)estimate.Cost : 0;
+    }
+
+    public static bool IsUnsupportedProjectedCost(DetailedShoppingPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+
+        return MarketPurchaseCostProjectionService.IsUnsupportedProjectedCost(plan);
+    }
+
+    public static string GetTotalCostClass(DetailedShoppingPlan plan)
+    {
+        return IsUnsupportedProjectedCost(plan)
+            ? "ma-total-value is-projected-unsupported"
+            : "ma-total-value";
+    }
+
+    public static string GetTotalCostTooltip(DetailedShoppingPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+
+        if (IsUnsupportedProjectedCost(plan))
         {
-            return plan.SplitTotalCost.Value;
+            return UnsupportedProjectedCostTooltip;
+        }
+
+        if (plan.RecommendedSplit?.Any() == true)
+        {
+            var splitQuantity = plan.RecommendedSplit.Sum(split => split.QuantityToBuy);
+            return $"Calculated Total is the sum of the recommended split purchase: {splitQuantity:N0}/{plan.QuantityNeeded:N0} items across {plan.RecommendedSplit.Count:N0} worlds.";
+        }
+
+        if (plan.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName || plan.Vendors.Any())
+        {
+            return $"Calculated Total uses loaded gil vendor pricing for {plan.QuantityNeeded:N0} needed.";
         }
 
         if (plan.RecommendedWorld != null)
         {
-            return plan.RecommendedWorld.TotalCost;
+            return $"Calculated Total uses the recommended world's market listings for {plan.RecommendedWorld.TotalQuantityPurchased:N0}/{plan.QuantityNeeded:N0} needed.";
         }
 
-        if (plan.WorldOptions.Any())
-        {
-            return plan.WorldOptions.OrderBy(world => world.TotalCost).First().TotalCost;
-        }
-
-        return (long)(plan.DCAveragePrice * plan.QuantityNeeded);
+        return "Calculated Total is the computed gil cost for the needed quantity. Run Market Analysis again if this row lacks current recommendation evidence.";
     }
 
     public static string FormatWorldPriceSummary(WorldMarketAnalysis world, MarketAcquisitionLens lens)
@@ -495,13 +532,6 @@ public static class MarketAnalysisGridViewService
         }
 
         return plan.RecommendedWorld == null ? 0 : 1;
-    }
-
-    private static int GetAvailableSortValue(DetailedShoppingPlan plan)
-    {
-        return IsVendorPlan(plan)
-            ? int.MaxValue
-            : plan.TotalAvailableQuantity;
     }
 
     private static bool IsVendorPlan(DetailedShoppingPlan plan)

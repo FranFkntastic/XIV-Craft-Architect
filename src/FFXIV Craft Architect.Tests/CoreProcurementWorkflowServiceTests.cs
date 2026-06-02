@@ -69,6 +69,7 @@ public class CoreProcurementWorkflowServiceTests
         Assert.Equal(before.Procurement + 1, service.Session.Versions.Procurement);
         Assert.Equal([101, 202], service.Session.ProcurementOverlay?.ActiveItemIds);
         Assert.Equal([101, 202], service.Session.ProcurementOverlay?.ShoppingPlans.Select(plan => plan.ItemId));
+        Assert.Equal(["Faerie", "Siren"], service.Session.ProcurementOverlay?.RouteCards?.Select(card => card.WorldName));
         execution.Verify(e => e.AnalyzeAsync(
             It.Is<ProcurementRouteExecutionRequest>(request =>
                 request.ActiveProcurementItems.Count == 2 &&
@@ -81,6 +82,51 @@ public class CoreProcurementWorkflowServiceTests
             It.IsAny<IProgress<string>?>(),
             It.IsAny<CancellationToken>(),
             It.IsAny<MarketAnalysisExecutionOptions?>()));
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_MergesSessionTemporaryExclusionsIntoExecutionRequest()
+    {
+        ProcurementRouteExecutionRequest? capturedRequest = null;
+        var execution = new Mock<IProcurementRouteExecutionService>();
+        execution.Setup(e => e.AnalyzeAsync(
+                It.IsAny<ProcurementRouteExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback<ProcurementRouteExecutionRequest, IProgress<string>?, CancellationToken, MarketAnalysisExecutionOptions?>(
+                (request, _, _, _) => capturedRequest = request)
+            .ReturnsAsync(new ProcurementRouteExecutionResult([ShoppingPlan(101)], [], [], [], []));
+        var service = CreateService(procurementExecution: execution.Object);
+        service.Session.ActivatePlan(
+            CreatePlan(),
+            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
+            new CraftSessionActiveContext("North America", "Aether", string.Empty, MarketFetchScope.SelectedDataCenter),
+            "test plan");
+        var sessionWorld = new MarketWorldKey("Aether", "Siren");
+        var requestWorld = new MarketWorldKey("Aether", "Faerie");
+        service.Session.BlacklistMarketWorldTemporarily(sessionWorld);
+        service.Session.ExcludeItemWorldTemporarily(101, sessionWorld);
+
+        var result = await service.RunAnalysisAsync(new CoreProcurementWorkflowRequest(
+            MarketFetchScope.SelectedDataCenter,
+            "Aether",
+            "North America",
+            MarketAcquisitionLens.MinimumUpfrontCost,
+            new MarketAnalysisConfig { TravelTolerance = 7 },
+            IncludeSplitPurchases: false,
+            SourceShoppingPlans: [ShoppingPlan(101)],
+            BlacklistedWorlds: new HashSet<MarketWorldKey> { requestWorld },
+            ExcludedItemWorlds: new HashSet<MarketItemWorldKey> { new(202, requestWorld) },
+            ExpectedWorldsByDataCenter: new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+            ExecutionOptions: MarketAnalysisExecutionOptions.Synchronous));
+
+        Assert.Equal(CoreProcurementWorkflowStatus.Published, result.Status);
+        Assert.NotNull(capturedRequest);
+        Assert.Contains(sessionWorld, capturedRequest.BlacklistedWorlds);
+        Assert.Contains(requestWorld, capturedRequest.BlacklistedWorlds);
+        Assert.Contains(new MarketItemWorldKey(101, sessionWorld), capturedRequest.ExcludedItemWorlds);
+        Assert.Contains(new MarketItemWorldKey(202, requestWorld), capturedRequest.ExcludedItemWorlds);
     }
 
     [Fact]
@@ -135,6 +181,32 @@ public class CoreProcurementWorkflowServiceTests
     }
 
     [Fact]
+    public async Task RunAnalysisAsync_WhenRouteExclusionsChangeDuringExecution_DoesNotPublish()
+    {
+        var execution = new Mock<IProcurementRouteExecutionService>();
+        var service = CreateService(procurementExecution: execution.Object);
+        service.Session.ActivatePlan(
+            CreatePlan(),
+            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
+            new CraftSessionActiveContext("North America", "Aether", string.Empty, MarketFetchScope.SelectedDataCenter),
+            "test plan");
+        var before = service.Session.CaptureVersionStamp();
+        execution.Setup(e => e.AnalyzeAsync(
+                It.IsAny<ProcurementRouteExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(() => service.Session.BlacklistMarketWorldTemporarily(new MarketWorldKey("Aether", "Siren")))
+            .ReturnsAsync(new ProcurementRouteExecutionResult([ShoppingPlan(101)], [], [], [], []));
+
+        var result = await service.RunAnalysisAsync(CreateRequest());
+
+        Assert.Equal(CoreProcurementWorkflowStatus.StaleConfiguration, result.Status);
+        Assert.Null(service.Session.ProcurementOverlay);
+        Assert.Equal(before.Procurement + 1, service.Session.Versions.Procurement);
+    }
+
+    [Fact]
     public async Task RefreshItemMarketDataAsync_ReplacesSingleMarketAnalysisItemAndInvalidatesProcurement()
     {
         var marketExecution = new Mock<IMarketAnalysisExecutionService>();
@@ -161,7 +233,9 @@ public class CoreProcurementWorkflowServiceTests
             [ShoppingPlan(202, "Faerie")],
             acquisitionDecisionsChanged: false,
             "existing analysis",
-            [404]));
+            [404],
+            RecommendationMode.MaximizeValue,
+            MarketAcquisitionLens.BulkValue));
         service.Session.PublishProcurementOverlay(
             new CraftSessionProcurementOverlay(DateTime.UtcNow, [202], "existing route", [ShoppingPlan(202)]),
             "existing route");
@@ -173,6 +247,8 @@ public class CoreProcurementWorkflowServiceTests
         Assert.Equal([202, 101], service.Session.MarketEvidence.ItemAnalyses.Select(analysis => analysis.ItemId));
         Assert.Equal([202, 101], service.Session.MarketEvidence.ShoppingPlans!.Select(plan => plan.ItemId));
         Assert.Contains(404, service.Session.MarketEvidence.UnavailableMarketItemIds);
+        Assert.Equal(RecommendationMode.MaximizeValue, service.Session.MarketEvidence.RecommendationMode);
+        Assert.Equal(MarketAcquisitionLens.BulkValue, service.Session.MarketEvidence.Lens);
         Assert.Null(service.Session.ProcurementOverlay);
         marketExecution.Verify(e => e.ExecuteAsync(
             It.Is<MarketAnalysisExecutionRequest>(request =>
@@ -248,6 +324,42 @@ public class CoreProcurementWorkflowServiceTests
         Assert.Equal(CoreProcurementItemRefreshStatus.StaleConfiguration, result.Status);
         Assert.Equal(303, Assert.Single(service.Session.MarketEvidence.ItemAnalyses).ItemId);
         Assert.Empty(service.Session.MarketEvidence.ShoppingPlans!);
+    }
+
+    [Fact]
+    public async Task RefreshItemMarketDataAsync_WhenRouteExclusionsChangeAfterFetch_DoesNotPublish()
+    {
+        var marketExecution = new Mock<IMarketAnalysisExecutionService>();
+        var service = CreateService(marketExecution: marketExecution.Object);
+        service.Session.ActivatePlan(
+            CreatePlan(),
+            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
+            new CraftSessionActiveContext("North America", "Aether", string.Empty, MarketFetchScope.SelectedDataCenter),
+            "test plan");
+        Assert.True(service.Session.TryPublishMarketAnalysis(
+            service.Session.CaptureVersionStamp(),
+            service.Session.ActivePlan!,
+            service.Session.PlanSessionVersion,
+            [new MarketItemAnalysis { ItemId = 202, Name = "Item 202", QuantityNeeded = 3 }],
+            [ShoppingPlan(202, "Faerie")],
+            acquisitionDecisionsChanged: false,
+            "existing analysis"));
+        marketExecution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(() => service.Session.BlacklistMarketWorldTemporarily(new MarketWorldKey("Aether", "Siren")))
+            .ReturnsAsync(new MarketAnalysisExecutionResult(
+                CreateEmptyEvidence(),
+                [new MarketItemAnalysis { ItemId = 101, Name = "Item 101", QuantityNeeded = 5 }],
+                [ShoppingPlan(101)]));
+
+        var result = await service.RefreshItemMarketDataAsync(CreateRefreshRequest(101));
+
+        Assert.Equal(CoreProcurementItemRefreshStatus.StaleConfiguration, result.Status);
+        Assert.Equal(202, Assert.Single(service.Session.MarketEvidence.ItemAnalyses).ItemId);
+        Assert.Equal(202, Assert.Single(service.Session.MarketEvidence.ShoppingPlans!).ItemId);
     }
 
     private static TestServiceHost CreateService(

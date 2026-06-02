@@ -30,4 +30,17 @@ public static class MarketFetchScopeResolver
 
         return regionDataCenters;
     }
+
+    public static string ResolveRegionForDataCenter(string selectedDataCenter, string fallbackRegion)
+    {
+        foreach (var (region, dataCenters) in RegionDataCenters)
+        {
+            if (dataCenters.Contains(selectedDataCenter, StringComparer.OrdinalIgnoreCase))
+            {
+                return region;
+            }
+        }
+
+        return fallbackRegion;
+    }
 }

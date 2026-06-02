@@ -20,14 +20,15 @@ public class WebSettingsService : ISettingsService
         ["market.region"] = "North America",
         ["market.home_world"] = "",
         ["market.auto_fetch_prices"] = true,
-        ["market.default_search_scope"] = "SelectedDataCenter",
+        ["market.default_search_scope"] = "EntireRegion",
         ["market.include_cross_world"] = true,
         ["market.exclude_congested_worlds"] = true,
         ["ui.auto_save_enabled"] = true,
         ["ui.accent_color"] = "#d4af37",
         ["ui.use_split_pane_market_view"] = true,
         ["planning.default_recommendation_mode"] = "MinimizeTotalCost",
-        ["debug.enable_diagnostic_logging"] = false
+        ["debug.enable_diagnostic_logging"] = false,
+        ["debug.secret_tools_enabled"] = false
     };
 
     public WebSettingsService(IndexedDbService indexedDb, ILogger<WebSettingsService>? logger = null)

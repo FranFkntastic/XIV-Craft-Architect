@@ -29,7 +29,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
             plan,
             marketPlans,
-            Array.Empty<MarketDataUnavailableItem>(),
+            Array.Empty<CoreMarketDataUnavailableItem>(),
             AcquisitionFilter.All,
             CreateProjection(plan));
 
@@ -47,7 +47,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
             plan,
             Array.Empty<DetailedShoppingPlan>(),
-            Array.Empty<MarketDataUnavailableItem>(),
+            Array.Empty<CoreMarketDataUnavailableItem>(),
             AcquisitionFilter.Active,
             CreateProjection(plan));
 
@@ -62,7 +62,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
             plan,
             Array.Empty<DetailedShoppingPlan>(),
-            [new MarketDataUnavailableItem(200, "Intermediate")],
+            [new CoreMarketDataUnavailableItem(200, "Intermediate")],
             AcquisitionFilter.All,
             CreateProjection(plan));
 
@@ -84,7 +84,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
             plan,
             Array.Empty<DetailedShoppingPlan>(),
-            Array.Empty<MarketDataUnavailableItem>(),
+            Array.Empty<CoreMarketDataUnavailableItem>(),
             AcquisitionFilter.All,
             CreateProjection(plan));
 
@@ -122,7 +122,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
             plan,
             shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             AcquisitionFilter.All,
             projection);
 
@@ -172,7 +172,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
             plan,
             shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             AcquisitionFilter.All,
             projection);
 
@@ -210,7 +210,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
             plan,
             shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             AcquisitionFilter.All,
             projection);
 
@@ -263,7 +263,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
             plan,
             marketPlans,
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             AcquisitionFilter.All,
             projection);
 
@@ -271,6 +271,64 @@ public class AcquisitionEvaluationSnapshotBuilderTests
 
         Assert.Equal("700g", row.EstimatedCost);
         Assert.Equal(2, material.Quantity);
+    }
+
+    [Fact]
+    public void Build_EstimateUsesUnsupportedMarketProjectionInsteadOfPlannerUnitPrice()
+    {
+        var root = CreateRoot(100, "Final Craft");
+        var material = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Cassia Lumber",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 3,
+            Parent = root
+        };
+        root.Children.Add(material);
+        var plan = new CraftingPlan { RootItems = [root] };
+        var projection = new RecipeDemandProjection(
+            AllPlanDemand:
+            [
+                CreateDemandRow(RecipeDemandViewKind.PlanOccurrence, material, quantity: 999)
+            ],
+            MarketAnalysisCandidates: [CreateDemandRow(RecipeDemandViewKind.MarketAnalysisCandidate, material, quantity: 999)],
+            ActiveProcurementDemand: [CreateDemandRow(RecipeDemandViewKind.ActiveProcurement, material, quantity: 999)],
+            SuppressedDemand: Array.Empty<RecipeDemandRow>());
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 200,
+                Name = "Cassia Lumber",
+                QuantityNeeded = 999,
+                DCAveragePrice = 6_408,
+                WorldOptions =
+                [
+                    new WorldShoppingSummary
+                    {
+                        DataCenter = "Aether",
+                        WorldName = "Adamantoise",
+                        TotalCost = 3_000,
+                        TotalQuantityPurchased = 1
+                    }
+                ]
+            }
+        };
+
+        var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
+            plan,
+            marketPlans,
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
+            AcquisitionFilter.All,
+            projection);
+
+        var row = snapshot.Rows.Single(row => row.Node.ItemId == 200);
+
+        Assert.Equal("Projected only", row.MarketEvidence);
+        Assert.Equal("6,401,592g", row.EstimatedCost);
     }
 
     [Fact]
@@ -301,7 +359,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
             plan,
             shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             AcquisitionFilter.All,
             projection);
 
@@ -372,7 +430,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
             plan,
             shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             AcquisitionFilter.All,
             projection);
 
@@ -402,7 +460,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var report = AcquisitionEvaluationSnapshotBuilder.CompareWithLegacyTraversal(
             plan,
             shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             projection);
 
         Assert.True(report.Matches);
@@ -422,7 +480,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var report = AcquisitionEvaluationSnapshotBuilder.CompareWithLegacyTraversal(
             plan,
             shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             mismatchedProjection);
 
         var mismatch = Assert.Single(report.Mismatches, item =>
@@ -456,7 +514,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var report = AcquisitionEvaluationSnapshotBuilder.CompareWithLegacyTraversal(
             plan,
             shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             mismatchedProjection);
 
         Assert.Contains(report.Mismatches, item =>
@@ -483,7 +541,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var report = AcquisitionEvaluationSnapshotBuilder.CompareWithLegacyTraversal(
             plan,
             shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             mismatchedProjection);
 
         Assert.Contains(report.Mismatches, item =>
@@ -511,7 +569,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var report = AcquisitionEvaluationSnapshotBuilder.CompareWithLegacyTraversal(
             plan,
             shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
-            unavailableMarketItems: Array.Empty<MarketDataUnavailableItem>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
             mismatchedProjection);
 
         Assert.Contains(report.Mismatches, item =>

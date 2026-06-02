@@ -27,6 +27,8 @@ public sealed class CraftSessionState
     private CraftSessionMarketEvidence _marketEvidence = CraftSessionMarketEvidence.Empty;
     private CraftSessionProcurementOverlay? _procurementOverlay;
     private CraftSessionViewState _viewState = new();
+    private MarketWorldBlacklist _temporaryMarketWorldBlacklist = new();
+    private HashSet<MarketItemWorldKey> _temporarilyExcludedItemWorlds = new();
     private readonly CraftSessionVersions _versions = new();
     private readonly ConditionalWeakTable<CraftingPlan, PlanSessionToken> _planSessionTokens = new();
     private long _planSessionVersion;
@@ -116,6 +118,25 @@ public sealed class CraftSessionState
             {
                 return _viewState.Clone();
             }
+        }
+    }
+
+    public IReadOnlySet<MarketItemWorldKey> TemporarilyExcludedItemWorlds
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _temporarilyExcludedItemWorlds.ToHashSet();
+            }
+        }
+    }
+
+    public int ActiveTemporaryExclusionCount
+    {
+        get
+        {
+            return GetActiveTemporaryExclusionCount();
         }
     }
 
@@ -274,6 +295,57 @@ public sealed class CraftSessionState
         }
     }
 
+    public bool TryBeginAutoSave(
+        out CraftSessionVersionStamp capturedVersions,
+        out IReadOnlySet<CraftSessionDirtyBucket> dirtyBuckets)
+    {
+        lock (_gate)
+        {
+            capturedVersions = _versions.Capture(_planSessionVersion);
+            dirtyBuckets = _dirtyBuckets
+                .Where(IsAutoSavePersistedBucket)
+                .ToHashSet();
+            return dirtyBuckets.Count > 0;
+        }
+    }
+
+    public bool CompleteAutoSave(
+        bool succeeded,
+        CraftSessionVersionStamp capturedVersions,
+        IReadOnlySet<CraftSessionDirtyBucket> dirtyBuckets)
+    {
+        if (!succeeded || dirtyBuckets.Count == 0)
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            if (!_versions.Capture(_planSessionVersion).Equals(capturedVersions))
+            {
+                return false;
+            }
+
+            foreach (var bucket in dirtyBuckets)
+            {
+                _dirtyBuckets.Remove(bucket);
+            }
+
+            return true;
+        }
+    }
+
+    public void MarkCurrentPersisted(params CraftSessionDirtyBucket[] buckets)
+    {
+        lock (_gate)
+        {
+            foreach (var bucket in buckets)
+            {
+                _dirtyBuckets.Remove(bucket);
+            }
+        }
+    }
+
     public CraftSessionChange MarkPlanStructureChanged(string reason) =>
         ApplyChange(
             CraftSessionChangeScope.PlanCore,
@@ -303,6 +375,8 @@ public sealed class CraftSessionState
             _projectItems = projectItems.Select(CloneProjectItem).ToArray();
             _activeContext = activeContext;
             _marketEvidence = CraftSessionMarketEvidence.Empty;
+            _temporaryMarketWorldBlacklist.Clear();
+            _temporarilyExcludedItemWorlds.Clear();
             _planSessionVersion++;
         }
 
@@ -340,7 +414,9 @@ public sealed class CraftSessionState
                 _marketEvidence.ItemAnalyses.Select(CloneMarketItemAnalysis).ToArray(),
                 unavailableMarketItemIds.ToHashSet(),
                 _marketEvidence.ShoppingPlans?.Select(CloneDetailedShoppingPlan).ToArray(),
-                _marketEvidence.PublishedAgainstVersion);
+                _marketEvidence.PublishedAgainstVersion,
+                _marketEvidence.RecommendationMode,
+                _marketEvidence.Lens);
             MarkPlanPriceChanged(reason);
             MarkMarketEvidenceChanged("unavailable market items updated");
             RegisterPlanInstance(plan, _planSessionVersion);
@@ -405,7 +481,9 @@ public sealed class CraftSessionState
     public CraftSessionChange PublishMarketAnalysis(
         IEnumerable<MarketItemAnalysis> itemAnalyses,
         IEnumerable<int> unavailableMarketItemIds,
-        string reason)
+        string reason,
+        RecommendationMode recommendationMode = RecommendationMode.MinimizeTotalCost,
+        MarketAcquisitionLens lens = MarketAcquisitionLens.MinimumUpfrontCost)
     {
         return ApplyChange(
             CraftSessionChangeScope.MarketAnalysis,
@@ -422,7 +500,9 @@ public sealed class CraftSessionState
                     itemAnalyses.Select(CloneMarketItemAnalysis).ToArray(),
                     unavailableMarketItemIds.ToHashSet(),
                     Array.Empty<DetailedShoppingPlan>(),
-                    _versions.Capture(_planSessionVersion));
+                    _versions.Capture(_planSessionVersion),
+                    recommendationMode,
+                    lens);
             });
     }
 
@@ -451,7 +531,9 @@ public sealed class CraftSessionState
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
         bool acquisitionDecisionsChanged,
         string reason,
-        IEnumerable<int>? unavailableMarketItemIds = null)
+        IEnumerable<int>? unavailableMarketItemIds = null,
+        RecommendationMode recommendationMode = RecommendationMode.MinimizeTotalCost,
+        MarketAcquisitionLens lens = MarketAcquisitionLens.MinimumUpfrontCost)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(itemAnalyses);
@@ -479,7 +561,9 @@ public sealed class CraftSessionState
                 analysisList.Select(CloneMarketItemAnalysis).ToArray(),
                 unavailableIds.ToHashSet(),
                 shoppingPlanList.Select(CloneDetailedShoppingPlan).ToArray(),
-                _versions.Capture(_planSessionVersion));
+                _versions.Capture(_planSessionVersion),
+                recommendationMode,
+                lens);
 
             RegisterPlanInstance(plan, _planSessionVersion);
             RegisterPlanInstance(_activePlan, _planSessionVersion);
@@ -566,6 +650,113 @@ public sealed class CraftSessionState
             });
     }
 
+    public CraftSessionChange MarkProcurementRouteSettingsChanged(string reason) =>
+        ApplyChange(
+            CraftSessionChangeScope.ProcurementOverlay,
+            new HashSet<CraftSessionDirtyBucket> { CraftSessionDirtyBucket.Procurement },
+            reason,
+            invalidatesProcurementOverlay: true,
+            versions =>
+            {
+                versions.Procurement++;
+            });
+
+    public CraftSessionChange BlacklistMarketWorldTemporarily(
+        MarketWorldKey world,
+        TimeSpan? duration = null,
+        DateTimeOffset? now = null,
+        string reason = "temporary market world blacklisted")
+    {
+        return ApplyChange(
+            CraftSessionChangeScope.ProcurementOverlay,
+            new HashSet<CraftSessionDirtyBucket> { CraftSessionDirtyBucket.Procurement },
+            reason,
+            invalidatesProcurementOverlay: true,
+            versions =>
+            {
+                versions.Procurement++;
+            },
+            () =>
+            {
+                _temporaryMarketWorldBlacklist.Add(world, duration ?? TimeSpan.FromMinutes(30), now);
+            });
+    }
+
+    public CraftSessionChange ExcludeItemWorldTemporarily(
+        int itemId,
+        MarketWorldKey world,
+        string reason = "temporary item-world route excluded")
+    {
+        return ApplyChange(
+            CraftSessionChangeScope.ProcurementOverlay,
+            new HashSet<CraftSessionDirtyBucket> { CraftSessionDirtyBucket.Procurement },
+            reason,
+            invalidatesProcurementOverlay: true,
+            versions =>
+            {
+                versions.Procurement++;
+            },
+            () =>
+            {
+                _temporarilyExcludedItemWorlds.Add(new MarketItemWorldKey(itemId, world));
+            });
+    }
+
+    public HashSet<MarketWorldKey> GetActiveBlacklistedMarketWorlds(DateTimeOffset? now = null)
+    {
+        lock (_gate)
+        {
+            return _temporaryMarketWorldBlacklist.GetActiveWorlds(now);
+        }
+    }
+
+    public int GetActiveTemporaryExclusionCount(DateTimeOffset? now = null)
+    {
+        lock (_gate)
+        {
+            return _temporaryMarketWorldBlacklist.GetActiveWorlds(now).Count + _temporarilyExcludedItemWorlds.Count;
+        }
+    }
+
+    public CraftSessionChange ClearTemporaryProcurementExclusions(string reason = "temporary procurement exclusions cleared")
+    {
+        return ApplyChange(
+            CraftSessionChangeScope.ProcurementOverlay,
+            new HashSet<CraftSessionDirtyBucket> { CraftSessionDirtyBucket.Procurement },
+            reason,
+            invalidatesProcurementOverlay: true,
+            versions =>
+            {
+                versions.Procurement++;
+            },
+            () =>
+            {
+                _temporaryMarketWorldBlacklist.Clear();
+                _temporarilyExcludedItemWorlds.Clear();
+            });
+    }
+
+    public bool PruneExpiredTemporaryMarketWorldBlacklists(
+        DateTimeOffset? now = null,
+        string reason = "expired temporary market world blacklist pruned")
+    {
+        var changed = false;
+        lock (_gate)
+        {
+            var before = _temporaryMarketWorldBlacklist.Entries.Count;
+            _temporaryMarketWorldBlacklist.PruneExpired(now);
+            changed = _temporaryMarketWorldBlacklist.Entries.Count != before;
+        }
+
+        if (!changed)
+        {
+            return false;
+        }
+
+        MarkProcurementRouteSettingsChanged(reason);
+        return true;
+    }
+
     public CraftSessionChange MarkViewStateChanged(string reason) =>
         ApplyChange(
             CraftSessionChangeScope.ViewState,
@@ -585,6 +776,43 @@ public sealed class CraftSessionState
         }
 
         MarkPlanStructureChanged("session identity replaced");
+    }
+
+    public bool RenameSourceIdentity(string sourcePlanId, string sourcePlanName)
+    {
+        lock (_gate)
+        {
+            if (!string.Equals(Identity.SourcePlanId, sourcePlanId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            Identity = Identity with
+            {
+                Name = sourcePlanName,
+                SourcePlanName = sourcePlanName
+            };
+            return true;
+        }
+    }
+
+    public bool ClearSourceIdentity(string sourcePlanId)
+    {
+        lock (_gate)
+        {
+            if (!string.Equals(Identity.SourcePlanId, sourcePlanId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            Identity = Identity with
+            {
+                Name = string.IsNullOrWhiteSpace(_activePlan?.Name) ? "New Plan" : _activePlan.Name,
+                SourcePlanId = null,
+                SourcePlanName = null
+            };
+            return true;
+        }
     }
 
     private CraftSessionChange ApplyChange(
@@ -648,6 +876,11 @@ public sealed class CraftSessionState
         return change;
     }
 
+    private static bool IsAutoSavePersistedBucket(CraftSessionDirtyBucket bucket) =>
+        bucket is CraftSessionDirtyBucket.PlanCore or
+            CraftSessionDirtyBucket.MarketAnalysis or
+            CraftSessionDirtyBucket.SettingsContext;
+
     private void DispatchChanges(IReadOnlyCollection<CraftSessionChange> changes)
     {
         foreach (var change in changes)
@@ -699,13 +932,18 @@ public sealed class CraftSessionState
             evidence.ItemAnalyses.Select(CloneMarketItemAnalysis).ToArray(),
             evidence.UnavailableMarketItemIds.ToHashSet(),
             evidence.ShoppingPlans?.Select(CloneDetailedShoppingPlan).ToArray(),
-            evidence.PublishedAgainstVersion);
+            evidence.PublishedAgainstVersion,
+            evidence.RecommendationMode,
+            evidence.Lens);
 
     private static MarketItemAnalysis CloneMarketItemAnalysis(MarketItemAnalysis analysis) =>
         JsonSerializer.Deserialize<MarketItemAnalysis>(JsonSerializer.Serialize(analysis)) ?? new MarketItemAnalysis();
 
     private static DetailedShoppingPlan CloneDetailedShoppingPlan(DetailedShoppingPlan plan) =>
         JsonSerializer.Deserialize<DetailedShoppingPlan>(JsonSerializer.Serialize(plan)) ?? new DetailedShoppingPlan();
+
+    private static WorldProcurementCardModel CloneWorldProcurementCard(WorldProcurementCardModel card) =>
+        JsonSerializer.Deserialize<WorldProcurementCardModel>(JsonSerializer.Serialize(card)) ?? new WorldProcurementCardModel();
 
     private static CraftSessionProcurementOverlay? CloneProcurementOverlay(CraftSessionProcurementOverlay? overlay) =>
         overlay == null
@@ -714,7 +952,8 @@ public sealed class CraftSessionState
                 overlay.PublishedAtUtc,
                 overlay.ActiveItemIds.ToArray(),
                 overlay.SourceDescription,
-                overlay.ShoppingPlans?.Select(CloneDetailedShoppingPlan).ToArray());
+                overlay.ShoppingPlans?.Select(CloneDetailedShoppingPlan).ToArray(),
+                overlay.RouteCards?.Select(CloneWorldProcurementCard).ToArray());
 
     private void RegisterPlanInstance(CraftingPlan? plan, long planSessionVersion)
     {
@@ -752,6 +991,8 @@ public sealed class CraftSessionState
             CloneMarketEvidence(_marketEvidence),
             CloneProcurementOverlay(_procurementOverlay),
             _viewState.Clone(),
+            _temporaryMarketWorldBlacklist.Clone(),
+            _temporarilyExcludedItemWorlds.ToHashSet(),
             _versions.Capture(_planSessionVersion),
             _dirtyBuckets.ToHashSet(),
             _changes.Count,
@@ -767,6 +1008,8 @@ public sealed class CraftSessionState
         _marketEvidence = CloneMarketEvidence(snapshot.MarketEvidence);
         _procurementOverlay = CloneProcurementOverlay(snapshot.ProcurementOverlay);
         _viewState = snapshot.ViewState.Clone();
+        _temporaryMarketWorldBlacklist = snapshot.TemporaryMarketWorldBlacklist.Clone();
+        _temporarilyExcludedItemWorlds = snapshot.TemporarilyExcludedItemWorlds.ToHashSet();
         RestoreVersions(snapshot.Versions);
 
         _dirtyBuckets.Clear();
@@ -806,6 +1049,8 @@ public sealed class CraftSessionState
         CraftSessionMarketEvidence MarketEvidence,
         CraftSessionProcurementOverlay? ProcurementOverlay,
         CraftSessionViewState ViewState,
+        MarketWorldBlacklist TemporaryMarketWorldBlacklist,
+        HashSet<MarketItemWorldKey> TemporarilyExcludedItemWorlds,
         CraftSessionVersionStamp Versions,
         HashSet<CraftSessionDirtyBucket> DirtyBuckets,
         int ChangeCount,

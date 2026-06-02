@@ -6,6 +6,8 @@ public sealed class CraftOperationState
 {
     private readonly object _gate = new();
 
+    public event Action<CraftOperationSnapshot>? Changed;
+
     public Guid? CurrentOperationId { get; private set; }
     public CraftOperationWorkflow Workflow { get; private set; } = CraftOperationWorkflow.Unknown;
     public string OperationName { get; private set; } = string.Empty;
@@ -18,19 +20,13 @@ public sealed class CraftOperationState
     {
         lock (_gate)
         {
-            return new CraftOperationSnapshot(
-                CurrentOperationId,
-                Workflow,
-                OperationName,
-                StatusMessage,
-                ProgressPercent,
-                IsBusy,
-                IsCancellationRequested);
+            return SnapshotUnderLock();
         }
     }
 
     internal void Start(Guid operationId, CraftOperationWorkflow workflow, string name, string statusMessage)
     {
+        CraftOperationSnapshot snapshot;
         lock (_gate)
         {
             CurrentOperationId = operationId;
@@ -40,11 +36,15 @@ public sealed class CraftOperationState
             ProgressPercent = 0;
             IsBusy = true;
             IsCancellationRequested = false;
+            snapshot = SnapshotUnderLock();
         }
+
+        RaiseChanged(snapshot);
     }
 
     internal bool ReportProgress(Guid operationId, int progressPercent, string statusMessage)
     {
+        CraftOperationSnapshot snapshot;
         lock (_gate)
         {
             if (CurrentOperationId != operationId || !IsBusy)
@@ -54,12 +54,16 @@ public sealed class CraftOperationState
 
             ProgressPercent = Math.Clamp(progressPercent, 0, 100);
             StatusMessage = statusMessage;
-            return true;
+            snapshot = SnapshotUnderLock();
         }
+
+        RaiseChanged(snapshot);
+        return true;
     }
 
     internal bool Complete(Guid operationId, string statusMessage)
     {
+        CraftOperationSnapshot snapshot;
         lock (_gate)
         {
             if (CurrentOperationId != operationId || !IsBusy)
@@ -71,12 +75,16 @@ public sealed class CraftOperationState
             ProgressPercent = 100;
             IsBusy = false;
             IsCancellationRequested = false;
-            return true;
+            snapshot = SnapshotUnderLock();
         }
+
+        RaiseChanged(snapshot);
+        return true;
     }
 
     internal bool Cancel(Guid operationId)
     {
+        CraftOperationSnapshot snapshot;
         lock (_gate)
         {
             if (CurrentOperationId != operationId || !IsBusy)
@@ -88,12 +96,16 @@ public sealed class CraftOperationState
             ProgressPercent = 0;
             IsBusy = false;
             IsCancellationRequested = true;
-            return true;
+            snapshot = SnapshotUnderLock();
         }
+
+        RaiseChanged(snapshot);
+        return true;
     }
 
     internal bool Supersede(Guid operationId)
     {
+        CraftOperationSnapshot snapshot;
         lock (_gate)
         {
             if (CurrentOperationId != operationId || !IsBusy)
@@ -105,8 +117,11 @@ public sealed class CraftOperationState
             ProgressPercent = 0;
             IsBusy = false;
             IsCancellationRequested = true;
-            return true;
+            snapshot = SnapshotUnderLock();
         }
+
+        RaiseChanged(snapshot);
+        return true;
     }
 
     internal bool IsCurrent(Guid operationId)
@@ -116,4 +131,17 @@ public sealed class CraftOperationState
             return CurrentOperationId == operationId && IsBusy;
         }
     }
+
+    private CraftOperationSnapshot SnapshotUnderLock() =>
+        new(
+            CurrentOperationId,
+            Workflow,
+            OperationName,
+            StatusMessage,
+            ProgressPercent,
+            IsBusy,
+            IsCancellationRequested);
+
+    private void RaiseChanged(CraftOperationSnapshot snapshot) =>
+        Changed?.Invoke(snapshot);
 }

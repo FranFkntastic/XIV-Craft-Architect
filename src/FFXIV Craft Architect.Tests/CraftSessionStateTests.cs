@@ -85,7 +85,11 @@ public class CraftSessionStateTests
         };
         session.PublishMarketAnalysis([analysis], [], "analysis published");
         session.PublishProcurementOverlay(
-            new CraftSessionProcurementOverlay(DateTime.UtcNow, [3], "route"),
+            new CraftSessionProcurementOverlay(
+                DateTime.UtcNow,
+                [3],
+                "route",
+                RouteCards: [new WorldProcurementCardModel { WorldName = "Siren", DataCenter = "Aether" }]),
             "route generated");
 
         var versionSnapshot = session.Versions;
@@ -95,10 +99,12 @@ public class CraftSessionStateTests
         analysis.Worlds.Add(new WorldMarketAnalysis { WorldName = "External Mutation" });
         session.MarketEvidence.ItemAnalyses[0].Worlds.Add(new WorldMarketAnalysis { WorldName = "Snapshot Mutation" });
         ((int[])session.ProcurementOverlay!.ActiveItemIds)[0] = 99;
+        session.ProcurementOverlay!.RouteCards![0].WorldName = "Mutated Outside";
 
         Assert.Equal(1, session.Versions.MarketAnalysis);
         Assert.Single(session.MarketEvidence.ItemAnalyses[0].Worlds);
         Assert.Equal(3, session.ProcurementOverlay!.ActiveItemIds[0]);
+        Assert.Equal("Siren", session.ProcurementOverlay!.RouteCards![0].WorldName);
     }
 
     [Fact]
@@ -179,6 +185,54 @@ public class CraftSessionStateTests
         Assert.False(session.HasProcurementOverlay);
         Assert.Null(session.ProcurementOverlay);
         Assert.True(session.IsDirty(CraftSessionDirtyBucket.Procurement));
+    }
+
+    [Fact]
+    public void ProcurementRouteSettingsChange_ClearsOverlayWithoutStalingMarketEvidence()
+    {
+        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
+        session.PublishMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 12, Name = "Ore", QuantityNeeded = 3 }],
+            [],
+            "analysis published");
+        session.PublishProcurementOverlay(CreateOverlay(), "route generated");
+        var before = session.CaptureVersionStamp();
+
+        session.MarkProcurementRouteSettingsChanged("split world setting changed");
+
+        Assert.Equal(before.MarketAnalysis, session.Versions.MarketAnalysis);
+        Assert.Equal(before.SettingsContext, session.Versions.SettingsContext);
+        Assert.Equal(before.Procurement + 1, session.Versions.Procurement);
+        Assert.Single(session.MarketEvidence.ItemAnalyses);
+        Assert.False(session.HasProcurementOverlay);
+    }
+
+    [Fact]
+    public void TemporaryProcurementExclusions_AreSessionOwnedAndClearOnlyProcurementOverlay()
+    {
+        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
+        session.PublishMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 12, Name = "Ore", QuantityNeeded = 3 }],
+            [],
+            "analysis published");
+        session.PublishProcurementOverlay(CreateOverlay(), "route generated");
+        var before = session.CaptureVersionStamp();
+        var blacklistedWorld = new MarketWorldKey("Aether", "Siren");
+        var excludedWorld = new MarketWorldKey("Aether", "Faerie");
+
+        session.BlacklistMarketWorldTemporarily(
+            blacklistedWorld,
+            TimeSpan.FromMinutes(30),
+            DateTimeOffset.Parse("2026-06-01T12:00:00Z"));
+        session.ExcludeItemWorldTemporarily(55, excludedWorld);
+
+        Assert.Equal(before.MarketAnalysis, session.Versions.MarketAnalysis);
+        Assert.Equal(before.SettingsContext, session.Versions.SettingsContext);
+        Assert.Contains(blacklistedWorld, session.GetActiveBlacklistedMarketWorlds(DateTimeOffset.Parse("2026-06-01T12:05:00Z")));
+        Assert.Contains(new MarketItemWorldKey(55, excludedWorld), session.TemporarilyExcludedItemWorlds);
+        Assert.Equal(2, session.GetActiveTemporaryExclusionCount(DateTimeOffset.Parse("2026-06-01T12:05:00Z")));
+        Assert.Single(session.MarketEvidence.ItemAnalyses);
+        Assert.False(session.HasProcurementOverlay);
     }
 
     [Fact]

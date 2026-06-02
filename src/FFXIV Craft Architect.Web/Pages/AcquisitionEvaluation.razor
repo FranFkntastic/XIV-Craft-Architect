@@ -92,7 +92,7 @@
                         @for (var i = 0; i < ColumnHeaders.Length; i++)
                         {
                             var columnIndex = i;
-                            <span class="ae-head-cell">
+                            <span class="ae-head-cell" title="@GetColumnHeaderTooltip(ColumnHeaders[i])">
                                 @ColumnHeaders[i]
                                 @if (i < ColumnHeaders.Length - 1)
                                 {
@@ -136,7 +136,7 @@
                             <span class="ae-market-cell">
                                 @row.MarketEvidence
                             </span>
-                            <span class="ae-cost-cell">@row.EstimatedCost</span>
+                            <span class="@GetCalculatedTotalClass(row)" title="@GetCalculatedTotalTooltip(row)">@row.EstimatedCost</span>
                         </div>
                     }
                 </div>
@@ -157,27 +157,40 @@
 </div>
 
 @code {
+    [SupplyParameterFromQuery(Name = "nodeId")]
+    public string? RequestedNodeId { get; set; }
+
     private PlanNode? _selectedNode;
     private AcquisitionFilter _filter = AcquisitionFilter.All;
     private readonly AcquisitionEvaluationLedgerCache _ledgerCache = new();
     private AcquisitionEvaluationSnapshot _snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
         null,
         Array.Empty<DetailedShoppingPlan>(),
-        Array.Empty<MarketDataUnavailableItem>(),
+        Array.Empty<CoreMarketDataUnavailableItem>(),
         AcquisitionFilter.All,
         new RecipeDemandProjection([], [], [], []));
-    private readonly int[] _columnWidths = { 300, 150, 260, 150, 170, 110 };
-    private static readonly string[] ColumnHeaders = { "Item", "Source", "Used In", "Role", "Market Evidence", "Estimate" };
+    private readonly int[] _columnWidths = { 300, 150, 260, 150, 170, 150 };
+    private static readonly string[] ColumnHeaders = { "Item", "Source", "Used In", "Role", "Market Evidence", "Calculated Total" };
+    private const string CalculatedTotalHeaderTooltip = "Calculated Total is the gil cost computed for the row's selected source and needed quantity. Craft totals roll up selected child acquisition costs, market totals use market evidence when available, and vendor totals use loaded gil vendor prices.";
     private int? _resizingColumnIndex;
     private double _resizeStartX;
     private int _resizeStartWidth;
     private CancellationTokenSource? _refreshCts;
     private long _refreshRequestId;
+    private string? _appliedRequestedNodeId;
 
     protected override async Task OnInitializedAsync()
     {
         AppState.OnStateChanged += OnStateChanged;
         await RefreshLedgerSnapshotAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!string.Equals(RequestedNodeId, _appliedRequestedNodeId, StringComparison.Ordinal))
+        {
+            SelectRequestedNodeFromSnapshot();
+        }
     }
 
     public void Dispose()
@@ -445,6 +458,45 @@
         return "Reference";
     }
 
+    private static string? GetColumnHeaderTooltip(string columnHeader)
+    {
+        return columnHeader == "Calculated Total"
+            ? CalculatedTotalHeaderTooltip
+            : null;
+    }
+
+    private static string GetCalculatedTotalClass(DecisionRow row)
+    {
+        return IsUnsupportedProjectedTotal(row)
+            ? "ae-cost-cell projected-unsupported"
+            : "ae-cost-cell";
+    }
+
+    private static string GetCalculatedTotalTooltip(DecisionRow row)
+    {
+        var quantity = AcquisitionEvaluationCostCalculator.GetCostQuantity(row);
+        var source = RecipePlanDisplayHelpers.GetSourceDisplayName(row.Source);
+        var baseText = $"Calculated Total is the gil cost computed for {quantity:N0} needed from {source}.";
+
+        if (IsUnsupportedProjectedTotal(row))
+        {
+            return $"{baseText} This row is projected because the current market search scope cannot support the purchase, so it is highlighted as unsupported.";
+        }
+
+        return row.Source switch
+        {
+            AcquisitionSource.Craft => $"{baseText} Craft totals roll up selected child acquisition costs from the current recipe tree.",
+            AcquisitionSource.VendorBuy => $"{baseText} Vendor totals use loaded gil vendor prices.",
+            AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq => $"{baseText} Market totals use loaded listing evidence for the selected market purchase.",
+            _ => baseText
+        };
+    }
+
+    private static bool IsUnsupportedProjectedTotal(DecisionRow row)
+    {
+        return string.Equals(row.MarketEvidence, "Projected only", StringComparison.Ordinal);
+    }
+
     private static List<AcquisitionSource> GetSourceOptions(PlanNode node)
     {
         var options = AcquisitionPlanningService.GetAvailableSources(node);
@@ -464,10 +516,34 @@
             return;
         }
 
+        if (SelectRequestedNodeFromSnapshot())
+        {
+            return;
+        }
+
         if (_selectedNode == null || !_snapshot.Rows.Any(row => row.Node.NodeId == _selectedNode.NodeId))
         {
             _selectedNode = _snapshot.Rows.FirstOrDefault()?.Node;
         }
+    }
+
+    private bool SelectRequestedNodeFromSnapshot()
+    {
+        if (string.IsNullOrWhiteSpace(RequestedNodeId) ||
+            string.Equals(RequestedNodeId, _appliedRequestedNodeId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var row = _snapshot.Rows.FirstOrDefault(row => row.NodeId == RequestedNodeId);
+        if (row == null)
+        {
+            return false;
+        }
+
+        _selectedNode = row.Node;
+        _appliedRequestedNodeId = RequestedNodeId;
+        return true;
     }
 
     private void GoToMarket()

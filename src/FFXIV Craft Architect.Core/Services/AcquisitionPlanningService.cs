@@ -621,12 +621,6 @@ public static class AcquisitionPlanningService
             return true;
         }
 
-        if (shoppingPlan.HQAveragePrice is > 0)
-        {
-            cost = shoppingPlan.HQAveragePrice.Value * quantity;
-            return true;
-        }
-
         return false;
     }
 
@@ -827,11 +821,30 @@ public static class AcquisitionPlanningService
     {
         foreach (var source in GetAvailableSources(node))
         {
-            if (TryGetAcquisitionCost(node, source, planByItemId, context, out var cost))
+            if (TryGetDefaultEligibleAcquisitionCost(node, source, planByItemId, context, out var cost))
             {
                 yield return (source, cost);
             }
         }
+    }
+
+    private static bool TryGetDefaultEligibleAcquisitionCost(
+        PlanNode node,
+        AcquisitionSource source,
+        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
+        AcquisitionCostContext? context,
+        out decimal cost)
+    {
+        cost = source switch
+        {
+            AcquisitionSource.MarketBuyNq when node.CanBuyFromMarket && !node.MustBeHq =>
+                GetDefaultEligibleMarketBuyCost(node, planByItemId, hqOnly: false),
+            AcquisitionSource.MarketBuyHq when node.CanBuyFromMarket && node.CanBeHq =>
+                GetDefaultEligibleMarketBuyCost(node, planByItemId, hqOnly: true),
+            _ => TryGetAcquisitionCost(node, source, planByItemId, context, out var sourceCost) ? sourceCost : 0
+        };
+
+        return cost > 0;
     }
 
     private static bool TryGetAcquisitionCost(
@@ -887,10 +900,46 @@ public static class AcquisitionPlanningService
         bool hqOnly,
         int quantity)
     {
-        return planByItemId.TryGetValue(node.ItemId, out var shoppingPlan) &&
-            TryGetMarketBoardPurchase(shoppingPlan, quantity, hqOnly, out _, out var evidenceCost)
-                ? evidenceCost
-                : (hqOnly ? node.HqMarketPrice : node.MarketPrice) * quantity;
+        if (planByItemId.TryGetValue(node.ItemId, out var shoppingPlan))
+        {
+            var estimate = MarketPurchaseCostProjectionService.Estimate(
+                shoppingPlan,
+                quantity,
+                hqOnly,
+                includeVendor: false);
+            if (estimate.HasCost)
+            {
+                return estimate.Cost;
+            }
+        }
+
+        return (hqOnly ? node.HqMarketPrice : node.MarketPrice) * quantity;
+    }
+
+    private static decimal GetDefaultEligibleMarketBuyCost(
+        PlanNode node,
+        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
+        bool hqOnly)
+    {
+        if (planByItemId.TryGetValue(node.ItemId, out var shoppingPlan))
+        {
+            var estimate = MarketPurchaseCostProjectionService.Estimate(
+                shoppingPlan,
+                node.Quantity,
+                hqOnly,
+                includeVendor: false);
+            if (estimate.IsDefaultEligible)
+            {
+                return estimate.Cost;
+            }
+
+            if (estimate.IsUnsupportedProjection)
+            {
+                return 0;
+            }
+        }
+
+        return (hqOnly ? node.HqMarketPrice : node.MarketPrice) * node.Quantity;
     }
 
     private static int GetSourceTieBreak(AcquisitionSource source)
@@ -970,17 +1019,31 @@ public static class AcquisitionPlanningService
         IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
     {
         if (node.Source is AcquisitionSource.MarketBuyNq &&
-            planByItemId.TryGetValue(node.ItemId, out var shoppingPlan) &&
-            TryGetMarketBoardPurchase(shoppingPlan, node.Quantity, hqOnly: false, out _, out var evidenceCost))
+            planByItemId.TryGetValue(node.ItemId, out var shoppingPlan))
         {
-            return evidenceCost;
+            var estimate = MarketPurchaseCostProjectionService.Estimate(
+                shoppingPlan,
+                node.Quantity,
+                hqOnly: false,
+                includeVendor: false);
+            if (estimate.HasCost)
+            {
+                return estimate.Cost;
+            }
         }
 
         if (node.Source is AcquisitionSource.MarketBuyHq &&
-            planByItemId.TryGetValue(node.ItemId, out var hqShoppingPlan) &&
-            TryGetMarketBoardPurchase(hqShoppingPlan, node.Quantity, hqOnly: true, out _, out evidenceCost))
+            planByItemId.TryGetValue(node.ItemId, out var hqShoppingPlan))
         {
-            return evidenceCost;
+            var estimate = MarketPurchaseCostProjectionService.Estimate(
+                hqShoppingPlan,
+                node.Quantity,
+                hqOnly: true,
+                includeVendor: false);
+            if (estimate.HasCost)
+            {
+                return estimate.Cost;
+            }
         }
 
         return node.Source switch

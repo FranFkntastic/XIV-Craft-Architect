@@ -86,9 +86,17 @@ public partial class MainWindow
             }
         }
 
-        _recipeVm.CurrentPlan = state.CurrentPlan;
-
-        _recipeVm.ProjectItems = _watchStateCoordinator.RestoreProjectItemsFromPlan(state.CurrentPlan);
+        var selectedDataCenter = DcCombo.SelectedItem as string ?? state.DataCenter ?? "Aether";
+        await _recipePlannerCommands.ActivatePlanAsync(
+            new Core.Services.CoreActivateRecipePlanRequest(
+                state.CurrentPlan,
+                ClearCurrentPlanId: false,
+                RefreshVendorPrices: false,
+                RefreshMarketPrices: false,
+                PriceFetchScope: Core.Models.MarketFetchScope.SelectedDataCenter,
+                SelectedDataCenter: selectedDataCenter,
+                SelectedRegion: ResolveSelectedRegion(selectedDataCenter)));
+        _recipeVm.RefreshFromCoreSession();
 
         ProjectList.ItemsSource = _recipeVm.ProjectItems.ToList();
         UpdateQuickViewCount();

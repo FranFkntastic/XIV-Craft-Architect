@@ -93,5 +93,5 @@
 @code {
     [Parameter] public CraftingPlan? CurrentPlan { get; set; }
     [Parameter] public IReadOnlyList<MaterialAggregate>? Materials { get; set; }
-    [Parameter] public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<MarketDataUnavailableItem>();
+    [Parameter] public IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<CoreMarketDataUnavailableItem>();
 }

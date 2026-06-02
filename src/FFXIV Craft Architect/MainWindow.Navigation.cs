@@ -209,6 +209,7 @@ public partial class MainWindow
 
         var enabled = EnableSplitWorldCheck.IsChecked == true;
         _marketVm.EnableSplitWorld = enabled;
+        _marketVm.MarkProcurementRouteSettingsChanged("wpf split-world procurement setting changed");
         _logger.LogInformation("[OnEnableSplitWorldChanged] User changed split-world to '{Enabled}'", enabled);
     }
 }

@@ -4,18 +4,33 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 public sealed record CoreMarketDataUnavailableItem(int ItemId, string Name);
 
+public enum CoreMarketPriceRefreshStatus
+{
+    Success,
+    NoPlan,
+    StalePlan
+}
+
 public sealed record CoreMarketPriceRefreshResult(
     int RequestedCount,
     int FetchedCount,
-    IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableItems)
+    IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableItems,
+    CoreMarketPriceRefreshStatus Status = CoreMarketPriceRefreshStatus.Success)
 {
     public bool HasUnavailableItems => UnavailableItems.Count > 0;
+    public bool Published => Status == CoreMarketPriceRefreshStatus.Success;
 }
 
 public static class CoreMarketPriceAvailability
 {
     public static CoreMarketPriceRefreshResult Empty { get; } =
         new(0, 0, Array.Empty<CoreMarketDataUnavailableItem>());
+
+    public static CoreMarketPriceRefreshResult NoPlan { get; } =
+        new(0, 0, Array.Empty<CoreMarketDataUnavailableItem>(), CoreMarketPriceRefreshStatus.NoPlan);
+
+    public static CoreMarketPriceRefreshResult StalePlan { get; } =
+        new(0, 0, Array.Empty<CoreMarketDataUnavailableItem>(), CoreMarketPriceRefreshStatus.StalePlan);
 
     public static CoreMarketPriceRefreshResult FromCachedMarketData(
         CraftingPlan plan,

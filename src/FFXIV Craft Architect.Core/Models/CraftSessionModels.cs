@@ -149,7 +149,9 @@ public sealed record CraftSessionMarketEvidence(
     IReadOnlyList<MarketItemAnalysis> ItemAnalyses,
     IReadOnlySet<int> UnavailableMarketItemIds,
     IReadOnlyList<DetailedShoppingPlan>? ShoppingPlans = null,
-    CraftSessionVersionStamp? PublishedAgainstVersion = null)
+    CraftSessionVersionStamp? PublishedAgainstVersion = null,
+    RecommendationMode RecommendationMode = RecommendationMode.MinimizeTotalCost,
+    MarketAcquisitionLens Lens = MarketAcquisitionLens.MinimumUpfrontCost)
 {
     public static CraftSessionMarketEvidence Empty { get; } =
         new(Array.Empty<MarketItemAnalysis>(), new HashSet<int>(), Array.Empty<DetailedShoppingPlan>(), null);
@@ -159,7 +161,8 @@ public sealed record CraftSessionProcurementOverlay(
     DateTime PublishedAtUtc,
     IReadOnlyList<int> ActiveItemIds,
     string SourceDescription,
-    IReadOnlyList<DetailedShoppingPlan>? ShoppingPlans = null);
+    IReadOnlyList<DetailedShoppingPlan>? ShoppingPlans = null,
+    IReadOnlyList<WorldProcurementCardModel>? RouteCards = null);
 
 public static class CraftSettingsKeyMap
 {

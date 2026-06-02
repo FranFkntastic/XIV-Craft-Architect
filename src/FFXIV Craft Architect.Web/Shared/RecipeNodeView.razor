@@ -118,14 +118,14 @@
         _isExpanded = !_isExpanded;
     }
 
-    private async Task SelectNode()
+    private void OpenMarketAnalysis()
     {
         if (Node == null)
         {
             return;
         }
 
-        await OnNodeSelected.InvokeAsync(Node);
+        AppState.RequestMarketItemAutoExpand(Node.ItemId);
     }
 
     private async Task OnHqToggle()
@@ -183,23 +183,24 @@
             __builder.CloseElement();
         }
         
-        // Price display and details selector. Acquisition source edits now live in the right-hand panel.
-        __builder.OpenElement(19, "button");
-        __builder.AddAttribute(20, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, SelectNode));
-        __builder.AddEventStopPropagationAttribute(21, "onclick", true);
-        __builder.AddAttribute(22, "title", "Show acquisition details");
-        __builder.AddAttribute(23, "aria-label", $"Show acquisition details for {Node.Name}");
-        __builder.AddAttribute(24, "style", "margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: 132px; min-width: 132px; height: 24px; background: transparent; border: none; padding: 0 0 0 10px; cursor: pointer;");
+        // Price display and Market Analysis selector. Acquisition source edits now live in the right-hand panel.
+        __builder.OpenElement(19, "a");
+        __builder.AddAttribute(20, "href", "market");
+        __builder.AddAttribute(21, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, OpenMarketAnalysis));
+        __builder.AddEventStopPropagationAttribute(22, "onclick", true);
+        __builder.AddAttribute(23, "title", "Open in Market Analysis");
+        __builder.AddAttribute(24, "aria-label", $"Open Market Analysis for {Node.Name}");
+        __builder.AddAttribute(25, "style", "margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: 132px; min-width: 132px; height: 24px; background: transparent; border: none; padding: 0 0 0 10px; cursor: pointer; text-decoration: none;");
 
-        __builder.OpenElement(25, "span");
-        __builder.AddAttribute(26, "style", "color: #4caf50; font-size: 12px; min-width: 92px; text-align: right;");
-        __builder.AddContent(27, display.PriceText);
+        __builder.OpenElement(26, "span");
+        __builder.AddAttribute(27, "style", "color: #4caf50; font-size: 12px; min-width: 92px; text-align: right;");
+        __builder.AddContent(28, display.PriceText);
         __builder.CloseElement();
 
-        __builder.OpenElement(28, "span");
-        __builder.AddAttribute(29, "aria-hidden", "true");
-        __builder.AddAttribute(30, "style", "color: #888; font-size: 16px; line-height: 1; width: 10px;");
-        __builder.AddContent(31, "›");
+        __builder.OpenElement(29, "span");
+        __builder.AddAttribute(30, "aria-hidden", "true");
+        __builder.AddAttribute(31, "style", "color: #888; font-size: 16px; line-height: 1; width: 10px;");
+        __builder.AddContent(32, "›");
         __builder.CloseElement();
 
         __builder.CloseElement();

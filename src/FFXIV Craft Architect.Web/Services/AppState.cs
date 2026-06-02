@@ -131,7 +131,7 @@ public class AppState
     /// This may be filtered, re-routed, or affected by temporary world exclusions.
     /// </summary>
     public IReadOnlyList<DetailedShoppingPlan> ProcurementShoppingPlans => _procurementShoppingPlans.AsReadOnly();
-    public IReadOnlyList<MarketDataUnavailableItem> UnavailableMarketItems { get; private set; } = Array.Empty<MarketDataUnavailableItem>();
+    public IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems { get; private set; } = Array.Empty<CoreMarketDataUnavailableItem>();
     public RecommendationMode RecommendationMode { get; private set; } = RecommendationMode.MinimizeTotalCost;
     public MarketAcquisitionLens MarketAnalysisLens { get; private set; } = MarketAcquisitionLens.MinimumUpfrontCost;
     
@@ -165,14 +165,15 @@ public class AppState
     // Persistence state
     public bool IsAutoSaveEnabled { get; private set; } = true;
     public bool AutoFetchPricesOnRebuild { get; private set; } = true;
-    public MarketFetchScope DefaultMarketFetchScope { get; private set; } = MarketFetchScope.SelectedDataCenter;
+    public bool SecretDebugToolsEnabled { get; private set; }
+    public MarketFetchScope DefaultMarketFetchScope { get; private set; } = MarketFetchScope.EntireRegion;
     public DateTime? LastAutoSave { get; private set; }
     public IReadOnlyList<StoredPlanSummary> SavedPlans { get; private set; } = Array.AsReadOnly(Array.Empty<StoredPlanSummary>());
     
     // Market Analysis Settings (persist across page navigations)
     public bool EnableMultiWorldSplits { get; private set; } = false;
     public int MaxWorldsPerItem { get; private set; } = 0; // 0 = unlimited
-    public bool SearchEntireRegion { get; private set; } = false;
+    public bool SearchEntireRegion { get; private set; } = true;
     public MarketSortOption MarketSortPreference { get; private set; } = MarketSortOption.ByRecommended;
 
     // Procurement Planning Settings
@@ -412,11 +413,12 @@ public class AppState
         ReplaceListContents(_shoppingPlans, shoppingPlans);
         _procurementShoppingPlans.Clear();
         var viewChanged = PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses, publishChange: false);
+        var navigationChanged = ApplyPendingMarketItemAutoExpand(publishChange: false);
         using (BeginStateChangeBatch())
         {
             NotifyShoppingListChanged();
             NotifyProcurementOverlayChanged();
-            if (viewChanged)
+            if (viewChanged || navigationChanged)
             {
                 PublishChange(AppStateChangeScope.MarketAnalysisView);
             }
@@ -434,11 +436,12 @@ public class AppState
         ReplaceListContents(_shoppingPlans, ReplaceShoppingPlanByItemId(_shoppingPlans, shoppingPlan));
         _procurementShoppingPlans.Clear();
         var viewChanged = PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses, publishChange: false);
+        var navigationChanged = ApplyPendingMarketItemAutoExpand(publishChange: false);
         using (BeginStateChangeBatch())
         {
             NotifyShoppingListChanged();
             NotifyProcurementOverlayChanged();
-            if (viewChanged)
+            if (viewChanged || navigationChanged)
             {
                 PublishChange(AppStateChangeScope.MarketAnalysisView);
             }
@@ -584,7 +587,7 @@ public class AppState
             _shoppingPlans.Clear();
             _marketItemAnalyses.Clear();
             _procurementShoppingPlans.Clear();
-            UnavailableMarketItems = Array.Empty<MarketDataUnavailableItem>();
+            UnavailableMarketItems = Array.Empty<CoreMarketDataUnavailableItem>();
             ClearMarketAnalysisViewState(publishChange: false);
             PublishChange(
                 AppStateChangeScope.Settings |
@@ -689,6 +692,18 @@ public class AppState
         return true;
     }
 
+    public bool SetSecretDebugToolsEnabled(bool enabled)
+    {
+        if (SecretDebugToolsEnabled == enabled)
+        {
+            return false;
+        }
+
+        SecretDebugToolsEnabled = enabled;
+        NotifySettingsChanged();
+        return true;
+    }
+
     public bool SetMarketSortPreference(MarketSortOption preference)
     {
         if (MarketSortPreference == preference)
@@ -701,7 +716,7 @@ public class AppState
         return true;
     }
 
-    public void SetUnavailableMarketItems(IReadOnlyList<MarketDataUnavailableItem> items)
+    public void SetUnavailableMarketItems(IReadOnlyList<CoreMarketDataUnavailableItem> items)
     {
         UnavailableMarketItems = items.ToArray();
         NotifyShoppingListChanged();
@@ -709,12 +724,13 @@ public class AppState
 
     public void ClearUnavailableMarketItems()
     {
-        SetUnavailableMarketItems(Array.Empty<MarketDataUnavailableItem>());
+        SetUnavailableMarketItems(Array.Empty<CoreMarketDataUnavailableItem>());
     }
 
     public void RequestMarketItemAutoExpand(int itemId)
     {
         AutoExpandItemId = itemId;
+        ApplyPendingMarketItemAutoExpand();
     }
 
     public bool ConsumeMarketItemAutoExpand(int itemId)
@@ -725,6 +741,39 @@ public class AppState
         }
 
         AutoExpandItemId = null;
+        return true;
+    }
+
+    public bool ApplyPendingMarketItemAutoExpand()
+    {
+        return ApplyPendingMarketItemAutoExpand(publishChange: true);
+    }
+
+    private bool ApplyPendingMarketItemAutoExpand(bool publishChange)
+    {
+        if (!AutoExpandItemId.HasValue)
+        {
+            return false;
+        }
+
+        var itemId = AutoExpandItemId.Value;
+        if (_shoppingPlans.All(plan => plan.ItemId != itemId))
+        {
+            return false;
+        }
+
+        AutoExpandItemId = null;
+        if (SelectedMarketAnalysisItemId == itemId)
+        {
+            return true;
+        }
+
+        SelectedMarketAnalysisItemId = itemId;
+        if (publishChange)
+        {
+            PublishChange(AppStateChangeScope.MarketAnalysisView);
+        }
+
         return true;
     }
 
@@ -780,7 +829,7 @@ public class AppState
         _shoppingPlans.Clear();
         _marketItemAnalyses.Clear();
         _procurementShoppingPlans.Clear();
-        UnavailableMarketItems = Array.Empty<MarketDataUnavailableItem>();
+        UnavailableMarketItems = Array.Empty<CoreMarketDataUnavailableItem>();
         ClearMarketAnalysisViewState(publishChange: false);
         PublishChange(
             AppStateChangeScope.MarketAnalysis | AppStateChangeScope.ProcurementOverlay,

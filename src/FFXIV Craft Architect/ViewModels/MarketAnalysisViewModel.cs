@@ -11,32 +11,25 @@ using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Services;
 using Microsoft.Extensions.Logging;
-using PriceInfo = FFXIV_Craft_Architect.Core.Models.PriceInfo;
 
 namespace FFXIV_Craft_Architect.ViewModels;
 
 /// <summary>
 /// ViewModel for market analysis and shopping plan management.
-/// Owns price refresh orchestration and live market analysis.
+/// Owns market-analysis display projection and live market analysis.
 ///
 /// RESPONSIBILITIES:
-/// 1. Price Refresh Orchestration:
-///    - RefreshPlanPricesAsync: Fetches current market prices via IPriceRefreshCoordinator
-///    - Mutates CraftingPlan with updated prices via RecipeCalculationService
-///    - Reports progress via PriceRefreshProgressReported event
-///    - Supports forceRefresh to bypass cache and fetch fresh data
-///
-/// 2. Live Market Analysis:
+/// 1. Live Market Analysis:
 ///    - AnalyzeLiveMarketDataAsync: Calculates shopping plans from market data
 ///    - Delegates to MarketShoppingService for single-DC or multi-DC searches
 ///    - Updates ShoppingPlans collection with results
 ///
-/// 3. ViewModel Wrapping & Presentation:
+/// 2. ViewModel Wrapping & Presentation:
 ///    - Wraps DetailedShoppingPlan in ShoppingPlanViewModel
 ///    - Groups plans by world via GroupedByWorld
 ///    - Applies user-selected sort order
 ///
-/// 4. Selection State (MVVM Binding):
+/// 3. Selection State (MVVM Binding):
 ///    - SelectedExpandedPanel: Bindable property for the expanded panel ContentControl
 ///    - Delegates to IMarketLogisticsCoordinator for actual selection management
 ///
@@ -63,7 +56,6 @@ public partial class MarketAnalysisViewModel : ViewModelBase
     private RecommendationMode _recommendationMode = RecommendationMode.MinimizeTotalCost;
     private bool _searchAllNaDcs;
     private readonly MarketShoppingService _marketShoppingService;
-    private readonly RecipeCalculationService _recipeCalcService;
     private readonly IPriceRefreshCoordinator _priceRefreshCoordinator;
     private readonly IMarketLogisticsCoordinator? _marketLogisticsCoordinator;
     private readonly ILogger<MarketAnalysisViewModel>? _logger;
@@ -73,7 +65,6 @@ public partial class MarketAnalysisViewModel : ViewModelBase
     public MarketAnalysisViewModel(
         MarketShoppingService marketShoppingService,
         IPriceRefreshCoordinator priceRefreshCoordinator,
-        RecipeCalculationService recipeCalcService,
         IMarketLogisticsCoordinator? marketLogisticsCoordinator = null,
         ILogger<MarketAnalysisViewModel>? logger = null,
         CraftSessionState? session = null,
@@ -81,7 +72,6 @@ public partial class MarketAnalysisViewModel : ViewModelBase
     {
         _marketShoppingService = marketShoppingService;
         _priceRefreshCoordinator = priceRefreshCoordinator;
-        _recipeCalcService = recipeCalcService;
         _marketLogisticsCoordinator = marketLogisticsCoordinator;
         _logger = logger;
         _session = session;
@@ -118,12 +108,6 @@ public partial class MarketAnalysisViewModel : ViewModelBase
     /// Used for card highlighting in the collapsed cards grid.
     /// </summary>
     public int? SelectedItemId => _marketLogisticsCoordinator?.SelectedItemId;
-
-    /// <summary>
-    /// Raised whenever plan price refresh progress updates.
-    /// UI layers can subscribe to update progress widgets/windows.
-    /// </summary>
-    public event EventHandler<PriceRefreshProgress>? PriceRefreshProgressReported;
 
     private void OnShoppingPlansCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
@@ -409,6 +393,11 @@ public partial class MarketAnalysisViewModel : ViewModelBase
         _session?.MarkProcurementSettingsChanged(reason);
     }
 
+    public void MarkProcurementRouteSettingsChanged(string reason)
+    {
+        _session?.MarkProcurementRouteSettingsChanged(reason);
+    }
+
     private void PublishShoppingPlansToSession(IEnumerable<DetailedShoppingPlan> plans)
     {
         if (_session == null)
@@ -422,7 +411,8 @@ public partial class MarketAnalysisViewModel : ViewModelBase
             return;
         }
 
-        if (_session.MarketEvidence.ItemAnalyses.Count > 0)
+        if (_session.MarketEvidence.ItemAnalyses.Count > 0 ||
+            _session.MarketEvidence.ShoppingPlans?.Count > 0)
         {
             return;
         }
@@ -435,141 +425,6 @@ public partial class MarketAnalysisViewModel : ViewModelBase
             plans,
             acquisitionDecisionsChanged: false,
             "wpf market shopping plans updated");
-    }
-
-    /// <summary>
-    /// Fetches current market prices for all items in the plan and updates plan nodes.
-    /// Orchestrates price refresh via IPriceRefreshCoordinator and mutates the plan in-place.
-    /// </summary>
-    /// <param name="plan">The crafting plan to refresh prices for. Modified in-place with new prices.</param>
-    /// <param name="dataCenter">The data center context for price lookups.</param>
-    /// <param name="worldOrDc">Specific world or data center-wide scope for market queries.</param>
-    /// <param name="searchAllNa">If true, searches all NA data centers for best prices.</param>
-    /// <param name="forceRefresh">If true, bypasses cache and fetches fresh data.</param>
-    /// <param name="ct">Cancellation token for aborting the operation.</param>
-    /// <returns>
-    /// A <see cref="PlanPriceRefreshResult"/> containing refresh statistics,
-    /// price data, and cache metadata for UI status display.
-    /// </returns>
-    /// <remarks>
-    /// Progress is reported via <see cref="PriceRefreshProgressReported"/> event.
-    /// UI layers should subscribe to update progress widgets and status windows.
-    /// </remarks>
-    public async Task<PlanPriceRefreshResult> RefreshPlanPricesAsync(
-        CraftingPlan? plan,
-        string dataCenter,
-        string worldOrDc,
-        bool searchAllNa,
-        bool forceRefresh,
-        CancellationToken ct = default)
-    {
-        if (plan == null || plan.RootItems.Count == 0)
-        {
-            StatusMessage = "No plan - build a plan first";
-            return PlanPriceRefreshResult.NoPlan(StatusMessage);
-        }
-
-        IsLoading = true;
-
-        try
-        {
-            _logger?.LogInformation(
-                "[RefreshPlanPricesAsync] Starting refresh: DC={DataCenter}, WorldOrDc={WorldOrDc}, SearchAllNa={SearchAllNa}, ForceRefresh={ForceRefresh}",
-                dataCenter,
-                worldOrDc,
-                searchAllNa,
-                forceRefresh);
-
-            var progress = new Progress<PriceRefreshProgress>(p =>
-            {
-                StatusMessage = p.Message ?? ComputeProgressStatusMessage(p);
-                PriceRefreshProgressReported?.Invoke(this, p);
-            });
-
-            var refreshContext = await _priceRefreshCoordinator.FetchPlanPricesAsync(
-                plan,
-                dataCenter,
-                worldOrDc,
-                searchAllNa,
-                forceRefresh,
-                progress,
-                ct);
-
-            int successCount = 0;
-            int failedCount = 0;
-            int skippedCount = 0;
-            int cachedCount = 0;
-
-            foreach (var kvp in refreshContext.Prices)
-            {
-                var itemId = kvp.Key;
-                var priceInfo = kvp.Value;
-
-                if (priceInfo.Source == PriceSource.Unknown)
-                {
-                    if (!refreshContext.WarmCacheForCraftedItems && !refreshContext.CacheCandidateItemIds.Contains(itemId))
-                    {
-                        skippedCount++;
-                    }
-                    else
-                    {
-                        failedCount++;
-                    }
-                }
-                else if (priceInfo.Source == PriceSource.Market)
-                {
-                    var isFetchedThisRun = refreshContext.ScopeDataCenters.Any(itemDc =>
-                        refreshContext.FetchedThisRunKeys.Contains((itemId, itemDc)));
-
-                    if (isFetchedThisRun)
-                    {
-                        successCount++;
-                    }
-                    else
-                    {
-                        cachedCount++;
-                    }
-                }
-                else if (priceInfo.Source == PriceSource.Vendor || priceInfo.Source == PriceSource.Untradeable)
-                {
-                    successCount++;
-                }
-                else
-                {
-                    cachedCount++;
-                }
-
-                _recipeCalcService.UpdateSingleNodePrice(plan.RootItems, itemId, priceInfo);
-            }
-
-            var message = BuildRefreshSummaryMessage(plan, successCount, failedCount, skippedCount, cachedCount);
-            StatusMessage = message;
-
-            return new PlanPriceRefreshResult(
-                true,
-                message,
-                refreshContext.AllItems,
-                refreshContext.Prices,
-                successCount,
-                failedCount,
-                skippedCount,
-                cachedCount,
-                refreshContext.CacheCandidateItemIds,
-                refreshContext.WarmCacheForCraftedItems,
-                refreshContext.FetchedThisRunKeys,
-                refreshContext.DataScopeByItemId,
-                refreshContext.ScopeDataCenters);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "[RefreshPlanPricesAsync] Failed");
-            StatusMessage = $"Failed to fetch prices: {ex.Message}. Cached prices preserved.";
-            return PlanPriceRefreshResult.Failed(StatusMessage);
-        }
-        finally
-        {
-            IsLoading = false;
-        }
     }
 
     /// <summary>
@@ -802,43 +657,6 @@ public partial class MarketAnalysisViewModel : ViewModelBase
             MarketShoppingConstants.VendorWorldName,
             StringComparison.OrdinalIgnoreCase);
 
-    private static string ComputeProgressStatusMessage(PriceRefreshProgress progress)
-    {
-        return progress.Stage switch
-        {
-            PriceRefreshStage.Starting => $"Checking cache... {progress.Current}/{progress.Total}",
-            PriceRefreshStage.Fetching when string.IsNullOrWhiteSpace(progress.ItemName) =>
-                $"Fetching market prices... {progress.Current}/{progress.Total}",
-            PriceRefreshStage.Fetching =>
-                $"Loading item data: {progress.ItemName} ({progress.Current}/{progress.Total})",
-            PriceRefreshStage.Updating => $"Processing results... {progress.Current}/{progress.Total}",
-            PriceRefreshStage.Complete => $"Complete! ({progress.Total} items)",
-            _ => $"Fetching prices... {progress.Current}/{progress.Total}"
-        };
-    }
-
-    private static string BuildRefreshSummaryMessage(
-        CraftingPlan plan,
-        int successCount,
-        int failedCount,
-        int skippedCount,
-        int cachedCount)
-    {
-        var totalCost = plan.AggregatedMaterials.Sum(m => m.TotalCost);
-
-        if (failedCount > 0 && successCount == 0)
-        {
-            return $"Price fetch failed! Using cached prices. Total: {totalCost:N0}g";
-        }
-
-        if (failedCount > 0)
-        {
-            return $"Prices updated! Total: {totalCost:N0}g ({successCount} success, {failedCount} failed, {skippedCount} skipped, {cachedCount} cached)";
-        }
-
-        return $"Prices fetched! Total: {totalCost:N0}g ({successCount} success, {skippedCount} skipped, {cachedCount} cached)";
-    }
-
     /// <summary>
     /// Applies the current sort to shopping plans.
     /// </summary>
@@ -887,57 +705,6 @@ public partial class MarketAnalysisViewModel : ViewModelBase
         GroupedByWorld = new ObservableCollection<ProcurementWorldViewModel>(groups);
     }
 
-}
-
-/// <summary>
-/// Result of a plan price refresh operation.
-/// Contains price data, refresh statistics, and cache metadata for UI status display.
-/// </summary>
-/// <param name="Success">Whether the refresh completed successfully.</param>
-/// <param name="Message">Human-readable status message.</param>
-/// <param name="AllItems">All items that were processed during refresh.</param>
-/// <param name="Prices">Price information indexed by item ID.</param>
-/// <param name="SuccessCount">Number of items fetched successfully this run.</param>
-/// <param name="FailedCount">Number of items that failed to fetch.</param>
-/// <param name="SkippedCount">Number of items skipped (e.g., crafted items with warming disabled).</param>
-/// <param name="CachedCount">Number of items served from cache.</param>
-/// <param name="CacheCandidateItemIds">Items eligible for cache warming.</param>
-/// <param name="WarmCacheForCraftedItems">Whether crafted item cache warming was enabled.</param>
-/// <param name="FetchedThisRunKeys">Item/DC pairs that were actually fetched this run.</param>
-/// <param name="DataScopeByItemId">Cache scope metadata per item for status display.</param>
-/// <param name="ScopeDataCenters">Data centers included in the search scope.</param>
-public record PlanPriceRefreshResult(
-    bool Success,
-    string Message,
-    List<(int itemId, string name, int quantity)> AllItems,
-    Dictionary<int, PriceInfo> Prices,
-    int SuccessCount,
-    int FailedCount,
-    int SkippedCount,
-    int CachedCount,
-    HashSet<int> CacheCandidateItemIds,
-    bool WarmCacheForCraftedItems,
-    HashSet<(int itemId, string dataCenter)> FetchedThisRunKeys,
-    Dictionary<int, (int CachedDataCenterCount, int CachedWorldCount)> DataScopeByItemId,
-    IReadOnlyList<string> ScopeDataCenters)
-{
-    public static PlanPriceRefreshResult NoPlan(string message) =>
-        new(
-            false,
-            message,
-            new List<(int itemId, string name, int quantity)>(),
-            new Dictionary<int, PriceInfo>(),
-            0,
-            0,
-            0,
-            0,
-            new HashSet<int>(),
-            false,
-            new HashSet<(int itemId, string dataCenter)>(),
-            new Dictionary<int, (int CachedDataCenterCount, int CachedWorldCount)>(),
-            Array.Empty<string>());
-
-    public static PlanPriceRefreshResult Failed(string message) => NoPlan(message);
 }
 
 /// <summary>

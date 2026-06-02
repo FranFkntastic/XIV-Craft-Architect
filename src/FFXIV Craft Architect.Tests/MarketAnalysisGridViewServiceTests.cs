@@ -62,6 +62,36 @@ public class MarketAnalysisGridViewServiceTests
     }
 
     [Fact]
+    public void GetOrderedPlans_QuantitySort_UsesNeededQuantityNotAvailableStock()
+    {
+        var lowNeedHighStock = Plan(100, "Low Need", 100);
+        lowNeedHighStock.QuantityNeeded = 2;
+        lowNeedHighStock.WorldOptions[0].TotalQuantityPurchased = 500;
+
+        var highNeedThinStock = Plan(200, "High Need", 100);
+        highNeedThinStock.QuantityNeeded = 50;
+        highNeedThinStock.WorldOptions[0].TotalQuantityPurchased = 1;
+
+        var ascending = MarketAnalysisGridViewService.GetOrderedPlans(
+            [highNeedThinStock, lowNeedHighStock],
+            Array.Empty<MarketItemAnalysis>(),
+            MarketAcquisitionLens.MinimumUpfrontCost,
+            MarketSortOption.ByRecommended,
+            MarketAnalysisGridSortColumn.Quantity,
+            sortDescending: false);
+        var descending = MarketAnalysisGridViewService.GetOrderedPlans(
+            [highNeedThinStock, lowNeedHighStock],
+            Array.Empty<MarketItemAnalysis>(),
+            MarketAcquisitionLens.MinimumUpfrontCost,
+            MarketSortOption.ByRecommended,
+            MarketAnalysisGridSortColumn.Quantity,
+            sortDescending: true);
+
+        Assert.Equal([100, 200], ascending.Select(plan => plan.ItemId));
+        Assert.Equal([200, 100], descending.Select(plan => plan.ItemId));
+    }
+
+    [Fact]
     public void GetOrderedPlans_CoverageSort_UsesScopeCompetitiveStock()
     {
         var plans = new[]
@@ -445,6 +475,57 @@ public class MarketAnalysisGridViewServiceTests
         var summary = MarketAnalysisGridViewService.FormatAnalysisScopePriceSummary(analysis);
 
         Assert.Equal("good avg ~100g; avg ~125g; competitive <= 150g; insane >= 200g", summary);
+    }
+
+    [Fact]
+    public void IsUnsupportedProjectedCost_NoFullRecommendation_ReturnsTrueWithTooltipClass()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Thin Ore",
+            QuantityNeeded = 10,
+            DCAveragePrice = 6_408,
+            WorldOptions =
+            [
+                new WorldShoppingSummary
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Siren",
+                    TotalCost = 300,
+                    TotalQuantityPurchased = 3
+                }
+            ]
+        };
+
+        Assert.True(MarketAnalysisGridViewService.IsUnsupportedProjectedCost(plan));
+        Assert.Equal("ma-total-value is-projected-unsupported", MarketAnalysisGridViewService.GetTotalCostClass(plan));
+        Assert.Equal(
+            MarketAnalysisGridViewService.UnsupportedProjectedCostTooltip,
+            MarketAnalysisGridViewService.GetTotalCostTooltip(plan));
+        Assert.Equal(64_080, MarketAnalysisGridViewService.GetTotalCost(plan));
+    }
+
+    [Fact]
+    public void IsUnsupportedProjectedCost_FullSplitRecommendation_ReturnsFalseWithCalculatedTotalTooltip()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Split Ore",
+            QuantityNeeded = 10,
+            RecommendedSplit =
+            [
+                new SplitWorldPurchase { DataCenter = "Aether", WorldName = "Siren", QuantityToBuy = 6, TotalCost = 600 },
+                new SplitWorldPurchase { DataCenter = "Aether", WorldName = "Faerie", QuantityToBuy = 4, TotalCost = 440 }
+            ]
+        };
+
+        Assert.False(MarketAnalysisGridViewService.IsUnsupportedProjectedCost(plan));
+        Assert.Equal("ma-total-value", MarketAnalysisGridViewService.GetTotalCostClass(plan));
+        var tooltip = MarketAnalysisGridViewService.GetTotalCostTooltip(plan);
+        Assert.Contains("Calculated Total", tooltip);
+        Assert.Contains("recommended split", tooltip);
     }
 
     [Fact]
