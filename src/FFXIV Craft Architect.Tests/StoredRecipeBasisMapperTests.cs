@@ -308,6 +308,22 @@ public class StoredRecipeBasisMapperTests
         Assert.Contains("node id", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Hydrate_WhitespaceNodeId_ThrowsClearInvalidOperationException()
+    {
+        var stored = new StoredRecipeOperationSnapshot
+        {
+            Operations =
+            [
+                new StoredRecipeOperation { NodeId = "   ", ResultItemId = 100, ResultItemName = "Root Item" }
+            ]
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => StoredRecipeBasisMapper.Hydrate(stored));
+
+        Assert.Contains("node id", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static RecipeOperationSnapshot CreateSnapshot()
     {
         var operation = new RecipeOperation(
