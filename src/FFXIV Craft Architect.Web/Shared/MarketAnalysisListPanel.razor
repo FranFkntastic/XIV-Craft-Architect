@@ -1,4 +1,6 @@
 @using FFXIV_Craft_Architect.Core.Models
+@inject IJSRuntime JSRuntime
+@inject ISnackbar Snackbar
 
 <div class="ma-ledger-shell">
     <div class="ma-ledger-workspace">
@@ -83,14 +85,23 @@
             else
             {
                 <div class="ma-detail-header">
-                    <div>
-                        <a class="ma-detail-title"
-                           href="@_selectedPlan.UniversalisUrl"
-                           target="_blank"
-                           rel="noopener noreferrer"
-                           title="Open @_selectedPlan.Name on Universalis">
-                            @_selectedPlan.Name
-                        </a>
+                    <div class="ma-detail-title-block">
+                        <div class="ma-detail-title-row">
+                            <a class="ma-detail-title"
+                               href="@_selectedPlan.UniversalisUrl"
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               title="Open @_selectedPlan.Name on Universalis">
+                                @_selectedPlan.Name
+                            </a>
+                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                           Size="Size.Small"
+                                           Class="ma-detail-copy-button"
+                                           OnClick="() => CopySelectedItemNameAsync(_selectedPlan.Name)"
+                                           OnClick:StopPropagation="true"
+                                           Title="Copy item name"
+                                           AriaLabel="Copy item name" />
+                        </div>
                         <MudText Typo="Typo.caption" Class="ma-detail-subtitle">
                             @FormatQuantity(_selectedPlan.QuantityNeeded) needed
                         </MudText>
@@ -284,6 +295,19 @@
         return !plan.HasSufficientStock && !IsVendorPlan(plan)
             ? "ma-stock-warning"
             : "ma-stock-ok";
+    }
+
+    private async Task CopySelectedItemNameAsync(string itemName)
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", itemName);
+            Snackbar.Add("Item name copied", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("Failed to copy item name", Severity.Error);
+        }
     }
 
 }
