@@ -83,8 +83,49 @@ public sealed class CoreRecipeLayerWorkflowService : ICoreRecipeLayerWorkflowSer
         CraftingPlan? plan,
         CancellationToken cancellationToken = default)
     {
-        var projection = await BuildCurrentDemandProjectionAsync(plan, cancellationToken);
-        return projection?.ToMarketAnalysisMaterialAggregates();
+        var result = await BuildCurrentMarketAnalysisCandidateResultAsync(plan, cancellationToken);
+        return result?.Candidates;
+    }
+
+    public async Task<CoreMarketAnalysisCandidateBuildResult?> BuildCurrentMarketAnalysisCandidateResultAsync(
+        CraftingPlan? plan,
+        CancellationToken cancellationToken = default)
+    {
+        if (plan == null)
+        {
+            var fallbackProjection = BuildDemandProjection(plan);
+            return new CoreMarketAnalysisCandidateBuildResult(
+                fallbackProjection.ToMarketAnalysisMaterialAggregates(),
+                RecipeBasis: null);
+        }
+
+        var identity = CreateSnapshotIdentity();
+        if (!_session.IsCurrentPlanSession(plan, identity.PlanSessionVersion))
+        {
+            return null;
+        }
+
+        var snapshot = await _snapshotLifecycleService.GetCurrentOrNullAsync(
+            plan,
+            identity,
+            IsCurrentSnapshotIdentity,
+            cancellationToken: cancellationToken);
+        if (snapshot == null)
+        {
+            return null;
+        }
+
+        var projection = _demandProjectionService.Build(plan, snapshot);
+        var candidates = projection.ToMarketAnalysisMaterialAggregates();
+        if (!IsCurrentSnapshotIdentity(identity) ||
+            !_session.IsCurrentPlanSession(plan, identity.PlanSessionVersion))
+        {
+            return null;
+        }
+
+        return new CoreMarketAnalysisCandidateBuildResult(
+            candidates,
+            StoredRecipeBasisMapper.ToStored(snapshot, candidates));
     }
 
     public async Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(

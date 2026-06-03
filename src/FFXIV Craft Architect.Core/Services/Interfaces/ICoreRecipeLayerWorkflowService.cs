@@ -20,7 +20,21 @@ public interface ICoreRecipeLayerWorkflowService
         CraftingPlan? plan,
         CancellationToken cancellationToken = default);
 
+    async Task<CoreMarketAnalysisCandidateBuildResult?> BuildCurrentMarketAnalysisCandidateResultAsync(
+        CraftingPlan? plan,
+        CancellationToken cancellationToken = default)
+    {
+        var candidates = await BuildCurrentMarketAnalysisCandidatesAsync(plan, cancellationToken);
+        return candidates == null
+            ? null
+            : new CoreMarketAnalysisCandidateBuildResult(candidates, RecipeBasis: null);
+    }
+
     Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(
         CraftingPlan? plan,
         CancellationToken cancellationToken = default);
 }
+
+public sealed record CoreMarketAnalysisCandidateBuildResult(
+    IReadOnlyList<MaterialAggregate> Candidates,
+    StoredRecipeOperationSnapshot? RecipeBasis);

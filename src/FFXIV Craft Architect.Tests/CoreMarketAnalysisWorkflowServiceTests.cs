@@ -59,6 +59,7 @@ public class CoreMarketAnalysisWorkflowServiceTests
             It.IsAny<MarketAnalysisExecutionOptions?>()));
         Assert.Equal(RecommendationMode.MaximizeValue, service.Session.MarketEvidence.RecommendationMode);
         Assert.Equal(MarketAcquisitionLens.MinimumUpfrontCost, service.Session.MarketEvidence.Lens);
+        Assert.NotNull(service.Session.MarketEvidence.RecipeBasis);
     }
 
     [Fact]
@@ -168,7 +169,8 @@ public class CoreMarketAnalysisWorkflowServiceTests
             [],
             "existing analysis",
             RecommendationMode.MaximizeValue,
-            MarketAcquisitionLens.MinimumUpfrontCost);
+            MarketAcquisitionLens.MinimumUpfrontCost,
+            CreateStoredRecipeBasis());
 
         var result = await service.ApplyLensAsync(new CoreApplyMarketAnalysisLensRequest(MarketAcquisitionLens.BulkValue));
 
@@ -176,6 +178,7 @@ public class CoreMarketAnalysisWorkflowServiceTests
         Assert.Equal(1, Assert.Single(service.Session.MarketEvidence.ShoppingPlans!).ItemId);
         Assert.Equal(RecommendationMode.MaximizeValue, service.Session.MarketEvidence.RecommendationMode);
         Assert.Equal(MarketAcquisitionLens.BulkValue, service.Session.MarketEvidence.Lens);
+        Assert.NotNull(service.Session.MarketEvidence.RecipeBasis);
         Assert.Null(service.Session.ProcurementOverlay);
         ladder.Verify(l => l.ProjectToShoppingPlan(
             It.Is<MarketItemAnalysis>(analysis => analysis.ItemId == 1),
@@ -298,6 +301,31 @@ public class CoreMarketAnalysisWorkflowServiceTests
         };
     }
 
+    private static StoredRecipeOperationSnapshot CreateStoredRecipeBasis()
+    {
+        return new StoredRecipeOperationSnapshot
+        {
+            Operations =
+            [
+                new StoredRecipeOperation
+                {
+                    NodeId = "root",
+                    ResultItemId = 1,
+                    ResultItemName = "Material"
+                }
+            ],
+            MarketAnalysisDemandItems =
+            [
+                new StoredMarketAnalysisDemandItem
+                {
+                    ItemId = 1,
+                    Name = "Material",
+                    TotalQuantity = 2
+                }
+            ]
+        };
+    }
+
     private sealed record TestServiceHost(
         CoreMarketAnalysisWorkflowService Service,
         CraftSessionState Session,
@@ -335,6 +363,14 @@ public class CoreMarketAnalysisWorkflowServiceTests
             CraftingPlan? plan,
             CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildMarketAnalysisCandidates(plan));
+
+        public Task<CoreMarketAnalysisCandidateBuildResult?> BuildCurrentMarketAnalysisCandidateResultAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<CoreMarketAnalysisCandidateBuildResult?>(
+                new CoreMarketAnalysisCandidateBuildResult(
+                    BuildMarketAnalysisCandidates(plan),
+                    CreateStoredRecipeBasis()));
 
         public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(
             CraftingPlan? plan,

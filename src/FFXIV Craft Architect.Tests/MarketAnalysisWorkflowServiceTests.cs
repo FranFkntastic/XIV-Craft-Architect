@@ -42,6 +42,35 @@ public class MarketAnalysisWorkflowServiceTests
     }
 
     [Fact]
+    public async Task RunAnalysisAsync_PublishesAndPersistsRecipeBasis()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        appState.TrackCurrentPlanIdentity("saved-plan", null);
+        var jsRuntime = new RecordingJsRuntime();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateExecutionResult());
+        var recipeBasis = CreateStoredRecipeBasis();
+        var service = CreateService(
+            appState,
+            execution.Object,
+            jsRuntime,
+            new StubRecipeLayerWorkflowService(recipeBasis: recipeBasis));
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.True(result.Published);
+        Assert.NotNull(appState.MarketAnalysisRecipeBasis);
+        Assert.Contains("\"MarketAnalysisDemandItems\"", jsRuntime.LastPatchedRecipeBasisJson);
+        Assert.Contains("\"MarketAnalysisDemandItems\"", jsRuntime.LastSavedPlan?.MarketAnalysisRecipeBasisJson);
+    }
+
+    [Fact]
     public async Task RunAnalysisAsync_WhenPlanChangesDuringExecution_DoesNotPublishStaleResults()
     {
         var originalPlan = CreatePlan();
@@ -274,7 +303,8 @@ public class MarketAnalysisWorkflowServiceTests
         appState.TrackCurrentPlanIdentity("saved-plan", null);
         appState.ReplaceMarketAnalysis(
             [new MarketItemAnalysis { ItemId = 1, Name = "Material", QuantityNeeded = 2 }],
-            []);
+            [],
+            CreateStoredRecipeBasis());
         var jsRuntime = new RecordingJsRuntime();
         var service = CreateService(appState, Mock.Of<IMarketAnalysisExecutionService>(), jsRuntime);
 
@@ -283,6 +313,8 @@ public class MarketAnalysisWorkflowServiceTests
         Assert.True(result.Published);
         Assert.Equal(MarketAcquisitionLens.BulkValue, appState.MarketAnalysisLens);
         Assert.Equal(1, Assert.Single(appState.ShoppingPlans).ItemId);
+        Assert.NotNull(appState.MarketAnalysisRecipeBasis);
+        Assert.Contains("\"MarketAnalysisDemandItems\"", jsRuntime.LastPatchedRecipeBasisJson);
         Assert.Equal(1, jsRuntime.PatchMarketAnalysisCallCount);
         Assert.Equal(1, jsRuntime.SavePlanCallCount);
     }
@@ -420,6 +452,31 @@ public class MarketAnalysisWorkflowServiceTests
             SuppressedDemand: Array.Empty<RecipeDemandRow>());
     }
 
+    private static StoredRecipeOperationSnapshot CreateStoredRecipeBasis()
+    {
+        return new StoredRecipeOperationSnapshot
+        {
+            Operations =
+            [
+                new StoredRecipeOperation
+                {
+                    NodeId = "root",
+                    ResultItemId = 1,
+                    ResultItemName = "Material"
+                }
+            ],
+            MarketAnalysisDemandItems =
+            [
+                new StoredMarketAnalysisDemandItem
+                {
+                    ItemId = 1,
+                    Name = "Material",
+                    TotalQuantity = 2
+                }
+            ]
+        };
+    }
+
     private static RecipeDemandRow CreateDemandRow(
         int itemId,
         string itemName,
@@ -455,10 +512,14 @@ public class MarketAnalysisWorkflowServiceTests
     private class StubRecipeLayerWorkflowService : IRecipeLayerWorkflowService
     {
         private readonly RecipeDemandProjection? _projection;
+        private readonly StoredRecipeOperationSnapshot? _recipeBasis;
 
-        public StubRecipeLayerWorkflowService(RecipeDemandProjection? projection = null)
+        public StubRecipeLayerWorkflowService(
+            RecipeDemandProjection? projection = null,
+            StoredRecipeOperationSnapshot? recipeBasis = null)
         {
             _projection = projection;
+            _recipeBasis = recipeBasis;
         }
 
         public RecipeOperationSnapshotIdentity CreateSnapshotIdentity()
@@ -495,6 +556,14 @@ public class MarketAnalysisWorkflowServiceTests
             return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildMarketAnalysisCandidates(plan));
         }
 
+        public virtual Task<MarketAnalysisCandidateBuildResult?> BuildCurrentMarketAnalysisCandidateResultAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<MarketAnalysisCandidateBuildResult?>(
+                new MarketAnalysisCandidateBuildResult(BuildMarketAnalysisCandidates(plan), _recipeBasis));
+        }
+
         public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(
             CraftingPlan? plan,
             CancellationToken cancellationToken = default)
@@ -521,24 +590,38 @@ public class MarketAnalysisWorkflowServiceTests
             _afterYield();
             return candidates;
         }
+
+        public override async Task<MarketAnalysisCandidateBuildResult?> BuildCurrentMarketAnalysisCandidateResultAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            var candidates = BuildMarketAnalysisCandidates(plan);
+            await Task.Yield();
+            _afterYield();
+            return new MarketAnalysisCandidateBuildResult(candidates, RecipeBasis: null);
+        }
     }
 
     private sealed class RecordingJsRuntime : IJSRuntime
     {
         public int SavePlanCallCount { get; private set; }
         public int PatchMarketAnalysisCallCount { get; private set; }
+        public StoredPlan? LastSavedPlan { get; private set; }
+        public string? LastPatchedRecipeBasisJson { get; private set; }
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
         {
             if (identifier == "IndexedDB.savePlan")
             {
                 SavePlanCallCount++;
+                LastSavedPlan = Assert.IsType<StoredPlan>(Assert.Single(args ?? []));
                 return new ValueTask<TValue>((TValue)(object)true);
             }
 
             if (identifier == "IndexedDB.patchMarketAnalysis")
             {
                 PatchMarketAnalysisCallCount++;
+                LastPatchedRecipeBasisJson = args?.Length > 5 ? args[5] as string : null;
                 return new ValueTask<TValue>((TValue)(object)true);
             }
 

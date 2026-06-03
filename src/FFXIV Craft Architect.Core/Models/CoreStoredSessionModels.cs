@@ -15,6 +15,7 @@ public sealed class CoreStoredPlanSnapshot
     public string? PlanJson { get; set; }
     public string? MarketPlansJson { get; set; }
     public string? MarketItemAnalysesJson { get; set; }
+    public string? MarketAnalysisRecipeBasisJson { get; set; }
     public HashSet<int> UnavailableMarketItemIds { get; set; } = new();
     public RecommendationMode SavedRecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
     public MarketAcquisitionLens SavedMarketAnalysisLens { get; set; } = MarketAcquisitionLens.MinimumUpfrontCost;
@@ -48,5 +49,6 @@ public sealed record CorePlanSessionLoadResult(
     IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses,
     IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
     IReadOnlySet<int> UnavailableMarketItemIds,
+    StoredRecipeOperationSnapshot? MarketAnalysisRecipeBasis,
     bool CanLoad,
     string? Warning);

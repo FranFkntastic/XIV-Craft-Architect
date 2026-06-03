@@ -47,6 +47,9 @@ public sealed class CoreStoredPlanSnapshotBuilder
             MarketItemAnalysesJson = evidence.ItemAnalyses.Any()
                 ? JsonSerializer.Serialize(evidence.ItemAnalyses)
                 : null,
+            MarketAnalysisRecipeBasisJson = evidence.RecipeBasis != null
+                ? JsonSerializer.Serialize(evidence.RecipeBasis)
+                : null,
             UnavailableMarketItemIds = evidence.UnavailableMarketItemIds.ToHashSet(),
             SavedRecommendationMode = evidence.RecommendationMode,
             SavedMarketAnalysisLens = evidence.Lens,

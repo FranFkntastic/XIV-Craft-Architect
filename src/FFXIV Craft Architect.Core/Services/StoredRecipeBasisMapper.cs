@@ -114,6 +114,16 @@ public static class StoredRecipeBasisMapper
             return false;
         }
 
+        var demandItemIds = new HashSet<int>();
+        foreach (var demandItem in stored.MarketAnalysisDemandItems)
+        {
+            if (!demandItemIds.Add(demandItem.ItemId))
+            {
+                warning = $"Stored recipe basis contains a duplicate market analysis demand item id: {demandItem.ItemId}.";
+                return false;
+            }
+        }
+
         foreach (var operation in stored.Operations)
         {
             if (operation == null)

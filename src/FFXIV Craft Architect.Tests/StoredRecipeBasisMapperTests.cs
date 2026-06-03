@@ -276,6 +276,26 @@ public class StoredRecipeBasisMapperTests
     }
 
     [Fact]
+    public void TryDeserialize_DuplicateDemandItemIds_ReturnsNullAndWarning()
+    {
+        const string json = """
+            {
+              "SchemaVersion": 1,
+              "MarketAnalysisDemandItems": [
+                { "ItemId": 100, "Name": "First", "TotalQuantity": 1 },
+                { "ItemId": 100, "Name": "Second", "TotalQuantity": 2 }
+              ]
+            }
+            """;
+
+        var result = StoredRecipeBasisMapper.TryDeserialize(json, out var warning);
+
+        Assert.Null(result);
+        Assert.Contains("duplicate", warning, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("demand item", warning, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Hydrate_DuplicateNodeIds_ThrowsClearInvalidOperationException()
     {
         var stored = new StoredRecipeOperationSnapshot

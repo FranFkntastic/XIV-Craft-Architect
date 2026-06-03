@@ -90,6 +90,7 @@ public class AppState
     private System.Threading.Timer? _autoSaveTimer;
     private readonly List<DetailedShoppingPlan> _shoppingPlans = [];
     private readonly List<MarketItemAnalysis> _marketItemAnalyses = [];
+    private StoredRecipeOperationSnapshot? _marketAnalysisRecipeBasis;
     private readonly List<DetailedShoppingPlan> _procurementShoppingPlans = [];
     private readonly List<MarketShoppingItem> _shoppingItems = [];
     private readonly List<ProjectItem> _projectItems = [];
@@ -125,6 +126,8 @@ public class AppState
     /// Acquisition and procurement views may project from this data, but should not mutate or filter it.
     /// </summary>
     public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses => _marketItemAnalyses.AsReadOnly();
+
+    public StoredRecipeOperationSnapshot? MarketAnalysisRecipeBasis => CloneRecipeBasis(_marketAnalysisRecipeBasis);
 
     /// <summary>
     /// Mutable procurement overlay derived from ShoppingPlans and current acquisition choices.
@@ -383,13 +386,14 @@ public class AppState
         IEnumerable<MarketItemAnalysis> analyses,
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
         IReadOnlyList<MaterialAggregate> activeProcurementItems,
-        bool acquisitionDecisionsChanged)
+        bool acquisitionDecisionsChanged,
+        StoredRecipeOperationSnapshot? recipeBasis = null)
     {
         ArgumentNullException.ThrowIfNull(activeProcurementItems);
 
         using (BeginStateChangeBatch())
         {
-            ReplaceMarketAnalysis(analyses, shoppingPlans);
+            ReplaceMarketAnalysis(analyses, shoppingPlans, recipeBasis);
             if (acquisitionDecisionsChanged)
             {
                 ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
@@ -404,13 +408,15 @@ public class AppState
 
     public void ReplaceMarketAnalysis(
         IEnumerable<MarketItemAnalysis> analyses,
-        IEnumerable<DetailedShoppingPlan> shoppingPlans)
+        IEnumerable<DetailedShoppingPlan> shoppingPlans,
+        StoredRecipeOperationSnapshot? recipeBasis = null)
     {
         ArgumentNullException.ThrowIfNull(analyses);
         ArgumentNullException.ThrowIfNull(shoppingPlans);
 
         ReplaceListContents(_marketItemAnalyses, analyses);
         ReplaceListContents(_shoppingPlans, shoppingPlans);
+        _marketAnalysisRecipeBasis = CloneRecipeBasis(recipeBasis);
         _procurementShoppingPlans.Clear();
         var viewChanged = PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses, publishChange: false);
         var navigationChanged = ApplyPendingMarketItemAutoExpand(publishChange: false);
@@ -829,6 +835,7 @@ public class AppState
         _shoppingPlans.Clear();
         _marketItemAnalyses.Clear();
         _procurementShoppingPlans.Clear();
+        _marketAnalysisRecipeBasis = null;
         UnavailableMarketItems = Array.Empty<CoreMarketDataUnavailableItem>();
         ClearMarketAnalysisViewState(publishChange: false);
         PublishChange(
@@ -1137,6 +1144,14 @@ public class AppState
         };
     }
 
+    private static StoredRecipeOperationSnapshot? CloneRecipeBasis(StoredRecipeOperationSnapshot? recipeBasis)
+    {
+        return recipeBasis == null
+            ? null
+            : System.Text.Json.JsonSerializer.Deserialize<StoredRecipeOperationSnapshot>(
+                System.Text.Json.JsonSerializer.Serialize(recipeBasis));
+    }
+
     private static List<MarketItemAnalysis> ReplaceAnalysisByItemId(
         IEnumerable<MarketItemAnalysis> analyses,
         MarketItemAnalysis replacement)
@@ -1290,6 +1305,7 @@ public class AppState
         AutoExpandItemId = null;
         ReplaceListContents(_marketItemAnalyses, session.MarketItemAnalyses);
         ReplaceListContents(_shoppingPlans, session.ShoppingPlans);
+        _marketAnalysisRecipeBasis = CloneRecipeBasis(session.MarketAnalysisRecipeBasis);
         ClearMarketAnalysisViewState(publishChange: false);
         RecommendationMode = storedPlan.SavedRecommendationMode;
         MarketAnalysisLens = storedPlan.SavedMarketAnalysisLens;

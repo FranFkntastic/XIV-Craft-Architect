@@ -10,9 +10,13 @@ public sealed record StoredPlanSnapshotMetrics(
     int MarketAnalysisCount,
     int PlanJsonBytes,
     int MarketPlansJsonBytes,
-    int MarketItemAnalysesJsonBytes)
+    int MarketItemAnalysesJsonBytes,
+    int MarketAnalysisRecipeBasisJsonBytes)
 {
-    public int TotalJsonBytes => PlanJsonBytes + MarketPlansJsonBytes + MarketItemAnalysesJsonBytes;
+    public int TotalJsonBytes => PlanJsonBytes +
+                                 MarketPlansJsonBytes +
+                                 MarketItemAnalysesJsonBytes +
+                                 MarketAnalysisRecipeBasisJsonBytes;
 
     public static StoredPlanSnapshotMetrics FromStoredPlan(StoredPlan plan)
     {
@@ -22,7 +26,8 @@ public sealed record StoredPlanSnapshotMetrics(
             CountList<MarketItemAnalysis>(plan.MarketItemAnalysesJson),
             GetUtf8ByteCount(plan.PlanJson),
             GetUtf8ByteCount(plan.MarketPlansJson),
-            GetUtf8ByteCount(plan.MarketItemAnalysesJson));
+            GetUtf8ByteCount(plan.MarketItemAnalysesJson),
+            GetUtf8ByteCount(plan.MarketAnalysisRecipeBasisJson));
     }
 
     private static int CountPlanNodes(string? json)

@@ -267,7 +267,8 @@ public class IndexedDbService
         IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
         IReadOnlyList<MarketItemAnalysis> marketItemAnalyses,
         RecommendationMode mode,
-        MarketAcquisitionLens lens)
+        MarketAcquisitionLens lens,
+        StoredRecipeOperationSnapshot? recipeBasis = null)
     {
         try
         {
@@ -278,7 +279,8 @@ public class IndexedDbService
                 JsonSerializer.Serialize(shoppingPlans),
                 JsonSerializer.Serialize(marketItemAnalyses),
                 mode,
-                lens);
+                lens,
+                recipeBasis != null ? JsonSerializer.Serialize(recipeBasis) : null);
         }
         catch (Exception ex)
         {
@@ -352,6 +354,11 @@ public class StoredPlan
     /// Serialized immutable market analysis source data.
     /// </summary>
     public string? MarketItemAnalysesJson { get; set; }
+
+    /// <summary>
+    /// Serialized recipe-operation basis used to validate restored market analysis.
+    /// </summary>
+    public string? MarketAnalysisRecipeBasisJson { get; set; }
     
     /// <summary>
     /// Recommendation mode used for the saved market analysis.

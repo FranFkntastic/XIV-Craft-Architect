@@ -61,10 +61,11 @@ public sealed class CoreMarketAnalysisWorkflowService
             var plan = _session.ActivePlan;
             var planSessionVersion = _session.PlanSessionVersion;
             using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct, operation.Token);
-            var materials = (await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidatesAsync(
+            var candidateResult = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidateResultAsync(
                     plan,
-                    linkedCancellation.Token))?
-                .ToList() ?? [];
+                    linkedCancellation.Token);
+            var materials = candidateResult?.Candidates.ToList() ?? [];
+            var recipeBasis = candidateResult?.RecipeBasis;
             if (_session.PlanSessionVersion != planSessionVersion)
             {
                 operation.Cancel();
@@ -118,7 +119,8 @@ public sealed class CoreMarketAnalysisWorkflowService
                 executionResult.Analyses,
                 executionResult.ShoppingPlans,
                 request.RecommendationMode,
-                request.Lens);
+                request.Lens,
+                recipeBasis);
             if (published == null)
             {
                 return new CoreMarketAnalysisWorkflowResult(false, 0, 0, executionResult.Evidence.FetchedCount);
@@ -180,7 +182,8 @@ public sealed class CoreMarketAnalysisWorkflowService
                 evidence.ItemAnalyses,
                 shoppingPlans,
                 evidence.RecommendationMode,
-                request.Lens);
+                request.Lens,
+                evidence.RecipeBasis);
             if (published == null)
             {
                 return new CoreMarketAnalysisWorkflowResult(false, 0, 0, 0);
@@ -218,7 +221,8 @@ public sealed class CoreMarketAnalysisWorkflowService
         IEnumerable<MarketItemAnalysis> analyses,
         List<DetailedShoppingPlan> shoppingPlans,
         RecommendationMode recommendationMode,
-        MarketAcquisitionLens lens)
+        MarketAcquisitionLens lens,
+        StoredRecipeOperationSnapshot? recipeBasis)
     {
         var currentVersions = _session.CaptureVersionStamp();
         if (currentVersions.PlanSession != capturedVersions.PlanSession)
@@ -256,7 +260,8 @@ public sealed class CoreMarketAnalysisWorkflowService
                     changedDecisions > 0,
                     "market analysis published",
                     recommendationMode: recommendationMode,
-                    lens: lens);
+                    lens: lens,
+                    recipeBasis: recipeBasis);
             },
             "Market analysis published.");
         if (!completed || !published)

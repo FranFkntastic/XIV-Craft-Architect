@@ -49,8 +49,9 @@ public sealed class MarketAnalysisWorkflowService
         var plan = _appState.CurrentPlan;
         var planSessionVersion = _appState.PlanSessionVersion;
         var planId = _appState.CurrentPlanId;
-        var materials = (await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidatesAsync(plan, ct))?
-            .ToList() ?? [];
+        var candidateResult = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidateResultAsync(plan, ct);
+        var materials = candidateResult?.Candidates.ToList() ?? [];
+        var recipeBasis = candidateResult?.RecipeBasis;
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, 0);
@@ -104,6 +105,7 @@ public sealed class MarketAnalysisWorkflowService
             planId,
             executionResult.Analyses,
             executionResult.ShoppingPlans,
+            recipeBasis,
             ct);
         if (published == null)
         {
@@ -144,6 +146,7 @@ public sealed class MarketAnalysisWorkflowService
             planId,
             _appState.MarketItemAnalyses,
             shoppingPlans,
+            _appState.MarketAnalysisRecipeBasis,
             ct);
         if (published == null)
         {
@@ -163,6 +166,7 @@ public sealed class MarketAnalysisWorkflowService
         string? planId,
         IEnumerable<MarketItemAnalysis> analyses,
         List<DetailedShoppingPlan> shoppingPlans,
+        StoredRecipeOperationSnapshot? recipeBasis,
         CancellationToken ct)
     {
         if (plan == null || !_appState.IsCurrentPlanSession(plan, planSessionVersion))
@@ -184,7 +188,8 @@ public sealed class MarketAnalysisWorkflowService
             analysisList,
             shoppingPlans,
             _recipeLayerWorkflow.BuildActiveProcurementItems(plan),
-            changedDecisions > 0);
+            changedDecisions > 0,
+            recipeBasis);
 
         if (!string.IsNullOrEmpty(planId) &&
             _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
@@ -195,7 +200,8 @@ public sealed class MarketAnalysisWorkflowService
                 shoppingPlans,
                 analysisList,
                 RecommendationMode.MinimizeTotalCost,
-                _appState.MarketAnalysisLens);
+                _appState.MarketAnalysisLens,
+                recipeBasis);
         }
 
         ct.ThrowIfCancellationRequested();

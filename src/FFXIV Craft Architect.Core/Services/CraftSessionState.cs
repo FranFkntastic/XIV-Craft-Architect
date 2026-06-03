@@ -416,7 +416,8 @@ public sealed class CraftSessionState
                 _marketEvidence.ShoppingPlans?.Select(CloneDetailedShoppingPlan).ToArray(),
                 _marketEvidence.PublishedAgainstVersion,
                 _marketEvidence.RecommendationMode,
-                _marketEvidence.Lens);
+                _marketEvidence.Lens,
+                CloneRecipeBasis(_marketEvidence.RecipeBasis));
             MarkPlanPriceChanged(reason);
             MarkMarketEvidenceChanged("unavailable market items updated");
             RegisterPlanInstance(plan, _planSessionVersion);
@@ -483,7 +484,8 @@ public sealed class CraftSessionState
         IEnumerable<int> unavailableMarketItemIds,
         string reason,
         RecommendationMode recommendationMode = RecommendationMode.MinimizeTotalCost,
-        MarketAcquisitionLens lens = MarketAcquisitionLens.MinimumUpfrontCost)
+        MarketAcquisitionLens lens = MarketAcquisitionLens.MinimumUpfrontCost,
+        StoredRecipeOperationSnapshot? recipeBasis = null)
     {
         return ApplyChange(
             CraftSessionChangeScope.MarketAnalysis,
@@ -502,7 +504,8 @@ public sealed class CraftSessionState
                     Array.Empty<DetailedShoppingPlan>(),
                     _versions.Capture(_planSessionVersion),
                     recommendationMode,
-                    lens);
+                    lens,
+                    CloneRecipeBasis(recipeBasis));
             });
     }
 
@@ -533,7 +536,8 @@ public sealed class CraftSessionState
         string reason,
         IEnumerable<int>? unavailableMarketItemIds = null,
         RecommendationMode recommendationMode = RecommendationMode.MinimizeTotalCost,
-        MarketAcquisitionLens lens = MarketAcquisitionLens.MinimumUpfrontCost)
+        MarketAcquisitionLens lens = MarketAcquisitionLens.MinimumUpfrontCost,
+        StoredRecipeOperationSnapshot? recipeBasis = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(itemAnalyses);
@@ -563,7 +567,8 @@ public sealed class CraftSessionState
                 shoppingPlanList.Select(CloneDetailedShoppingPlan).ToArray(),
                 _versions.Capture(_planSessionVersion),
                 recommendationMode,
-                lens);
+                lens,
+                CloneRecipeBasis(recipeBasis));
 
             RegisterPlanInstance(plan, _planSessionVersion);
             RegisterPlanInstance(_activePlan, _planSessionVersion);
@@ -934,13 +939,19 @@ public sealed class CraftSessionState
             evidence.ShoppingPlans?.Select(CloneDetailedShoppingPlan).ToArray(),
             evidence.PublishedAgainstVersion,
             evidence.RecommendationMode,
-            evidence.Lens);
+            evidence.Lens,
+            CloneRecipeBasis(evidence.RecipeBasis));
 
     private static MarketItemAnalysis CloneMarketItemAnalysis(MarketItemAnalysis analysis) =>
         JsonSerializer.Deserialize<MarketItemAnalysis>(JsonSerializer.Serialize(analysis)) ?? new MarketItemAnalysis();
 
     private static DetailedShoppingPlan CloneDetailedShoppingPlan(DetailedShoppingPlan plan) =>
         JsonSerializer.Deserialize<DetailedShoppingPlan>(JsonSerializer.Serialize(plan)) ?? new DetailedShoppingPlan();
+
+    private static StoredRecipeOperationSnapshot? CloneRecipeBasis(StoredRecipeOperationSnapshot? recipeBasis) =>
+        recipeBasis == null
+            ? null
+            : JsonSerializer.Deserialize<StoredRecipeOperationSnapshot>(JsonSerializer.Serialize(recipeBasis));
 
     private static WorldProcurementCardModel CloneWorldProcurementCard(WorldProcurementCardModel card) =>
         JsonSerializer.Deserialize<WorldProcurementCardModel>(JsonSerializer.Serialize(card)) ?? new WorldProcurementCardModel();

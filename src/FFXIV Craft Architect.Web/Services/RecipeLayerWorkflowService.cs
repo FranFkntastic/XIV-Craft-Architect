@@ -22,10 +22,24 @@ public interface IRecipeLayerWorkflowService
         CraftingPlan? plan,
         CancellationToken cancellationToken = default);
 
+    async Task<MarketAnalysisCandidateBuildResult?> BuildCurrentMarketAnalysisCandidateResultAsync(
+        CraftingPlan? plan,
+        CancellationToken cancellationToken = default)
+    {
+        var candidates = await BuildCurrentMarketAnalysisCandidatesAsync(plan, cancellationToken);
+        return candidates == null
+            ? null
+            : new MarketAnalysisCandidateBuildResult(candidates, RecipeBasis: null);
+    }
+
     Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(
         CraftingPlan? plan,
         CancellationToken cancellationToken = default);
 }
+
+public sealed record MarketAnalysisCandidateBuildResult(
+    IReadOnlyList<MaterialAggregate> Candidates,
+    StoredRecipeOperationSnapshot? RecipeBasis);
 
 public sealed class RecipeLayerWorkflowService : IRecipeLayerWorkflowService
 {
@@ -107,8 +121,49 @@ public sealed class RecipeLayerWorkflowService : IRecipeLayerWorkflowService
         CraftingPlan? plan,
         CancellationToken cancellationToken = default)
     {
-        var projection = await BuildCurrentDemandProjectionAsync(plan, cancellationToken);
-        return projection?.ToMarketAnalysisMaterialAggregates();
+        var result = await BuildCurrentMarketAnalysisCandidateResultAsync(plan, cancellationToken);
+        return result?.Candidates;
+    }
+
+    public async Task<MarketAnalysisCandidateBuildResult?> BuildCurrentMarketAnalysisCandidateResultAsync(
+        CraftingPlan? plan,
+        CancellationToken cancellationToken = default)
+    {
+        if (plan == null)
+        {
+            var fallbackProjection = BuildDemandProjection(plan);
+            return new MarketAnalysisCandidateBuildResult(
+                fallbackProjection.ToMarketAnalysisMaterialAggregates(),
+                RecipeBasis: null);
+        }
+
+        var identity = CreateSnapshotIdentity();
+        if (!_appState.IsCurrentPlanSession(plan, identity.PlanSessionVersion))
+        {
+            return null;
+        }
+
+        var snapshot = await _snapshotLifecycleService.GetCurrentOrNullAsync(
+            plan,
+            identity,
+            IsCurrentSnapshotIdentity,
+            cancellationToken: cancellationToken);
+        if (snapshot == null)
+        {
+            return null;
+        }
+
+        var projection = _demandProjectionService.Build(plan, snapshot);
+        var candidates = projection.ToMarketAnalysisMaterialAggregates();
+        if (!IsCurrentSnapshotIdentity(identity) ||
+            !_appState.IsCurrentPlanSession(plan, identity.PlanSessionVersion))
+        {
+            return null;
+        }
+
+        return new MarketAnalysisCandidateBuildResult(
+            candidates,
+            StoredRecipeBasisMapper.ToStored(snapshot, candidates));
     }
 
     public async Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(
@@ -167,6 +222,14 @@ internal sealed class LightweightRecipeLayerWorkflowService : IRecipeLayerWorkfl
         CancellationToken cancellationToken = default)
     {
         return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildMarketAnalysisCandidates(plan));
+    }
+
+    public Task<MarketAnalysisCandidateBuildResult?> BuildCurrentMarketAnalysisCandidateResultAsync(
+        CraftingPlan? plan,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult<MarketAnalysisCandidateBuildResult?>(
+            new MarketAnalysisCandidateBuildResult(BuildMarketAnalysisCandidates(plan), RecipeBasis: null));
     }
 
     public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(

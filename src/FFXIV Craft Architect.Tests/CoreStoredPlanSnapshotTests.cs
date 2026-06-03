@@ -28,7 +28,8 @@ public class CoreStoredPlanSnapshotTests
             "market analysis",
             [404],
             RecommendationMode.MaximizeValue,
-            MarketAcquisitionLens.BulkValue));
+            MarketAcquisitionLens.BulkValue,
+            CreateStoredRecipeBasis()));
         var builder = new CoreStoredPlanSnapshotBuilder(session);
 
         var snapshot = builder.Build(
@@ -49,6 +50,9 @@ public class CoreStoredPlanSnapshotTests
         Assert.NotNull(JsonSerializer.Deserialize<CraftingPlan>(snapshot.PlanJson!));
         Assert.Single(JsonSerializer.Deserialize<List<MarketItemAnalysis>>(snapshot.MarketItemAnalysesJson!)!);
         Assert.Single(JsonSerializer.Deserialize<List<DetailedShoppingPlan>>(snapshot.MarketPlansJson!)!);
+        Assert.NotNull(snapshot.MarketAnalysisRecipeBasisJson);
+        Assert.Single(JsonSerializer.Deserialize<StoredRecipeOperationSnapshot>(
+            snapshot.MarketAnalysisRecipeBasisJson!)!.MarketAnalysisDemandItems);
     }
 
     [Fact]
@@ -164,6 +168,101 @@ public class CoreStoredPlanSnapshotTests
     }
 
     [Fact]
+    public void Prepare_RecipeBasisQuantityMatch_RestoresAnalysisWhenProjectQuantityDiffers()
+    {
+        var snapshot = new CoreStoredPlanSnapshot
+        {
+            Id = "saved",
+            Name = "Saved",
+            ProjectItems =
+            [
+                new CoreStoredProjectItem { Id = 100, Name = "Final Craft", Quantity = 99 }
+            ],
+            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
+            {
+                new() { ItemId = 100, Name = "Final Craft", QuantityNeeded = 1 }
+            }),
+            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
+            {
+                CreateShoppingPlan(100)
+            }),
+            MarketAnalysisRecipeBasisJson = JsonSerializer.Serialize(CreateStoredRecipeBasis())
+        };
+
+        var result = CorePlanSessionLoadService.Prepare(snapshot);
+
+        Assert.Single(result.MarketItemAnalyses);
+        Assert.Single(result.ShoppingPlans);
+        Assert.NotNull(result.MarketAnalysisRecipeBasis);
+    }
+
+    [Fact]
+    public void Prepare_InvalidRecipeBasis_DropsMarketEvidenceEvenIfLegacyWouldMatch()
+    {
+        var snapshot = new CoreStoredPlanSnapshot
+        {
+            Id = "saved",
+            Name = "Saved",
+            ProjectItems =
+            [
+                new CoreStoredProjectItem { Id = 100, Name = "Final Craft", Quantity = 1 }
+            ],
+            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
+            {
+                new() { ItemId = 100, Name = "Final Craft", QuantityNeeded = 1 }
+            }),
+            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
+            {
+                CreateShoppingPlan(100)
+            }),
+            MarketAnalysisRecipeBasisJson = "{not json}"
+        };
+
+        var result = CorePlanSessionLoadService.Prepare(snapshot);
+
+        Assert.Empty(result.MarketItemAnalyses);
+        Assert.Empty(result.ShoppingPlans);
+        Assert.Null(result.MarketAnalysisRecipeBasis);
+        Assert.Contains("recipe basis", result.Warning, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Prepare_DuplicateRecipeBasisDemand_DropsMarketEvidenceWithoutThrowing()
+    {
+        var recipeBasis = CreateStoredRecipeBasis();
+        recipeBasis.MarketAnalysisDemandItems.Add(new StoredMarketAnalysisDemandItem
+        {
+            ItemId = 100,
+            Name = "Duplicate",
+            TotalQuantity = 1
+        });
+        var snapshot = new CoreStoredPlanSnapshot
+        {
+            Id = "saved",
+            Name = "Saved",
+            ProjectItems =
+            [
+                new CoreStoredProjectItem { Id = 100, Name = "Final Craft", Quantity = 1 }
+            ],
+            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
+            {
+                new() { ItemId = 100, Name = "Final Craft", QuantityNeeded = 1 }
+            }),
+            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
+            {
+                CreateShoppingPlan(100)
+            }),
+            MarketAnalysisRecipeBasisJson = JsonSerializer.Serialize(recipeBasis)
+        };
+
+        var result = CorePlanSessionLoadService.Prepare(snapshot);
+
+        Assert.Empty(result.MarketItemAnalyses);
+        Assert.Empty(result.ShoppingPlans);
+        Assert.Null(result.MarketAnalysisRecipeBasis);
+    }
+
+    [Fact]
     public void Load_ActivatesPlanAndRestoresValidMarketEvidenceIntoCoreSession()
     {
         var sourceSession = new CraftSessionState(new ImmediateCraftSessionDispatcher());
@@ -181,7 +280,8 @@ public class CoreStoredPlanSnapshotTests
             acquisitionDecisionsChanged: false,
             "market analysis",
             recommendationMode: RecommendationMode.MaximizeValue,
-            lens: MarketAcquisitionLens.BulkValue));
+            lens: MarketAcquisitionLens.BulkValue,
+            recipeBasis: CreateStoredRecipeBasis()));
         var snapshot = new CoreStoredPlanSnapshotBuilder(sourceSession)
             .Build("saved-plan", "Saved Plan");
         var targetSession = new CraftSessionState(new ImmediateCraftSessionDispatcher());
@@ -196,6 +296,7 @@ public class CoreStoredPlanSnapshotTests
         Assert.Single(targetSession.ProjectItems);
         Assert.Equal(100, Assert.Single(targetSession.MarketEvidence.ItemAnalyses).ItemId);
         Assert.Equal(100, Assert.Single(targetSession.MarketEvidence.ShoppingPlans!).ItemId);
+        Assert.NotNull(targetSession.MarketEvidence.RecipeBasis);
         Assert.Equal(RecommendationMode.MaximizeValue, targetSession.MarketEvidence.RecommendationMode);
         Assert.Equal(MarketAcquisitionLens.BulkValue, targetSession.MarketEvidence.Lens);
     }
@@ -247,6 +348,31 @@ public class CoreStoredPlanSnapshotTests
                 TotalCost = 1000,
                 TotalQuantityPurchased = quantityNeeded
             }
+        };
+    }
+
+    private static StoredRecipeOperationSnapshot CreateStoredRecipeBasis()
+    {
+        return new StoredRecipeOperationSnapshot
+        {
+            Operations =
+            [
+                new StoredRecipeOperation
+                {
+                    NodeId = "root",
+                    ResultItemId = 100,
+                    ResultItemName = "Final Craft"
+                }
+            ],
+            MarketAnalysisDemandItems =
+            [
+                new StoredMarketAnalysisDemandItem
+                {
+                    ItemId = 100,
+                    Name = "Final Craft",
+                    TotalQuantity = 1
+                }
+            ]
         };
     }
 }

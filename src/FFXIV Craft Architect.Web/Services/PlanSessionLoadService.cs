@@ -80,8 +80,26 @@ public sealed class PlanSessionLoadService
         }).ToList();
 
         var marketAnalyses = DeserializeOrEmpty<MarketItemAnalysis>(storedPlan.MarketItemAnalysesJson);
-        if (ContainsLegacyListingOutlierField(storedPlan.MarketItemAnalysesJson) ||
-            !RestoredMarketAnalysisMatchesPlan(plan, projectItems, marketAnalyses, buildMarketAnalysisCandidates))
+        var hasRecipeBasisPayload = !string.IsNullOrWhiteSpace(storedPlan.MarketAnalysisRecipeBasisJson);
+        var marketAnalysisRecipeBasis = StoredRecipeBasisMapper.TryDeserialize(
+            storedPlan.MarketAnalysisRecipeBasisJson,
+            out var recipeBasisWarning);
+        warning = AppendWarning(warning, recipeBasisWarning);
+        if (ContainsLegacyListingOutlierField(storedPlan.MarketItemAnalysesJson))
+        {
+            marketAnalyses.Clear();
+            marketAnalysisRecipeBasis = null;
+        }
+        else if (hasRecipeBasisPayload)
+        {
+            if (marketAnalysisRecipeBasis == null ||
+                !RestoredMarketAnalysisMatchesRecipeBasis(marketAnalysisRecipeBasis, marketAnalyses))
+            {
+                marketAnalyses.Clear();
+                marketAnalysisRecipeBasis = null;
+            }
+        }
+        else if (!RestoredMarketAnalysisMatchesPlan(plan, projectItems, marketAnalyses, buildMarketAnalysisCandidates))
         {
             marketAnalyses.Clear();
         }
@@ -91,6 +109,10 @@ public sealed class PlanSessionLoadService
                             RestoredShoppingPlansMatchMarketAnalysis(restoredShoppingPlans, marketAnalyses)
             ? restoredShoppingPlans
             : new List<DetailedShoppingPlan>();
+        if (marketAnalyses.Count == 0)
+        {
+            marketAnalysisRecipeBasis = null;
+        }
 
         return new PlanSessionLoadResult(
             storedPlan,
@@ -98,7 +120,23 @@ public sealed class PlanSessionLoadService
             projectItems,
             marketAnalyses,
             shoppingPlans,
+            marketAnalysisRecipeBasis,
             warning);
+    }
+
+    private static string? AppendWarning(string? existingWarning, string? newWarning)
+    {
+        if (string.IsNullOrWhiteSpace(newWarning))
+        {
+            return existingWarning;
+        }
+
+        if (string.IsNullOrWhiteSpace(existingWarning))
+        {
+            return newWarning;
+        }
+
+        return $"{existingWarning} {newWarning}";
     }
 
     private static void RestoreParentLinks(CraftingPlan? plan)
@@ -202,6 +240,25 @@ public sealed class PlanSessionLoadService
                    quantityNeeded == analysis.QuantityNeeded);
     }
 
+    private static bool RestoredMarketAnalysisMatchesRecipeBasis(
+        StoredRecipeOperationSnapshot recipeBasis,
+        IReadOnlyList<MarketItemAnalysis> analyses)
+    {
+        if (analyses.Count == 0)
+        {
+            return false;
+        }
+
+        var expected = recipeBasis.MarketAnalysisDemandItems
+            .Where(item => !recipeBasis.UnavailableMarketItemIds.Contains(item.ItemId))
+            .ToDictionary(item => item.ItemId, item => item.TotalQuantity);
+
+        return expected.Count == analyses.Count &&
+               analyses.All(analysis =>
+                   expected.TryGetValue(analysis.ItemId, out var quantityNeeded) &&
+                   quantityNeeded == analysis.QuantityNeeded);
+    }
+
     private static IReadOnlyList<MaterialAggregate> BuildLightweightMarketAnalysisCandidates(CraftingPlan? plan)
     {
         return new RecipeDemandProjectionService()
@@ -232,4 +289,5 @@ public sealed record PlanSessionLoadResult(
     IReadOnlyList<ProjectItem> ProjectItems,
     IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses,
     IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
+    StoredRecipeOperationSnapshot? MarketAnalysisRecipeBasis,
     string? Warning);

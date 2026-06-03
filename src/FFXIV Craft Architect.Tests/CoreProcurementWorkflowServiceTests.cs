@@ -235,7 +235,8 @@ public class CoreProcurementWorkflowServiceTests
             "existing analysis",
             [404],
             RecommendationMode.MaximizeValue,
-            MarketAcquisitionLens.BulkValue));
+            MarketAcquisitionLens.BulkValue,
+            CreateStoredRecipeBasis()));
         service.Session.PublishProcurementOverlay(
             new CraftSessionProcurementOverlay(DateTime.UtcNow, [202], "existing route", [ShoppingPlan(202)]),
             "existing route");
@@ -249,6 +250,7 @@ public class CoreProcurementWorkflowServiceTests
         Assert.Contains(404, service.Session.MarketEvidence.UnavailableMarketItemIds);
         Assert.Equal(RecommendationMode.MaximizeValue, service.Session.MarketEvidence.RecommendationMode);
         Assert.Equal(MarketAcquisitionLens.BulkValue, service.Session.MarketEvidence.Lens);
+        Assert.NotNull(service.Session.MarketEvidence.RecipeBasis);
         Assert.Null(service.Session.ProcurementOverlay);
         marketExecution.Verify(e => e.ExecuteAsync(
             It.Is<MarketAnalysisExecutionRequest>(request =>
@@ -447,6 +449,31 @@ public class CoreProcurementWorkflowServiceTests
                 TotalCost = itemId * 10,
                 TotalQuantityPurchased = 5
             }
+        };
+    }
+
+    private static StoredRecipeOperationSnapshot CreateStoredRecipeBasis()
+    {
+        return new StoredRecipeOperationSnapshot
+        {
+            Operations =
+            [
+                new StoredRecipeOperation
+                {
+                    NodeId = "root",
+                    ResultItemId = 202,
+                    ResultItemName = "Item 202"
+                }
+            ],
+            MarketAnalysisDemandItems =
+            [
+                new StoredMarketAnalysisDemandItem
+                {
+                    ItemId = 202,
+                    Name = "Item 202",
+                    TotalQuantity = 5
+                }
+            ]
         };
     }
 

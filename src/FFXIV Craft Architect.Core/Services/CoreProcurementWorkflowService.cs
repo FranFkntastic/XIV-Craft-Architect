@@ -347,7 +347,8 @@ public sealed class CoreProcurementWorkflowService
                         "market item refreshed",
                         existingEvidence.UnavailableMarketItemIds,
                         existingEvidence.RecommendationMode,
-                        existingEvidence.Lens);
+                        existingEvidence.Lens,
+                        existingEvidence.RecipeBasis);
                 },
                 $"{request.ItemName} market data refreshed.");
             if (!completed || !published)

@@ -131,7 +131,13 @@ async function loadPlan(planId) {
 /**
  * Patch market analysis fields without transferring or rewriting the full plan payload.
  */
-async function patchMarketAnalysis(planId, marketPlansJson, marketItemAnalysesJson, recommendationMode, marketAnalysisLens) {
+async function patchMarketAnalysis(
+    planId,
+    marketPlansJson,
+    marketItemAnalysesJson,
+    recommendationMode,
+    marketAnalysisLens,
+    marketAnalysisRecipeBasisJson) {
     const database = await initDB();
 
     return new Promise((resolve, reject) => {
@@ -151,6 +157,7 @@ async function patchMarketAnalysis(planId, marketPlansJson, marketItemAnalysesJs
                 ...plan,
                 marketPlansJson,
                 marketItemAnalysesJson,
+                marketAnalysisRecipeBasisJson,
                 savedRecommendationMode: recommendationMode,
                 savedMarketAnalysisLens: marketAnalysisLens,
                 modifiedAt: new Date().toISOString()

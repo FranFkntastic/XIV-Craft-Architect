@@ -402,6 +402,12 @@ public class MarketAnalysisViewModelSessionBridgeTests
                 It.IsAny<CraftingPlan?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([new MaterialAggregate { ItemId = 200, Name = "Material", TotalQuantity = 2 }]);
+        recipeLayerWorkflow.Setup(w => w.BuildCurrentMarketAnalysisCandidateResultAsync(
+                It.IsAny<CraftingPlan?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CoreMarketAnalysisCandidateBuildResult(
+                [new MaterialAggregate { ItemId = 200, Name = "Material", TotalQuantity = 2 }],
+                RecipeBasis: null));
 
         return new CoreMarketAnalysisWorkflowService(
             session,

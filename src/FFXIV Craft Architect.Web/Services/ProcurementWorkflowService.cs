@@ -235,7 +235,8 @@ public sealed class ProcurementWorkflowService
                 _appState.ShoppingPlans,
                 _appState.MarketItemAnalyses,
                 _appState.RecommendationMode,
-                _appState.MarketAnalysisLens);
+                _appState.MarketAnalysisLens,
+                _appState.MarketAnalysisRecipeBasis);
         }
 
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))

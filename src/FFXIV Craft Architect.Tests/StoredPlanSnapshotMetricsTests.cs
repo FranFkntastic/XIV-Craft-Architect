@@ -44,7 +44,19 @@ public class StoredPlanSnapshotMetricsTests
         {
             PlanJson = JsonSerializer.Serialize(plan),
             MarketPlansJson = JsonSerializer.Serialize(shoppingPlans),
-            MarketItemAnalysesJson = JsonSerializer.Serialize(analyses)
+            MarketItemAnalysesJson = JsonSerializer.Serialize(analyses),
+            MarketAnalysisRecipeBasisJson = JsonSerializer.Serialize(new StoredRecipeOperationSnapshot
+            {
+                Operations =
+                [
+                    new StoredRecipeOperation
+                    {
+                        NodeId = "root",
+                        ResultItemId = 1,
+                        ResultItemName = "Root"
+                    }
+                ]
+            })
         };
 
         var metrics = StoredPlanSnapshotMetrics.FromStoredPlan(storedPlan);
@@ -56,7 +68,13 @@ public class StoredPlanSnapshotMetricsTests
         Assert.Equal(Encoding.UTF8.GetByteCount(storedPlan.MarketPlansJson!), metrics.MarketPlansJsonBytes);
         Assert.Equal(Encoding.UTF8.GetByteCount(storedPlan.MarketItemAnalysesJson!), metrics.MarketItemAnalysesJsonBytes);
         Assert.Equal(
-            metrics.PlanJsonBytes + metrics.MarketPlansJsonBytes + metrics.MarketItemAnalysesJsonBytes,
+            Encoding.UTF8.GetByteCount(storedPlan.MarketAnalysisRecipeBasisJson!),
+            metrics.MarketAnalysisRecipeBasisJsonBytes);
+        Assert.Equal(
+            metrics.PlanJsonBytes +
+            metrics.MarketPlansJsonBytes +
+            metrics.MarketItemAnalysesJsonBytes +
+            metrics.MarketAnalysisRecipeBasisJsonBytes,
             metrics.TotalJsonBytes);
     }
 
@@ -67,7 +85,8 @@ public class StoredPlanSnapshotMetricsTests
         {
             PlanJson = "{not valid",
             MarketPlansJson = null,
-            MarketItemAnalysesJson = string.Empty
+            MarketItemAnalysesJson = string.Empty,
+            MarketAnalysisRecipeBasisJson = null
         };
 
         var metrics = StoredPlanSnapshotMetrics.FromStoredPlan(storedPlan);
@@ -78,5 +97,6 @@ public class StoredPlanSnapshotMetricsTests
         Assert.True(metrics.PlanJsonBytes > 0);
         Assert.Equal(0, metrics.MarketPlansJsonBytes);
         Assert.Equal(0, metrics.MarketItemAnalysesJsonBytes);
+        Assert.Equal(0, metrics.MarketAnalysisRecipeBasisJsonBytes);
     }
 }
