@@ -42,7 +42,11 @@
                 var isSelected = Selection.IsSelected(key);
                 <div class="@GetBodyRowClass(item, isSelected)"
                      role="row"
+                     aria-label="@GetRowActionLabel(item)"
                      aria-selected="@isSelected.ToString().ToLowerInvariant()"
+                     tabindex="@GetRowTabIndex()"
+                     @onclick="() => ActivateRowAsync(item)"
+                     @onkeydown="args => ActivateRowFromKeyboardAsync(item, args)"
                      @key="key">
                     @for (var i = 0; i < Columns.Count; i++)
                     {
@@ -50,16 +54,15 @@
                         var cellClass = WebTableColumn<TItem, TColumnId>.CombineClasses(
                             "web-grid-table-cell",
                             column.GetCellCssClass(item));
-                        if (i == 0 && RowActivated.HasDelegate)
+                        if (column.SuppressRowActivation)
                         {
-                            <button type="button"
-                                    class="@GetRowActionClass(item, column)"
-                                    role="cell"
-                                    aria-label="@GetRowActionLabel(item)"
-                                    title="@column.CellTitleSelector?.Invoke(item)"
-                                    @onclick="() => RowActivated.InvokeAsync(item)">
+                            <div class="@cellClass"
+                                 role="cell"
+                                 title="@column.CellTitleSelector?.Invoke(item)"
+                                 @onclick="SuppressCellActivationAsync"
+                                 @onclick:stopPropagation="true">
                                 @column.CellTemplate(item)
-                            </button>
+                            </div>
                         }
                         else
                         {
@@ -161,12 +164,27 @@
         return RowActionLabel?.Invoke(item) ?? "Select row";
     }
 
-    private static string GetRowActionClass(
-        TItem item,
-        WebTableColumn<TItem, TColumnId> column)
+    private Task ActivateRowAsync(TItem item)
     {
-        return WebTableColumn<TItem, TColumnId>.CombineClasses(
-            "web-grid-table-cell web-grid-table-row-action",
-            column.GetCellCssClass(item));
+        return RowActivated.HasDelegate
+            ? RowActivated.InvokeAsync(item)
+            : Task.CompletedTask;
+    }
+
+    private Task ActivateRowFromKeyboardAsync(TItem item, KeyboardEventArgs args)
+    {
+        return args.Key is "Enter" or " "
+            ? ActivateRowAsync(item)
+            : Task.CompletedTask;
+    }
+
+    private string? GetRowTabIndex()
+    {
+        return RowActivated.HasDelegate ? "0" : null;
+    }
+
+    private static Task SuppressCellActivationAsync()
+    {
+        return Task.CompletedTask;
     }
 }

@@ -125,9 +125,87 @@ public class WebTableComponentTests : BunitContext
         Assert.Equal("true", rendered.Find(".web-grid-table-row.is-selected").GetAttribute("aria-selected"));
         Assert.Contains("selected-row", rendered.Find(".web-grid-table-row.is-selected").GetAttribute("class"));
 
-        rendered.Find("button[aria-label='Select Ore']").Click();
+        rendered.Find(".web-grid-table-row[aria-label='Select Ore']").Click();
 
         Assert.Equal("ore", activatedKey);
+    }
+
+    [Fact]
+    public void GridTable_RowActivationWorksFromNonFirstCells()
+    {
+        var rows = new[]
+        {
+            new TestRow("ore", "Ore", 4, 100)
+        };
+        string? activatedKey = null;
+
+        var rendered = Render<WebGridTable<TestRow, TestColumn>>(parameters => parameters
+            .Add(parameter => parameter.Items, rows)
+            .Add(parameter => parameter.Columns, CreateColumns())
+            .Add(parameter => parameter.GetRowKey, row => row.Key)
+            .Add(parameter => parameter.RowActivated, row => activatedKey = row.Key));
+
+        rendered.FindAll("[role='cell']")[1].Click();
+
+        Assert.Equal("ore", activatedKey);
+    }
+
+    [Theory]
+    [InlineData("Enter")]
+    [InlineData(" ")]
+    public void GridTable_RowActivationWorksFromKeyboard(string key)
+    {
+        var rows = new[]
+        {
+            new TestRow("ore", "Ore", 4, 100)
+        };
+        string? activatedKey = null;
+
+        var rendered = Render<WebGridTable<TestRow, TestColumn>>(parameters => parameters
+            .Add(parameter => parameter.Items, rows)
+            .Add(parameter => parameter.Columns, CreateColumns())
+            .Add(parameter => parameter.GetRowKey, row => row.Key)
+            .Add(parameter => parameter.RowActivated, row => activatedKey = row.Key));
+
+        var row = rendered.Find(".web-grid-table-row[aria-label='Select row']");
+
+        Assert.Equal("0", row.GetAttribute("tabindex"));
+
+        row.KeyDown(key);
+
+        Assert.Equal("ore", activatedKey);
+    }
+
+    [Fact]
+    public void GridTable_InteractiveCellsCanSuppressRowActivation()
+    {
+        var rows = new[]
+        {
+            new TestRow("ore", "Ore", 4, 100)
+        };
+        var columns = new[]
+        {
+            WebTableColumn<TestRow, TestColumn>.Text(TestColumn.Name, "Name", row => row.Name, widthPx: 160),
+            new WebTableColumn<TestRow, TestColumn>
+            {
+                Id = TestColumn.Quantity,
+                Header = "Qty",
+                Size = new WebTableColumnSize(80),
+                SuppressRowActivation = true,
+                CellTemplate = row => builder => builder.AddContent(0, row.Quantity.ToString("N0"))
+            }
+        };
+        string? activatedKey = null;
+
+        var rendered = Render<WebGridTable<TestRow, TestColumn>>(parameters => parameters
+            .Add(parameter => parameter.Items, rows)
+            .Add(parameter => parameter.Columns, columns)
+            .Add(parameter => parameter.GetRowKey, row => row.Key)
+            .Add(parameter => parameter.RowActivated, row => activatedKey = row.Key));
+
+        rendered.FindAll("[role='cell']")[1].Click();
+
+        Assert.Null(activatedKey);
     }
 
     [Fact]

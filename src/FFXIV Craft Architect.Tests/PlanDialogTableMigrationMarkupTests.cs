@@ -30,9 +30,12 @@ public class PlanDialogTableMigrationMarkupTests
         Assert.Contains("WebGridTable", source);
         Assert.Contains("GetNodeColumns()", source);
         Assert.Contains("Sortable = false", source);
+        Assert.Contains("RowActivated=\"ToggleNodeFromRow\"", source);
+        Assert.Contains("SuppressRowActivation = true", source);
         Assert.Contains("row => row.Node.NodeId", source);
         Assert.Contains("row.Depth * 14", source);
         Assert.Contains("ToggleNode(row.Node.NodeId, args)", source);
+        Assert.Contains("ToggleNodeFromRow(PlanNodeEditRow row)", source);
         Assert.Contains("PlanBulkEditService.FilterNodes(_rows, _filter)", source);
         Assert.Contains("::deep .pe-node-table", styles);
     }

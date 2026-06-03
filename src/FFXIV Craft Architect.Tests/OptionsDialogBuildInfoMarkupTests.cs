@@ -30,11 +30,32 @@ public class OptionsDialogBuildInfoMarkupTests
         Assert.Contains("GenerateWebBuildInfo", project);
         Assert.Contains("GeneratedBuildInfo.g.cs", project);
         Assert.Contains("GenerateBuildInfo.ps1", project);
+        Assert.Contains("BuildInfoBranchName", project);
+        Assert.Contains("[string] $BranchName", script);
         Assert.Contains("git rev-list --count", script);
         Assert.Contains("WebBuildInfo", script);
     }
 
+    [Fact]
+    public void DeployWorkflow_PassesBranchNameForEachPublishedCheckout()
+    {
+        var workflow = File.ReadAllText(GetRepositoryPath(".github", "workflows", "deploy-web.yml"));
+
+        Assert.Contains("-p:BuildInfoBranchName=main", workflow);
+        Assert.Contains("-p:BuildInfoBranchName=local-dev", workflow);
+    }
+
     private static string GetWebPath(params string[] segments)
+    {
+        return Path.Combine(new[] { GetRepositoryRoot(), "src", "FFXIV Craft Architect.Web" }.Concat(segments).ToArray());
+    }
+
+    private static string GetRepositoryPath(params string[] segments)
+    {
+        return Path.Combine(new[] { GetRepositoryRoot() }.Concat(segments).ToArray());
+    }
+
+    private static string GetRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory != null && !File.Exists(Path.Combine(directory.FullName, "FFXIV Craft Architect.sln")))
@@ -43,6 +64,6 @@ public class OptionsDialogBuildInfoMarkupTests
         }
 
         Assert.NotNull(directory);
-        return Path.Combine(new[] { directory.FullName, "src", "FFXIV Craft Architect.Web" }.Concat(segments).ToArray());
+        return directory.FullName;
     }
 }

@@ -43,13 +43,13 @@ jobs:
         run: dotnet restore "main-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"
 
       - name: Publish main
-        run: dotnet publish "main-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj" -c Release -o dist/web/main
+        run: dotnet publish "main-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj" -c Release -o dist/web/main -p:BuildInfoBranchName=main
 
       - name: Restore local-dev dependencies
         run: dotnet restore "local-dev-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"
 
       - name: Publish local-dev
-        run: dotnet publish "local-dev-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj" -c Release -o dist/web/local-dev
+        run: dotnet publish "local-dev-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj" -c Release -o dist/web/local-dev -p:BuildInfoBranchName=local-dev
 
       - name: Assemble Pages artifact
         run: |

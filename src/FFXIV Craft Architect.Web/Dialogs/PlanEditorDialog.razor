@@ -72,7 +72,9 @@
                           Items="@VisibleRows"
                           Columns="@GetNodeColumns()"
                           GetRowKey="row => row.Node.NodeId"
-                          GetRowClass="GetNodeRowClass" />
+                          GetRowClass="GetNodeRowClass"
+                          RowActionLabel="@(row => $"Toggle {row.Node.Name}")"
+                          RowActivated="ToggleNodeFromRow" />
 
             <div class="pe-summary">
                 @SummaryText
@@ -124,6 +126,7 @@
                 Header = string.Empty,
                 Size = new WebTableColumnSize(34, 34),
                 Sortable = false,
+                SuppressRowActivation = true,
                 CellTemplate = row => builder =>
                 {
                     builder.OpenElement(0, "input");
@@ -198,6 +201,14 @@
     private static string GetNodeRowClass(PlanNodeEditRow row)
     {
         return "pe-table-row";
+    }
+
+    private void ToggleNodeFromRow(PlanNodeEditRow row)
+    {
+        if (!_selectedNodeIds.Add(row.Node.NodeId))
+        {
+            _selectedNodeIds.Remove(row.Node.NodeId);
+        }
     }
 
     private bool CanApply =>

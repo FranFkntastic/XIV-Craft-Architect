@@ -27,6 +27,8 @@ public sealed class WebTableColumn<TItem, TColumnId>
 
     public Func<TItem, string?>? CellTitleSelector { get; init; }
 
+    public bool SuppressRowActivation { get; init; }
+
     public required RenderFragment<TItem> CellTemplate { get; init; }
 
     public static WebTableColumn<TItem, TColumnId> Text(

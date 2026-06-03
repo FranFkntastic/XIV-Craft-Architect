@@ -3,7 +3,9 @@ param(
     [string] $ProjectDirectory,
 
     [Parameter(Mandatory = $true)]
-    [string] $OutputPath
+    [string] $OutputPath,
+
+    [string] $BranchName = ''
 )
 
 Set-StrictMode -Version 2.0
@@ -46,7 +48,11 @@ if ([string]::IsNullOrWhiteSpace($repositoryRoot)) {
     $repositoryRoot = $ProjectDirectory
 }
 
-$branchName = $env:GITHUB_REF_NAME
+$branchName = $BranchName
+if ([string]::IsNullOrWhiteSpace($branchName)) {
+    $branchName = $env:GITHUB_REF_NAME
+}
+
 if ([string]::IsNullOrWhiteSpace($branchName)) {
     $branchName = Invoke-Git -RepositoryRoot $repositoryRoot -Arguments @('branch', '--show-current')
 }
