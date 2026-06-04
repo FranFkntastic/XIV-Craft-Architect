@@ -39,7 +39,6 @@ public class SettingsService : ISettingsService
             ["default_datacenter"] = "Aether",
             ["home_world"] = "",
             ["include_cross_world"] = true,
-            ["auto_fetch_prices"] = true,
             ["exclude_congested_worlds"] = true,
             ["exclude_blacklisted_worlds"] = true,
             ["parallel_api_requests"] = true,

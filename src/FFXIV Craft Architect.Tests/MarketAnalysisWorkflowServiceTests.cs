@@ -113,8 +113,7 @@ public class MarketAnalysisWorkflowServiceTests
                 "Aether",
                 "North America",
                 MarketFetchScope.SelectedDataCenter,
-                searchEntireRegion: false,
-                autoFetchPricesOnRebuild: true))
+                searchEntireRegion: false))
             .ReturnsAsync(CreateExecutionResult());
         var service = CreateService(appState, execution.Object, jsRuntime);
 
@@ -414,24 +413,21 @@ public class MarketAnalysisWorkflowServiceTests
                     "Aether",
                     "North America",
                     MarketFetchScope.SelectedDataCenter,
-                    searchEntireRegion: false,
-                    autoFetchPricesOnRebuild: true);
+                    searchEntireRegion: false);
                 break;
             case "data-center":
                 appState.SetMarketEvidenceSettings(
                     "Primal",
                     "North America",
                     MarketFetchScope.SelectedDataCenter,
-                    searchEntireRegion: false,
-                    autoFetchPricesOnRebuild: true);
+                    searchEntireRegion: false);
                 break;
             case "region":
                 appState.SetMarketEvidenceSettings(
                     "Aether",
                     "Europe",
                     MarketFetchScope.SelectedDataCenter,
-                    searchEntireRegion: false,
-                    autoFetchPricesOnRebuild: true);
+                    searchEntireRegion: false);
                 break;
             case "lens":
                 appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);

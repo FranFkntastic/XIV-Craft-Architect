@@ -71,10 +71,6 @@ public partial class OptionsWindow : Window
             _logger.LogInformation("[OptionsWindow.LoadSettings] market.home_world = '{Value}'", homeWorld);
             HomeWorldTextBox.Text = homeWorld ?? "";
             
-            var autoFetch = _settingsService.Get<bool>("market.auto_fetch_prices", true);
-            _logger.LogInformation("[OptionsWindow.LoadSettings] market.auto_fetch_prices = {Value}", autoFetch);
-            AutoFetchPricesToggle.IsChecked = autoFetch;
-            
             var crossWorld = _settingsService.Get<bool>("market.include_cross_world", true);
             _logger.LogInformation("[OptionsWindow.LoadSettings] market.include_cross_world = {Value}", crossWorld);
             IncludeCrossWorldToggle.IsChecked = crossWorld;
@@ -218,7 +214,6 @@ public partial class OptionsWindow : Window
             _logger.LogInformation("[OptionsWindow.OnSave] Saving market.home_world = '{Value}'", homeWorld);
             _settingsService.Set("market.home_world", homeWorld);
             
-            _settingsService.Set("market.auto_fetch_prices", AutoFetchPricesToggle.IsChecked == true);
             _settingsService.Set("market.include_cross_world", IncludeCrossWorldToggle.IsChecked == true);
             _settingsService.Set("market.exclude_congested_worlds", ExcludeCongestedWorldsToggle.IsChecked == true);
             _settingsService.Set("market.parallel_api_requests", ParallelApiRequestsToggle.IsChecked == true);

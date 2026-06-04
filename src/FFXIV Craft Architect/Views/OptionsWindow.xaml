@@ -172,11 +172,6 @@
                                  ToolTip="Enter your home world name (e.g., Gilgamesh, Balmung)"
                                  Text=""/>
 
-                        <ui:ToggleSwitch x:Name="AutoFetchPricesToggle"
-                                         Content="Auto-fetch prices on plan build"
-                                         Margin="0,8"
-                                         ToolTip="Automatically fetch market prices after building a project plan"/>
-
                         <ui:ToggleSwitch x:Name="ExcludeCongestedWorldsToggle"
                                          Content="Exclude congested worlds from market fetch"
                                          Margin="0,8"

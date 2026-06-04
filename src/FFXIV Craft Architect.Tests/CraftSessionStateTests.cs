@@ -295,7 +295,6 @@ public class CraftSessionStateTests
     [InlineData("market.region", CraftSettingsKey.Region)]
     [InlineData("market.default_datacenter", CraftSettingsKey.DefaultDataCenter)]
     [InlineData("market.default_search_scope", CraftSettingsKey.DefaultMarketFetchScope)]
-    [InlineData("market.auto_fetch_prices", CraftSettingsKey.AutoFetchMarketPrices)]
     [InlineData("market.home_world", CraftSettingsKey.HomeWorld)]
     [InlineData("market.exclude_congested_worlds", CraftSettingsKey.ExcludeCongestedWorlds)]
     [InlineData("market.include_cross_world", CraftSettingsKey.IncludeCrossWorld)]

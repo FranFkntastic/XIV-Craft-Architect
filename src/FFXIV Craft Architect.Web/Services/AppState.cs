@@ -175,7 +175,6 @@ public class AppState
     
     // Persistence state
     public bool IsAutoSaveEnabled { get; private set; } = true;
-    public bool AutoFetchPricesOnRebuild { get; private set; } = true;
     public bool SecretDebugToolsEnabled { get; private set; }
     public MarketFetchScope DefaultMarketFetchScope { get; private set; } = MarketFetchScope.EntireRegion;
     public DateTime? LastAutoSave { get; private set; }
@@ -581,18 +580,15 @@ public class AppState
         string dataCenter,
         string region,
         MarketFetchScope defaultFetchScope,
-        bool searchEntireRegion,
-        bool autoFetchPricesOnRebuild)
+        bool searchEntireRegion)
     {
         var changesMarketContext =
             !string.Equals(SelectedDataCenter, dataCenter, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(SelectedRegion, region, StringComparison.OrdinalIgnoreCase) ||
             SearchEntireRegion != searchEntireRegion;
-        var normalizedAutoFetchPricesOnRebuild = true;
         var changesSettings =
             changesMarketContext ||
-            DefaultMarketFetchScope != defaultFetchScope ||
-            AutoFetchPricesOnRebuild != normalizedAutoFetchPricesOnRebuild;
+            DefaultMarketFetchScope != defaultFetchScope;
 
         if (!changesSettings)
         {
@@ -603,7 +599,6 @@ public class AppState
         SelectedRegion = region;
         DefaultMarketFetchScope = defaultFetchScope;
         SearchEntireRegion = searchEntireRegion;
-        AutoFetchPricesOnRebuild = normalizedAutoFetchPricesOnRebuild;
 
         if (changesMarketContext)
         {

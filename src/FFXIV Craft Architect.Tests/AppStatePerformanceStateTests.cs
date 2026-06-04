@@ -357,8 +357,7 @@ public class AppStatePerformanceStateTests
             "Primal",
             "North America",
             MarketFetchScope.SelectedDataCenter,
-            searchEntireRegion: false,
-            autoFetchPricesOnRebuild: true);
+            searchEntireRegion: false);
 
         Assert.Single(appState.MarketItemAnalyses);
         Assert.Single(appState.ShoppingPlans);
@@ -1007,8 +1006,7 @@ public class AppStatePerformanceStateTests
             dataCenter: "Primal",
             region: "North America",
             defaultFetchScope: MarketFetchScope.SelectedDataCenter,
-            searchEntireRegion: false,
-            autoFetchPricesOnRebuild: true);
+            searchEntireRegion: false);
 
         var change = Assert.Single(changes);
         Assert.Equal("Primal", appState.SelectedDataCenter);

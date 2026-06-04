@@ -335,7 +335,6 @@
             var autoSave = await Settings.GetAsync("ui.auto_save_enabled", true);
             var defaultDc = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
             var region = await Settings.GetAsync("market.region", "North America") ?? "North America";
-            var autoFetch = true;
             var secretDebugToolsEnabled = await Settings.GetAsync("debug.secret_tools_enabled", false);
             var defaultScope = ParseMarketFetchScope(
                 await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
@@ -349,8 +348,7 @@
                 selectedDataCenter,
                 region,
                 defaultScope,
-                defaultScope == MarketFetchScope.EntireRegion,
-                autoFetch);
+                defaultScope == MarketFetchScope.EntireRegion);
         }
         catch { /* Ignore settings load errors */ }
     }

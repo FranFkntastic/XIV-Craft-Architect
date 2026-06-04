@@ -43,8 +43,7 @@ public sealed record BuildRecipePlanRequest(
     IReadOnlyList<ProjectItem> ProjectItems,
     string SelectedDataCenter,
     string SelectedRegion,
-    MarketFetchScope PriceFetchScope,
-    bool RefreshPrices = true);
+    MarketFetchScope PriceFetchScope);
 
 public sealed record BuildRecipePlanResult(
     bool Built,
@@ -308,8 +307,7 @@ public sealed class RecipePlannerCommandService
                 _appState.ProjectItems,
                 request.SelectedDataCenter,
                 request.SelectedRegion,
-                request.PriceFetchScope,
-                RefreshPrices: true),
+                request.PriceFetchScope),
             ct);
 
         return new ImportProjectItemsResult(

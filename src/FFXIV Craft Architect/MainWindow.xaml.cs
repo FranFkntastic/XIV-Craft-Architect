@@ -577,7 +577,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Builds the crafting plan through the Core recipe planner workflow.
     /// Note: MUST REMAIN in MainWindow - extensive UI coordination: BuildPlanButton/BrowsePlanButton state,
-    ///       auto-fetch prices trigger, StatusLabel updates, and tree view display. Too UI-heavy for ViewModel.
+    ///       built-in price refresh, StatusLabel updates, and tree view display. Too UI-heavy for ViewModel.
     /// </summary>
     private async Task OnBuildProjectPlanAsync()
     {
@@ -592,7 +592,6 @@ public partial class MainWindow : Window
         var priceFetchScope = ProcurementSearchAllNaCheck.IsChecked == true
             ? MarketFetchScope.EntireRegion
             : MarketFetchScope.SelectedDataCenter;
-        var refreshPrices = _settingsService.Get<bool>("market.auto_fetch_prices", true);
 
         StatusLabel.Text = $"Building plan for {_recipeVm.ProjectItems.Count} items...";
         BuildPlanButton.IsEnabled = false;
@@ -605,8 +604,7 @@ public partial class MainWindow : Window
                     _recipeVm.ProjectItems.ToList(),
                     dc,
                     selectedRegion,
-                    priceFetchScope,
-                    refreshPrices));
+                    priceFetchScope));
             _recipeVm.RefreshFromCoreSession();
 
             if (_currentPlan != null)

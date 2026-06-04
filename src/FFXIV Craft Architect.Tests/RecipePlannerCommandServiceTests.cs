@@ -8,6 +8,20 @@ namespace FFXIV_Craft_Architect.Tests;
 public class RecipePlannerCommandServiceTests
 {
     [Fact]
+    public void BuildRecipePlanRequest_DoesNotExposeOptionalPriceRefreshToggle()
+    {
+        Assert.DoesNotContain(
+            typeof(BuildRecipePlanRequest).GetProperties(),
+            property => property.Name == "RefreshPrices");
+    }
+
+    [Fact]
+    public void AppState_DoesNotExposePlanConstructionPriceRefreshOptOut()
+    {
+        Assert.Null(typeof(AppState).GetProperty("AutoFetchPricesOnRebuild"));
+    }
+
+    [Fact]
     public async Task BuildPlanAsync_EmptyProjectItems_DoesNotMutateCurrentPlan()
     {
         var appState = new AppState();
@@ -119,7 +133,7 @@ public class RecipePlannerCommandServiceTests
     }
 
     [Fact]
-    public async Task BuildPlanAsync_WhenPriceRefreshDisabled_StillRefreshesPrices()
+    public async Task BuildPlanAsync_AlwaysRefreshesPrices()
     {
         var appState = new AppState();
         var builder = new FakeRecipePlanBuilder
@@ -146,8 +160,7 @@ public class RecipePlannerCommandServiceTests
             [new ProjectItem { Id = 100, Name = "Imported Item", Quantity = 1 }],
             "Aether",
             "North America",
-            MarketFetchScope.SelectedDataCenter,
-            RefreshPrices: false));
+            MarketFetchScope.SelectedDataCenter));
 
         Assert.True(result.Built);
         Assert.Same(builder.PlanToReturn, appState.CurrentPlan);

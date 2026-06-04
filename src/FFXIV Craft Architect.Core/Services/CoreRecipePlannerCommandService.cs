@@ -7,8 +7,7 @@ public sealed record CoreBuildRecipePlanRequest(
     IReadOnlyList<ProjectItem> ProjectItems,
     string SelectedDataCenter,
     string SelectedRegion,
-    MarketFetchScope PriceFetchScope,
-    bool RefreshPrices = true);
+    MarketFetchScope PriceFetchScope);
 
 public sealed record CoreBuildRecipePlanResult(
     bool Built,
@@ -147,21 +146,17 @@ public sealed class CoreRecipePlannerCommandService
             publishedPlanSessionVersion = _session.PlanSessionVersion;
             selectedNode = builtPlan.RootItems.FirstOrDefault();
 
-            var priceRefresh = CoreMarketPriceAvailability.Empty;
-            if (request.RefreshPrices)
+            var priceRefresh = await RefreshPricesWithOperationAsync(
+                builtPlan,
+                publishedPlanSessionVersion.Value,
+                request.PriceFetchScope,
+                request.SelectedDataCenter,
+                request.SelectedRegion,
+                forceRefreshData: false,
+                linkedCancellation.Token);
+            if (!_session.IsCurrentPlanSession(builtPlan, publishedPlanSessionVersion.Value))
             {
-                priceRefresh = await RefreshPricesWithOperationAsync(
-                    builtPlan,
-                    publishedPlanSessionVersion.Value,
-                    request.PriceFetchScope,
-                    request.SelectedDataCenter,
-                    request.SelectedRegion,
-                    forceRefreshData: false,
-                    linkedCancellation.Token);
-                if (!_session.IsCurrentPlanSession(builtPlan, publishedPlanSessionVersion.Value))
-                {
-                    return CanceledBuildResult();
-                }
+                return CanceledBuildResult();
             }
 
             var changedDefaults = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(
@@ -203,15 +198,12 @@ public sealed class CoreRecipePlannerCommandService
                     CoreRecipePlannerCommandMessageLevel.Warning);
             }
 
-            var message = request.RefreshPrices
-                ? "Plan built! Prices fetched. Go to Procurement Planner to run market analysis."
-                : "Plan built. Go to Procurement Planner to run market analysis.";
             return new CoreBuildRecipePlanResult(
                 true,
                 selectedNode,
                 priceRefresh,
                 changedDefaults,
-                message,
+                "Plan built! Prices fetched. Go to Procurement Planner to run market analysis.",
                 CoreRecipePlannerCommandMessageLevel.Success);
         }
         catch (OperationCanceledException) when (!operation.IsCurrent || operation.Token.IsCancellationRequested || ct.IsCancellationRequested)
@@ -315,8 +307,7 @@ public sealed class CoreRecipePlannerCommandService
                 importedItems,
                 request.SelectedDataCenter,
                 request.SelectedRegion,
-                request.PriceFetchScope,
-                RefreshPrices: false),
+                request.PriceFetchScope),
             ct);
 
         return new CoreImportProjectItemsResult(
