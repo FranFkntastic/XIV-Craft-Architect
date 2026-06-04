@@ -5,7 +5,7 @@ namespace FFXIV_Craft_Architect.Tests;
 public class OptionsDialogMarkupTests
 {
     [Fact]
-    public void OptionsDialog_AboutTab_HasQuietBottomLeftDebugToggle()
+    public void OptionsDialog_AboutTab_HasQuietBottomLeftDeveloperModeToggleWithWarning()
     {
         var source = File.ReadAllText(GetOptionsDialogPath());
         var aboutTab = Regex.Match(
@@ -20,17 +20,19 @@ public class OptionsDialogMarkupTests
         Assert.Contains("bottom: 8px", aboutTab.Value);
         Assert.Contains("left: 8px", aboutTab.Value);
         Assert.Contains("Size=\"Size.Small\"", aboutTab.Value);
-        Assert.DoesNotContain("Tooltip", aboutTab.Value, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Developer Mode enables experimental work-in-progress features", aboutTab.Value);
+        Assert.Contains("aria-label=\"Toggle Developer Mode\"", aboutTab.Value);
     }
 
     [Fact]
-    public void OptionsDialog_DebugToggle_PersistsSecretDebugToolsSetting()
+    public void OptionsDialog_DeveloperModeToggle_PersistsSecretDebugToolsSetting()
     {
         var source = File.ReadAllText(GetOptionsDialogPath());
 
         Assert.Contains("debug.secret_tools_enabled", source);
         Assert.Contains("AppState.SetSecretDebugToolsEnabled", source);
         Assert.Contains("Settings.SetAsync", source);
+        Assert.Contains("Developer Mode enabled", source);
     }
 
     private static string GetOptionsDialogPath()

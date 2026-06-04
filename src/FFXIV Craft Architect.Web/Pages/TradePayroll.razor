@@ -1,0 +1,341 @@
+@page "/trade"
+@using System.Text
+@using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Web.Services
+@inject AppState AppState
+@inject NavigationManager NavigationManager
+@inject TradePayrollDraftFactory DraftFactory
+@inject CommissionPayrollService PayrollService
+@inject IJSRuntime JSRuntime
+@inject ISnackbar Snackbar
+@implements IDisposable
+
+<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-page">
+    @if (!AppState.SecretDebugToolsEnabled)
+    {
+        <MudAlert Severity="Severity.Info" Class="ma-4">
+            Returning to Craft Architect...
+        </MudAlert>
+    }
+    else if (!string.IsNullOrWhiteSpace(_unavailableReason))
+    {
+        <section class="trade-empty">
+            <MudText Typo="Typo.h5" Class="mb-2">Payroll</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">@_unavailableReason</MudText>
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Build"
+                       OnClick="@(() => NavigationManager.NavigateTo("./"))">
+                Return to Craft Architect
+            </MudButton>
+        </section>
+    }
+    else if (_source == null || _payroll == null)
+    {
+        <section class="trade-empty">
+            <MudText Typo="Typo.h5" Class="mb-2">Payroll</MudText>
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Payments"
+                       OnClick="CreateDraft">
+                New payroll calculation from active craft plan
+            </MudButton>
+        </section>
+    }
+    else
+    {
+        <div class="trade-layout">
+            <section class="trade-main">
+                <div class="trade-section-header">
+                    <div>
+                        <MudText Typo="Typo.h5">Payroll Calculator</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @_source.SourcePlanName - @_source.SelectedDataCenter / @_source.SelectedRegion - imported @_source.ImportedAtUtc.ToLocalTime():g
+                        </MudText>
+                    </div>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Secondary"
+                               StartIcon="@Icons.Material.Filled.Refresh"
+                               OnClick="CreateDraft">
+                        Re-import Craft Evidence
+                    </MudButton>
+                </div>
+
+                @if (_source.Warnings.Count > 0)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                        This payroll estimate has evidence warnings. They are listed by item and included in the copied summary.
+                    </MudAlert>
+                }
+
+                <div class="trade-material-table">
+                    <div class="trade-material-row trade-material-head">
+                        <span>Item</span>
+                        <span>Qty</span>
+                        <span>Responsibility</span>
+                        <span>Unit Cost</span>
+                        <span>Payroll Basis</span>
+                    </div>
+                    @foreach (var line in _lines)
+                    {
+                        <div class="trade-material-row" @key="line.ItemId">
+                            <div>
+                                <strong>@line.Name</strong>
+                                @if (line.RequiresHq)
+                                {
+                                    <span class="trade-hq">HQ</span>
+                                }
+                                <div class="trade-evidence">@line.EvidenceSource</div>
+                            </div>
+                            <span>@line.Quantity.ToString("N0")</span>
+                            <MudSelect T="CommissionMaterialResponsibility"
+                                       Value="line.Responsibility"
+                                       ValueChanged="value => SetResponsibility(line, value)"
+                                       Dense="true"
+                                       Margin="Margin.Dense"
+                                       Variant="Variant.Outlined"
+                                       Class="trade-responsibility-select"
+                                       aria-label="@($"{line.Name} material responsibility")">
+                                <MudSelectItem Value="@CommissionMaterialResponsibility.Crafter">Crafter</MudSelectItem>
+                                <MudSelectItem Value="@CommissionMaterialResponsibility.Provided">Provided</MudSelectItem>
+                            </MudSelect>
+                            <span title="@line.UnitCostExplanation">@FormatGil(line.UnitCost)</span>
+                            <span title="@line.ResponsibilityExplanation">@FormatGil(line.MaterialBasis)</span>
+                        </div>
+                    }
+                </div>
+            </section>
+
+            <aside class="trade-side">
+                <section class="trade-panel">
+                    <MudText Typo="Typo.subtitle1" Class="mb-3">Payout Policy</MudText>
+                    <div class="trade-policy-rule">
+                        <span>Guild commission</span>
+                        <strong>@_commissionPercent.ToString("N0")%</strong>
+                    </div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        Commission is @_commissionPercent.ToString("N0")% of full estimated material cost. Crafter-responsible materials are also reimbursed.
+                    </MudText>
+                </section>
+
+                <section class="trade-panel trade-totals">
+                    <MudText Typo="Typo.subtitle1" Class="mb-3">Payroll</MudText>
+                    <div><span>Estimated materials</span><strong>@FormatGil(_payroll.EstimatedMaterialTotal)</strong></div>
+                    <div><span>Provided materials</span><strong>@FormatGil(_payroll.Lines.Where(line => line.Responsibility == CommissionMaterialResponsibility.Provided).Sum(line => line.EstimatedMaterialCost))</strong></div>
+                    <div><span>Reimbursable materials</span><strong>@FormatGil(_payroll.MaterialBasisTotal)</strong></div>
+                    <div><span>Commission on estimate (@_commissionPercent.ToString("N0")%)</span><strong>@FormatGil(_payroll.CommissionAmount)</strong></div>
+                    <div class="trade-total"><span>Total pay</span><strong>@FormatGil(_payroll.TotalPay)</strong></div>
+                    <MudButton FullWidth="true"
+                               Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.ContentCopy"
+                               OnClick="CopyPayrollSummaryAsync">
+                        Copy Payroll Summary
+                    </MudButton>
+                </section>
+
+                @if (_payroll.Warnings.Count > 0)
+                {
+                    <section class="trade-panel">
+                        <MudText Typo="Typo.subtitle1" Class="mb-2">Evidence Warnings</MudText>
+                        <ul class="trade-warnings">
+                            @foreach (var warning in _payroll.Warnings)
+                            {
+                                <li>@warning</li>
+                            }
+                        </ul>
+                    </section>
+                }
+            </aside>
+        </div>
+    }
+</MudContainer>
+
+@code {
+    private TradePayrollImportSnapshot? _source;
+    private CommissionPayrollRun? _payroll;
+    private string? _unavailableReason;
+    private List<TradePayrollLineEditor> _lines = [];
+    private decimal _commissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
+
+    protected override void OnInitialized()
+    {
+        AppState.OnStateChanged += OnAppStateChanged;
+        if (!EnsureDeveloperMode())
+        {
+            return;
+        }
+
+        CreateDraft();
+    }
+
+    private void OnAppStateChanged(AppStateChange change)
+    {
+        if (change.HasScope(AppStateChangeScope.Settings) && !EnsureDeveloperMode())
+        {
+            return;
+        }
+    }
+
+    private bool EnsureDeveloperMode()
+    {
+        if (AppState.SecretDebugToolsEnabled)
+        {
+            return true;
+        }
+
+        NavigationManager.NavigateTo("./");
+        return false;
+    }
+
+    private void CreateDraft()
+    {
+        var result = DraftFactory.CreateFromCurrentPlan(AppState);
+        if (!result.CanCreate || result.Draft == null)
+        {
+            _source = null;
+            _payroll = null;
+            _lines.Clear();
+            _unavailableReason = result.UnavailableReason;
+            return;
+        }
+
+        _unavailableReason = null;
+        _source = result.Draft.Source;
+        _payroll = result.Draft.Payroll;
+        _lines = _source.Lines.Select(TradePayrollLineEditor.FromInput).ToList();
+        ResetPolicy(result.Draft.Payroll.Policy);
+        Recalculate();
+    }
+
+    private void ResetPolicy(CommissionPayoutPolicy policy)
+    {
+        _commissionPercent = policy.CommissionPercent;
+    }
+
+    private void SetResponsibility(TradePayrollLineEditor line, CommissionMaterialResponsibility responsibility)
+    {
+        line.Responsibility = responsibility;
+        Recalculate();
+    }
+
+    private void Recalculate()
+    {
+        if (_source == null || _lines.Count == 0)
+        {
+            return;
+        }
+
+        var policy = new CommissionPayoutPolicy(_commissionPercent);
+        _payroll = PayrollService.Calculate(_lines.Select(line => line.ToInputLine()), policy);
+    }
+
+    private async Task CopyPayrollSummaryAsync()
+    {
+        if (_source == null || _payroll == null)
+        {
+            return;
+        }
+
+        var summary = BuildPayrollSummary();
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", summary);
+            Snackbar.Add("Payroll summary copied", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("Failed to copy payroll summary", Severity.Error);
+        }
+    }
+
+    private string BuildPayrollSummary()
+    {
+        var summary = new StringBuilder();
+        summary.AppendLine("FFXIV Trade Architect Payroll");
+        summary.AppendLine($"Plan: {_source!.SourcePlanName}");
+        summary.AppendLine($"Cost basis: {_payroll!.CostBasis}");
+        summary.AppendLine($"Evidence: {_source.SelectedDataCenter} / {_source.SelectedRegion}, imported {_source.ImportedAtUtc:u}");
+        summary.AppendLine($"Estimated materials: {FormatGil(_payroll.EstimatedMaterialTotal)}");
+        summary.AppendLine($"Provided materials excluded: {FormatGil(_payroll.Lines.Where(line => line.Responsibility == CommissionMaterialResponsibility.Provided).Sum(line => line.EstimatedMaterialCost))}");
+        summary.AppendLine($"Reimbursable materials: {FormatGil(_payroll.MaterialBasisTotal)}");
+        summary.AppendLine($"Commission on full estimate ({_payroll.Policy.CommissionPercent:N0}%): {FormatGil(_payroll.CommissionAmount)}");
+        summary.AppendLine($"Total pay: {FormatGil(_payroll.TotalPay)}");
+
+        if (_payroll.Warnings.Count > 0)
+        {
+            summary.AppendLine();
+            summary.AppendLine("Estimate warnings:");
+            foreach (var warning in _payroll.Warnings)
+            {
+                summary.AppendLine($"- {warning}");
+            }
+        }
+
+        return summary.ToString();
+    }
+
+    private static string FormatGil(decimal value)
+    {
+        return $"{value:N0}g";
+    }
+
+    public void Dispose()
+    {
+        AppState.OnStateChanged -= OnAppStateChanged;
+    }
+
+    private sealed class TradePayrollLineEditor
+    {
+        public int ItemId { get; init; }
+        public string Name { get; init; } = string.Empty;
+        public int Quantity { get; init; }
+        public decimal UnitCost { get; init; }
+        public bool RequiresHq { get; init; }
+        public CommissionMaterialResponsibility Responsibility { get; set; }
+        public string EvidenceSource { get; init; } = string.Empty;
+        public string UnitCostExplanation { get; init; } = string.Empty;
+        public DateTime? EvidenceTimestampUtc { get; init; }
+        public IReadOnlyList<string> Warnings { get; init; } = [];
+        public decimal EstimatedMaterialCost => Quantity * UnitCost;
+        public decimal MaterialBasis => Responsibility == CommissionMaterialResponsibility.Crafter
+            ? EstimatedMaterialCost
+            : 0m;
+        public string ResponsibilityExplanation => Responsibility == CommissionMaterialResponsibility.Crafter
+            ? "Crafter is responsible for this material; it is included in reimbursable material basis."
+            : "Material is provided by the guild; it is excluded from reimbursable material basis.";
+
+        public static TradePayrollLineEditor FromInput(CommissionPayrollInputLine line)
+        {
+            return new TradePayrollLineEditor
+            {
+                ItemId = line.ItemId,
+                Name = line.Name,
+                Quantity = line.Quantity,
+                UnitCost = line.UnitCost,
+                RequiresHq = line.RequiresHq,
+                Responsibility = line.Responsibility,
+                EvidenceSource = line.EvidenceSource,
+                UnitCostExplanation = line.UnitCostExplanation,
+                EvidenceTimestampUtc = line.EvidenceTimestampUtc,
+                Warnings = line.Warnings.ToArray()
+            };
+        }
+
+        public CommissionPayrollInputLine ToInputLine()
+        {
+            return new CommissionPayrollInputLine(
+                ItemId,
+                Name,
+                Quantity,
+                UnitCost,
+                RequiresHq,
+                Responsibility,
+                EvidenceSource,
+                UnitCostExplanation,
+                EvidenceTimestampUtc,
+                Warnings);
+        }
+    }
+}

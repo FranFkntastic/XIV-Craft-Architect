@@ -83,15 +83,6 @@
                     Used for plan-build auto-fetch and the startup Market Analysis scope.
                 </MudText>
 
-                <!-- Auto-fetch prices on rebuild -->
-                <MudSwitch @bind-Value="_autoFetchPricesOnRebuild" 
-                           Label="Auto-fetch prices on plan import/rebuild" 
-                           Color="Color.Primary"
-                           Class="my-2" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                    Automatically fetch market prices after importing or rebuilding a plan. Vendor prices are always fetched.
-                </MudText>
-                
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-4">
                     These settings determine which market board prices are shown by default.
                 </MudText>
@@ -157,6 +148,8 @@
                                    OnClick="ToggleSecretDebugToolsAsync"
                                    Size="Size.Small"
                                    Color="@(AppState.SecretDebugToolsEnabled ? Color.Warning : Color.Default)"
+                                   title="Developer Mode enables experimental work-in-progress features. These tools may change, break, or lose draft data."
+                                   aria-label="Toggle Developer Mode"
                                    Style="position: absolute; bottom: 8px; left: 8px; opacity: 0.35;" />
                 </div>
             </MudTabPanel>
@@ -192,7 +185,7 @@
         _autoSaveEnabled = await Settings.GetAsync("ui.auto_save_enabled", true);
         _defaultDataCenter = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
         _selectedRegion = await Settings.GetAsync("market.region", "North America") ?? "North America";
-        _autoFetchPricesOnRebuild = await Settings.GetAsync("market.auto_fetch_prices", true);
+        _autoFetchPricesOnRebuild = true;
         _defaultMarketFetchScope = ParseMarketFetchScope(
             await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
 
@@ -251,7 +244,7 @@
         await Settings.SetAsync("ui.auto_save_enabled", _autoSaveEnabled);
         await Settings.SetAsync("market.default_datacenter", _defaultDataCenter);
         await Settings.SetAsync("market.region", _selectedRegion);
-        await Settings.SetAsync("market.auto_fetch_prices", _autoFetchPricesOnRebuild);
+        await Settings.SetAsync("market.auto_fetch_prices", true);
         await Settings.SetAsync("market.default_search_scope", _defaultMarketFetchScope.ToString());
         
         Snackbar.Add("Settings saved", Severity.Success);
@@ -263,7 +256,7 @@
         var enabled = !AppState.SecretDebugToolsEnabled;
         AppState.SetSecretDebugToolsEnabled(enabled);
         await Settings.SetAsync("debug.secret_tools_enabled", enabled);
-        Snackbar.Add(enabled ? "Debug tools enabled" : "Debug tools disabled", Severity.Info);
+        Snackbar.Add(enabled ? "Developer Mode enabled" : "Developer Mode disabled", Severity.Info);
     }
     
     private void Cancel()

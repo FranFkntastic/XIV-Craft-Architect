@@ -29,6 +29,7 @@ public enum MarketDataQualityBucket
     Aging,
     Old,
     VeryOld,
+    Ancient,
     Missing
 }
 
@@ -39,6 +40,15 @@ public enum MarketDataAgeSource
     LocalFetchFallback,
     Missing
 }
+
+public sealed record PublishedMarketAnalysisScopeSnapshot(
+    MarketFetchScope Scope,
+    string SelectedDataCenter,
+    string SelectedRegion,
+    IReadOnlyList<string> RequestedDataCenters,
+    MarketAcquisitionLens Lens,
+    long PlanSessionVersion,
+    DateTime PublishedAtUtc);
 
 public enum MarketListingPriceSanity
 {

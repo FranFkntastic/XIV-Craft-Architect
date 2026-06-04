@@ -30,31 +30,78 @@
 
 <MudLayout Style="height: 100vh; display: flex; flex-direction: column;">
     <!-- Title Bar with Menu - Fixed at top -->
-    <MudAppBar Elevation="0" Style="background-color: #1a1a1a; border-bottom: 1px solid #d4a73a; flex-shrink: 0;">
-        <MudText Style="color: #d4a73a; font-weight: 600; margin-right: 24px;">FFXIV Craft Architect</MudText>
+    <MudAppBar Elevation="0" Style="@GetAppBarStyle()">
+        @if (AppState.SecretDebugToolsEnabled)
+        {
+            <MudMenu Dense="true"
+                     AnchorOrigin="Origin.BottomLeft"
+                     TransformOrigin="Origin.TopLeft"
+                     Color="Color.Secondary">
+                <ActivatorContent>
+                    <MudButton Style="@GetWorkspaceButtonStyle()"
+                               Size="Size.Medium"
+                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">
+                        @GetWorkspaceTitle()
+                    </MudButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem OnClick="@(() => NavigateTo(""))" Icon="@Icons.Material.Filled.Build">
+                        FFXIV Craft Architect
+                    </MudMenuItem>
+                    <MudMenuItem OnClick="@(() => NavigateTo("trade"))" Icon="@Icons.Material.Filled.Payments">
+                        FFXIV Trade Architect
+                    </MudMenuItem>
+                </ChildContent>
+            </MudMenu>
+            @if (IsTradeMode)
+            {
+                <MudChip T="string"
+                         Size="Size.Small"
+                         Color="Color.Warning"
+                         Variant="Variant.Outlined"
+                         Style="margin-right: 16px;">
+                    Experimental
+                </MudChip>
+            }
+        }
+        else
+        {
+            <MudText Style="color: #d4a73a; font-weight: 600; margin-right: 24px;">FFXIV Craft Architect</MudText>
+        }
         
         <!-- Navigation Tabs -->
         <MudButtonGroup Size="Size.Small" Style="margin-right: 24px;">
-            <MudButton OnClick="@(() => NavigateTo(""))"
-                       Color="@GetTabColor("planner")"
-                       Variant="@GetTabVariant("planner")">
-                Recipe Planner
-            </MudButton>
-            <MudButton OnClick="@(() => NavigateTo("market"))"
-                       Color="@GetTabColor("market")"
-                       Variant="@GetTabVariant("market")">
-                Market Analysis
-            </MudButton>
-            <MudButton OnClick="@(() => NavigateTo("acquisition"))"
-                       Color="@GetTabColor("acquisition")"
-                       Variant="@GetTabVariant("acquisition")">
-                Acquisition Evaluation
-            </MudButton>
-            <MudButton OnClick="@(() => NavigateTo("procurement"))"
-                       Color="@GetTabColor("procurement")"
-                       Variant="@GetTabVariant("procurement")">
-                Procurement Plan
-            </MudButton>
+            @if (IsTradeMode)
+            {
+                <MudButton OnClick="@(() => NavigateTo("trade"))"
+                           Color="@GetTabColor("payroll")"
+                           Variant="@GetTabVariant("payroll")">
+                    Payroll
+                </MudButton>
+            }
+            else
+            {
+                <MudButton OnClick="@(() => NavigateTo(""))"
+                           Color="@GetTabColor("planner")"
+                           Variant="@GetTabVariant("planner")">
+                    Recipe Planner
+                </MudButton>
+                <MudButton OnClick="@(() => NavigateTo("market"))"
+                           Color="@GetTabColor("market")"
+                           Variant="@GetTabVariant("market")">
+                    Market Analysis
+                </MudButton>
+                <MudButton OnClick="@(() => NavigateTo("acquisition"))"
+                           Color="@GetTabColor("acquisition")"
+                           Variant="@GetTabVariant("acquisition")">
+                    Acquisition Evaluation
+                </MudButton>
+                <MudButton OnClick="@(() => NavigateTo("procurement"))"
+                           Color="@GetTabColor("procurement")"
+                           Variant="@GetTabVariant("procurement")">
+                    Procurement Plan
+                </MudButton>
+            }
         </MudButtonGroup>
         
         <!-- Menu Bar using MudMenu -->
@@ -154,7 +201,7 @@
                                      Icon="@Icons.Material.Filled.BugReport"
                                      AutoClose="false">
                             <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 24px;">
-                                <span>Debug</span>
+                                <span>Developer</span>
                                 <MudIcon Icon="@(_debugToolsMenuOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
                                          Size="Size.Small" />
                             </div>
@@ -199,6 +246,7 @@
     private bool _debugToolsMenuOpen;
     private bool IsDevelopment => string.Equals(HostEnvironment.Environment, "Development", StringComparison.OrdinalIgnoreCase);
     private bool IsDebugToolsAvailable => IsDevelopment || AppState.SecretDebugToolsEnabled;
+    private bool IsTradeMode => IsTradeRoute(NavigationManager.Uri);
     private bool CanDumpSelectedMarketAnalysisItem => AppState.MarketItemAnalyses.Any();
     
     private readonly MudTheme _theme = AppTheme.CreateTheme();
@@ -245,6 +293,11 @@
     {
         if (change.HasScope(AppStateChangeScope.Settings))
         {
+            if (!AppState.SecretDebugToolsEnabled && IsTradeMode)
+            {
+                NavigateTo("");
+            }
+
             _ = InvokeAsync(StateHasChanged);
         }
     }
@@ -282,7 +335,7 @@
             var autoSave = await Settings.GetAsync("ui.auto_save_enabled", true);
             var defaultDc = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
             var region = await Settings.GetAsync("market.region", "North America") ?? "North America";
-            var autoFetch = await Settings.GetAsync("market.auto_fetch_prices", true);
+            var autoFetch = true;
             var secretDebugToolsEnabled = await Settings.GetAsync("debug.secret_tools_enabled", false);
             var defaultScope = ParseMarketFetchScope(
                 await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
@@ -371,7 +424,9 @@
     private void UpdateActiveTab(string uri)
     {
         var uriLower = uri.ToLowerInvariant();
-        if (uriLower.Contains("/procurement"))
+        if (IsTradeRoute(uri))
+            _activeTab = "payroll";
+        else if (uriLower.Contains("/procurement"))
             _activeTab = "procurement";
         else if (uriLower.Contains("/acquisition"))
             _activeTab = "acquisition";
@@ -405,6 +460,29 @@
     {
         // Use relative path (no leading slash) so it resolves against base href correctly
         NavigationManager.NavigateTo(string.IsNullOrEmpty(page) ? "./" : page);
+    }
+
+    private bool IsTradeRoute(string uri)
+    {
+        var relativePath = NavigationManager.ToBaseRelativePath(uri).TrimStart('/');
+        return relativePath.StartsWith("trade", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string GetWorkspaceTitle()
+    {
+        return IsTradeMode ? "FFXIV Trade Architect" : "FFXIV Craft Architect";
+    }
+
+    private string GetAppBarStyle()
+    {
+        var accent = IsTradeMode ? "#8fbf7f" : "#d4a73a";
+        return $"background-color: #1a1a1a; border-bottom: 1px solid {accent}; flex-shrink: 0;";
+    }
+
+    private string GetWorkspaceButtonStyle()
+    {
+        var accent = IsTradeMode ? "#8fbf7f" : "#d4a73a";
+        return $"color: {accent}; font-size: 1rem; line-height: 1.5; font-weight: 600; margin-right: 24px; text-transform: none; padding-left: 0; padding-right: 0; min-width: 0;";
     }
 
     // ==================== FILE MENU ====================
@@ -636,7 +714,7 @@
                     plan,
                     clearCurrentPlanId,
                     RefreshVendorPrices: refreshPrices,
-                    RefreshMarketPrices: refreshPrices && AppState.AutoFetchPricesOnRebuild,
+                    RefreshMarketPrices: refreshPrices,
                     AppState.DefaultMarketFetchScope,
                     AppState.SelectedDataCenter,
                     AppState.SelectedRegion));
@@ -649,14 +727,11 @@
             else if (refreshPrices)
             {
                 Snackbar.Add("Vendor prices updated", Severity.Success);
-                if (AppState.AutoFetchPricesOnRebuild)
-                {
-                    Logger.LogInformation(
-                        "Loaded {Count} market entries from cache scope {Scope}",
-                        result.PriceRefresh.FetchedCount,
-                        AppState.DefaultMarketFetchScope);
-                    Snackbar.Add("Market prices updated", Severity.Success);
-                }
+                Logger.LogInformation(
+                    "Loaded {Count} market entries from cache scope {Scope}",
+                    result.PriceRefresh.FetchedCount,
+                    AppState.DefaultMarketFetchScope);
+                Snackbar.Add("Market prices updated", Severity.Success);
             }
         }
         catch (Exception ex)

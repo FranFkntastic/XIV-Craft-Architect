@@ -613,6 +613,8 @@ public class WorldShoppingSummary
     public decimal MarketDataQualityScore { get; set; } = 100;
     public MarketDataQualityBucket MarketDataQualityBucket { get; set; } = MarketDataQualityBucket.Current;
     public MarketDataAgeSource MarketDataAgeSource { get; set; } = MarketDataAgeSource.UniversalisWorldUpload;
+    public TimeSpan? MarketDataAge { get; set; }
+    public DateTime? MarketUploadedAtUtc { get; set; }
     public int LensRank { get; set; } = int.MaxValue;
     public MarketScoreBucket LensScoreBucket { get; set; } = MarketScoreBucket.Unavailable;
     public decimal ProcurementPriorityScore { get; set; }

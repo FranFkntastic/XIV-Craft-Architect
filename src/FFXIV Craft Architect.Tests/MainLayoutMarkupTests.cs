@@ -5,7 +5,7 @@ namespace FFXIV_Craft_Architect.Tests;
 public class MainLayoutMarkupTests
 {
     [Fact]
-    public void MainLayout_DebugMenu_UsesClickableExpandableToolsSection()
+    public void MainLayout_DeveloperMenu_UsesClickableExpandableToolsSection()
     {
         var source = File.ReadAllText(GetMainLayoutPath());
         var debugActivator = Regex.Match(
@@ -16,7 +16,7 @@ public class MainLayoutMarkupTests
         Assert.True(debugActivator.Success);
         Assert.Contains("Icon=\"@Icons.Material.Filled.BugReport\"", debugActivator.Value);
         Assert.Contains("AutoClose=\"false\"", debugActivator.Value);
-        Assert.Contains("<span>Debug</span>", debugActivator.Value);
+        Assert.Contains("<span>Developer</span>", debugActivator.Value);
         Assert.Contains("_debugToolsMenuOpen", source);
         Assert.Contains("Dump Selected Market Analysis Item", source);
         Assert.DoesNotContain("ActivationEvent=\"MouseEvent.MouseOver\"", debugActivator.Value);
@@ -34,6 +34,29 @@ public class MainLayoutMarkupTests
             "IsDevelopment || AppState.SecretDebugToolsEnabled",
             source);
         Assert.Contains("if (!IsDebugToolsAvailable)", source);
+    }
+
+    [Fact]
+    public void MainLayout_TradeWorkspaceSwitcher_IsDeveloperModeGated()
+    {
+        var source = File.ReadAllText(GetMainLayoutPath());
+
+        Assert.Contains("@if (AppState.SecretDebugToolsEnabled)", source);
+        Assert.Contains("FFXIV Trade Architect", source);
+        Assert.Contains("NavigateTo(\"trade\")", source);
+        Assert.Contains("IsTradeMode", source);
+        Assert.Contains("font-size: 1rem", source);
+        Assert.Contains("margin-right: 24px", source);
+    }
+
+    [Fact]
+    public void MainLayout_TradeRoute_DisablesBackToCraftWhenDeveloperModeTurnsOff()
+    {
+        var source = File.ReadAllText(GetMainLayoutPath());
+
+        Assert.Contains("!AppState.SecretDebugToolsEnabled && IsTradeMode", source);
+        Assert.Contains("NavigateTo(\"\")", source);
+        Assert.Contains("relativePath.StartsWith(\"trade\"", source);
     }
 
     [Fact]
