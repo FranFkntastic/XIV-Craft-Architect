@@ -14,6 +14,7 @@ public sealed class CoreStoredPlanSnapshot
     public List<CoreStoredProjectItem> ProjectItems { get; set; } = new();
     public string? PlanJson { get; set; }
     public string? MarketPlansJson { get; set; }
+    public string? MarketIntelligenceJson { get; set; }
     public string? MarketItemAnalysesJson { get; set; }
     public string? MarketAnalysisRecipeBasisJson { get; set; }
     public HashSet<int> UnavailableMarketItemIds { get; set; } = new();
@@ -49,6 +50,7 @@ public sealed record CorePlanSessionLoadResult(
     IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses,
     IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
     IReadOnlySet<int> UnavailableMarketItemIds,
+    MarketIntelligence? MarketIntelligence,
     StoredRecipeOperationSnapshot? MarketAnalysisRecipeBasis,
     bool CanLoad,
     string? Warning);

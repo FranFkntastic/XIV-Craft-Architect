@@ -48,11 +48,149 @@ public class CoreStoredPlanSnapshotTests
         Assert.Equal(MarketAcquisitionLens.BulkValue, snapshot.SavedMarketAnalysisLens);
         Assert.Equal("source-id", snapshot.SourcePlanId);
         Assert.NotNull(JsonSerializer.Deserialize<CraftingPlan>(snapshot.PlanJson!));
+        Assert.NotNull(snapshot.MarketIntelligenceJson);
         Assert.Single(JsonSerializer.Deserialize<List<MarketItemAnalysis>>(snapshot.MarketItemAnalysesJson!)!);
         Assert.Single(JsonSerializer.Deserialize<List<DetailedShoppingPlan>>(snapshot.MarketPlansJson!)!);
+        Assert.Single(JsonSerializer.Deserialize<StoredMarketIntelligence>(
+            snapshot.MarketIntelligenceJson!)!.ItemAnalyses);
         Assert.NotNull(snapshot.MarketAnalysisRecipeBasisJson);
         Assert.Single(JsonSerializer.Deserialize<StoredRecipeOperationSnapshot>(
             snapshot.MarketAnalysisRecipeBasisJson!)!.MarketAnalysisDemandItems);
+    }
+
+    [Fact]
+    public void Prepare_RestoresMarketIntelligenceJsonWithoutLegacyMarketFields()
+    {
+        var intelligence = new MarketIntelligence(
+            Guid.NewGuid(),
+            [new MarketItemAnalysis { ItemId = 100, Name = "Final Craft", QuantityNeeded = 1 }],
+            [CreateShoppingPlan(100)],
+            [new CoreMarketDataUnavailableItem(404, "Missing Item")],
+            MarketIntelligencePublicationContext.UnknownLegacy(
+                RecommendationMode.MaximizeValue,
+                MarketAcquisitionLens.BulkValue),
+            CreateStoredRecipeBasis());
+        var snapshot = new CoreStoredPlanSnapshot
+        {
+            Id = "plan",
+            Name = "Plan",
+            ProjectItems =
+            [
+                new CoreStoredProjectItem { Id = 100, Name = "Final Craft", Quantity = 1 }
+            ],
+            MarketIntelligenceJson = JsonSerializer.Serialize(
+                StoredMarketIntelligence.FromMarketIntelligence(intelligence)),
+            MarketItemAnalysesJson = null,
+            MarketPlansJson = null,
+            MarketAnalysisRecipeBasisJson = null
+        };
+
+        var result = CorePlanSessionLoadService.Prepare(snapshot);
+
+        Assert.True(result.CanLoad);
+        Assert.Equal(100, Assert.Single(result.MarketItemAnalyses).ItemId);
+        Assert.Equal(100, Assert.Single(result.ShoppingPlans).ItemId);
+        Assert.Contains(404, result.UnavailableMarketItemIds);
+        Assert.NotNull(result.MarketAnalysisRecipeBasis);
+    }
+
+    [Fact]
+    public void Prepare_InvalidMarketIntelligenceRecipeBasisClearsAnalysis()
+    {
+        var invalidRecipeBasis = CreateStoredRecipeBasis();
+        invalidRecipeBasis.MarketAnalysisDemandItems.Add(new StoredMarketAnalysisDemandItem
+        {
+            ItemId = 100,
+            Name = "Duplicate Final Craft",
+            TotalQuantity = 1
+        });
+        var intelligence = new MarketIntelligence(
+            Guid.NewGuid(),
+            [new MarketItemAnalysis { ItemId = 100, Name = "Final Craft", QuantityNeeded = 1 }],
+            [CreateShoppingPlan(100)],
+            [],
+            MarketIntelligencePublicationContext.UnknownLegacy(
+                RecommendationMode.MaximizeValue,
+                MarketAcquisitionLens.BulkValue),
+            invalidRecipeBasis);
+        var snapshot = new CoreStoredPlanSnapshot
+        {
+            Id = "plan",
+            Name = "Plan",
+            MarketIntelligenceJson = JsonSerializer.Serialize(
+                StoredMarketIntelligence.FromMarketIntelligence(intelligence))
+        };
+
+        var result = CorePlanSessionLoadService.Prepare(snapshot);
+
+        Assert.True(result.CanLoad);
+        Assert.Empty(result.MarketItemAnalyses);
+        Assert.Empty(result.ShoppingPlans);
+        Assert.Null(result.MarketIntelligence);
+        Assert.Contains("duplicate market analysis demand item id", result.Warning);
+    }
+
+    [Fact]
+    public void Load_RestoresMarketIntelligenceAnalysisWithoutRecommendations()
+    {
+        var targetSession = new CraftSessionState(new ImmediateCraftSessionDispatcher());
+        var intelligence = new MarketIntelligence(
+            Guid.NewGuid(),
+            [new MarketItemAnalysis { ItemId = 100, Name = "Final Craft", QuantityNeeded = 1 }],
+            [],
+            [],
+            MarketIntelligencePublicationContext.UnknownLegacy(
+                RecommendationMode.MaximizeValue,
+                MarketAcquisitionLens.BulkValue),
+            null);
+        var snapshot = new CoreStoredPlanSnapshot
+        {
+            Id = "plan",
+            Name = "Plan",
+            PlanJson = JsonSerializer.Serialize(CreatePlan()),
+            MarketIntelligenceJson = JsonSerializer.Serialize(
+                StoredMarketIntelligence.FromMarketIntelligence(intelligence))
+        };
+        var loader = new CorePlanSessionLoadService(targetSession);
+
+        var result = loader.Load(snapshot);
+
+        Assert.True(result.CanLoad);
+        Assert.Equal(100, Assert.Single(targetSession.MarketEvidence.ItemAnalyses).ItemId);
+        Assert.Empty(targetSession.MarketEvidence.ShoppingPlans!);
+        Assert.Equal(RecommendationMode.MaximizeValue, targetSession.MarketEvidence.RecommendationMode);
+        Assert.Equal(MarketAcquisitionLens.BulkValue, targetSession.MarketEvidence.Lens);
+    }
+
+    [Fact]
+    public void Load_RestoresUnavailableOnlyMarketIntelligence()
+    {
+        var targetSession = new CraftSessionState(new ImmediateCraftSessionDispatcher());
+        var intelligence = new MarketIntelligence(
+            Guid.NewGuid(),
+            [],
+            [],
+            [new CoreMarketDataUnavailableItem(404, "Missing Item")],
+            MarketIntelligencePublicationContext.UnknownLegacy(
+                RecommendationMode.MinimizeTotalCost,
+                MarketAcquisitionLens.MinimumUpfrontCost),
+            null);
+        var snapshot = new CoreStoredPlanSnapshot
+        {
+            Id = "plan",
+            Name = "Plan",
+            PlanJson = JsonSerializer.Serialize(CreatePlan()),
+            MarketIntelligenceJson = JsonSerializer.Serialize(
+                StoredMarketIntelligence.FromMarketIntelligence(intelligence))
+        };
+        var loader = new CorePlanSessionLoadService(targetSession);
+
+        var result = loader.Load(snapshot);
+
+        Assert.True(result.CanLoad);
+        Assert.Contains(404, targetSession.MarketEvidence.UnavailableMarketItemIds);
+        Assert.Empty(targetSession.MarketEvidence.ItemAnalyses);
+        Assert.Empty(targetSession.MarketEvidence.ShoppingPlans!);
     }
 
     [Fact]

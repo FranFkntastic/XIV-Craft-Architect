@@ -28,6 +28,8 @@ public sealed class StoredPlanSnapshotBuilder
         DateTime? savedAt = null,
         bool includeSourcePlanIdentity = false)
     {
+        var marketIntelligence = appState.MarketIntelligence;
+
         return new StoredPlan
         {
             Id = planId,
@@ -45,6 +47,11 @@ public sealed class StoredPlanSnapshotBuilder
             }).ToList(),
             PlanJson = appState.CurrentPlan != null
                 ? JsonSerializer.Serialize(appState.CurrentPlan)
+                : null,
+            MarketIntelligenceJson = marketIntelligence.HasPublishedMarketAnalysis ||
+                                     marketIntelligence.HasRecommendations ||
+                                     marketIntelligence.HasUnavailableMarketItems
+                ? JsonSerializer.Serialize(StoredMarketIntelligence.FromMarketIntelligence(marketIntelligence))
                 : null,
             MarketPlansJson = appState.ShoppingPlans.Any()
                 ? JsonSerializer.Serialize(appState.ShoppingPlans)

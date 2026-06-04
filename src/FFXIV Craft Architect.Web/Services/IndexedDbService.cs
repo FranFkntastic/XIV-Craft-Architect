@@ -269,16 +269,26 @@ public class IndexedDbService
         RecommendationMode mode,
         MarketAcquisitionLens lens,
         StoredRecipeOperationSnapshot? recipeBasis = null,
-        PublishedMarketAnalysisScopeSnapshot? publishedScope = null)
+        PublishedMarketAnalysisScopeSnapshot? publishedScope = null,
+        MarketIntelligence? marketIntelligence = null)
     {
         try
         {
             await EnsureInitialized();
+            var storedMarketIntelligence = CreateStoredMarketIntelligence(
+                shoppingPlans,
+                marketItemAnalyses,
+                mode,
+                lens,
+                recipeBasis,
+                publishedScope,
+                marketIntelligence);
             return await _jsRuntime.InvokeAsync<bool>(
                 "IndexedDB.patchMarketAnalysis",
                 planId,
                 JsonSerializer.Serialize(shoppingPlans),
                 JsonSerializer.Serialize(marketItemAnalyses),
+                storedMarketIntelligence != null ? JsonSerializer.Serialize(storedMarketIntelligence) : null,
                 mode,
                 lens,
                 recipeBasis != null ? JsonSerializer.Serialize(recipeBasis) : null,
@@ -289,6 +299,57 @@ public class IndexedDbService
             _logger?.LogError(ex, "Failed to save market analysis for plan {PlanId}", planId);
             return false;
         }
+    }
+
+    private static StoredMarketIntelligence? CreateStoredMarketIntelligence(
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
+        IReadOnlyList<MarketItemAnalysis> marketItemAnalyses,
+        RecommendationMode mode,
+        MarketAcquisitionLens lens,
+        StoredRecipeOperationSnapshot? recipeBasis,
+        PublishedMarketAnalysisScopeSnapshot? publishedScope,
+        MarketIntelligence? marketIntelligence)
+    {
+        var intelligence = marketIntelligence;
+        if (intelligence == null &&
+            (shoppingPlans.Count > 0 || marketItemAnalyses.Count > 0))
+        {
+            var context = publishedScope != null
+                ? new MarketIntelligencePublicationContext(
+                    MarketIntelligencePublicationContextKind.Known,
+                    publishedScope.Scope,
+                    publishedScope.SelectedDataCenter,
+                    publishedScope.SelectedRegion,
+                    publishedScope.RequestedDataCenters.ToArray(),
+                    new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+                    null,
+                    false,
+                    mode,
+                    lens,
+                    null,
+                    publishedScope.PlanSessionVersion,
+                    null,
+                    publishedScope.PublishedAtUtc)
+                : MarketIntelligencePublicationContext.UnknownLegacy(mode, lens);
+
+            intelligence = new MarketIntelligence(
+                Guid.NewGuid(),
+                marketItemAnalyses.ToArray(),
+                shoppingPlans.ToArray(),
+                Array.Empty<CoreMarketDataUnavailableItem>(),
+                context,
+                recipeBasis);
+        }
+
+        if (intelligence == null ||
+            (!intelligence.HasPublishedMarketAnalysis &&
+             !intelligence.HasRecommendations &&
+             !intelligence.HasUnavailableMarketItems))
+        {
+            return null;
+        }
+
+        return StoredMarketIntelligence.FromMarketIntelligence(intelligence);
     }
 
     /// <summary>
@@ -351,6 +412,11 @@ public class StoredPlan
     /// Serialized market analysis shopping plans.
     /// </summary>
     public string? MarketPlansJson { get; set; }
+
+    /// <summary>
+    /// Serialized canonical market intelligence publication.
+    /// </summary>
+    public string? MarketIntelligenceJson { get; set; }
 
     /// <summary>
     /// Serialized immutable market analysis source data.

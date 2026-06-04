@@ -206,7 +206,8 @@ public sealed class MarketAnalysisWorkflowService
                 RecommendationMode.MinimizeTotalCost,
                 _appState.MarketAnalysisLens,
                 recipeBasis,
-                publishedScope);
+                publishedScope,
+                _appState.MarketIntelligence);
         }
 
         ct.ThrowIfCancellationRequested();

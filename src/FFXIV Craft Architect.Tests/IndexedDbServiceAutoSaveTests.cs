@@ -82,9 +82,10 @@ public class IndexedDbServiceAutoSaveTests
         Assert.True(saved);
         Assert.Equal("IndexedDB.patchMarketAnalysis", jsRuntime.LastIdentifier);
         Assert.Equal(0, jsRuntime.LoadPlanCallCount);
-        Assert.Equal(7, jsRuntime.LastArgs?.Length);
-        Assert.Contains("\"SchemaVersion\"", Assert.IsType<string>(jsRuntime.LastArgs?[5]));
-        Assert.Null(jsRuntime.LastArgs?[6]);
+        Assert.Equal(8, jsRuntime.LastArgs?.Length);
+        Assert.Contains("\"ItemAnalyses\"", Assert.IsType<string>(jsRuntime.LastArgs?[3]));
+        Assert.Contains("\"SchemaVersion\"", Assert.IsType<string>(jsRuntime.LastArgs?[6]));
+        Assert.Null(jsRuntime.LastArgs?[7]);
     }
 
     [Fact]
@@ -112,8 +113,9 @@ public class IndexedDbServiceAutoSaveTests
         Assert.Equal("IndexedDB.patchMarketAnalysis", jsRuntime.LastIdentifier);
         Assert.Contains("\"ItemId\":100", Assert.IsType<string>(jsRuntime.LastArgs?[1]));
         Assert.Contains("\"ItemId\":100", Assert.IsType<string>(jsRuntime.LastArgs?[2]));
-        Assert.Null(jsRuntime.LastArgs?[5]);
+        Assert.Contains("\"ItemAnalyses\"", Assert.IsType<string>(jsRuntime.LastArgs?[3]));
         Assert.Null(jsRuntime.LastArgs?[6]);
+        Assert.Null(jsRuntime.LastArgs?[7]);
     }
 
     private sealed class RecordingJsRuntime : IJSRuntime

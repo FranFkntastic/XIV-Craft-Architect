@@ -664,6 +664,186 @@ public class AppStatePersistenceTests
     }
 
     [Fact]
+    public void CreateStoredPlanSnapshot_WritesMarketIntelligenceJsonAlongsideLegacyFields()
+    {
+        var appState = new AppState();
+        appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
+            publishedScope: appState.CreateCurrentMarketAnalysisScopeSnapshot(
+                new DateTime(2026, 6, 4, 12, 0, 0, DateTimeKind.Utc)));
+
+        var snapshot = appState.CreateStoredPlanSnapshot("autosave", "AutoSave");
+
+        Assert.NotNull(snapshot.MarketIntelligenceJson);
+        Assert.NotNull(snapshot.MarketPlansJson);
+        Assert.NotNull(snapshot.MarketItemAnalysesJson);
+
+        var storedIntelligence = JsonSerializer.Deserialize<StoredMarketIntelligence>(snapshot.MarketIntelligenceJson!);
+        Assert.NotNull(storedIntelligence);
+        Assert.NotEqual(Guid.Empty, storedIntelligence!.MarketIntelligenceId);
+        Assert.Equal(MarketIntelligencePublicationContextKind.Known, storedIntelligence.PublicationContext.Kind);
+        Assert.Equal(MarketAcquisitionLens.BulkValue, storedIntelligence.PublicationContext.Lens);
+        Assert.Equal(123, Assert.Single(storedIntelligence.ItemAnalyses).ItemId);
+        Assert.Equal(123, Assert.Single(storedIntelligence.Recommendations).ItemId);
+    }
+
+    [Fact]
+    public void LoadStoredPlan_RestoresMarketIntelligenceJsonWithoutLegacyMarketFields()
+    {
+        var appState = new AppState();
+        var publishedAtUtc = new DateTime(2026, 6, 4, 12, 0, 0, DateTimeKind.Utc);
+        var intelligence = new MarketIntelligence(
+            Guid.NewGuid(),
+            [new MarketItemAnalysis { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
+            [new CoreMarketDataUnavailableItem(456, "Missing Item")],
+            new MarketIntelligencePublicationContext(
+                MarketIntelligencePublicationContextKind.Known,
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                ["Aether"],
+                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+                null,
+                false,
+                RecommendationMode.MinimizeTotalCost,
+                MarketAcquisitionLens.BulkValue,
+                null,
+                7,
+                2,
+                publishedAtUtc),
+            CreateStoredRecipeBasis());
+        var storedPlan = new StoredPlan
+        {
+            ProjectItems =
+            [
+                new StoredProjectItem
+                {
+                    Id = 123,
+                    Name = "Snapshot Item",
+                    Quantity = 10
+                }
+            ],
+            MarketIntelligenceJson = JsonSerializer.Serialize(StoredMarketIntelligence.FromMarketIntelligence(intelligence)),
+            MarketPlansJson = null,
+            MarketItemAnalysesJson = null,
+            MarketAnalysisRecipeBasisJson = null,
+            MarketAnalysisScopeSnapshotJson = null
+        };
+
+        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
+
+        Assert.Equal(123, Assert.Single(appState.MarketItemAnalyses).ItemId);
+        Assert.Equal(123, Assert.Single(appState.ShoppingPlans).ItemId);
+        Assert.Equal(456, Assert.Single(appState.UnavailableMarketItems).ItemId);
+        Assert.Equal(MarketAcquisitionLens.BulkValue, appState.MarketAnalysisLens);
+        Assert.Equal(MarketIntelligencePublicationContextKind.Known, appState.MarketIntelligence.PublicationContext.Kind);
+        Assert.Equal(publishedAtUtc, appState.PublishedMarketAnalysisScope?.PublishedAtUtc);
+        Assert.NotNull(appState.MarketAnalysisRecipeBasis);
+    }
+
+    [Fact]
+    public void LoadStoredPlan_MarketIntelligenceWithAnalysisButNoRecommendationsKeepsKnownScope()
+    {
+        var appState = new AppState();
+        var publishedAtUtc = new DateTime(2026, 6, 4, 12, 0, 0, DateTimeKind.Utc);
+        var intelligence = new MarketIntelligence(
+            Guid.NewGuid(),
+            [new MarketItemAnalysis { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
+            [],
+            [],
+            new MarketIntelligencePublicationContext(
+                MarketIntelligencePublicationContextKind.Known,
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                ["Aether"],
+                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+                null,
+                false,
+                RecommendationMode.MinimizeTotalCost,
+                MarketAcquisitionLens.MinimumUpfrontCost,
+                null,
+                7,
+                2,
+                publishedAtUtc),
+            null);
+        var storedPlan = new StoredPlan
+        {
+            ProjectItems =
+            [
+                new StoredProjectItem
+                {
+                    Id = 123,
+                    Name = "Snapshot Item",
+                    Quantity = 10
+                }
+            ],
+            MarketIntelligenceJson = JsonSerializer.Serialize(StoredMarketIntelligence.FromMarketIntelligence(intelligence))
+        };
+
+        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
+
+        Assert.Equal(123, Assert.Single(appState.MarketItemAnalyses).ItemId);
+        Assert.Empty(appState.ShoppingPlans);
+        Assert.Equal(publishedAtUtc, appState.PublishedMarketAnalysisScope?.PublishedAtUtc);
+        Assert.Equal(MarketIntelligencePublicationContextKind.Known, appState.MarketIntelligence.PublicationContext.Kind);
+    }
+
+    [Fact]
+    public void PlanSessionLoadService_Prepare_InvalidMarketIntelligenceRecipeBasisClearsAnalysis()
+    {
+        var invalidRecipeBasis = CreateStoredRecipeBasis();
+        invalidRecipeBasis.MarketAnalysisDemandItems.Add(new StoredMarketAnalysisDemandItem
+        {
+            ItemId = 123,
+            Name = "Duplicate Snapshot Item",
+            TotalQuantity = 10
+        });
+        var intelligence = new MarketIntelligence(
+            Guid.NewGuid(),
+            [new MarketItemAnalysis { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
+            [],
+            MarketIntelligencePublicationContext.UnknownLegacy(
+                RecommendationMode.MinimizeTotalCost,
+                MarketAcquisitionLens.MinimumUpfrontCost),
+            invalidRecipeBasis);
+        var storedPlan = new StoredPlan
+        {
+            MarketIntelligenceJson = JsonSerializer.Serialize(StoredMarketIntelligence.FromMarketIntelligence(intelligence))
+        };
+
+        var result = PlanSessionLoadService.Prepare(storedPlan);
+
+        Assert.Empty(result.MarketItemAnalyses);
+        Assert.Empty(result.ShoppingPlans);
+        Assert.Null(result.MarketIntelligence);
+        Assert.Contains("duplicate market analysis demand item id", result.Warning);
+    }
+
+    [Fact]
+    public void CreateStoredPlanSnapshot_WritesUnavailableOnlyMarketIntelligence()
+    {
+        var appState = new AppState();
+        appState.SetUnavailableMarketItems([new CoreMarketDataUnavailableItem(456, "Missing Item")]);
+
+        var snapshot = appState.CreateStoredPlanSnapshot("autosave", "AutoSave");
+
+        Assert.NotNull(snapshot.MarketIntelligenceJson);
+        var storedIntelligence = JsonSerializer.Deserialize<StoredMarketIntelligence>(snapshot.MarketIntelligenceJson!);
+        Assert.Equal(456, Assert.Single(storedIntelligence!.UnavailableMarketItems).ItemId);
+
+        var restored = new AppState();
+        restored.LoadStoredPlan(snapshot, deserializedPlan: null);
+
+        Assert.Equal(456, Assert.Single(restored.UnavailableMarketItems).ItemId);
+        Assert.Equal(456, Assert.Single(restored.MarketIntelligence.UnavailableMarketItems).ItemId);
+    }
+
+    [Fact]
     public void LoadStoredPlan_RestoresMarketAnalysisRecipeBasis()
     {
         var appState = new AppState();

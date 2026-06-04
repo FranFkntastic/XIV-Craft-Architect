@@ -66,20 +66,7 @@ public static class StoredRecipeBasisMapper
                 return null;
             }
 
-            if (stored.SchemaVersion > StoredRecipeOperationSnapshot.CurrentSchemaVersion)
-            {
-                warning = "Stored recipe basis was saved with a newer schema version.";
-                return null;
-            }
-
-            Normalize(stored);
-
-            if (!ValidateAndNormalize(stored, out warning))
-            {
-                return null;
-            }
-
-            return stored;
+            return TryNormalize(stored, out warning);
         }
         catch (JsonException ex)
         {
@@ -91,6 +78,33 @@ public static class StoredRecipeBasisMapper
             warning = $"Stored recipe basis could not be deserialized: {ex.Message}";
             return null;
         }
+    }
+
+    public static StoredRecipeOperationSnapshot? TryNormalize(
+        StoredRecipeOperationSnapshot? stored,
+        out string? warning)
+    {
+        warning = null;
+
+        if (stored == null)
+        {
+            return null;
+        }
+
+        if (stored.SchemaVersion > StoredRecipeOperationSnapshot.CurrentSchemaVersion)
+        {
+            warning = "Stored recipe basis was saved with a newer schema version.";
+            return null;
+        }
+
+        Normalize(stored);
+
+        if (!ValidateAndNormalize(stored, out warning))
+        {
+            return null;
+        }
+
+        return stored;
     }
 
     private static void Normalize(StoredRecipeOperationSnapshot stored)

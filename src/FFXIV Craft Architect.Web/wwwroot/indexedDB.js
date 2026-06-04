@@ -135,6 +135,7 @@ async function patchMarketAnalysis(
     planId,
     marketPlansJson,
     marketItemAnalysesJson,
+    marketIntelligenceJson,
     recommendationMode,
     marketAnalysisLens,
     marketAnalysisRecipeBasisJson,
@@ -157,6 +158,7 @@ async function patchMarketAnalysis(
             const patched = {
                 ...plan,
                 marketPlansJson,
+                marketIntelligenceJson,
                 marketItemAnalysesJson,
                 marketAnalysisRecipeBasisJson,
                 marketAnalysisScopeSnapshotJson,

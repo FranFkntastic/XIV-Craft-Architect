@@ -22,6 +22,7 @@ public sealed class CoreStoredPlanSnapshotBuilder
         var projectItems = _session.ProjectItems;
         var activeContext = _session.ActiveContext;
         var evidence = _session.MarketEvidence;
+        var intelligence = MarketIntelligence.FromCraftSessionMarketEvidence(evidence);
         var identity = _session.Identity;
         var now = DateTime.UtcNow;
 
@@ -43,6 +44,11 @@ public sealed class CoreStoredPlanSnapshotBuilder
             PlanJson = plan != null ? JsonSerializer.Serialize(plan) : null,
             MarketPlansJson = evidence.ShoppingPlans?.Any() == true
                 ? JsonSerializer.Serialize(evidence.ShoppingPlans)
+                : null,
+            MarketIntelligenceJson = intelligence.HasPublishedMarketAnalysis ||
+                                     intelligence.HasRecommendations ||
+                                     intelligence.HasUnavailableMarketItems
+                ? JsonSerializer.Serialize(StoredMarketIntelligence.FromMarketIntelligence(intelligence))
                 : null,
             MarketItemAnalysesJson = evidence.ItemAnalyses.Any()
                 ? JsonSerializer.Serialize(evidence.ItemAnalyses)

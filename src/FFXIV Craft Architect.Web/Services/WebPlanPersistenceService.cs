@@ -88,7 +88,8 @@ public sealed class WebPlanPersistenceService
         RecommendationMode mode,
         MarketAcquisitionLens lens,
         StoredRecipeOperationSnapshot? recipeBasis = null,
-        PublishedMarketAnalysisScopeSnapshot? publishedScope = null)
+        PublishedMarketAnalysisScopeSnapshot? publishedScope = null,
+        MarketIntelligence? marketIntelligence = null)
     {
         return await _indexedDb.SaveMarketAnalysisAsync(
             planId,
@@ -97,7 +98,8 @@ public sealed class WebPlanPersistenceService
             mode,
             lens,
             recipeBasis,
-            publishedScope);
+            publishedScope,
+            marketIntelligence);
     }
 
     public async Task<RenameStoredPlanResult> RenamePlanAsync(string planId, string newName)

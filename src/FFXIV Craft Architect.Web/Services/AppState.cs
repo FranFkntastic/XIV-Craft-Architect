@@ -90,6 +90,7 @@ public class AppState
     private System.Threading.Timer? _autoSaveTimer;
     private readonly List<DetailedShoppingPlan> _shoppingPlans = [];
     private readonly List<MarketItemAnalysis> _marketItemAnalyses = [];
+    private Guid _marketIntelligenceId = Guid.Empty;
     private StoredRecipeOperationSnapshot? _marketAnalysisRecipeBasis;
     private PublishedMarketAnalysisScopeSnapshot? _publishedMarketAnalysisScope;
     private readonly List<DetailedShoppingPlan> _procurementShoppingPlans = [];
@@ -128,7 +129,11 @@ public class AppState
     /// </summary>
     public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses => _marketItemAnalyses.AsReadOnly();
 
+    public MarketIntelligence MarketIntelligence => CreateMarketIntelligence();
+    public IReadOnlyList<DetailedShoppingPlan> MarketRecommendations => ShoppingPlans;
     public StoredRecipeOperationSnapshot? MarketAnalysisRecipeBasis => CloneRecipeBasis(_marketAnalysisRecipeBasis);
+    public StoredRecipeOperationSnapshot? MarketIntelligenceRecipeBasis => MarketAnalysisRecipeBasis;
+    public MarketIntelligencePublicationContext MarketIntelligencePublicationContext => MarketIntelligence.PublicationContext;
     public PublishedMarketAnalysisScopeSnapshot? PublishedMarketAnalysisScope => _publishedMarketAnalysisScope;
     public string? MarketAnalysisScopeWarning => GetMarketAnalysisScopeWarning();
 
@@ -421,6 +426,9 @@ public class AppState
 
         ReplaceListContents(_marketItemAnalyses, analyses);
         ReplaceListContents(_shoppingPlans, shoppingPlans);
+        _marketIntelligenceId = _marketItemAnalyses.Count > 0 || _shoppingPlans.Count > 0
+            ? Guid.NewGuid()
+            : Guid.Empty;
         _marketAnalysisRecipeBasis = CloneRecipeBasis(recipeBasis);
         _publishedMarketAnalysisScope = publishedScope;
         _procurementShoppingPlans.Clear();
@@ -446,6 +454,11 @@ public class AppState
 
         ReplaceListContents(_marketItemAnalyses, ReplaceAnalysisByItemId(_marketItemAnalyses, analysis));
         ReplaceListContents(_shoppingPlans, ReplaceShoppingPlanByItemId(_shoppingPlans, shoppingPlan));
+        if (_marketIntelligenceId == Guid.Empty)
+        {
+            _marketIntelligenceId = Guid.NewGuid();
+        }
+
         _publishedMarketAnalysisScope ??= CreateCurrentMarketAnalysisScopeSnapshot();
         _procurementShoppingPlans.Clear();
         var viewChanged = PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses, publishChange: false);
@@ -731,6 +744,17 @@ public class AppState
     public void SetUnavailableMarketItems(IReadOnlyList<CoreMarketDataUnavailableItem> items)
     {
         UnavailableMarketItems = items.ToArray();
+        if (UnavailableMarketItems.Count > 0 && _marketIntelligenceId == Guid.Empty)
+        {
+            _marketIntelligenceId = Guid.NewGuid();
+        }
+        else if (UnavailableMarketItems.Count == 0 &&
+                 _marketItemAnalyses.Count == 0 &&
+                 _shoppingPlans.Count == 0)
+        {
+            _marketIntelligenceId = Guid.Empty;
+        }
+
         NotifyShoppingListChanged();
     }
 
@@ -841,6 +865,7 @@ public class AppState
         _shoppingPlans.Clear();
         _marketItemAnalyses.Clear();
         _procurementShoppingPlans.Clear();
+        _marketIntelligenceId = Guid.Empty;
         _marketAnalysisRecipeBasis = null;
         _publishedMarketAnalysisScope = null;
         UnavailableMarketItems = Array.Empty<CoreMarketDataUnavailableItem>();
@@ -991,6 +1016,48 @@ public class AppState
             MarketAnalysisLens,
             PlanSessionVersion,
             publishedAtUtc ?? DateTime.UtcNow);
+    }
+
+    private MarketIntelligence CreateMarketIntelligence()
+    {
+        if (_marketItemAnalyses.Count == 0 &&
+            _shoppingPlans.Count == 0 &&
+            UnavailableMarketItems.Count == 0)
+        {
+            return MarketIntelligence.Empty;
+        }
+
+        var context = _publishedMarketAnalysisScope != null
+            ? ToMarketIntelligencePublicationContext(_publishedMarketAnalysisScope)
+            : MarketIntelligencePublicationContext.UnknownLegacy(RecommendationMode, MarketAnalysisLens);
+
+        return new MarketIntelligence(
+            _marketIntelligenceId == Guid.Empty ? Guid.NewGuid() : _marketIntelligenceId,
+            _marketItemAnalyses.ToArray(),
+            _shoppingPlans.ToArray(),
+            UnavailableMarketItems.ToArray(),
+            context,
+            CloneRecipeBasis(_marketAnalysisRecipeBasis));
+    }
+
+    private MarketIntelligencePublicationContext ToMarketIntelligencePublicationContext(
+        PublishedMarketAnalysisScopeSnapshot scope)
+    {
+        return new MarketIntelligencePublicationContext(
+            MarketIntelligencePublicationContextKind.Known,
+            scope.Scope,
+            scope.SelectedDataCenter,
+            scope.SelectedRegion,
+            scope.RequestedDataCenters.ToArray(),
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+            null,
+            false,
+            RecommendationMode,
+            scope.Lens,
+            null,
+            scope.PlanSessionVersion,
+            _marketAnalysisVersion,
+            scope.PublishedAtUtc);
     }
 
     private string? GetMarketAnalysisScopeWarning()
@@ -1370,11 +1437,14 @@ public class AppState
         AutoExpandItemId = null;
         ReplaceListContents(_marketItemAnalyses, session.MarketItemAnalyses);
         ReplaceListContents(_shoppingPlans, session.ShoppingPlans);
+        UnavailableMarketItems = session.MarketIntelligence?.UnavailableMarketItems.ToArray()
+            ?? Array.Empty<CoreMarketDataUnavailableItem>();
+        _marketIntelligenceId = session.MarketIntelligence?.MarketIntelligenceId ?? Guid.Empty;
         _marketAnalysisRecipeBasis = CloneRecipeBasis(session.MarketAnalysisRecipeBasis);
         _publishedMarketAnalysisScope = session.PublishedMarketAnalysisScope;
         ClearMarketAnalysisViewState(publishChange: false);
-        RecommendationMode = storedPlan.SavedRecommendationMode;
-        MarketAnalysisLens = storedPlan.SavedMarketAnalysisLens;
+        RecommendationMode = session.MarketIntelligence?.RecommendationMode ?? storedPlan.SavedRecommendationMode;
+        MarketAnalysisLens = session.MarketIntelligence?.Lens ?? storedPlan.SavedMarketAnalysisLens;
         ClearProcurementOverlay();
         
         // Track the loaded plan ID for save-overwrite behavior

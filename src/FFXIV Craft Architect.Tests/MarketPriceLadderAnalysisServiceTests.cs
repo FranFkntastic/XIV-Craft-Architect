@@ -254,6 +254,47 @@ public class MarketPriceLadderAnalysisServiceTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_DuplicatedThinLowShelf_DoesNotAnchorRegionalBaseline()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            quantityNeeded: 2_997,
+            itemId: 12_224,
+            worlds:
+            [
+                World("Coeurl",
+                [
+                    Listing(quantity: 88, price: 17, retainer: "Lawuwu"),
+                    Listing(quantity: 88, price: 17, retainer: "Lawuwu")
+                ]),
+                World("Goblin",
+                [
+                    Listing(quantity: 184, price: 117, retainer: "Normal Seller")
+                ]),
+                World("Adamantoise",
+                [
+                    Listing(quantity: 1_024, price: 268, retainer: "Bulk Seller")
+                ]),
+                World("Jenova",
+                [
+                    Listing(quantity: 2_997, price: 300, retainer: "Deep Seller")
+                ])
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+        var plan = service.ProjectToShoppingPlan(analysis, MarketAcquisitionLens.BulkValue);
+
+        Assert.True(analysis.AnalysisScopeBaselineUnitPrice > 100);
+        Assert.Equal(2, analysis.PriceEvaluation?.ListingClassCounts.LowOutlierCount);
+        Assert.Equal(176, analysis.Worlds.Single(world => world.WorldName == "Coeurl").Listings
+            .Where(listing => listing.PriceSanity == MarketListingPriceSanity.LowOutlier)
+            .Sum(listing => listing.Quantity));
+        Assert.True(analysis.Worlds.Single(world => world.WorldName == "Jenova").ScopeSaneQuantity >= 2_997);
+        Assert.True(plan.WorldOptions.Sum(world => world.TotalQuantityPurchased) > 176);
+        Assert.NotNull(plan.RecommendedWorld);
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_ExtremeHighOutlierStack_DoesNotPoisonRegionalAverages()
     {
         var service = CreateService();

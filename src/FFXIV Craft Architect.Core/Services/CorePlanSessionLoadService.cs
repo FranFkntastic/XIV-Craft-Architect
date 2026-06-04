@@ -46,8 +46,7 @@ public sealed class CorePlanSessionLoadService
             identity);
 
         if (result.Plan != null &&
-            result.MarketItemAnalyses.Count > 0 &&
-            result.ShoppingPlans.Count > 0)
+            (result.MarketItemAnalyses.Count > 0 || result.UnavailableMarketItemIds.Count > 0))
         {
             _session.TryPublishMarketAnalysis(
                 _session.CaptureVersionStamp(),
@@ -58,8 +57,8 @@ public sealed class CorePlanSessionLoadService
                 acquisitionDecisionsChanged: false,
                 "stored market analysis restored",
                 result.UnavailableMarketItemIds,
-                storedPlan.SavedRecommendationMode,
-                storedPlan.SavedMarketAnalysisLens,
+                result.MarketIntelligence?.RecommendationMode ?? storedPlan.SavedRecommendationMode,
+                result.MarketIntelligence?.Lens ?? storedPlan.SavedMarketAnalysisLens,
                 result.MarketAnalysisRecipeBasis);
         }
 
@@ -79,6 +78,7 @@ public sealed class CorePlanSessionLoadService
                 Array.Empty<MarketItemAnalysis>(),
                 Array.Empty<DetailedShoppingPlan>(),
                 new HashSet<int>(),
+                null,
                 null,
                 CanLoad: false,
                 $"Stored plan '{storedPlan.Name}' uses newer session schema version {storedPlan.SchemaVersion}; this app supports version {CoreStoredPlanSnapshot.CurrentSchemaVersion}.");
@@ -110,39 +110,79 @@ public sealed class CorePlanSessionLoadService
             MustBeHq = item.MustBeHq
         }).ToList();
 
-        var marketAnalyses = DeserializeOrEmpty<MarketItemAnalysis>(storedPlan.MarketItemAnalysesJson);
-        var hasRecipeBasisPayload = !string.IsNullOrWhiteSpace(storedPlan.MarketAnalysisRecipeBasisJson);
-        var marketAnalysisRecipeBasis = StoredRecipeBasisMapper.TryDeserialize(
-            storedPlan.MarketAnalysisRecipeBasisJson,
-            out var recipeBasisWarning);
-        warning = AppendWarning(warning, recipeBasisWarning);
-        if (ContainsLegacyListingOutlierField(storedPlan.MarketItemAnalysesJson))
+        var marketIntelligence = DeserializeMarketIntelligence(
+            storedPlan.MarketIntelligenceJson,
+            out var hasMarketIntelligenceRecipeBasisPayload,
+            out var marketIntelligenceWarning);
+        warning = AppendWarning(warning, marketIntelligenceWarning);
+        var marketAnalyses = marketIntelligence?.ItemAnalyses.ToList()
+            ?? DeserializeOrEmpty<MarketItemAnalysis>(storedPlan.MarketItemAnalysesJson);
+        var unavailableMarketItemIds = marketIntelligence?.UnavailableMarketItemIds.ToHashSet()
+            ?? storedPlan.UnavailableMarketItemIds.ToHashSet();
+        var hasUnavailableOnlyMarketIntelligence = marketIntelligence?.HasUnavailableMarketItems == true &&
+                                                   marketAnalyses.Count == 0;
+        var hasRecipeBasisPayload = hasMarketIntelligenceRecipeBasisPayload ||
+                                    !string.IsNullOrWhiteSpace(storedPlan.MarketAnalysisRecipeBasisJson);
+        var marketAnalysisRecipeBasis = marketIntelligence?.RecipeBasis;
+        if (!hasMarketIntelligenceRecipeBasisPayload)
+        {
+            marketAnalysisRecipeBasis = StoredRecipeBasisMapper.TryDeserialize(
+                storedPlan.MarketAnalysisRecipeBasisJson,
+                out var recipeBasisWarning);
+            warning = AppendWarning(warning, recipeBasisWarning);
+        }
+
+        if (!hasUnavailableOnlyMarketIntelligence &&
+            marketIntelligence == null &&
+            ContainsLegacyListingOutlierField(storedPlan.MarketItemAnalysesJson))
         {
             marketAnalyses.Clear();
             marketAnalysisRecipeBasis = null;
+            unavailableMarketItemIds.Clear();
+            marketIntelligence = null;
         }
-        else if (hasRecipeBasisPayload)
+        else if (!hasUnavailableOnlyMarketIntelligence && hasRecipeBasisPayload)
         {
             if (marketAnalysisRecipeBasis == null ||
                 !RestoredMarketAnalysisMatchesRecipeBasis(marketAnalysisRecipeBasis, marketAnalyses))
             {
                 marketAnalyses.Clear();
                 marketAnalysisRecipeBasis = null;
+                unavailableMarketItemIds.Clear();
+                marketIntelligence = null;
             }
         }
-        else if (!RestoredMarketAnalysisMatchesPlan(plan, projectItems, marketAnalyses))
+        else if (!hasUnavailableOnlyMarketIntelligence &&
+                 !RestoredMarketAnalysisMatchesPlan(plan, projectItems, marketAnalyses))
         {
             marketAnalyses.Clear();
+            unavailableMarketItemIds.Clear();
+            marketIntelligence = null;
         }
 
-        var restoredShoppingPlans = DeserializeOrEmpty<DetailedShoppingPlan>(storedPlan.MarketPlansJson);
+        var restoredShoppingPlans = marketIntelligence?.Recommendations.ToList()
+            ?? DeserializeOrEmpty<DetailedShoppingPlan>(storedPlan.MarketPlansJson);
         var shoppingPlans = marketAnalyses.Count > 0 &&
                             RestoredShoppingPlansMatchMarketAnalysis(restoredShoppingPlans, marketAnalyses)
             ? restoredShoppingPlans
             : new List<DetailedShoppingPlan>();
-        if (marketAnalyses.Count == 0)
+        if (marketAnalyses.Count == 0 && marketIntelligence?.HasUnavailableMarketItems != true)
         {
             marketAnalysisRecipeBasis = null;
+            unavailableMarketItemIds.Clear();
+            marketIntelligence = null;
+        }
+        else if (marketIntelligence != null)
+        {
+            marketIntelligence = marketIntelligence with
+            {
+                ItemAnalyses = marketAnalyses.ToArray(),
+                Recommendations = shoppingPlans.ToArray(),
+                UnavailableMarketItems = marketIntelligence.UnavailableMarketItems
+                    .Where(item => unavailableMarketItemIds.Contains(item.ItemId))
+                    .ToArray(),
+                RecipeBasis = marketAnalysisRecipeBasis
+            };
         }
 
         return new CorePlanSessionLoadResult(
@@ -151,7 +191,8 @@ public sealed class CorePlanSessionLoadService
             projectItems,
             marketAnalyses,
             shoppingPlans,
-            storedPlan.UnavailableMarketItemIds.ToHashSet(),
+            unavailableMarketItemIds,
+            marketIntelligence,
             marketAnalysisRecipeBasis,
             CanLoad: true,
             warning);
@@ -206,6 +247,55 @@ public sealed class CorePlanSessionLoadService
         catch
         {
             return [];
+        }
+    }
+
+    private static MarketIntelligence? DeserializeMarketIntelligence(
+        string? json,
+        out bool hasRecipeBasisPayload,
+        out string? warning)
+    {
+        hasRecipeBasisPayload = false;
+        warning = null;
+
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            var stored = JsonSerializer.Deserialize<StoredMarketIntelligence>(json);
+            if (stored == null)
+            {
+                warning = "Stored market intelligence payload was empty.";
+                return null;
+            }
+
+            if (stored.SchemaVersion > StoredMarketIntelligence.CurrentSchemaVersion)
+            {
+                warning = "Stored market intelligence was saved with a newer schema version.";
+                return null;
+            }
+
+            hasRecipeBasisPayload = stored.RecipeBasis != null;
+            var recipeBasis = StoredRecipeBasisMapper.TryNormalize(stored.RecipeBasis, out var recipeBasisWarning);
+            warning = AppendWarning(warning, recipeBasisWarning);
+
+            return stored.ToMarketIntelligence() with
+            {
+                RecipeBasis = recipeBasis
+            };
+        }
+        catch (JsonException ex)
+        {
+            warning = $"Stored market intelligence could not be deserialized: {ex.Message}";
+            return null;
+        }
+        catch (NotSupportedException ex)
+        {
+            warning = $"Stored market intelligence could not be deserialized: {ex.Message}";
+            return null;
         }
     }
 

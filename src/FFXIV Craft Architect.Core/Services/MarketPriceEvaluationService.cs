@@ -11,6 +11,7 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
     private const decimal ScopeCompetitiveMultiplier = 1.5m;
     private const decimal LowOutlierBreakPercent = 400m;
     private const int FullStackQuantity = 99;
+    private const int SingleSourceCredibleLowRegionQuantity = 500;
     private const int MinimumCredibleLowRegionQuantity = 80;
     private const int MinimumSubstantialLowListingQuantity = 40;
     private const int ElementalCommodityCredibleLowRegionQuantity = 1_000;
@@ -462,10 +463,16 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
     private static bool IsCrediblePriceRegion(int itemId, IReadOnlyList<CachedPriceBand> bands)
     {
         var quantity = bands.Sum(band => band.Quantity);
+        var listingCount = bands.Sum(band => band.ListingCount);
         var isElementalCommodity = IsElementalCommodity(itemId);
 
         // TODO: Replace this eyeballed shard/crystal/cluster rule with item-family metadata when available.
-        var fullStackQuantity = isElementalCommodity ? ElementalCommodityCredibleLowRegionQuantity : FullStackQuantity;
+        var singleSourceCredibleQuantity = isElementalCommodity
+            ? ElementalCommodityCredibleLowRegionQuantity
+            : SingleSourceCredibleLowRegionQuantity;
+        var singleListingCredibleQuantity = isElementalCommodity
+            ? ElementalCommodityCredibleLowRegionQuantity
+            : FullStackQuantity;
         var minimumCredibleQuantity = isElementalCommodity
             ? ElementalCommodityMinimumCredibleLowRegionQuantity
             : MinimumCredibleLowRegionQuantity;
@@ -473,7 +480,8 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
             ? ElementalCommodityMinimumSubstantialLowListingQuantity
             : MinimumSubstantialLowListingQuantity;
 
-        return quantity >= fullStackQuantity ||
+        return quantity >= singleSourceCredibleQuantity ||
+            (listingCount == 1 && quantity >= singleListingCredibleQuantity) ||
             (quantity >= minimumCredibleQuantity &&
                 bands.Max(band => band.MaxListingQuantity) >= minimumSubstantialListingQuantity &&
                 (bands.Sum(band => band.DistinctRetainerCount) >= 2 ||

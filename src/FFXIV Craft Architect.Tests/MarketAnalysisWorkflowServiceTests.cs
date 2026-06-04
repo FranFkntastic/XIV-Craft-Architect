@@ -607,6 +607,7 @@ public class MarketAnalysisWorkflowServiceTests
         public int SavePlanCallCount { get; private set; }
         public int PatchMarketAnalysisCallCount { get; private set; }
         public StoredPlan? LastSavedPlan { get; private set; }
+        public string? LastPatchedMarketIntelligenceJson { get; private set; }
         public string? LastPatchedRecipeBasisJson { get; private set; }
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
@@ -621,7 +622,8 @@ public class MarketAnalysisWorkflowServiceTests
             if (identifier == "IndexedDB.patchMarketAnalysis")
             {
                 PatchMarketAnalysisCallCount++;
-                LastPatchedRecipeBasisJson = args?.Length > 5 ? args[5] as string : null;
+                LastPatchedMarketIntelligenceJson = args?.Length > 3 ? args[3] as string : null;
+                LastPatchedRecipeBasisJson = args?.Length > 6 ? args[6] as string : null;
                 return new ValueTask<TValue>((TValue)(object)true);
             }
 
