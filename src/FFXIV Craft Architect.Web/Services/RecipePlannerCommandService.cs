@@ -39,6 +39,9 @@ public sealed class RecipeCalculationPlanBuilder : IRecipePlanBuilder
     }
 }
 
+/// <summary>
+/// Builds a fresh plan. Plan construction always refreshes vendor and market prices for the new plan.
+/// </summary>
 public sealed record BuildRecipePlanRequest(
     IReadOnlyList<ProjectItem> ProjectItems,
     string SelectedDataCenter,
@@ -81,8 +84,8 @@ public sealed record ApplyPlanEditorEditResult(
 public sealed record ActivateRecipePlanRequest(
     CraftingPlan Plan,
     bool ClearCurrentPlanId,
-    bool RefreshVendorPrices,
-    bool RefreshMarketPrices,
+    bool RefreshVendorPricesOnActivation,
+    bool RefreshMarketPricesOnActivation,
     MarketFetchScope PriceFetchScope,
     string SelectedDataCenter,
     string SelectedRegion);
@@ -407,7 +410,7 @@ public sealed class RecipePlannerCommandService
             GetActiveProcurementItems(request.Plan));
         var activatedPlanSessionVersion = _appState.PlanSessionVersion;
 
-        if (!request.RefreshVendorPrices && !request.RefreshMarketPrices)
+        if (!request.RefreshVendorPricesOnActivation && !request.RefreshMarketPricesOnActivation)
         {
             _appState.SetStatus("Ready", busy: false);
             return new ActivateRecipePlanResult(
@@ -428,7 +431,7 @@ public sealed class RecipePlannerCommandService
                 ? _appState.SelectedDataCenter
                 : request.SelectedDataCenter;
             CoreMarketPriceRefreshResult priceRefresh;
-            if (request.RefreshMarketPrices)
+            if (request.RefreshMarketPricesOnActivation)
             {
                 priceRefresh = await RefreshPricesAsync(
                     new RefreshRecipePlanPricesRequest(
@@ -469,7 +472,7 @@ public sealed class RecipePlannerCommandService
                 priceRefresh = CoreMarketPriceAvailability.Empty;
             }
 
-            var autoAnalysisResult = request.RefreshMarketPrices
+            var autoAnalysisResult = request.RefreshMarketPricesOnActivation
                 ? await RunMarketAnalysisAfterBuildAsync(
                     request.Plan,
                     activatedPlanSessionVersion,

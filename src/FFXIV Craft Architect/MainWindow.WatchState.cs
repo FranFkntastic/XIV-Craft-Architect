@@ -91,8 +91,8 @@ public partial class MainWindow
             new Core.Services.CoreActivateRecipePlanRequest(
                 state.CurrentPlan,
                 ClearCurrentPlanId: false,
-                RefreshVendorPrices: false,
-                RefreshMarketPrices: false,
+                RefreshVendorPricesOnActivation: false,
+                RefreshMarketPricesOnActivation: false,
                 PriceFetchScope: Core.Models.MarketFetchScope.SelectedDataCenter,
                 SelectedDataCenter: selectedDataCenter,
                 SelectedRegion: ResolveSelectedRegion(selectedDataCenter)));

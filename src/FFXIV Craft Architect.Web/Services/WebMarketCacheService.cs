@@ -128,8 +128,8 @@ public class WebMarketCacheService : IMarketCacheService
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
-        // For the Web app, we don't auto-fetch - just return how many are missing
-        // The caller (MarketShoppingService) will fetch via UniversalisService directly
+        // This cache does not fetch by itself; orchestration services decide when
+        // to populate it from Universalis.
         var missing = GetMissingAsync(requests, maxAge).Result;
         return Task.FromResult(missing.Count);
     }

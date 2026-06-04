@@ -22,6 +22,17 @@ public class RecipePlannerCommandServiceTests
     }
 
     [Fact]
+    public void ActivateRecipePlanRequest_UsesActivationScopedPriceRefreshNames()
+    {
+        var properties = typeof(ActivateRecipePlanRequest).GetProperties();
+
+        Assert.DoesNotContain(properties, property => property.Name == "RefreshVendorPrices");
+        Assert.DoesNotContain(properties, property => property.Name == "RefreshMarketPrices");
+        Assert.Contains(properties, property => property.Name == "RefreshVendorPricesOnActivation");
+        Assert.Contains(properties, property => property.Name == "RefreshMarketPricesOnActivation");
+    }
+
+    [Fact]
     public async Task BuildPlanAsync_EmptyProjectItems_DoesNotMutateCurrentPlan()
     {
         var appState = new AppState();
@@ -645,8 +656,8 @@ public class RecipePlannerCommandServiceTests
         var result = await service.ActivatePlanAsync(new ActivateRecipePlanRequest(
             plan,
             ClearCurrentPlanId: true,
-            RefreshVendorPrices: true,
-            RefreshMarketPrices: false,
+            RefreshVendorPricesOnActivation: true,
+            RefreshMarketPricesOnActivation: false,
             MarketFetchScope.SelectedDataCenter,
             "Aether",
             "North America"));
@@ -702,8 +713,8 @@ public class RecipePlannerCommandServiceTests
         var result = await service.ActivatePlanAsync(new ActivateRecipePlanRequest(
             plan,
             ClearCurrentPlanId: true,
-            RefreshVendorPrices: true,
-            RefreshMarketPrices: true,
+            RefreshVendorPricesOnActivation: true,
+            RefreshMarketPricesOnActivation: true,
             MarketFetchScope.SelectedDataCenter,
             SelectedDataCenter: "Aether",
             SelectedRegion: "North America"));
@@ -733,8 +744,8 @@ public class RecipePlannerCommandServiceTests
         var result = await service.ActivatePlanAsync(new ActivateRecipePlanRequest(
             plan,
             ClearCurrentPlanId: true,
-            RefreshVendorPrices: true,
-            RefreshMarketPrices: false,
+            RefreshVendorPricesOnActivation: true,
+            RefreshMarketPricesOnActivation: false,
             MarketFetchScope.SelectedDataCenter,
             "Aether",
             "North America"), cancellation.Token);
@@ -765,8 +776,8 @@ public class RecipePlannerCommandServiceTests
         var result = await service.ActivatePlanAsync(new ActivateRecipePlanRequest(
             activatedPlan,
             ClearCurrentPlanId: true,
-            RefreshVendorPrices: true,
-            RefreshMarketPrices: true,
+            RefreshVendorPricesOnActivation: true,
+            RefreshMarketPricesOnActivation: true,
             MarketFetchScope.SelectedDataCenter,
             "Aether",
             "North America"));

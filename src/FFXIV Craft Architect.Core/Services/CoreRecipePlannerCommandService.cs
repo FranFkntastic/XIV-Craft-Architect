@@ -3,6 +3,9 @@ using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Core.Services;
 
+/// <summary>
+/// Builds a fresh plan. Plan construction always refreshes vendor and market prices for the new plan.
+/// </summary>
 public sealed record CoreBuildRecipePlanRequest(
     IReadOnlyList<ProjectItem> ProjectItems,
     string SelectedDataCenter,
@@ -46,8 +49,8 @@ public sealed record CoreApplyPlanEditorEditResult(
 public sealed record CoreActivateRecipePlanRequest(
     CraftingPlan Plan,
     bool ClearCurrentPlanId,
-    bool RefreshVendorPrices,
-    bool RefreshMarketPrices,
+    bool RefreshVendorPricesOnActivation,
+    bool RefreshMarketPricesOnActivation,
     MarketFetchScope PriceFetchScope,
     string SelectedDataCenter,
     string SelectedRegion);
@@ -387,7 +390,7 @@ public sealed class CoreRecipePlannerCommandService
 
         var activatedPlanSessionVersion = _session.PlanSessionVersion;
 
-        if (!request.RefreshVendorPrices && !request.RefreshMarketPrices)
+        if (!request.RefreshVendorPricesOnActivation && !request.RefreshMarketPricesOnActivation)
         {
             RestoreSavedMarketPlans(request.Plan, activatedPlanSessionVersion);
             return new CoreActivateRecipePlanResult(
@@ -405,7 +408,7 @@ public sealed class CoreRecipePlannerCommandService
         {
             using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct, operation.Token);
             CoreMarketPriceRefreshResult priceRefresh;
-            if (request.RefreshMarketPrices)
+            if (request.RefreshMarketPricesOnActivation)
             {
                 priceRefresh = await RefreshPricesForPlanAsync(
                     request.Plan,
@@ -446,7 +449,7 @@ public sealed class CoreRecipePlannerCommandService
                 operation.RefreshSessionStamp();
             }
 
-            if (!request.RefreshMarketPrices)
+            if (!request.RefreshMarketPricesOnActivation)
             {
                 RestoreSavedMarketPlans(request.Plan, activatedPlanSessionVersion);
                 operation.RefreshSessionStamp();

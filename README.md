@@ -4,6 +4,7 @@ Yet another crafting cost calculator for Final Fantasy XIV.
 ## Features
 
 - **Market Data Integration** - Real-time prices from Universalis
+- **Automatic Plan Pricing** - Recipe plan builds refresh vendor and market prices as part of construction
 - **Actionable Plan Compilation** - Suggested world travel plans to get the best prices with minimum effort.
 
 ## Requirements

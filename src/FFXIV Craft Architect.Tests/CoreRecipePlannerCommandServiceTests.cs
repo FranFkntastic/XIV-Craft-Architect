@@ -16,6 +16,17 @@ public class CoreRecipePlannerCommandServiceTests
     }
 
     [Fact]
+    public void CoreActivateRecipePlanRequest_UsesActivationScopedPriceRefreshNames()
+    {
+        var properties = typeof(CoreActivateRecipePlanRequest).GetProperties();
+
+        Assert.DoesNotContain(properties, property => property.Name == "RefreshVendorPrices");
+        Assert.DoesNotContain(properties, property => property.Name == "RefreshMarketPrices");
+        Assert.Contains(properties, property => property.Name == "RefreshVendorPricesOnActivation");
+        Assert.Contains(properties, property => property.Name == "RefreshMarketPricesOnActivation");
+    }
+
+    [Fact]
     public async Task BuildPlanAsync_WithNoProjectItems_ReturnsInfoWithoutActivatingPlan()
     {
         var service = CreateService();
@@ -473,8 +484,8 @@ public class CoreRecipePlannerCommandServiceTests
         var result = await service.ActivatePlanAsync(new CoreActivateRecipePlanRequest(
             plan,
             ClearCurrentPlanId: true,
-            RefreshVendorPrices: true,
-            RefreshMarketPrices: false,
+            RefreshVendorPricesOnActivation: true,
+            RefreshMarketPricesOnActivation: false,
             MarketFetchScope.SelectedDataCenter,
             "Aether",
             "North America"));
@@ -498,8 +509,8 @@ public class CoreRecipePlannerCommandServiceTests
         var result = await service.ActivatePlanAsync(new CoreActivateRecipePlanRequest(
             plan,
             ClearCurrentPlanId: true,
-            RefreshVendorPrices: false,
-            RefreshMarketPrices: false,
+            RefreshVendorPricesOnActivation: false,
+            RefreshMarketPricesOnActivation: false,
             MarketFetchScope.EntireRegion,
             "Aether",
             "North America"));
@@ -519,8 +530,8 @@ public class CoreRecipePlannerCommandServiceTests
         var result = await service.ActivatePlanAsync(new CoreActivateRecipePlanRequest(
             plan,
             ClearCurrentPlanId: true,
-            RefreshVendorPrices: false,
-            RefreshMarketPrices: false,
+            RefreshVendorPricesOnActivation: false,
+            RefreshMarketPricesOnActivation: false,
             MarketFetchScope.SelectedDataCenter,
             "Aether",
             "North America"));
@@ -547,8 +558,8 @@ public class CoreRecipePlannerCommandServiceTests
         var result = await service.ActivatePlanAsync(new CoreActivateRecipePlanRequest(
             plan,
             ClearCurrentPlanId: true,
-            RefreshVendorPrices: false,
-            RefreshMarketPrices: false,
+            RefreshVendorPricesOnActivation: false,
+            RefreshMarketPricesOnActivation: false,
             MarketFetchScope.SelectedDataCenter,
             "Aether",
             "North America"));
