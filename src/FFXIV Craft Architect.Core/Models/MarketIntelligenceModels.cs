@@ -215,10 +215,10 @@ public sealed class StoredMarketIntelligence
     {
         return new MarketIntelligence(
             MarketIntelligenceId,
-            ItemAnalyses,
-            Recommendations,
-            UnavailableMarketItems,
-            PublicationContext,
+            ItemAnalyses ?? new List<MarketItemAnalysis>(),
+            Recommendations ?? new List<DetailedShoppingPlan>(),
+            UnavailableMarketItems ?? new List<CoreMarketDataUnavailableItem>(),
+            PublicationContext ?? MarketIntelligencePublicationContext.None,
             RecipeBasis);
     }
 }

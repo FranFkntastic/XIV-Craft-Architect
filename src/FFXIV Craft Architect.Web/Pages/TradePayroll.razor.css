@@ -94,6 +94,21 @@
     margin-bottom: 8px;
 }
 
+.trade-crafted-summary {
+    margin-bottom: 8px;
+}
+
+.trade-crafted-summary > span {
+    color: #aaa;
+    display: block;
+    margin-bottom: 4px;
+}
+
+.trade-crafted-summary ul {
+    margin: 0;
+    padding-left: 18px;
+}
+
 .trade-responsibility-select {
     max-width: 140px;
 }

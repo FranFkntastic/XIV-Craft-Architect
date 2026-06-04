@@ -16,9 +16,16 @@ public sealed class StoredPlanSnapshotBuilder
         string planId,
         string planName,
         DateTime? savedAt = null,
-        bool includeSourcePlanIdentity = false)
+        bool includeSourcePlanIdentity = false,
+        bool includeLegacyMarketAnalysisFields = true)
     {
-        return Build(_appState, planId, planName, savedAt, includeSourcePlanIdentity);
+        return Build(
+            _appState,
+            planId,
+            planName,
+            savedAt,
+            includeSourcePlanIdentity,
+            includeLegacyMarketAnalysisFields);
     }
 
     public static StoredPlan Build(
@@ -26,9 +33,13 @@ public sealed class StoredPlanSnapshotBuilder
         string planId,
         string planName,
         DateTime? savedAt = null,
-        bool includeSourcePlanIdentity = false)
+        bool includeSourcePlanIdentity = false,
+        bool includeLegacyMarketAnalysisFields = true)
     {
         var marketIntelligence = appState.MarketIntelligence;
+        var hasMarketIntelligence = marketIntelligence.HasPublishedMarketAnalysis ||
+                                    marketIntelligence.HasRecommendations ||
+                                    marketIntelligence.HasUnavailableMarketItems;
 
         return new StoredPlan
         {
@@ -48,15 +59,13 @@ public sealed class StoredPlanSnapshotBuilder
             PlanJson = appState.CurrentPlan != null
                 ? JsonSerializer.Serialize(appState.CurrentPlan)
                 : null,
-            MarketIntelligenceJson = marketIntelligence.HasPublishedMarketAnalysis ||
-                                     marketIntelligence.HasRecommendations ||
-                                     marketIntelligence.HasUnavailableMarketItems
+            MarketIntelligenceJson = hasMarketIntelligence
                 ? JsonSerializer.Serialize(StoredMarketIntelligence.FromMarketIntelligence(marketIntelligence))
                 : null,
-            MarketPlansJson = appState.ShoppingPlans.Any()
+            MarketPlansJson = includeLegacyMarketAnalysisFields && appState.ShoppingPlans.Any()
                 ? JsonSerializer.Serialize(appState.ShoppingPlans)
                 : null,
-            MarketItemAnalysesJson = appState.MarketItemAnalyses.Any()
+            MarketItemAnalysesJson = includeLegacyMarketAnalysisFields && appState.MarketItemAnalyses.Any()
                 ? JsonSerializer.Serialize(appState.MarketItemAnalyses)
                 : null,
             MarketAnalysisRecipeBasisJson = appState.MarketAnalysisRecipeBasis != null

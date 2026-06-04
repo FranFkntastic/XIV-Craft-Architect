@@ -11,6 +11,7 @@ public sealed record TradePayrollImportSnapshot(
     string SelectedRegion,
     MarketFetchScope MarketFetchScope,
     MarketAcquisitionLens MarketLens,
+    IReadOnlyList<ProjectItem> CraftedItems,
     IReadOnlyList<CommissionPayrollInputLine> Lines,
     IReadOnlyList<string> Warnings);
 

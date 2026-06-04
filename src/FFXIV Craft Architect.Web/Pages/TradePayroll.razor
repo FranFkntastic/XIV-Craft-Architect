@@ -109,7 +109,27 @@
 
             <aside class="trade-side">
                 <section class="trade-panel">
-                    <MudText Typo="Typo.subtitle1" Class="mb-3">Payout Policy</MudText>
+                    <MudText Typo="Typo.subtitle1" Class="mb-3">Payroll Details</MudText>
+                    <MudTextField @bind-Value="_commissionerName"
+                                  Label="Commissioner name"
+                                  Placeholder="Name to include in copied payroll"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  Class="mb-3" />
+                    <div class="trade-policy-rule">
+                        <span>Plan</span>
+                        <strong>@FormatPayrollDate(_source.ImportedAtUtc)</strong>
+                    </div>
+                    <div class="trade-crafted-summary">
+                        <span>Being made</span>
+                        <ul>
+                            @foreach (var item in _source.CraftedItems.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
+                            {
+                                <li>@FormatProjectItem(item)</li>
+                            }
+                        </ul>
+                    </div>
                     <div class="trade-policy-rule">
                         <span>Guild commission</span>
                         <strong>@_commissionPercent.ToString("N0")%</strong>
@@ -121,10 +141,9 @@
 
                 <section class="trade-panel trade-totals">
                     <MudText Typo="Typo.subtitle1" Class="mb-3">Payroll</MudText>
-                    <div><span>Estimated materials</span><strong>@FormatGil(_payroll.EstimatedMaterialTotal)</strong></div>
-                    <div><span>Provided materials</span><strong>@FormatGil(_payroll.Lines.Where(line => line.Responsibility == CommissionMaterialResponsibility.Provided).Sum(line => line.EstimatedMaterialCost))</strong></div>
-                    <div><span>Reimbursable materials</span><strong>@FormatGil(_payroll.MaterialBasisTotal)</strong></div>
-                    <div><span>Commission on estimate (@_commissionPercent.ToString("N0")%)</span><strong>@FormatGil(_payroll.CommissionAmount)</strong></div>
+                    <div><span>Crafter procures</span><strong>@FormatGil(_payroll.MaterialBasisTotal)</strong></div>
+                    <div><span>Provided by commissioner</span><strong>@FormatGil(GetProvidedMaterialTotal())</strong></div>
+                    <div><span>Commission (@_commissionPercent.ToString("N0")%)</span><strong>@FormatGil(_payroll.CommissionAmount)</strong></div>
                     <div class="trade-total"><span>Total pay</span><strong>@FormatGil(_payroll.TotalPay)</strong></div>
                     <MudButton FullWidth="true"
                                Variant="Variant.Filled"
@@ -158,6 +177,7 @@
     private string? _unavailableReason;
     private List<TradePayrollLineEditor> _lines = [];
     private decimal _commissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
+    private string _commissionerName = string.Empty;
 
     protected override void OnInitialized()
     {
@@ -254,13 +274,17 @@
     {
         var summary = new StringBuilder();
         summary.AppendLine("FFXIV Trade Architect Payroll");
-        summary.AppendLine($"Plan: {_source!.SourcePlanName}");
-        summary.AppendLine($"Cost basis: {_payroll!.CostBasis}");
-        summary.AppendLine($"Evidence: {_source.SelectedDataCenter} / {_source.SelectedRegion}, imported {_source.ImportedAtUtc:u}");
-        summary.AppendLine($"Estimated materials: {FormatGil(_payroll.EstimatedMaterialTotal)}");
-        summary.AppendLine($"Provided materials excluded: {FormatGil(_payroll.Lines.Where(line => line.Responsibility == CommissionMaterialResponsibility.Provided).Sum(line => line.EstimatedMaterialCost))}");
-        summary.AppendLine($"Reimbursable materials: {FormatGil(_payroll.MaterialBasisTotal)}");
-        summary.AppendLine($"Commission on full estimate ({_payroll.Policy.CommissionPercent:N0}%): {FormatGil(_payroll.CommissionAmount)}");
+        summary.AppendLine($"Plan: {FormatPayrollDate(_source!.ImportedAtUtc)}");
+        summary.AppendLine($"Name: {FormatCommissionerName()}");
+        summary.AppendLine();
+        AppendCraftedItemsSection(summary, _source.CraftedItems);
+        summary.AppendLine();
+        AppendMaterialSection(summary, "Crafter procures", _payroll!.Lines.Where(line => line.Responsibility == CommissionMaterialResponsibility.Crafter));
+        summary.AppendLine();
+        AppendMaterialSection(summary, "Provided by commissioner", _payroll.Lines.Where(line => line.Responsibility == CommissionMaterialResponsibility.Provided));
+        summary.AppendLine();
+        summary.AppendLine($"Materials reimbursement: {FormatGil(_payroll.MaterialBasisTotal)}");
+        summary.AppendLine($"Commission ({_payroll.Policy.CommissionPercent:N0}%): {FormatGil(_payroll.CommissionAmount)}");
         summary.AppendLine($"Total pay: {FormatGil(_payroll.TotalPay)}");
 
         if (_payroll.Warnings.Count > 0)
@@ -274,6 +298,67 @@
         }
 
         return summary.ToString();
+    }
+
+    private void AppendCraftedItemsSection(StringBuilder summary, IEnumerable<ProjectItem> items)
+    {
+        summary.AppendLine("Being made:");
+        var craftedItems = items.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (craftedItems.Length == 0)
+        {
+            summary.AppendLine("- None");
+            return;
+        }
+
+        foreach (var item in craftedItems)
+        {
+            summary.AppendLine($"- {FormatProjectItem(item)}");
+        }
+    }
+
+    private void AppendMaterialSection(
+        StringBuilder summary,
+        string heading,
+        IEnumerable<CommissionPayrollLine> lines)
+    {
+        summary.AppendLine($"{heading}:");
+        var materialLines = lines.OrderBy(line => line.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (materialLines.Length == 0)
+        {
+            summary.AppendLine("- None");
+            return;
+        }
+
+        foreach (var line in materialLines)
+        {
+            var hqSuffix = line.RequiresHq ? " HQ" : string.Empty;
+            summary.AppendLine($"- {line.Name}{hqSuffix} x{line.Quantity:N0}: {FormatGil(line.EstimatedMaterialCost)}");
+        }
+    }
+
+    private decimal GetProvidedMaterialTotal()
+    {
+        return _payroll?.Lines
+            .Where(line => line.Responsibility == CommissionMaterialResponsibility.Provided)
+            .Sum(line => line.EstimatedMaterialCost) ?? 0m;
+    }
+
+    private string FormatCommissionerName()
+    {
+        return string.IsNullOrWhiteSpace(_commissionerName)
+            ? "Unspecified"
+            : _commissionerName.Trim();
+    }
+
+    private static string FormatPayrollDate(DateTime generatedAtUtc)
+    {
+        return generatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd");
+    }
+
+    private static string FormatProjectItem(ProjectItem item)
+    {
+        var hqSuffix = item.MustBeHq ? " HQ" : string.Empty;
+        return $"{item.Name}{hqSuffix} x{item.Quantity:N0}";
     }
 
     private static string FormatGil(decimal value)

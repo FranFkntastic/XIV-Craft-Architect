@@ -59,6 +59,7 @@ public sealed class TradePayrollDraftFactory
             appState.SelectedRegion,
             appState.DefaultMarketFetchScope,
             appState.MarketAnalysisLens,
+            CraftPlanStateMapper.GetRootProjectItems(appState.CurrentPlan),
             lines,
             warnings.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase).ToArray());
 

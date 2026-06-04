@@ -408,10 +408,6 @@ public class AppState
                 ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
                 NotifyPlanDecisionChanged();
             }
-            else
-            {
-                NotifyPlanChanged();
-            }
         }
     }
 
@@ -1400,14 +1396,16 @@ public class AppState
         string planId,
         string planName,
         DateTime? savedAt = null,
-        bool includeSourcePlanIdentity = false)
+        bool includeSourcePlanIdentity = false,
+        bool includeLegacyMarketAnalysisFields = true)
     {
         return StoredPlanSnapshotBuilder.Build(
             this,
             planId,
             planName,
             savedAt,
-            includeSourcePlanIdentity);
+            includeSourcePlanIdentity,
+            includeLegacyMarketAnalysisFields);
     }
 
     /// <summary>

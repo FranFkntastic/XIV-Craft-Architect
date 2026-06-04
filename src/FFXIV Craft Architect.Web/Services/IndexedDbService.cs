@@ -210,7 +210,8 @@ public class IndexedDbService
             var planData = state.CreateStoredPlanSnapshot(
                 "autosave",
                 planName,
-                includeSourcePlanIdentity: true);
+                includeSourcePlanIdentity: true,
+                includeLegacyMarketAnalysisFields: false);
             snapshotElapsed.Stop();
 
             StoredPlanSnapshotMetrics? metrics = null;
@@ -350,29 +351,6 @@ public class IndexedDbService
         }
 
         return StoredMarketIntelligence.FromMarketIntelligence(intelligence);
-    }
-
-    /// <summary>
-    /// Load market analysis results.
-    /// </summary>
-    public async Task<(List<DetailedShoppingPlan>? Plans, RecommendationMode Mode)> LoadMarketAnalysisAsync(string planId)
-    {
-        try
-        {
-            await EnsureInitialized();
-            
-            var plan = await LoadPlanAsync(planId);
-            if (plan?.MarketPlansJson == null)
-                return (null, RecommendationMode.MinimizeTotalCost);
-            
-            var plans = System.Text.Json.JsonSerializer.Deserialize<List<DetailedShoppingPlan>>(plan.MarketPlansJson);
-            return (plans, plan.SavedRecommendationMode);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to load market analysis for plan {PlanId}", planId);
-            return (null, RecommendationMode.MinimizeTotalCost);
-        }
     }
 
     /// <summary>

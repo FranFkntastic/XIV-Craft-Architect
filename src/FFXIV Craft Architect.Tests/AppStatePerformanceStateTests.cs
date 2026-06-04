@@ -160,6 +160,31 @@ public class AppStatePerformanceStateTests
     }
 
     [Fact]
+    public void ApplyMarketAnalysisPublication_WithoutDecisionChanges_DoesNotDirtyPlanCore()
+    {
+        var appState = new AppState();
+        appState.NotifyPlanChanged();
+        appState.MarkPersisted(PersistedStateBucket.All, appState.CurrentVersions);
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        appState.ApplyMarketAnalysisPublication(
+            [new MarketItemAnalysis { ItemId = 200, Name = "Analysis Item" }],
+            [new DetailedShoppingPlan { ItemId = 200, Name = "Analysis Item" }],
+            [new MaterialAggregate { ItemId = 300, Name = "Active Item", TotalQuantity = 5 }],
+            acquisitionDecisionsChanged: false);
+
+        var change = Assert.Single(changes);
+        Assert.True(change.HasScope(AppStateChangeScope.MarketAnalysis));
+        Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
+        Assert.False(change.HasScope(AppStateChangeScope.PlanStructure));
+        Assert.False(change.HasScope(AppStateChangeScope.PlanDecision));
+        Assert.True(appState.IsPersistedBucketDirty(PersistedStateBucket.MarketAnalysis));
+        Assert.False(appState.IsPersistedBucketDirty(PersistedStateBucket.PlanCore));
+        Assert.Empty(appState.ShoppingItems);
+    }
+
+    [Fact]
     public void RequestPlanAndMarketRefresh_PublishesShoppingAndPlanScopes()
     {
         var appState = new AppState();

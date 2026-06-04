@@ -95,7 +95,7 @@ public class CoreStoredPlanSnapshotTests
     }
 
     [Fact]
-    public void Prepare_InvalidMarketIntelligenceRecipeBasisClearsAnalysis()
+    public void Prepare_InvalidMarketEvidenceClearsOnlyMarketPayload()
     {
         var invalidRecipeBasis = CreateStoredRecipeBasis();
         invalidRecipeBasis.MarketAnalysisDemandItems.Add(new StoredMarketAnalysisDemandItem
@@ -117,6 +117,10 @@ public class CoreStoredPlanSnapshotTests
         {
             Id = "plan",
             Name = "Plan",
+            ProjectItems =
+            [
+                new CoreStoredProjectItem { Id = 100, Name = "Final Craft", Quantity = 1 }
+            ],
             MarketIntelligenceJson = JsonSerializer.Serialize(
                 StoredMarketIntelligence.FromMarketIntelligence(intelligence))
         };
@@ -124,6 +128,7 @@ public class CoreStoredPlanSnapshotTests
         var result = CorePlanSessionLoadService.Prepare(snapshot);
 
         Assert.True(result.CanLoad);
+        Assert.Single(result.ProjectItems);
         Assert.Empty(result.MarketItemAnalyses);
         Assert.Empty(result.ShoppingPlans);
         Assert.Null(result.MarketIntelligence);
@@ -275,129 +280,6 @@ public class CoreStoredPlanSnapshotTests
         Assert.False(result.CanLoad);
         Assert.Equal("Plan", session.ActivePlan?.Name);
         Assert.Equal(100, Assert.Single(session.ProjectItems).Id);
-    }
-
-    [Fact]
-    public void Prepare_DropsStoredMarketEvidenceWhenItDoesNotMatchProjectItems()
-    {
-        var snapshot = new CoreStoredPlanSnapshot
-        {
-            Id = "saved",
-            Name = "Saved",
-            ProjectItems =
-            [
-                new CoreStoredProjectItem { Id = 100, Name = "Final Craft", Quantity = 1 }
-            ],
-            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
-            {
-                new() { ItemId = 100, Name = "Final Craft", QuantityNeeded = 99 }
-            }),
-            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
-            {
-                CreateShoppingPlan(100, quantityNeeded: 99)
-            })
-        };
-
-        var result = CorePlanSessionLoadService.Prepare(snapshot);
-
-        Assert.Single(result.ProjectItems);
-        Assert.Empty(result.MarketItemAnalyses);
-        Assert.Empty(result.ShoppingPlans);
-    }
-
-    [Fact]
-    public void Prepare_RecipeBasisQuantityMatch_RestoresAnalysisWhenProjectQuantityDiffers()
-    {
-        var snapshot = new CoreStoredPlanSnapshot
-        {
-            Id = "saved",
-            Name = "Saved",
-            ProjectItems =
-            [
-                new CoreStoredProjectItem { Id = 100, Name = "Final Craft", Quantity = 99 }
-            ],
-            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
-            {
-                new() { ItemId = 100, Name = "Final Craft", QuantityNeeded = 1 }
-            }),
-            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
-            {
-                CreateShoppingPlan(100)
-            }),
-            MarketAnalysisRecipeBasisJson = JsonSerializer.Serialize(CreateStoredRecipeBasis())
-        };
-
-        var result = CorePlanSessionLoadService.Prepare(snapshot);
-
-        Assert.Single(result.MarketItemAnalyses);
-        Assert.Single(result.ShoppingPlans);
-        Assert.NotNull(result.MarketAnalysisRecipeBasis);
-    }
-
-    [Fact]
-    public void Prepare_InvalidRecipeBasis_DropsMarketEvidenceEvenIfLegacyWouldMatch()
-    {
-        var snapshot = new CoreStoredPlanSnapshot
-        {
-            Id = "saved",
-            Name = "Saved",
-            ProjectItems =
-            [
-                new CoreStoredProjectItem { Id = 100, Name = "Final Craft", Quantity = 1 }
-            ],
-            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
-            {
-                new() { ItemId = 100, Name = "Final Craft", QuantityNeeded = 1 }
-            }),
-            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
-            {
-                CreateShoppingPlan(100)
-            }),
-            MarketAnalysisRecipeBasisJson = "{not json}"
-        };
-
-        var result = CorePlanSessionLoadService.Prepare(snapshot);
-
-        Assert.Empty(result.MarketItemAnalyses);
-        Assert.Empty(result.ShoppingPlans);
-        Assert.Null(result.MarketAnalysisRecipeBasis);
-        Assert.Contains("recipe basis", result.Warning, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void Prepare_DuplicateRecipeBasisDemand_DropsMarketEvidenceWithoutThrowing()
-    {
-        var recipeBasis = CreateStoredRecipeBasis();
-        recipeBasis.MarketAnalysisDemandItems.Add(new StoredMarketAnalysisDemandItem
-        {
-            ItemId = 100,
-            Name = "Duplicate",
-            TotalQuantity = 1
-        });
-        var snapshot = new CoreStoredPlanSnapshot
-        {
-            Id = "saved",
-            Name = "Saved",
-            ProjectItems =
-            [
-                new CoreStoredProjectItem { Id = 100, Name = "Final Craft", Quantity = 1 }
-            ],
-            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
-            {
-                new() { ItemId = 100, Name = "Final Craft", QuantityNeeded = 1 }
-            }),
-            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
-            {
-                CreateShoppingPlan(100)
-            }),
-            MarketAnalysisRecipeBasisJson = JsonSerializer.Serialize(recipeBasis)
-        };
-
-        var result = CorePlanSessionLoadService.Prepare(snapshot);
-
-        Assert.Empty(result.MarketItemAnalyses);
-        Assert.Empty(result.ShoppingPlans);
-        Assert.Null(result.MarketAnalysisRecipeBasis);
     }
 
     [Fact]

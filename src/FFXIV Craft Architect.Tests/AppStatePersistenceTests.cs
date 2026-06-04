@@ -88,6 +88,31 @@ public class AppStatePersistenceTests
     }
 
     [Fact]
+    public void LoadStoredPlan_NoRestoredMarketIntelligenceUsesSavedModeAndLens()
+    {
+        var appState = new AppState();
+        appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
+        appState.SetRecommendationMode(RecommendationMode.MinimizeTotalCost);
+        var storedPlan = new StoredPlan
+        {
+            SavedRecommendationMode = RecommendationMode.MaximizeValue,
+            SavedMarketAnalysisLens = MarketAcquisitionLens.MinimumUpfrontCost,
+            MarketItemAnalysesJson = "{not valid json}",
+            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
+            {
+                new() { ItemId = 123, Name = "Stale Projection", QuantityNeeded = 1 }
+            })
+        };
+
+        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
+
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Empty(appState.ShoppingPlans);
+        Assert.Equal(RecommendationMode.MaximizeValue, appState.RecommendationMode);
+        Assert.Equal(MarketAcquisitionLens.MinimumUpfrontCost, appState.MarketAnalysisLens);
+    }
+
+    [Fact]
     public void LoadStoredPlan_RestoresScopeAwareMarketAnalysisFields()
     {
         var appState = new AppState();
@@ -170,6 +195,49 @@ public class AppStatePersistenceTests
     }
 
     [Fact]
+    public void PlanSessionLoadService_Prepare_LegacyScopeSnapshotProjectsIntoMarketIntelligence()
+    {
+        var publishedAt = new DateTime(2026, 6, 3, 12, 0, 0, DateTimeKind.Utc);
+        var storedPlan = new StoredPlan
+        {
+            SavedMarketAnalysisLens = MarketAcquisitionLens.BulkValue,
+            ProjectItems =
+            [
+                new StoredProjectItem
+                {
+                    Id = 123,
+                    Name = "Scope Item",
+                    Quantity = 10
+                }
+            ],
+            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
+            {
+                new() { ItemId = 123, Name = "Scope Item", QuantityNeeded = 10 }
+            }),
+            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
+            {
+                new() { ItemId = 123, Name = "Scope Item", QuantityNeeded = 10 }
+            }),
+            MarketAnalysisScopeSnapshotJson = JsonSerializer.Serialize(new PublishedMarketAnalysisScopeSnapshot(
+                MarketFetchScope.EntireRegion,
+                "Aether",
+                "North America",
+                ["Aether", "Primal"],
+                MarketAcquisitionLens.BulkValue,
+                7,
+                publishedAt))
+        };
+
+        var result = PlanSessionLoadService.Prepare(storedPlan);
+
+        Assert.NotNull(result.MarketIntelligence);
+        Assert.Equal(MarketIntelligencePublicationContextKind.Known, result.MarketIntelligence!.PublicationContext.Kind);
+        Assert.Equal(MarketFetchScope.EntireRegion, result.MarketIntelligence.PublicationContext.Scope);
+        Assert.Equal(["Aether", "Primal"], result.MarketIntelligence.PublicationContext.RequestedDataCenters);
+        Assert.Equal(publishedAt, result.MarketIntelligence.PublicationContext.PublishedAtUtc);
+    }
+
+    [Fact]
     public void LoadStoredPlan_LegacyAnalysisMissingScopeAwareFields_LoadsDefaults()
     {
         var appState = new AppState();
@@ -230,65 +298,6 @@ public class AppStatePersistenceTests
         Assert.Equal(0, world.ScopeCompetitiveQuantity);
         Assert.Equal(0, world.ScopeSaneQuantity);
         Assert.Equal(0, world.ScopeInsaneQuantity);
-    }
-
-    [Fact]
-    public void LoadStoredPlan_LegacyAnalysisWithOutlierListingField_ClearsAnalysis()
-    {
-        var appState = new AppState();
-        var storedPlan = new StoredPlan
-        {
-            Id = "legacy-outlier",
-            Name = "Legacy Outlier",
-            DataCenter = "Aether",
-            ProjectItems =
-            [
-                new StoredProjectItem
-                {
-                    Id = 123,
-                    Name = "Legacy Item",
-                    Quantity = 10
-                }
-            ],
-            MarketPlansJson = """
-                [
-                  {
-                    "ItemId": 123,
-                    "Name": "Legacy Item",
-                    "QuantityNeeded": 10
-                  }
-                ]
-                """,
-            MarketItemAnalysesJson = """
-                [
-                  {
-                    "ItemId": 123,
-                    "Name": "Legacy Item",
-                    "QuantityNeeded": 10,
-                    "Worlds": [
-                      {
-                        "DataCenter": "Aether",
-                        "WorldName": "Siren",
-                        "QuantityNeeded": 10,
-                        "Listings": [
-                          {
-                            "Quantity": 1,
-                            "PricePerUnit": 999999999,
-                            "RetainerName": "Legacy Scam",
-                            "IsOutlier": true
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-                """
-        };
-
-        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
-
-        Assert.Empty(appState.MarketItemAnalyses);
-        Assert.Empty(appState.ShoppingPlans);
     }
 
     [Fact]
@@ -371,220 +380,6 @@ public class AppStatePersistenceTests
         Assert.Empty(appState.ExpandedMarketAnalysisWorlds);
         Assert.Null(appState.MarketAnalysisGridSortColumn);
         Assert.False(appState.MarketAnalysisGridSortDescending);
-    }
-
-    [Fact]
-    public void LoadStoredPlan_LegacyMarketPlansWithoutAnalysisSource_ClearsProjectionAndDefaultLens()
-    {
-        var appState = new AppState();
-        appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
-        var shoppingPlans = new List<DetailedShoppingPlan>
-        {
-            new()
-            {
-                ItemId = 123,
-                Name = "Legacy Item",
-                QuantityNeeded = 10
-            }
-        };
-        var storedPlan = new StoredPlan
-        {
-            Id = "legacy",
-            Name = "Legacy",
-            DataCenter = "Aether",
-            ProjectItems =
-            [
-                new StoredProjectItem
-                {
-                    Id = 123,
-                    Name = "Legacy Item",
-                    Quantity = 10
-                }
-            ],
-            MarketPlansJson = JsonSerializer.Serialize(shoppingPlans),
-            MarketItemAnalysesJson = null
-        };
-
-        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
-
-        Assert.Empty(appState.ShoppingPlans);
-        Assert.Empty(appState.MarketItemAnalyses);
-        Assert.Equal(MarketAcquisitionLens.MinimumUpfrontCost, appState.MarketAnalysisLens);
-    }
-
-    [Fact]
-    public void LoadStoredPlan_InvalidAnalysisJson_ClearsShoppingPlanProjection()
-    {
-        var appState = new AppState();
-        var shoppingPlans = new List<DetailedShoppingPlan>
-        {
-            new()
-            {
-                ItemId = 123,
-                Name = "Restored Item",
-                QuantityNeeded = 10
-            }
-        };
-        var storedPlan = new StoredPlan
-        {
-            Id = "autosave",
-            Name = "AutoSave",
-            DataCenter = "Aether",
-            ProjectItems =
-            [
-                new StoredProjectItem
-                {
-                    Id = 123,
-                    Name = "Restored Item",
-                    Quantity = 10
-                }
-            ],
-            MarketPlansJson = JsonSerializer.Serialize(shoppingPlans),
-            MarketItemAnalysesJson = "{not valid json}"
-        };
-
-        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
-
-        Assert.Empty(appState.ShoppingPlans);
-        Assert.Empty(appState.MarketItemAnalyses);
-    }
-
-    [Fact]
-    public void LoadStoredPlan_AnalysisForDifferentPlan_ClearsAnalysisAndProjection()
-    {
-        var appState = new AppState();
-        var shoppingPlans = new List<DetailedShoppingPlan>
-        {
-            new()
-            {
-                ItemId = 999,
-                Name = "Wrong Item",
-                QuantityNeeded = 10
-            }
-        };
-        var analyses = new List<MarketItemAnalysis>
-        {
-            new()
-            {
-                ItemId = 999,
-                Name = "Wrong Item",
-                QuantityNeeded = 10
-            }
-        };
-        var storedPlan = new StoredPlan
-        {
-            Id = "plan",
-            Name = "Plan",
-            DataCenter = "Aether",
-            ProjectItems =
-            [
-                new StoredProjectItem
-                {
-                    Id = 123,
-                    Name = "Current Item",
-                    Quantity = 10
-                }
-            ],
-            MarketPlansJson = JsonSerializer.Serialize(shoppingPlans),
-            MarketItemAnalysesJson = JsonSerializer.Serialize(analyses)
-        };
-
-        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
-
-        Assert.Empty(appState.ShoppingPlans);
-        Assert.Empty(appState.MarketItemAnalyses);
-    }
-
-    [Fact]
-    public void LoadStoredPlan_AnalysisForSameItemDifferentQuantity_ClearsAnalysisAndProjection()
-    {
-        var appState = new AppState();
-        var shoppingPlans = new List<DetailedShoppingPlan>
-        {
-            new()
-            {
-                ItemId = 123,
-                Name = "Current Item",
-                QuantityNeeded = 5
-            }
-        };
-        var analyses = new List<MarketItemAnalysis>
-        {
-            new()
-            {
-                ItemId = 123,
-                Name = "Current Item",
-                QuantityNeeded = 5
-            }
-        };
-        var storedPlan = new StoredPlan
-        {
-            Id = "plan",
-            Name = "Plan",
-            DataCenter = "Aether",
-            ProjectItems =
-            [
-                new StoredProjectItem
-                {
-                    Id = 123,
-                    Name = "Current Item",
-                    Quantity = 10
-                }
-            ],
-            MarketPlansJson = JsonSerializer.Serialize(shoppingPlans),
-            MarketItemAnalysesJson = JsonSerializer.Serialize(analyses)
-        };
-
-        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
-
-        Assert.Empty(appState.ShoppingPlans);
-        Assert.Empty(appState.MarketItemAnalyses);
-    }
-
-    [Fact]
-    public void LoadStoredPlan_ProjectionForDifferentAnalysis_ClearsProjectionButKeepsAnalysis()
-    {
-        var appState = new AppState();
-        var shoppingPlans = new List<DetailedShoppingPlan>
-        {
-            new()
-            {
-                ItemId = 999,
-                Name = "Wrong Item",
-                QuantityNeeded = 10
-            }
-        };
-        var analyses = new List<MarketItemAnalysis>
-        {
-            new()
-            {
-                ItemId = 123,
-                Name = "Current Item",
-                QuantityNeeded = 10
-            }
-        };
-        var storedPlan = new StoredPlan
-        {
-            Id = "plan",
-            Name = "Plan",
-            DataCenter = "Aether",
-            ProjectItems =
-            [
-                new StoredProjectItem
-                {
-                    Id = 123,
-                    Name = "Current Item",
-                    Quantity = 10
-                }
-            ],
-            MarketPlansJson = JsonSerializer.Serialize(shoppingPlans),
-            MarketItemAnalysesJson = JsonSerializer.Serialize(analyses)
-        };
-
-        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
-
-        Assert.Empty(appState.ShoppingPlans);
-        Assert.Single(appState.MarketItemAnalyses);
     }
 
     [Fact]
@@ -687,6 +482,33 @@ public class AppStatePersistenceTests
         Assert.Equal(MarketAcquisitionLens.BulkValue, storedIntelligence.PublicationContext.Lens);
         Assert.Equal(123, Assert.Single(storedIntelligence.ItemAnalyses).ItemId);
         Assert.Equal(123, Assert.Single(storedIntelligence.Recommendations).ItemId);
+    }
+
+    [Fact]
+    public void CreateStoredPlanSnapshot_CanOmitLegacyFieldsWhenMarketIntelligenceJsonIsAvailable()
+    {
+        var appState = new AppState();
+        appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
+        appState.ReplaceProjectItems(
+            [new ProjectItem { Id = 123, Name = "Snapshot Item", Quantity = 10 }]);
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
+            publishedScope: appState.CreateCurrentMarketAnalysisScopeSnapshot(
+                new DateTime(2026, 6, 4, 12, 0, 0, DateTimeKind.Utc)));
+
+        var snapshot = appState.CreateStoredPlanSnapshot(
+            "autosave",
+            "AutoSave",
+            includeLegacyMarketAnalysisFields: false);
+
+        Assert.NotNull(snapshot.MarketIntelligenceJson);
+        Assert.Null(snapshot.MarketPlansJson);
+        Assert.Null(snapshot.MarketItemAnalysesJson);
+
+        var restored = PlanSessionLoadService.Prepare(snapshot);
+        Assert.Equal(123, Assert.Single(restored.MarketItemAnalyses).ItemId);
+        Assert.Equal(123, Assert.Single(restored.ShoppingPlans).ItemId);
     }
 
     [Fact]
@@ -793,38 +615,6 @@ public class AppStatePersistenceTests
     }
 
     [Fact]
-    public void PlanSessionLoadService_Prepare_InvalidMarketIntelligenceRecipeBasisClearsAnalysis()
-    {
-        var invalidRecipeBasis = CreateStoredRecipeBasis();
-        invalidRecipeBasis.MarketAnalysisDemandItems.Add(new StoredMarketAnalysisDemandItem
-        {
-            ItemId = 123,
-            Name = "Duplicate Snapshot Item",
-            TotalQuantity = 10
-        });
-        var intelligence = new MarketIntelligence(
-            Guid.NewGuid(),
-            [new MarketItemAnalysis { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
-            [new DetailedShoppingPlan { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
-            [],
-            MarketIntelligencePublicationContext.UnknownLegacy(
-                RecommendationMode.MinimizeTotalCost,
-                MarketAcquisitionLens.MinimumUpfrontCost),
-            invalidRecipeBasis);
-        var storedPlan = new StoredPlan
-        {
-            MarketIntelligenceJson = JsonSerializer.Serialize(StoredMarketIntelligence.FromMarketIntelligence(intelligence))
-        };
-
-        var result = PlanSessionLoadService.Prepare(storedPlan);
-
-        Assert.Empty(result.MarketItemAnalyses);
-        Assert.Empty(result.ShoppingPlans);
-        Assert.Null(result.MarketIntelligence);
-        Assert.Contains("duplicate market analysis demand item id", result.Warning);
-    }
-
-    [Fact]
     public void CreateStoredPlanSnapshot_WritesUnavailableOnlyMarketIntelligence()
     {
         var appState = new AppState();
@@ -896,146 +686,6 @@ public class AppStatePersistenceTests
 
         Assert.Null(warning);
         Assert.Equal(10, Assert.Single(persistedBasis!.MarketAnalysisDemandItems).TotalQuantity);
-    }
-
-    [Fact]
-    public void LoadStoredPlan_RecipeBasisQuantityMatch_RestoresAnalysisWhenProjectQuantityDiffers()
-    {
-        var appState = new AppState();
-        var storedPlan = new StoredPlan
-        {
-            ProjectItems =
-            [
-                new StoredProjectItem
-                {
-                    Id = 123,
-                    Name = "Snapshot Item",
-                    Quantity = 99
-                }
-            ],
-            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
-            {
-                new() { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }
-            }),
-            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
-            {
-                new() { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }
-            }),
-            MarketAnalysisRecipeBasisJson = JsonSerializer.Serialize(CreateStoredRecipeBasis())
-        };
-
-        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
-
-        Assert.Single(appState.MarketItemAnalyses);
-        Assert.Single(appState.ShoppingPlans);
-        Assert.NotNull(appState.MarketAnalysisRecipeBasis);
-    }
-
-    [Fact]
-    public void LoadStoredPlan_InvalidRecipeBasis_DropsMarketEvidenceEvenIfLegacyWouldMatch()
-    {
-        var appState = new AppState();
-        var storedPlan = new StoredPlan
-        {
-            ProjectItems =
-            [
-                new StoredProjectItem
-                {
-                    Id = 123,
-                    Name = "Snapshot Item",
-                    Quantity = 10
-                }
-            ],
-            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
-            {
-                new() { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }
-            }),
-            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
-            {
-                new() { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }
-            }),
-            MarketAnalysisRecipeBasisJson = "{not json}"
-        };
-
-        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
-
-        Assert.Empty(appState.MarketItemAnalyses);
-        Assert.Empty(appState.ShoppingPlans);
-        Assert.Null(appState.MarketAnalysisRecipeBasis);
-    }
-
-    [Fact]
-    public void LoadStoredPlan_DuplicateRecipeBasisDemand_DropsMarketEvidenceWithoutThrowing()
-    {
-        var appState = new AppState();
-        var recipeBasis = CreateStoredRecipeBasis();
-        recipeBasis.MarketAnalysisDemandItems.Add(new StoredMarketAnalysisDemandItem
-        {
-            ItemId = 123,
-            Name = "Duplicate",
-            TotalQuantity = 10
-        });
-        var storedPlan = new StoredPlan
-        {
-            ProjectItems =
-            [
-                new StoredProjectItem
-                {
-                    Id = 123,
-                    Name = "Snapshot Item",
-                    Quantity = 10
-                }
-            ],
-            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
-            {
-                new() { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }
-            }),
-            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
-            {
-                new() { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }
-            }),
-            MarketAnalysisRecipeBasisJson = JsonSerializer.Serialize(recipeBasis)
-        };
-
-        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
-
-        Assert.Empty(appState.MarketItemAnalyses);
-        Assert.Empty(appState.ShoppingPlans);
-        Assert.Null(appState.MarketAnalysisRecipeBasis);
-    }
-
-    [Fact]
-    public void LoadStoredPlan_RecipeBasisExtraAvailableDemand_DropsMarketEvidence()
-    {
-        var appState = new AppState();
-        var recipeBasis = CreateStoredRecipeBasis(extraDemandItemId: 456);
-        var storedPlan = new StoredPlan
-        {
-            ProjectItems =
-            [
-                new StoredProjectItem
-                {
-                    Id = 123,
-                    Name = "Snapshot Item",
-                    Quantity = 10
-                }
-            ],
-            MarketPlansJson = JsonSerializer.Serialize(new List<DetailedShoppingPlan>
-            {
-                new() { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }
-            }),
-            MarketItemAnalysesJson = JsonSerializer.Serialize(new List<MarketItemAnalysis>
-            {
-                new() { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }
-            }),
-            MarketAnalysisRecipeBasisJson = JsonSerializer.Serialize(recipeBasis)
-        };
-
-        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
-
-        Assert.Empty(appState.MarketItemAnalyses);
-        Assert.Empty(appState.ShoppingPlans);
-        Assert.Null(appState.MarketAnalysisRecipeBasis);
     }
 
     [Fact]
@@ -1449,7 +1099,7 @@ public class AppStatePersistenceTests
         Assert.Equal("Named Plan", appState.CurrentPlanName);
     }
 
-    private static StoredRecipeOperationSnapshot CreateStoredRecipeBasis(int? extraDemandItemId = null)
+    private static StoredRecipeOperationSnapshot CreateStoredRecipeBasis()
     {
         var stored = new StoredRecipeOperationSnapshot
         {
@@ -1487,16 +1137,6 @@ public class AppStatePersistenceTests
                 }
             ]
         };
-
-        if (extraDemandItemId.HasValue)
-        {
-            stored.MarketAnalysisDemandItems.Add(new StoredMarketAnalysisDemandItem
-            {
-                ItemId = extraDemandItemId.Value,
-                Name = "Extra Demand",
-                TotalQuantity = 1
-            });
-        }
 
         return stored;
     }

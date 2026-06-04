@@ -17,12 +17,34 @@ public class TradePayrollMarkupTests
         Assert.Contains("Responsibility", source);
         Assert.Contains("CommissionMaterialResponsibility.Crafter", source);
         Assert.Contains("CommissionMaterialResponsibility.Provided", source);
+        Assert.Contains("Commissioner name", source);
+        Assert.Contains("FormatPayrollDate(_source.ImportedAtUtc)", source);
+        Assert.Contains("Being made", source);
+        Assert.Contains("_source.CraftedItems", source);
         Assert.Contains("Guild commission", source);
         Assert.Contains("Commission is @_commissionPercent.ToString(\"N0\")% of full estimated material cost", source);
-        Assert.Contains("Provided materials", source);
-        Assert.Contains("Commission on full estimate", source);
+        Assert.Contains("Crafter procures", source);
+        Assert.Contains("Provided by commissioner", source);
         Assert.DoesNotContain("MudNumericField", source);
         Assert.DoesNotContain("Handling", source);
+    }
+
+    [Fact]
+    public void TradePayrollSummary_UsesCommissionerAndMaterialResponsibilitySections()
+    {
+        var source = File.ReadAllText(GetTradePayrollPath());
+
+        Assert.Contains("summary.AppendLine($\"Plan: {FormatPayrollDate(_source!.ImportedAtUtc)}\")", source);
+        Assert.Contains("summary.AppendLine($\"Name: {FormatCommissionerName()}\")", source);
+        Assert.Contains("AppendCraftedItemsSection(summary, _source.CraftedItems)", source);
+        Assert.Contains("AppendMaterialSection(summary, \"Crafter procures\"", source);
+        Assert.Contains("AppendMaterialSection(summary, \"Provided by commissioner\"", source);
+        Assert.Contains("Materials reimbursement", source);
+        Assert.DoesNotContain("summary.AppendLine($\"Plan: {_source!.SourcePlanName}\")", source);
+        Assert.DoesNotContain("summary.AppendLine($\"Cost basis:", source);
+        Assert.DoesNotContain("summary.AppendLine($\"Evidence:", source);
+        Assert.DoesNotContain("Provided materials excluded", source);
+        Assert.DoesNotContain("Commission on full estimate", source);
     }
 
     [Fact]

@@ -110,90 +110,29 @@ public sealed class CorePlanSessionLoadService
             MustBeHq = item.MustBeHq
         }).ToList();
 
-        var marketIntelligence = DeserializeMarketIntelligence(
-            storedPlan.MarketIntelligenceJson,
-            out var hasMarketIntelligenceRecipeBasisPayload,
-            out var marketIntelligenceWarning);
-        warning = AppendWarning(warning, marketIntelligenceWarning);
-        var marketAnalyses = marketIntelligence?.ItemAnalyses.ToList()
-            ?? DeserializeOrEmpty<MarketItemAnalysis>(storedPlan.MarketItemAnalysesJson);
-        var unavailableMarketItemIds = marketIntelligence?.UnavailableMarketItemIds.ToHashSet()
-            ?? storedPlan.UnavailableMarketItemIds.ToHashSet();
-        var hasUnavailableOnlyMarketIntelligence = marketIntelligence?.HasUnavailableMarketItems == true &&
-                                                   marketAnalyses.Count == 0;
-        var hasRecipeBasisPayload = hasMarketIntelligenceRecipeBasisPayload ||
-                                    !string.IsNullOrWhiteSpace(storedPlan.MarketAnalysisRecipeBasisJson);
-        var marketAnalysisRecipeBasis = marketIntelligence?.RecipeBasis;
-        if (!hasMarketIntelligenceRecipeBasisPayload)
-        {
-            marketAnalysisRecipeBasis = StoredRecipeBasisMapper.TryDeserialize(
+        var marketRestore = StoredMarketIntelligenceRestorer.Restore(
+            new StoredMarketIntelligenceRestoreInput(
+                storedPlan.MarketIntelligenceJson,
+                storedPlan.MarketItemAnalysesJson,
+                storedPlan.MarketPlansJson,
                 storedPlan.MarketAnalysisRecipeBasisJson,
-                out var recipeBasisWarning);
-            warning = AppendWarning(warning, recipeBasisWarning);
-        }
-
-        if (!hasUnavailableOnlyMarketIntelligence &&
-            marketIntelligence == null &&
-            ContainsLegacyListingOutlierField(storedPlan.MarketItemAnalysesJson))
-        {
-            marketAnalyses.Clear();
-            marketAnalysisRecipeBasis = null;
-            unavailableMarketItemIds.Clear();
-            marketIntelligence = null;
-        }
-        else if (!hasUnavailableOnlyMarketIntelligence && hasRecipeBasisPayload)
-        {
-            if (marketAnalysisRecipeBasis == null ||
-                !RestoredMarketAnalysisMatchesRecipeBasis(marketAnalysisRecipeBasis, marketAnalyses))
-            {
-                marketAnalyses.Clear();
-                marketAnalysisRecipeBasis = null;
-                unavailableMarketItemIds.Clear();
-                marketIntelligence = null;
-            }
-        }
-        else if (!hasUnavailableOnlyMarketIntelligence &&
-                 !RestoredMarketAnalysisMatchesPlan(plan, projectItems, marketAnalyses))
-        {
-            marketAnalyses.Clear();
-            unavailableMarketItemIds.Clear();
-            marketIntelligence = null;
-        }
-
-        var restoredShoppingPlans = marketIntelligence?.Recommendations.ToList()
-            ?? DeserializeOrEmpty<DetailedShoppingPlan>(storedPlan.MarketPlansJson);
-        var shoppingPlans = marketAnalyses.Count > 0 &&
-                            RestoredShoppingPlansMatchMarketAnalysis(restoredShoppingPlans, marketAnalyses)
-            ? restoredShoppingPlans
-            : new List<DetailedShoppingPlan>();
-        if (marketAnalyses.Count == 0 && marketIntelligence?.HasUnavailableMarketItems != true)
-        {
-            marketAnalysisRecipeBasis = null;
-            unavailableMarketItemIds.Clear();
-            marketIntelligence = null;
-        }
-        else if (marketIntelligence != null)
-        {
-            marketIntelligence = marketIntelligence with
-            {
-                ItemAnalyses = marketAnalyses.ToArray(),
-                Recommendations = shoppingPlans.ToArray(),
-                UnavailableMarketItems = marketIntelligence.UnavailableMarketItems
-                    .Where(item => unavailableMarketItemIds.Contains(item.ItemId))
-                    .ToArray(),
-                RecipeBasis = marketAnalysisRecipeBasis
-            };
-        }
+                storedPlan.UnavailableMarketItemIds,
+                storedPlan.SavedRecommendationMode,
+                storedPlan.SavedMarketAnalysisLens,
+                plan,
+                projectItems,
+                BuildMarketAnalysisCandidates));
+        warning = AppendWarning(warning, marketRestore.Warning);
 
         return new CorePlanSessionLoadResult(
             storedPlan,
             plan,
             projectItems,
-            marketAnalyses,
-            shoppingPlans,
-            unavailableMarketItemIds,
-            marketIntelligence,
-            marketAnalysisRecipeBasis,
+            marketRestore.MarketItemAnalyses,
+            marketRestore.Recommendations,
+            marketRestore.UnavailableMarketItemIds,
+            marketRestore.MarketIntelligence,
+            marketRestore.RecipeBasis,
             CanLoad: true,
             warning);
     }
@@ -233,166 +172,10 @@ public sealed class CorePlanSessionLoadService
         }
     }
 
-    private static List<T> DeserializeOrEmpty<T>(string? json)
+    private static IReadOnlyList<MaterialAggregate> BuildMarketAnalysisCandidates(CraftingPlan? plan)
     {
-        if (string.IsNullOrWhiteSpace(json))
-        {
-            return [];
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<List<T>>(json) ?? [];
-        }
-        catch
-        {
-            return [];
-        }
-    }
-
-    private static MarketIntelligence? DeserializeMarketIntelligence(
-        string? json,
-        out bool hasRecipeBasisPayload,
-        out string? warning)
-    {
-        hasRecipeBasisPayload = false;
-        warning = null;
-
-        if (string.IsNullOrWhiteSpace(json))
-        {
-            return null;
-        }
-
-        try
-        {
-            var stored = JsonSerializer.Deserialize<StoredMarketIntelligence>(json);
-            if (stored == null)
-            {
-                warning = "Stored market intelligence payload was empty.";
-                return null;
-            }
-
-            if (stored.SchemaVersion > StoredMarketIntelligence.CurrentSchemaVersion)
-            {
-                warning = "Stored market intelligence was saved with a newer schema version.";
-                return null;
-            }
-
-            hasRecipeBasisPayload = stored.RecipeBasis != null;
-            var recipeBasis = StoredRecipeBasisMapper.TryNormalize(stored.RecipeBasis, out var recipeBasisWarning);
-            warning = AppendWarning(warning, recipeBasisWarning);
-
-            return stored.ToMarketIntelligence() with
-            {
-                RecipeBasis = recipeBasis
-            };
-        }
-        catch (JsonException ex)
-        {
-            warning = $"Stored market intelligence could not be deserialized: {ex.Message}";
-            return null;
-        }
-        catch (NotSupportedException ex)
-        {
-            warning = $"Stored market intelligence could not be deserialized: {ex.Message}";
-            return null;
-        }
-    }
-
-    private static bool ContainsLegacyListingOutlierField(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json))
-        {
-            return false;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(json);
-            return ContainsLegacyListingOutlierField(document.RootElement);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool ContainsLegacyListingOutlierField(JsonElement element)
-    {
-        return element.ValueKind switch
-        {
-            JsonValueKind.Object => element.EnumerateObject().Any(property =>
-                string.Equals(property.Name, "IsOutlier", StringComparison.OrdinalIgnoreCase) ||
-                ContainsLegacyListingOutlierField(property.Value)),
-            JsonValueKind.Array => element.EnumerateArray().Any(ContainsLegacyListingOutlierField),
-            _ => false
-        };
-    }
-
-    private static bool RestoredMarketAnalysisMatchesPlan(
-        CraftingPlan? plan,
-        IReadOnlyList<ProjectItem> projectItems,
-        IReadOnlyList<MarketItemAnalysis> analyses)
-    {
-        if (analyses.Count == 0)
-        {
-            return false;
-        }
-
-        var candidates = plan != null
-            ? new RecipeDemandProjectionService()
-                .Build(plan, snapshot: null)
-                .ToMarketAnalysisMaterialAggregates()
-            : projectItems
-                .Where(item => item.Quantity > 0)
-                .Select(item => new MaterialAggregate
-                {
-                    ItemId = item.Id,
-                    Name = item.Name,
-                    IconId = item.IconId,
-                    TotalQuantity = item.Quantity
-                })
-                .ToList();
-        var expected = candidates.ToDictionary(candidate => candidate.ItemId, candidate => candidate.TotalQuantity);
-
-        return expected.Count == analyses.Count &&
-               analyses.All(analysis =>
-                   expected.TryGetValue(analysis.ItemId, out var quantityNeeded) &&
-                   quantityNeeded == analysis.QuantityNeeded);
-    }
-
-    private static bool RestoredMarketAnalysisMatchesRecipeBasis(
-        StoredRecipeOperationSnapshot recipeBasis,
-        IReadOnlyList<MarketItemAnalysis> analyses)
-    {
-        if (analyses.Count == 0)
-        {
-            return false;
-        }
-
-        var expected = recipeBasis.MarketAnalysisDemandItems
-            .Where(item => !recipeBasis.UnavailableMarketItemIds.Contains(item.ItemId))
-            .ToDictionary(item => item.ItemId, item => item.TotalQuantity);
-
-        return expected.Count == analyses.Count &&
-               analyses.All(analysis =>
-                   expected.TryGetValue(analysis.ItemId, out var quantityNeeded) &&
-                   quantityNeeded == analysis.QuantityNeeded);
-    }
-
-    private static bool RestoredShoppingPlansMatchMarketAnalysis(
-        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
-        IReadOnlyList<MarketItemAnalysis> analyses)
-    {
-        if (shoppingPlans.Count == 0)
-        {
-            return false;
-        }
-
-        var expected = analyses.ToDictionary(analysis => analysis.ItemId, analysis => analysis.QuantityNeeded);
-        return expected.Count == shoppingPlans.Count &&
-               shoppingPlans.All(plan =>
-                   expected.TryGetValue(plan.ItemId, out var quantityNeeded) &&
-                   quantityNeeded == plan.QuantityNeeded);
+        return new RecipeDemandProjectionService()
+            .Build(plan, snapshot: null)
+            .ToMarketAnalysisMaterialAggregates();
     }
 }
