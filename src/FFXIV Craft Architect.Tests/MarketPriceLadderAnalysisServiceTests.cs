@@ -631,7 +631,7 @@ public class MarketPriceLadderAnalysisServiceTests
         Assert.Equal(MarketDataAgeSource.UniversalisWorldUpload, freshWorld.DataAgeSource);
         Assert.Equal(MarketDataAgeSource.UniversalisWorldUpload, staleWorld.DataAgeSource);
         Assert.Equal(MarketDataQualityBucket.Current, freshWorld.DataQualityBucket);
-        Assert.Equal(MarketDataQualityBucket.VeryOld, staleWorld.DataQualityBucket);
+        Assert.Equal(MarketDataQualityBucket.Old, staleWorld.DataQualityBucket);
         Assert.True(freshWorld.DataQualityScore > staleWorld.DataQualityScore);
     }
 
@@ -646,7 +646,7 @@ public class MarketPriceLadderAnalysisServiceTests
 
         var world = Assert.Single(analysis.Worlds);
         Assert.Equal(MarketDataAgeSource.UniversalisResponseUpload, world.DataAgeSource);
-        Assert.Equal(MarketDataQualityBucket.Old, world.DataQualityBucket);
+        Assert.Equal(MarketDataQualityBucket.Aging, world.DataQualityBucket);
     }
 
     [Fact]
@@ -675,7 +675,7 @@ public class MarketPriceLadderAnalysisServiceTests
                 World("StaleWorld", [Listing(10, 100, "Stale")], uploadedAtUtc: now.AddHours(-8))
             ])));
 
-        Assert.Equal(MarketDataQualityBucket.VeryOld, analysis.PriceEvaluation?.CentralRegion.DataQualityBucket);
+        Assert.Equal(MarketDataQualityBucket.Old, analysis.PriceEvaluation?.CentralRegion.DataQualityBucket);
     }
 
     [Fact]
@@ -727,6 +727,8 @@ public class MarketPriceLadderAnalysisServiceTests
         Assert.Equal(currentWorld.TotalCost, fallbackWorld.TotalCost);
         Assert.Equal(currentWorld.HasSufficientStock, fallbackWorld.HasSufficientStock);
         Assert.Equal(currentWorld.ShortfallQuantity, fallbackWorld.ShortfallQuantity);
+        Assert.NotNull(currentWorld.MarketDataAge);
+        Assert.NotNull(currentWorld.MarketUploadedAtUtc);
         Assert.Equal(currentPlan.RecommendedWorld?.WorldName, fallbackPlan.RecommendedWorld?.WorldName);
     }
 

@@ -3,6 +3,13 @@
 <div class="ma-controls-column">
     <MudText Typo="Typo.h6" Color="Color.Primary" Class="mb-4">Market Analysis</MudText>
 
+    @if (!string.IsNullOrWhiteSpace(AppState.MarketAnalysisScopeWarning))
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+            @AppState.MarketAnalysisScopeWarning
+        </MudAlert>
+    }
+
     <div class="ma-field-block">
         <div class="ma-field-label">Lens</div>
         <MudSelect T="MarketAcquisitionLens"

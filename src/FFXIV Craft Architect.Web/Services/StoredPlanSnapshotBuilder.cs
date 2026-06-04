@@ -55,6 +55,9 @@ public sealed class StoredPlanSnapshotBuilder
             MarketAnalysisRecipeBasisJson = appState.MarketAnalysisRecipeBasis != null
                 ? JsonSerializer.Serialize(appState.MarketAnalysisRecipeBasis)
                 : null,
+            MarketAnalysisScopeSnapshotJson = appState.PublishedMarketAnalysisScope != null
+                ? JsonSerializer.Serialize(appState.PublishedMarketAnalysisScope)
+                : null,
             SavedRecommendationMode = appState.RecommendationMode,
             SavedMarketAnalysisLens = appState.MarketAnalysisLens,
             SourcePlanId = includeSourcePlanIdentity ? appState.CurrentPlanId : null,

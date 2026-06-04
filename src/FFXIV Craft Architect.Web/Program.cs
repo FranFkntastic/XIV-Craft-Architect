@@ -42,6 +42,8 @@ builder.Services.AddScoped<IMarketPriceLadderAnalysisService, MarketPriceLadderA
 builder.Services.AddScoped<IMarketAnalysisExecutionService, MarketAnalysisExecutionService>();
 builder.Services.AddScoped<IProcurementRouteExecutionService, ProcurementRouteExecutionService>();
 builder.Services.AddScoped<IndexedDbMarketCacheService>();
+builder.Services.AddScoped<CommissionCostBasisResolver>();
+builder.Services.AddScoped<CommissionPayrollService>();
 
 // Register Settings Service (Web implementation)
 builder.Services.AddScoped<ISettingsService, WebSettingsService>();
@@ -56,9 +58,11 @@ builder.Services.AddScoped<StartupInitializationService>();
 builder.Services.AddScoped<CancellableOperationService>();
 builder.Services.AddScoped<RecipePlannerCommandService>();
 builder.Services.AddScoped<MarketAnalysisWorkflowService>();
+builder.Services.AddScoped<IMarketAnalysisAutoRunner, MarketAnalysisAutoRunner>();
 builder.Services.AddScoped<MarketAnalysisDiagnosticDumpService>();
 builder.Services.AddScoped<ProcurementWorkflowService>();
 builder.Services.AddScoped<AcquisitionEvaluationWorkflowService>();
+builder.Services.AddScoped<TradePayrollDraftFactory>();
 
 // Register IndexedDB service for browser persistence
 builder.Services.AddScoped<IndexedDbService>();

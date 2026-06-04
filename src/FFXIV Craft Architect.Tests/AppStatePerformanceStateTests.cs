@@ -302,7 +302,7 @@ public class AppStatePerformanceStateTests
     }
 
     [Fact]
-    public void SetMarketEvidenceSettings_WhenMarketContextChanges_ClearsMarketAnalysisViewState()
+    public void SetMarketEvidenceSettings_WhenMarketContextChanges_PreservesMarketEvidenceAndMarksScopeStale()
     {
         var appState = new AppState();
         appState.ReplaceMarketAnalysis(
@@ -314,7 +314,15 @@ public class AppStatePerformanceStateTests
                     Worlds = [new WorldMarketAnalysis { DataCenter = "Aether", WorldName = "Siren" }]
                 }
             ],
-            [new DetailedShoppingPlan { ItemId = 100, Name = "Market Item" }]);
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Market Item" }],
+            publishedScope: new PublishedMarketAnalysisScopeSnapshot(
+                MarketFetchScope.EntireRegion,
+                "Aether",
+                "North America",
+                ["Aether", "Primal", "Crystal", "Dynamis"],
+                MarketAcquisitionLens.MinimumUpfrontCost,
+                appState.PlanSessionVersion,
+                new DateTime(2026, 6, 3, 12, 0, 0, DateTimeKind.Utc)));
         appState.SelectMarketAnalysisItem(100);
         appState.ToggleMarketAnalysisWorld(100, "Aether", "Siren");
         appState.SetMarketAnalysisGridSort(MarketAnalysisGridSortColumn.Total, descending: true);
@@ -327,9 +335,11 @@ public class AppStatePerformanceStateTests
             searchEntireRegion: false,
             autoFetchPricesOnRebuild: true);
 
-        Assert.Empty(appState.MarketItemAnalyses);
-        Assert.Empty(appState.ShoppingPlans);
+        Assert.Single(appState.MarketItemAnalyses);
+        Assert.Single(appState.ShoppingPlans);
         Assert.Empty(appState.ProcurementShoppingPlans);
+        Assert.Contains("Entire Region: North America", appState.MarketAnalysisScopeWarning);
+        Assert.Contains("Selected Data Center: Primal", appState.MarketAnalysisScopeWarning);
         Assert.Null(appState.SelectedMarketAnalysisItemId);
         Assert.Empty(appState.ExpandedMarketAnalysisWorlds);
         Assert.Null(appState.MarketAnalysisGridSortColumn);
@@ -957,12 +967,13 @@ public class AppStatePerformanceStateTests
     }
 
     [Fact]
-    public void SetMarketEvidenceSettings_WhenLocationChanges_ClearsMarketAnalysisAndProcurementOverlay()
+    public void SetMarketEvidenceSettings_WhenLocationChanges_PreservesMarketAnalysisAndClearsProcurementOverlay()
     {
         var appState = new AppState();
         appState.ReplaceMarketAnalysis(
             [new MarketItemAnalysis { ItemId = 100, Name = "Market Item" }],
-            [new DetailedShoppingPlan { ItemId = 100, Name = "Market Item" }]);
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Market Item" }],
+            publishedScope: appState.CreateCurrentMarketAnalysisScopeSnapshot(new DateTime(2026, 6, 3, 12, 0, 0, DateTimeKind.Utc)));
         appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 100, Name = "Route Item" }]);
         var changes = new List<AppStateChange>();
         appState.OnStateChanged += changes.Add;
@@ -976,9 +987,10 @@ public class AppStatePerformanceStateTests
 
         var change = Assert.Single(changes);
         Assert.Equal("Primal", appState.SelectedDataCenter);
-        Assert.Empty(appState.ShoppingPlans);
-        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Single(appState.ShoppingPlans);
+        Assert.Single(appState.MarketItemAnalyses);
         Assert.Empty(appState.ProcurementShoppingPlans);
+        Assert.NotNull(appState.MarketAnalysisScopeWarning);
         Assert.True(change.HasScope(AppStateChangeScope.Settings));
         Assert.True(change.HasScope(AppStateChangeScope.MarketAnalysis));
         Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));

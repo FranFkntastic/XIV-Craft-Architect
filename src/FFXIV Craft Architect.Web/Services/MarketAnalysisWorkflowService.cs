@@ -106,6 +106,7 @@ public sealed class MarketAnalysisWorkflowService
             executionResult.Analyses,
             executionResult.ShoppingPlans,
             recipeBasis,
+            _appState.CreateCurrentMarketAnalysisScopeSnapshot(),
             ct);
         if (published == null)
         {
@@ -147,6 +148,7 @@ public sealed class MarketAnalysisWorkflowService
             _appState.MarketItemAnalyses,
             shoppingPlans,
             _appState.MarketAnalysisRecipeBasis,
+            _appState.CreateCurrentMarketAnalysisScopeSnapshot(),
             ct);
         if (published == null)
         {
@@ -167,6 +169,7 @@ public sealed class MarketAnalysisWorkflowService
         IEnumerable<MarketItemAnalysis> analyses,
         List<DetailedShoppingPlan> shoppingPlans,
         StoredRecipeOperationSnapshot? recipeBasis,
+        PublishedMarketAnalysisScopeSnapshot publishedScope,
         CancellationToken ct)
     {
         if (plan == null || !_appState.IsCurrentPlanSession(plan, planSessionVersion))
@@ -189,7 +192,8 @@ public sealed class MarketAnalysisWorkflowService
             shoppingPlans,
             _recipeLayerWorkflow.BuildActiveProcurementItems(plan),
             changedDecisions > 0,
-            recipeBasis);
+            recipeBasis,
+            publishedScope);
 
         if (!string.IsNullOrEmpty(planId) &&
             _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
@@ -201,7 +205,8 @@ public sealed class MarketAnalysisWorkflowService
                 analysisList,
                 RecommendationMode.MinimizeTotalCost,
                 _appState.MarketAnalysisLens,
-                recipeBasis);
+                recipeBasis,
+                publishedScope);
         }
 
         ct.ThrowIfCancellationRequested();

@@ -109,9 +109,13 @@ public sealed class PlanSessionLoadService
                             RestoredShoppingPlansMatchMarketAnalysis(restoredShoppingPlans, marketAnalyses)
             ? restoredShoppingPlans
             : new List<DetailedShoppingPlan>();
+        var publishedScope = shoppingPlans.Count > 0
+            ? DeserializeOrNull<PublishedMarketAnalysisScopeSnapshot>(storedPlan.MarketAnalysisScopeSnapshotJson)
+            : null;
         if (marketAnalyses.Count == 0)
         {
             marketAnalysisRecipeBasis = null;
+            publishedScope = null;
         }
 
         return new PlanSessionLoadResult(
@@ -121,6 +125,7 @@ public sealed class PlanSessionLoadService
             marketAnalyses,
             shoppingPlans,
             marketAnalysisRecipeBasis,
+            publishedScope,
             warning);
     }
 
@@ -209,6 +214,23 @@ public sealed class PlanSessionLoadService
         }
     }
 
+    private static T? DeserializeOrNull<T>(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return default;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<T>(json);
+        }
+        catch
+        {
+            return default;
+        }
+    }
+
     private static bool RestoredMarketAnalysisMatchesPlan(
         CraftingPlan? plan,
         IReadOnlyList<ProjectItem> projectItems,
@@ -290,4 +312,5 @@ public sealed record PlanSessionLoadResult(
     IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses,
     IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
     StoredRecipeOperationSnapshot? MarketAnalysisRecipeBasis,
+    PublishedMarketAnalysisScopeSnapshot? PublishedMarketAnalysisScope,
     string? Warning);

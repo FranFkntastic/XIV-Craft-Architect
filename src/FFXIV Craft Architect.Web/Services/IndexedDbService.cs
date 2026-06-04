@@ -268,7 +268,8 @@ public class IndexedDbService
         IReadOnlyList<MarketItemAnalysis> marketItemAnalyses,
         RecommendationMode mode,
         MarketAcquisitionLens lens,
-        StoredRecipeOperationSnapshot? recipeBasis = null)
+        StoredRecipeOperationSnapshot? recipeBasis = null,
+        PublishedMarketAnalysisScopeSnapshot? publishedScope = null)
     {
         try
         {
@@ -280,7 +281,8 @@ public class IndexedDbService
                 JsonSerializer.Serialize(marketItemAnalyses),
                 mode,
                 lens,
-                recipeBasis != null ? JsonSerializer.Serialize(recipeBasis) : null);
+                recipeBasis != null ? JsonSerializer.Serialize(recipeBasis) : null,
+                publishedScope != null ? JsonSerializer.Serialize(publishedScope) : null);
         }
         catch (Exception ex)
         {
@@ -359,6 +361,11 @@ public class StoredPlan
     /// Serialized recipe-operation basis used to validate restored market analysis.
     /// </summary>
     public string? MarketAnalysisRecipeBasisJson { get; set; }
+
+    /// <summary>
+    /// Serialized market-analysis publication scope used to detect stale-scope evidence.
+    /// </summary>
+    public string? MarketAnalysisScopeSnapshotJson { get; set; }
     
     /// <summary>
     /// Recommendation mode used for the saved market analysis.

@@ -80,14 +80,66 @@ public class RecipePlannerCommandServiceTests
     }
 
     [Fact]
-    public async Task BuildPlanAsync_WhenPriceRefreshDisabled_BuildsPlanWithoutMarketCache()
+    public async Task BuildPlanAsync_AfterSuccessfulPriceRefresh_RunsMarketAnalysisAutomatically()
+    {
+        var appState = new AppState();
+        var builtPlan = CreatePlan("Built Item", 100, marketPrice: 12);
+        var builder = new FakeRecipePlanBuilder
+        {
+            PlanToReturn = builtPlan
+        };
+        var cache = new Mock<IMarketCacheService>();
+        cache.Setup(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+        cache.Setup(c => c.GetManyAsync(
+                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>()))
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(100, "Aether")] = CachedData(100, "Aether", 77)
+            });
+        var autoRunner = new RecordingMarketAnalysisAutoRunner();
+        var service = CreateService(appState, builder, cache.Object, autoRunner);
+
+        var result = await service.BuildPlanAsync(new BuildRecipePlanRequest(
+            [new ProjectItem { Id = 100, Name = "Built Item", Quantity = 2 }],
+            "Aether",
+            "North America",
+            MarketFetchScope.SelectedDataCenter));
+
+        Assert.True(result.Built);
+        Assert.Equal(1, autoRunner.RunCount);
+        Assert.Same(builtPlan, autoRunner.LastPlan);
+        Assert.Equal(appState.PlanSessionVersion, autoRunner.LastPlanSessionVersion);
+        Assert.Contains("market analysis", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task BuildPlanAsync_WhenPriceRefreshDisabled_StillRefreshesPrices()
     {
         var appState = new AppState();
         var builder = new FakeRecipePlanBuilder
         {
             PlanToReturn = CreatePlan("Imported Item", 100)
         };
-        var cache = new Mock<IMarketCacheService>(MockBehavior.Strict);
+        var cache = new Mock<IMarketCacheService>();
+        cache.Setup(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+        cache.Setup(c => c.GetManyAsync(
+                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>()))
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(100, "Aether")] = CachedData(100, "Aether", 77)
+            });
         var service = CreateService(appState, builder, cache.Object);
 
         var result = await service.BuildPlanAsync(new BuildRecipePlanRequest(
@@ -100,10 +152,10 @@ public class RecipePlannerCommandServiceTests
         Assert.True(result.Built);
         Assert.Same(builder.PlanToReturn, appState.CurrentPlan);
         Assert.Equal(1, builder.BuildPlanCallCount);
-        Assert.Equal(0, builder.FetchVendorCallCount);
-        Assert.Equal(0, result.PriceRefresh.RequestedCount);
+        Assert.Equal(1, builder.FetchVendorCallCount);
+        Assert.Equal(1, result.PriceRefresh.RequestedCount);
+        Assert.Equal(1, result.PriceRefresh.FetchedCount);
         Assert.Equal(RecipePlannerCommandMessageLevel.Success, result.MessageLevel);
-        cache.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -144,7 +196,7 @@ public class RecipePlannerCommandServiceTests
     }
 
     [Fact]
-    public async Task ImportProjectItemsAsync_ReplacesProjectItemsClearsPlanAndBuildsWithoutPriceRefresh()
+    public async Task ImportProjectItemsAsync_ReplacesProjectItemsClearsPlanAndBuildsWithPriceRefresh()
     {
         var appState = new AppState();
         appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan("Old Plan", 900));
@@ -156,8 +208,22 @@ public class RecipePlannerCommandServiceTests
         {
             PlanToReturn = importedPlan
         };
-        var cache = new Mock<IMarketCacheService>(MockBehavior.Strict);
-        var service = CreateService(appState, builder, cache.Object);
+        var cache = new Mock<IMarketCacheService>();
+        cache.Setup(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+        cache.Setup(c => c.GetManyAsync(
+                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>()))
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(100, "Aether")] = CachedData(100, "Aether", 77)
+            });
+        var autoRunner = new RecordingMarketAnalysisAutoRunner();
+        var service = CreateService(appState, builder, cache.Object, autoRunner);
 
         var result = await service.ImportProjectItemsAsync(new ImportProjectItemsRequest(
             [
@@ -185,8 +251,8 @@ public class RecipePlannerCommandServiceTests
         Assert.Empty(appState.MarketItemAnalyses);
         Assert.Empty(appState.ProcurementShoppingPlans);
         Assert.Equal(1, builder.BuildPlanCallCount);
-        Assert.Equal(0, builder.FetchVendorCallCount);
-        cache.VerifyNoOtherCalls();
+        Assert.Equal(1, builder.FetchVendorCallCount);
+        Assert.Equal(1, autoRunner.RunCount);
     }
 
     [Fact]
@@ -702,14 +768,16 @@ public class RecipePlannerCommandServiceTests
     private static RecipePlannerCommandService CreateService(
         AppState appState,
         IRecipePlanBuilder builder,
-        IMarketCacheService? marketCache = null)
+        IMarketCacheService? marketCache = null,
+        IMarketAnalysisAutoRunner? marketAnalysisAutoRunner = null)
     {
         return new RecipePlannerCommandService(
             appState,
             builder,
             marketCache ?? Mock.Of<IMarketCacheService>(),
             new CancellableOperationService(appState),
-            new StubRecipeLayerWorkflowService());
+            new StubRecipeLayerWorkflowService(),
+            marketAnalysisAutoRunner);
     }
 
     private static CraftingPlan CreatePlan(string name, int itemId, decimal marketPrice = 0)
@@ -842,6 +910,24 @@ public class RecipePlannerCommandServiceTests
             }
 
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingMarketAnalysisAutoRunner : IMarketAnalysisAutoRunner
+    {
+        public int RunCount { get; private set; }
+        public CraftingPlan? LastPlan { get; private set; }
+        public long LastPlanSessionVersion { get; private set; }
+
+        public Task<MarketAnalysisWorkflowResult> RunAfterPlanActivationAsync(
+            CraftingPlan plan,
+            long planSessionVersion,
+            CancellationToken ct = default)
+        {
+            RunCount++;
+            LastPlan = plan;
+            LastPlanSessionVersion = planSessionVersion;
+            return Task.FromResult(new MarketAnalysisWorkflowResult(true, 1, 0, 0));
         }
     }
 }

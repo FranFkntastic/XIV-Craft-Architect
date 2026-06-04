@@ -91,6 +91,7 @@ public class AppState
     private readonly List<DetailedShoppingPlan> _shoppingPlans = [];
     private readonly List<MarketItemAnalysis> _marketItemAnalyses = [];
     private StoredRecipeOperationSnapshot? _marketAnalysisRecipeBasis;
+    private PublishedMarketAnalysisScopeSnapshot? _publishedMarketAnalysisScope;
     private readonly List<DetailedShoppingPlan> _procurementShoppingPlans = [];
     private readonly List<MarketShoppingItem> _shoppingItems = [];
     private readonly List<ProjectItem> _projectItems = [];
@@ -128,6 +129,8 @@ public class AppState
     public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses => _marketItemAnalyses.AsReadOnly();
 
     public StoredRecipeOperationSnapshot? MarketAnalysisRecipeBasis => CloneRecipeBasis(_marketAnalysisRecipeBasis);
+    public PublishedMarketAnalysisScopeSnapshot? PublishedMarketAnalysisScope => _publishedMarketAnalysisScope;
+    public string? MarketAnalysisScopeWarning => GetMarketAnalysisScopeWarning();
 
     /// <summary>
     /// Mutable procurement overlay derived from ShoppingPlans and current acquisition choices.
@@ -387,13 +390,14 @@ public class AppState
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
         IReadOnlyList<MaterialAggregate> activeProcurementItems,
         bool acquisitionDecisionsChanged,
-        StoredRecipeOperationSnapshot? recipeBasis = null)
+        StoredRecipeOperationSnapshot? recipeBasis = null,
+        PublishedMarketAnalysisScopeSnapshot? publishedScope = null)
     {
         ArgumentNullException.ThrowIfNull(activeProcurementItems);
 
         using (BeginStateChangeBatch())
         {
-            ReplaceMarketAnalysis(analyses, shoppingPlans, recipeBasis);
+            ReplaceMarketAnalysis(analyses, shoppingPlans, recipeBasis, publishedScope);
             if (acquisitionDecisionsChanged)
             {
                 ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
@@ -409,7 +413,8 @@ public class AppState
     public void ReplaceMarketAnalysis(
         IEnumerable<MarketItemAnalysis> analyses,
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
-        StoredRecipeOperationSnapshot? recipeBasis = null)
+        StoredRecipeOperationSnapshot? recipeBasis = null,
+        PublishedMarketAnalysisScopeSnapshot? publishedScope = null)
     {
         ArgumentNullException.ThrowIfNull(analyses);
         ArgumentNullException.ThrowIfNull(shoppingPlans);
@@ -417,6 +422,7 @@ public class AppState
         ReplaceListContents(_marketItemAnalyses, analyses);
         ReplaceListContents(_shoppingPlans, shoppingPlans);
         _marketAnalysisRecipeBasis = CloneRecipeBasis(recipeBasis);
+        _publishedMarketAnalysisScope = publishedScope;
         _procurementShoppingPlans.Clear();
         var viewChanged = PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses, publishChange: false);
         var navigationChanged = ApplyPendingMarketItemAutoExpand(publishChange: false);
@@ -440,6 +446,7 @@ public class AppState
 
         ReplaceListContents(_marketItemAnalyses, ReplaceAnalysisByItemId(_marketItemAnalyses, analysis));
         ReplaceListContents(_shoppingPlans, ReplaceShoppingPlanByItemId(_shoppingPlans, shoppingPlan));
+        _publishedMarketAnalysisScope ??= CreateCurrentMarketAnalysisScopeSnapshot();
         _procurementShoppingPlans.Clear();
         var viewChanged = PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses, publishChange: false);
         var navigationChanged = ApplyPendingMarketItemAutoExpand(publishChange: false);
@@ -572,10 +579,11 @@ public class AppState
             !string.Equals(SelectedDataCenter, dataCenter, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(SelectedRegion, region, StringComparison.OrdinalIgnoreCase) ||
             SearchEntireRegion != searchEntireRegion;
+        var normalizedAutoFetchPricesOnRebuild = true;
         var changesSettings =
             changesMarketContext ||
             DefaultMarketFetchScope != defaultFetchScope ||
-            AutoFetchPricesOnRebuild != autoFetchPricesOnRebuild;
+            AutoFetchPricesOnRebuild != normalizedAutoFetchPricesOnRebuild;
 
         if (!changesSettings)
         {
@@ -586,12 +594,10 @@ public class AppState
         SelectedRegion = region;
         DefaultMarketFetchScope = defaultFetchScope;
         SearchEntireRegion = searchEntireRegion;
-        AutoFetchPricesOnRebuild = autoFetchPricesOnRebuild;
+        AutoFetchPricesOnRebuild = normalizedAutoFetchPricesOnRebuild;
 
         if (changesMarketContext)
         {
-            _shoppingPlans.Clear();
-            _marketItemAnalyses.Clear();
             _procurementShoppingPlans.Clear();
             UnavailableMarketItems = Array.Empty<CoreMarketDataUnavailableItem>();
             ClearMarketAnalysisViewState(publishChange: false);
@@ -836,6 +842,7 @@ public class AppState
         _marketItemAnalyses.Clear();
         _procurementShoppingPlans.Clear();
         _marketAnalysisRecipeBasis = null;
+        _publishedMarketAnalysisScope = null;
         UnavailableMarketItems = Array.Empty<CoreMarketDataUnavailableItem>();
         ClearMarketAnalysisViewState(publishChange: false);
         PublishChange(
@@ -964,6 +971,64 @@ public class AppState
         }
 
         return result;
+    }
+
+    public PublishedMarketAnalysisScopeSnapshot CreateCurrentMarketAnalysisScopeSnapshot(DateTime? publishedAtUtc = null)
+    {
+        var scope = SearchEntireRegion
+            ? MarketFetchScope.EntireRegion
+            : MarketFetchScope.SelectedDataCenter;
+        var dataCenters = MarketFetchScopeResolver.GetDataCenters(
+            scope,
+            SelectedDataCenter,
+            SelectedRegion);
+
+        return new PublishedMarketAnalysisScopeSnapshot(
+            scope,
+            SelectedDataCenter,
+            SelectedRegion,
+            dataCenters.ToArray(),
+            MarketAnalysisLens,
+            PlanSessionVersion,
+            publishedAtUtc ?? DateTime.UtcNow);
+    }
+
+    private string? GetMarketAnalysisScopeWarning()
+    {
+        if (!_marketItemAnalyses.Any() && !_shoppingPlans.Any())
+        {
+            return null;
+        }
+
+        if (_publishedMarketAnalysisScope == null)
+        {
+            return "Analysis shown for an unknown saved scope. Rerun analysis to confirm current scope.";
+        }
+
+        var currentScope = CreateCurrentMarketAnalysisScopeSnapshot(_publishedMarketAnalysisScope.PublishedAtUtc);
+        if (ScopesMatch(_publishedMarketAnalysisScope, currentScope))
+        {
+            return null;
+        }
+
+        return $"Analysis shown for {DescribeScope(_publishedMarketAnalysisScope)}. Current scope is {DescribeScope(currentScope)}.";
+    }
+
+    private static bool ScopesMatch(PublishedMarketAnalysisScopeSnapshot left, PublishedMarketAnalysisScopeSnapshot right)
+    {
+        return left.Scope == right.Scope &&
+               left.Lens == right.Lens &&
+               string.Equals(left.SelectedDataCenter, right.SelectedDataCenter, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(left.SelectedRegion, right.SelectedRegion, StringComparison.OrdinalIgnoreCase) &&
+               left.RequestedDataCenters.Order(StringComparer.OrdinalIgnoreCase)
+                   .SequenceEqual(right.RequestedDataCenters.Order(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string DescribeScope(PublishedMarketAnalysisScopeSnapshot scope)
+    {
+        return scope.Scope == MarketFetchScope.EntireRegion
+            ? $"Entire Region: {scope.SelectedRegion} ({string.Join(", ", scope.RequestedDataCenters)})"
+            : $"Selected Data Center: {scope.SelectedDataCenter}";
     }
 
     public void ClearTemporaryMarketWorldBlacklists()
@@ -1306,6 +1371,7 @@ public class AppState
         ReplaceListContents(_marketItemAnalyses, session.MarketItemAnalyses);
         ReplaceListContents(_shoppingPlans, session.ShoppingPlans);
         _marketAnalysisRecipeBasis = CloneRecipeBasis(session.MarketAnalysisRecipeBasis);
+        _publishedMarketAnalysisScope = session.PublishedMarketAnalysisScope;
         ClearMarketAnalysisViewState(publishChange: false);
         RecommendationMode = storedPlan.SavedRecommendationMode;
         MarketAnalysisLens = storedPlan.SavedMarketAnalysisLens;

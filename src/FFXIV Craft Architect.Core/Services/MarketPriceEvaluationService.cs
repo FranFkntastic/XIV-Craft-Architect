@@ -511,44 +511,18 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
     {
         if (TryGetUtcFromUnixMilliseconds(world.LastUploadTimeUnixMilliseconds, out var worldUploadedAtUtc))
         {
-            return CalculateDataQualityBucket(worldUploadedAtUtc, evaluatedAtUtc);
+            return MarketEvidenceFreshness.Evaluate(worldUploadedAtUtc, evaluatedAtUtc).Bucket;
         }
 
         if (TryGetUtcFromUnixMilliseconds(entry.LastUploadTimeUnixMilliseconds, out var responseUploadedAtUtc))
         {
-            return CalculateDataQualityBucket(responseUploadedAtUtc, evaluatedAtUtc);
+            return MarketEvidenceFreshness.Evaluate(responseUploadedAtUtc, evaluatedAtUtc).Bucket;
         }
 
-        var fallbackBucket = CalculateDataQualityBucket(entry.FetchedAt, evaluatedAtUtc);
-        return fallbackBucket == MarketDataQualityBucket.Current
-            ? MarketDataQualityBucket.Aging
-            : fallbackBucket;
-    }
-
-    private static MarketDataQualityBucket CalculateDataQualityBucket(DateTime timestampUtc, DateTime evaluatedAtUtc)
-    {
-        var age = CacheTimeHelper.NormalizeToUtc(evaluatedAtUtc) - CacheTimeHelper.NormalizeToUtc(timestampUtc);
-        if (age < TimeSpan.Zero)
-        {
-            age = TimeSpan.Zero;
-        }
-
-        if (age <= TimeSpan.FromMinutes(15))
-        {
-            return MarketDataQualityBucket.Current;
-        }
-
-        if (age <= TimeSpan.FromHours(1))
-        {
-            return MarketDataQualityBucket.Aging;
-        }
-
-        if (age <= TimeSpan.FromHours(6))
-        {
-            return MarketDataQualityBucket.Old;
-        }
-
-        return MarketDataQualityBucket.VeryOld;
+        return MarketEvidenceFreshness.Evaluate(
+            entry.FetchedAt,
+            evaluatedAtUtc,
+            capCurrentToAging: true).Bucket;
     }
 
     private static bool TryGetUtcFromUnixMilliseconds(long? unixMilliseconds, out DateTime value)

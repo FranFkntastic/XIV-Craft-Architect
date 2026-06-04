@@ -809,6 +809,8 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             MarketDataQualityScore = world.DataQualityScore,
             MarketDataQualityBucket = world.DataQualityBucket,
             MarketDataAgeSource = world.DataAgeSource,
+            MarketDataAge = world.DataAge,
+            MarketUploadedAtUtc = world.MarketUploadedAtUtc,
             LensRank = lensScore?.Rank ?? int.MaxValue,
             LensScoreBucket = lensScore?.ScoreBucket ?? MarketScoreBucket.Unavailable
         };
@@ -826,57 +828,23 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
     {
         if (TryGetUtcFromUnixMilliseconds(world.LastUploadTimeUnixMilliseconds, out var worldUploadedAtUtc))
         {
-            var (score, bucket, age) = CalculateDataQuality(worldUploadedAtUtc, nowUtc);
+            var (score, bucket, age) = MarketEvidenceFreshness.Evaluate(worldUploadedAtUtc, nowUtc);
             return new DataQualityEvaluation(score, bucket, age, worldUploadedAtUtc, MarketDataAgeSource.UniversalisWorldUpload);
         }
 
         if (TryGetUtcFromUnixMilliseconds(entry.LastUploadTimeUnixMilliseconds, out var responseUploadedAtUtc))
         {
-            var (score, bucket, age) = CalculateDataQuality(responseUploadedAtUtc, nowUtc);
+            var (score, bucket, age) = MarketEvidenceFreshness.Evaluate(responseUploadedAtUtc, nowUtc);
             return new DataQualityEvaluation(score, bucket, age, responseUploadedAtUtc, MarketDataAgeSource.UniversalisResponseUpload);
         }
 
-        var fallback = CalculateDataQuality(entry.FetchedAt, nowUtc);
-        var cappedScore = Math.Min(fallback.Score, 70);
-        var cappedBucket = fallback.Bucket == MarketDataQualityBucket.Current
-            ? MarketDataQualityBucket.Aging
-            : fallback.Bucket;
+        var fallback = MarketEvidenceFreshness.Evaluate(entry.FetchedAt, nowUtc, capCurrentToAging: true);
         return new DataQualityEvaluation(
-            cappedScore,
-            cappedBucket,
+            fallback.Score,
+            fallback.Bucket,
             fallback.Age,
             null,
             MarketDataAgeSource.LocalFetchFallback);
-    }
-
-    private static (decimal Score, MarketDataQualityBucket Bucket, TimeSpan Age) CalculateDataQuality(
-        DateTime timestampUtc,
-        DateTime nowUtc)
-    {
-        var age = nowUtc - CacheTimeHelper.NormalizeToUtc(timestampUtc);
-        if (age < TimeSpan.Zero)
-        {
-            age = TimeSpan.Zero;
-        }
-
-        var minutes = (decimal)age.TotalMinutes;
-        if (age <= TimeSpan.FromMinutes(15))
-        {
-            return (100 - minutes / 15m * 20m, MarketDataQualityBucket.Current, age);
-        }
-
-        if (age <= TimeSpan.FromHours(1))
-        {
-            return (80 - (minutes - 15m) / 45m * 30m, MarketDataQualityBucket.Aging, age);
-        }
-
-        if (age <= TimeSpan.FromHours(6))
-        {
-            return (50 - (minutes - 60m) / 300m * 30m, MarketDataQualityBucket.Old, age);
-        }
-
-        var veryOldScore = Math.Max(1, 20 - (minutes - 360m) / 1080m * 19m);
-        return (veryOldScore, MarketDataQualityBucket.VeryOld, age);
     }
 
     private static bool TryGetUtcFromUnixMilliseconds(long? unixMilliseconds, out DateTime value)
