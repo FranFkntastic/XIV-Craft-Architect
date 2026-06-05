@@ -6,6 +6,31 @@ namespace FFXIV_Craft_Architect.Tests;
 public class UniversalisServiceTests
 {
     [Fact]
+    public async Task GetMarketDataBulkAsync_DefaultChunking_UsesTenItemChunks()
+    {
+        var requests = new List<string>();
+        var handler = new StubHttpMessageHandler(request =>
+        {
+            requests.Add(request.RequestUri?.AbsolutePath ?? string.Empty);
+            var itemIds = ParseRequestedItemIds(request);
+            return BulkResponse(itemIds);
+        });
+
+        var service = new UniversalisService(new HttpClient(handler));
+
+        var result = await service.GetMarketDataBulkAsync(
+            "Aether",
+            Enumerable.Range(1, 24),
+            useParallel: false);
+
+        Assert.Equal(Enumerable.Range(1, 24), result.Keys.Order().ToArray());
+        Assert.Contains(requests, path => path.EndsWith("/1,2,3,4,5,6,7,8,9,10", StringComparison.Ordinal));
+        Assert.Contains(requests, path => path.EndsWith("/11,12,13,14,15,16,17,18,19,20", StringComparison.Ordinal));
+        Assert.Contains(requests, path => path.EndsWith("/21,22,23,24", StringComparison.Ordinal));
+        Assert.DoesNotContain(requests, path => path.EndsWith("/1,2,3,4,5,6,7,8,9,10,11", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task GetMarketDataBulkAsync_GlobalRetryBatchesMissingItems()
     {
         var requests = new List<string>();
@@ -71,6 +96,14 @@ public class UniversalisServiceTests
         {
             Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
         };
+    }
+
+    private static int[] ParseRequestedItemIds(HttpRequestMessage request)
+    {
+        return (request.RequestUri?.Segments.LastOrDefault() ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(int.Parse)
+            .ToArray();
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler
