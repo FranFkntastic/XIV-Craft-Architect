@@ -552,8 +552,21 @@
         {
             var items = importResult.Items;
             
-            // If we have a native plan, restore it fully
-            if (importResult.NativePlan != null)
+            if (importResult.NativeStoredPlan != null)
+            {
+                var loadResult = PlanSessionLoad.Load(
+                    importResult.NativeStoredPlan,
+                    trackStoredPlanIdentity: false);
+                if (!string.IsNullOrWhiteSpace(loadResult.Warning))
+                {
+                    Snackbar.Add($"Warning: {loadResult.Warning}", Severity.Warning);
+                }
+
+                Snackbar.Add(
+                    $"Imported native plan '{loadResult.StoredPlan.Name}' with {items.Count} items",
+                    Severity.Success);
+            }
+            else if (importResult.NativePlan != null)
             {
                 await LoadNativePlanAsync(
                     importResult.NativePlan,
