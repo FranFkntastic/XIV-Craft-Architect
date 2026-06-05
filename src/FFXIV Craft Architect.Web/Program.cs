@@ -53,8 +53,6 @@ builder.Services.AddSingleton<AppState>();
 builder.Services.AddScoped<AcquisitionDecisionService>();
 builder.Services.AddScoped<StoredPlanSnapshotBuilder>();
 builder.Services.AddScoped<PlanSessionLoadService>();
-builder.Services.AddScoped<NativePlanExportService>();
-builder.Services.AddScoped<NativePlanImportService>();
 builder.Services.AddScoped<WebPlanPersistenceService>();
 builder.Services.AddScoped<StartupInitializationService>();
 builder.Services.AddScoped<CancellableOperationService>();
