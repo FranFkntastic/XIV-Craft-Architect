@@ -87,4 +87,79 @@ public class NativePlanExportServiceTests
         Assert.Equal(100, item.Id);
         Assert.True(item.MustBeHq);
     }
+
+    [Fact]
+    public void Import_LegacyPlanWrapperJson_ReturnsPlanPayload()
+    {
+        var recipeService = CreateRecipeService();
+        var legacyPlan = new CraftingPlan
+        {
+            Name = "Legacy Export",
+            DataCenter = "Aether",
+            RootItems =
+            [
+                new PlanNode
+                {
+                    ItemId = 100,
+                    Name = "Legacy Root",
+                    IconId = 1234,
+                    Quantity = 3,
+                    MustBeHq = true,
+                    NodeId = "root"
+                }
+            ]
+        };
+        var service = new NativePlanImportService(recipeService);
+
+        var result = service.Import(recipeService.SerializePlan(legacyPlan));
+
+        Assert.Null(result.StoredPlan);
+        Assert.NotNull(result.Plan);
+        Assert.Equal("Legacy Export", result.Plan.Name);
+        var item = Assert.Single(result.Items);
+        Assert.Equal(100, item.Id);
+        Assert.Equal(3, item.Quantity);
+        Assert.True(item.MustBeHq);
+    }
+
+    [Fact]
+    public void ExportedNativeJson_LoadsThroughPlanSessionLoadService()
+    {
+        var appState = new AppState();
+        appState.ReplaceProjectItems(
+        [
+            new ProjectItem { Id = 100, Name = "Roundtrip Root", Quantity = 4, MustBeHq = true }
+        ]);
+        appState.ApplyBuiltRecipePlanWithActiveItems(new CraftingPlan
+        {
+            Name = "Roundtrip Plan",
+            DataCenter = "Aether",
+            RootItems =
+            [
+                new PlanNode
+                {
+                    ItemId = 100,
+                    Name = "Roundtrip Root",
+                    Quantity = 4,
+                    MustBeHq = true,
+                    NodeId = "root"
+                }
+            ]
+        });
+        var exportService = new NativePlanExportService(new StoredPlanSnapshotBuilder(appState));
+        var importService = new NativePlanImportService(CreateRecipeService());
+
+        var import = importService.Import(exportService.GenerateNativeJson("plan-id", "Roundtrip Plan"));
+        var load = PlanSessionLoadService.Prepare(import.StoredPlan!);
+
+        Assert.NotNull(import.StoredPlan);
+        Assert.Equal("Roundtrip Plan", load.StoredPlan.Name);
+        Assert.Equal("Roundtrip Root", Assert.Single(load.ProjectItems).Name);
+        Assert.Equal("Roundtrip Root", Assert.Single(load.Plan!.RootItems).Name);
+    }
+
+    private static RecipeCalculationService CreateRecipeService() =>
+        new(
+            new GarlandService(new HttpClient()),
+            Mock.Of<IVendorCacheService>());
 }

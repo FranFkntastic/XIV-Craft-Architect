@@ -36,6 +36,11 @@ public sealed class NativePlanImportService
     {
         try
         {
+            if (!LooksLikeStoredPlan(json))
+            {
+                return null;
+            }
+
             var storedPlan = JsonSerializer.Deserialize<StoredPlan>(json);
             if (storedPlan == null)
             {
@@ -52,6 +57,24 @@ public sealed class NativePlanImportService
         {
             return null;
         }
+    }
+
+    private static bool LooksLikeStoredPlan(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        return root.TryGetProperty(nameof(StoredPlan.ProjectItems), out _) ||
+               root.TryGetProperty(nameof(StoredPlan.PlanJson), out _) ||
+               root.TryGetProperty(nameof(StoredPlan.MarketPlansJson), out _) ||
+               root.TryGetProperty(nameof(StoredPlan.MarketIntelligenceJson), out _) ||
+               root.TryGetProperty(nameof(StoredPlan.MarketItemAnalysesJson), out _) ||
+               root.TryGetProperty(nameof(StoredPlan.MarketAnalysisRecipeBasisJson), out _) ||
+               root.TryGetProperty(nameof(StoredPlan.MarketAnalysisScopeSnapshotJson), out _);
     }
 
     private static NativePlanImportItem ToImportItem(StoredProjectItem item) =>
