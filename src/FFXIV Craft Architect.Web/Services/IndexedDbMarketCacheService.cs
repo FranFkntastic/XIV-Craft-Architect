@@ -18,6 +18,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService
     private readonly TimeSpan _defaultMaxAge = TimeSpan.FromHours(1);
     private const long MaxCacheSizeBytes = 500 * 1024 * 1024; // 500MB max
     private const int MaxCacheEntries = 10000; // Max 10k items
+    private const int MaxDataCenterFetchConcurrency = 2;
 
     public IndexedDbMarketCacheService(
         IJSRuntime jsRuntime,
@@ -369,54 +370,36 @@ public class IndexedDbMarketCacheService : IMarketCacheService
         var byDataCenter = missing.GroupBy(x => x.dataCenter).ToList();
         int fetchedCount = 0;
         int verifiedCount = 0;
-        
-        foreach (var dcGroup in byDataCenter)
+
+        var fetchResults = await FetchDataCentersAsync(byDataCenter, progress, ct);
+        var shouldLoadWorldData = fetchResults.Any(result => result.FetchedData.Count > 0);
+        var worldData = shouldLoadWorldData
+            ? await GetWorldDataForCachingAsync(ct)
+            : null;
+
+        foreach (var result in fetchResults)
         {
-            var dc = dcGroup.Key;
-            var itemIds = dcGroup.Select(x => x.itemId).ToList();
-            
-            try
+            // STEP 5: Store each result in cache with verification
+            foreach (var kvp in result.FetchedData)
             {
-                progress?.Report($"Fetching {itemIds.Count} items from {dc}...");
-                
-                var fetchedData = await _universalisService.GetMarketDataBulkAsync(dc, itemIds, useParallel: true, ct: ct);
-                WorldData? worldData = null;
-                try
+                var cachedData = ConvertUniversalisResponseToCachedData(kvp.Key, result.DataCenter, kvp.Value, worldData);
+                await SetAsync(kvp.Key, result.DataCenter, cachedData);
+                fetchedCount++;
+
+                // STEP 6: Verify the data was stored correctly
+                var verified = await VerifyStoredDataAsync(kvp.Key, result.DataCenter, cachedData.FetchedAtUnix);
+                if (verified)
                 {
-                    worldData = await _universalisService.GetWorldDataAsync(ct);
+                    verifiedCount++;
                 }
-                catch (Exception ex)
+                else
                 {
-                    _logger?.LogWarning(ex, "[IndexedDbMarketCache] World metadata unavailable; caching {DC} without per-world upload mapping", dc);
+                    _logger?.LogWarning("[IndexedDbMarketCache] Data verification failed for {ItemId}@{DC}", kvp.Key, result.DataCenter);
                 }
-                
-                // STEP 5: Store each result in cache with verification
-                foreach (var kvp in fetchedData)
-                {
-                    var cachedData = ConvertUniversalisResponseToCachedData(kvp.Key, dc, kvp.Value, worldData);
-                    await SetAsync(kvp.Key, dc, cachedData);
-                    fetchedCount++;
-                    
-                    // STEP 6: Verify the data was stored correctly
-                    var verified = await VerifyStoredDataAsync(kvp.Key, dc, cachedData.FetchedAtUnix);
-                    if (verified)
-                    {
-                        verifiedCount++;
-                    }
-                    else
-                    {
-                        _logger?.LogWarning("[IndexedDbMarketCache] Data verification failed for {ItemId}@{DC}", kvp.Key, dc);
-                    }
-                }
-                
-                _logger?.LogInformation("[IndexedDbMarketCache] Fetched and cached {FetchedCount}/{RequestedCount} items from {DC} (verified: {Verified})",
-                    fetchedData.Count, itemIds.Count, dc, verifiedCount);
             }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "[IndexedDbMarketCache] Failed to fetch items from {DC}", dc);
-                // Continue with other DCs - partial failure is acceptable
-            }
+
+            _logger?.LogInformation("[IndexedDbMarketCache] Fetched and cached {FetchedCount}/{RequestedCount} items from {DC} (verified total: {Verified})",
+                result.FetchedData.Count, result.RequestedItemIds.Count, result.DataCenter, verifiedCount);
         }
         
         _logger?.LogInformation("[IndexedDbMarketCache] EnsurePopulatedAsync COMPLETE - Fetched: {Fetched}, Verified: {Verified}",
@@ -424,6 +407,57 @@ public class IndexedDbMarketCacheService : IMarketCacheService
         
         return fetchedCount;
     }
+
+    private async Task<List<DataCenterFetchResult>> FetchDataCentersAsync(
+        IReadOnlyCollection<IGrouping<string, (int itemId, string dataCenter)>> dataCenterGroups,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
+        using var semaphore = new SemaphoreSlim(MaxDataCenterFetchConcurrency);
+        var tasks = dataCenterGroups.Select(async dcGroup =>
+        {
+            await semaphore.WaitAsync(ct);
+            try
+            {
+                var dc = dcGroup.Key;
+                var itemIds = dcGroup.Select(x => x.itemId).ToList();
+                progress?.Report($"Fetching {itemIds.Count} items from {dc}...");
+
+                var fetchedData = await _universalisService.GetMarketDataBulkAsync(dc, itemIds, useParallel: true, ct: ct);
+                return new DataCenterFetchResult(dc, itemIds, fetchedData);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "[IndexedDbMarketCache] Failed to fetch items from {DC}", dcGroup.Key);
+                // Continue with other DCs - partial failure is acceptable
+                return new DataCenterFetchResult(dcGroup.Key, dcGroup.Select(x => x.itemId).ToList(), new Dictionary<int, UniversalisResponse>());
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        });
+
+        return (await Task.WhenAll(tasks)).ToList();
+    }
+
+    private async Task<WorldData?> GetWorldDataForCachingAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await _universalisService.GetWorldDataAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "[IndexedDbMarketCache] World metadata unavailable; caching data without per-world upload mapping");
+            return null;
+        }
+    }
+
+    private sealed record DataCenterFetchResult(
+        string DataCenter,
+        IReadOnlyCollection<int> RequestedItemIds,
+        Dictionary<int, UniversalisResponse> FetchedData);
 
     /// <summary>
     /// Verifies that data was stored correctly by reading it back.
