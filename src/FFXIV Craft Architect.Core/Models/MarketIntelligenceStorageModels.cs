@@ -86,6 +86,29 @@ public sealed class MarketItemSummary
     public MarketIntelligenceDetailKey? DetailKey { get; init; }
 
     public IReadOnlyList<WorldMarketSummary> Worlds { get; init; } = [];
+
+    public IReadOnlyList<MarketSplitPurchaseSummary> RecommendedSplit { get; init; } = [];
+}
+
+public sealed class MarketSplitPurchaseSummary
+{
+    public MarketWorldKey World { get; init; }
+
+    public int QuantityToBuy { get; init; }
+
+    public decimal PricePerUnit { get; init; }
+
+    public decimal EffectivePricePerNeededUnit { get; init; }
+
+    public long TotalCost { get; init; }
+
+    public bool IsPartial { get; init; }
+
+    public string TravelContext { get; init; } = string.Empty;
+
+    public int ExcessAvailable { get; init; }
+
+    public MarketIntelligenceDetailKey? DetailKey { get; init; }
 }
 
 public sealed class WorldMarketSummary
