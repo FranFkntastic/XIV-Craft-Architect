@@ -201,7 +201,7 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
             PriceRefreshStage.Starting,
             $"Fetching prices for {allItems.Count} items..."));
 
-        var allMaterials = plan.AggregatedMaterials ?? new List<MaterialAggregate>();
+        var allMaterials = AcquisitionPlanningService.GetActiveProcurementItems(plan);
         var warmCacheForCraftedItems = _settingsService.Get("market.warm_cache_for_crafted_items", false);
         var cacheCandidateItemIds = warmCacheForCraftedItems
             ? allItems.Select(i => i.itemId).Distinct().ToHashSet()
@@ -326,7 +326,7 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
         var allItems = new List<(int itemId, string name, int quantity)>();
         CollectAllItemsWithQuantity(plan.RootItems, allItems);
 
-        var allMaterials = plan.AggregatedMaterials ?? new List<MaterialAggregate>();
+        var allMaterials = AcquisitionPlanningService.GetActiveProcurementItems(plan);
         var warmCacheForCraftedItems = _settingsService.Get("market.warm_cache_for_crafted_items", false);
         var cacheCandidateItemIds = warmCacheForCraftedItems
             ? allItems.Select(i => i.itemId).Distinct().ToHashSet()
@@ -465,7 +465,7 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
     /// </summary>
     private string BuildResultMessage(int successCount, int failedCount, int cachedCount, CraftingPlan plan)
     {
-        var totalCost = plan.AggregatedMaterials.Sum(m => m.TotalCost);
+        var totalCost = AcquisitionPlanningService.GetActiveProcurementItems(plan).Sum(m => m.TotalCost);
 
         if (failedCount > 0 && successCount == 0)
         {

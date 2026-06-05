@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace FFXIV_Craft_Architect;
@@ -26,7 +27,13 @@ public partial class MainWindow
     /// </summary>
     private async Task PromptToReanalyzeCachedMarketDataAsync()
     {
-        if (_currentPlan?.AggregatedMaterials == null)
+        if (_currentPlan == null)
+        {
+            return;
+        }
+
+        var activeProcurementItems = AcquisitionPlanningService.GetActiveProcurementItems(_currentPlan);
+        if (activeProcurementItems.Count == 0)
         {
             return;
         }
@@ -43,7 +50,7 @@ public partial class MainWindow
             return;
         }
 
-        var itemIds = _currentPlan.AggregatedMaterials.Select(m => m.ItemId).ToList();
+        var itemIds = activeProcurementItems.Select(m => m.ItemId).ToList();
         var missing = await cacheService.GetMissingAsync(
             itemIds.Select(id => (id, dataCenter)).ToList());
         var cachedCount = itemIds.Count - missing.Count;

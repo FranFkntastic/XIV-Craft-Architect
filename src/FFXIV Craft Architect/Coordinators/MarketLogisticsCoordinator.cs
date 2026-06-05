@@ -385,7 +385,7 @@ public partial class MarketLogisticsCoordinator : ObservableObject, IMarketLogis
         _logger.LogDebug("[CategorizeMaterials] Found {Count} items marked as VendorBuy in plan tree", 
             vendorBuyItemIds.Count);
 
-        foreach (var material in plan.AggregatedMaterials)
+        foreach (var material in AcquisitionPlanningService.GetActiveProcurementItems(plan))
         {
             // Check if user explicitly selected VendorBuy in recipe tree
             if (vendorBuyItemIds.Contains(material.ItemId))

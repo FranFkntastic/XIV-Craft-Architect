@@ -90,7 +90,7 @@ public class MarketShoppingService
     /// Callers MUST populate the cache first via IMarketCacheService.EnsurePopulatedAsync
     /// before calling this method. This service reads from cache only.
     /// </summary>
-    /// <param name="marketItems">Materials to analyze (from CraftingPlan.AggregatedMaterials)</param>
+    /// <param name="marketItems">Materials to analyze, usually from choice-aware recipe demand projection.</param>
     /// <param name="dataCenter">Data center to analyze</param>
     /// <param name="progress">Progress reporter for UI feedback (optional)</param>
     /// <param name="ct">Cancellation token</param>

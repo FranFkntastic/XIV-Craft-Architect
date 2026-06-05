@@ -205,7 +205,7 @@ public class TeamcraftService : ITeamcraftService
         var sb = new StringBuilder();
         sb.AppendLine("Item Name,Quantity,Buy/Craft,Estimated Price");
         
-        foreach (var material in plan.AggregatedMaterials)
+        foreach (var material in AcquisitionPlanningService.GetActiveProcurementItems(plan))
         {
             var source = material.Sources.FirstOrDefault();
             var buyCraft = source?.IsCrafted == true ? "Craft" : "Buy";

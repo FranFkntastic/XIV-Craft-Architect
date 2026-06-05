@@ -25,7 +25,10 @@ public static class AcquisitionPlanningService
 
     public static List<MaterialAggregate> GetActiveProcurementItems(CraftingPlan? plan)
     {
-        return plan?.AggregatedMaterials ?? new List<MaterialAggregate>();
+        return new RecipeDemandProjectionService()
+            .Build(plan, snapshot: null)
+            .ToActiveProcurementMaterialAggregates()
+            .ToList();
     }
 
     public static List<DetailedShoppingPlan> FilterShoppingPlansForActiveProcurement(

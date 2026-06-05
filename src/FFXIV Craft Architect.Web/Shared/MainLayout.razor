@@ -18,6 +18,7 @@
 @inject RecipeCalculationService RecipeService
 @inject UniversalisService UniversalisService
 @inject RecipePlannerCommandService RecipePlannerCommandService
+@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject MarketAnalysisDiagnosticDumpService MarketAnalysisDiagnosticDumpService
 @inject ILogger<MainLayout> Logger
 @inject Microsoft.AspNetCore.Components.WebAssembly.Hosting.IWebAssemblyHostEnvironment HostEnvironment
@@ -772,21 +773,9 @@
 
     private async Task OnCopyPlainText()
     {
-        var materials = AppState.CurrentPlan?.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList();
+        var materials = CreateMaterialsForQuickCopy();
         
-        if ((materials == null || materials.Count == 0) && AppState.ShoppingItems.Any())
-        {
-            // Use shopping items instead
-            materials = AppState.ShoppingItems.Select(s => new Core.Models.MaterialAggregate
-            {
-                ItemId = s.Id,
-                Name = s.Name,
-                TotalQuantity = s.Quantity,
-                UnitPrice = 0
-            }).ToList();
-        }
-        
-        if (materials == null || materials.Count == 0)
+        if (materials.Count == 0)
         {
             Snackbar.Add("Nothing to copy. Add items to your shopping list first.", Severity.Warning);
             return;
@@ -806,20 +795,7 @@
 
     private async Task OnCopyCsv()
     {
-        var materials = AppState.CurrentPlan?.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList()
-            ?? new List<Core.Models.MaterialAggregate>();
-        
-        if (materials.Count == 0 && AppState.ShoppingItems.Any())
-        {
-            // Convert shopping items to material format
-            materials = AppState.ShoppingItems.Select(s => new Core.Models.MaterialAggregate
-            {
-                ItemId = s.Id,
-                Name = s.Name,
-                TotalQuantity = s.Quantity,
-                UnitPrice = 0
-            }).ToList();
-        }
+        var materials = CreateMaterialsForQuickCopy();
         
         if (materials.Count == 0)
         {
@@ -836,6 +812,45 @@
         }
         
         await CopyTextToClipboardAsync(csv.ToString(), "CSV copied to clipboard!");
+    }
+
+    private List<Core.Models.MaterialAggregate> CreateMaterialsForQuickCopy()
+    {
+        var planMaterials = RecipeLayerWorkflowService
+            .BuildActiveProcurementItems(AppState.CurrentPlan)
+            .Where(item => item.TotalQuantity > 0)
+            .Select(CloneMaterial)
+            .ToList();
+
+        return planMaterials.Count > 0
+            ? planMaterials
+            : CreateMaterialsFromShoppingItems();
+    }
+
+    private static Core.Models.MaterialAggregate CloneMaterial(Core.Models.MaterialAggregate item)
+    {
+        return new Core.Models.MaterialAggregate
+        {
+            ItemId = item.ItemId,
+            Name = item.Name,
+            TotalQuantity = item.TotalQuantity,
+            UnitPrice = item.UnitPrice,
+            Sources = item.Sources.ToList()
+        };
+    }
+
+    private List<Core.Models.MaterialAggregate> CreateMaterialsFromShoppingItems()
+    {
+        return AppState.ShoppingItems
+            .Where(item => item.Quantity > 0)
+            .Select(item => new Core.Models.MaterialAggregate
+            {
+                ItemId = item.Id,
+                Name = item.Name,
+                TotalQuantity = item.Quantity,
+                UnitPrice = 0
+            })
+            .ToList();
     }
     
     private async Task CopyTextToClipboardAsync(string text, string successMessage)

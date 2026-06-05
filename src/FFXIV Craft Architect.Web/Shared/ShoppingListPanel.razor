@@ -11,7 +11,7 @@
     }
     else
     {
-        var materials = (Materials ?? CurrentPlan.AggregatedMaterials)
+        var materials = (Materials ?? Array.Empty<MaterialAggregate>())
             .Where(m => m.TotalQuantity > 0)
             .ToList();
         var hqMaterials = materials.Count(m => m.RequiresHq);

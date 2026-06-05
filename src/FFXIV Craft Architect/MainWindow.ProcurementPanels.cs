@@ -323,9 +323,11 @@ public partial class MainWindow
     {
         _marketLogisticsCoordinator.ClearSelection();
 
-        var materials = _currentPlan?.AggregatedMaterials;
+        var materials = _currentPlan is null
+            ? new List<MaterialAggregate>()
+            : AcquisitionPlanningService.GetActiveProcurementItems(_currentPlan);
 
-        if (materials?.Any() != true)
+        if (materials.Any() != true)
         {
             _procurementBuilder?.SplitPaneCardsGrid.Children.Add(new TextBlock
             {

@@ -96,6 +96,19 @@ public class MainLayoutMarkupTests
         Assert.Contains("Href=\"https://github.com/FranFkntastic/XIV-Craft-Architect\"", source);
     }
 
+    [Fact]
+    public void MainLayout_QuickCopy_PrefersChoiceAwarePlanMaterialsBeforeShoppingFallback()
+    {
+        var source = File.ReadAllText(GetMainLayoutPath());
+
+        Assert.Contains("@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService", source);
+        Assert.Contains("var materials = CreateMaterialsForQuickCopy();", source);
+        Assert.Contains("BuildActiveProcurementItems(AppState.CurrentPlan)", source);
+        Assert.Contains("? planMaterials", source);
+        Assert.Contains(": CreateMaterialsFromShoppingItems()", source);
+        Assert.Contains("UnitPrice = item.UnitPrice", source);
+    }
+
     private static string GetMainLayoutPath()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
