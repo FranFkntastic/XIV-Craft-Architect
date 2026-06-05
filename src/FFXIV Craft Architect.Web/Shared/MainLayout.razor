@@ -652,7 +652,7 @@
 
         try
         {
-            var dump = MarketAnalysisDiagnosticDumpService.BuildDump(
+            var dump = await MarketAnalysisDiagnosticDumpService.BuildDumpAsync(
                 AppState.MarketItemAnalyses,
                 AppState.ShoppingPlans,
                 new MarketAnalysisDiagnosticDumpContext(
@@ -666,7 +666,8 @@
                     AppState.MarketAnalysisGridSortDescending,
                     AppState.MarketAnalysisWorldGridSortColumn,
                     AppState.MarketAnalysisWorldGridSortDescending,
-                    AppState.SelectedMarketAnalysisItemId));
+                    AppState.SelectedMarketAnalysisItemId,
+                    AppState.MarketIntelligenceSummary?.PublicationId));
             if (dump == null)
             {
                 Snackbar.Add("No market analysis to dump", Severity.Warning);
