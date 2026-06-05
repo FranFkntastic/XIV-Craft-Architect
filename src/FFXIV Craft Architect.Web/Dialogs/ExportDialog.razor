@@ -17,32 +17,12 @@
                     Native format that preserves plan data, project items, acquisition choices, market analysis evidence, and recipe tree structure.
                     Best for sharing plans with other Craft Architect users.
                 </MudText>
-                @if (_nativeJson != null)
-                {
-                    <MudTextField Value="_nativeJson"
-                                  Label="Native Plan JSON"
-                                  Variant="Variant.Outlined"
-                                  Lines="8"
-                                  ReadOnly="true" />
-                    <div class="d-flex gap-2 mt-4">
-                        <MudButton Color="Color.Primary" 
-                                   StartIcon="@Icons.Material.Filled.ContentCopy"
-                                   OnClick="() => CopyToClipboard(_nativeJson)">
-                            Copy JSON
-                        </MudButton>
-                        <MudButton Color="Color.Secondary" 
-                                   StartIcon="@Icons.Material.Filled.Download"
-                                   OnClick="DownloadNativeJson">
-                            Download .craftplan
-                        </MudButton>
-                    </div>
-                }
-                else
-                {
-                    <MudButton Color="Color.Primary" OnClick="GenerateNativeJson" Disabled="!CanExport">
-                        Generate Native Export
-                    </MudButton>
-                }
+                <MudButton Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Download"
+                           OnClick="DownloadNativeJson"
+                           Disabled="!CanExport || _isNativeExporting">
+                    Download .craftplan
+                </MudButton>
             </MudTabPanel>
             
             <MudTabPanel Text="Teamcraft URL">
@@ -117,10 +97,10 @@
     [Parameter] public int ActiveTab { get; set; } = 0;
     
     private int _activeTab = 0;
-    private string? _nativeJson = null;
     private string? _teamcraftUrl = null;
     private string? _artisanJson = null;
     private bool _includeArtisanPrecrafts;
+    private bool _isNativeExporting;
     
     protected override void OnInitialized()
     {
@@ -129,41 +109,31 @@
     
     private bool CanExport => AppState.HasPlanOrProjectItems;
 
-    private void GenerateNativeJson()
+    private async Task DownloadNativeJson()
     {
+        if (!CanExport) return;
+
         try
         {
+            _isNativeExporting = true;
             var planId = AppState.CurrentPlanId ?? Guid.NewGuid().ToString();
             var planName = AppState.CurrentPlanName ??
                            AppState.CurrentPlan?.Name ??
                            $"Imported Plan {DateTime.Now:yyyy-MM-dd HH:mm}";
-            _nativeJson = NativePlanExport.GenerateNativeJson(planId, planName);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to generate native export: {ex.Message}", Severity.Error);
-        }
-    }
-
-    private async Task DownloadNativeJson()
-    {
-        if (string.IsNullOrEmpty(_nativeJson)) return;
-        
-        try
-        {
-            var bytes = System.Text.Encoding.UTF8.GetBytes(_nativeJson);
-            var stream = new MemoryStream(bytes);
+            using var stream = NativePlanExport.GenerateNativeJsonStream(planId, planName);
             using var streamRef = new DotNetStreamReference(stream);
             
-            var fileName = NativePlanExportService.CreateFileName(
-                AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name);
-            
+            var fileName = NativePlanExportService.CreateFileName(planName);
             await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
             Snackbar.Add($"Downloaded {fileName}", Severity.Success);
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Download failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isNativeExporting = false;
         }
     }
     

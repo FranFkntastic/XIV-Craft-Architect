@@ -4,10 +4,7 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed class NativePlanExportService
 {
-    private static readonly JsonSerializerOptions ExportJsonOptions = new()
-    {
-        WriteIndented = true
-    };
+    private static readonly JsonSerializerOptions ExportJsonOptions = new();
 
     private readonly StoredPlanSnapshotBuilder _snapshotBuilder;
 
@@ -18,11 +15,27 @@ public sealed class NativePlanExportService
 
     public string GenerateNativeJson(string planId, string planName)
     {
+        var snapshot = BuildExportSnapshot(planId, planName);
+        return JsonSerializer.Serialize(snapshot, ExportJsonOptions);
+    }
+
+    public MemoryStream GenerateNativeJsonStream(string planId, string planName)
+    {
+        var snapshot = BuildExportSnapshot(planId, planName);
+        var stream = new MemoryStream();
+        JsonSerializer.Serialize(stream, snapshot, ExportJsonOptions);
+        stream.Position = 0;
+        return stream;
+    }
+
+    private StoredPlan BuildExportSnapshot(string planId, string planName)
+    {
         var snapshot = _snapshotBuilder.Build(
             planId,
             planName,
-            includeSourcePlanIdentity: true);
-        return JsonSerializer.Serialize(snapshot, ExportJsonOptions);
+            includeSourcePlanIdentity: true,
+            includeLegacyMarketAnalysisFields: false);
+        return snapshot;
     }
 
     public static string CreateFileName(string? planName)

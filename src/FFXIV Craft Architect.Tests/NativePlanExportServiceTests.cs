@@ -55,6 +55,37 @@ public class NativePlanExportServiceTests
     }
 
     [Fact]
+    public void GenerateNativeJson_OmitsLegacyMarketAnalysisFields()
+    {
+        var appState = new AppState();
+        appState.ReplaceProjectItems(
+        [
+            new ProjectItem { Id = 100, Name = "Final Craft", Quantity = 2 }
+        ]);
+        appState.ApplyBuiltRecipePlanWithActiveItems(new CraftingPlan
+        {
+            Name = "Exported Plan",
+            RootItems =
+            [
+                new PlanNode { ItemId = 100, Name = "Final Craft", Quantity = 2 }
+            ]
+        });
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 100, Name = "Final Craft", QuantityNeeded = 2 }],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Final Craft", QuantityNeeded = 2 }],
+            publishedScope: appState.CreateCurrentMarketAnalysisScopeSnapshot(DateTime.UtcNow));
+        var service = new NativePlanExportService(new StoredPlanSnapshotBuilder(appState));
+
+        var json = service.GenerateNativeJson("export-id", "Exported Plan");
+        var exported = JsonSerializer.Deserialize<StoredPlan>(json);
+
+        Assert.NotNull(exported);
+        Assert.NotNull(exported.MarketIntelligenceJson);
+        Assert.Null(exported.MarketPlansJson);
+        Assert.Null(exported.MarketItemAnalysesJson);
+    }
+
+    [Fact]
     public void Import_StoredPlanNativeJson_ReturnsStoredPlanPayload()
     {
         var storedPlan = new StoredPlan

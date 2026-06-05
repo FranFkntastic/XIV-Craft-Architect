@@ -401,10 +401,7 @@
         {
             var planId = AppState.CurrentPlanId ?? Guid.NewGuid().ToString();
             var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan.Name;
-            var json = NativePlanExport.GenerateNativeJson(planId, planName);
-            var bytes = System.Text.Encoding.UTF8.GetBytes(json);
-            var stream = new MemoryStream(bytes);
-
+            using var stream = NativePlanExport.GenerateNativeJsonStream(planId, planName);
             using var streamRef = new DotNetStreamReference(stream);
             await JSRuntime.InvokeVoidAsync(
                 "downloadFileFromStream",
