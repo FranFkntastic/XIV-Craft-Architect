@@ -397,6 +397,17 @@ public class StoredPlan
     public string? MarketIntelligenceJson { get; set; }
 
     /// <summary>
+    /// Active cold-storage market intelligence publication for compact autosave payloads.
+    /// </summary>
+    public Guid? ActiveMarketIntelligencePublicationId { get; set; }
+
+    /// <summary>
+    /// Serialized compact market intelligence publication summary.
+    /// Listing-level details are stored separately in cold IndexedDB stores.
+    /// </summary>
+    public string? MarketIntelligenceSummaryJson { get; set; }
+
+    /// <summary>
     /// Serialized immutable market analysis source data.
     /// </summary>
     public string? MarketItemAnalysesJson { get; set; }

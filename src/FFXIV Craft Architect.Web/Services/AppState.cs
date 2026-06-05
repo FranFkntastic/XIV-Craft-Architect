@@ -90,6 +90,7 @@ public class AppState
     private System.Threading.Timer? _autoSaveTimer;
     private readonly List<DetailedShoppingPlan> _shoppingPlans = [];
     private readonly List<MarketItemAnalysis> _marketItemAnalyses = [];
+    private MarketIntelligencePublicationSummary? _marketIntelligenceSummary;
     private Guid _marketIntelligenceId = Guid.Empty;
     private StoredRecipeOperationSnapshot? _marketAnalysisRecipeBasis;
     private PublishedMarketAnalysisScopeSnapshot? _publishedMarketAnalysisScope;
@@ -130,10 +131,12 @@ public class AppState
     public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses => _marketItemAnalyses.AsReadOnly();
 
     public MarketIntelligence MarketIntelligence => CreateMarketIntelligence();
+    public MarketIntelligencePublicationSummary? MarketIntelligenceSummary => _marketIntelligenceSummary;
     public IReadOnlyList<DetailedShoppingPlan> MarketRecommendations => ShoppingPlans;
     public StoredRecipeOperationSnapshot? MarketAnalysisRecipeBasis => CloneRecipeBasis(_marketAnalysisRecipeBasis);
     public StoredRecipeOperationSnapshot? MarketIntelligenceRecipeBasis => MarketAnalysisRecipeBasis;
-    public MarketIntelligencePublicationContext MarketIntelligencePublicationContext => MarketIntelligence.PublicationContext;
+    public MarketIntelligencePublicationContext MarketIntelligencePublicationContext =>
+        _marketIntelligenceSummary?.PublicationContext ?? MarketIntelligence.PublicationContext;
     public PublishedMarketAnalysisScopeSnapshot? PublishedMarketAnalysisScope => _publishedMarketAnalysisScope;
     public string? MarketAnalysisScopeWarning => GetMarketAnalysisScopeWarning();
 
@@ -395,13 +398,14 @@ public class AppState
         IReadOnlyList<MaterialAggregate> activeProcurementItems,
         bool acquisitionDecisionsChanged,
         StoredRecipeOperationSnapshot? recipeBasis = null,
-        PublishedMarketAnalysisScopeSnapshot? publishedScope = null)
+        PublishedMarketAnalysisScopeSnapshot? publishedScope = null,
+        MarketIntelligencePublicationSummary? marketIntelligenceSummary = null)
     {
         ArgumentNullException.ThrowIfNull(activeProcurementItems);
 
         using (BeginStateChangeBatch())
         {
-            ReplaceMarketAnalysis(analyses, shoppingPlans, recipeBasis, publishedScope);
+            ReplaceMarketAnalysis(analyses, shoppingPlans, recipeBasis, publishedScope, marketIntelligenceSummary);
             if (acquisitionDecisionsChanged)
             {
                 ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
@@ -414,15 +418,24 @@ public class AppState
         IEnumerable<MarketItemAnalysis> analyses,
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
         StoredRecipeOperationSnapshot? recipeBasis = null,
-        PublishedMarketAnalysisScopeSnapshot? publishedScope = null)
+        PublishedMarketAnalysisScopeSnapshot? publishedScope = null,
+        MarketIntelligencePublicationSummary? marketIntelligenceSummary = null)
     {
         ArgumentNullException.ThrowIfNull(analyses);
         ArgumentNullException.ThrowIfNull(shoppingPlans);
 
         ReplaceListContents(_marketItemAnalyses, analyses);
         ReplaceListContents(_shoppingPlans, shoppingPlans);
-        _marketIntelligenceId = _marketItemAnalyses.Count > 0 || _shoppingPlans.Count > 0
-            ? Guid.NewGuid()
+        _marketIntelligenceSummary = marketIntelligenceSummary;
+        if (marketIntelligenceSummary != null)
+        {
+            UnavailableMarketItems = marketIntelligenceSummary.UnavailableMarketItems.ToArray();
+        }
+
+        _marketIntelligenceId = _marketItemAnalyses.Count > 0 ||
+                                _shoppingPlans.Count > 0 ||
+                                marketIntelligenceSummary?.UnavailableMarketItems.Count > 0
+            ? marketIntelligenceSummary?.PublicationId ?? Guid.NewGuid()
             : Guid.Empty;
         _marketAnalysisRecipeBasis = CloneRecipeBasis(recipeBasis);
         _publishedMarketAnalysisScope = publishedScope;
@@ -438,6 +451,17 @@ public class AppState
                 PublishChange(AppStateChangeScope.MarketAnalysisView);
             }
         }
+    }
+
+    public void ApplyMarketIntelligenceSummary(MarketIntelligencePublicationSummary? summary)
+    {
+        _marketIntelligenceSummary = summary;
+        if (summary?.PublicationId is { } publicationId && publicationId != Guid.Empty)
+        {
+            _marketIntelligenceId = publicationId;
+        }
+
+        PublishChange(AppStateChangeScope.MarketAnalysis);
     }
 
     public void ReplaceMarketAnalysisItem(
@@ -856,6 +880,7 @@ public class AppState
         _shoppingPlans.Clear();
         _marketItemAnalyses.Clear();
         _procurementShoppingPlans.Clear();
+        _marketIntelligenceSummary = null;
         _marketIntelligenceId = Guid.Empty;
         _marketAnalysisRecipeBasis = null;
         _publishedMarketAnalysisScope = null;
@@ -1053,7 +1078,10 @@ public class AppState
 
     private string? GetMarketAnalysisScopeWarning()
     {
-        if (!_marketItemAnalyses.Any() && !_shoppingPlans.Any())
+        if (!_marketItemAnalyses.Any() &&
+            !_shoppingPlans.Any() &&
+            _marketIntelligenceSummary?.Items.Count is not > 0 &&
+            _marketIntelligenceSummary?.UnavailableMarketItems.Count is not > 0)
         {
             return null;
         }
@@ -1431,8 +1459,12 @@ public class AppState
         ReplaceListContents(_marketItemAnalyses, session.MarketItemAnalyses);
         ReplaceListContents(_shoppingPlans, session.ShoppingPlans);
         UnavailableMarketItems = session.MarketIntelligence?.UnavailableMarketItems.ToArray()
+            ?? session.MarketIntelligenceSummary?.UnavailableMarketItems.ToArray()
             ?? Array.Empty<CoreMarketDataUnavailableItem>();
-        _marketIntelligenceId = session.MarketIntelligence?.MarketIntelligenceId ?? Guid.Empty;
+        _marketIntelligenceSummary = session.MarketIntelligenceSummary;
+        _marketIntelligenceId = session.MarketIntelligence?.MarketIntelligenceId
+            ?? session.MarketIntelligenceSummary?.PublicationId
+            ?? Guid.Empty;
         _marketAnalysisRecipeBasis = CloneRecipeBasis(session.MarketAnalysisRecipeBasis);
         _publishedMarketAnalysisScope = session.PublishedMarketAnalysisScope;
         ClearMarketAnalysisViewState(publishChange: false);

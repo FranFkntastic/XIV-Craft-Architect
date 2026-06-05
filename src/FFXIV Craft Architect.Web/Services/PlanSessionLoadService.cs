@@ -92,24 +92,28 @@ public sealed class PlanSessionLoadService
                 ProjectItems: projectItems,
                 BuildMarketAnalysisCandidates: buildMarketAnalysisCandidates));
         warning = AppendWarning(warning, marketRestore.Warning);
+        var marketIntelligenceSummary =
+            DeserializeOrNull<MarketIntelligencePublicationSummary>(storedPlan.MarketIntelligenceSummaryJson);
 
-        var publishedScope = marketRestore.MarketItemAnalyses.Count > 0 ||
-                             marketRestore.MarketIntelligence?.HasUnavailableMarketItems == true
-            ? marketRestore.MarketIntelligence?.HasCompletePublicationContext == true
-                ? ToPublishedScope(marketRestore.MarketIntelligence.PublicationContext)
-                : DeserializeOrNull<PublishedMarketAnalysisScopeSnapshot>(storedPlan.MarketAnalysisScopeSnapshotJson)
-            : null;
+        var publishedScope = ResolvePublishedScope(storedPlan, marketRestore, marketIntelligenceSummary);
         var marketIntelligence = ApplyPublishedScopeFallback(
             marketRestore.MarketIntelligence,
             publishedScope);
+        var marketItemAnalyses = marketRestore.MarketItemAnalyses.Count > 0
+            ? marketRestore.MarketItemAnalyses
+            : HydrateMarketItemAnalyses(marketIntelligenceSummary);
+        var recommendations = marketRestore.Recommendations.Count > 0
+            ? marketRestore.Recommendations
+            : HydrateShoppingPlans(marketIntelligenceSummary);
 
         return new PlanSessionLoadResult(
             storedPlan,
             plan,
             projectItems,
-            marketRestore.MarketItemAnalyses,
-            marketRestore.Recommendations,
+            marketItemAnalyses,
+            recommendations,
             marketIntelligence,
+            marketIntelligenceSummary,
             marketRestore.RecipeBasis,
             publishedScope,
             warning);
@@ -128,6 +132,148 @@ public sealed class PlanSessionLoadService
         }
 
         return $"{existingWarning} {newWarning}";
+    }
+
+    private static PublishedMarketAnalysisScopeSnapshot? ResolvePublishedScope(
+        StoredPlan storedPlan,
+        StoredMarketIntelligenceRestoreResult marketRestore,
+        MarketIntelligencePublicationSummary? marketIntelligenceSummary)
+    {
+        var hasMarketPayload = marketRestore.MarketItemAnalyses.Count > 0 ||
+                               marketRestore.MarketIntelligence?.HasUnavailableMarketItems == true ||
+                               marketIntelligenceSummary?.Items.Count > 0 ||
+                               marketIntelligenceSummary?.UnavailableMarketItems.Count > 0;
+        if (!hasMarketPayload)
+        {
+            return null;
+        }
+
+        if (marketRestore.MarketIntelligence?.HasCompletePublicationContext == true)
+        {
+            return ToPublishedScope(marketRestore.MarketIntelligence.PublicationContext);
+        }
+
+        if (marketIntelligenceSummary?.PublicationContext.Kind == MarketIntelligencePublicationContextKind.Known)
+        {
+            return ToPublishedScope(marketIntelligenceSummary.PublicationContext);
+        }
+
+        return DeserializeOrNull<PublishedMarketAnalysisScopeSnapshot>(storedPlan.MarketAnalysisScopeSnapshotJson);
+    }
+
+    private static IReadOnlyList<MarketItemAnalysis> HydrateMarketItemAnalyses(
+        MarketIntelligencePublicationSummary? summary)
+    {
+        if (summary == null)
+        {
+            return [];
+        }
+
+        return summary.Items
+            .Select(item => new MarketItemAnalysis
+            {
+                ItemId = item.ItemId,
+                Name = item.Name,
+                QuantityNeeded = item.QuantityNeeded,
+                Scope = item.Scope,
+                LoadedAtUtc = summary.PublicationContext.PublishedAtUtc,
+                AnalysisScopeBaselineUnitPrice = item.BaselineUnitPrice,
+                AnalysisScopeAverageUnitPrice = item.AverageUnitPrice,
+                AnalysisScopeCompetitiveAverageUnitPrice = item.CompetitiveAverageUnitPrice,
+                AnalysisScopeMedianUnitPrice = item.MedianUnitPrice,
+                RequestedDataCenters = summary.PublicationContext.RequestedDataCenters,
+                PresentDataCenters = item.Worlds
+                    .Select(world => world.World.DataCenter)
+                    .Where(dataCenter => !string.IsNullOrWhiteSpace(dataCenter))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                MissingDataCenters = [],
+                WorstDataQualityBucket = item.DataQualityBucket,
+                Worlds = item.Worlds.Select(HydrateWorldMarketAnalysis).ToList(),
+                Warning = item.Warning
+            })
+            .ToArray();
+    }
+
+    private static WorldMarketAnalysis HydrateWorldMarketAnalysis(WorldMarketSummary summary)
+    {
+        return new WorldMarketAnalysis
+        {
+            DataCenter = summary.World.DataCenter,
+            WorldName = summary.World.WorldName,
+            QuantityNeeded = summary.QuantityNeeded,
+            CompetitiveQuantity = summary.CompetitiveQuantity,
+            TotalListingQuantity = summary.TotalListingQuantity,
+            CompetitiveCoverageRatio = summary.CompetitiveCoverageRatio,
+            AnalysisScopeCompetitiveAverageUnitPrice = summary.CompetitiveAverageUnitPrice,
+            ScopeCompetitiveAverageUnitPrice = summary.CompetitiveAverageUnitPrice,
+            CoverageBucket = summary.CoverageBucket,
+            FetchedAtUtc = summary.FetchedAtUtc,
+            MarketUploadedAtUtc = summary.MarketUploadedAtUtc,
+            DataAge = summary.DataAge,
+            DataAgeSource = summary.DataAgeSource,
+            DataQualityBucket = summary.DataQualityBucket,
+            Scores = summary.Scores.ToList()
+        };
+    }
+
+    private static IReadOnlyList<DetailedShoppingPlan> HydrateShoppingPlans(
+        MarketIntelligencePublicationSummary? summary)
+    {
+        if (summary == null)
+        {
+            return [];
+        }
+
+        return summary.Items
+            .Select(item => new DetailedShoppingPlan
+            {
+                ItemId = item.ItemId,
+                Name = item.Name,
+                QuantityNeeded = item.QuantityNeeded,
+                DCAveragePrice = item.AverageUnitPrice,
+                WorldOptions = item.Worlds.Select(HydrateWorldShoppingSummary).ToList(),
+                RecommendedWorld = item.RecommendedWorld is null
+                    ? null
+                    : new WorldShoppingSummary
+                    {
+                        DataCenter = item.RecommendedWorld.Value.DataCenter,
+                        WorldName = item.RecommendedWorld.Value.WorldName,
+                        TotalCost = item.RecommendedTotalCost,
+                        AveragePricePerUnit = item.CompetitiveAverageUnitPrice,
+                        TotalQuantityPurchased = item.QuantityNeeded
+                    },
+                RecommendedSplit = item.RecommendedSplit.Select(HydrateSplitPurchase).ToList(),
+                MarketDataWarning = item.Warning
+            })
+            .ToArray();
+    }
+
+    private static WorldShoppingSummary HydrateWorldShoppingSummary(WorldMarketSummary summary)
+    {
+        return new WorldShoppingSummary
+        {
+            DataCenter = summary.World.DataCenter,
+            WorldName = summary.World.WorldName,
+            AveragePricePerUnit = summary.CompetitiveAverageUnitPrice,
+            TotalQuantityPurchased = summary.CompetitiveQuantity
+        };
+    }
+
+    private static SplitWorldPurchase HydrateSplitPurchase(MarketSplitPurchaseSummary summary)
+    {
+        return new SplitWorldPurchase
+        {
+            DataCenter = summary.World.DataCenter,
+            WorldName = summary.World.WorldName,
+            QuantityToBuy = summary.QuantityToBuy,
+            PricePerUnit = summary.PricePerUnit,
+            EffectivePricePerNeededUnit = summary.EffectivePricePerNeededUnit,
+            TotalCost = summary.TotalCost,
+            IsPartial = summary.IsPartial,
+            TravelContext = summary.TravelContext,
+            ExcessAvailable = summary.ExcessAvailable
+        };
     }
 
     private static void RestoreParentLinks(CraftingPlan? plan)
@@ -245,6 +391,7 @@ public sealed record PlanSessionLoadResult(
     IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses,
     IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
     MarketIntelligence? MarketIntelligence,
+    MarketIntelligencePublicationSummary? MarketIntelligenceSummary,
     StoredRecipeOperationSnapshot? MarketAnalysisRecipeBasis,
     PublishedMarketAnalysisScopeSnapshot? PublishedMarketAnalysisScope,
     string? Warning);

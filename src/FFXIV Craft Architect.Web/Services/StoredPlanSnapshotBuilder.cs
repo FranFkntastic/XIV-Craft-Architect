@@ -37,9 +37,12 @@ public sealed class StoredPlanSnapshotBuilder
         bool includeLegacyMarketAnalysisFields = true)
     {
         var marketIntelligence = appState.MarketIntelligence;
+        var marketIntelligenceSummary = appState.MarketIntelligenceSummary;
         var hasMarketIntelligence = marketIntelligence.HasPublishedMarketAnalysis ||
                                     marketIntelligence.HasRecommendations ||
                                     marketIntelligence.HasUnavailableMarketItems;
+        var shouldWriteRichMarketIntelligence =
+            includeLegacyMarketAnalysisFields && hasMarketIntelligence;
 
         return new StoredPlan
         {
@@ -59,8 +62,12 @@ public sealed class StoredPlanSnapshotBuilder
             PlanJson = appState.CurrentPlan != null
                 ? JsonSerializer.Serialize(appState.CurrentPlan)
                 : null,
-            MarketIntelligenceJson = hasMarketIntelligence
+            MarketIntelligenceJson = shouldWriteRichMarketIntelligence
                 ? JsonSerializer.Serialize(StoredMarketIntelligence.FromMarketIntelligence(marketIntelligence))
+                : null,
+            ActiveMarketIntelligencePublicationId = marketIntelligenceSummary?.PublicationId,
+            MarketIntelligenceSummaryJson = marketIntelligenceSummary != null
+                ? JsonSerializer.Serialize(marketIntelligenceSummary)
                 : null,
             MarketPlansJson = includeLegacyMarketAnalysisFields && appState.ShoppingPlans.Any()
                 ? JsonSerializer.Serialize(appState.ShoppingPlans)

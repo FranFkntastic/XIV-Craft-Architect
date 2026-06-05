@@ -485,9 +485,10 @@ public class AppStatePersistenceTests
     }
 
     [Fact]
-    public void CreateStoredPlanSnapshot_CanOmitLegacyFieldsWhenMarketIntelligenceJsonIsAvailable()
+    public void CreateStoredPlanSnapshot_CanOmitLegacyFieldsWhenMarketIntelligenceSummaryIsAvailable()
     {
         var appState = new AppState();
+        var publicationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
         appState.SetMarketAnalysisLens(MarketAcquisitionLens.BulkValue);
         appState.ReplaceProjectItems(
             [new ProjectItem { Id = 123, Name = "Snapshot Item", Quantity = 10 }]);
@@ -496,19 +497,37 @@ public class AppStatePersistenceTests
             [new DetailedShoppingPlan { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
             publishedScope: appState.CreateCurrentMarketAnalysisScopeSnapshot(
                 new DateTime(2026, 6, 4, 12, 0, 0, DateTimeKind.Utc)));
+        appState.ApplyMarketIntelligenceSummary(new MarketIntelligencePublicationSummary
+        {
+            PublicationId = publicationId,
+            PublicationContext = appState.MarketIntelligencePublicationContext,
+            Items =
+            [
+                new MarketItemSummary
+                {
+                    ItemId = 123,
+                    Name = "Snapshot Item",
+                    QuantityNeeded = 10,
+                    RecommendedTotalCost = 100
+                }
+            ]
+        });
 
         var snapshot = appState.CreateStoredPlanSnapshot(
             "autosave",
             "AutoSave",
             includeLegacyMarketAnalysisFields: false);
 
-        Assert.NotNull(snapshot.MarketIntelligenceJson);
+        Assert.Null(snapshot.MarketIntelligenceJson);
         Assert.Null(snapshot.MarketPlansJson);
         Assert.Null(snapshot.MarketItemAnalysesJson);
+        Assert.Equal(publicationId, snapshot.ActiveMarketIntelligencePublicationId);
+        Assert.NotNull(snapshot.MarketIntelligenceSummaryJson);
 
-        var restored = PlanSessionLoadService.Prepare(snapshot);
-        Assert.Equal(123, Assert.Single(restored.MarketItemAnalyses).ItemId);
-        Assert.Equal(123, Assert.Single(restored.ShoppingPlans).ItemId);
+        var summary = JsonSerializer.Deserialize<MarketIntelligencePublicationSummary>(
+            snapshot.MarketIntelligenceSummaryJson!);
+        Assert.Equal(publicationId, summary?.PublicationId);
+        Assert.Equal(123, Assert.Single(summary!.Items).ItemId);
     }
 
     [Fact]
@@ -564,6 +583,69 @@ public class AppStatePersistenceTests
         Assert.Equal(MarketIntelligencePublicationContextKind.Known, appState.MarketIntelligence.PublicationContext.Kind);
         Assert.Equal(publishedAtUtc, appState.PublishedMarketAnalysisScope?.PublishedAtUtc);
         Assert.NotNull(appState.MarketAnalysisRecipeBasis);
+    }
+
+    [Fact]
+    public void LoadStoredPlan_RestoresCompactMarketIntelligenceSummaryWithoutRichDetails()
+    {
+        var appState = new AppState();
+        var publicationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var publishedAtUtc = new DateTime(2026, 6, 4, 12, 0, 0, DateTimeKind.Utc);
+        var summary = new MarketIntelligencePublicationSummary
+        {
+            PublicationId = publicationId,
+            PublicationContext = new MarketIntelligencePublicationContext(
+                MarketIntelligencePublicationContextKind.Known,
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                ["Aether"],
+                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+                null,
+                false,
+                RecommendationMode.MinimizeTotalCost,
+                MarketAcquisitionLens.BulkValue,
+                null,
+                7,
+                2,
+                publishedAtUtc),
+            Items =
+            [
+                new MarketItemSummary
+                {
+                    ItemId = 123,
+                    Name = "Snapshot Item",
+                    QuantityNeeded = 10,
+                    RecommendedTotalCost = 100
+                }
+            ]
+        };
+        var storedPlan = new StoredPlan
+        {
+            ProjectItems =
+            [
+                new StoredProjectItem
+                {
+                    Id = 123,
+                    Name = "Snapshot Item",
+                    Quantity = 10
+                }
+            ],
+            ActiveMarketIntelligencePublicationId = publicationId,
+            MarketIntelligenceSummaryJson = JsonSerializer.Serialize(summary),
+            MarketIntelligenceJson = null,
+            MarketPlansJson = null,
+            MarketItemAnalysesJson = null
+        };
+
+        appState.LoadStoredPlan(storedPlan, deserializedPlan: null);
+
+        Assert.Equal(publicationId, appState.MarketIntelligenceSummary?.PublicationId);
+        Assert.Equal(123, Assert.Single(appState.MarketIntelligenceSummary!.Items).ItemId);
+        Assert.Equal(123, Assert.Single(appState.MarketItemAnalyses).ItemId);
+        Assert.Equal(123, Assert.Single(appState.ShoppingPlans).ItemId);
+        Assert.Equal(MarketIntelligencePublicationContextKind.Known, appState.MarketIntelligencePublicationContext.Kind);
+        Assert.Equal(publishedAtUtc, appState.PublishedMarketAnalysisScope?.PublishedAtUtc);
     }
 
     [Fact]
