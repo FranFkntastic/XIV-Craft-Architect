@@ -252,6 +252,9 @@ internal sealed class MarketAnalysisBenchmark
             $"shopping listings: {run.Shape.ShoppingListings}");
         Console.WriteLine("Payloads:");
         Console.WriteLine($"  Market intelligence bytes: {run.Payload.MarketIntelligenceJsonBytes:N0}");
+        Console.WriteLine($"  Compact summary bytes: {run.Payload.CompactSummaryJsonBytes:N0}");
+        Console.WriteLine($"  Cold detail bytes: {run.Payload.ColdDetailJsonBytes:N0}");
+        Console.WriteLine($"  Source fact bytes: {run.Payload.SourceFactJsonBytes:N0}");
         Console.WriteLine($"  Legacy plans JSON bytes: {run.Payload.LegacyPlansJsonBytes:N0}");
         Console.WriteLine($"  Legacy analyses JSON bytes: {run.Payload.LegacyAnalysesJsonBytes:N0}");
         Console.WriteLine($"  Retained detail estimate bytes: {run.Payload.RetainedDetailEstimateBytes:N0}");
@@ -1880,6 +1883,9 @@ internal sealed record BenchmarkShapeMetrics(
 
 internal sealed record BenchmarkPayloadMetrics(
     long MarketIntelligenceJsonBytes,
+    long CompactSummaryJsonBytes,
+    long ColdDetailJsonBytes,
+    long SourceFactJsonBytes,
     long LegacyPlansJsonBytes,
     long LegacyAnalysesJsonBytes,
     long RetainedDetailEstimateBytes)
@@ -1898,14 +1904,51 @@ internal sealed record BenchmarkPayloadMetrics(
         var intelligenceJsonBytes = JsonSerializer
             .SerializeToUtf8Bytes(StoredMarketIntelligence.FromMarketIntelligence(intelligence), ProbeJson.Options)
             .LongLength;
+        var projection = new MarketIntelligenceProjectionService().Project(
+            new MarketIntelligenceProjectionRequest
+            {
+                ExecutionResult = result,
+                PublicationContext = new MarketIntelligencePublicationContext(
+                    MarketIntelligencePublicationContextKind.Known,
+                    result.Evidence.Scope,
+                    result.Evidence.SelectedDataCenter,
+                    result.Evidence.SelectedRegion,
+                    result.Evidence.DataCenters,
+                    new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+                    null,
+                    false,
+                    RecommendationMode.MinimizeTotalCost,
+                    MarketAcquisitionLens.MinimumUpfrontCost,
+                    null,
+                    null,
+                    null,
+                    result.Evidence.LoadedAtUtc),
+                AnalyzerVersion = "market-analysis-probe",
+                StartedAtUtc = result.Evidence.LoadedAtUtc,
+                CompletedAtUtc = DateTime.UtcNow,
+                MarketFetchDuration = TimeSpan.Zero,
+                NetworkRequestCount = result.Evidence.FetchedCount
+            });
+        var compactSummaryJsonBytes = JsonSerializer
+            .SerializeToUtf8Bytes(projection.Publication.Summary, ProbeJson.Options)
+            .LongLength;
+        var coldDetailJsonBytes = JsonSerializer
+            .SerializeToUtf8Bytes(projection.Publication.Details, ProbeJson.Options)
+            .LongLength;
+        var sourceFactJsonBytes = JsonSerializer
+            .SerializeToUtf8Bytes(projection.SourceFacts, ProbeJson.Options)
+            .LongLength;
         var legacyPlansJsonBytes = JsonSerializer.SerializeToUtf8Bytes(result.ShoppingPlans, ProbeJson.Options).LongLength;
         var legacyAnalysesJsonBytes = JsonSerializer.SerializeToUtf8Bytes(result.Analyses, ProbeJson.Options).LongLength;
 
         return new BenchmarkPayloadMetrics(
             intelligenceJsonBytes,
+            compactSummaryJsonBytes,
+            coldDetailJsonBytes,
+            sourceFactJsonBytes,
             legacyPlansJsonBytes,
             legacyAnalysesJsonBytes,
-            legacyPlansJsonBytes + legacyAnalysesJsonBytes);
+            coldDetailJsonBytes);
     }
 }
 

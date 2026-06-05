@@ -119,7 +119,7 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
             PublicationDuration = request.PublicationDuration,
             CacheMode = request.CacheMode,
             MarketIntelligencePayloadBytes = EstimatePayloadBytes(summary),
-            LegacyPayloadBytes = EstimatePayloadBytes(request.ExecutionResult),
+            LegacyPayloadBytes = EstimateLegacyPayloadBytes(request.ExecutionResult),
             RetainedDetailBytes = details.Sum(EstimatePayloadBytes),
             NetworkRequestCount = request.NetworkRequestCount,
             FreshCacheHitCount = request.FreshCacheHitCount,
@@ -331,6 +331,12 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
     }
 
     private static long EstimatePayloadBytes<T>(T value) => JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions).LongLength;
+
+    private static long EstimateLegacyPayloadBytes(MarketAnalysisExecutionResult executionResult)
+    {
+        return EstimatePayloadBytes(executionResult.Analyses) +
+               EstimatePayloadBytes(executionResult.ShoppingPlans);
+    }
 }
 
 public sealed class MarketIntelligenceProjectionRequest

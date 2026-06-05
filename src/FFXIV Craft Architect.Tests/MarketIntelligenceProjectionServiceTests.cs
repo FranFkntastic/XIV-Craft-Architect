@@ -171,6 +171,51 @@ public class MarketIntelligenceProjectionServiceTests
         Assert.True(run.LegacyPayloadBytes > run.MarketIntelligencePayloadBytes);
     }
 
+    [Fact]
+    public void Project_WhenEvidenceContainsCachedEntries_DoesNotSerializeTupleKeyDictionaryForPayloadAccounting()
+    {
+        var projection = new MarketIntelligenceProjectionService();
+        var request = CreateRequest(Guid.NewGuid(), Guid.NewGuid());
+        var loadedAt = request.CompletedAtUtc;
+        request = new MarketIntelligenceProjectionRequest
+        {
+            PublicationId = request.PublicationId,
+            RunId = request.RunId,
+            ExecutionResult = new MarketAnalysisExecutionResult(
+                new MarketEvidenceSet(
+                    new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+                    {
+                        [(5338, "Aether")] = new()
+                        {
+                            ItemId = 5338,
+                            DataCenter = "Aether",
+                            FetchedAt = loadedAt
+                        }
+                    },
+                    [(5338, "Aether")],
+                    MarketFetchScope.SelectedDataCenter,
+                    ["Aether"],
+                    "Aether",
+                    "North America",
+                    TimeSpan.FromHours(24),
+                    fetchedCount: 1,
+                    loadedAt),
+                request.ExecutionResult.Analyses,
+                request.ExecutionResult.ShoppingPlans),
+            PublicationContext = request.PublicationContext,
+            AnalyzerVersion = request.AnalyzerVersion,
+            StartedAtUtc = request.StartedAtUtc,
+            CompletedAtUtc = request.CompletedAtUtc,
+            CacheMode = request.CacheMode,
+            NetworkRequestCount = request.NetworkRequestCount,
+            FreshCacheHitCount = request.FreshCacheHitCount
+        };
+
+        var result = projection.Project(request);
+
+        Assert.True(Assert.Single(result.Publication.RunRecords).LegacyPayloadBytes > 0);
+    }
+
     private static MarketIntelligenceProjectionRequest CreateRequest(Guid publicationId, Guid runId)
     {
         var loadedAt = new DateTime(2026, 6, 4, 12, 0, 0, DateTimeKind.Utc);
