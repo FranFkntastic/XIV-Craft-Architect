@@ -46,6 +46,7 @@ builder.Services.AddScoped<IndexedDbMarketCacheService>();
 builder.Services.AddScoped<IndexedDbMarketIntelligenceStore>();
 builder.Services.AddScoped<IMarketIntelligenceStore>(sp => sp.GetRequiredService<IndexedDbMarketIntelligenceStore>());
 builder.Services.AddScoped<IMarketDataSourceStore>(sp => sp.GetRequiredService<IndexedDbMarketIntelligenceStore>());
+builder.Services.AddScoped<IMarketAnalysisDetailHydrationService, MarketAnalysisDetailHydrationService>();
 builder.Services.AddScoped<CommissionCostBasisResolver>();
 builder.Services.AddScoped<CommissionPayrollService>();
 

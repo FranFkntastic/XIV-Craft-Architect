@@ -120,6 +120,7 @@
                         <MarketAnalysisWorldGrid Analysis="analysis"
                                                  Lens="CurrentLens"
                                                  ItemId="_selectedPlan.ItemId"
+                                                 PublicationId="MarketIntelligencePublicationId"
                                                  SortColumn="WorldSortColumn"
                                                  SortDescending="WorldSortDescending"
                                                  ExpandedWorldKeys="ExpandedWorldKeys"
@@ -144,6 +145,7 @@
 @code {
     [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
     [Parameter] public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses { get; set; } = Array.Empty<MarketItemAnalysis>();
+    [Parameter] public Guid? MarketIntelligencePublicationId { get; set; }
     [Parameter] public MarketAcquisitionLens CurrentLens { get; set; } = MarketAcquisitionLens.MinimumUpfrontCost;
     [Parameter] public MarketSortOption CurrentSort { get; set; } = MarketSortOption.ByRecommended;
     [Parameter] public MarketAnalysisGridSortColumn? SortColumn { get; set; }

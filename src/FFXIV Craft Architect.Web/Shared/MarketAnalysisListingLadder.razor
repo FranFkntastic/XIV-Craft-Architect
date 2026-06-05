@@ -1,61 +1,191 @@
 @using FFXIV_Craft_Architect.Core.Models
+@inject IMarketAnalysisDetailHydrationService DetailHydrationService
 
 <div class="ma-ladder-shell">
-    <table class="ma-ladder-table">
-        <thead>
-            <tr>
-                <th>Qty</th>
-                <th>Unit</th>
-                <th>Total</th>
-                <th>Retainer</th>
-                <th>HQ/NQ</th>
-                <th>Reviewed</th>
-                <th>Flags</th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach (var listing in World.Listings.OrderBy(listing => listing.SortIndex))
-            {
-                foreach (var divider in MarketAnalysisGridViewService.GetListingDividersBefore(World, listing))
+    @if (_isLoading)
+    {
+        <div class="ma-ladder-state">
+            <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+            <span>Loading listing detail...</span>
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(_loadMessage))
+    {
+        <div class="ma-ladder-state">
+            <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
+            <span>@_loadMessage</span>
+        </div>
+    }
+    else
+    {
+        <table class="ma-ladder-table">
+            <thead>
+                <tr>
+                    <th>Qty</th>
+                    <th>Unit</th>
+                    <th>Total</th>
+                    <th>Retainer</th>
+                    <th>HQ/NQ</th>
+                    <th>Reviewed</th>
+                    <th>Flags</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var listing in GetDisplayListings())
                 {
-                    <tr class="ma-ladder-break-row">
-                        <td colspan="7">@divider.Label</td>
+                    foreach (var divider in MarketAnalysisGridViewService.GetListingDividersBefore(GetDisplayWorld(), listing))
+                    {
+                        <tr class="ma-ladder-break-row">
+                            <td colspan="7">@divider.Label</td>
+                        </tr>
+                    }
+
+                    <tr class="@GetListingClass(listing)">
+                        <td>@listing.Quantity.ToString("N0")</td>
+                        <td>@listing.PricePerUnit.ToString("N0")g</td>
+                        <td>@((listing.Quantity * listing.PricePerUnit).ToString("N0"))g</td>
+                        <td class="ma-ladder-retainer">@listing.RetainerName</td>
+                        <td>@(listing.IsHq ? "HQ" : "NQ")</td>
+                        <td title="@FormatReviewTooltip(listing)">@FormatReviewAge(listing)</td>
+                        <td>
+                            @if (listing.PriceSanity == MarketListingPriceSanity.Insane)
+                            {
+                                <span class="ma-ladder-flag is-insane">insane</span>
+                            }
+                            else if (listing.PriceSanity == MarketListingPriceSanity.Outlier)
+                            {
+                                <span class="ma-ladder-flag is-outlier">outlier</span>
+                            }
+                            else if (listing.PriceSanity == MarketListingPriceSanity.LowOutlier)
+                            {
+                                <span class="ma-ladder-flag is-low-outlier">low outlier</span>
+                            }
+                            else if (IsUncompetitive(listing))
+                            {
+                                <span class="ma-ladder-flag is-uncompetitive">uncompetitive</span>
+                            }
+                        </td>
                     </tr>
                 }
-
-                <tr class="@GetListingClass(listing)">
-                    <td>@listing.Quantity.ToString("N0")</td>
-                    <td>@listing.PricePerUnit.ToString("N0")g</td>
-                    <td>@((listing.Quantity * listing.PricePerUnit).ToString("N0"))g</td>
-                    <td class="ma-ladder-retainer">@listing.RetainerName</td>
-                    <td>@(listing.IsHq ? "HQ" : "NQ")</td>
-                    <td title="@FormatReviewTooltip(listing)">@FormatReviewAge(listing)</td>
-                    <td>
-                        @if (listing.PriceSanity == MarketListingPriceSanity.Insane)
-                        {
-                            <span class="ma-ladder-flag is-insane">insane</span>
-                        }
-                        else if (listing.PriceSanity == MarketListingPriceSanity.Outlier)
-                        {
-                            <span class="ma-ladder-flag is-outlier">outlier</span>
-                        }
-                        else if (listing.PriceSanity == MarketListingPriceSanity.LowOutlier)
-                        {
-                            <span class="ma-ladder-flag is-low-outlier">low outlier</span>
-                        }
-                        else if (IsUncompetitive(listing))
-                        {
-                            <span class="ma-ladder-flag is-uncompetitive">uncompetitive</span>
-                        }
-                    </td>
-                </tr>
-            }
-        </tbody>
-    </table>
+            </tbody>
+        </table>
+    }
 </div>
 
 @code {
     [Parameter, EditorRequired] public WorldMarketAnalysis World { get; set; } = default!;
+    [Parameter] public int ItemId { get; set; }
+    [Parameter] public Guid? PublicationId { get; set; }
+
+    private MarketAnalysisWorldDetailHydrationResult? _detail;
+    private WorldMarketAnalysis? _detailWorld;
+    private string? _loadMessage;
+    private bool _isLoading;
+    private long _loadVersion;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var version = ++_loadVersion;
+        _loadMessage = null;
+        _detail = null;
+        _detailWorld = null;
+
+        if (World.Listings.Count > 0)
+        {
+            _isLoading = false;
+            return;
+        }
+
+        _isLoading = true;
+        try
+        {
+            var detail = await DetailHydrationService.LoadWorldDetailAsync(
+                PublicationId,
+                ItemId,
+                World);
+            if (version != _loadVersion)
+            {
+                return;
+            }
+
+            _detail = detail;
+            if (detail.HasListings)
+            {
+                _detailWorld = CloneWorldWithDetail(World, detail);
+            }
+            else
+            {
+                _loadMessage = detail.Message ?? "Listing detail is not available.";
+            }
+        }
+        catch (Exception ex)
+        {
+            if (version == _loadVersion)
+            {
+                _loadMessage = $"Unable to load listing detail: {ex.Message}";
+            }
+        }
+        finally
+        {
+            if (version == _loadVersion)
+            {
+                _isLoading = false;
+            }
+        }
+    }
+
+    private IReadOnlyList<AnalyzedMarketListing> GetDisplayListings()
+    {
+        return (_detail?.Listings.Count > 0 ? _detail.Listings : World.Listings)
+            .OrderBy(listing => listing.SortIndex)
+            .ToArray();
+    }
+
+    private WorldMarketAnalysis GetDisplayWorld()
+    {
+        return _detailWorld ?? World;
+    }
+
+    private static WorldMarketAnalysis CloneWorldWithDetail(
+        WorldMarketAnalysis world,
+        MarketAnalysisWorldDetailHydrationResult detail)
+    {
+        return new WorldMarketAnalysis
+        {
+            DataCenter = world.DataCenter,
+            WorldName = world.WorldName,
+            QuantityNeeded = world.QuantityNeeded,
+            CompetitiveQuantity = world.CompetitiveQuantity,
+            LocalCompetitiveQuantity = world.LocalCompetitiveQuantity,
+            ScopeCompetitiveQuantity = world.ScopeCompetitiveQuantity,
+            ScopeSaneQuantity = world.ScopeSaneQuantity,
+            ScopeUncompetitiveQuantity = world.ScopeUncompetitiveQuantity,
+            ScopeInsaneQuantity = world.ScopeInsaneQuantity,
+            TotalSaneQuantity = world.TotalSaneQuantity,
+            TotalListingQuantity = world.TotalListingQuantity,
+            CompetitiveCoverageRatio = world.CompetitiveCoverageRatio,
+            ScopeCompetitiveCoverageRatio = world.ScopeCompetitiveCoverageRatio,
+            ScopeSaneCoverageRatio = world.ScopeSaneCoverageRatio,
+            SaneCoverageRatio = world.SaneCoverageRatio,
+            AnalysisScopeBaselineUnitPrice = world.AnalysisScopeBaselineUnitPrice,
+            AnalysisScopeAverageUnitPrice = world.AnalysisScopeAverageUnitPrice,
+            AnalysisScopeCompetitiveAverageUnitPrice = world.AnalysisScopeCompetitiveAverageUnitPrice,
+            ScopeCompetitiveAverageUnitPrice = world.ScopeCompetitiveAverageUnitPrice,
+            AnalysisScopeMedianUnitPrice = world.AnalysisScopeMedianUnitPrice,
+            CompetitiveThresholdUnitPrice = world.CompetitiveThresholdUnitPrice,
+            SaneThresholdUnitPrice = world.SaneThresholdUnitPrice,
+            CoverageBucket = world.CoverageBucket,
+            FetchedAtUtc = world.FetchedAtUtc,
+            MarketUploadedAtUtc = world.MarketUploadedAtUtc,
+            DataAgeSource = world.DataAgeSource,
+            DataAge = world.DataAge,
+            DataQualityScore = world.DataQualityScore,
+            DataQualityBucket = world.DataQualityBucket,
+            PriceBands = detail.PriceBands.ToList(),
+            Listings = detail.Listings.ToList(),
+            Scores = world.Scores.ToList()
+        };
+    }
 
     private static string GetListingClass(AnalyzedMarketListing listing)
     {

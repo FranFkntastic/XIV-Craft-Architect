@@ -10,6 +10,16 @@
     font-size: 12px;
 }
 
+.ma-ladder-state {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 6px 8px;
+    color: #b8c2cc;
+    font-size: 12px;
+}
+
 .ma-ladder-table th,
 .ma-ladder-table td {
     padding: 5px 6px;

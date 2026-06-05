@@ -616,7 +616,21 @@ public class AppStatePersistenceTests
                     ItemId = 123,
                     Name = "Snapshot Item",
                     QuantityNeeded = 10,
-                    RecommendedTotalCost = 100
+                    RecommendedTotalCost = 100,
+                    Worlds =
+                    [
+                        new WorldMarketSummary
+                        {
+                            World = new MarketWorldKey("Aether", "Siren"),
+                            QuantityNeeded = 10,
+                            CompetitiveQuantity = 8,
+                            TotalListingQuantity = 12,
+                            CompetitiveCoverageRatio = 0.8m,
+                            CompetitiveAverageUnitPrice = 100,
+                            CoverageBucket = MarketCoverageBucket.Full,
+                            DataQualityBucket = MarketDataQualityBucket.Current
+                        }
+                    ]
                 }
             ]
         };
@@ -642,7 +656,12 @@ public class AppStatePersistenceTests
 
         Assert.Equal(publicationId, appState.MarketIntelligenceSummary?.PublicationId);
         Assert.Equal(123, Assert.Single(appState.MarketIntelligenceSummary!.Items).ItemId);
-        Assert.Equal(123, Assert.Single(appState.MarketItemAnalyses).ItemId);
+        var restoredAnalysis = Assert.Single(appState.MarketItemAnalyses);
+        Assert.Equal(123, restoredAnalysis.ItemId);
+        var restoredWorld = Assert.Single(restoredAnalysis.Worlds);
+        Assert.Equal(8, restoredWorld.ScopeCompetitiveQuantity);
+        Assert.Equal(12, restoredWorld.ScopeSaneQuantity);
+        Assert.Equal(0.8m, restoredWorld.ScopeCompetitiveCoverageRatio);
         Assert.Equal(123, Assert.Single(appState.ShoppingPlans).ItemId);
         Assert.Equal(MarketIntelligencePublicationContextKind.Known, appState.MarketIntelligencePublicationContext.Kind);
         Assert.Equal(publishedAtUtc, appState.PublishedMarketAnalysisScope?.PublishedAtUtc);
