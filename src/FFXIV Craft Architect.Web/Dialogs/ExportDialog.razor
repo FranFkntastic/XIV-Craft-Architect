@@ -4,7 +4,6 @@
 @inject AppState AppState
 @inject RecipeCalculationService RecipeService
 @inject IArtisanService ArtisanService
-@inject NativePlanExportService NativePlanExport
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
@@ -14,15 +13,36 @@
             <!-- Native Format - Always first as it's the primary format -->
             <MudTabPanel Text="Craft Architect (.craftplan)">
                 <MudText Typo="Typo.body2" Class="mb-4">
-                    Native format that preserves plan data, project items, acquisition choices, market analysis evidence, and recipe tree structure.
+                    Native format that preserves all plan data including acquisition sources, HQ settings, and recipe tree structure.
+                    Market prices are not included (they'll be fetched fresh when loading).
                     Best for sharing plans with other Craft Architect users.
                 </MudText>
-                <MudButton Color="Color.Primary"
-                           StartIcon="@Icons.Material.Filled.Download"
-                           OnClick="DownloadNativeJson"
-                           Disabled="!CanExport || _isNativeExporting">
-                    Download .craftplan
-                </MudButton>
+                @if (_nativeJson != null)
+                {
+                    <MudTextField Value="_nativeJson"
+                                  Label="Native Plan JSON"
+                                  Variant="Variant.Outlined"
+                                  Lines="8"
+                                  ReadOnly="true" />
+                    <div class="d-flex gap-2 mt-4">
+                        <MudButton Color="Color.Primary" 
+                                   StartIcon="@Icons.Material.Filled.ContentCopy"
+                                   OnClick="() => CopyToClipboard(_nativeJson)">
+                            Copy JSON
+                        </MudButton>
+                        <MudButton Color="Color.Secondary" 
+                                   StartIcon="@Icons.Material.Filled.Download"
+                                   OnClick="DownloadNativeJson">
+                            Download .craftplan
+                        </MudButton>
+                    </div>
+                }
+                else
+                {
+                    <MudButton Color="Color.Primary" OnClick="GenerateNativeJson" Disabled="!CanExport">
+                        Generate Native Export
+                    </MudButton>
+                }
             </MudTabPanel>
             
             <MudTabPanel Text="Teamcraft URL">
@@ -97,10 +117,10 @@
     [Parameter] public int ActiveTab { get; set; } = 0;
     
     private int _activeTab = 0;
+    private string? _nativeJson = null;
     private string? _teamcraftUrl = null;
     private string? _artisanJson = null;
     private bool _includeArtisanPrecrafts;
-    private bool _isNativeExporting;
     
     protected override void OnInitialized()
     {
@@ -109,31 +129,61 @@
     
     private bool CanExport => AppState.HasPlanOrProjectItems;
 
-    private async Task DownloadNativeJson()
+    private void GenerateNativeJson()
     {
-        if (!CanExport) return;
-
         try
         {
-            _isNativeExporting = true;
-            var planId = AppState.CurrentPlanId ?? Guid.NewGuid().ToString();
-            var planName = AppState.CurrentPlanName ??
-                           AppState.CurrentPlan?.Name ??
-                           $"Imported Plan {DateTime.Now:yyyy-MM-dd HH:mm}";
-            using var stream = NativePlanExport.GenerateNativeJsonStream(planId, planName);
+            // Use the plan if available, otherwise build from project items
+            if (AppState.CurrentPlan != null)
+            {
+                _nativeJson = RecipeService.SerializePlan(AppState.CurrentPlan);
+            }
+            else if (AppState.HasProjectItems)
+            {
+                // Create a minimal plan from project items
+                var plan = new CraftingPlan
+                {
+                    Name = $"Imported Plan {DateTime.Now:yyyy-MM-dd HH:mm}",
+                    DataCenter = AppState.SelectedDataCenter,
+                    RootItems = AppState.ProjectItems.Select(p => new PlanNode
+                    {
+                        ItemId = p.Id,
+                        Name = p.Name,
+                        IconId = p.IconId,
+                        Quantity = p.Quantity,
+                        MustBeHq = p.MustBeHq
+                    }).ToList()
+                };
+                _nativeJson = RecipeService.SerializePlan(plan);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to generate native export: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task DownloadNativeJson()
+    {
+        if (string.IsNullOrEmpty(_nativeJson)) return;
+        
+        try
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(_nativeJson);
+            var stream = new MemoryStream(bytes);
             using var streamRef = new DotNetStreamReference(stream);
             
-            var fileName = NativePlanExportService.CreateFileName(planName);
+            // Use .craftplan extension to identify native format
+            var fileName = $"{AppState.CurrentPlan?.Name ?? "plan"}.craftplan";
+            fileName = string.Join("_", fileName.Split(Path.GetInvalidFileNameChars()));
+            if (fileName.Length > 100) fileName = fileName[..100];
+            
             await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
             Snackbar.Add($"Downloaded {fileName}", Severity.Success);
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Download failed: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _isNativeExporting = false;
         }
     }
     

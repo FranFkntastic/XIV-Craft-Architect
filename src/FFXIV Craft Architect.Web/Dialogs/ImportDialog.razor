@@ -5,7 +5,6 @@
 @inject GarlandService GarlandService
 @inject RecipeCalculationService RecipeService
 @inject IArtisanService ArtisanService
-@inject NativePlanImportService NativePlanImport
 @inject ISnackbar Snackbar
 
 <MudDialog>
@@ -120,11 +119,10 @@
         {
             List<ImportItem>? items = null;
             CraftingPlan? nativePlan = null;
-            StoredPlan? nativeStoredPlan = null;
             
             if (!string.IsNullOrWhiteSpace(_nativeJson))
             {
-                (items, nativePlan, nativeStoredPlan) = await ImportNativeAsync();
+                (items, nativePlan) = await ImportNativeAsync();
             }
             else if (!string.IsNullOrWhiteSpace(_teamcraftText))
             {
@@ -140,9 +138,8 @@
                 // Return both items and native plan (if available)
                 MudDialog.Close(DialogResult.Ok(new ImportResult 
                 { 
-                    Items = items,
-                    NativePlan = nativePlan,
-                    NativeStoredPlan = nativeStoredPlan
+                    Items = items, 
+                    NativePlan = nativePlan 
                 }));
             }
             else
@@ -181,36 +178,42 @@
         }
     }
 
-    private async Task<(List<ImportItem> Items, CraftingPlan? Plan, StoredPlan? StoredPlan)> ImportNativeAsync()
+    private async Task<(List<ImportItem> Items, CraftingPlan? Plan)> ImportNativeAsync()
     {
         var items = new List<ImportItem>();
+        CraftingPlan? plan = null;
+        
         try
         {
             _processingMessage = "Parsing native plan format...";
             StateHasChanged();
-
-            var result = NativePlanImport.Import(_nativeJson);
-            foreach (var item in result.Items)
+            
+            plan = RecipeService.DeserializePlan(_nativeJson);
+            
+            if (plan != null)
             {
-                items.Add(new ImportItem
+                // Convert root items to ImportItem list
+                foreach (var rootItem in plan.RootItems)
                 {
-                    Id = item.Id,
-                    Name = item.Name,
-                    IconId = item.IconId,
-                    Quantity = item.Quantity,
-                    MustBeHq = item.MustBeHq
-                });
+                    items.Add(new ImportItem
+                    {
+                        Id = rootItem.ItemId,
+                        Name = rootItem.Name,
+                        IconId = rootItem.IconId,
+                        Quantity = rootItem.Quantity,
+                        MustBeHq = rootItem.MustBeHq
+                    });
+                }
+                
+                Snackbar.Add($"Imported native plan with {items.Count} items", Severity.Success);
             }
-
-            Snackbar.Add($"Imported native plan with {items.Count} items", Severity.Success);
-            return (items, result.Plan, result.StoredPlan);
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Failed to parse native format: {ex.Message}", Severity.Error);
         }
         
-        return (items, null, null);
+        return (items, plan);
     }
     
     private async Task<List<ImportItem>> ImportTeamcraftAsync()
@@ -423,6 +426,5 @@
     {
         public List<ImportItem> Items { get; set; } = new();
         public CraftingPlan? NativePlan { get; set; }
-        public StoredPlan? NativeStoredPlan { get; set; }
     }
 }
