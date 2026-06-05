@@ -40,6 +40,7 @@ builder.Services.AddScoped<MarketShoppingService>();
 builder.Services.AddScoped<IMarketPriceEvaluationService, MarketPriceEvaluationService>();
 builder.Services.AddScoped<IMarketPriceLadderAnalysisService, MarketPriceLadderAnalysisService>();
 builder.Services.AddScoped<IMarketAnalysisExecutionService, MarketAnalysisExecutionService>();
+builder.Services.AddScoped<IMarketIntelligenceProjectionService, MarketIntelligenceProjectionService>();
 builder.Services.AddScoped<IProcurementRouteExecutionService, ProcurementRouteExecutionService>();
 builder.Services.AddScoped<IndexedDbMarketCacheService>();
 builder.Services.AddScoped<IndexedDbMarketIntelligenceStore>();

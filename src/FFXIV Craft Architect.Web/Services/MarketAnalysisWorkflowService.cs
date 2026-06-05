@@ -21,6 +21,9 @@ public sealed class MarketAnalysisWorkflowService
     private readonly WebPlanPersistenceService _planPersistence;
     private readonly IndexedDbService _indexedDb;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
+    private readonly IMarketIntelligenceProjectionService _marketIntelligenceProjection;
+    private readonly IMarketIntelligenceStore _marketIntelligenceStore;
+    private readonly IMarketDataSourceStore _marketDataSourceStore;
 
     public MarketAnalysisWorkflowService(
         AppState appState,
@@ -29,7 +32,10 @@ public sealed class MarketAnalysisWorkflowService
         IMarketPriceLadderAnalysisService marketPriceLadderAnalysis,
         WebPlanPersistenceService planPersistence,
         IndexedDbService indexedDb,
-        IRecipeLayerWorkflowService recipeLayerWorkflow)
+        IRecipeLayerWorkflowService recipeLayerWorkflow,
+        IMarketIntelligenceProjectionService marketIntelligenceProjection,
+        IMarketIntelligenceStore marketIntelligenceStore,
+        IMarketDataSourceStore marketDataSourceStore)
     {
         _appState = appState;
         _marketAnalysisExecution = marketAnalysisExecution;
@@ -38,6 +44,9 @@ public sealed class MarketAnalysisWorkflowService
         _planPersistence = planPersistence;
         _indexedDb = indexedDb;
         _recipeLayerWorkflow = recipeLayerWorkflow;
+        _marketIntelligenceProjection = marketIntelligenceProjection;
+        _marketIntelligenceStore = marketIntelligenceStore;
+        _marketDataSourceStore = marketDataSourceStore;
     }
 
     public async Task<MarketAnalysisWorkflowResult> RunAnalysisAsync(
@@ -103,8 +112,7 @@ public sealed class MarketAnalysisWorkflowService
             plan,
             planSessionVersion,
             planId,
-            executionResult.Analyses,
-            executionResult.ShoppingPlans,
+            executionResult,
             recipeBasis,
             _appState.CreateCurrentMarketAnalysisScopeSnapshot(),
             ct);
@@ -141,14 +149,18 @@ public sealed class MarketAnalysisWorkflowService
         var shoppingPlans = _appState.MarketItemAnalyses
             .Select(analysis => _marketPriceLadderAnalysis.ProjectToShoppingPlan(analysis, lens))
             .ToList();
+        var publishedScope = CreateLensPublicationScope(lens);
+        var executionResult = new MarketAnalysisExecutionResult(
+            CreateEmptyEvidence(publishedScope),
+            _appState.MarketItemAnalyses.ToList(),
+            shoppingPlans);
         var published = await PublishMarketAnalysisAsync(
             plan,
             planSessionVersion,
             planId,
-            _appState.MarketItemAnalyses,
-            shoppingPlans,
+            executionResult,
             _appState.MarketAnalysisRecipeBasis,
-            _appState.CreateCurrentMarketAnalysisScopeSnapshot(),
+            publishedScope,
             ct);
         if (published == null)
         {
@@ -166,8 +178,7 @@ public sealed class MarketAnalysisWorkflowService
         CraftingPlan? plan,
         long planSessionVersion,
         string? planId,
-        IEnumerable<MarketItemAnalysis> analyses,
-        List<DetailedShoppingPlan> shoppingPlans,
+        MarketAnalysisExecutionResult executionResult,
         StoredRecipeOperationSnapshot? recipeBasis,
         PublishedMarketAnalysisScopeSnapshot publishedScope,
         CancellationToken ct)
@@ -178,10 +189,33 @@ public sealed class MarketAnalysisWorkflowService
         }
 
         ct.ThrowIfCancellationRequested();
-        var analysisList = analyses.ToList();
+        var analysisList = executionResult.Analyses.ToList();
+        var shoppingPlans = executionResult.ShoppingPlans.ToList();
         var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(plan, shoppingPlans);
         _marketShoppingService.ApplyVendorPurchaseOverrides(plan, shoppingPlans);
 
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        {
+            return null;
+        }
+
+        var projection = _marketIntelligenceProjection.Project(
+            new MarketIntelligenceProjectionRequest
+            {
+                ExecutionResult = new MarketAnalysisExecutionResult(
+                    executionResult.Evidence,
+                    analysisList,
+                    shoppingPlans),
+                PublicationContext = ToMarketIntelligencePublicationContext(publishedScope),
+                AnalyzerVersion = "web-market-analysis",
+                StartedAtUtc = publishedScope.PublishedAtUtc,
+                CompletedAtUtc = DateTime.UtcNow,
+                NetworkRequestCount = executionResult.Evidence.FetchedCount,
+                CacheMode = "mixed"
+            });
+        await _marketIntelligenceStore.SavePublicationAsync(projection.Publication, ct);
+        await _marketDataSourceStore.SaveListingFactsAsync(projection.SourceFacts, ct);
+        ct.ThrowIfCancellationRequested();
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
             return null;
@@ -193,7 +227,8 @@ public sealed class MarketAnalysisWorkflowService
             _recipeLayerWorkflow.BuildActiveProcurementItems(plan),
             changedDecisions > 0,
             recipeBasis,
-            publishedScope);
+            publishedScope,
+            projection.Publication.Summary);
 
         if (!string.IsNullOrEmpty(planId) &&
             _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
@@ -224,6 +259,56 @@ public sealed class MarketAnalysisWorkflowService
     }
 
     private sealed record PublishMarketAnalysisResult(int ChangedDecisionCount);
+
+    private PublishedMarketAnalysisScopeSnapshot CreateLensPublicationScope(MarketAcquisitionLens lens)
+    {
+        var previousScope = _appState.PublishedMarketAnalysisScope;
+        if (previousScope == null)
+        {
+            return _appState.CreateCurrentMarketAnalysisScopeSnapshot();
+        }
+
+        return previousScope with
+        {
+            Lens = lens,
+            PlanSessionVersion = _appState.PlanSessionVersion,
+            PublishedAtUtc = DateTime.UtcNow
+        };
+    }
+
+    private static MarketIntelligencePublicationContext ToMarketIntelligencePublicationContext(
+        PublishedMarketAnalysisScopeSnapshot scope)
+    {
+        return new MarketIntelligencePublicationContext(
+            MarketIntelligencePublicationContextKind.Known,
+            scope.Scope,
+            scope.SelectedDataCenter,
+            scope.SelectedRegion,
+            scope.RequestedDataCenters.ToArray(),
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+            null,
+            false,
+            RecommendationMode.MinimizeTotalCost,
+            scope.Lens,
+            null,
+            scope.PlanSessionVersion,
+            null,
+            scope.PublishedAtUtc);
+    }
+
+    private static MarketEvidenceSet CreateEmptyEvidence(PublishedMarketAnalysisScopeSnapshot scope)
+    {
+        return new MarketEvidenceSet(
+            new Dictionary<(int itemId, string dataCenter), CachedMarketData>(),
+            Array.Empty<(int itemId, string dataCenter)>(),
+            scope.Scope,
+            scope.RequestedDataCenters.ToArray(),
+            scope.SelectedDataCenter,
+            scope.SelectedRegion,
+            TimeSpan.Zero,
+            fetchedCount: 0,
+            scope.PublishedAtUtc);
+    }
 
     private bool IsCurrentRequest(MarketAnalysisRequestSnapshot snapshot)
     {
