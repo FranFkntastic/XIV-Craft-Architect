@@ -123,15 +123,53 @@ public sealed class CorePlanSessionLoadService
                 projectItems,
                 BuildMarketAnalysisCandidates));
         warning = AppendWarning(warning, marketRestore.Warning);
+        var marketIntelligenceSummary = DeserializeMarketIntelligenceSummary(
+            storedPlan.MarketIntelligenceSummaryJson,
+            out var summaryWarning);
+        warning = AppendWarning(warning, summaryWarning);
+        if (marketIntelligenceSummary != null &&
+            storedPlan.ActiveMarketIntelligencePublicationId is { } activePublicationId &&
+            activePublicationId != Guid.Empty &&
+            marketIntelligenceSummary.PublicationId != activePublicationId)
+        {
+            warning = AppendWarning(
+                warning,
+                "Stored market intelligence summary does not match the active publication reference.");
+            marketIntelligenceSummary = null;
+        }
+
+        var marketItemAnalyses = marketRestore.MarketItemAnalyses.Count > 0
+            ? marketRestore.MarketItemAnalyses
+            : HydrateMarketItemAnalyses(marketIntelligenceSummary);
+        var recommendations = marketRestore.Recommendations.Count > 0
+            ? marketRestore.Recommendations
+            : HydrateShoppingPlans(marketIntelligenceSummary);
+        var unavailableMarketItemIds = marketRestore.UnavailableMarketItemIds.Count > 0
+            ? marketRestore.UnavailableMarketItemIds
+            : marketIntelligenceSummary?.UnavailableMarketItems.Select(item => item.ItemId).ToHashSet()
+              ?? new HashSet<int>();
+        var marketIntelligence = marketRestore.MarketIntelligence;
+        if (marketIntelligence == null &&
+            (marketItemAnalyses.Count > 0 || recommendations.Count > 0 || unavailableMarketItemIds.Count > 0) &&
+            marketIntelligenceSummary != null)
+        {
+            marketIntelligence = new MarketIntelligence(
+                marketIntelligenceSummary.PublicationId,
+                marketItemAnalyses,
+                recommendations,
+                marketIntelligenceSummary.UnavailableMarketItems,
+                marketIntelligenceSummary.PublicationContext,
+                marketRestore.RecipeBasis);
+        }
 
         return new CorePlanSessionLoadResult(
             storedPlan,
             plan,
             projectItems,
-            marketRestore.MarketItemAnalyses,
-            marketRestore.Recommendations,
-            marketRestore.UnavailableMarketItemIds,
-            marketRestore.MarketIntelligence,
+            marketItemAnalyses,
+            recommendations,
+            unavailableMarketItemIds,
+            marketIntelligence,
             marketRestore.RecipeBasis,
             CanLoad: true,
             warning);
@@ -177,5 +215,161 @@ public sealed class CorePlanSessionLoadService
         return new RecipeDemandProjectionService()
             .Build(plan, snapshot: null)
             .ToMarketAnalysisMaterialAggregates();
+    }
+
+    private static MarketIntelligencePublicationSummary? DeserializeMarketIntelligenceSummary(
+        string? json,
+        out string? warning)
+    {
+        warning = null;
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            var summary = JsonSerializer.Deserialize<MarketIntelligencePublicationSummary>(json);
+            if (summary == null)
+            {
+                return null;
+            }
+
+            if (summary.SchemaVersion > MarketIntelligencePublicationSummary.CurrentSchemaVersion)
+            {
+                warning = "Stored market intelligence summary was saved with a newer schema version.";
+                return null;
+            }
+
+            return summary;
+        }
+        catch (JsonException ex)
+        {
+            warning = $"Stored market intelligence summary could not be deserialized: {ex.Message}";
+            return null;
+        }
+        catch (NotSupportedException ex)
+        {
+            warning = $"Stored market intelligence summary could not be deserialized: {ex.Message}";
+            return null;
+        }
+    }
+
+    private static IReadOnlyList<MarketItemAnalysis> HydrateMarketItemAnalyses(
+        MarketIntelligencePublicationSummary? summary)
+    {
+        if (summary == null)
+        {
+            return [];
+        }
+
+        return summary.Items
+            .Select(item => new MarketItemAnalysis
+            {
+                ItemId = item.ItemId,
+                Name = item.Name,
+                QuantityNeeded = item.QuantityNeeded,
+                Scope = item.Scope,
+                LoadedAtUtc = summary.PublicationContext.PublishedAtUtc,
+                AnalysisScopeBaselineUnitPrice = item.BaselineUnitPrice,
+                AnalysisScopeAverageUnitPrice = item.AverageUnitPrice,
+                AnalysisScopeCompetitiveAverageUnitPrice = item.CompetitiveAverageUnitPrice,
+                AnalysisScopeMedianUnitPrice = item.MedianUnitPrice,
+                RequestedDataCenters = summary.PublicationContext.RequestedDataCenters,
+                PresentDataCenters = item.Worlds
+                    .Select(world => world.World.DataCenter)
+                    .Where(dataCenter => !string.IsNullOrWhiteSpace(dataCenter))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                MissingDataCenters = [],
+                WorstDataQualityBucket = item.DataQualityBucket,
+                Worlds = item.Worlds.Select(HydrateWorldMarketAnalysis).ToList(),
+                Warning = item.Warning
+            })
+            .ToArray();
+    }
+
+    private static WorldMarketAnalysis HydrateWorldMarketAnalysis(WorldMarketSummary summary)
+    {
+        return new WorldMarketAnalysis
+        {
+            DataCenter = summary.World.DataCenter,
+            WorldName = summary.World.WorldName,
+            QuantityNeeded = summary.QuantityNeeded,
+            CompetitiveQuantity = summary.CompetitiveQuantity,
+            ScopeCompetitiveQuantity = summary.CompetitiveQuantity,
+            ScopeSaneQuantity = summary.TotalListingQuantity,
+            TotalListingQuantity = summary.TotalListingQuantity,
+            CompetitiveCoverageRatio = summary.CompetitiveCoverageRatio,
+            ScopeCompetitiveCoverageRatio = summary.CompetitiveCoverageRatio,
+            AnalysisScopeCompetitiveAverageUnitPrice = summary.CompetitiveAverageUnitPrice,
+            ScopeCompetitiveAverageUnitPrice = summary.CompetitiveAverageUnitPrice,
+            CoverageBucket = summary.CoverageBucket,
+            FetchedAtUtc = summary.FetchedAtUtc,
+            MarketUploadedAtUtc = summary.MarketUploadedAtUtc,
+            DataAge = summary.DataAge,
+            DataAgeSource = summary.DataAgeSource,
+            DataQualityBucket = summary.DataQualityBucket,
+            Scores = summary.Scores.ToList()
+        };
+    }
+
+    private static IReadOnlyList<DetailedShoppingPlan> HydrateShoppingPlans(
+        MarketIntelligencePublicationSummary? summary)
+    {
+        if (summary == null)
+        {
+            return [];
+        }
+
+        return summary.Items
+            .Select(item => new DetailedShoppingPlan
+            {
+                ItemId = item.ItemId,
+                Name = item.Name,
+                QuantityNeeded = item.QuantityNeeded,
+                DCAveragePrice = item.AverageUnitPrice,
+                WorldOptions = item.Worlds.Select(HydrateWorldShoppingSummary).ToList(),
+                RecommendedWorld = item.RecommendedWorld is null
+                    ? null
+                    : new WorldShoppingSummary
+                    {
+                        DataCenter = item.RecommendedWorld.Value.DataCenter,
+                        WorldName = item.RecommendedWorld.Value.WorldName,
+                        TotalCost = item.RecommendedTotalCost,
+                        AveragePricePerUnit = item.CompetitiveAverageUnitPrice,
+                        TotalQuantityPurchased = item.QuantityNeeded
+                    },
+                RecommendedSplit = item.RecommendedSplit.Select(HydrateSplitPurchase).ToList(),
+                MarketDataWarning = item.Warning
+            })
+            .ToArray();
+    }
+
+    private static WorldShoppingSummary HydrateWorldShoppingSummary(WorldMarketSummary summary)
+    {
+        return new WorldShoppingSummary
+        {
+            DataCenter = summary.World.DataCenter,
+            WorldName = summary.World.WorldName,
+            AveragePricePerUnit = summary.CompetitiveAverageUnitPrice,
+            TotalQuantityPurchased = summary.CompetitiveQuantity
+        };
+    }
+
+    private static SplitWorldPurchase HydrateSplitPurchase(MarketSplitPurchaseSummary summary)
+    {
+        return new SplitWorldPurchase
+        {
+            DataCenter = summary.World.DataCenter,
+            WorldName = summary.World.WorldName,
+            QuantityToBuy = summary.QuantityToBuy,
+            PricePerUnit = summary.PricePerUnit,
+            EffectivePricePerNeededUnit = summary.EffectivePricePerNeededUnit,
+            TotalCost = summary.TotalCost,
+            IsPartial = summary.IsPartial,
+            TravelContext = summary.TravelContext,
+            ExcessAvailable = summary.ExcessAvailable
+        };
     }
 }

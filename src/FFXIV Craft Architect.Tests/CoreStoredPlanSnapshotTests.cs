@@ -95,6 +95,39 @@ public class CoreStoredPlanSnapshotTests
     }
 
     [Fact]
+    public void Prepare_RestoresCompactMarketIntelligenceSummaryWithoutRichDetails()
+    {
+        var publicationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var snapshot = new CoreStoredPlanSnapshot
+        {
+            Id = "plan",
+            Name = "Plan",
+            ProjectItems =
+            [
+                new CoreStoredProjectItem { Id = 100, Name = "Final Craft", Quantity = 4 }
+            ],
+            ActiveMarketIntelligencePublicationId = publicationId,
+            MarketIntelligenceSummaryJson = JsonSerializer.Serialize(CreateMarketIntelligenceSummary(publicationId)),
+            MarketIntelligenceJson = null,
+            MarketItemAnalysesJson = null,
+            MarketPlansJson = null
+        };
+
+        var result = CorePlanSessionLoadService.Prepare(snapshot);
+
+        Assert.True(result.CanLoad);
+        var analysis = Assert.Single(result.MarketItemAnalyses);
+        Assert.Equal(100, analysis.ItemId);
+        var world = Assert.Single(analysis.Worlds);
+        Assert.Equal(4, world.ScopeCompetitiveQuantity);
+        Assert.Equal(5, world.ScopeSaneQuantity);
+        Assert.Equal(100, Assert.Single(result.ShoppingPlans).ItemId);
+        Assert.NotNull(result.MarketIntelligence);
+        Assert.Equal(publicationId, result.MarketIntelligence!.MarketIntelligenceId);
+        Assert.Equal(MarketIntelligencePublicationContextKind.Known, result.MarketIntelligence.PublicationContext.Kind);
+    }
+
+    [Fact]
     public void Prepare_InvalidMarketEvidenceClearsOnlyMarketPayload()
     {
         var invalidRecipeBasis = CreateStoredRecipeBasis();
@@ -368,6 +401,54 @@ public class CoreStoredPlanSnapshotTests
                 TotalCost = 1000,
                 TotalQuantityPurchased = quantityNeeded
             }
+        };
+    }
+
+    private static MarketIntelligencePublicationSummary CreateMarketIntelligenceSummary(Guid publicationId)
+    {
+        return new MarketIntelligencePublicationSummary
+        {
+            PublicationId = publicationId,
+            PublicationContext = new MarketIntelligencePublicationContext(
+                MarketIntelligencePublicationContextKind.Known,
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                ["Aether"],
+                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+                null,
+                false,
+                RecommendationMode.MinimizeTotalCost,
+                MarketAcquisitionLens.BulkValue,
+                null,
+                7,
+                2,
+                new DateTime(2026, 6, 5, 12, 0, 0, DateTimeKind.Utc)),
+            Items =
+            [
+                new MarketItemSummary
+                {
+                    ItemId = 100,
+                    Name = "Final Craft",
+                    QuantityNeeded = 4,
+                    RecommendedTotalCost = 400,
+                    CompetitiveAverageUnitPrice = 100,
+                    Worlds =
+                    [
+                        new WorldMarketSummary
+                        {
+                            World = new MarketWorldKey("Aether", "Siren"),
+                            QuantityNeeded = 4,
+                            CompetitiveQuantity = 4,
+                            TotalListingQuantity = 5,
+                            CompetitiveCoverageRatio = 1m,
+                            CompetitiveAverageUnitPrice = 100,
+                            CoverageBucket = MarketCoverageBucket.Full,
+                            DataQualityBucket = MarketDataQualityBucket.Current
+                        }
+                    ]
+                }
+            ]
         };
     }
 

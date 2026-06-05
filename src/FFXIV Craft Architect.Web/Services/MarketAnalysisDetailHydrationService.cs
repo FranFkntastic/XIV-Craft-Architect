@@ -76,7 +76,7 @@ public sealed class MarketAnalysisDetailHydrationService : IMarketAnalysisDetail
                 manifestWorld == worldKey);
             result = MarketAnalysisWorldDetailHydrationResult.Unavailable(
                 manifestEntry?.Availability ?? MarketIntelligenceDetailAvailability.Missing,
-                FormatUnavailableMessage(manifestEntry));
+                FormatUnavailableMessage(manifestEntry, expectedAvailableDetailMissing: manifestEntry?.Availability == MarketIntelligenceDetailAvailability.Available));
         }
 
         Cache(cacheKey, result);
@@ -99,8 +99,15 @@ public sealed class MarketAnalysisDetailHydrationService : IMarketAnalysisDetail
         }
     }
 
-    private static string FormatUnavailableMessage(MarketIntelligenceDetailManifestEntry? manifestEntry)
+    private static string FormatUnavailableMessage(
+        MarketIntelligenceDetailManifestEntry? manifestEntry,
+        bool expectedAvailableDetailMissing)
     {
+        if (expectedAvailableDetailMissing)
+        {
+            return "Listing detail was expected in local storage, but the detail record is missing.";
+        }
+
         if (!string.IsNullOrWhiteSpace(manifestEntry?.UnavailableReason))
         {
             return manifestEntry.UnavailableReason;

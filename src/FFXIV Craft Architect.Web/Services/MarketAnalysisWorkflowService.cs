@@ -242,7 +242,8 @@ public sealed class MarketAnalysisWorkflowService
                 _appState.MarketAnalysisLens,
                 recipeBasis,
                 publishedScope,
-                _appState.MarketIntelligence);
+                _appState.MarketIntelligence,
+                projection.Publication.Summary);
         }
 
         ct.ThrowIfCancellationRequested();

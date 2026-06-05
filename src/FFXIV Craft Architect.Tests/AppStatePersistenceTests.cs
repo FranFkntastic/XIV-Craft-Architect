@@ -668,6 +668,47 @@ public class AppStatePersistenceTests
     }
 
     [Fact]
+    public void PlanSessionLoadService_Prepare_NewerCompactSummarySchemaWarnsAndSkipsSummary()
+    {
+        var summaryJson = $$"""
+            {
+              "SchemaVersion": {{MarketIntelligencePublicationSummary.CurrentSchemaVersion + 1}},
+              "PublicationId": "11111111-1111-1111-1111-111111111111",
+              "Items": [
+                {
+                  "ItemId": 123,
+                  "Name": "Future Item",
+                  "QuantityNeeded": 10
+                }
+              ]
+            }
+            """;
+        var storedPlan = new StoredPlan
+        {
+            ProjectItems =
+            [
+                new StoredProjectItem
+                {
+                    Id = 123,
+                    Name = "Future Item",
+                    Quantity = 10
+                }
+            ],
+            MarketIntelligenceSummaryJson = summaryJson,
+            MarketIntelligenceJson = null,
+            MarketPlansJson = null,
+            MarketItemAnalysesJson = null
+        };
+
+        var result = PlanSessionLoadService.Prepare(storedPlan);
+
+        Assert.Null(result.MarketIntelligenceSummary);
+        Assert.Empty(result.MarketItemAnalyses);
+        Assert.Empty(result.ShoppingPlans);
+        Assert.Contains("newer schema", result.Warning, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void LoadStoredPlan_MarketIntelligenceWithAnalysisButNoRecommendationsKeepsKnownScope()
     {
         var appState = new AppState();

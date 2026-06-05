@@ -76,6 +76,9 @@ public class MarketAnalysisWorkflowServiceTests
         Assert.Null(jsRuntime.LastSavedPlan.MarketIntelligenceJson);
         Assert.Null(jsRuntime.LastSavedPlan.MarketPlansJson);
         Assert.Null(jsRuntime.LastSavedPlan.MarketItemAnalysesJson);
+        Assert.Null(jsRuntime.LastPatchedMarketIntelligenceJson);
+        Assert.Equal(summary.PublicationId, jsRuntime.LastPatchedActivePublicationId);
+        Assert.Contains("\"PublicationId\"", jsRuntime.LastPatchedMarketIntelligenceSummaryJson);
 
         var storedManifest = await intelligenceStore.LoadDetailManifestAsync(summary.PublicationId);
         Assert.True(storedManifest?.HasAvailableDetails);
@@ -792,6 +795,8 @@ public class MarketAnalysisWorkflowServiceTests
         public StoredPlan? LastSavedPlan { get; private set; }
         public string? LastPatchedMarketIntelligenceJson { get; private set; }
         public string? LastPatchedRecipeBasisJson { get; private set; }
+        public Guid? LastPatchedActivePublicationId { get; private set; }
+        public string? LastPatchedMarketIntelligenceSummaryJson { get; private set; }
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
         {
@@ -807,6 +812,8 @@ public class MarketAnalysisWorkflowServiceTests
                 PatchMarketAnalysisCallCount++;
                 LastPatchedMarketIntelligenceJson = args?.Length > 3 ? args[3] as string : null;
                 LastPatchedRecipeBasisJson = args?.Length > 6 ? args[6] as string : null;
+                LastPatchedActivePublicationId = args?.Length > 8 ? args[8] as Guid? : null;
+                LastPatchedMarketIntelligenceSummaryJson = args?.Length > 9 ? args[9] as string : null;
                 return new ValueTask<TValue>((TValue)(object)true);
             }
 

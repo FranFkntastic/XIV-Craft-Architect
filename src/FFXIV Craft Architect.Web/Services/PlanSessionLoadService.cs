@@ -92,8 +92,20 @@ public sealed class PlanSessionLoadService
                 ProjectItems: projectItems,
                 BuildMarketAnalysisCandidates: buildMarketAnalysisCandidates));
         warning = AppendWarning(warning, marketRestore.Warning);
-        var marketIntelligenceSummary =
-            DeserializeOrNull<MarketIntelligencePublicationSummary>(storedPlan.MarketIntelligenceSummaryJson);
+        var marketIntelligenceSummary = DeserializeMarketIntelligenceSummary(
+            storedPlan.MarketIntelligenceSummaryJson,
+            out var marketIntelligenceSummaryWarning);
+        warning = AppendWarning(warning, marketIntelligenceSummaryWarning);
+        if (marketIntelligenceSummary != null &&
+            storedPlan.ActiveMarketIntelligencePublicationId is { } activePublicationId &&
+            activePublicationId != Guid.Empty &&
+            marketIntelligenceSummary.PublicationId != activePublicationId)
+        {
+            warning = AppendWarning(
+                warning,
+                "Stored market intelligence summary does not match the active publication reference.");
+            marketIntelligenceSummary = null;
+        }
 
         var publishedScope = ResolvePublishedScope(storedPlan, marketRestore, marketIntelligenceSummary);
         var marketIntelligence = ApplyPublishedScopeFallback(
@@ -317,6 +329,26 @@ public sealed class PlanSessionLoadService
         {
             return default;
         }
+    }
+
+    private static MarketIntelligencePublicationSummary? DeserializeMarketIntelligenceSummary(
+        string? json,
+        out string? warning)
+    {
+        warning = null;
+        var summary = DeserializeOrNull<MarketIntelligencePublicationSummary>(json);
+        if (summary == null)
+        {
+            return null;
+        }
+
+        if (summary.SchemaVersion > MarketIntelligencePublicationSummary.CurrentSchemaVersion)
+        {
+            warning = "Stored market intelligence summary was saved with a newer schema version.";
+            return null;
+        }
+
+        return summary;
     }
 
     private static PublishedMarketAnalysisScopeSnapshot? ToPublishedScope(

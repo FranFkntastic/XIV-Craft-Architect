@@ -166,7 +166,9 @@ async function patchMarketAnalysis(
     recommendationMode,
     marketAnalysisLens,
     marketAnalysisRecipeBasisJson,
-    marketAnalysisScopeSnapshotJson) {
+    marketAnalysisScopeSnapshotJson,
+    activeMarketIntelligencePublicationId,
+    marketIntelligenceSummaryJson) {
     const database = await initDB();
 
     return new Promise((resolve, reject) => {
@@ -187,6 +189,8 @@ async function patchMarketAnalysis(
                 marketPlansJson,
                 marketIntelligenceJson,
                 marketItemAnalysesJson,
+                activeMarketIntelligencePublicationId,
+                marketIntelligenceSummaryJson,
                 marketAnalysisRecipeBasisJson,
                 marketAnalysisScopeSnapshotJson,
                 savedRecommendationMode: recommendationMode,
