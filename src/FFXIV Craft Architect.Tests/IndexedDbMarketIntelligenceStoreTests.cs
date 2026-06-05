@@ -1,0 +1,158 @@
+using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
+using FFXIV_Craft_Architect.Web.Services;
+using Microsoft.JSInterop;
+
+namespace FFXIV_Craft_Architect.Tests;
+
+public class IndexedDbMarketIntelligenceStoreTests
+{
+    [Fact]
+    public async Task SavePublicationAsync_UsesSingleAtomicInteropCallAndNormalizesMissingDetails()
+    {
+        var jsRuntime = new RecordingJsRuntime();
+        var store = new IndexedDbMarketIntelligenceStore(jsRuntime);
+        var publicationId = Guid.NewGuid();
+        var detailKey = new MarketIntelligenceDetailKey(
+            publicationId,
+            MarketFetchScope.SelectedDataCenter,
+            5338,
+            new MarketWorldKey("Aether", "Siren"),
+            "plan:v1:item:5338:qty:12");
+        var summary = new MarketIntelligencePublicationSummary
+        {
+            PublicationId = publicationId,
+            DetailManifest = new MarketIntelligenceDetailManifest
+            {
+                PublicationId = publicationId,
+                Entries =
+                [
+                    new MarketIntelligenceDetailManifestEntry
+                    {
+                        Key = detailKey,
+                        Availability = MarketIntelligenceDetailAvailability.Available,
+                        ListingCount = 1
+                    }
+                ]
+            }
+        };
+
+        await store.SavePublicationAsync(
+            new MarketIntelligencePublicationWrite(summary, [], []),
+            CancellationToken.None);
+
+        Assert.Equal("IndexedDB.saveMarketPublication", jsRuntime.LastIdentifier);
+        var write = Assert.IsType<MarketIntelligencePublicationWrite>(Assert.Single(jsRuntime.LastArgs ?? []));
+        var manifestEntry = Assert.Single(write.Summary.DetailManifest.Entries);
+        Assert.Equal(MarketIntelligenceDetailAvailability.Missing, manifestEntry.Availability);
+    }
+
+    [Fact]
+    public async Task LoadAndSaveMethods_UseStableIndexedDbInteropNames()
+    {
+        var jsRuntime = new RecordingJsRuntime();
+        var store = new IndexedDbMarketIntelligenceStore(jsRuntime);
+        var publicationId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+
+        await store.LoadPublicationSummaryAsync(publicationId, CancellationToken.None);
+        Assert.Equal("IndexedDB.loadMarketPublicationSummary", jsRuntime.LastIdentifier);
+        Assert.Equal(publicationId, Assert.Single(jsRuntime.LastArgs ?? []));
+
+        await store.LoadDetailManifestAsync(publicationId, CancellationToken.None);
+        Assert.Equal("IndexedDB.loadMarketDetailManifest", jsRuntime.LastIdentifier);
+
+        await store.LoadDetailsAsync(
+            new MarketIntelligenceDetailQuery(publicationId, 5338, new MarketWorldKey("Aether", "Siren")),
+            CancellationToken.None);
+        Assert.Equal("IndexedDB.loadMarketDetails", jsRuntime.LastIdentifier);
+        Assert.IsType<MarketIntelligenceDetailQuery>(Assert.Single(jsRuntime.LastArgs ?? []));
+
+        await store.LoadRunRecordAsync(runId, CancellationToken.None);
+        Assert.Equal("IndexedDB.loadMarketRunRecord", jsRuntime.LastIdentifier);
+
+        await store.SaveListingFactsAsync([], CancellationToken.None);
+        Assert.Equal("IndexedDB.saveMarketListingFacts", jsRuntime.LastIdentifier);
+
+        await store.LoadListingFactsAsync(
+            new MarketDataSourceQuery(5338, MarketFetchScope.SelectedDataCenter, "Aether", "Siren"),
+            CancellationToken.None);
+        Assert.Equal("IndexedDB.loadMarketListingFacts", jsRuntime.LastIdentifier);
+
+        await store.PruneDetailsAsync(
+            new MarketIntelligencePruneRequest(publicationId, null, null),
+            CancellationToken.None);
+        Assert.Equal("IndexedDB.pruneMarketDetails", jsRuntime.LastIdentifier);
+    }
+
+    [Fact]
+    public async Task SavePublicationAsync_DoesNotSwallowAtomicWriteFailure()
+    {
+        var jsRuntime = new RecordingJsRuntime { ThrowOnSaveMarketPublication = true };
+        var store = new IndexedDbMarketIntelligenceStore(jsRuntime);
+        var summary = new MarketIntelligencePublicationSummary { PublicationId = Guid.NewGuid() };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.SavePublicationAsync(
+                new MarketIntelligencePublicationWrite(summary, [], []),
+                CancellationToken.None));
+    }
+
+    private sealed class RecordingJsRuntime : IJSRuntime
+    {
+        public string? LastIdentifier { get; private set; }
+        public object?[]? LastArgs { get; private set; }
+        public bool ThrowOnSaveMarketPublication { get; init; }
+
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
+        {
+            LastIdentifier = identifier;
+            LastArgs = args;
+            if (ThrowOnSaveMarketPublication && identifier == "IndexedDB.saveMarketPublication")
+            {
+                throw new InvalidOperationException("simulated quota failure");
+            }
+
+            return new ValueTask<TValue>(DefaultValue<TValue>());
+        }
+
+        public ValueTask<TValue> InvokeAsync<TValue>(
+            string identifier,
+            CancellationToken cancellationToken,
+            object?[]? args)
+        {
+            LastIdentifier = identifier;
+            LastArgs = args;
+            if (ThrowOnSaveMarketPublication && identifier == "IndexedDB.saveMarketPublication")
+            {
+                throw new InvalidOperationException("simulated quota failure");
+            }
+
+            return new ValueTask<TValue>(DefaultValue<TValue>());
+        }
+
+        private static TValue DefaultValue<TValue>()
+        {
+            var type = typeof(TValue);
+            if (type == typeof(bool))
+            {
+                return (TValue)(object)true;
+            }
+
+            if (type == typeof(IReadOnlyList<MarketListingDetail>) ||
+                type == typeof(List<MarketListingDetail>))
+            {
+                return (TValue)(object)new List<MarketListingDetail>();
+            }
+
+            if (type == typeof(IReadOnlyList<CanonicalMarketListingFact>) ||
+                type == typeof(List<CanonicalMarketListingFact>))
+            {
+                return (TValue)(object)new List<CanonicalMarketListingFact>();
+            }
+
+            return default!;
+        }
+    }
+}
