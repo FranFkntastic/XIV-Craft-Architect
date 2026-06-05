@@ -146,13 +146,26 @@ public sealed class MarketAnalysisWorkflowService
         var plan = _appState.CurrentPlan;
         var planSessionVersion = _appState.PlanSessionVersion;
         var planId = _appState.CurrentPlanId;
-        var shoppingPlans = _appState.MarketItemAnalyses
-            .Select(analysis => _marketPriceLadderAnalysis.ProjectToShoppingPlan(analysis, lens))
+        var analyses = (await LoadAnalysesForLensProjectionAsync(ct)).ToList();
+        var currentPlansByItemId = _appState.ShoppingPlans
+            .GroupBy(plan => plan.ItemId)
+            .ToDictionary(group => group.Key, group => group.First());
+        var shoppingPlans = analyses
+            .Select(analysis =>
+            {
+                var shoppingPlan = _marketPriceLadderAnalysis.ProjectToShoppingPlan(analysis, lens);
+                if (currentPlansByItemId.TryGetValue(shoppingPlan.ItemId, out var currentPlan))
+                {
+                    shoppingPlan.IconId = currentPlan.IconId;
+                }
+
+                return shoppingPlan;
+            })
             .ToList();
         var publishedScope = CreateLensPublicationScope(lens);
         var executionResult = new MarketAnalysisExecutionResult(
             CreateEmptyEvidence(publishedScope),
-            _appState.MarketItemAnalyses.ToList(),
+            analyses,
             shoppingPlans);
         var published = await PublishMarketAnalysisAsync(
             plan,
@@ -172,6 +185,108 @@ public sealed class MarketAnalysisWorkflowService
             _appState.ShoppingPlans.Count,
             published.ChangedDecisionCount,
             0);
+    }
+
+    private async Task<IReadOnlyList<MarketItemAnalysis>> LoadAnalysesForLensProjectionAsync(CancellationToken ct)
+    {
+        var publicationId = _appState.MarketIntelligenceSummary?.PublicationId;
+        var analyses = _appState.MarketItemAnalyses.ToList();
+        if (publicationId is null || publicationId.Value == Guid.Empty)
+        {
+            return analyses;
+        }
+
+        var hydrated = new List<MarketItemAnalysis>(analyses.Count);
+        foreach (var analysis in analyses)
+        {
+            ct.ThrowIfCancellationRequested();
+            var details = await _marketIntelligenceStore.LoadDetailsAsync(
+                new MarketIntelligenceDetailQuery(publicationId.Value, analysis.ItemId),
+                ct);
+            hydrated.Add(CloneAnalysisWithDetails(analysis, details));
+        }
+
+        return hydrated;
+    }
+
+    private static MarketItemAnalysis CloneAnalysisWithDetails(
+        MarketItemAnalysis analysis,
+        IReadOnlyList<MarketListingDetail> details)
+    {
+        var itemDetail = details.FirstOrDefault(detail => detail.Key.World is null);
+        var detailByWorld = details
+            .Where(detail => detail.Key.World is not null)
+            .GroupBy(detail => detail.Key.World!.Value)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        return new MarketItemAnalysis
+        {
+            ItemId = analysis.ItemId,
+            Name = analysis.Name,
+            QuantityNeeded = analysis.QuantityNeeded,
+            Scope = analysis.Scope,
+            LoadedAtUtc = analysis.LoadedAtUtc,
+            AnalysisScopeBaselineUnitPrice = analysis.AnalysisScopeBaselineUnitPrice,
+            AnalysisScopeAverageUnitPrice = analysis.AnalysisScopeAverageUnitPrice,
+            AnalysisScopeCompetitiveAverageUnitPrice = analysis.AnalysisScopeCompetitiveAverageUnitPrice,
+            AnalysisScopeMedianUnitPrice = analysis.AnalysisScopeMedianUnitPrice,
+            CompetitiveThresholdUnitPrice = analysis.CompetitiveThresholdUnitPrice,
+            SaneThresholdUnitPrice = analysis.SaneThresholdUnitPrice,
+            RequestedDataCenters = analysis.RequestedDataCenters,
+            PresentDataCenters = analysis.PresentDataCenters,
+            MissingDataCenters = analysis.MissingDataCenters,
+            WorstDataQualityBucket = analysis.WorstDataQualityBucket,
+            PriceEvaluation = itemDetail?.PriceEvaluation ?? analysis.PriceEvaluation,
+            Worlds = analysis.Worlds
+                .Select(world => CloneWorldWithDetails(
+                    world,
+                    detailByWorld.TryGetValue(new MarketWorldKey(world.DataCenter, world.WorldName), out var detail)
+                        ? detail
+                        : null))
+                .ToList(),
+            Warning = analysis.Warning
+        };
+    }
+
+    private static WorldMarketAnalysis CloneWorldWithDetails(
+        WorldMarketAnalysis world,
+        MarketListingDetail? detail)
+    {
+        return new WorldMarketAnalysis
+        {
+            DataCenter = world.DataCenter,
+            WorldName = world.WorldName,
+            QuantityNeeded = world.QuantityNeeded,
+            CompetitiveQuantity = world.CompetitiveQuantity,
+            LocalCompetitiveQuantity = world.LocalCompetitiveQuantity,
+            ScopeCompetitiveQuantity = world.ScopeCompetitiveQuantity,
+            ScopeSaneQuantity = world.ScopeSaneQuantity,
+            ScopeUncompetitiveQuantity = world.ScopeUncompetitiveQuantity,
+            ScopeInsaneQuantity = world.ScopeInsaneQuantity,
+            TotalSaneQuantity = world.TotalSaneQuantity,
+            TotalListingQuantity = world.TotalListingQuantity,
+            CompetitiveCoverageRatio = world.CompetitiveCoverageRatio,
+            ScopeCompetitiveCoverageRatio = world.ScopeCompetitiveCoverageRatio,
+            ScopeSaneCoverageRatio = world.ScopeSaneCoverageRatio,
+            SaneCoverageRatio = world.SaneCoverageRatio,
+            AnalysisScopeBaselineUnitPrice = world.AnalysisScopeBaselineUnitPrice,
+            AnalysisScopeAverageUnitPrice = world.AnalysisScopeAverageUnitPrice,
+            AnalysisScopeCompetitiveAverageUnitPrice = world.AnalysisScopeCompetitiveAverageUnitPrice,
+            ScopeCompetitiveAverageUnitPrice = world.ScopeCompetitiveAverageUnitPrice,
+            AnalysisScopeMedianUnitPrice = world.AnalysisScopeMedianUnitPrice,
+            CompetitiveThresholdUnitPrice = world.CompetitiveThresholdUnitPrice,
+            SaneThresholdUnitPrice = world.SaneThresholdUnitPrice,
+            CoverageBucket = world.CoverageBucket,
+            FetchedAtUtc = world.FetchedAtUtc,
+            MarketUploadedAtUtc = world.MarketUploadedAtUtc,
+            DataAgeSource = world.DataAgeSource,
+            DataAge = world.DataAge,
+            DataQualityScore = world.DataQualityScore,
+            DataQualityBucket = world.DataQualityBucket,
+            PriceBands = detail?.PriceBands.ToList() ?? world.PriceBands.ToList(),
+            Listings = detail?.Listings.ToList() ?? world.Listings.ToList(),
+            Scores = world.Scores.ToList()
+        };
     }
 
     private async Task<PublishMarketAnalysisResult?> PublishMarketAnalysisAsync(
@@ -221,9 +336,16 @@ public sealed class MarketAnalysisWorkflowService
             return null;
         }
 
+        var hotAnalyses = MarketIntelligenceSummaryHydrator
+            .HydrateMarketItemAnalyses(projection.Publication.Summary)
+            .ToList();
+        var hotShoppingPlans = MarketIntelligenceSummaryHydrator
+            .HydrateShoppingPlans(projection.Publication.Summary)
+            .ToList();
+
         _appState.ApplyMarketAnalysisPublication(
-            analysisList,
-            shoppingPlans,
+            hotAnalyses,
+            hotShoppingPlans,
             _recipeLayerWorkflow.BuildActiveProcurementItems(plan),
             changedDecisions > 0,
             recipeBasis,
@@ -236,8 +358,8 @@ public sealed class MarketAnalysisWorkflowService
         {
             await _planPersistence.SaveMarketAnalysisAsync(
                 planId,
-                shoppingPlans,
-                analysisList,
+                hotShoppingPlans,
+                hotAnalyses,
                 RecommendationMode.MinimizeTotalCost,
                 _appState.MarketAnalysisLens,
                 recipeBasis,

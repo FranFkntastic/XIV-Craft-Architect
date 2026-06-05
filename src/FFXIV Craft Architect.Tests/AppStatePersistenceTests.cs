@@ -617,6 +617,10 @@ public class AppStatePersistenceTests
                     Name = "Snapshot Item",
                     QuantityNeeded = 10,
                     RecommendedTotalCost = 100,
+                    BaselineUnitPrice = 150,
+                    AverageUnitPrice = 300,
+                    CompetitiveAverageUnitPrice = 200,
+                    MedianUnitPrice = 250,
                     Worlds =
                     [
                         new WorldMarketSummary
@@ -662,6 +666,12 @@ public class AppStatePersistenceTests
         Assert.Equal(8, restoredWorld.ScopeCompetitiveQuantity);
         Assert.Equal(12, restoredWorld.ScopeSaneQuantity);
         Assert.Equal(0.8m, restoredWorld.ScopeCompetitiveCoverageRatio);
+        Assert.Equal(150, restoredWorld.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(300, restoredWorld.AnalysisScopeAverageUnitPrice);
+        Assert.Equal(200, restoredWorld.AnalysisScopeCompetitiveAverageUnitPrice);
+        Assert.Equal(250, restoredWorld.AnalysisScopeMedianUnitPrice);
+        Assert.Equal(100, restoredWorld.ScopeCompetitiveAverageUnitPrice);
+        Assert.Equal("-50%", MarketAnalysisGridViewService.FormatCompetitiveValue(restoredWorld));
         Assert.Equal(123, Assert.Single(appState.ShoppingPlans).ItemId);
         Assert.Equal(MarketIntelligencePublicationContextKind.Known, appState.MarketIntelligencePublicationContext.Kind);
         Assert.Equal(publishedAtUtc, appState.PublishedMarketAnalysisScope?.PublishedAtUtc);

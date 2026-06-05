@@ -59,6 +59,8 @@ public sealed class MarketItemSummary
 
     public string Name { get; init; } = string.Empty;
 
+    public int IconId { get; init; }
+
     public int QuantityNeeded { get; init; }
 
     public MarketFetchScope Scope { get; init; }
@@ -67,6 +69,12 @@ public sealed class MarketItemSummary
 
     public long RecommendedTotalCost { get; init; }
 
+    public decimal RecommendedWorldAveragePricePerUnit { get; init; }
+
+    public string? RecommendedWorldVendorName { get; init; }
+
+    public IReadOnlyList<VendorInfo> Vendors { get; init; } = [];
+
     public decimal BaselineUnitPrice { get; init; }
 
     public decimal AverageUnitPrice { get; init; }
@@ -74,6 +82,10 @@ public sealed class MarketItemSummary
     public decimal CompetitiveAverageUnitPrice { get; init; }
 
     public decimal MedianUnitPrice { get; init; }
+
+    public decimal CompetitiveThresholdUnitPrice { get; init; }
+
+    public decimal SaneThresholdUnitPrice { get; init; }
 
     public MarketCoverageBucket CoverageBucket { get; init; } = MarketCoverageBucket.None;
 
@@ -119,11 +131,31 @@ public sealed class WorldMarketSummary
 
     public int CompetitiveQuantity { get; init; }
 
+    public int LocalCompetitiveQuantity { get; init; }
+
+    public int ScopeCompetitiveQuantity { get; init; }
+
+    public int ScopeSaneQuantity { get; init; }
+
+    public int ScopeUncompetitiveQuantity { get; init; }
+
+    public int ScopeInsaneQuantity { get; init; }
+
+    public int TotalSaneQuantity { get; init; }
+
     public int TotalListingQuantity { get; init; }
 
     public decimal CompetitiveCoverageRatio { get; init; }
 
+    public decimal ScopeCompetitiveCoverageRatio { get; init; }
+
+    public decimal ScopeSaneCoverageRatio { get; init; }
+
+    public decimal SaneCoverageRatio { get; init; }
+
     public decimal CompetitiveAverageUnitPrice { get; init; }
+
+    public decimal ScopeCompetitiveAverageUnitPrice { get; init; }
 
     public MarketCoverageBucket CoverageBucket { get; init; } = MarketCoverageBucket.None;
 

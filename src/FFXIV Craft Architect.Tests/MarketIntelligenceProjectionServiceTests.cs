@@ -23,12 +23,27 @@ public class MarketIntelligenceProjectionServiceTests
         Assert.Equal(new MarketWorldKey("Aether", "Siren"), item.RecommendedWorld);
         Assert.Equal(1_200, item.RecommendedTotalCost);
         Assert.Equal(100, item.CompetitiveAverageUnitPrice);
+        Assert.Equal(110, item.BaselineUnitPrice);
+        Assert.Equal(120, item.AverageUnitPrice);
+        Assert.Equal(105, item.MedianUnitPrice);
+        Assert.Equal(115, item.CompetitiveThresholdUnitPrice);
+        Assert.Equal(300, item.SaneThresholdUnitPrice);
         Assert.Equal(MarketCoverageBucket.Full, item.CoverageBucket);
         Assert.Equal(MarketDataQualityBucket.Current, item.DataQualityBucket);
         Assert.Equal(MarketPriceEvaluationConfidence.High, item.Confidence);
         Assert.Equal("watch the shelf", item.Warning);
         Assert.Equal(new MarketWorldKey("Aether", "Siren"), world.World);
         Assert.Equal(12, world.CompetitiveQuantity);
+        Assert.Equal(10, world.LocalCompetitiveQuantity);
+        Assert.Equal(12, world.ScopeCompetitiveQuantity);
+        Assert.Equal(18, world.ScopeSaneQuantity);
+        Assert.Equal(4, world.ScopeUncompetitiveQuantity);
+        Assert.Equal(2, world.ScopeInsaneQuantity);
+        Assert.Equal(20, world.TotalSaneQuantity);
+        Assert.Equal(1m, world.ScopeCompetitiveCoverageRatio);
+        Assert.Equal(1.5m, world.ScopeSaneCoverageRatio);
+        Assert.Equal(1.67m, world.SaneCoverageRatio);
+        Assert.Equal(100, world.ScopeCompetitiveAverageUnitPrice);
         Assert.Equal(MarketCoverageBucket.Full, world.CoverageBucket);
         Assert.True(result.Publication.Summary.ContainsLoadedListingDetails is false);
     }
@@ -120,6 +135,50 @@ public class MarketIntelligenceProjectionServiceTests
                 Assert.Equal(480, split.TotalCost);
                 Assert.Equal(TravelContextConstants.Supplemental, split.TravelContext);
             });
+    }
+
+    [Fact]
+    public void Project_CompactHydrationPreservesIconAndVendorRecommendation()
+    {
+        var projection = new MarketIntelligenceProjectionService();
+        var publicationId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var request = CreateRequest(publicationId, runId);
+        var plan = request.ExecutionResult.ShoppingPlans.Single();
+        plan.IconId = 42;
+        plan.RecommendedWorld = new WorldShoppingSummary
+        {
+            DataCenter = MarketShoppingConstants.VendorWorldName,
+            WorldName = MarketShoppingConstants.VendorWorldName,
+            TotalCost = 504,
+            AveragePricePerUnit = 42,
+            TotalQuantityPurchased = 12,
+            VendorName = "Material Supplier (Mist)"
+        };
+        plan.Vendors =
+        [
+            new VendorInfo
+            {
+                Name = "Material Supplier",
+                Location = "Mist",
+                Price = 42,
+                Currency = "gil"
+            }
+        ];
+
+        var result = projection.Project(request);
+        var item = Assert.Single(result.Publication.Summary.Items);
+        var hydratedPlan = Assert.Single(MarketIntelligenceSummaryHydrator.HydrateShoppingPlans(result.Publication.Summary));
+
+        Assert.Equal(42, item.IconId);
+        Assert.Equal(42, item.RecommendedWorldAveragePricePerUnit);
+        Assert.Equal("Material Supplier (Mist)", item.RecommendedWorldVendorName);
+        Assert.Equal(42, Assert.Single(item.Vendors).Price);
+        Assert.Equal(42, hydratedPlan.IconId);
+        Assert.Equal(42, hydratedPlan.RecommendedWorld!.AveragePricePerUnit);
+        Assert.Equal(504, hydratedPlan.RecommendedWorld.TotalCost);
+        Assert.Equal("Material Supplier (Mist)", hydratedPlan.RecommendedWorld.VendorName);
+        Assert.Equal(42, Assert.Single(hydratedPlan.Vendors).Price);
     }
 
     [Fact]
@@ -232,6 +291,8 @@ public class MarketIntelligenceProjectionServiceTests
             AnalysisScopeAverageUnitPrice = 120,
             AnalysisScopeCompetitiveAverageUnitPrice = 100,
             AnalysisScopeMedianUnitPrice = 105,
+            CompetitiveThresholdUnitPrice = 115,
+            SaneThresholdUnitPrice = 300,
             WorstDataQualityBucket = MarketDataQualityBucket.Current,
             Warning = "watch the shelf",
             PriceEvaluation = new MarketPriceEvaluation
@@ -255,8 +316,17 @@ public class MarketIntelligenceProjectionServiceTests
                     WorldName = "Siren",
                     QuantityNeeded = 12,
                     CompetitiveQuantity = 12,
+                    LocalCompetitiveQuantity = 10,
+                    ScopeCompetitiveQuantity = 12,
+                    ScopeSaneQuantity = 18,
+                    ScopeUncompetitiveQuantity = 4,
+                    ScopeInsaneQuantity = 2,
+                    TotalSaneQuantity = 20,
                     TotalListingQuantity = 24,
                     CompetitiveCoverageRatio = 1m,
+                    ScopeCompetitiveCoverageRatio = 1m,
+                    ScopeSaneCoverageRatio = 1.5m,
+                    SaneCoverageRatio = 1.67m,
                     ScopeCompetitiveAverageUnitPrice = 100,
                     CoverageBucket = MarketCoverageBucket.Full,
                     FetchedAtUtc = loadedAt,

@@ -157,16 +157,22 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
         {
             ItemId = plan.ItemId,
             Name = plan.Name,
+            IconId = plan.IconId,
             QuantityNeeded = plan.QuantityNeeded,
             Scope = analysis?.Scope ?? request.PublicationContext.Scope,
             RecommendedWorld = recommendedWorld,
             RecommendedTotalCost = plan.SplitTotalCost ?? plan.RecommendedWorld?.TotalCost ?? 0,
+            RecommendedWorldAveragePricePerUnit = plan.RecommendedWorld?.AveragePricePerUnit ?? 0,
+            RecommendedWorldVendorName = plan.RecommendedWorld?.VendorName,
+            Vendors = plan.Vendors.Select(CloneVendor).ToList(),
             BaselineUnitPrice = analysis?.AnalysisScopeBaselineUnitPrice ?? 0,
             AverageUnitPrice = analysis?.AnalysisScopeAverageUnitPrice ?? plan.DCAveragePrice,
             CompetitiveAverageUnitPrice = analysis?.AnalysisScopeCompetitiveAverageUnitPrice
                 ?? plan.RecommendedWorld?.AveragePricePerUnit
                 ?? 0,
             MedianUnitPrice = analysis?.AnalysisScopeMedianUnitPrice ?? 0,
+            CompetitiveThresholdUnitPrice = analysis?.CompetitiveThresholdUnitPrice ?? 0,
+            SaneThresholdUnitPrice = analysis?.SaneThresholdUnitPrice ?? 0,
             CoverageBucket = ResolveCoverageBucket(plan, analysis),
             DataQualityBucket = ResolveDataQualityBucket(plan, analysis),
             Confidence = analysis?.PriceEvaluation?.Confidence ?? MarketPriceEvaluationConfidence.Unknown,
@@ -176,6 +182,19 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
             RecommendedSplit = plan.RecommendedSplit?
                 .Select(split => ProjectSplitSummary(publicationId, request, plan.ItemId, split, analysis, demandFingerprint))
                 .ToList() ?? []
+        };
+    }
+
+    private static VendorInfo CloneVendor(VendorInfo vendor)
+    {
+        return new VendorInfo
+        {
+            Name = vendor.Name,
+            Location = vendor.Location,
+            Price = vendor.Price,
+            Currency = vendor.Currency,
+            AlternateLocations = vendor.AlternateLocations.ToList(),
+            Coordinates = vendor.Coordinates?.ToList()
         };
     }
 
@@ -220,9 +239,19 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
             World = key.World ?? new MarketWorldKey(world.DataCenter, world.WorldName),
             QuantityNeeded = world.QuantityNeeded,
             CompetitiveQuantity = world.CompetitiveQuantity,
+            LocalCompetitiveQuantity = world.LocalCompetitiveQuantity,
+            ScopeCompetitiveQuantity = world.ScopeCompetitiveQuantity,
+            ScopeSaneQuantity = world.ScopeSaneQuantity,
+            ScopeUncompetitiveQuantity = world.ScopeUncompetitiveQuantity,
+            ScopeInsaneQuantity = world.ScopeInsaneQuantity,
+            TotalSaneQuantity = world.TotalSaneQuantity,
             TotalListingQuantity = world.TotalListingQuantity,
             CompetitiveCoverageRatio = world.CompetitiveCoverageRatio,
+            ScopeCompetitiveCoverageRatio = world.ScopeCompetitiveCoverageRatio,
+            ScopeSaneCoverageRatio = world.ScopeSaneCoverageRatio,
+            SaneCoverageRatio = world.SaneCoverageRatio,
             CompetitiveAverageUnitPrice = world.ScopeCompetitiveAverageUnitPrice,
+            ScopeCompetitiveAverageUnitPrice = world.ScopeCompetitiveAverageUnitPrice,
             CoverageBucket = world.CoverageBucket,
             FetchedAtUtc = world.FetchedAtUtc,
             MarketUploadedAtUtc = world.MarketUploadedAtUtc,

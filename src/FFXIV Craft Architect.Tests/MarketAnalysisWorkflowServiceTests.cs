@@ -80,6 +80,12 @@ public class MarketAnalysisWorkflowServiceTests
         Assert.Equal(summary.PublicationId, jsRuntime.LastPatchedActivePublicationId);
         Assert.Contains("\"PublicationId\"", jsRuntime.LastPatchedMarketIntelligenceSummaryJson);
 
+        var hotWorld = Assert.Single(Assert.Single(appState.MarketItemAnalyses).Worlds);
+        Assert.Empty(hotWorld.Listings);
+        Assert.Empty(hotWorld.PriceBands);
+        Assert.Empty(Assert.Single(appState.ShoppingPlans).RecommendedWorld!.Listings);
+        Assert.Empty(Assert.Single(appState.ShoppingPlans).RecommendedWorld!.ExcludedListings);
+
         var storedManifest = await intelligenceStore.LoadDetailManifestAsync(summary.PublicationId);
         Assert.True(storedManifest?.HasAvailableDetails);
         var storedDetails = await intelligenceStore.LoadDetailsAsync(
@@ -88,6 +94,38 @@ public class MarketAnalysisWorkflowServiceTests
         var storedFacts = await intelligenceStore.LoadListingFactsAsync(
             new MarketDataSourceQuery(1, MarketFetchScope.SelectedDataCenter, "Aether", "Siren", summary.PublicationId));
         Assert.Equal(100, Assert.Single(storedFacts).UnitPrice);
+    }
+
+    [Fact]
+    public async Task ApplyLensAsync_AfterCompactPublication_ReprojectsFromColdDetailsAndKeepsHotStateCompact()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        var jsRuntime = new RecordingJsRuntime();
+        var intelligenceStore = new InMemoryMarketIntelligenceStore();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateExecutionResultWithListingDetail());
+        var service = CreateService(
+            appState,
+            execution.Object,
+            jsRuntime,
+            marketIntelligenceStore: intelligenceStore,
+            marketDataSourceStore: intelligenceStore);
+        await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        var result = await service.ApplyLensAsync(MarketAcquisitionLens.BulkValue);
+
+        Assert.True(result.Published);
+        var shoppingPlan = Assert.Single(appState.ShoppingPlans);
+        Assert.NotNull(shoppingPlan.RecommendedWorld);
+        Assert.Equal(200, shoppingPlan.RecommendedWorld!.TotalCost);
+        Assert.Empty(shoppingPlan.RecommendedWorld.Listings);
+        Assert.Empty(Assert.Single(Assert.Single(appState.MarketItemAnalyses).Worlds).Listings);
     }
 
     [Fact]
@@ -555,6 +593,23 @@ public class MarketAnalysisWorkflowServiceTests
                                     PriceSanity = MarketListingPriceSanity.Sane,
                                     Competitiveness = MarketListingCompetitiveness.Competitive
                                 }
+                            ],
+                            Scores =
+                            [
+                                new WorldLensScore
+                                {
+                                    Lens = MarketAcquisitionLens.MinimumUpfrontCost,
+                                    Rank = 1,
+                                    Score = 200,
+                                    ScoreBucket = MarketScoreBucket.Competitive
+                                },
+                                new WorldLensScore
+                                {
+                                    Lens = MarketAcquisitionLens.BulkValue,
+                                    Rank = 1,
+                                    Score = 200,
+                                    ScoreBucket = MarketScoreBucket.Competitive
+                                }
                             ]
                         }
                     ]
@@ -571,7 +626,26 @@ public class MarketAnalysisWorkflowServiceTests
                         DataCenter = "Aether",
                         WorldName = "Siren",
                         TotalQuantityPurchased = 2,
-                        TotalCost = 200
+                        TotalCost = 200,
+                        Listings =
+                        [
+                            new ShoppingListingEntry
+                            {
+                                Quantity = 2,
+                                NeededFromStack = 2,
+                                PricePerUnit = 100,
+                                RetainerName = "Shopping Retainer"
+                            }
+                        ],
+                        ExcludedListings =
+                        [
+                            new ShoppingListingEntry
+                            {
+                                Quantity = 1,
+                                PricePerUnit = 1_000_000,
+                                RetainerName = "Excluded Retainer"
+                            }
+                        ]
                     }
                 }
             ]);

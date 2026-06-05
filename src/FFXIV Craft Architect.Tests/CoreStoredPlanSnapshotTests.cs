@@ -121,10 +121,86 @@ public class CoreStoredPlanSnapshotTests
         var world = Assert.Single(analysis.Worlds);
         Assert.Equal(4, world.ScopeCompetitiveQuantity);
         Assert.Equal(5, world.ScopeSaneQuantity);
+        Assert.Equal(150, world.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(300, world.AnalysisScopeAverageUnitPrice);
+        Assert.Equal(200, world.AnalysisScopeCompetitiveAverageUnitPrice);
+        Assert.Equal(250, world.AnalysisScopeMedianUnitPrice);
+        Assert.Equal(100, world.ScopeCompetitiveAverageUnitPrice);
         Assert.Equal(100, Assert.Single(result.ShoppingPlans).ItemId);
         Assert.NotNull(result.MarketIntelligence);
         Assert.Equal(publicationId, result.MarketIntelligence!.MarketIntelligenceId);
         Assert.Equal(MarketIntelligencePublicationContextKind.Known, result.MarketIntelligence.PublicationContext.Kind);
+    }
+
+    [Fact]
+    public void Prepare_OlderCompactSummaryMissingExtendedWorldScalars_UsesCompatibilityFallbacks()
+    {
+        var publicationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var summaryJson = $$"""
+            {
+              "PublicationId": "{{publicationId}}",
+              "PublicationContext": {
+                "Kind": 1,
+                "Scope": 1,
+                "SelectedDataCenter": "Aether",
+                "SelectedRegion": "North America",
+                "RequestedDataCenters": ["Aether"],
+                "RecommendationMode": 0,
+                "Lens": 1,
+                "PublishedAtUtc": "2026-06-05T12:00:00Z"
+              },
+              "Items": [
+                {
+                  "ItemId": 100,
+                  "Name": "Final Craft",
+                  "QuantityNeeded": 4,
+                  "BaselineUnitPrice": 150,
+                  "AverageUnitPrice": 300,
+                  "CompetitiveAverageUnitPrice": 200,
+                  "MedianUnitPrice": 250,
+                  "Worlds": [
+                    {
+                      "World": { "DataCenter": "Aether", "WorldName": "Siren" },
+                      "QuantityNeeded": 4,
+                      "CompetitiveQuantity": 4,
+                      "TotalListingQuantity": 5,
+                      "CompetitiveCoverageRatio": 1.0,
+                      "CompetitiveAverageUnitPrice": 100,
+                      "CoverageBucket": 0,
+                      "DataQualityBucket": 0
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+        var snapshot = new CoreStoredPlanSnapshot
+        {
+            Id = "plan",
+            Name = "Plan",
+            ProjectItems =
+            [
+                new CoreStoredProjectItem { Id = 100, Name = "Final Craft", Quantity = 4 }
+            ],
+            ActiveMarketIntelligencePublicationId = publicationId,
+            MarketIntelligenceSummaryJson = summaryJson,
+            MarketIntelligenceJson = null,
+            MarketItemAnalysesJson = null,
+            MarketPlansJson = null
+        };
+
+        var result = CorePlanSessionLoadService.Prepare(snapshot);
+
+        Assert.True(result.CanLoad);
+        var world = Assert.Single(Assert.Single(result.MarketItemAnalyses).Worlds);
+        Assert.Equal(200, world.AnalysisScopeCompetitiveAverageUnitPrice);
+        Assert.Equal(100, world.ScopeCompetitiveAverageUnitPrice);
+        Assert.Equal(4, world.ScopeCompetitiveQuantity);
+        Assert.Equal(5, world.ScopeSaneQuantity);
+        Assert.Equal(5, world.TotalSaneQuantity);
+        Assert.Equal(1m, world.ScopeCompetitiveCoverageRatio);
+        Assert.Equal(1.25m, world.ScopeSaneCoverageRatio);
+        Assert.Equal(1.25m, world.SaneCoverageRatio);
     }
 
     [Fact]
@@ -432,7 +508,10 @@ public class CoreStoredPlanSnapshotTests
                     Name = "Final Craft",
                     QuantityNeeded = 4,
                     RecommendedTotalCost = 400,
-                    CompetitiveAverageUnitPrice = 100,
+                    BaselineUnitPrice = 150,
+                    AverageUnitPrice = 300,
+                    CompetitiveAverageUnitPrice = 200,
+                    MedianUnitPrice = 250,
                     Worlds =
                     [
                         new WorldMarketSummary
