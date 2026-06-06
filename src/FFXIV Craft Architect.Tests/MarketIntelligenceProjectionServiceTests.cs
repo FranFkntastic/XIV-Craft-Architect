@@ -258,6 +258,24 @@ public class MarketIntelligenceProjectionServiceTests
     }
 
     [Fact]
+    public void Project_CompactHydrationPreservesBlockedRecommendationError()
+    {
+        var projection = new MarketIntelligenceProjectionService();
+        var request = CreateRequest(Guid.NewGuid(), Guid.NewGuid());
+        var plan = request.ExecutionResult.ShoppingPlans.Single();
+        plan.Error = "Suspicious cached market evidence could not be refreshed. Recommendations are blocked.";
+        plan.MarketDataWarning = "Existing warning.";
+        plan.RecommendedWorld = null;
+        plan.RecommendedSplit = null;
+
+        var result = projection.Project(request);
+        var hydratedPlan = Assert.Single(MarketIntelligenceSummaryHydrator.HydrateShoppingPlans(result.Publication.Summary));
+
+        Assert.Contains("blocked", hydratedPlan.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("watch the shelf", hydratedPlan.MarketDataWarning);
+    }
+
+    [Fact]
     public void Project_PreservesUnavailableItemsWhenAllRequestsAreMissing()
     {
         var projection = new MarketIntelligenceProjectionService();

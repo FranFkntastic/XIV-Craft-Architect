@@ -403,6 +403,70 @@ public class MarketAnalysisExecutionServiceTests
             StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_SuspiciousCacheShapeRefreshThrowsAfterRepair_KeepsCleanReplacement()
+    {
+        var cache = new Mock<IMarketCacheService>();
+        var suspectFirst = CreateSuspiciousCachedData(123, "Aether");
+        var suspectSecond = CreateSuspiciousCachedData(456, "Aether");
+        var freshFirst = CreateCachedData(123, "Aether");
+        freshFirst.FetchedAt = DateTime.UtcNow.AddMinutes(1);
+        freshFirst.Worlds[0].Listings[0].RetainerName = "Fresh Retainer";
+        cache.Setup(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+        cache.SetupSequence(c => c.GetManyAsync(
+                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>()))
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(123, "Aether")] = suspectFirst,
+                [(456, "Aether")] = suspectSecond
+            })
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(123, "Aether")] = freshFirst
+            })
+            .ThrowsAsync(new InvalidOperationException("storage read failed"));
+        MarketAnalysisRequest? capturedAnalysisRequest = null;
+        var ladder = new Mock<IMarketPriceLadderAnalysisService>();
+        ladder.Setup(l => l.AnalyzeAsync(
+                It.IsAny<MarketAnalysisRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback<MarketAnalysisRequest, IProgress<string>?, CancellationToken, MarketAnalysisExecutionOptions?>(
+                (request, _, _, _) => capturedAnalysisRequest = request)
+            .ReturnsAsync([
+                new MarketItemAnalysis { ItemId = 123, Name = "First Item", QuantityNeeded = 5 },
+                new MarketItemAnalysis { ItemId = 456, Name = "Second Item", QuantityNeeded = 5 }
+            ]);
+        ladder.Setup(l => l.ProjectToShoppingPlan(
+                It.IsAny<MarketItemAnalysis>(),
+                MarketAcquisitionLens.BulkValue,
+                It.IsAny<MarketAnalysisConfig?>()))
+            .Returns<MarketItemAnalysis, MarketAcquisitionLens, MarketAnalysisConfig?>((analysis, _, _) =>
+                new DetailedShoppingPlan { ItemId = analysis.ItemId, Name = analysis.Name });
+        var service = new MarketAnalysisExecutionService(cache.Object, ladder.Object);
+
+        var result = await service.ExecuteAsync(
+            CreateExecutionRequest([123, 456]),
+            executionOptions: MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.NotNull(capturedAnalysisRequest);
+        var repairedEntry = Assert.Single(capturedAnalysisRequest.Evidence.Entries).Value;
+        Assert.Equal(123, repairedEntry.ItemId);
+        Assert.Equal("Fresh Retainer", Assert.Single(Assert.Single(repairedEntry.Worlds).Listings).RetainerName);
+        var firstPlan = Assert.Single(result.ShoppingPlans, plan => plan.ItemId == 123);
+        var secondPlan = Assert.Single(result.ShoppingPlans, plan => plan.ItemId == 456);
+        Assert.Null(firstPlan.Error);
+        Assert.Null(firstPlan.MarketDataWarning);
+        Assert.Contains("blocked", secondPlan.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static CachedMarketData CreateCachedData(int itemId, string dataCenter)
     {
         return new CachedMarketData
@@ -447,17 +511,21 @@ public class MarketAnalysisExecutionServiceTests
 
     private static MarketAnalysisExecutionRequest CreateExecutionRequest()
     {
+        return CreateExecutionRequest([123]);
+    }
+
+    private static MarketAnalysisExecutionRequest CreateExecutionRequest(IReadOnlyList<int> itemIds)
+    {
         return new MarketAnalysisExecutionRequest
         {
-            Items =
-            [
-                new MaterialAggregate
+            Items = itemIds
+                .Select(itemId => new MaterialAggregate
                 {
-                    ItemId = 123,
-                    Name = "Test Item",
+                    ItemId = itemId,
+                    Name = $"Test Item {itemId}",
                     TotalQuantity = 5
-                }
-            ],
+                })
+                .ToList(),
             Scope = MarketFetchScope.SelectedDataCenter,
             SelectedDataCenter = "Aether",
             SelectedRegion = "North America",

@@ -100,11 +100,11 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
         var cleanRefreshedEntries = new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
         var forcedFetchedCount = 0;
         var lastFailureReason = "Refresh did not return clean fresh data.";
+        var pendingPairs = suspectPairs.ToList();
 
         try
         {
             progress?.Report($"Refreshing suspicious cached market evidence for {suspectPairs.Count} item scopes...");
-            var pendingPairs = suspectPairs.ToList();
             for (var attempt = 1; attempt <= SuspectCacheRefreshAttemptLimit && pendingPairs.Count > 0; attempt++)
             {
                 var forceRefreshStartedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -149,7 +149,7 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
         catch (Exception ex)
         {
             unresolvedIssues.AddRange(CreateBlockedIssues(
-                initialReport.Issues,
+                pendingPairs.SelectMany(pair => GetIssuesForPair(initialReport, pair)),
                 $"Refresh failed with {ex.GetType().Name}."));
         }
 

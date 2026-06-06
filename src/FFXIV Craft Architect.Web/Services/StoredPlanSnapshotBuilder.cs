@@ -42,7 +42,8 @@ public sealed class StoredPlanSnapshotBuilder
                                     marketIntelligence.HasRecommendations ||
                                     marketIntelligence.HasUnavailableMarketItems;
         var shouldWriteRichMarketIntelligence =
-            includeLegacyMarketAnalysisFields && hasMarketIntelligence;
+            hasMarketIntelligence &&
+            (includeLegacyMarketAnalysisFields || marketIntelligenceSummary == null);
 
         return new StoredPlan
         {

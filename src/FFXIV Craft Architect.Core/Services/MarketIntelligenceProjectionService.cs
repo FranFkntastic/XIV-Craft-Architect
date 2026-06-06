@@ -212,6 +212,7 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
             DataQualityBucket = ResolveDataQualityBucket(plan, analysis),
             Confidence = analysis?.PriceEvaluation?.Confidence ?? MarketPriceEvaluationConfidence.Unknown,
             Warning = analysis?.Warning ?? plan.MarketDataWarning ?? plan.Error,
+            Error = plan.Error,
             DetailKey = recommendedDetailKey,
             Worlds = worldSummaries,
             RecommendedSplit = plan.RecommendedSplit?

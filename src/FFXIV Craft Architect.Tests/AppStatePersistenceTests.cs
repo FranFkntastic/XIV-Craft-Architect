@@ -531,6 +531,61 @@ public class AppStatePersistenceTests
     }
 
     [Fact]
+    public void CreateStoredPlanSnapshot_CompactAutosaveWritesRichMarketIntelligenceWhenSummaryIsMissing()
+    {
+        var appState = new AppState();
+        var publishedAtUtc = new DateTime(2026, 6, 4, 12, 0, 0, DateTimeKind.Utc);
+        var intelligence = new MarketIntelligence(
+            Guid.NewGuid(),
+            [new MarketItemAnalysis { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Snapshot Item", QuantityNeeded = 10 }],
+            [new CoreMarketDataUnavailableItem(456, "Missing Item")],
+            new MarketIntelligencePublicationContext(
+                MarketIntelligencePublicationContextKind.Known,
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                ["Aether"],
+                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+                null,
+                false,
+                RecommendationMode.MinimizeTotalCost,
+                MarketAcquisitionLens.BulkValue,
+                null,
+                7,
+                2,
+                publishedAtUtc),
+            CreateStoredRecipeBasis());
+        appState.LoadStoredPlan(
+            new StoredPlan
+            {
+                ProjectItems =
+                [
+                    new StoredProjectItem
+                    {
+                        Id = 123,
+                        Name = "Snapshot Item",
+                        Quantity = 10
+                    }
+                ],
+                MarketIntelligenceJson = JsonSerializer.Serialize(StoredMarketIntelligence.FromMarketIntelligence(intelligence))
+            },
+            deserializedPlan: null);
+
+        var snapshot = appState.CreateStoredPlanSnapshot(
+            "autosave",
+            "AutoSave",
+            includeLegacyMarketAnalysisFields: false);
+
+        Assert.NotNull(snapshot.MarketIntelligenceJson);
+        Assert.Null(snapshot.MarketIntelligenceSummaryJson);
+        var storedIntelligence = JsonSerializer.Deserialize<StoredMarketIntelligence>(snapshot.MarketIntelligenceJson!);
+        Assert.Equal(123, Assert.Single(storedIntelligence!.ItemAnalyses).ItemId);
+        Assert.Equal(123, Assert.Single(storedIntelligence.Recommendations).ItemId);
+        Assert.Equal(456, Assert.Single(storedIntelligence.UnavailableMarketItems).ItemId);
+    }
+
+    [Fact]
     public void LoadStoredPlan_RestoresMarketIntelligenceJsonWithoutLegacyMarketFields()
     {
         var appState = new AppState();

@@ -62,6 +62,7 @@ public static class MarketIntelligenceSummaryHydrator
                     : HydrateRecommendedWorldShoppingSummary(item),
                 RecommendedSplit = item.RecommendedSplit.Select(HydrateSplitPurchase).ToList(),
                 MarketDataWarning = item.Warning,
+                Error = item.Error,
                 Vendors = item.Vendors.Select(CloneVendor).ToList()
             })
             .ToArray();

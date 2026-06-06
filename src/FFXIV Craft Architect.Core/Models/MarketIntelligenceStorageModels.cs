@@ -95,6 +95,8 @@ public sealed class MarketItemSummary
 
     public string? Warning { get; init; }
 
+    public string? Error { get; init; }
+
     public MarketIntelligenceDetailKey? DetailKey { get; init; }
 
     public IReadOnlyList<WorldMarketSummary> Worlds { get; init; } = [];
