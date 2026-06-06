@@ -408,7 +408,7 @@ internal static class BenchmarkRunner
                 return false;
               }
 
-              await window.IndexedDB.saveSetting('debug.secret_tools_enabled', true);
+              await window.IndexedDB.saveSetting('debug.secret_tools_enabled', 'true');
               return true;
             })()
             """,
