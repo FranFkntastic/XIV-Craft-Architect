@@ -31,6 +31,35 @@ public class IndexedDbMarketCacheServiceTests
         Assert.Equal(2, handler.MaximumConcurrentMarketRequests);
     }
 
+    [Fact]
+    public async Task EnsurePopulatedAsync_ConcurrentColdCalls_DoNotFetchSameRegionalDataTwice()
+    {
+        var jsRuntime = new RecordingMarketCacheJsRuntime();
+        var handler = new ConcurrentMarketFetchHandler();
+        var universalis = new UniversalisService(new HttpClient(handler));
+        var cache = new IndexedDbMarketCacheService(jsRuntime, universalis);
+
+        var requests = new List<(int itemId, string dataCenter)>
+        {
+            (201, "Aether"),
+            (202, "Crystal"),
+            (203, "Dynamis"),
+            (204, "Primal")
+        };
+
+        var populateTasks = new[]
+        {
+            cache.EnsurePopulatedAsync(requests, TimeSpan.FromMinutes(5)),
+            cache.EnsurePopulatedAsync(requests, TimeSpan.FromMinutes(5))
+        };
+
+        var fetchedCounts = await Task.WhenAll(populateTasks);
+
+        Assert.Equal(4, fetchedCounts.Sum());
+        Assert.Equal(4, handler.MarketRequestCount);
+        Assert.Equal(2, handler.MaximumConcurrentMarketRequests);
+    }
+
     private sealed class ConcurrentMarketFetchHandler : HttpMessageHandler
     {
         private int _currentMarketRequests;
@@ -124,7 +153,13 @@ public class IndexedDbMarketCacheServiceTests
         {
             if (identifier == "IndexedDB.loadMarketDataBulk")
             {
-                return (TValue)(object)new List<IndexedDbMarketCacheEntry>();
+                var keys = ((IEnumerable<string>)args![0]!).ToList();
+                var cutoffUnix = Convert.ToInt64(args[1], System.Globalization.CultureInfo.InvariantCulture);
+                var entries = keys
+                    .Select(key => _entries.TryGetValue(key, out var entry) ? entry : null)
+                    .Where(entry => entry != null && entry.FetchedAtUnix > cutoffUnix)
+                    .ToList();
+                return (TValue)(object)entries!;
             }
 
             if (identifier == "IndexedDB.getMarketCacheStats")

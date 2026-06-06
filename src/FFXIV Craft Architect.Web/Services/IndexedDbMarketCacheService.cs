@@ -16,6 +16,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService
     private readonly UniversalisService _universalisService;
     private readonly ILogger<IndexedDbMarketCacheService>? _logger;
     private readonly TimeSpan _defaultMaxAge = TimeSpan.FromHours(1);
+    private readonly SemaphoreSlim _populateSemaphore = new(1, 1);
     private const long MaxCacheSizeBytes = 500 * 1024 * 1024; // 500MB max
     private const int MaxCacheEntries = 10000; // Max 10k items
     private const int MaxDataCenterFetchConcurrency = 2;
@@ -319,14 +320,31 @@ public class IndexedDbMarketCacheService : IMarketCacheService
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
+        if (requests.Count == 0) return 0;
+
+        await _populateSemaphore.WaitAsync(ct);
+        try
+        {
+            return await EnsurePopulatedCoreAsync(requests, maxAge, progress, ct);
+        }
+        finally
+        {
+            _populateSemaphore.Release();
+        }
+    }
+
+    private async Task<int> EnsurePopulatedCoreAsync(
+        List<(int itemId, string dataCenter)> requests,
+        TimeSpan? maxAge,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
         var effectiveMaxAge = maxAge ?? _defaultMaxAge;
         var cutoffUnix = DateTimeToUnix(DateTime.UtcNow) - (long)effectiveMaxAge.TotalSeconds;
         
         _logger?.LogInformation("[IndexedDbMarketCache] EnsurePopulatedAsync START - {Count} requests, maxAge={MaxAge}", 
             requests.Count, effectiveMaxAge);
-        
-        if (requests.Count == 0) return 0;
-        
+
         // STEP 1: Clean up stale entries before fetching new data
         progress?.Report("Cleaning up stale cache entries...");
         var cleanedCount = await CleanupStaleAsync(effectiveMaxAge);
