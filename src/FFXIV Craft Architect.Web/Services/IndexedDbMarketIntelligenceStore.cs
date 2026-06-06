@@ -7,8 +7,6 @@ namespace FFXIV_Craft_Architect.Web.Services;
 public sealed class IndexedDbMarketIntelligenceStore : IMarketIntelligenceStore, IMarketDataSourceStore
 {
     private const int DetailWriteChunkSize = 128;
-    private const int ListingFactWriteChunkSize = 256;
-
     private readonly IJSRuntime _jsRuntime;
     private readonly ILogger<IndexedDbMarketIntelligenceStore>? _logger;
 
@@ -133,33 +131,14 @@ public sealed class IndexedDbMarketIntelligenceStore : IMarketIntelligenceStore,
             request);
     }
 
-    public async Task SaveListingFactsAsync(
+    public Task SaveListingFactsAsync(
         IReadOnlyList<CanonicalMarketListingFact> facts,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(facts);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        if (facts.Count <= ListingFactWriteChunkSize)
-        {
-            await _jsRuntime.InvokeAsync<bool>(
-                "IndexedDB.saveMarketListingFacts",
-                cancellationToken,
-                facts,
-                0);
-            return;
-        }
-
-        var offset = 0;
-        foreach (var factChunk in facts.Chunk(ListingFactWriteChunkSize))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await _jsRuntime.InvokeAsync<bool>(
-                "IndexedDB.saveMarketListingFacts",
-                cancellationToken,
-                factChunk,
-                offset);
-            offset += factChunk.Length;
-        }
+        return Task.CompletedTask;
     }
 
     public async Task<IReadOnlyList<CanonicalMarketListingFact>> LoadListingFactsAsync(
@@ -167,6 +146,16 @@ public sealed class IndexedDbMarketIntelligenceStore : IMarketIntelligenceStore,
         CancellationToken cancellationToken = default)
     {
         var facts = await _jsRuntime.InvokeAsync<List<CanonicalMarketListingFact>?>(
+            "IndexedDB.loadMarketListingFactsFromDetails",
+            cancellationToken,
+            query);
+
+        if (facts is { Count: > 0 })
+        {
+            return facts;
+        }
+
+        facts = await _jsRuntime.InvokeAsync<List<CanonicalMarketListingFact>?>(
             "IndexedDB.loadMarketListingFacts",
             cancellationToken,
             query);

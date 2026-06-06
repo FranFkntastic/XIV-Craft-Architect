@@ -72,6 +72,9 @@ public class MarketIntelligenceProjectionServiceTests
         Assert.Equal(5338, worldDetail.Key.ItemId);
         Assert.Equal(new MarketWorldKey("Aether", "Siren"), worldDetail.Key.World);
         Assert.Contains("item:5338", worldDetail.Key.DemandFingerprint.Value);
+        Assert.Equal(runId, worldDetail.RunId);
+        Assert.Equal(fact.RetrievedAtUtc, worldDetail.RetrievedAtUtc);
+        Assert.Equal(fact.MarketUploadedAtUtc, worldDetail.MarketUploadedAtUtc);
         Assert.Equal(MarketListingCompetitiveness.Competitive, listing.Competitiveness);
         Assert.Contains(MarketPriceEvaluationReasonCode.AcceptedDueToQuantityDespiteLowDiversity, itemDetail.ClassificationReasons);
         Assert.Empty(itemDetail.Listings);

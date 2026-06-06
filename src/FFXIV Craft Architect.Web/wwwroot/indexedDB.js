@@ -1064,6 +1064,100 @@ async function saveMarketListingFacts(facts, startIndex = 0) {
     });
 }
 
+function canonicalFactFromMarketDetail(detail, listing, listingIndex) {
+    const key = getField(detail, 'key', 'Key') ?? {};
+    const world = getField(key, 'world', 'World') ?? {};
+    const scope = getField(key, 'scope', 'Scope') ?? 0;
+    const dataCenter = getField(world, 'dataCenter', 'DataCenter') ?? '';
+    const worldName = getField(world, 'worldName', 'WorldName') ?? '';
+    const retrievedAt = getField(detail, 'retrievedAtUtc', 'RetrievedAtUtc') ??
+        getField(detail, 'createdAtUtc', 'CreatedAtUtc') ??
+        '';
+    const sourceScopeKey = `${scope}:${dataCenter}:${worldName}`;
+
+    return {
+        publicationId: normalizeGuid(getField(key, 'publicationId', 'PublicationId')),
+        runId: normalizeGuid(getField(detail, 'runId', 'RunId')),
+        demandFingerprint: getField(key, 'demandFingerprint', 'DemandFingerprint'),
+        itemId: getField(key, 'itemId', 'ItemId') ?? 0,
+        scope,
+        dataCenter,
+        worldName,
+        retrievedAtUtc: retrievedAt,
+        marketUploadedAtUtc: getField(detail, 'marketUploadedAtUtc', 'MarketUploadedAtUtc'),
+        lastReviewTimeUtc: getField(listing, 'lastReviewTimeUtc', 'LastReviewTimeUtc'),
+        quantity: getField(listing, 'quantity', 'Quantity') ?? 0,
+        unitPrice: getField(listing, 'pricePerUnit', 'PricePerUnit') ?? 0,
+        isHq: getField(listing, 'isHq', 'IsHq') ?? false,
+        retainerName: getField(listing, 'retainerName', 'RetainerName') ?? '',
+        listingId: getField(listing, 'listingId', 'ListingId') ?? `${sourceScopeKey}:${listingIndex}`,
+        priceSanity: getField(listing, 'priceSanity', 'PriceSanity') ?? 0,
+        competitiveness: getField(listing, 'competitiveness', 'Competitiveness') ?? 0,
+        classificationReasons: getField(detail, 'classificationReasons', 'ClassificationReasons') ?? [],
+        sourceProvider: 'Universalis',
+        sourceScopeKey
+    };
+}
+
+function marketDetailMatchesSourceQuery(detail, query) {
+    const key = getField(detail, 'key', 'Key') ?? {};
+    const world = getField(key, 'world', 'World');
+    if (!world) {
+        return false;
+    }
+
+    const itemId = getField(query, 'itemId', 'ItemId');
+    const scope = getField(query, 'scope', 'Scope');
+    const dataCenter = getField(query, 'dataCenter', 'DataCenter');
+    const worldName = getField(query, 'worldName', 'WorldName');
+    const publicationId = normalizeGuid(getField(query, 'publicationId', 'PublicationId'));
+    const runId = normalizeGuid(getField(query, 'runId', 'RunId'));
+    const demandFingerprint = getFingerprintValue(getField(query, 'demandFingerprint', 'DemandFingerprint'));
+    const keyDemandFingerprint = getFingerprintValue(getField(key, 'demandFingerprint', 'DemandFingerprint'));
+
+    return (itemId == null || getField(key, 'itemId', 'ItemId') === itemId) &&
+        (scope == null || getField(key, 'scope', 'Scope') === scope) &&
+        (!dataCenter || String(getField(world, 'dataCenter', 'DataCenter') ?? '').toLowerCase() === String(dataCenter).toLowerCase()) &&
+        (!worldName || String(getField(world, 'worldName', 'WorldName') ?? '').toLowerCase() === String(worldName).toLowerCase()) &&
+        (!publicationId || normalizeGuid(getField(key, 'publicationId', 'PublicationId')) === publicationId) &&
+        (!runId || normalizeGuid(getField(detail, 'runId', 'RunId')) === runId) &&
+        (!demandFingerprint || keyDemandFingerprint === demandFingerprint);
+}
+
+async function loadMarketListingFactsFromDetails(query) {
+    const database = await initDB();
+    const publicationId = normalizeGuid(getField(query, 'publicationId', 'PublicationId'));
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_MARKET_LISTING_DETAILS], 'readonly');
+        const store = transaction.objectStore(STORE_MARKET_LISTING_DETAILS);
+        const request = publicationId
+            ? store.index('publicationId').openCursor(publicationId)
+            : store.openCursor();
+        const results = [];
+
+        request.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (!cursor) {
+                resolve(results);
+                return;
+            }
+
+            const detail = cursor.value;
+            if (marketDetailMatchesSourceQuery(detail, query)) {
+                const listings = getField(detail, 'listings', 'Listings') ?? [];
+                for (let i = 0; i < listings.length; i++) {
+                    results.push(canonicalFactFromMarketDetail(detail, listings[i], i));
+                }
+            }
+
+            cursor.continue();
+        };
+
+        request.onerror = () => reject(request.error);
+    });
+}
+
 async function loadMarketListingFacts(query) {
     const database = await initDB();
     const itemId = getField(query, 'itemId', 'ItemId');
@@ -1134,6 +1228,7 @@ window.IndexedDB = {
     loadMarketRunRecord,
     pruneMarketDetails,
     saveMarketListingFacts,
+    loadMarketListingFactsFromDetails,
     loadMarketListingFacts
 };
 
