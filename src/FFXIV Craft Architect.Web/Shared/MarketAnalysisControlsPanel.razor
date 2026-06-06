@@ -56,7 +56,8 @@
                Variant="Variant.Filled"
                FullWidth="true"
                Class="mb-4"
-               StartIcon="@(IsAnalyzing ? "" : Icons.Material.Filled.Analytics)">
+               StartIcon="@(IsAnalyzing ? "" : Icons.Material.Filled.Analytics)"
+               data-benchmark-id="@BenchmarkHook("market-analysis-run")">
         @if (IsAnalyzing)
         {
             <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
@@ -74,7 +75,8 @@
                Variant="Variant.Outlined"
                FullWidth="true"
                Class="mb-4"
-               StartIcon="@(IsRefreshingPrices ? "" : Icons.Material.Filled.Refresh)">
+               StartIcon="@(IsRefreshingPrices ? "" : Icons.Material.Filled.Refresh)"
+               data-benchmark-id="@BenchmarkHook("market-analysis-refresh-prices")">
         @if (IsRefreshingPrices)
         {
             <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
@@ -133,4 +135,6 @@
     {
         AppState.SetMarketSortPreference(preference);
     }
+
+    private string? BenchmarkHook(string id) => AppState.SecretDebugToolsEnabled ? id : null;
 }

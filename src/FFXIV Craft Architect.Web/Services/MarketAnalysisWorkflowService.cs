@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
@@ -58,7 +60,9 @@ public sealed class MarketAnalysisWorkflowService
         var plan = _appState.CurrentPlan;
         var planSessionVersion = _appState.PlanSessionVersion;
         var planId = _appState.CurrentPlanId;
+        var planBuildStopwatch = Stopwatch.StartNew();
         var candidateResult = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidateResultAsync(plan, ct);
+        planBuildStopwatch.Stop();
         var materials = candidateResult?.Candidates.ToList() ?? [];
         var recipeBasis = candidateResult?.RecipeBasis;
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
@@ -81,6 +85,7 @@ public sealed class MarketAnalysisWorkflowService
             _appState.SelectedDataCenter,
             _appState.SelectedRegion,
             _appState.MarketAnalysisLens);
+        var executionStopwatch = Stopwatch.StartNew();
         var executionResult = await _marketAnalysisExecution.ExecuteAsync(
             new MarketAnalysisExecutionRequest
             {
@@ -96,7 +101,12 @@ public sealed class MarketAnalysisWorkflowService
             progress,
             ct,
             executionOptions: executionOptions);
+        executionStopwatch.Stop();
         ct.ThrowIfCancellationRequested();
+        var timings = CreateWorkflowTimings(
+            planBuildStopwatch.Elapsed,
+            executionResult.Timings,
+            executionStopwatch.Elapsed);
 
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
@@ -115,6 +125,7 @@ public sealed class MarketAnalysisWorkflowService
             executionResult,
             recipeBasis,
             _appState.CreateCurrentMarketAnalysisScopeSnapshot(),
+            timings,
             ct);
         if (published == null)
         {
@@ -167,6 +178,11 @@ public sealed class MarketAnalysisWorkflowService
             CreateEmptyEvidence(publishedScope),
             analyses,
             shoppingPlans);
+        var timings = new MarketAnalysisWorkflowTimings(
+            TimeSpan.Zero,
+            TimeSpan.Zero,
+            TimeSpan.Zero,
+            TimeSpan.Zero);
         var published = await PublishMarketAnalysisAsync(
             plan,
             planSessionVersion,
@@ -174,6 +190,7 @@ public sealed class MarketAnalysisWorkflowService
             executionResult,
             _appState.MarketAnalysisRecipeBasis,
             publishedScope,
+            timings,
             ct);
         if (published == null)
         {
@@ -296,6 +313,7 @@ public sealed class MarketAnalysisWorkflowService
         MarketAnalysisExecutionResult executionResult,
         StoredRecipeOperationSnapshot? recipeBasis,
         PublishedMarketAnalysisScopeSnapshot publishedScope,
+        MarketAnalysisWorkflowTimings timings,
         CancellationToken ct)
     {
         if (plan == null || !_appState.IsCurrentPlanSession(plan, planSessionVersion))
@@ -314,28 +332,46 @@ public sealed class MarketAnalysisWorkflowService
             return null;
         }
 
+        var publicationStopwatch = Stopwatch.StartNew();
+        var projectionStopwatch = Stopwatch.StartNew();
         var projection = _marketIntelligenceProjection.Project(
             new MarketIntelligenceProjectionRequest
             {
                 ExecutionResult = new MarketAnalysisExecutionResult(
                     executionResult.Evidence,
                     analysisList,
-                    shoppingPlans),
+                    shoppingPlans,
+                    executionResult.Timings),
                 PublicationContext = ToMarketIntelligencePublicationContext(publishedScope),
                 AnalyzerVersion = "web-market-analysis",
                 StartedAtUtc = publishedScope.PublishedAtUtc,
                 CompletedAtUtc = DateTime.UtcNow,
+                PlanBuildDuration = timings.PlanBuildDuration,
+                MarketFetchDuration = timings.MarketFetchDuration,
+                LadderAnalysisDuration = timings.LadderAnalysisDuration,
+                ShoppingPlanProjectionDuration = timings.ShoppingPlanProjectionDuration,
+                AnalysisDuration = timings.AnalysisDuration,
                 NetworkRequestCount = executionResult.Evidence.FetchedCount,
                 CacheMode = "mixed"
             });
-        await _marketIntelligenceStore.SavePublicationAsync(projection.Publication, ct);
+        projectionStopwatch.Stop();
+
+        var detailPersistenceStopwatch = Stopwatch.StartNew();
+        await _marketIntelligenceStore.SavePublicationAsync(
+            projection.Publication with { RunRecords = [] },
+            ct);
+        detailPersistenceStopwatch.Stop();
+
+        var sourceFactPersistenceStopwatch = Stopwatch.StartNew();
         await _marketDataSourceStore.SaveListingFactsAsync(projection.SourceFacts, ct);
+        sourceFactPersistenceStopwatch.Stop();
         ct.ThrowIfCancellationRequested();
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
             return null;
         }
 
+        var hotStatePublicationStopwatch = Stopwatch.StartNew();
         var hotAnalyses = MarketIntelligenceSummaryHydrator
             .HydrateMarketItemAnalyses(projection.Publication.Summary)
             .ToList();
@@ -351,11 +387,14 @@ public sealed class MarketAnalysisWorkflowService
             recipeBasis,
             publishedScope,
             projection.Publication.Summary);
+        hotStatePublicationStopwatch.Stop();
 
+        var planPersistenceDuration = TimeSpan.Zero;
         if (!string.IsNullOrEmpty(planId) &&
             _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
             string.Equals(_appState.CurrentPlanId, planId, StringComparison.Ordinal))
         {
+            var planPersistenceStopwatch = Stopwatch.StartNew();
             await _planPersistence.SaveMarketAnalysisAsync(
                 planId,
                 hotShoppingPlans,
@@ -366,6 +405,8 @@ public sealed class MarketAnalysisWorkflowService
                 publishedScope,
                 _appState.MarketIntelligence,
                 projection.Publication.Summary);
+            planPersistenceStopwatch.Stop();
+            planPersistenceDuration = planPersistenceStopwatch.Elapsed;
         }
 
         ct.ThrowIfCancellationRequested();
@@ -374,14 +415,107 @@ public sealed class MarketAnalysisWorkflowService
             return null;
         }
 
+        var autosaveStopwatch = Stopwatch.StartNew();
         await _indexedDb.AutoSaveStateAsync(_appState);
+        autosaveStopwatch.Stop();
         ct.ThrowIfCancellationRequested();
+        publicationStopwatch.Stop();
+        var runRecord = projection.Publication.RunRecords.Count > 0
+            ? FinalizeRunRecord(
+                projection.Publication.RunRecords[0],
+                projectionStopwatch.Elapsed,
+                publicationStopwatch.Elapsed,
+                detailPersistenceStopwatch.Elapsed,
+                sourceFactPersistenceStopwatch.Elapsed,
+                hotStatePublicationStopwatch.Elapsed,
+                planPersistenceDuration,
+                autosaveStopwatch.Elapsed)
+            : null;
+        if (runRecord != null)
+        {
+            await _marketIntelligenceStore.SaveRunRecordsAsync(
+                projection.Publication.Summary.PublicationId,
+                [runRecord],
+                ct);
+        }
+
         return _appState.IsCurrentPlanSession(plan, planSessionVersion)
             ? new PublishMarketAnalysisResult(changedDecisions)
             : null;
     }
 
     private sealed record PublishMarketAnalysisResult(int ChangedDecisionCount);
+
+    private sealed record MarketAnalysisWorkflowTimings(
+        TimeSpan PlanBuildDuration,
+        TimeSpan MarketFetchDuration,
+        TimeSpan LadderAnalysisDuration,
+        TimeSpan ShoppingPlanProjectionDuration)
+    {
+        public TimeSpan AnalysisDuration => LadderAnalysisDuration + ShoppingPlanProjectionDuration;
+    }
+
+    private static MarketAnalysisWorkflowTimings CreateWorkflowTimings(
+        TimeSpan planBuildDuration,
+        MarketAnalysisExecutionTimings executionTimings,
+        TimeSpan executionDuration)
+    {
+        if (executionTimings.HasMeasuredDuration)
+        {
+            return new MarketAnalysisWorkflowTimings(
+                planBuildDuration,
+                executionTimings.MarketFetchDuration,
+                executionTimings.LadderAnalysisDuration,
+                executionTimings.ShoppingPlanProjectionDuration);
+        }
+
+        return new MarketAnalysisWorkflowTimings(
+            planBuildDuration,
+            TimeSpan.Zero,
+            executionDuration,
+            TimeSpan.Zero);
+    }
+
+    private static MarketAnalysisRunRecord FinalizeRunRecord(
+        MarketAnalysisRunRecord runRecord,
+        TimeSpan projectionDuration,
+        TimeSpan publicationDuration,
+        TimeSpan detailPersistenceDuration,
+        TimeSpan sourceFactPersistenceDuration,
+        TimeSpan hotStatePublicationDuration,
+        TimeSpan planPersistenceDuration,
+        TimeSpan autosaveDuration) =>
+        new()
+        {
+            RunId = runRecord.RunId,
+            PublicationId = runRecord.PublicationId,
+            DemandFingerprint = runRecord.DemandFingerprint,
+            AnalyzerVersion = runRecord.AnalyzerVersion,
+            Scope = runRecord.Scope,
+            SelectedDataCenter = runRecord.SelectedDataCenter,
+            SelectedRegion = runRecord.SelectedRegion,
+            StartedAtUtc = runRecord.StartedAtUtc,
+            CompletedAtUtc = runRecord.CompletedAtUtc,
+            PlanBuildDuration = runRecord.PlanBuildDuration,
+            MarketFetchDuration = runRecord.MarketFetchDuration,
+            LadderAnalysisDuration = runRecord.LadderAnalysisDuration,
+            ShoppingPlanProjectionDuration = runRecord.ShoppingPlanProjectionDuration,
+            AnalysisDuration = runRecord.AnalysisDuration,
+            ProjectionDuration = projectionDuration,
+            PublicationDuration = publicationDuration,
+            DetailPersistenceDuration = detailPersistenceDuration,
+            SourceFactPersistenceDuration = sourceFactPersistenceDuration,
+            HotStatePublicationDuration = hotStatePublicationDuration,
+            PlanPersistenceDuration = planPersistenceDuration,
+            AutosaveDuration = autosaveDuration,
+            CacheMode = runRecord.CacheMode,
+            MarketIntelligencePayloadBytes = runRecord.MarketIntelligencePayloadBytes,
+            LegacyPayloadBytes = runRecord.LegacyPayloadBytes,
+            RetainedDetailBytes = runRecord.RetainedDetailBytes,
+            NetworkRequestCount = runRecord.NetworkRequestCount,
+            FreshCacheHitCount = runRecord.FreshCacheHitCount,
+            StaleCacheRefreshCount = runRecord.StaleCacheRefreshCount
+        };
 
     private PublishedMarketAnalysisScopeSnapshot CreateLensPublicationScope(MarketAcquisitionLens lens)
     {

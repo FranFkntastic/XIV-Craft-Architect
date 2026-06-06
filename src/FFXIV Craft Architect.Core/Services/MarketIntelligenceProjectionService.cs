@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 
 using FFXIV_Craft_Architect.Core.Models;
@@ -14,6 +15,7 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.ExecutionResult);
 
+        var projectionStopwatch = Stopwatch.StartNew();
         var publicationId = request.PublicationId == Guid.Empty
             ? Guid.NewGuid()
             : request.PublicationId;
@@ -23,7 +25,12 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
         var details = new List<MarketListingDetail>();
         var manifestEntries = new List<MarketIntelligenceDetailManifestEntry>();
         var sourceFacts = new List<CanonicalMarketListingFact>();
+        var retainedDetailBytes = 0L;
         var analysisByItemId = request.ExecutionResult.Analyses.ToDictionary(analysis => analysis.ItemId);
+        var classificationReasonsByItemId = analysisByItemId.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.PriceEvaluation?.Diagnostics.CompactReasonCodes.ToList()
+                ?? new List<MarketPriceEvaluationReasonCode>());
 
         foreach (var analysis in request.ExecutionResult.Analyses)
         {
@@ -44,12 +51,14 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
                     ClassificationReasons = analysis.PriceEvaluation.Diagnostics.CompactReasonCodes.ToList()
                 };
                 details.Add(itemDetail);
+                var detailBytes = EstimatePayloadBytes(itemDetail);
+                retainedDetailBytes += detailBytes;
                 manifestEntries.Add(new MarketIntelligenceDetailManifestEntry
                 {
                     Key = itemDetailKey,
                     Availability = MarketIntelligenceDetailAvailability.Available,
                     ListingCount = 0,
-                    DetailBytes = EstimatePayloadBytes(itemDetail)
+                    DetailBytes = detailBytes
                 });
             }
 
@@ -66,14 +75,24 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
                 };
 
                 details.Add(detail);
+                var detailBytes = EstimatePayloadBytes(detail);
+                retainedDetailBytes += detailBytes;
                 manifestEntries.Add(new MarketIntelligenceDetailManifestEntry
                 {
                     Key = key,
                     Availability = MarketIntelligenceDetailAvailability.Available,
                     ListingCount = world.Listings.Count,
-                    DetailBytes = EstimatePayloadBytes(detail)
+                    DetailBytes = detailBytes
                 });
-                sourceFacts.AddRange(ProjectFacts(request, runId, key, world));
+                AppendFacts(
+                    sourceFacts,
+                    request,
+                    runId,
+                    key,
+                    world,
+                    classificationReasonsByItemId.TryGetValue(analysis.ItemId, out var classificationReasons)
+                        ? classificationReasons
+                        : []);
             }
         }
 
@@ -100,6 +119,14 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
                 .ToList(),
             DetailManifest = manifest
         };
+        var marketIntelligencePayloadBytes = EstimatePayloadBytes(summary);
+        var legacyPayloadBytes = EstimateLegacyPayloadBytes(
+            request.ExecutionResult,
+            marketIntelligencePayloadBytes,
+            retainedDetailBytes);
+        var projectionDuration = request.ProjectionDuration > TimeSpan.Zero
+            ? request.ProjectionDuration
+            : projectionStopwatch.Elapsed;
         var runRecord = new MarketAnalysisRunRecord
         {
             RunId = runId,
@@ -115,12 +142,20 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
             CompletedAtUtc = request.CompletedAtUtc,
             PlanBuildDuration = request.PlanBuildDuration,
             MarketFetchDuration = request.MarketFetchDuration,
+            LadderAnalysisDuration = request.LadderAnalysisDuration,
+            ShoppingPlanProjectionDuration = request.ShoppingPlanProjectionDuration,
             AnalysisDuration = request.AnalysisDuration,
+            ProjectionDuration = projectionDuration,
             PublicationDuration = request.PublicationDuration,
+            DetailPersistenceDuration = request.DetailPersistenceDuration,
+            SourceFactPersistenceDuration = request.SourceFactPersistenceDuration,
+            HotStatePublicationDuration = request.HotStatePublicationDuration,
+            PlanPersistenceDuration = request.PlanPersistenceDuration,
+            AutosaveDuration = request.AutosaveDuration,
             CacheMode = request.CacheMode,
-            MarketIntelligencePayloadBytes = EstimatePayloadBytes(summary),
-            LegacyPayloadBytes = EstimateLegacyPayloadBytes(request.ExecutionResult),
-            RetainedDetailBytes = details.Sum(EstimatePayloadBytes),
+            MarketIntelligencePayloadBytes = marketIntelligencePayloadBytes,
+            LegacyPayloadBytes = legacyPayloadBytes,
+            RetainedDetailBytes = retainedDetailBytes,
             NetworkRequestCount = request.NetworkRequestCount,
             FreshCacheHitCount = request.FreshCacheHitCount,
             StaleCacheRefreshCount = request.StaleCacheRefreshCount
@@ -263,14 +298,17 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
         };
     }
 
-    private static IReadOnlyList<CanonicalMarketListingFact> ProjectFacts(
+    private static void AppendFacts(
+        List<CanonicalMarketListingFact> facts,
         MarketIntelligenceProjectionRequest request,
         Guid runId,
         MarketIntelligenceDetailKey key,
-        WorldMarketAnalysis world)
+        WorldMarketAnalysis world,
+        IReadOnlyList<MarketPriceEvaluationReasonCode> classificationReasons)
     {
-        return world.Listings
-            .Select(listing => new CanonicalMarketListingFact
+        foreach (var listing in world.Listings)
+        {
+            facts.Add(new CanonicalMarketListingFact
             {
                 PublicationId = key.PublicationId,
                 RunId = runId,
@@ -288,13 +326,11 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
                 RetainerName = listing.RetainerName,
                 PriceSanity = listing.PriceSanity,
                 Competitiveness = listing.Competitiveness,
-                ClassificationReasons = request.ExecutionResult.Analyses
-                    .FirstOrDefault(analysis => analysis.ItemId == key.ItemId)?
-                    .PriceEvaluation?.Diagnostics.CompactReasonCodes.ToList() ?? [],
+                ClassificationReasons = classificationReasons,
                 SourceProvider = "Universalis",
                 SourceScopeKey = $"{key.Scope}:{world.DataCenter}:{world.WorldName}"
-            })
-            .ToList();
+            });
+        }
     }
 
     private static MarketIntelligenceDetailKey CreateDetailKey(
@@ -361,10 +397,16 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
 
     private static long EstimatePayloadBytes<T>(T value) => JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions).LongLength;
 
-    private static long EstimateLegacyPayloadBytes(MarketAnalysisExecutionResult executionResult)
+    private static long EstimateLegacyPayloadBytes(
+        MarketAnalysisExecutionResult executionResult,
+        long marketIntelligencePayloadBytes,
+        long retainedDetailBytes)
     {
-        return EstimatePayloadBytes(executionResult.Analyses) +
-               EstimatePayloadBytes(executionResult.ShoppingPlans);
+        var itemOverheadBytes = executionResult.Analyses.Count * 512L;
+        var shoppingPlanOverheadBytes = executionResult.ShoppingPlans.Count * 256L;
+        return Math.Max(
+            marketIntelligencePayloadBytes + retainedDetailBytes,
+            retainedDetailBytes + itemOverheadBytes + shoppingPlanOverheadBytes);
     }
 }
 
@@ -389,9 +431,25 @@ public sealed class MarketIntelligenceProjectionRequest
 
     public TimeSpan MarketFetchDuration { get; init; }
 
+    public TimeSpan LadderAnalysisDuration { get; init; }
+
+    public TimeSpan ShoppingPlanProjectionDuration { get; init; }
+
     public TimeSpan AnalysisDuration { get; init; }
 
+    public TimeSpan ProjectionDuration { get; init; }
+
     public TimeSpan PublicationDuration { get; init; }
+
+    public TimeSpan DetailPersistenceDuration { get; init; }
+
+    public TimeSpan SourceFactPersistenceDuration { get; init; }
+
+    public TimeSpan HotStatePublicationDuration { get; init; }
+
+    public TimeSpan PlanPersistenceDuration { get; init; }
+
+    public TimeSpan AutosaveDuration { get; init; }
 
     public string CacheMode { get; init; } = string.Empty;
 

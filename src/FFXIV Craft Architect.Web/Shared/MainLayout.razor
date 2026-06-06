@@ -88,7 +88,8 @@
                 </MudButton>
                 <MudButton OnClick="@(() => NavigateTo("market"))"
                            Color="@GetTabColor("market")"
-                           Variant="@GetTabVariant("market")">
+                           Variant="@GetTabVariant("market")"
+                           data-benchmark-id="@BenchmarkHook("main-nav-market-analysis")">
                     Market Analysis
                 </MudButton>
                 <MudButton OnClick="@(() => NavigateTo("acquisition"))"
@@ -128,10 +129,13 @@
                      Color="Color.Secondary">
                 <ActivatorContent>
                     <MudButton Style="color: #cccccc; text-transform: none;"
-                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Import</MudButton>
+                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown"
+                               data-benchmark-id="@BenchmarkHook("main-import-menu")">Import</MudButton>
                 </ActivatorContent>
                 <ChildContent>
-                    <MudMenuItem OnClick="() => ShowImportDialog(0)" Icon="@Icons.Material.Filled.FolderOpen">
+                    <MudMenuItem OnClick="() => ShowImportDialog(0)"
+                                 Icon="@Icons.Material.Filled.FolderOpen"
+                                 data-benchmark-id="@BenchmarkHook("main-import-native-plan")">
                         From Craft Architect (Native)...
                     </MudMenuItem>
                     <MudMenuItem OnClick="() => ShowImportDialog(1)" Icon="@Icons.Material.Filled.ContentPaste">
@@ -248,6 +252,7 @@
     private bool IsDebugToolsAvailable => IsDevelopment || AppState.SecretDebugToolsEnabled;
     private bool IsTradeMode => IsTradeRoute(NavigationManager.Uri);
     private bool CanDumpSelectedMarketAnalysisItem => AppState.MarketItemAnalyses.Any();
+    private string? BenchmarkHook(string id) => AppState.SecretDebugToolsEnabled ? id : null;
     
     private readonly MudTheme _theme = AppTheme.CreateTheme();
 

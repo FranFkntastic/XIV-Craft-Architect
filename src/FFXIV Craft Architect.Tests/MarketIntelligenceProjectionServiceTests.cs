@@ -86,6 +86,82 @@ public class MarketIntelligenceProjectionServiceTests
     }
 
     [Fact]
+    public void Project_SourceFactsUsePerItemClassificationReasons()
+    {
+        var projection = new MarketIntelligenceProjectionService();
+        var request = CreateRequest(Guid.NewGuid(), Guid.NewGuid());
+        var firstAnalysis = request.ExecutionResult.Analyses.Single();
+        var firstPlan = request.ExecutionResult.ShoppingPlans.Single();
+        var secondAnalysis = new MarketItemAnalysis
+        {
+            ItemId = 9999,
+            Name = "Second Item",
+            QuantityNeeded = 4,
+            Scope = MarketFetchScope.SelectedDataCenter,
+            LoadedAtUtc = firstAnalysis.LoadedAtUtc,
+            PriceEvaluation = new MarketPriceEvaluation
+            {
+                ItemId = 9999,
+                Scope = MarketFetchScope.SelectedDataCenter,
+                Diagnostics = new MarketPriceEvaluationDiagnostics
+                {
+                    CompactReasonCodes =
+                    [
+                        MarketPriceEvaluationReasonCode.RejectedAsThinLowRegion
+                    ]
+                }
+            },
+            Worlds =
+            [
+                new WorldMarketAnalysis
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Adamantoise",
+                    FetchedAtUtc = firstAnalysis.LoadedAtUtc,
+                    Listings =
+                    [
+                        new AnalyzedMarketListing
+                        {
+                            Quantity = 4,
+                            PricePerUnit = 250,
+                            Competitiveness = MarketListingCompetitiveness.Uncompetitive
+                        }
+                    ]
+                }
+            ]
+        };
+        var secondPlan = new DetailedShoppingPlan
+        {
+            ItemId = 9999,
+            Name = "Second Item",
+            QuantityNeeded = 4
+        };
+        var updatedRequest = CopyRequest(
+            request,
+            new MarketAnalysisExecutionResult(
+                request.ExecutionResult.Evidence,
+                [firstAnalysis, secondAnalysis],
+                [firstPlan, secondPlan]));
+
+        var result = projection.Project(updatedRequest);
+
+        var firstFact = Assert.Single(result.SourceFacts, fact => fact.ItemId == 5338);
+        var secondFact = Assert.Single(result.SourceFacts, fact => fact.ItemId == 9999);
+        Assert.Contains(
+            MarketPriceEvaluationReasonCode.AcceptedDueToQuantityDespiteLowDiversity,
+            firstFact.ClassificationReasons);
+        Assert.DoesNotContain(
+            MarketPriceEvaluationReasonCode.RejectedAsThinLowRegion,
+            firstFact.ClassificationReasons);
+        Assert.Contains(
+            MarketPriceEvaluationReasonCode.RejectedAsThinLowRegion,
+            secondFact.ClassificationReasons);
+        Assert.DoesNotContain(
+            MarketPriceEvaluationReasonCode.AcceptedDueToQuantityDespiteLowDiversity,
+            secondFact.ClassificationReasons);
+    }
+
+    [Fact]
     public void Project_PreservesSplitRecommendationInHotSummary()
     {
         var projection = new MarketIntelligenceProjectionService();
@@ -225,6 +301,8 @@ public class MarketIntelligenceProjectionServiceTests
         Assert.Equal(MarketFetchScope.SelectedDataCenter, run.Scope);
         Assert.Equal("Aether", run.SelectedDataCenter);
         Assert.Equal("North America", run.SelectedRegion);
+        Assert.True(run.ProjectionDuration > TimeSpan.Zero);
+        Assert.Equal(TimeSpan.Zero, run.PublicationDuration);
         Assert.True(run.MarketIntelligencePayloadBytes > 0);
         Assert.True(run.RetainedDetailBytes > 0);
         Assert.True(run.LegacyPayloadBytes > run.MarketIntelligencePayloadBytes);
@@ -442,4 +520,34 @@ public class MarketIntelligenceProjectionServiceTests
             WebPlanSessionVersion: null,
             WebMarketAnalysisVersion: null,
             publishedAt);
+
+    private static MarketIntelligenceProjectionRequest CopyRequest(
+        MarketIntelligenceProjectionRequest request,
+        MarketAnalysisExecutionResult executionResult) =>
+        new()
+        {
+            PublicationId = request.PublicationId,
+            RunId = request.RunId,
+            ExecutionResult = executionResult,
+            PublicationContext = request.PublicationContext,
+            AnalyzerVersion = request.AnalyzerVersion,
+            StartedAtUtc = request.StartedAtUtc,
+            CompletedAtUtc = request.CompletedAtUtc,
+            PlanBuildDuration = request.PlanBuildDuration,
+            MarketFetchDuration = request.MarketFetchDuration,
+            LadderAnalysisDuration = request.LadderAnalysisDuration,
+            ShoppingPlanProjectionDuration = request.ShoppingPlanProjectionDuration,
+            AnalysisDuration = request.AnalysisDuration,
+            ProjectionDuration = request.ProjectionDuration,
+            PublicationDuration = request.PublicationDuration,
+            DetailPersistenceDuration = request.DetailPersistenceDuration,
+            SourceFactPersistenceDuration = request.SourceFactPersistenceDuration,
+            HotStatePublicationDuration = request.HotStatePublicationDuration,
+            PlanPersistenceDuration = request.PlanPersistenceDuration,
+            AutosaveDuration = request.AutosaveDuration,
+            CacheMode = request.CacheMode,
+            NetworkRequestCount = request.NetworkRequestCount,
+            FreshCacheHitCount = request.FreshCacheHitCount,
+            StaleCacheRefreshCount = request.StaleCacheRefreshCount
+        };
 }

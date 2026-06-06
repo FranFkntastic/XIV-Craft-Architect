@@ -244,9 +244,25 @@ public sealed class MarketAnalysisRunRecord
 
     public TimeSpan MarketFetchDuration { get; init; }
 
+    public TimeSpan LadderAnalysisDuration { get; init; }
+
+    public TimeSpan ShoppingPlanProjectionDuration { get; init; }
+
     public TimeSpan AnalysisDuration { get; init; }
 
+    public TimeSpan ProjectionDuration { get; init; }
+
     public TimeSpan PublicationDuration { get; init; }
+
+    public TimeSpan DetailPersistenceDuration { get; init; }
+
+    public TimeSpan SourceFactPersistenceDuration { get; init; }
+
+    public TimeSpan HotStatePublicationDuration { get; init; }
+
+    public TimeSpan PlanPersistenceDuration { get; init; }
+
+    public TimeSpan AutosaveDuration { get; init; }
 
     public string CacheMode { get; init; } = string.Empty;
 

@@ -8,6 +8,11 @@ public interface IMarketIntelligenceStore
         MarketIntelligencePublicationWrite publication,
         CancellationToken cancellationToken = default);
 
+    Task SaveRunRecordsAsync(
+        Guid publicationId,
+        IReadOnlyList<MarketAnalysisRunRecord> runRecords,
+        CancellationToken cancellationToken = default);
+
     Task<MarketIntelligencePublicationSummary?> LoadPublicationSummaryAsync(
         Guid publicationId,
         CancellationToken cancellationToken = default);

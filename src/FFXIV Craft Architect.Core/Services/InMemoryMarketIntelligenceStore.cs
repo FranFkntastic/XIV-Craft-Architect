@@ -42,6 +42,23 @@ public sealed class InMemoryMarketIntelligenceStore : IMarketIntelligenceStore, 
         return Task.CompletedTask;
     }
 
+    public Task SaveRunRecordsAsync(
+        Guid publicationId,
+        IReadOnlyList<MarketAnalysisRunRecord> runRecords,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(runRecords);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        foreach (var runRecord in runRecords)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _runRecords[runRecord.RunId] = runRecord;
+        }
+
+        return Task.CompletedTask;
+    }
+
     public Task<MarketIntelligencePublicationSummary?> LoadPublicationSummaryAsync(
         Guid publicationId,
         CancellationToken cancellationToken = default)

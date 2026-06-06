@@ -821,6 +821,55 @@ async function saveMarketPublication(publicationWrite) {
     });
 }
 
+async function saveMarketPublicationDetails(publicationId, details) {
+    const database = await initDB();
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_MARKET_LISTING_DETAILS], 'readwrite');
+        const detailStore = transaction.objectStore(STORE_MARKET_LISTING_DETAILS);
+
+        for (const detail of details ?? []) {
+            detailStore.put(normalizeDetailForStorage(detail));
+        }
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
+async function saveMarketPublicationRunRecords(publicationId, runRecords) {
+    const database = await initDB();
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_MARKET_ANALYSIS_RUNS], 'readwrite');
+        const runStore = transaction.objectStore(STORE_MARKET_ANALYSIS_RUNS);
+
+        for (const runRecord of runRecords ?? []) {
+            runStore.put(runRecord);
+        }
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
+async function saveMarketPublicationSummary(summary) {
+    const database = await initDB();
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_MARKET_PUBLICATIONS], 'readwrite');
+        const publicationStore = transaction.objectStore(STORE_MARKET_PUBLICATIONS);
+
+        publicationStore.put(summary);
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
 async function loadMarketPublicationSummary(publicationId) {
     const database = await initDB();
     return new Promise((resolve, reject) => {
@@ -998,13 +1047,13 @@ function markMarketPublicationDetailsPruned(summary) {
     }
 }
 
-async function saveMarketListingFacts(facts) {
+async function saveMarketListingFacts(facts, startIndex = 0) {
     const database = await initDB();
 
     return new Promise((resolve, reject) => {
         const transaction = database.transaction([STORE_MARKET_FETCHES], 'readwrite');
         const store = transaction.objectStore(STORE_MARKET_FETCHES);
-        let index = 0;
+        let index = startIndex ?? 0;
         for (const fact of facts ?? []) {
             store.put(normalizeFactForStorage(fact, index++));
         }
@@ -1076,6 +1125,9 @@ window.IndexedDB = {
     deleteOldestEntries,
     getMarketCacheStats,
     saveMarketPublication,
+    saveMarketPublicationDetails,
+    saveMarketPublicationRunRecords,
+    saveMarketPublicationSummary,
     loadMarketPublicationSummary,
     loadMarketDetailManifest,
     loadMarketDetails,

@@ -142,6 +142,12 @@ public class MarketAnalysisDetailHydrationServiceTests
             CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
 
+        public Task SaveRunRecordsAsync(
+            Guid publicationId,
+            IReadOnlyList<MarketAnalysisRunRecord> runRecords,
+            CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
         public Task<MarketIntelligencePublicationSummary?> LoadPublicationSummaryAsync(
             Guid publicationId,
             CancellationToken cancellationToken = default) =>

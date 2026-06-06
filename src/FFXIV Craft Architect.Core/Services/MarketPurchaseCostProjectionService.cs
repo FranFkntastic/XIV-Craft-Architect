@@ -10,7 +10,10 @@ public static class MarketPurchaseCostProjectionService
         bool hqOnly,
         bool includeVendor = true)
     {
-        if (shoppingPlan == null || quantity <= 0 || shoppingPlan.QuantityNeeded <= 0)
+        if (shoppingPlan == null ||
+            quantity <= 0 ||
+            shoppingPlan.QuantityNeeded <= 0 ||
+            !string.IsNullOrWhiteSpace(shoppingPlan.Error))
         {
             return MarketPurchaseCostEstimate.Unavailable;
         }

@@ -6,6 +6,9 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed class IndexedDbMarketIntelligenceStore : IMarketIntelligenceStore, IMarketDataSourceStore
 {
+    private const int DetailWriteChunkSize = 128;
+    private const int ListingFactWriteChunkSize = 256;
+
     private readonly IJSRuntime _jsRuntime;
     private readonly ILogger<IndexedDbMarketIntelligenceStore>? _logger;
 
@@ -24,10 +27,58 @@ public sealed class IndexedDbMarketIntelligenceStore : IMarketIntelligenceStore,
         ArgumentNullException.ThrowIfNull(publication);
 
         var normalized = NormalizePublicationWrite(publication);
+        if (normalized.Details.Count <= DetailWriteChunkSize)
+        {
+            await _jsRuntime.InvokeAsync<bool>(
+                "IndexedDB.saveMarketPublication",
+                cancellationToken,
+                normalized);
+            return;
+        }
+
+        foreach (var detailChunk in normalized.Details.Chunk(DetailWriteChunkSize))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await _jsRuntime.InvokeAsync<bool>(
+                "IndexedDB.saveMarketPublicationDetails",
+                cancellationToken,
+                normalized.Summary.PublicationId,
+                detailChunk);
+        }
+
+        if (normalized.RunRecords.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await _jsRuntime.InvokeAsync<bool>(
+                "IndexedDB.saveMarketPublicationRunRecords",
+                cancellationToken,
+                normalized.Summary.PublicationId,
+                normalized.RunRecords);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
         await _jsRuntime.InvokeAsync<bool>(
-            "IndexedDB.saveMarketPublication",
+            "IndexedDB.saveMarketPublicationSummary",
             cancellationToken,
-            normalized);
+            normalized.Summary);
+    }
+
+    public async Task SaveRunRecordsAsync(
+        Guid publicationId,
+        IReadOnlyList<MarketAnalysisRunRecord> runRecords,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(runRecords);
+        if (runRecords.Count == 0)
+        {
+            return;
+        }
+
+        await _jsRuntime.InvokeAsync<bool>(
+            "IndexedDB.saveMarketPublicationRunRecords",
+            cancellationToken,
+            publicationId,
+            runRecords);
     }
 
     public async Task<MarketIntelligencePublicationSummary?> LoadPublicationSummaryAsync(
@@ -86,10 +137,29 @@ public sealed class IndexedDbMarketIntelligenceStore : IMarketIntelligenceStore,
         IReadOnlyList<CanonicalMarketListingFact> facts,
         CancellationToken cancellationToken = default)
     {
-        await _jsRuntime.InvokeAsync<bool>(
-            "IndexedDB.saveMarketListingFacts",
-            cancellationToken,
-            facts);
+        ArgumentNullException.ThrowIfNull(facts);
+
+        if (facts.Count <= ListingFactWriteChunkSize)
+        {
+            await _jsRuntime.InvokeAsync<bool>(
+                "IndexedDB.saveMarketListingFacts",
+                cancellationToken,
+                facts,
+                0);
+            return;
+        }
+
+        var offset = 0;
+        foreach (var factChunk in facts.Chunk(ListingFactWriteChunkSize))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await _jsRuntime.InvokeAsync<bool>(
+                "IndexedDB.saveMarketListingFacts",
+                cancellationToken,
+                factChunk,
+                offset);
+            offset += factChunk.Length;
+        }
     }
 
     public async Task<IReadOnlyList<CanonicalMarketListingFact>> LoadListingFactsAsync(

@@ -97,6 +97,54 @@ public class MarketAnalysisWorkflowServiceTests
     }
 
     [Fact]
+    public async Task RunAnalysisAsync_RecordsRunTimingsForBenchmarking()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        var jsRuntime = new RecordingJsRuntime();
+        var intelligenceStore = new InMemoryMarketIntelligenceStore();
+        var executionTimings = new MarketAnalysisExecutionTimings(
+            TimeSpan.FromMilliseconds(11),
+            TimeSpan.FromMilliseconds(13),
+            TimeSpan.FromMilliseconds(17));
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateExecutionResultWithListingDetail(executionTimings));
+        var service = CreateService(
+            appState,
+            execution.Object,
+            jsRuntime,
+            new DelayedRecipeLayerWorkflowService(TimeSpan.FromMilliseconds(10)),
+            marketIntelligenceStore: intelligenceStore,
+            marketDataSourceStore: intelligenceStore);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.True(result.Published);
+        var summary = appState.MarketIntelligenceSummary;
+        Assert.NotNull(summary);
+        Assert.NotNull(summary!.ActiveRunId);
+        var runRecord = await intelligenceStore.LoadRunRecordAsync(summary.ActiveRunId.Value);
+        Assert.NotNull(runRecord);
+        Assert.True(runRecord!.PlanBuildDuration > TimeSpan.Zero);
+        Assert.Equal(executionTimings.MarketFetchDuration, runRecord.MarketFetchDuration);
+        Assert.Equal(executionTimings.LadderAnalysisDuration, runRecord.LadderAnalysisDuration);
+        Assert.Equal(executionTimings.ShoppingPlanProjectionDuration, runRecord.ShoppingPlanProjectionDuration);
+        Assert.Equal(executionTimings.AnalysisDuration, runRecord.AnalysisDuration);
+        Assert.True(runRecord.ProjectionDuration >= TimeSpan.Zero);
+        Assert.True(runRecord.PublicationDuration > TimeSpan.Zero);
+        Assert.True(runRecord.PublicationDuration >= runRecord.ProjectionDuration);
+        Assert.True(runRecord.DetailPersistenceDuration >= TimeSpan.Zero);
+        Assert.True(runRecord.SourceFactPersistenceDuration >= TimeSpan.Zero);
+        Assert.True(runRecord.HotStatePublicationDuration >= TimeSpan.Zero);
+        Assert.True(runRecord.AutosaveDuration >= TimeSpan.Zero);
+    }
+
+    [Fact]
     public async Task ApplyLensAsync_AfterCompactPublication_ReprojectsFromColdDetailsAndKeepsHotStateCompact()
     {
         var appState = new AppState();
@@ -553,7 +601,8 @@ public class MarketAnalysisWorkflowServiceTests
             ]);
     }
 
-    private static MarketAnalysisExecutionResult CreateExecutionResultWithListingDetail()
+    private static MarketAnalysisExecutionResult CreateExecutionResultWithListingDetail(
+        MarketAnalysisExecutionTimings timings = default)
     {
         return new MarketAnalysisExecutionResult(
             new MarketEvidenceSet(
@@ -648,7 +697,8 @@ public class MarketAnalysisWorkflowServiceTests
                         ]
                     }
                 }
-            ]);
+            ],
+            timings);
     }
 
     private static DetailedShoppingPlan ShoppingPlan(int itemId, string worldName = "Siren")
@@ -829,6 +879,24 @@ public class MarketAnalysisWorkflowServiceTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(BuildActiveProcurementItems(plan));
+        }
+    }
+
+    private sealed class DelayedRecipeLayerWorkflowService : StubRecipeLayerWorkflowService
+    {
+        private readonly TimeSpan _delay;
+
+        public DelayedRecipeLayerWorkflowService(TimeSpan delay)
+        {
+            _delay = delay;
+        }
+
+        public override async Task<MarketAnalysisCandidateBuildResult?> BuildCurrentMarketAnalysisCandidateResultAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(_delay, cancellationToken);
+            return await base.BuildCurrentMarketAnalysisCandidateResultAsync(plan, cancellationToken);
         }
     }
 
