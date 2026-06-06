@@ -362,15 +362,6 @@ public sealed class MarketAnalysisWorkflowService
             ct);
         detailPersistenceStopwatch.Stop();
 
-        var sourceFactPersistenceStopwatch = Stopwatch.StartNew();
-        await _marketDataSourceStore.SaveListingFactsAsync(projection.SourceFacts, ct);
-        sourceFactPersistenceStopwatch.Stop();
-        ct.ThrowIfCancellationRequested();
-        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
-        {
-            return null;
-        }
-
         var hotStatePublicationStopwatch = Stopwatch.StartNew();
         var hotAnalyses = MarketIntelligenceSummaryHydrator
             .HydrateMarketItemAnalyses(projection.Publication.Summary)
@@ -388,6 +379,7 @@ public sealed class MarketAnalysisWorkflowService
             publishedScope,
             projection.Publication.Summary);
         hotStatePublicationStopwatch.Stop();
+        await Task.Yield();
 
         var planPersistenceDuration = TimeSpan.Zero;
         if (!string.IsNullOrEmpty(planId) &&
@@ -418,6 +410,15 @@ public sealed class MarketAnalysisWorkflowService
         var autosaveStopwatch = Stopwatch.StartNew();
         await _indexedDb.AutoSaveStateAsync(_appState);
         autosaveStopwatch.Stop();
+        ct.ThrowIfCancellationRequested();
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        {
+            return null;
+        }
+
+        var sourceFactPersistenceStopwatch = Stopwatch.StartNew();
+        await _marketDataSourceStore.SaveListingFactsAsync(projection.SourceFacts, ct);
+        sourceFactPersistenceStopwatch.Stop();
         ct.ThrowIfCancellationRequested();
         publicationStopwatch.Stop();
         var runRecord = projection.Publication.RunRecords.Count > 0
