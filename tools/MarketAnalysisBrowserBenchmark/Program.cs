@@ -575,6 +575,74 @@ internal static class BenchmarkRunner
                 .filter(Boolean)
                 .slice(0, 10);
 
+              const getField = (value, camel, pascal) => value?.[camel] ?? value?.[pascal] ?? null;
+              const parseJsonObject = (value) => {
+                if (!value) {
+                  return null;
+                }
+
+                if (typeof value !== 'string') {
+                  return typeof value === 'object' ? value : null;
+                }
+
+                try {
+                  const parsed = JSON.parse(value);
+                  return parsed && typeof parsed === 'object' ? parsed : null;
+                } catch {
+                  return null;
+                }
+              };
+
+              const pickTiming = (runRecord, camel, pascal) => getField(runRecord, camel, pascal);
+              const pickRunRecordTiming = (runRecord) => runRecord ? {
+                runId: getField(runRecord, 'runId', 'RunId'),
+                publicationId: getField(runRecord, 'publicationId', 'PublicationId'),
+                scope: getField(runRecord, 'scope', 'Scope'),
+                selectedDataCenter: getField(runRecord, 'selectedDataCenter', 'SelectedDataCenter'),
+                selectedRegion: getField(runRecord, 'selectedRegion', 'SelectedRegion'),
+                startedAtUtc: getField(runRecord, 'startedAtUtc', 'StartedAtUtc'),
+                completedAtUtc: getField(runRecord, 'completedAtUtc', 'CompletedAtUtc'),
+                planBuildDuration: pickTiming(runRecord, 'planBuildDuration', 'PlanBuildDuration'),
+                marketFetchDuration: pickTiming(runRecord, 'marketFetchDuration', 'MarketFetchDuration'),
+                ladderAnalysisDuration: pickTiming(runRecord, 'ladderAnalysisDuration', 'LadderAnalysisDuration'),
+                shoppingPlanProjectionDuration: pickTiming(runRecord, 'shoppingPlanProjectionDuration', 'ShoppingPlanProjectionDuration'),
+                analysisDuration: pickTiming(runRecord, 'analysisDuration', 'AnalysisDuration'),
+                projectionDuration: pickTiming(runRecord, 'projectionDuration', 'ProjectionDuration'),
+                publicationDuration: pickTiming(runRecord, 'publicationDuration', 'PublicationDuration'),
+                detailPersistenceDuration: pickTiming(runRecord, 'detailPersistenceDuration', 'DetailPersistenceDuration'),
+                sourceFactPersistenceDuration: pickTiming(runRecord, 'sourceFactPersistenceDuration', 'SourceFactPersistenceDuration'),
+                hotStatePublicationDuration: pickTiming(runRecord, 'hotStatePublicationDuration', 'HotStatePublicationDuration'),
+                planPersistenceDuration: pickTiming(runRecord, 'planPersistenceDuration', 'PlanPersistenceDuration'),
+                autosaveDuration: pickTiming(runRecord, 'autosaveDuration', 'AutosaveDuration'),
+                cacheMode: getField(runRecord, 'cacheMode', 'CacheMode'),
+                marketIntelligencePayloadBytes: getField(runRecord, 'marketIntelligencePayloadBytes', 'MarketIntelligencePayloadBytes'),
+                legacyPayloadBytes: getField(runRecord, 'legacyPayloadBytes', 'LegacyPayloadBytes'),
+                retainedDetailBytes: getField(runRecord, 'retainedDetailBytes', 'RetainedDetailBytes'),
+                networkRequestCount: getField(runRecord, 'networkRequestCount', 'NetworkRequestCount'),
+                freshCacheHitCount: getField(runRecord, 'freshCacheHitCount', 'FreshCacheHitCount'),
+                staleCacheRefreshCount: getField(runRecord, 'staleCacheRefreshCount', 'StaleCacheRefreshCount')
+              } : null;
+
+              let marketAnalysisRunTiming = null;
+              let marketAnalysisRunTimingWarning = null;
+              try {
+                if (window.IndexedDB?.loadAllPlans && window.IndexedDB?.loadMarketRunRecord) {
+                  const plans = await window.IndexedDB.loadAllPlans();
+                  const activePlan = Array.isArray(plans)
+                    ? plans.find(plan => getField(plan, 'marketIntelligenceSummaryJson', 'MarketIntelligenceSummaryJson'))
+                    : null;
+                  const summary = parseJsonObject(getField(activePlan, 'marketIntelligenceSummaryJson', 'MarketIntelligenceSummaryJson'));
+                  const activeRunId = getField(summary, 'activeRunId', 'ActiveRunId');
+                  if (activeRunId) {
+                    marketAnalysisRunTiming = pickRunRecordTiming(await window.IndexedDB.loadMarketRunRecord(activeRunId));
+                  } else if (summary) {
+                    marketAnalysisRunTimingWarning = 'Active market intelligence summary did not include activeRunId.';
+                  }
+                }
+              } catch (error) {
+                marketAnalysisRunTimingWarning = String(error?.message || error);
+              }
+
               return {
                 href: location.href,
                 title: document.title,
@@ -613,7 +681,9 @@ internal static class BenchmarkRunner
                   jsHeapSizeLimit: performance.memory.jsHeapSizeLimit,
                   totalJSHeapSize: performance.memory.totalJSHeapSize,
                   usedJSHeapSize: performance.memory.usedJSHeapSize
-                } : null
+                } : null,
+                marketAnalysisRunTiming,
+                marketAnalysisRunTimingWarning
               };
             })()
             """;
