@@ -45,6 +45,18 @@ public class StoredPlanSnapshotMetricsTests
             PlanJson = JsonSerializer.Serialize(plan),
             MarketPlansJson = JsonSerializer.Serialize(shoppingPlans),
             MarketItemAnalysesJson = JsonSerializer.Serialize(analyses),
+            MarketIntelligenceSummaryJson = JsonSerializer.Serialize(new MarketIntelligencePublicationSummary
+            {
+                PublicationId = Guid.NewGuid(),
+                Items =
+                [
+                    new MarketItemSummary
+                    {
+                        ItemId = 1,
+                        QuantityNeeded = 1
+                    }
+                ]
+            }),
             MarketAnalysisRecipeBasisJson = JsonSerializer.Serialize(new StoredRecipeOperationSnapshot
             {
                 Operations =
@@ -68,12 +80,16 @@ public class StoredPlanSnapshotMetricsTests
         Assert.Equal(Encoding.UTF8.GetByteCount(storedPlan.MarketPlansJson!), metrics.MarketPlansJsonBytes);
         Assert.Equal(Encoding.UTF8.GetByteCount(storedPlan.MarketItemAnalysesJson!), metrics.MarketItemAnalysesJsonBytes);
         Assert.Equal(
+            Encoding.UTF8.GetByteCount(storedPlan.MarketIntelligenceSummaryJson!),
+            metrics.MarketIntelligenceSummaryJsonBytes);
+        Assert.Equal(
             Encoding.UTF8.GetByteCount(storedPlan.MarketAnalysisRecipeBasisJson!),
             metrics.MarketAnalysisRecipeBasisJsonBytes);
         Assert.Equal(
             metrics.PlanJsonBytes +
             metrics.MarketPlansJsonBytes +
             metrics.MarketItemAnalysesJsonBytes +
+            metrics.MarketIntelligenceSummaryJsonBytes +
             metrics.MarketAnalysisRecipeBasisJsonBytes,
             metrics.TotalJsonBytes);
     }
@@ -97,6 +113,7 @@ public class StoredPlanSnapshotMetricsTests
         Assert.True(metrics.PlanJsonBytes > 0);
         Assert.Equal(0, metrics.MarketPlansJsonBytes);
         Assert.Equal(0, metrics.MarketItemAnalysesJsonBytes);
+        Assert.Equal(0, metrics.MarketIntelligenceSummaryJsonBytes);
         Assert.Equal(0, metrics.MarketAnalysisRecipeBasisJsonBytes);
     }
 }

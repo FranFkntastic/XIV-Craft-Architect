@@ -60,6 +60,19 @@ public class MainLayoutMarkupTests
     }
 
     [Fact]
+    public void MainLayout_BenchmarkHooks_AreDeveloperModeGated()
+    {
+        var source = File.ReadAllText(GetMainLayoutPath());
+
+        Assert.Contains("BenchmarkHook(", source);
+        Assert.Contains("AppState.SecretDebugToolsEnabled ? id : null", source);
+        Assert.Contains("data-benchmark-id=\"@BenchmarkHook(\"", source);
+        Assert.Contains("main-import-menu", source);
+        Assert.Contains("main-import-native-plan", source);
+        Assert.Contains("main-nav-market-analysis", source);
+    }
+
+    [Fact]
     public void MainLayout_ReRendersWhenSettingsChange()
     {
         var source = File.ReadAllText(GetMainLayoutPath());

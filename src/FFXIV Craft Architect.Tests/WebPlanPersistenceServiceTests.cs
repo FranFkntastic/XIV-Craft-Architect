@@ -1,5 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Services;
 using Microsoft.JSInterop;
 
@@ -122,14 +123,115 @@ public class WebPlanPersistenceServiceTests
         Assert.Single(result.ShoppingPlans);
     }
 
-    private static WebPlanPersistenceService CreateService(RecordingJsRuntime jsRuntime, AppState? appState = null)
+    [Fact]
+    public async Task LoadPlanIntoSessionAsync_ReferenceOnlyMarketSummaryHydratesFromStore()
+    {
+        var appState = new AppState();
+        var publicationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var store = new InMemoryMarketIntelligenceStore();
+        await store.SavePublicationAsync(new MarketIntelligencePublicationWrite(
+            CreateSummary(publicationId),
+            [],
+            []));
+        var jsRuntime = new RecordingJsRuntime
+        {
+            PlanToLoad = new StoredPlan
+            {
+                Id = "saved",
+                Name = "Saved",
+                ProjectItems = [new StoredProjectItem { Id = 100, Name = "Stored Item", Quantity = 4 }],
+                ActiveMarketIntelligencePublicationId = publicationId
+            }
+        };
+        var service = CreateService(jsRuntime, appState, store);
+
+        var result = await service.LoadPlanIntoSessionAsync("saved");
+
+        Assert.NotNull(result);
+        Assert.Equal(publicationId, appState.MarketIntelligenceSummary?.PublicationId);
+        Assert.Equal(100, Assert.Single(appState.MarketItemAnalyses).ItemId);
+        Assert.Equal(100, Assert.Single(appState.ShoppingPlans).ItemId);
+    }
+
+    [Fact]
+    public void PlanSessionLoadService_Prepare_MismatchedCompactSummaryReferenceWarnsAndSkipsSummary()
+    {
+        var activePublicationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var embeddedPublicationId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var storedPlan = new StoredPlan
+        {
+            ProjectItems = [new StoredProjectItem { Id = 100, Name = "Stored Item", Quantity = 4 }],
+            ActiveMarketIntelligencePublicationId = activePublicationId,
+            MarketIntelligenceSummaryJson = System.Text.Json.JsonSerializer.Serialize(CreateSummary(embeddedPublicationId))
+        };
+
+        var result = PlanSessionLoadService.Prepare(storedPlan);
+
+        Assert.Null(result.MarketIntelligenceSummary);
+        Assert.Empty(result.MarketItemAnalyses);
+        Assert.Empty(result.ShoppingPlans);
+        Assert.Contains("active publication reference", result.Warning, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static WebPlanPersistenceService CreateService(
+        RecordingJsRuntime jsRuntime,
+        AppState? appState = null,
+        IMarketIntelligenceStore? marketIntelligenceStore = null)
     {
         appState ??= new AppState();
         var indexedDb = new IndexedDbService(jsRuntime);
         return new WebPlanPersistenceService(
             indexedDb,
             new StoredPlanSnapshotBuilder(appState),
-            new PlanSessionLoadService(appState, new StubRecipeLayerWorkflowService()));
+            new PlanSessionLoadService(appState, new StubRecipeLayerWorkflowService()),
+            marketIntelligenceStore);
+    }
+
+    private static MarketIntelligencePublicationSummary CreateSummary(Guid publicationId)
+    {
+        return new MarketIntelligencePublicationSummary
+        {
+            PublicationId = publicationId,
+            PublicationContext = new MarketIntelligencePublicationContext(
+                MarketIntelligencePublicationContextKind.Known,
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                ["Aether"],
+                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+                null,
+                false,
+                RecommendationMode.MinimizeTotalCost,
+                MarketAcquisitionLens.BulkValue,
+                null,
+                7,
+                2,
+                new DateTime(2026, 6, 5, 12, 0, 0, DateTimeKind.Utc)),
+            Items =
+            [
+                new MarketItemSummary
+                {
+                    ItemId = 100,
+                    Name = "Stored Item",
+                    QuantityNeeded = 4,
+                    RecommendedTotalCost = 400,
+                    Worlds =
+                    [
+                        new WorldMarketSummary
+                        {
+                            World = new MarketWorldKey("Aether", "Siren"),
+                            QuantityNeeded = 4,
+                            CompetitiveQuantity = 4,
+                            TotalListingQuantity = 4,
+                            CompetitiveCoverageRatio = 1m,
+                            CompetitiveAverageUnitPrice = 100,
+                            CoverageBucket = MarketCoverageBucket.Full,
+                            DataQualityBucket = MarketDataQualityBucket.Current
+                        }
+                    ]
+                }
+            ]
+        };
     }
 
     private static CraftingPlan CreateSimplePlan()
@@ -215,13 +317,14 @@ public class WebPlanPersistenceServiceTests
     {
         public int LoadPlanCallCount { get; private set; }
         public StoredPlan? LastSavedPlan { get; private set; }
+        public StoredPlan? PlanToLoad { get; init; }
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
         {
             if (identifier == "IndexedDB.loadPlan")
             {
                 LoadPlanCallCount++;
-                return new ValueTask<TValue>((TValue)(object?)null!);
+                return new ValueTask<TValue>((TValue)(object?)PlanToLoad!);
             }
 
             if (identifier == "IndexedDB.savePlan")

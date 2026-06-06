@@ -40,8 +40,13 @@ builder.Services.AddScoped<MarketShoppingService>();
 builder.Services.AddScoped<IMarketPriceEvaluationService, MarketPriceEvaluationService>();
 builder.Services.AddScoped<IMarketPriceLadderAnalysisService, MarketPriceLadderAnalysisService>();
 builder.Services.AddScoped<IMarketAnalysisExecutionService, MarketAnalysisExecutionService>();
+builder.Services.AddScoped<IMarketIntelligenceProjectionService, MarketIntelligenceProjectionService>();
 builder.Services.AddScoped<IProcurementRouteExecutionService, ProcurementRouteExecutionService>();
 builder.Services.AddScoped<IndexedDbMarketCacheService>();
+builder.Services.AddScoped<IndexedDbMarketIntelligenceStore>();
+builder.Services.AddScoped<IMarketIntelligenceStore>(sp => sp.GetRequiredService<IndexedDbMarketIntelligenceStore>());
+builder.Services.AddScoped<IMarketDataSourceStore>(sp => sp.GetRequiredService<IndexedDbMarketIntelligenceStore>());
+builder.Services.AddScoped<IMarketAnalysisDetailHydrationService, MarketAnalysisDetailHydrationService>();
 builder.Services.AddScoped<CommissionCostBasisResolver>();
 builder.Services.AddScoped<CommissionPayrollService>();
 

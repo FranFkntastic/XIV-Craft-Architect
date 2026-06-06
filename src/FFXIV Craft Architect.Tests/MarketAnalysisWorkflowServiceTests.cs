@@ -42,6 +42,177 @@ public class MarketAnalysisWorkflowServiceTests
     }
 
     [Fact]
+    public async Task RunAnalysisAsync_SavesColdMarketIntelligenceAndAutosavesCompactSummary()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        appState.TrackCurrentPlanIdentity("saved-plan", null);
+        var jsRuntime = new RecordingJsRuntime();
+        var intelligenceStore = new InMemoryMarketIntelligenceStore();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateExecutionResultWithListingDetail());
+        var service = CreateService(
+            appState,
+            execution.Object,
+            jsRuntime,
+            marketIntelligenceStore: intelligenceStore,
+            marketDataSourceStore: intelligenceStore);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.True(result.Published);
+        var summary = appState.MarketIntelligenceSummary;
+        Assert.NotNull(summary);
+        Assert.NotEqual(Guid.Empty, summary!.PublicationId);
+        Assert.Equal(1, Assert.Single(summary.Items).ItemId);
+        Assert.NotNull(jsRuntime.LastSavedPlan);
+        Assert.Equal(summary.PublicationId, jsRuntime.LastSavedPlan!.ActiveMarketIntelligencePublicationId);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketIntelligenceSummaryJson);
+        Assert.Null(jsRuntime.LastSavedPlan.MarketIntelligenceJson);
+        Assert.Null(jsRuntime.LastSavedPlan.MarketPlansJson);
+        Assert.Null(jsRuntime.LastSavedPlan.MarketItemAnalysesJson);
+        Assert.Null(jsRuntime.LastPatchedMarketIntelligenceJson);
+        Assert.Equal(summary.PublicationId, jsRuntime.LastPatchedActivePublicationId);
+        Assert.Contains("\"PublicationId\"", jsRuntime.LastPatchedMarketIntelligenceSummaryJson);
+
+        var hotWorld = Assert.Single(Assert.Single(appState.MarketItemAnalyses).Worlds);
+        Assert.Empty(hotWorld.Listings);
+        Assert.Empty(hotWorld.PriceBands);
+        Assert.Empty(Assert.Single(appState.ShoppingPlans).RecommendedWorld!.Listings);
+        Assert.Empty(Assert.Single(appState.ShoppingPlans).RecommendedWorld!.ExcludedListings);
+
+        var storedManifest = await intelligenceStore.LoadDetailManifestAsync(summary.PublicationId);
+        Assert.True(storedManifest?.HasAvailableDetails);
+        var storedDetails = await intelligenceStore.LoadDetailsAsync(
+            new MarketIntelligenceDetailQuery(summary.PublicationId, 1, new MarketWorldKey("Aether", "Siren")));
+        Assert.Equal(100, Assert.Single(Assert.Single(storedDetails).Listings).PricePerUnit);
+        var storedFacts = await intelligenceStore.LoadListingFactsAsync(
+            new MarketDataSourceQuery(1, MarketFetchScope.SelectedDataCenter, "Aether", "Siren", summary.PublicationId));
+        Assert.Equal(100, Assert.Single(storedFacts).UnitPrice);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_RecordsRunTimingsForBenchmarking()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        var jsRuntime = new RecordingJsRuntime();
+        var intelligenceStore = new InMemoryMarketIntelligenceStore();
+        var executionTimings = new MarketAnalysisExecutionTimings(
+            TimeSpan.FromMilliseconds(11),
+            TimeSpan.FromMilliseconds(13),
+            TimeSpan.FromMilliseconds(17));
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateExecutionResultWithListingDetail(executionTimings));
+        var service = CreateService(
+            appState,
+            execution.Object,
+            jsRuntime,
+            new DelayedRecipeLayerWorkflowService(TimeSpan.FromMilliseconds(10)),
+            marketIntelligenceStore: intelligenceStore,
+            marketDataSourceStore: intelligenceStore);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.True(result.Published);
+        var summary = appState.MarketIntelligenceSummary;
+        Assert.NotNull(summary);
+        Assert.NotNull(summary!.ActiveRunId);
+        var runRecord = await intelligenceStore.LoadRunRecordAsync(summary.ActiveRunId.Value);
+        Assert.NotNull(runRecord);
+        Assert.True(runRecord!.PlanBuildDuration > TimeSpan.Zero);
+        Assert.Equal(executionTimings.MarketFetchDuration, runRecord.MarketFetchDuration);
+        Assert.Equal(executionTimings.LadderAnalysisDuration, runRecord.LadderAnalysisDuration);
+        Assert.Equal(executionTimings.ShoppingPlanProjectionDuration, runRecord.ShoppingPlanProjectionDuration);
+        Assert.Equal(executionTimings.AnalysisDuration, runRecord.AnalysisDuration);
+        Assert.True(runRecord.ProjectionDuration >= TimeSpan.Zero);
+        Assert.True(runRecord.PublicationDuration > TimeSpan.Zero);
+        Assert.True(runRecord.PublicationDuration >= runRecord.ProjectionDuration);
+        Assert.True(runRecord.DetailPersistenceDuration >= TimeSpan.Zero);
+        Assert.True(runRecord.SourceFactPersistenceDuration >= TimeSpan.Zero);
+        Assert.True(runRecord.HotStatePublicationDuration >= TimeSpan.Zero);
+        Assert.True(runRecord.AutosaveDuration >= TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task ApplyLensAsync_AfterCompactPublication_ReprojectsFromColdDetailsAndKeepsHotStateCompact()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        var jsRuntime = new RecordingJsRuntime();
+        var intelligenceStore = new InMemoryMarketIntelligenceStore();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateExecutionResultWithListingDetail());
+        var service = CreateService(
+            appState,
+            execution.Object,
+            jsRuntime,
+            marketIntelligenceStore: intelligenceStore,
+            marketDataSourceStore: intelligenceStore);
+        await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        var result = await service.ApplyLensAsync(MarketAcquisitionLens.BulkValue);
+
+        Assert.True(result.Published);
+        var shoppingPlan = Assert.Single(appState.ShoppingPlans);
+        Assert.NotNull(shoppingPlan.RecommendedWorld);
+        Assert.Equal(200, shoppingPlan.RecommendedWorld!.TotalCost);
+        Assert.Empty(shoppingPlan.RecommendedWorld.Listings);
+        Assert.Empty(Assert.Single(Assert.Single(appState.MarketItemAnalyses).Worlds).Listings);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_WithMissingMarketEvidence_PublishesUnavailableItems()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        var jsRuntime = new RecordingJsRuntime();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(new MarketAnalysisExecutionResult(
+                new MarketEvidenceSet(
+                    new Dictionary<(int itemId, string dataCenter), CachedMarketData>(),
+                    [(1, "Aether")],
+                    MarketFetchScope.SelectedDataCenter,
+                    ["Aether"],
+                    "Aether",
+                    "North America",
+                    TimeSpan.Zero,
+                    fetchedCount: 0,
+                    DateTime.UtcNow),
+                [],
+                []));
+        var service = CreateService(appState, execution.Object, jsRuntime);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.True(result.Published);
+        Assert.Equal(1, Assert.Single(appState.UnavailableMarketItems).ItemId);
+        Assert.Equal(1, Assert.Single(appState.MarketIntelligenceSummary!.UnavailableMarketItems).ItemId);
+        Assert.NotEqual(Guid.Empty, appState.MarketIntelligence.MarketIntelligenceId);
+        Assert.Equal(1, Assert.Single(appState.MarketIntelligence.UnavailableMarketItems).ItemId);
+    }
+
+    [Fact]
     public async Task RunAnalysisAsync_PublishesAndPersistsRecipeBasis()
     {
         var appState = new AppState();
@@ -318,11 +489,51 @@ public class MarketAnalysisWorkflowServiceTests
         Assert.Equal(1, jsRuntime.SavePlanCallCount);
     }
 
+    [Fact]
+    public async Task ApplyLensAsync_WhenCurrentScopeChanged_PreservesPublishedDataScope()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        appState.TrackCurrentPlanIdentity("saved-plan", null);
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 1,
+                    Name = "Material",
+                    QuantityNeeded = 2,
+                    Scope = MarketFetchScope.SelectedDataCenter
+                }
+            ],
+            [ShoppingPlan(1)],
+            publishedScope: appState.CreateCurrentMarketAnalysisScopeSnapshot(
+                new DateTime(2026, 6, 4, 12, 0, 0, DateTimeKind.Utc)));
+        appState.SetMarketEvidenceSettings(
+            "Primal",
+            "North America",
+            MarketFetchScope.SelectedDataCenter,
+            searchEntireRegion: false);
+        var jsRuntime = new RecordingJsRuntime();
+        var service = CreateService(appState, Mock.Of<IMarketAnalysisExecutionService>(), jsRuntime);
+
+        var result = await service.ApplyLensAsync(MarketAcquisitionLens.BulkValue);
+
+        Assert.True(result.Published);
+        Assert.Equal("Aether", appState.PublishedMarketAnalysisScope?.SelectedDataCenter);
+        Assert.Equal(MarketAcquisitionLens.BulkValue, appState.PublishedMarketAnalysisScope?.Lens);
+        Assert.Equal("Primal", appState.SelectedDataCenter);
+        Assert.Contains("Aether", appState.MarketAnalysisScopeWarning);
+        Assert.Contains("Primal", appState.MarketAnalysisScopeWarning);
+        Assert.Contains("\"SelectedDataCenter\":\"Aether\"", jsRuntime.LastSavedPlan?.MarketIntelligenceSummaryJson);
+    }
+
     private static MarketAnalysisWorkflowService CreateService(
         AppState appState,
         IMarketAnalysisExecutionService execution,
         RecordingJsRuntime jsRuntime,
-        IRecipeLayerWorkflowService? recipeLayerWorkflow = null)
+        IRecipeLayerWorkflowService? recipeLayerWorkflow = null,
+        IMarketIntelligenceStore? marketIntelligenceStore = null,
+        IMarketDataSourceStore? marketDataSourceStore = null)
     {
         var indexedDb = new IndexedDbService(jsRuntime);
         var persistence = new WebPlanPersistenceService(
@@ -336,7 +547,10 @@ public class MarketAnalysisWorkflowServiceTests
             new MarketPriceLadderAnalysisService(),
             persistence,
             indexedDb,
-            recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService());
+            recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService(),
+            new MarketIntelligenceProjectionService(),
+            marketIntelligenceStore ?? new InMemoryMarketIntelligenceStore(),
+            marketDataSourceStore ?? new InMemoryMarketIntelligenceStore());
     }
 
     private static CraftingPlan CreatePlan(int itemId = 1)
@@ -385,6 +599,106 @@ public class MarketAnalysisWorkflowServiceTests
                     }
                 }
             ]);
+    }
+
+    private static MarketAnalysisExecutionResult CreateExecutionResultWithListingDetail(
+        MarketAnalysisExecutionTimings timings = default)
+    {
+        return new MarketAnalysisExecutionResult(
+            new MarketEvidenceSet(
+                new Dictionary<(int itemId, string dataCenter), CachedMarketData>(),
+                [(1, "Aether")],
+                MarketFetchScope.SelectedDataCenter,
+                ["Aether"],
+                "Aether",
+                "North America",
+                TimeSpan.Zero,
+                fetchedCount: 1,
+                DateTime.UtcNow),
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 1,
+                    Name = "Material",
+                    QuantityNeeded = 2,
+                    Scope = MarketFetchScope.SelectedDataCenter,
+                    Worlds =
+                    [
+                        new WorldMarketAnalysis
+                        {
+                            DataCenter = "Aether",
+                            WorldName = "Siren",
+                            QuantityNeeded = 2,
+                            CompetitiveQuantity = 2,
+                            TotalListingQuantity = 2,
+                            CompetitiveCoverageRatio = 1m,
+                            Listings =
+                            [
+                                new AnalyzedMarketListing
+                                {
+                                    Quantity = 2,
+                                    PricePerUnit = 100,
+                                    RetainerName = "Test Retainer",
+                                    PriceSanity = MarketListingPriceSanity.Sane,
+                                    Competitiveness = MarketListingCompetitiveness.Competitive
+                                }
+                            ],
+                            Scores =
+                            [
+                                new WorldLensScore
+                                {
+                                    Lens = MarketAcquisitionLens.MinimumUpfrontCost,
+                                    Rank = 1,
+                                    Score = 200,
+                                    ScoreBucket = MarketScoreBucket.Competitive
+                                },
+                                new WorldLensScore
+                                {
+                                    Lens = MarketAcquisitionLens.BulkValue,
+                                    Rank = 1,
+                                    Score = 200,
+                                    ScoreBucket = MarketScoreBucket.Competitive
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 1,
+                    Name = "Material",
+                    QuantityNeeded = 2,
+                    RecommendedWorld = new WorldShoppingSummary
+                    {
+                        DataCenter = "Aether",
+                        WorldName = "Siren",
+                        TotalQuantityPurchased = 2,
+                        TotalCost = 200,
+                        Listings =
+                        [
+                            new ShoppingListingEntry
+                            {
+                                Quantity = 2,
+                                NeededFromStack = 2,
+                                PricePerUnit = 100,
+                                RetainerName = "Shopping Retainer"
+                            }
+                        ],
+                        ExcludedListings =
+                        [
+                            new ShoppingListingEntry
+                            {
+                                Quantity = 1,
+                                PricePerUnit = 1_000_000,
+                                RetainerName = "Excluded Retainer"
+                            }
+                        ]
+                    }
+                }
+            ],
+            timings);
     }
 
     private static DetailedShoppingPlan ShoppingPlan(int itemId, string worldName = "Siren")
@@ -568,6 +882,24 @@ public class MarketAnalysisWorkflowServiceTests
         }
     }
 
+    private sealed class DelayedRecipeLayerWorkflowService : StubRecipeLayerWorkflowService
+    {
+        private readonly TimeSpan _delay;
+
+        public DelayedRecipeLayerWorkflowService(TimeSpan delay)
+        {
+            _delay = delay;
+        }
+
+        public override async Task<MarketAnalysisCandidateBuildResult?> BuildCurrentMarketAnalysisCandidateResultAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(_delay, cancellationToken);
+            return await base.BuildCurrentMarketAnalysisCandidateResultAsync(plan, cancellationToken);
+        }
+    }
+
     private sealed class ChangingRecipeLayerWorkflowService : StubRecipeLayerWorkflowService
     {
         private readonly Action _afterYield;
@@ -605,6 +937,8 @@ public class MarketAnalysisWorkflowServiceTests
         public StoredPlan? LastSavedPlan { get; private set; }
         public string? LastPatchedMarketIntelligenceJson { get; private set; }
         public string? LastPatchedRecipeBasisJson { get; private set; }
+        public Guid? LastPatchedActivePublicationId { get; private set; }
+        public string? LastPatchedMarketIntelligenceSummaryJson { get; private set; }
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
         {
@@ -620,6 +954,8 @@ public class MarketAnalysisWorkflowServiceTests
                 PatchMarketAnalysisCallCount++;
                 LastPatchedMarketIntelligenceJson = args?.Length > 3 ? args[3] as string : null;
                 LastPatchedRecipeBasisJson = args?.Length > 6 ? args[6] as string : null;
+                LastPatchedActivePublicationId = args?.Length > 8 ? args[8] as Guid? : null;
+                LastPatchedMarketIntelligenceSummaryJson = args?.Length > 9 ? args[9] as string : null;
                 return new ValueTask<TValue>((TValue)(object)true);
             }
 

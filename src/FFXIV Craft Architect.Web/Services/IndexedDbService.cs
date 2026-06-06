@@ -271,29 +271,35 @@ public class IndexedDbService
         MarketAcquisitionLens lens,
         StoredRecipeOperationSnapshot? recipeBasis = null,
         PublishedMarketAnalysisScopeSnapshot? publishedScope = null,
-        MarketIntelligence? marketIntelligence = null)
+        MarketIntelligence? marketIntelligence = null,
+        MarketIntelligencePublicationSummary? marketIntelligenceSummary = null)
     {
         try
         {
             await EnsureInitialized();
-            var storedMarketIntelligence = CreateStoredMarketIntelligence(
-                shoppingPlans,
-                marketItemAnalyses,
-                mode,
-                lens,
-                recipeBasis,
-                publishedScope,
-                marketIntelligence);
+            var shouldWriteCompactSummary = marketIntelligenceSummary != null;
+            var storedMarketIntelligence = shouldWriteCompactSummary
+                ? null
+                : CreateStoredMarketIntelligence(
+                    shoppingPlans,
+                    marketItemAnalyses,
+                    mode,
+                    lens,
+                    recipeBasis,
+                    publishedScope,
+                    marketIntelligence);
             return await _jsRuntime.InvokeAsync<bool>(
                 "IndexedDB.patchMarketAnalysis",
                 planId,
-                JsonSerializer.Serialize(shoppingPlans),
-                JsonSerializer.Serialize(marketItemAnalyses),
+                shouldWriteCompactSummary ? null : JsonSerializer.Serialize(shoppingPlans),
+                shouldWriteCompactSummary ? null : JsonSerializer.Serialize(marketItemAnalyses),
                 storedMarketIntelligence != null ? JsonSerializer.Serialize(storedMarketIntelligence) : null,
                 mode,
                 lens,
                 recipeBasis != null ? JsonSerializer.Serialize(recipeBasis) : null,
-                publishedScope != null ? JsonSerializer.Serialize(publishedScope) : null);
+                publishedScope != null ? JsonSerializer.Serialize(publishedScope) : null,
+                marketIntelligenceSummary?.PublicationId,
+                marketIntelligenceSummary != null ? JsonSerializer.Serialize(marketIntelligenceSummary) : null);
         }
         catch (Exception ex)
         {
@@ -395,6 +401,17 @@ public class StoredPlan
     /// Serialized canonical market intelligence publication.
     /// </summary>
     public string? MarketIntelligenceJson { get; set; }
+
+    /// <summary>
+    /// Active cold-storage market intelligence publication for compact autosave payloads.
+    /// </summary>
+    public Guid? ActiveMarketIntelligencePublicationId { get; set; }
+
+    /// <summary>
+    /// Serialized compact market intelligence publication summary.
+    /// Listing-level details are stored separately in cold IndexedDB stores.
+    /// </summary>
+    public string? MarketIntelligenceSummaryJson { get; set; }
 
     /// <summary>
     /// Serialized immutable market analysis source data.

@@ -1,4 +1,7 @@
+using System.Text.Json;
+
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -7,15 +10,18 @@ public sealed class WebPlanPersistenceService
     private readonly IndexedDbService _indexedDb;
     private readonly StoredPlanSnapshotBuilder _snapshotBuilder;
     private readonly PlanSessionLoadService _sessionLoadService;
+    private readonly IMarketIntelligenceStore? _marketIntelligenceStore;
 
     public WebPlanPersistenceService(
         IndexedDbService indexedDb,
         StoredPlanSnapshotBuilder snapshotBuilder,
-        PlanSessionLoadService sessionLoadService)
+        PlanSessionLoadService sessionLoadService,
+        IMarketIntelligenceStore? marketIntelligenceStore = null)
     {
         _indexedDb = indexedDb;
         _snapshotBuilder = snapshotBuilder;
         _sessionLoadService = sessionLoadService;
+        _marketIntelligenceStore = marketIntelligenceStore;
     }
 
     public async Task<IReadOnlyList<StoredPlanSummary>> LoadPlanSummariesAsync()
@@ -38,6 +44,7 @@ public sealed class WebPlanPersistenceService
             return null;
         }
 
+        await HydrateReferencedMarketIntelligenceSummaryAsync(storedPlan);
         return _sessionLoadService.Load(storedPlan, trackStoredPlanIdentity);
     }
 
@@ -49,7 +56,53 @@ public sealed class WebPlanPersistenceService
             return null;
         }
 
+        await HydrateReferencedMarketIntelligenceSummaryAsync(storedPlan);
         return _sessionLoadService.Load(storedPlan, trackStoredPlanIdentity: false);
+    }
+
+    private async Task HydrateReferencedMarketIntelligenceSummaryAsync(StoredPlan storedPlan)
+    {
+        if (_marketIntelligenceStore == null ||
+            storedPlan.ActiveMarketIntelligencePublicationId is not { } publicationId ||
+            publicationId == Guid.Empty ||
+            EmbeddedSummaryMatchesReference(storedPlan.MarketIntelligenceSummaryJson, publicationId))
+        {
+            return;
+        }
+
+        var summary = await _marketIntelligenceStore.LoadPublicationSummaryAsync(publicationId);
+        if (summary == null)
+        {
+            return;
+        }
+
+        storedPlan.MarketIntelligenceSummaryJson = JsonSerializer.Serialize(summary);
+    }
+
+    private static bool EmbeddedSummaryMatchesReference(string? summaryJson, Guid publicationId)
+    {
+        if (string.IsNullOrWhiteSpace(summaryJson))
+        {
+            return false;
+        }
+
+        try
+        {
+            var summary = JsonSerializer.Deserialize<MarketIntelligencePublicationSummary>(summaryJson);
+            return summary is
+            {
+                SchemaVersion: <= MarketIntelligencePublicationSummary.CurrentSchemaVersion
+            } &&
+                summary.PublicationId == publicationId;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
     }
 
     public StoredPlan BuildSnapshot(
@@ -89,7 +142,8 @@ public sealed class WebPlanPersistenceService
         MarketAcquisitionLens lens,
         StoredRecipeOperationSnapshot? recipeBasis = null,
         PublishedMarketAnalysisScopeSnapshot? publishedScope = null,
-        MarketIntelligence? marketIntelligence = null)
+        MarketIntelligence? marketIntelligence = null,
+        MarketIntelligencePublicationSummary? marketIntelligenceSummary = null)
     {
         return await _indexedDb.SaveMarketAnalysisAsync(
             planId,
@@ -99,7 +153,8 @@ public sealed class WebPlanPersistenceService
             lens,
             recipeBasis,
             publishedScope,
-            marketIntelligence);
+            marketIntelligence,
+            marketIntelligenceSummary);
     }
 
     public async Task<RenameStoredPlanResult> RenamePlanAsync(string planId, string newName)
