@@ -90,6 +90,80 @@ Comparison validity:
   `inconclusiveReasons`.
 - A JSON file existing is not enough evidence that the benchmark completed.
 
+## Benchmark Suite Runner
+
+Use `tools\Run-MarketAnalysisBenchmarkSuite.ps1` when comparing the pinned `local-dev`
+worktree against the current diagnostics/stabilization worktree. The suite runner writes
+one JSON manifest plus one JSON file per executed benchmark to the chosen output folder.
+It builds commands as native PowerShell arrays and records skipped browser runs instead
+of silently dropping them.
+
+Dry-run the Plan 17:43 matrix before any live calls:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools\Run-MarketAnalysisBenchmarkSuite.ps1" `
+  -PlanPath "C:\Users\gianf\Downloads\Plan 2026-06-06 17_43.craftplan" `
+  -Scenario "plan-1743" `
+  -OutputDirectory "C:\tmp\market-analysis-suite-plan-1743" `
+  -BaselineRepoRoot "C:\Users\gianf\.codex\worktrees\a2bd\FFXIV Craft Architect C# Edition" `
+  -StabilizationRepoRoot "C:\Users\gianf\.codex\worktrees\4466\FFXIV Craft Architect C# Edition" `
+  -SystemProfile "ffxiv-open" `
+  -IncludeBrowser `
+  -IncludeFake `
+  -IncludeWarmSequence `
+  -OwnDevServers `
+  -DryRun
+```
+
+Run CLI/Core live plus mechanism-only fake rows without browser automation:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools\Run-MarketAnalysisBenchmarkSuite.ps1" `
+  -PlanPath "C:\Users\gianf\Downloads\Plan 2026-06-06 17_43.craftplan" `
+  -Scenario "plan-1743" `
+  -OutputDirectory "C:\tmp\market-analysis-suite-plan-1743" `
+  -SystemProfile "ffxiv-open" `
+  -IncludeFake
+```
+
+Run browser rows against externally managed dev servers. Start the baseline app on
+`5002` and this branch on `5003` first, or pass different ports:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools\Run-MarketAnalysisBenchmarkSuite.ps1" `
+  -PlanPath "C:\Users\gianf\Downloads\Plan 2026-06-06 17_43.craftplan" `
+  -Scenario "plan-1743-browser" `
+  -OutputDirectory "C:\tmp\market-analysis-suite-plan-1743-browser" `
+  -BaselineAppPort 5002 `
+  -StabilizationAppPort 5003 `
+  -BaselineDevToolsPort 9232 `
+  -StabilizationDevToolsPort 9233 `
+  -SystemProfile "ffxiv-open" `
+  -IncludeBrowser `
+  -IncludeWarmSequence
+```
+
+The suite manifest records external server PIDs and command lines. Treat
+`serverWarnings` as a blocker for branch comparison when an external listener does not
+show the expected repo root in its command line.
+
+The runner also accepts explicit URLs when ports alone are not enough:
+
+```powershell
+-BaselineUrl "http://127.0.0.1:5002" -StabilizationUrl "http://127.0.0.1:5003"
+```
+
+Known plan paths used as benchmark sentinels:
+
+- Plan 17:43: `C:\Users\gianf\Downloads\Plan 2026-06-06 17_43.craftplan`
+- SSUC: `C:\Users\gianf\Downloads\SSUC Benchmark.craftplan`
+- Unmod stress: `C:\Users\gianf\Downloads\Unmod comparison sheet.craftplan`
+
+The suite runner defaults the `local-dev` baseline to
+`C:\Users\gianf\.codex\worktrees\a2bd\FFXIV Craft Architect C# Edition` and records
+`git worktree list --porcelain` in the manifest. It must not move or check out
+`local-dev`.
+
 Safety defaults:
 
 - total Chrome private memory over `7000 MB` trips the safety flag;
