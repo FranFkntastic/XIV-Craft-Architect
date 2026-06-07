@@ -52,6 +52,23 @@ function Convert-ToCommandText {
     }) -join " "
 }
 
+function Set-ProcessArguments {
+    param(
+        [System.Diagnostics.ProcessStartInfo]$StartInfo,
+        [string[]]$Arguments
+    )
+
+    if ($null -ne $StartInfo.ArgumentList) {
+        foreach ($argument in $Arguments) {
+            [void]$StartInfo.ArgumentList.Add($argument)
+        }
+
+        return
+    }
+
+    $StartInfo.Arguments = Convert-ToCommandText -Arguments $Arguments
+}
+
 function Invoke-Git {
     param(
         [string]$RepoRoot,
@@ -173,9 +190,7 @@ function Start-WebServer {
     )
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo.FileName = "dotnet"
-    foreach ($argument in $arguments) {
-        [void]$process.StartInfo.ArgumentList.Add($argument)
-    }
+    Set-ProcessArguments -StartInfo $process.StartInfo -Arguments $arguments
 
     $process.StartInfo.WorkingDirectory = $RepoRoot
     $process.StartInfo.UseShellExecute = $false
@@ -227,7 +242,7 @@ function New-RunRecord {
         [string]$TargetAppRepoRoot = ""
     )
 
-    [ordered]@{
+    [pscustomobject][ordered]@{
         id = $Id
         layer = $Layer
         label = $Label
@@ -259,19 +274,25 @@ function Invoke-RunRecord {
         return $Run
     }
 
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo.FileName = $Run.command[0]
-    foreach ($argument in $Run.command[1..($Run.command.Count - 1)]) {
-        [void]$process.StartInfo.ArgumentList.Add($argument)
+    $command = @($Run.command)
+    if ($command.Count -eq 0) {
+        $Run.status = "failed"
+        $Run.error = "Run record '$($Run.id)' does not define a command."
+        $Run.completedAtUtc = [DateTimeOffset]::UtcNow
+        return $Run
     }
 
-    $process.StartInfo.WorkingDirectory = $Run.repoRoot
-    $process.StartInfo.UseShellExecute = $false
-    $process.StartInfo.CreateNoWindow = $true
-    $process.StartInfo.RedirectStandardOutput = $true
-    $process.StartInfo.RedirectStandardError = $true
-
     try {
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo.FileName = $command[0]
+        if ($command.Count -gt 1) {
+            Set-ProcessArguments -StartInfo $process.StartInfo -Arguments $command[1..($command.Count - 1)]
+        }
+
+        $process.StartInfo.WorkingDirectory = $Run.repoRoot
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+
         [void]$process.Start()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             try {
@@ -285,12 +306,13 @@ function Invoke-RunRecord {
             $Run.error = "Timed out after $TimeoutSeconds seconds."
         }
         else {
+            $process.Refresh()
             $Run.exitCode = $process.ExitCode
             $Run.status = if ($process.ExitCode -eq 0) { "completed" } else { "failed" }
         }
 
-        $Run.stdout = $process.StandardOutput.ReadToEnd()
-        $Run.stderr = $process.StandardError.ReadToEnd()
+        $Run.stdout = "(not captured; child process output inherited by suite runner)"
+        $Run.stderr = ""
     }
     catch {
         $Run.status = "failed"
