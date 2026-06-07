@@ -72,6 +72,11 @@ public interface IMarketCacheService
         CancellationToken ct = default);
 }
 
+public interface IMarketCacheDiagnosticsProvider
+{
+    MarketCacheDecisionSnapshot? LastDecisionSnapshot { get; }
+}
+
 /// <summary>
 /// Cached market data for a specific item and data center.
 /// Uses Unix timestamp (seconds since epoch) for FetchedAt to avoid DateTime serialization issues.

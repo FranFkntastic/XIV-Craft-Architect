@@ -113,7 +113,23 @@ public class MarketAnalysisWorkflowServiceTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>(),
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
-            .ReturnsAsync(CreateExecutionResultWithListingDetail(executionTimings));
+            .ReturnsAsync(CreateExecutionResultWithListingDetail(
+                executionTimings,
+                new MarketCacheDecisionSnapshot
+                {
+                    RequestedItemCount = 1,
+                    RequestedPairCount = 1,
+                    FreshHitCount = 3,
+                    StaleExistingEntryCount = 4,
+                    MissingEntryCount = 5,
+                    OrdinaryFetchedPairCount = 6,
+                    ForcedRefreshPairCount = 7,
+                    DataCenterFetchCallCount = 8,
+                    CleanupStaleDeletionCount = 9,
+                    VerificationFailureCount = 10,
+                    ForceRefreshData = false,
+                    Trigger = "manual-run"
+                }));
         var service = CreateService(
             appState,
             execution.Object,
@@ -142,6 +158,18 @@ public class MarketAnalysisWorkflowServiceTests
         Assert.True(runRecord.SourceFactPersistenceDuration >= TimeSpan.Zero);
         Assert.True(runRecord.HotStatePublicationDuration >= TimeSpan.Zero);
         Assert.True(runRecord.AutosaveDuration >= TimeSpan.Zero);
+        Assert.Equal(1, runRecord.NetworkRequestCount);
+        Assert.Equal(1, runRecord.FetchedEvidencePairCount);
+        Assert.Equal(3, runRecord.FreshCacheHitCount);
+        Assert.Equal(4, runRecord.StaleExistingEntryCount);
+        Assert.Equal(5, runRecord.MissingCacheEntryCount);
+        Assert.Equal(6, runRecord.OrdinaryFetchedPairCount);
+        Assert.Equal(7, runRecord.ForcedRefreshPairCount);
+        Assert.Equal(8, runRecord.DataCenterFetchCallCount);
+        Assert.Equal(9, runRecord.CleanupStaleDeletionCount);
+        Assert.Equal(10, runRecord.VerificationFailureCount);
+        Assert.False(runRecord.ForceRefreshData);
+        Assert.Equal("manual-run", runRecord.RunTrigger);
     }
 
     [Fact]
@@ -639,7 +667,8 @@ public class MarketAnalysisWorkflowServiceTests
     }
 
     private static MarketAnalysisExecutionResult CreateExecutionResultWithListingDetail(
-        MarketAnalysisExecutionTimings timings = default)
+        MarketAnalysisExecutionTimings timings = default,
+        MarketCacheDecisionSnapshot? cacheDecision = null)
     {
         return new MarketAnalysisExecutionResult(
             new MarketEvidenceSet(
@@ -651,7 +680,8 @@ public class MarketAnalysisWorkflowServiceTests
                 "North America",
                 TimeSpan.Zero,
                 fetchedCount: 1,
-                DateTime.UtcNow),
+                DateTime.UtcNow,
+                cacheDecision),
             [
                 new MarketItemAnalysis
                 {

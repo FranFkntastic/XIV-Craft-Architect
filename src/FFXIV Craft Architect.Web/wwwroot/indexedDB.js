@@ -400,10 +400,29 @@ async function clearMarketCache() {
         
         request.onsuccess = () => {
             console.log('[IndexedDB] Cleared entire market cache');
-            resolve(true);
         };
         request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
+}
+
+function getInteropField(value, camel, pascal) {
+    return value?.[camel] ?? value?.[pascal];
+}
+
+function toMarketCacheEntry(key, data) {
+    return {
+        key: key,
+        itemId: getInteropField(data, 'itemId', 'ItemId'),
+        dataCenter: getInteropField(data, 'dataCenter', 'DataCenter'),
+        fetchedAtUnix: getInteropField(data, 'fetchedAtUnix', 'FetchedAtUnix'),
+        lastUploadTimeUnixMilliseconds: getInteropField(data, 'lastUploadTimeUnixMilliseconds', 'LastUploadTimeUnixMilliseconds'),
+        dcAvgPrice: getInteropField(data, 'dcAvgPrice', 'DcAvgPrice'),
+        hqAvgPrice: getInteropField(data, 'hqAvgPrice', 'HqAvgPrice'),
+        worlds: getInteropField(data, 'worlds', 'Worlds')
+    };
 }
 
 /**
@@ -416,28 +435,69 @@ async function saveMarketData(key, data) {
         const transaction = database.transaction([STORE_MARKET_CACHE], 'readwrite');
         const store = transaction.objectStore(STORE_MARKET_CACHE);
         
-        // Use Unix timestamp (seconds since epoch) for safe serialization
-        const cacheEntry = {
-            key: key,
-            itemId: data.itemId,
-            dataCenter: data.dataCenter,
-            fetchedAtUnix: data.fetchedAtUnix,  // Unix timestamp in seconds
-            lastUploadTimeUnixMilliseconds: data.lastUploadTimeUnixMilliseconds,
-            dcAvgPrice: data.dcAvgPrice,
-            hqAvgPrice: data.hqAvgPrice,
-            worlds: data.worlds
-        };
+        const cacheEntry = toMarketCacheEntry(key, data);
         
         const request = store.put(cacheEntry);
         
         request.onsuccess = () => {
             console.log('[IndexedDB] Saved market data for', key, 'timestamp:', cacheEntry.fetchedAtUnix);
-            resolve(true);
         };
         request.onerror = () => {
             console.error('[IndexedDB] Failed to save market data:', request.error);
             reject(request.error);
         };
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
+/**
+ * Save multiple market cache entries in one IndexedDB transaction.
+ * @param {{key:string,data:object}[]} entries
+ */
+async function saveMarketDataBatch(entries) {
+    const database = await initDB();
+    const cacheEntries = Array.isArray(entries) ? entries : [];
+
+    if (cacheEntries.length === 0) {
+        return 0;
+    }
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_MARKET_CACHE], 'readwrite');
+        const store = transaction.objectStore(STORE_MARKET_CACHE);
+        let queuedCount = 0;
+
+        transaction.oncomplete = () => {
+            console.log('[IndexedDB] Saved market data batch:', queuedCount);
+            resolve(queuedCount);
+        };
+        transaction.onerror = (event) => {
+            console.error('[IndexedDB] Failed to save market data batch:', transaction.error || event.target?.error);
+            reject(transaction.error || event.target?.error);
+        };
+        transaction.onabort = (event) => {
+            console.error('[IndexedDB] Market data batch transaction aborted:', transaction.error || event.target?.error);
+            reject(transaction.error || event.target?.error);
+        };
+
+        for (const entry of cacheEntries) {
+            const key = getInteropField(entry, 'key', 'Key');
+            const data = getInteropField(entry, 'data', 'Data');
+            if (!key || !data) {
+                continue;
+            }
+
+            const request = store.put(toMarketCacheEntry(key, data));
+            request.onsuccess = () => {
+                queuedCount++;
+            };
+            request.onerror = () => {
+                console.error('[IndexedDB] Failed to queue market data for', key, request.error);
+                reject(request.error);
+            };
+        }
     });
 }
 
@@ -577,11 +637,6 @@ async function deleteStaleMarketData(cutoffUnix) {
                     deletedCount++;
                 }
                 cursor.continue();
-            } else {
-                if (deletedCount > 0) {
-                    console.log('[IndexedDB] Deleted', deletedCount, 'stale entries');
-                }
-                resolve(deletedCount);
             }
         };
         
@@ -589,6 +644,14 @@ async function deleteStaleMarketData(cutoffUnix) {
             console.error('[IndexedDB] Failed to delete stale entries:', request.error);
             reject(request.error);
         };
+        transaction.oncomplete = () => {
+            if (deletedCount > 0) {
+                console.log('[IndexedDB] Deleted', deletedCount, 'stale entries');
+            }
+            resolve(deletedCount);
+        };
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
 }
 
@@ -629,7 +692,6 @@ async function deleteOldestEntries(count) {
                     deletedCount++;
                 }
                 console.log('[IndexedDB] Deleted', deletedCount, 'oldest entries');
-                resolve(deletedCount);
             }
         };
         
@@ -637,6 +699,9 @@ async function deleteOldestEntries(count) {
             console.error('[IndexedDB] Failed to delete oldest entries:', request.error);
             reject(request.error);
         };
+        transaction.oncomplete = () => resolve(deletedCount);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
 }
 
@@ -1213,6 +1278,7 @@ window.IndexedDB = {
     clearAllPlans,
     clearMarketCache,
     saveMarketData,
+    saveMarketDataBatch,
     loadMarketData,
     loadMarketDataBulk,
     deleteStaleMarketData,

@@ -225,6 +225,14 @@ public class MarketAnalysisExecutionServiceTests
     public async Task ExecuteAsync_SuspiciousCacheShape_ForceRefreshesAndAnalyzesCleanReplacement()
     {
         var cache = new Mock<IMarketCacheService>();
+        cache.As<IMarketCacheDiagnosticsProvider>()
+            .SetupGet(c => c.LastDecisionSnapshot)
+            .Returns(new MarketCacheDecisionSnapshot
+            {
+                RequestedItemCount = 1,
+                RequestedPairCount = 1,
+                FreshHitCount = 1
+            });
         var suspectData = CreateSuspiciousCachedData(123, "Aether");
         var freshData = CreateCachedData(123, "Aether");
         freshData.FetchedAt = DateTime.UtcNow.AddMinutes(1);
@@ -287,6 +295,10 @@ public class MarketAnalysisExecutionServiceTests
         var entry = Assert.Single(capturedAnalysisRequest.Evidence.Entries).Value;
         Assert.Equal("Fresh Retainer", Assert.Single(Assert.Single(entry.Worlds).Listings).RetainerName);
         Assert.Empty(capturedAnalysisRequest.Evidence.MissingRequests);
+        Assert.NotNull(result.Evidence.CacheDecision);
+        Assert.Equal(1, result.Evidence.CacheDecision!.FreshHitCount);
+        Assert.Equal(1, result.Evidence.CacheDecision.SuspectRefreshPairCount);
+        Assert.Equal(1, result.Evidence.CacheDecision.ForcedRefreshPairCount);
         Assert.DoesNotContain(
             "suspicious cached market evidence payload",
             Assert.Single(result.Analyses).Warning ?? string.Empty,

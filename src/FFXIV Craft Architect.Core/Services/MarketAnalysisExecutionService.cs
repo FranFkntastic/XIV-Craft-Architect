@@ -176,12 +176,30 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
             evidence.SelectedRegion,
             evidence.MaxAge,
             evidence.FetchedCount + forcedFetchedCount,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            MergeSuspectRefreshDecision(evidence.CacheDecision, suspectPairs.Count, forcedFetchedCount));
         return new SuspectCacheRefreshResult(
             repairedEvidence,
             unresolvedIssues.Count == 0
                 ? MarketCacheShapeReport.Empty
                 : new MarketCacheShapeReport(unresolvedIssues));
+    }
+
+    private static MarketCacheDecisionSnapshot? MergeSuspectRefreshDecision(
+        MarketCacheDecisionSnapshot? initialDecision,
+        int suspectPairCount,
+        int forcedFetchedCount)
+    {
+        if (initialDecision == null)
+        {
+            return null;
+        }
+
+        return initialDecision with
+        {
+            SuspectRefreshPairCount = suspectPairCount,
+            ForcedRefreshPairCount = initialDecision.ForcedRefreshPairCount + forcedFetchedCount
+        };
     }
 
     private static IEnumerable<MarketCacheShapeIssue> GetIssuesForPair(

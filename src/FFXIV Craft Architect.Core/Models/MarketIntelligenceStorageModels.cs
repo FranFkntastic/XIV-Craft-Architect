@@ -282,7 +282,39 @@ public sealed class MarketAnalysisRunRecord
 
     public int NetworkRequestCount { get; init; }
 
+    public int FetchedEvidencePairCount { get; init; }
+
     public int FreshCacheHitCount { get; init; }
+
+    public int StaleExistingEntryCount { get; init; }
+
+    public int MissingCacheEntryCount { get; init; }
+
+    public int OrdinaryFetchedPairCount { get; init; }
+
+    public int SuspectRefreshPairCount { get; init; }
+
+    public int ForcedRefreshPairCount { get; init; }
+
+    public int? HttpChunkRequestCount { get; init; }
+
+    public int DataCenterFetchCallCount { get; init; }
+
+    public int SplitCount { get; init; }
+
+    public int RateLimit429Count { get; init; }
+
+    public int GatewayTimeout504Count { get; init; }
+
+    public int CleanupStaleDeletionCount { get; init; }
+
+    public int CacheSizeEvictionCount { get; init; }
+
+    public int VerificationFailureCount { get; init; }
+
+    public bool ForceRefreshData { get; init; }
+
+    public string RunTrigger { get; init; } = string.Empty;
 
     public int StaleCacheRefreshCount { get; init; }
 }

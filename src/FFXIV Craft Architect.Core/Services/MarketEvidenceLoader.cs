@@ -26,6 +26,17 @@ public static class MarketEvidenceLoader
         var fetchedCount = requests.Count == 0
             ? 0
             : await marketCache.EnsurePopulatedAsync(requests, maxAge, progress, ct);
+        var cacheDecision = marketCache is IMarketCacheDiagnosticsProvider diagnosticsProvider
+            ? diagnosticsProvider.LastDecisionSnapshot
+            : null;
+        cacheDecision = cacheDecision is null
+            ? null
+            : cacheDecision with
+            {
+                Scope = scope,
+                SelectedDataCenter = selectedDataCenter,
+                SelectedRegion = selectedRegion
+            };
         var readMaxAge = maxAge == TimeSpan.Zero ? null : maxAge;
         var entries = requests.Count == 0
             ? new Dictionary<(int itemId, string dataCenter), CachedMarketData>()
@@ -46,6 +57,7 @@ public static class MarketEvidenceLoader
             selectedRegion,
             maxAge,
             fetchedCount,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            cacheDecision);
     }
 }

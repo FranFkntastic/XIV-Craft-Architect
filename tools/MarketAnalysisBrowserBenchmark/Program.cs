@@ -70,6 +70,11 @@ try
             await Task.Delay(options.PostActionDelay, CancellationToken.None);
         }
 
+        if (options.WaitForMarketAnalysisComplete)
+        {
+            await BenchmarkRunner.WaitForMarketAnalysisCompleteAsync(cdp, options.Timeout, CancellationToken.None);
+        }
+
         report.Checkpoints.Add(await BenchmarkRunner.CaptureCheckpointAsync(
             "after-page-ready",
             options,
@@ -125,6 +130,8 @@ internal sealed record BenchmarkOptions
 
     public bool EnableDeveloperMode { get; init; }
 
+    public bool WaitForMarketAnalysisComplete { get; init; }
+
     public IReadOnlyList<string> ClickBenchmarkIds { get; init; } = [];
 
     public IReadOnlyList<string> ClickButtonTexts { get; init; } = [];
@@ -168,6 +175,7 @@ internal sealed record BenchmarkOptions
           --process-only                      Skip DevTools and record system/Chrome process memory only
           --wait-selector <css>               Wait until a selector exists before measuring
           --enable-developer-mode             Persist and reload with Developer Mode enabled for benchmark hooks
+          --wait-for-market-analysis-complete Wait until a completed market-analysis run record is visible
           --import-native-plan <path>         Import a .craftplan through the native import dialog before measuring
           --click-benchmark-id <id>           Click an element with data-benchmark-id=<id>
           --click-button-text <text>          Click the first enabled button with matching text before measuring
@@ -225,6 +233,9 @@ internal sealed record BenchmarkOptions
                     break;
                 case "--enable-developer-mode":
                     options = options with { EnableDeveloperMode = true };
+                    break;
+                case "--wait-for-market-analysis-complete":
+                    options = options with { WaitForMarketAnalysisComplete = true };
                     break;
                 case "--import-native-plan":
                     options = options with { ImportNativePlanPath = RequireValue(args, ref index, arg) };
@@ -434,6 +445,70 @@ internal static class BenchmarkRunner
         }
     }
 
+    public static async Task WaitForMarketAnalysisCompleteAsync(
+        ChromeDevToolsClient cdp,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var completed = await cdp.EvaluateValueAsync(
+                """
+                (async () => {
+                  const getField = (value, camel, pascal) => value?.[camel] ?? value?.[pascal] ?? null;
+                  const parseJsonObject = (value) => {
+                    if (!value) {
+                      return null;
+                    }
+
+                    if (typeof value !== 'string') {
+                      return typeof value === 'object' ? value : null;
+                    }
+
+                    try {
+                      const parsed = JSON.parse(value);
+                      return parsed && typeof parsed === 'object' ? parsed : null;
+                    } catch {
+                      return null;
+                    }
+                  };
+
+                  if (!window.IndexedDB?.loadAllPlans || !window.IndexedDB?.loadMarketRunRecord) {
+                    return false;
+                  }
+
+                  const text = document.body?.innerText || '';
+                  if (text.includes('ANALYZING...')) {
+                    return false;
+                  }
+
+                  const plans = await window.IndexedDB.loadAllPlans();
+                  const activePlan = Array.isArray(plans)
+                    ? plans.find(plan => getField(plan, 'marketIntelligenceSummaryJson', 'MarketIntelligenceSummaryJson'))
+                    : null;
+                  const summary = parseJsonObject(getField(activePlan, 'marketIntelligenceSummaryJson', 'MarketIntelligenceSummaryJson'));
+                  const activeRunId = getField(summary, 'activeRunId', 'ActiveRunId');
+                  if (!activeRunId) {
+                    return false;
+                  }
+
+                  const runRecord = await window.IndexedDB.loadMarketRunRecord(activeRunId);
+                  return Boolean(getField(runRecord, 'completedAtUtc', 'CompletedAtUtc'));
+                })()
+                """,
+                cancellationToken);
+            if (completed?.ValueKind == JsonValueKind.True)
+            {
+                return;
+            }
+
+            await Task.Delay(500, cancellationToken);
+        }
+
+        throw new TimeoutException("Timed out waiting for completed market-analysis run record.");
+    }
+
     private static async Task<bool> TryClickBenchmarkIdAsync(
         ChromeDevToolsClient cdp,
         string benchmarkId,
@@ -619,12 +694,31 @@ internal static class BenchmarkRunner
                 legacyPayloadBytes: getField(runRecord, 'legacyPayloadBytes', 'LegacyPayloadBytes'),
                 retainedDetailBytes: getField(runRecord, 'retainedDetailBytes', 'RetainedDetailBytes'),
                 networkRequestCount: getField(runRecord, 'networkRequestCount', 'NetworkRequestCount'),
+                networkRequestCountMeaning: 'compatibility field; use httpChunkRequestCount for HTTP chunks and fetchedEvidencePairCount for fetched item/data-center pairs when available',
+                fetchedEvidencePairCount: getField(runRecord, 'fetchedEvidencePairCount', 'FetchedEvidencePairCount'),
                 freshCacheHitCount: getField(runRecord, 'freshCacheHitCount', 'FreshCacheHitCount'),
+                staleExistingEntryCount: getField(runRecord, 'staleExistingEntryCount', 'StaleExistingEntryCount'),
+                missingCacheEntryCount: getField(runRecord, 'missingCacheEntryCount', 'MissingCacheEntryCount'),
+                ordinaryFetchedPairCount: getField(runRecord, 'ordinaryFetchedPairCount', 'OrdinaryFetchedPairCount'),
+                suspectRefreshPairCount: getField(runRecord, 'suspectRefreshPairCount', 'SuspectRefreshPairCount'),
+                forcedRefreshPairCount: getField(runRecord, 'forcedRefreshPairCount', 'ForcedRefreshPairCount'),
+                httpChunkRequestCount: getField(runRecord, 'httpChunkRequestCount', 'HttpChunkRequestCount'),
+                dataCenterFetchCallCount: getField(runRecord, 'dataCenterFetchCallCount', 'DataCenterFetchCallCount'),
+                splitCount: getField(runRecord, 'splitCount', 'SplitCount'),
+                rateLimit429Count: getField(runRecord, 'rateLimit429Count', 'RateLimit429Count'),
+                gatewayTimeout504Count: getField(runRecord, 'gatewayTimeout504Count', 'GatewayTimeout504Count'),
+                cleanupStaleDeletionCount: getField(runRecord, 'cleanupStaleDeletionCount', 'CleanupStaleDeletionCount'),
+                cacheSizeEvictionCount: getField(runRecord, 'cacheSizeEvictionCount', 'CacheSizeEvictionCount'),
+                verificationFailureCount: getField(runRecord, 'verificationFailureCount', 'VerificationFailureCount'),
+                forceRefreshData: getField(runRecord, 'forceRefreshData', 'ForceRefreshData'),
+                runTrigger: getField(runRecord, 'runTrigger', 'RunTrigger'),
                 staleCacheRefreshCount: getField(runRecord, 'staleCacheRefreshCount', 'StaleCacheRefreshCount')
               } : null;
 
               let marketAnalysisRunTiming = null;
               let marketAnalysisRunTimingWarning = null;
+              let marketCacheStats = null;
+              let marketCacheStatsWarning = null;
               try {
                 if (window.IndexedDB?.loadAllPlans && window.IndexedDB?.loadMarketRunRecord) {
                   const plans = await window.IndexedDB.loadAllPlans();
@@ -641,6 +735,15 @@ internal static class BenchmarkRunner
                 }
               } catch (error) {
                 marketAnalysisRunTimingWarning = String(error?.message || error);
+              }
+
+              try {
+                if (window.IndexedDB?.getMarketCacheStats) {
+                  const oneHourAgoUnix = Math.floor(Date.now() / 1000) - 3600;
+                  marketCacheStats = await window.IndexedDB.getMarketCacheStats(oneHourAgoUnix);
+                }
+              } catch (error) {
+                marketCacheStatsWarning = String(error?.message || error);
               }
 
               return {
@@ -683,7 +786,9 @@ internal static class BenchmarkRunner
                   usedJSHeapSize: performance.memory.usedJSHeapSize
                 } : null,
                 marketAnalysisRunTiming,
-                marketAnalysisRunTimingWarning
+                marketAnalysisRunTimingWarning,
+                marketCacheStats,
+                marketCacheStatsWarning
               };
             })()
             """;
