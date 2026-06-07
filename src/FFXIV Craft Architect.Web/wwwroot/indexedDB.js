@@ -10,6 +10,31 @@ const STORE_MARKET_CACHE = 'marketCache';
 
 let db = null;
 
+function attachDatabaseConnection(database, openMessage) {
+    db = database;
+    db.onversionchange = () => {
+        console.warn('[IndexedDB] Database version changed; closing stale connection.');
+        db?.close();
+        db = null;
+    };
+    console.log(openMessage);
+    return db;
+}
+
+function openExistingDatabaseVersion() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME);
+
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+            const database = attachDatabaseConnection(
+                request.result,
+                `[IndexedDB] Database opened successfully (existing v${request.result.version}; app requested v${DB_VERSION})`);
+            resolve(database);
+        };
+    });
+}
+
 /**
  * Initialize the IndexedDB database
  */
@@ -19,21 +44,25 @@ async function initDB() {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
         
-        request.onerror = () => reject(request.error);
+        request.onerror = () => {
+            if (request.error?.name === 'VersionError') {
+                console.warn(
+                    `[IndexedDB] Existing database is newer than app schema v${DB_VERSION}; opening existing version.`);
+                openExistingDatabaseVersion().then(resolve).catch(reject);
+                return;
+            }
+
+            reject(request.error);
+        };
         request.onblocked = () => {
             const message = '[IndexedDB] Database upgrade blocked by another open tab. Close other FFXIV Craft Architect tabs and reload.';
             console.warn(message);
             reject(new Error(message));
         };
         request.onsuccess = () => {
-            db = request.result;
-            db.onversionchange = () => {
-                console.warn('[IndexedDB] Database version changed; closing stale connection.');
-                db?.close();
-                db = null;
-            };
-            console.log('[IndexedDB] Database opened successfully (v4 - plan summaries)');
-            resolve(db);
+            resolve(attachDatabaseConnection(
+                request.result,
+                '[IndexedDB] Database opened successfully (v4 - plan summaries)'));
         };
         
         request.onupgradeneeded = (event) => {
