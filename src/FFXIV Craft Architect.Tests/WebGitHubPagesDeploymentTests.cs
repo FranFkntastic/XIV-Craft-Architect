@@ -38,6 +38,16 @@ public class WebGitHubPagesDeploymentTests
         Assert.Contains("const baseUrl = window.location.origin + activeBase + '/';", notFoundHtml);
     }
 
+    [Fact]
+    public void IndexedDbScript_RetriesWithoutVersionWhenExistingDatabaseIsNewer()
+    {
+        var indexedDbScript = ReadRepoFile("src", "FFXIV Craft Architect.Web", "wwwroot", "indexedDB.js");
+
+        Assert.Contains("request.error?.name === 'VersionError'", indexedDbScript);
+        Assert.Contains("openExistingDatabaseVersion", indexedDbScript);
+        Assert.Contains("indexedDB.open(DB_NAME)", indexedDbScript);
+    }
+
     private static string ReadRepoFile(params string[] segments)
     {
         var repoRoot = FindRepoRoot();
