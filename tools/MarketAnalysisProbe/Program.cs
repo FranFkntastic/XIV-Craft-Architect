@@ -184,6 +184,13 @@ internal sealed class MarketAnalysisBenchmark
             .ToList();
 
         return new BenchmarkRunResult(
+            ToolVersion: "phase1-diagnostics-probe",
+            RepoRoot: GitInfo("rev-parse --show-toplevel"),
+            Branch: GitInfo("rev-parse --abbrev-ref HEAD"),
+            Commit: GitInfo("rev-parse HEAD"),
+            Dirty: !string.IsNullOrWhiteSpace(GitInfo("status --short")),
+            DirtyState: GitInfo("status --short"),
+            CommandLine: Environment.CommandLine,
             StartedAtUtc: startedAt,
             CompletedAtUtc: DateTimeOffset.UtcNow,
             PlanPath: options.PlanPath,
@@ -214,6 +221,35 @@ internal sealed class MarketAnalysisBenchmark
             BestValueTotal: totalCost,
             TopRecommendedItems: topItems,
             ErrorItems: errorItems);
+    }
+
+    private static string GitInfo(string arguments)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = arguments,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            if (process is null)
+            {
+                return string.Empty;
+            }
+
+            process.WaitForExit(5_000);
+            return process.ExitCode == 0
+                ? process.StandardOutput.ReadToEnd().Trim()
+                : string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
     }
 
     public static void PrintSummary(BenchmarkRunResult run)
@@ -1717,6 +1753,13 @@ internal sealed class BenchmarkMarketCache : IMarketCacheService
 }
 
 internal sealed record BenchmarkRunResult(
+    string ToolVersion,
+    string RepoRoot,
+    string Branch,
+    string Commit,
+    bool Dirty,
+    string DirtyState,
+    string CommandLine,
     DateTimeOffset StartedAtUtc,
     DateTimeOffset CompletedAtUtc,
     string PlanPath,

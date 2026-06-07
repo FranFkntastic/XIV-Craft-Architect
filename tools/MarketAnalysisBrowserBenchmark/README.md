@@ -55,6 +55,9 @@ Interaction options are intentionally small and boring:
 - `--click-element-text` clicks the first visible element matching the text.
 - `--import-native-plan` sets the native craftplan file input and waits for import to
   settle.
+- `--wait-market-analysis-completion` polls the app until market analysis has completed
+  or hard-failed. Use this for comparable market-analysis runs instead of relying only on
+  a fixed post-action delay.
 - `--post-action-delay-seconds` waits after the last action so async UI work can progress.
 
 Current debug-gated benchmark hook ids:
@@ -73,7 +76,19 @@ The harness records:
 - Chrome process count, total private memory, largest private memory, and working set;
 - DOM counts, table counts, expanded element counts, status text, IndexedDB database
   count, and `performance.memory` when DevTools is available;
+- market-analysis completion state, active run id, visible analyzing state, run-record
+  timing, and whether the report is valid for comparison;
 - safety-trip and contamination flags.
+
+Comparison validity:
+
+- `validForComparison=true` means the final page state is either completed with completed
+  run-record timing, or a hard error was visible and should be treated as the observed
+  failure.
+- `comparisonStatus=process-only`, `blocked`, `safety-tripped`, or `inconclusive` means
+  the report should not be used as a branch performance comparison without the attached
+  `inconclusiveReasons`.
+- A JSON file existing is not enough evidence that the benchmark completed.
 
 Safety defaults:
 
