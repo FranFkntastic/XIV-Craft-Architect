@@ -6,6 +6,7 @@ param(
     [int]$ProcessTimeoutSeconds = 180,
     [switch]$NoBuild,
     [switch]$KeepChrome,
+    [switch]$PreserveChromeProfile,
     [switch]$CleanBuildArtifacts,
     [string]$HarnessCommandLine = "",
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -198,11 +199,11 @@ try {
             Write-Warning "Configured Chrome path was not found at $ChromePath. Using $resolvedChromePath."
         }
 
-        if (Test-Path $ChromeProfile) {
+        if ((Test-Path $ChromeProfile) -and -not $PreserveChromeProfile) {
             Remove-Item -LiteralPath $ChromeProfile -Recurse -Force
         }
 
-        New-Item -ItemType Directory -Path $ChromeProfile | Out-Null
+        New-Item -ItemType Directory -Path $ChromeProfile -Force | Out-Null
         $chromeArgs = @(
             "--headless=new",
             "--remote-debugging-port=$DevToolsPort",

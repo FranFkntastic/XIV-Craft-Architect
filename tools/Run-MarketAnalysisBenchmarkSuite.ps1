@@ -416,7 +416,8 @@ function New-BrowserRun {
         [int]$DevToolsPort,
         [string]$CacheState,
         [string]$RunSuffix,
-        [int]$WarmIndex = 0
+        [int]$WarmIndex = 0,
+        [string]$ProfileKey = ""
     )
 
     $suiteRoot = $StabilizationRepoRoot
@@ -434,7 +435,11 @@ function New-BrowserRun {
     }
     $output = Join-Path $OutputDirectory $outputName
     $wrapper = Join-Path $suiteRoot "tools\Run-MarketAnalysisBrowserBenchmark.ps1"
-    $profile = Join-Path $OutputDirectory "chrome-$Scenario-$runId"
+    if ([string]::IsNullOrWhiteSpace($ProfileKey)) {
+        $ProfileKey = $runId
+    }
+
+    $profile = Join-Path $OutputDirectory "chrome-$Scenario-$ProfileKey"
     if ([string]::IsNullOrWhiteSpace($Url)) {
         $Url = "http://127.0.0.1:$AppPort"
     }
@@ -476,7 +481,12 @@ function New-BrowserRun {
         $profile,
         "-ProcessTimeoutSeconds",
         "$ProcessTimeoutSeconds"
-    ) + $harnessArgs
+    )
+    if ($WarmIndex -gt 0) {
+        $command += "-PreserveChromeProfile"
+    }
+
+    $command += $harnessArgs
 
     New-RunRecord `
         -Id $runId `
@@ -540,6 +550,30 @@ function Get-ServerWarnings {
         }
         if ($matched.Count -eq 0) {
             $warnings.Add("External server '$($server.label)' on port $($server.port) did not expose expected repo root '$expectedRoot' in its command line.")
+        }
+    }
+
+    return @($warnings)
+}
+
+function Get-LabelWarnings {
+    param(
+        [object]$BaselineState,
+        [object]$StabilizationState
+    )
+
+    $warnings = [System.Collections.Generic.List[string]]::new()
+    foreach ($pair in @(
+        @{ Name = "baseline"; Label = $BaselineLabel; State = $BaselineState },
+        @{ Name = "stabilization"; Label = $StabilizationLabel; State = $StabilizationState }
+    )) {
+        $matches = [regex]::Matches([string]$pair.Label, '[0-9a-fA-F]{7,40}')
+        foreach ($match in $matches) {
+            $expected = $match.Value.ToLowerInvariant()
+            $actual = ([string]$pair.State.commit).ToLowerInvariant()
+            if (-not $actual.StartsWith($expected, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $warnings.Add("$($pair.Name) label '$($pair.Label)' appears to reference commit '$expected', but repo is at '$($pair.State.shortCommit)'.")
+            }
         }
     }
 
@@ -620,10 +654,11 @@ try {
         $baselinePortListening = $DryRun -or (Test-PortListening -Port $BaselineAppPort)
         $stabilizationPortListening = $DryRun -or (Test-PortListening -Port $StabilizationAppPort)
         if ($baselinePortListening) {
-            $runs.Add((New-BrowserRun -Label $BaselineLabel -AppRepoRoot $BaselineRepoRoot -Url $BaselineUrl -AppPort $BaselineAppPort -DevToolsPort $BaselineDevToolsPort -CacheState "browser-cold" -RunSuffix "cold"))
+            $baselineProfileKey = "$BaselineLabel-browser-sequence"
+            $runs.Add((New-BrowserRun -Label $BaselineLabel -AppRepoRoot $BaselineRepoRoot -Url $BaselineUrl -AppPort $BaselineAppPort -DevToolsPort $BaselineDevToolsPort -CacheState "browser-cold" -RunSuffix "cold" -ProfileKey $baselineProfileKey))
             if ($IncludeWarmSequence) {
                 foreach ($index in 1..3) {
-                    $runs.Add((New-BrowserRun -Label $BaselineLabel -AppRepoRoot $BaselineRepoRoot -Url $BaselineUrl -AppPort $BaselineAppPort -DevToolsPort $BaselineDevToolsPort -CacheState "browser-warm" -RunSuffix "warm" -WarmIndex $index))
+                    $runs.Add((New-BrowserRun -Label $BaselineLabel -AppRepoRoot $BaselineRepoRoot -Url $BaselineUrl -AppPort $BaselineAppPort -DevToolsPort $BaselineDevToolsPort -CacheState "browser-warm" -RunSuffix "warm" -WarmIndex $index -ProfileKey $baselineProfileKey))
                 }
             }
         }
@@ -642,10 +677,11 @@ try {
         }
 
         if ($stabilizationPortListening) {
-            $runs.Add((New-BrowserRun -Label $StabilizationLabel -AppRepoRoot $StabilizationRepoRoot -Url $StabilizationUrl -AppPort $StabilizationAppPort -DevToolsPort $StabilizationDevToolsPort -CacheState "browser-cold" -RunSuffix "cold"))
+            $stabilizationProfileKey = "$StabilizationLabel-browser-sequence"
+            $runs.Add((New-BrowserRun -Label $StabilizationLabel -AppRepoRoot $StabilizationRepoRoot -Url $StabilizationUrl -AppPort $StabilizationAppPort -DevToolsPort $StabilizationDevToolsPort -CacheState "browser-cold" -RunSuffix "cold" -ProfileKey $stabilizationProfileKey))
             if ($IncludeWarmSequence) {
                 foreach ($index in 1..3) {
-                    $runs.Add((New-BrowserRun -Label $StabilizationLabel -AppRepoRoot $StabilizationRepoRoot -Url $StabilizationUrl -AppPort $StabilizationAppPort -DevToolsPort $StabilizationDevToolsPort -CacheState "browser-warm" -RunSuffix "warm" -WarmIndex $index))
+                    $runs.Add((New-BrowserRun -Label $StabilizationLabel -AppRepoRoot $StabilizationRepoRoot -Url $StabilizationUrl -AppPort $StabilizationAppPort -DevToolsPort $StabilizationDevToolsPort -CacheState "browser-warm" -RunSuffix "warm" -WarmIndex $index -ProfileKey $stabilizationProfileKey))
                 }
             }
         }
@@ -685,6 +721,9 @@ finally {
 
 $manifestPath = Join-Path $OutputDirectory "$Scenario-suite-manifest.json"
 $serverWarnings = Get-ServerWarnings -Servers $servers
+$baselineState = Get-GitState -RepoRoot $BaselineRepoRoot
+$stabilizationState = Get-GitState -RepoRoot $StabilizationRepoRoot
+$labelWarnings = Get-LabelWarnings -BaselineState $baselineState -StabilizationState $stabilizationState
 $manifest = [ordered]@{
     toolVersion = "phase2-benchmark-suite"
     createdAtUtc = [DateTimeOffset]::UtcNow
@@ -699,10 +738,11 @@ $manifest = [ordered]@{
     ownDevServers = [bool]$OwnDevServers
     systemProfile = $SystemProfile
     worktreeList = $worktreeList
-    baseline = Get-GitState -RepoRoot $BaselineRepoRoot
-    stabilization = Get-GitState -RepoRoot $StabilizationRepoRoot
+    baseline = $baselineState
+    stabilization = $stabilizationState
     servers = $servers
     serverWarnings = $serverWarnings
+    labelWarnings = $labelWarnings
     runs = @($runs)
 }
 

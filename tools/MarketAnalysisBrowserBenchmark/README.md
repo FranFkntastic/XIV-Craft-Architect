@@ -60,6 +60,11 @@ Interaction options are intentionally small and boring:
   a fixed post-action delay.
 - `--post-action-delay-seconds` waits after the last action so async UI work can progress.
 
+For warm browser sequences, reuse the same isolated Chrome profile and pass
+`-PreserveChromeProfile` on the warm runs. The cold run should omit this switch so the
+profile starts clean; warm runs should include it so IndexedDB/session/cache evidence can
+carry forward.
+
 Current debug-gated benchmark hook ids:
 
 - `main-import-menu`
@@ -146,6 +151,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "tools\Run-MarketAnalysisBen
 The suite manifest records external server PIDs and command lines. Treat
 `serverWarnings` as a blocker for branch comparison when an external listener does not
 show the expected repo root in its command line.
+
+The suite runner reuses one isolated Chrome profile per branch when
+`-IncludeWarmSequence` is set. It also emits `labelWarnings` if a label appears to embed a
+commit that does not match the target repo state.
 
 The runner also accepts explicit URLs when ports alone are not enough:
 
