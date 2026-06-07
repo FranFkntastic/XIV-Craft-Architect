@@ -93,21 +93,26 @@ public class MarketAnalysisExecutionServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_PassesMaxAgeAndCancellationToEvidenceLoader()
+    public async Task ExecuteAsync_ForceRefreshUsesExplicitPairRefreshAndCancellation()
     {
         var cache = new Mock<IMarketCacheService>();
-        TimeSpan? capturedEnsureMaxAge = null;
         TimeSpan? capturedReadMaxAge = TimeSpan.FromMinutes(1);
+        var refreshRequestedPairs = false;
         var cts = new CancellationTokenSource();
         cache.Setup(c => c.EnsurePopulatedAsync(
                 It.IsAny<List<(int itemId, string dataCenter)>>(),
                 It.IsAny<TimeSpan?>(),
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<List<(int itemId, string dataCenter)>, TimeSpan?, IProgress<string>?, CancellationToken>(
-                (_, maxAge, _, token) =>
+            .ReturnsAsync(0);
+        cache.Setup(c => c.RefreshRequestedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<List<(int itemId, string dataCenter)>, IProgress<string>?, CancellationToken>(
+                (_, _, token) =>
                 {
-                    capturedEnsureMaxAge = maxAge;
+                    refreshRequestedPairs = true;
                     Assert.Equal(cts.Token, token);
                 })
             .ReturnsAsync(0);
@@ -141,12 +146,47 @@ public class MarketAnalysisExecutionServiceTests
                 Scope = MarketFetchScope.SelectedDataCenter,
                 SelectedDataCenter = "Aether",
                 SelectedRegion = "North America",
-                MaxAge = TimeSpan.Zero
+                ForceRefreshData = true
             },
             ct: cts.Token);
 
-        Assert.Equal(TimeSpan.Zero, capturedEnsureMaxAge);
+        Assert.True(refreshRequestedPairs);
         Assert.Null(capturedReadMaxAge);
+        cache.Verify(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ZeroMaxAge_ThrowsInsteadOfOverloadingForceRefresh()
+    {
+        var cache = new Mock<IMarketCacheService>(MockBehavior.Strict);
+        var ladder = new Mock<IMarketPriceLadderAnalysisService>(MockBehavior.Strict);
+        var service = new MarketAnalysisExecutionService(cache.Object, ladder.Object);
+
+        var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            service.ExecuteAsync(
+                new MarketAnalysisExecutionRequest
+                {
+                    Items =
+                    [
+                        new MaterialAggregate
+                        {
+                            ItemId = 123,
+                            Name = "Test Item",
+                            TotalQuantity = 5
+                        }
+                    ],
+                    Scope = MarketFetchScope.SelectedDataCenter,
+                    SelectedDataCenter = "Aether",
+                    SelectedRegion = "North America",
+                    MaxAge = TimeSpan.Zero
+                }));
+
+        Assert.Equal("MaxAge", ex.ParamName);
     }
 
     [Fact]
@@ -222,7 +262,7 @@ public class MarketAnalysisExecutionServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_SuspiciousCacheShape_ForceRefreshesAndAnalyzesCleanReplacement()
+    public async Task ExecuteAsync_SuspiciousCacheShape_RefreshesRequestedPairAndAnalyzesCleanReplacement()
     {
         var cache = new Mock<IMarketCacheService>();
         cache.As<IMarketCacheDiagnosticsProvider>()
@@ -243,12 +283,11 @@ public class MarketAnalysisExecutionServiceTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(0);
-        cache.Setup(c => c.EnsurePopulatedAsync(
+        cache.Setup(c => c.RefreshRequestedAsync(
                 It.Is<List<(int itemId, string dataCenter)>>(requests =>
                     requests.Count == 1 &&
                     requests[0].itemId == 123 &&
                     requests[0].dataCenter == "Aether"),
-                TimeSpan.Zero,
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(1);
@@ -317,6 +356,11 @@ public class MarketAnalysisExecutionServiceTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(0);
+        cache.Setup(c => c.RefreshRequestedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
         cache.SetupSequence(c => c.GetManyAsync(
                 It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
                 It.IsAny<TimeSpan?>()))
@@ -355,12 +399,11 @@ public class MarketAnalysisExecutionServiceTests
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(0);
-        cache.Setup(c => c.EnsurePopulatedAsync(
+        cache.Setup(c => c.RefreshRequestedAsync(
                 It.Is<List<(int itemId, string dataCenter)>>(requests =>
                     requests.Count == 1 &&
                     requests[0].itemId == 123 &&
                     requests[0].dataCenter == "Aether"),
-                TimeSpan.Zero,
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(1);
@@ -401,12 +444,11 @@ public class MarketAnalysisExecutionServiceTests
             CreateExecutionRequest(),
             executionOptions: MarketAnalysisExecutionOptions.Synchronous);
 
-        cache.Verify(c => c.EnsurePopulatedAsync(
+        cache.Verify(c => c.RefreshRequestedAsync(
             It.Is<List<(int itemId, string dataCenter)>>(requests =>
                 requests.Count == 1 &&
                 requests[0].itemId == 123 &&
                 requests[0].dataCenter == "Aether"),
-            TimeSpan.Zero,
             It.IsAny<IProgress<string>?>(),
             It.IsAny<CancellationToken>()), Times.Exactly(2));
         Assert.DoesNotContain(

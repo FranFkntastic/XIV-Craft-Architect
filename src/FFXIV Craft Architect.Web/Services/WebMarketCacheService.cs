@@ -128,9 +128,27 @@ public class WebMarketCacheService : IMarketCacheService
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
+        if (maxAge <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxAge),
+                maxAge,
+                "Use RefreshRequestedAsync when fresh data is required for specific pairs.");
+        }
+
         // This cache does not fetch by itself; orchestration services decide when
         // to populate it from Universalis.
         var missing = GetMissingAsync(requests, maxAge).Result;
         return Task.FromResult(missing.Count);
+    }
+
+    public Task<int> RefreshRequestedAsync(
+        List<(int itemId, string dataCenter)> requests,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        // This in-memory cache does not fetch by itself; every requested pair
+        // remains the caller's responsibility to refresh.
+        return Task.FromResult(requests.Count);
     }
 }

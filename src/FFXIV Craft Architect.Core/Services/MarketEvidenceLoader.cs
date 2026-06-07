@@ -11,10 +11,18 @@ public static class MarketEvidenceLoader
         string selectedDataCenter,
         string selectedRegion,
         TimeSpan? maxAge = null,
+        bool forceRefreshData = false,
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(marketCache);
+        if (maxAge <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxAge),
+                maxAge,
+                "Use forceRefreshData when fresh data is required for the requested market-evidence pairs.");
+        }
 
         var distinctItemIds = itemIds.Distinct().ToList();
         var dataCenters = MarketFetchScopeResolver.GetDataCenters(scope, selectedDataCenter, selectedRegion);
@@ -25,7 +33,9 @@ public static class MarketEvidenceLoader
         var forceRefreshStartedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var fetchedCount = requests.Count == 0
             ? 0
-            : await marketCache.EnsurePopulatedAsync(requests, maxAge, progress, ct);
+            : forceRefreshData
+                ? await marketCache.RefreshRequestedAsync(requests, progress, ct)
+                : await marketCache.EnsurePopulatedAsync(requests, maxAge, progress, ct);
         var cacheDecision = marketCache is IMarketCacheDiagnosticsProvider diagnosticsProvider
             ? diagnosticsProvider.LastDecisionSnapshot
             : null;
@@ -37,11 +47,11 @@ public static class MarketEvidenceLoader
                 SelectedDataCenter = selectedDataCenter,
                 SelectedRegion = selectedRegion
             };
-        var readMaxAge = maxAge == TimeSpan.Zero ? null : maxAge;
+        var readMaxAge = forceRefreshData ? null : maxAge;
         var entries = requests.Count == 0
             ? new Dictionary<(int itemId, string dataCenter), CachedMarketData>()
             : await marketCache.GetManyAsync(requests, readMaxAge);
-        if (maxAge == TimeSpan.Zero)
+        if (forceRefreshData)
         {
             entries = entries
                 .Where(entry => entry.Value.FetchedAtUnix >= forceRefreshStartedAtUnix)

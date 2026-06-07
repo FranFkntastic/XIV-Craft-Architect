@@ -435,20 +435,25 @@ public class CoreRecipePlannerCommandServiceTests
     }
 
     [Fact]
-    public async Task RefreshPricesAsync_WhenForceRefreshRequested_PassesZeroMaxAgeToCachePopulation()
+    public async Task RefreshPricesAsync_WhenForceRefreshRequested_UsesExplicitPairRefresh()
     {
         var plan = CreatePlan();
         plan.RootItems[0].Source = AcquisitionSource.MarketBuyNq;
         plan.RootItems[0].CanBuyFromMarket = true;
-        TimeSpan? requestedMaxAge = null;
+        var refreshRequestedPairs = false;
         var cache = new Mock<IMarketCacheService>();
         cache.Setup(c => c.EnsurePopulatedAsync(
                 It.IsAny<List<(int itemId, string dataCenter)>>(),
                 It.IsAny<TimeSpan?>(),
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<List<(int itemId, string dataCenter)>, TimeSpan?, IProgress<string>?, CancellationToken>(
-                (_, maxAge, _, _) => requestedMaxAge = maxAge)
+            .ReturnsAsync(1);
+        cache.Setup(c => c.RefreshRequestedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<List<(int itemId, string dataCenter)>, IProgress<string>?, CancellationToken>(
+                (_, _, _) => refreshRequestedPairs = true)
             .ReturnsAsync(1);
         cache.Setup(c => c.GetManyAsync(
                 It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
@@ -470,7 +475,12 @@ public class CoreRecipePlannerCommandServiceTests
             "North America",
             ForceRefreshData: true));
 
-        Assert.Equal(TimeSpan.Zero, requestedMaxAge);
+        Assert.True(refreshRequestedPairs);
+        cache.Verify(c => c.EnsurePopulatedAsync(
+            It.IsAny<List<(int itemId, string dataCenter)>>(),
+            TimeSpan.Zero,
+            It.IsAny<IProgress<string>?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

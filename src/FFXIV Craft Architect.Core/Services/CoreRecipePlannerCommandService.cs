@@ -592,7 +592,7 @@ public sealed class CoreRecipePlannerCommandService
             priceFetchScope,
             selectedDataCenter,
             selectedRegion,
-            forceRefreshData ? TimeSpan.Zero : null,
+            forceRefreshData: forceRefreshData,
             ct: ct);
         ct.ThrowIfCancellationRequested();
         if (!_session.IsCurrentPlanSession(plan, planSessionVersion))

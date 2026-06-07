@@ -359,6 +359,14 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
+        if (maxAge <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxAge),
+                maxAge,
+                "Use RefreshRequestedAsync when fresh data is required for specific pairs.");
+        }
+
         var effectiveMaxAge = maxAge ?? _defaultMaxAge;
         var cutoff = DateTime.UtcNow - effectiveMaxAge;
         
@@ -375,13 +383,40 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
                 requests.Count, effectiveMaxAge);
             return 0;
         }
+
+        return await FetchAndStoreAsync(missing, progress, ct);
+    }
+
+    public async Task<int> RefreshRequestedAsync(
+        List<(int itemId, string dataCenter)> requests,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        _logger.LogInformation("[SqliteMarketCache] RefreshRequestedAsync START - {Count} requests", requests.Count);
+        if (requests.Count == 0)
+        {
+            return 0;
+        }
+
+        return await FetchAndStoreAsync(requests, progress, ct);
+    }
+
+    private async Task<int> FetchAndStoreAsync(
+        List<(int itemId, string dataCenter)> requests,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
+        if (requests.Count == 0)
+        {
+            return 0;
+        }
         
         _logger.LogInformation("[SqliteMarketCache] Fetching {MissingCount}/{TotalCount} items from Universalis", 
-            missing.Count, requests.Count);
-        progress?.Report($"Fetching market data for {missing.Count} items...");
+            requests.Count, requests.Count);
+        progress?.Report($"Fetching market data for {requests.Count} items...");
         
         // Group by data center for efficient bulk fetching
-        var byDataCenter = missing.GroupBy(x => x.dataCenter).ToList();
+        var byDataCenter = requests.GroupBy(x => x.dataCenter).ToList();
         int fetchedCount = 0;
 
         var fetchResults = await FetchDataCentersAsync(byDataCenter, progress, ct);

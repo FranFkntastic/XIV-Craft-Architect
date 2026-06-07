@@ -321,20 +321,58 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
+        if (maxAge <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxAge),
+                maxAge,
+                "Use RefreshRequestedAsync when fresh data is required for specific pairs.");
+        }
+
+        return await PopulateAsync(
+            requests,
+            maxAge,
+            refreshRequestedPairs: false,
+            progress,
+            ct);
+    }
+
+    public async Task<int> RefreshRequestedAsync(
+        List<(int itemId, string dataCenter)> requests,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        return await PopulateAsync(
+            requests,
+            maxAge: null,
+            refreshRequestedPairs: true,
+            progress,
+            ct);
+    }
+
+    private async Task<int> PopulateAsync(
+        List<(int itemId, string dataCenter)> requests,
+        TimeSpan? maxAge,
+        bool refreshRequestedPairs,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
         var effectiveMaxAge = maxAge ?? _defaultMaxAge;
-        var forceRefreshData = maxAge == TimeSpan.Zero;
         var requestedItemCount = requests.Select(request => request.itemId).Distinct().Count();
         
-        _logger?.LogInformation("[IndexedDbMarketCache] EnsurePopulatedAsync START - {Count} requests, maxAge={MaxAge}", 
-            requests.Count, effectiveMaxAge);
+        _logger?.LogInformation(
+            "[IndexedDbMarketCache] {Mode} START - {Count} requests, maxAge={MaxAge}",
+            refreshRequestedPairs ? "RefreshRequestedAsync" : "EnsurePopulatedAsync",
+            requests.Count,
+            effectiveMaxAge);
         
         if (requests.Count == 0)
         {
             LastDecisionSnapshot = new MarketCacheDecisionSnapshot
             {
                 MaxAge = maxAge,
-                ForceRefreshData = forceRefreshData,
-                Trigger = forceRefreshData ? "force-refresh" : "ensure-populated"
+                RefreshRequestedPairs = refreshRequestedPairs,
+                Trigger = refreshRequestedPairs ? "refresh-requested-pairs" : "ensure-populated"
             };
             return 0;
         }
@@ -343,7 +381,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
         
         // STEP 1: Clean up stale entries before fetching new data
         var cleanedCount = 0;
-        if (!forceRefreshData)
+        if (!refreshRequestedPairs)
         {
             progress?.Report("Cleaning up stale cache entries...");
             cleanedCount = await CleanupStaleAsync(effectiveMaxAge);
@@ -378,7 +416,9 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
         }
         
         // STEP 3: Check what's missing from cache
-        var missing = await GetMissingAsync(requests, maxAge);
+        var missing = refreshRequestedPairs
+            ? requests
+            : await GetMissingAsync(requests, maxAge);
         var dataCenterFetchCallCount = missing
             .Select(request => request.dataCenter)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -396,7 +436,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
                 cacheSizeEvictionCount,
                 dataCenterFetchCallCount: 0,
                 maxAge,
-                forceRefreshData);
+                refreshRequestedPairs);
             return 0;
         }
         
@@ -451,7 +491,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
             cacheSizeEvictionCount,
             dataCenterFetchCallCount,
             maxAge,
-            forceRefreshData);
+            refreshRequestedPairs);
         
         return fetchedCount;
     }
@@ -559,7 +599,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
         int cacheSizeEvictionCount,
         int dataCenterFetchCallCount,
         TimeSpan? maxAge,
-        bool forceRefreshData)
+        bool refreshRequestedPairs)
     {
         return new MarketCacheDecisionSnapshot
         {
@@ -568,15 +608,15 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
             FreshHitCount = preCleanupState.FreshHitCount,
             StaleExistingEntryCount = preCleanupState.StaleEntryCount,
             MissingEntryCount = preCleanupState.MissingEntryCount,
-            OrdinaryFetchedPairCount = forceRefreshData ? 0 : fetchedCount,
-            ForcedRefreshPairCount = forceRefreshData ? fetchedCount : 0,
+            OrdinaryFetchedPairCount = refreshRequestedPairs ? 0 : fetchedCount,
+            ForcedRefreshPairCount = refreshRequestedPairs ? fetchedCount : 0,
             DataCenterFetchCallCount = dataCenterFetchCallCount,
             CleanupStaleDeletionCount = cleanedCount,
             CacheSizeEvictionCount = cacheSizeEvictionCount,
             VerificationFailureCount = Math.Max(0, fetchedCount - verifiedCount),
             MaxAge = maxAge,
-            ForceRefreshData = forceRefreshData,
-            Trigger = forceRefreshData ? "force-refresh" : "ensure-populated"
+            RefreshRequestedPairs = refreshRequestedPairs,
+            Trigger = refreshRequestedPairs ? "refresh-requested-pairs" : "ensure-populated"
         };
     }
 

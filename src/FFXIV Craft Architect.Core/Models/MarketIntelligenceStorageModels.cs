@@ -280,6 +280,9 @@ public sealed class MarketAnalysisRunRecord
 
     public long RetainedDetailBytes { get; init; }
 
+    /// <summary>
+    /// Compatibility metric for fetched evidence pairs. Prefer HttpChunkRequestCount for actual HTTP calls.
+    /// </summary>
     public int NetworkRequestCount { get; init; }
 
     public int FetchedEvidencePairCount { get; init; }
@@ -294,6 +297,10 @@ public sealed class MarketAnalysisRunRecord
 
     public int SuspectRefreshPairCount { get; init; }
 
+    /// <summary>
+    /// Pairs fetched because a caller explicitly requested fresh data, including suspect-cache repair.
+    /// This is not derived from MaxAge.
+    /// </summary>
     public int ForcedRefreshPairCount { get; init; }
 
     public int? HttpChunkRequestCount { get; init; }
@@ -312,6 +319,9 @@ public sealed class MarketAnalysisRunRecord
 
     public int VerificationFailureCount { get; init; }
 
+    /// <summary>
+    /// True when the market-analysis run was started from a user or workflow request for fresh data.
+    /// </summary>
     public bool ForceRefreshData { get; init; }
 
     public string RunTrigger { get; init; } = string.Empty;

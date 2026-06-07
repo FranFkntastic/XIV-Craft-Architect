@@ -72,7 +72,26 @@ public class IndexedDbMarketCacheServiceTests
     }
 
     [Fact]
-    public async Task EnsurePopulatedAsync_ForcedRefresh_RecordsForcedFetchedPairs()
+    public async Task EnsurePopulatedAsync_ZeroMaxAge_ThrowsInsteadOfOverloadingForceRefresh()
+    {
+        var jsRuntime = new RecordingMarketCacheJsRuntime();
+        var handler = new ConcurrentMarketFetchHandler();
+        var universalis = new UniversalisService(new HttpClient(handler));
+        var cache = new IndexedDbMarketCacheService(jsRuntime, universalis);
+        var requests = new List<(int itemId, string dataCenter)>
+        {
+            (101, "Aether")
+        };
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            cache.EnsurePopulatedAsync(requests, TimeSpan.Zero));
+
+        Assert.Equal(0, handler.MarketRequestCount);
+        Assert.Equal(0, jsRuntime.DeleteStaleCallCount);
+    }
+
+    [Fact]
+    public async Task RefreshRequestedAsync_RecordsForcedFetchedPairsWithoutStaleCleanup()
     {
         var jsRuntime = new RecordingMarketCacheJsRuntime();
         var handler = new ConcurrentMarketFetchHandler();
@@ -91,12 +110,12 @@ public class IndexedDbMarketCacheServiceTests
             (101, "Aether")
         };
 
-        var fetchedCount = await cache.EnsurePopulatedAsync(requests, TimeSpan.Zero);
+        var fetchedCount = await cache.RefreshRequestedAsync(requests);
 
         Assert.Equal(1, fetchedCount);
         Assert.Equal(1, handler.MarketRequestCount);
         Assert.NotNull(cache.LastDecisionSnapshot);
-        Assert.True(cache.LastDecisionSnapshot!.ForceRefreshData);
+        Assert.True(cache.LastDecisionSnapshot!.RefreshRequestedPairs);
         Assert.Equal(1, cache.LastDecisionSnapshot.ForcedRefreshPairCount);
         Assert.Equal(0, cache.LastDecisionSnapshot.OrdinaryFetchedPairCount);
         Assert.Equal(0, jsRuntime.DeleteStaleCallCount);

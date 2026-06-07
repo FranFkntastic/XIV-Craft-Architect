@@ -296,7 +296,7 @@ public sealed class CoreProcurementWorkflowService
                     Scope = request.Scope,
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,
-                    MaxAge = TimeSpan.Zero,
+                    ForceRefreshData = true,
                     RecommendationMode = RecommendationMode.MinimizeTotalCost,
                     Lens = request.Lens,
                     ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter

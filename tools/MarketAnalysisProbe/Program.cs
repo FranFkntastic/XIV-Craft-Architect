@@ -1427,9 +1427,33 @@ internal sealed class BenchmarkMarketCache : IMarketCacheService
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
+        if (maxAge <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxAge),
+                maxAge,
+                "Use RefreshRequestedAsync when fresh data is required for specific pairs.");
+        }
+
         var missing = await GetMissingAsync(requests, maxAge);
+        return await FetchMissingAsync(missing, progress, ct);
+    }
+
+    public async Task<int> RefreshRequestedAsync(
+        List<(int itemId, string dataCenter)> requests,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        return await FetchMissingAsync(requests, progress, ct);
+    }
+
+    private async Task<int> FetchMissingAsync(
+        IReadOnlyCollection<(int itemId, string dataCenter)> requests,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
         var fetched = 0;
-        var dcGroups = missing
+        var dcGroups = requests
             .GroupBy(request => request.dataCenter)
             .Select(group => (DataCenter: group.Key, ItemIds: group.Select(request => request.itemId).Distinct().ToList()))
             .OrderBy(group => GetDataCenterOrderRank(group.DataCenter))

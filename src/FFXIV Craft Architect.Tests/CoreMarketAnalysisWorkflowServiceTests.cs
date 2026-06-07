@@ -48,7 +48,8 @@ public class CoreMarketAnalysisWorkflowServiceTests
             It.Is<MarketAnalysisExecutionRequest>(request =>
                 request.Items.Count == 1 &&
                 request.Items[0].ItemId == 1 &&
-                request.MaxAge == TimeSpan.Zero &&
+                request.ForceRefreshData &&
+                request.MaxAge == null &&
                 request.Scope == MarketFetchScope.SelectedDataCenter &&
                 request.SelectedDataCenter == "Aether" &&
                 request.SelectedRegion == "North America" &&

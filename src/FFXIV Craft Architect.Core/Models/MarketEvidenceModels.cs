@@ -81,6 +81,10 @@ public sealed record MarketCacheDecisionSnapshot
 
     public int SuspectRefreshPairCount { get; init; }
 
+    /// <summary>
+    /// Pairs fetched because a caller explicitly requested fresh data, including suspect-cache repair.
+    /// This must not be inferred from a cache age threshold.
+    /// </summary>
     public int ForcedRefreshPairCount { get; init; }
 
     public int? HttpChunkRequestCount { get; init; }
@@ -101,7 +105,10 @@ public sealed record MarketCacheDecisionSnapshot
 
     public TimeSpan? MaxAge { get; init; }
 
-    public bool ForceRefreshData { get; init; }
+    /// <summary>
+    /// True when the cache was asked to refresh the requested pairs directly instead of reusing freshness checks.
+    /// </summary>
+    public bool RefreshRequestedPairs { get; init; }
 
     public MarketFetchScope Scope { get; init; }
 

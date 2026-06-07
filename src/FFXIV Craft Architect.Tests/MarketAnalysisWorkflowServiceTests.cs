@@ -35,7 +35,9 @@ public class MarketAnalysisWorkflowServiceTests
         Assert.Equal(1, jsRuntime.PatchMarketAnalysisCallCount);
         Assert.Equal(1, jsRuntime.SavePlanCallCount);
         execution.Verify(e => e.ExecuteAsync(
-            It.Is<MarketAnalysisExecutionRequest>(request => request.MaxAge == TimeSpan.Zero),
+            It.Is<MarketAnalysisExecutionRequest>(request =>
+                request.ForceRefreshData &&
+                request.MaxAge == null),
             It.IsAny<IProgress<string>?>(),
             It.IsAny<CancellationToken>(),
             It.IsAny<MarketAnalysisExecutionOptions?>()));
@@ -127,7 +129,7 @@ public class MarketAnalysisWorkflowServiceTests
                     DataCenterFetchCallCount = 8,
                     CleanupStaleDeletionCount = 9,
                     VerificationFailureCount = 10,
-                    ForceRefreshData = false,
+                    RefreshRequestedPairs = false,
                     Trigger = "manual-run"
                 }));
         var service = CreateService(
