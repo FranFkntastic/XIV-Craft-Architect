@@ -100,36 +100,28 @@ public class IndexedDbMarketIntelligenceStoreTests
     }
 
     [Fact]
-    public async Task SaveListingFactsAsync_LargeFactSetWritesChunksWithStableOffsets()
+    public async Task SaveListingFactsAsync_DoesNotWriteDuplicateFactStore()
     {
         var jsRuntime = new RecordingJsRuntime();
         var store = new IndexedDbMarketIntelligenceStore(jsRuntime);
-        var publicationId = Guid.NewGuid();
-        var runId = Guid.NewGuid();
-        var facts = Enumerable
-            .Range(0, 257)
-            .Select(index => new CanonicalMarketListingFact
-            {
-                PublicationId = publicationId,
-                RunId = runId,
-                ItemId = 5338,
-                Scope = MarketFetchScope.SelectedDataCenter,
-                DataCenter = "Aether",
-                WorldName = "Siren",
-                UnitPrice = 100 + index,
-                Quantity = 1
-            })
-            .ToList();
 
-        await store.SaveListingFactsAsync(facts, CancellationToken.None);
+        await store.SaveListingFactsAsync(
+            [
+                new CanonicalMarketListingFact
+                {
+                    PublicationId = Guid.NewGuid(),
+                    RunId = Guid.NewGuid(),
+                    ItemId = 5338,
+                    Scope = MarketFetchScope.SelectedDataCenter,
+                    DataCenter = "Aether",
+                    WorldName = "Siren",
+                    Quantity = 12,
+                    UnitPrice = 100
+                }
+            ],
+            CancellationToken.None);
 
-        Assert.Equal(
-            ["IndexedDB.saveMarketListingFacts", "IndexedDB.saveMarketListingFacts"],
-            jsRuntime.Calls.Select(call => call.Identifier));
-        Assert.Equal(0, Assert.IsType<int>(jsRuntime.Calls[0].Args[1]));
-        Assert.Equal(256, Assert.IsType<int>(jsRuntime.Calls[1].Args[1]));
-        Assert.Equal(256, Assert.IsAssignableFrom<IReadOnlyList<CanonicalMarketListingFact>>(jsRuntime.Calls[0].Args[0]).Count);
-        Assert.Single(Assert.IsAssignableFrom<IReadOnlyList<CanonicalMarketListingFact>>(jsRuntime.Calls[1].Args[0]));
+        Assert.Empty(jsRuntime.Calls);
     }
 
     [Fact]
@@ -156,13 +148,15 @@ public class IndexedDbMarketIntelligenceStoreTests
         await store.LoadRunRecordAsync(runId, CancellationToken.None);
         Assert.Equal("IndexedDB.loadMarketRunRecord", jsRuntime.LastIdentifier);
 
+        var callCountBeforeFactSave = jsRuntime.Calls.Count;
         await store.SaveListingFactsAsync([], CancellationToken.None);
-        Assert.Equal("IndexedDB.saveMarketListingFacts", jsRuntime.LastIdentifier);
+        Assert.Equal(callCountBeforeFactSave, jsRuntime.Calls.Count);
 
         await store.LoadListingFactsAsync(
             new MarketDataSourceQuery(5338, MarketFetchScope.SelectedDataCenter, "Aether", "Siren"),
             CancellationToken.None);
         Assert.Equal("IndexedDB.loadMarketListingFacts", jsRuntime.LastIdentifier);
+        Assert.Equal("IndexedDB.loadMarketListingFactsFromDetails", jsRuntime.Calls[^2].Identifier);
 
         await store.PruneDetailsAsync(
             new MarketIntelligencePruneRequest(publicationId, null, null),

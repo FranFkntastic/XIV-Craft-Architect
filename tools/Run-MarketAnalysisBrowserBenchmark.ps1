@@ -6,6 +6,7 @@ param(
     [int]$ProcessTimeoutSeconds = 180,
     [switch]$NoBuild,
     [switch]$KeepChrome,
+    [switch]$PreserveChromeProfile,
     [switch]$CleanBuildArtifacts,
     [string]$HarnessCommandLine = "",
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -29,6 +30,55 @@ function Test-PortListening {
 
     $pattern = "[:.]$Port\s+.*LISTENING"
     return [bool](netstat -ano | Select-String -Pattern $pattern)
+}
+
+function Resolve-ChromePath {
+    param([string]$PreferredPath)
+
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($PreferredPath)) {
+        $candidates += $PreferredPath
+    }
+
+    foreach ($key in @(
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+    )) {
+        $registryKey = Get-Item -Path $key -ErrorAction SilentlyContinue
+        if ($null -ne $registryKey) {
+            $defaultValue = $registryKey.GetValue("")
+            if (-not [string]::IsNullOrWhiteSpace($defaultValue)) {
+                $candidates += [string]$defaultValue
+            }
+        }
+    }
+
+    $command = Get-Command chrome.exe -ErrorAction SilentlyContinue
+    if ($null -ne $command -and -not [string]::IsNullOrWhiteSpace($command.Source)) {
+        $candidates += $command.Source
+    }
+
+    $runningChrome = Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) } |
+        Select-Object -First 1 -ExpandProperty ExecutablePath
+    if (-not [string]::IsNullOrWhiteSpace($runningChrome)) {
+        $candidates += $runningChrome
+    }
+
+    $candidates += @(
+        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+        "$env:LocalAppData\Google\Chrome\Application\chrome.exe"
+    )
+
+    foreach ($candidate in $candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique) {
+        if (Test-Path -LiteralPath $candidate) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+
+    return $null
 }
 
 function Wait-PortListening {
@@ -140,15 +190,20 @@ try {
     }
 
     if (-not $processOnly -and -not (Test-PortListening -Port $DevToolsPort)) {
-        if (-not (Test-Path $ChromePath)) {
-            throw "Chrome was not found at $ChromePath."
+        $resolvedChromePath = Resolve-ChromePath -PreferredPath $ChromePath
+        if ([string]::IsNullOrWhiteSpace($resolvedChromePath)) {
+            throw "Chrome was not found. Checked configured path, registry App Paths, PATH, running Chrome processes, and common install locations."
         }
 
-        if (Test-Path $ChromeProfile) {
+        if (-not (Test-Path -LiteralPath $ChromePath)) {
+            Write-Warning "Configured Chrome path was not found at $ChromePath. Using $resolvedChromePath."
+        }
+
+        if ((Test-Path $ChromeProfile) -and -not $PreserveChromeProfile) {
             Remove-Item -LiteralPath $ChromeProfile -Recurse -Force
         }
 
-        New-Item -ItemType Directory -Path $ChromeProfile | Out-Null
+        New-Item -ItemType Directory -Path $ChromeProfile -Force | Out-Null
         $chromeArgs = @(
             "--headless=new",
             "--remote-debugging-port=$DevToolsPort",
@@ -158,7 +213,7 @@ try {
             "--no-default-browser-check",
             $Url
         )
-        $chromeProcess = Start-Process -FilePath $ChromePath -ArgumentList $chromeArgs -WindowStyle Hidden -PassThru
+        $chromeProcess = Start-Process -FilePath $resolvedChromePath -ArgumentList $chromeArgs -WindowStyle Hidden -PassThru
         Wait-PortListening -Port $DevToolsPort
     }
 

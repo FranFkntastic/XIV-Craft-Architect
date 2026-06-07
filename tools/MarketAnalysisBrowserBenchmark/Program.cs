@@ -50,6 +50,10 @@ try
             await BenchmarkRunner.ImportNativePlanAsync(cdp, options.ImportNativePlanPath, options.Timeout, CancellationToken.None);
         }
 
+        report.BaselineMarketAnalysisRunId = await BenchmarkRunner.ReadActiveMarketAnalysisRunIdAsync(
+            cdp,
+            CancellationToken.None);
+
         foreach (var benchmarkId in options.ClickBenchmarkIds)
         {
             await BenchmarkRunner.ClickBenchmarkIdAsync(cdp, benchmarkId, CancellationToken.None);
@@ -63,6 +67,15 @@ try
         foreach (var elementText in options.ClickElementTexts)
         {
             await BenchmarkRunner.ClickElementByTextAsync(cdp, elementText, CancellationToken.None);
+        }
+
+        if (options.WaitMarketAnalysisCompletion)
+        {
+            await BenchmarkRunner.WaitForMarketAnalysisCompletionAsync(
+                cdp,
+                options.Timeout,
+                report.BaselineMarketAnalysisRunId,
+                CancellationToken.None);
         }
 
         if (options.PostActionDelay > TimeSpan.Zero)
@@ -86,6 +99,7 @@ finally
     report.CompletedAtUtc = DateTime.UtcNow;
     report.SafetyTripped = report.Checkpoints.Any(checkpoint => checkpoint.SafetyTripped);
     report.Contaminated = report.Checkpoints.Any(checkpoint => checkpoint.Contaminated);
+    report.ApplyComparisonValidity();
     Directory.CreateDirectory(Path.GetDirectoryName(options.OutputPath)!);
     await File.WriteAllTextAsync(
         options.OutputPath,
@@ -135,6 +149,8 @@ internal sealed record BenchmarkOptions
 
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(60);
 
+    public bool WaitMarketAnalysisCompletion { get; init; }
+
     public decimal SafetyTotalChromeMb { get; init; } = 7_000m;
 
     public decimal SafetyLargestChromeMb { get; init; } = 2_500m;
@@ -172,6 +188,7 @@ internal sealed record BenchmarkOptions
           --click-benchmark-id <id>           Click an element with data-benchmark-id=<id>
           --click-button-text <text>          Click the first enabled button with matching text before measuring
           --click-element-text <text>         Click the first visible element with matching text before measuring
+          --wait-market-analysis-completion   Poll until market analysis has completed or hard-failed
           --post-action-delay-seconds <sec>   Delay after click actions before measuring
           --timeout-seconds <seconds>         Wait timeout. Default: 60
           --safety-total-chrome-mb <mb>       Default: 7000
@@ -237,6 +254,9 @@ internal sealed record BenchmarkOptions
                     break;
                 case "--click-element-text":
                     options = options with { ClickElementTexts = [.. options.ClickElementTexts, RequireValue(args, ref index, arg)] };
+                    break;
+                case "--wait-market-analysis-completion":
+                    options = options with { WaitMarketAnalysisCompletion = true };
                     break;
                 case "--post-action-delay-seconds":
                     options = options with { PostActionDelay = TimeSpan.FromSeconds(double.Parse(RequireValue(args, ref index, arg))) };
@@ -353,6 +373,44 @@ internal static class BenchmarkRunner
         }
 
         throw new TimeoutException($"Timed out waiting for selector '{selector}'.");
+    }
+
+    public static async Task WaitForMarketAnalysisCompletionAsync(
+        ChromeDevToolsClient cdp,
+        TimeSpan timeout,
+        string? baselineRunId,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var state = await cdp.EvaluateValueAsync(
+                CreateMarketAnalysisCompletionExpression(baselineRunId),
+                cancellationToken);
+            if (state?.ValueKind == JsonValueKind.Object)
+            {
+                var completionState = GetString(state.Value, "completionState");
+                if (string.Equals(completionState, "completed", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(completionState, "hard-error", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            await Task.Delay(1_000, cancellationToken);
+        }
+
+        throw new TimeoutException("Timed out waiting for market analysis completion.");
+    }
+
+    public static async Task<string?> ReadActiveMarketAnalysisRunIdAsync(
+        ChromeDevToolsClient cdp,
+        CancellationToken cancellationToken)
+    {
+        var value = await cdp.EvaluateValueAsync(CreateActiveRunIdExpression(), cancellationToken);
+        return value?.ValueKind == JsonValueKind.String
+            ? value.Value.GetString()
+            : null;
     }
 
     public static async Task ImportNativePlanAsync(
@@ -574,6 +632,105 @@ internal static class BenchmarkRunner
                 .map(element => (element.textContent || '').trim())
                 .filter(Boolean)
                 .slice(0, 10);
+              const statusTextJoined = statusText.join('\n');
+
+              const getField = (value, camel, pascal) => value?.[camel] ?? value?.[pascal] ?? null;
+              const parseJsonObject = (value) => {
+                if (!value) {
+                  return null;
+                }
+
+                if (typeof value !== 'string') {
+                  return typeof value === 'object' ? value : null;
+                }
+
+                try {
+                  const parsed = JSON.parse(value);
+                  return parsed && typeof parsed === 'object' ? parsed : null;
+                } catch {
+                  return null;
+                }
+              };
+
+              const pickTiming = (runRecord, camel, pascal) => getField(runRecord, camel, pascal);
+              const pickRunRecordTiming = (runRecord) => runRecord ? {
+                runId: getField(runRecord, 'runId', 'RunId'),
+                publicationId: getField(runRecord, 'publicationId', 'PublicationId'),
+                scope: getField(runRecord, 'scope', 'Scope'),
+                selectedDataCenter: getField(runRecord, 'selectedDataCenter', 'SelectedDataCenter'),
+                selectedRegion: getField(runRecord, 'selectedRegion', 'SelectedRegion'),
+                startedAtUtc: getField(runRecord, 'startedAtUtc', 'StartedAtUtc'),
+                completedAtUtc: getField(runRecord, 'completedAtUtc', 'CompletedAtUtc'),
+                planBuildDuration: pickTiming(runRecord, 'planBuildDuration', 'PlanBuildDuration'),
+                marketFetchDuration: pickTiming(runRecord, 'marketFetchDuration', 'MarketFetchDuration'),
+                ladderAnalysisDuration: pickTiming(runRecord, 'ladderAnalysisDuration', 'LadderAnalysisDuration'),
+                shoppingPlanProjectionDuration: pickTiming(runRecord, 'shoppingPlanProjectionDuration', 'ShoppingPlanProjectionDuration'),
+                analysisDuration: pickTiming(runRecord, 'analysisDuration', 'AnalysisDuration'),
+                projectionDuration: pickTiming(runRecord, 'projectionDuration', 'ProjectionDuration'),
+                publicationDuration: pickTiming(runRecord, 'publicationDuration', 'PublicationDuration'),
+                detailPersistenceDuration: pickTiming(runRecord, 'detailPersistenceDuration', 'DetailPersistenceDuration'),
+                sourceFactPersistenceDuration: pickTiming(runRecord, 'sourceFactPersistenceDuration', 'SourceFactPersistenceDuration'),
+                hotStatePublicationDuration: pickTiming(runRecord, 'hotStatePublicationDuration', 'HotStatePublicationDuration'),
+                planPersistenceDuration: pickTiming(runRecord, 'planPersistenceDuration', 'PlanPersistenceDuration'),
+                autosaveDuration: pickTiming(runRecord, 'autosaveDuration', 'AutosaveDuration'),
+                cacheMode: getField(runRecord, 'cacheMode', 'CacheMode'),
+                marketIntelligencePayloadBytes: getField(runRecord, 'marketIntelligencePayloadBytes', 'MarketIntelligencePayloadBytes'),
+                legacyPayloadBytes: getField(runRecord, 'legacyPayloadBytes', 'LegacyPayloadBytes'),
+                retainedDetailBytes: getField(runRecord, 'retainedDetailBytes', 'RetainedDetailBytes'),
+                networkRequestCount: getField(runRecord, 'networkRequestCount', 'NetworkRequestCount'),
+                freshCacheHitCount: getField(runRecord, 'freshCacheHitCount', 'FreshCacheHitCount'),
+                staleCacheRefreshCount: getField(runRecord, 'staleCacheRefreshCount', 'StaleCacheRefreshCount')
+              } : null;
+
+              let marketAnalysisRunTiming = null;
+              let marketAnalysisRunTimingWarning = null;
+              let marketAnalysisActiveRunId = null;
+              let marketAnalysisCompletionState = 'unknown';
+              const marketAnalysisAnalyzingVisible = /\bANALYZING\b/i.test(text);
+              const marketAnalysisHardErrorVisible = /suspect cache|failed|error|could not/i.test(statusTextJoined);
+              const marketAnalysisHasTopLevelResults = document.querySelectorAll('table tr').length > 1 &&
+                /recommended|total cost|world/i.test(text);
+              try {
+                if (window.IndexedDB?.loadAllPlans && window.IndexedDB?.loadMarketRunRecord) {
+                  const plans = await window.IndexedDB.loadAllPlans();
+                  const activePlan = Array.isArray(plans)
+                    ? plans.find(plan => getField(plan, 'marketIntelligenceSummaryJson', 'MarketIntelligenceSummaryJson'))
+                    : null;
+                  const summary = parseJsonObject(getField(activePlan, 'marketIntelligenceSummaryJson', 'MarketIntelligenceSummaryJson'));
+                  const activeRunId = getField(summary, 'activeRunId', 'ActiveRunId');
+                  marketAnalysisActiveRunId = activeRunId;
+                  if (activeRunId) {
+                    marketAnalysisRunTiming = pickRunRecordTiming(await window.IndexedDB.loadMarketRunRecord(activeRunId));
+                    if (marketAnalysisRunTiming?.completedAtUtc) {
+                      marketAnalysisCompletionState = 'completed';
+                    } else if (marketAnalysisAnalyzingVisible) {
+                      marketAnalysisCompletionState = 'analyzing';
+                    } else {
+                      marketAnalysisCompletionState = 'missing-completion-time';
+                    }
+                  } else if (summary) {
+                    marketAnalysisRunTimingWarning = 'Active market intelligence summary did not include activeRunId.';
+                    marketAnalysisCompletionState = marketAnalysisAnalyzingVisible ? 'analyzing' : 'missing-active-run-id';
+                  }
+                } else {
+                  marketAnalysisCompletionState = marketAnalysisAnalyzingVisible ? 'analyzing' : 'missing-indexeddb-hooks';
+                }
+              } catch (error) {
+                marketAnalysisRunTimingWarning = String(error?.message || error);
+                marketAnalysisCompletionState = marketAnalysisAnalyzingVisible ? 'analyzing' : 'run-record-error';
+              }
+
+              if (marketAnalysisCompletionState === 'unknown') {
+                marketAnalysisCompletionState = marketAnalysisAnalyzingVisible
+                  ? 'analyzing'
+                  : marketAnalysisHardErrorVisible
+                    ? 'hard-error'
+                    : 'missing-summary';
+              }
+
+              if (marketAnalysisHardErrorVisible && marketAnalysisCompletionState !== 'completed') {
+                marketAnalysisCompletionState = 'hard-error';
+              }
 
               return {
                 href: location.href,
@@ -609,14 +766,131 @@ internal static class BenchmarkRunner
                   }))
                   .slice(0, 40),
                 indexedDbDatabaseCount,
+                marketAnalysisActiveRunId,
+                marketAnalysisCompletionState,
+                marketAnalysisAnalyzingVisible,
+                marketAnalysisHardErrorVisible,
+                marketAnalysisHasTopLevelResults,
                 performanceMemory: performance.memory ? {
                   jsHeapSizeLimit: performance.memory.jsHeapSizeLimit,
                   totalJSHeapSize: performance.memory.totalJSHeapSize,
                   usedJSHeapSize: performance.memory.usedJSHeapSize
-                } : null
+                } : null,
+                marketAnalysisRunTiming,
+                marketAnalysisRunTimingWarning
               };
             })()
             """;
+    }
+
+    private static string CreateActiveRunIdExpression()
+    {
+        return """
+            (async () => {
+              const getField = (value, camel, pascal) => value?.[camel] ?? value?.[pascal] ?? null;
+              const parseJsonObject = (value) => {
+                if (!value) {
+                  return null;
+                }
+
+                if (typeof value !== 'string') {
+                  return typeof value === 'object' ? value : null;
+                }
+
+                try {
+                  const parsed = JSON.parse(value);
+                  return parsed && typeof parsed === 'object' ? parsed : null;
+                } catch {
+                  return null;
+                }
+              };
+
+              if (!window.IndexedDB?.loadAllPlans) {
+                return null;
+              }
+
+              const plans = await window.IndexedDB.loadAllPlans();
+              const activePlan = Array.isArray(plans)
+                ? plans.find(plan => getField(plan, 'marketIntelligenceSummaryJson', 'MarketIntelligenceSummaryJson'))
+                : null;
+              const summary = parseJsonObject(getField(activePlan, 'marketIntelligenceSummaryJson', 'MarketIntelligenceSummaryJson'));
+              return getField(summary, 'activeRunId', 'ActiveRunId');
+            })()
+            """;
+    }
+
+    private static string CreateMarketAnalysisCompletionExpression(string? baselineRunId)
+    {
+        var serializedBaselineRunId = JsonSerializer.Serialize(baselineRunId);
+        return """
+            (async () => {
+              const baselineRunId = __BASELINE_RUN_ID__;
+              const text = document.body?.innerText || '';
+              const getField = (value, camel, pascal) => value?.[camel] ?? value?.[pascal] ?? null;
+              const parseJsonObject = (value) => {
+                if (!value) {
+                  return null;
+                }
+
+                if (typeof value !== 'string') {
+                  return typeof value === 'object' ? value : null;
+                }
+
+                try {
+                  const parsed = JSON.parse(value);
+                  return parsed && typeof parsed === 'object' ? parsed : null;
+                } catch {
+                  return null;
+                }
+              };
+              const analyzingVisible = /\bANALYZING\b/i.test(text);
+              const statusText = Array.from(document.querySelectorAll('[role="status"], .validation-message, .mud-alert-message, .mud-progress-linear'))
+                .map(element => (element.textContent || '').trim())
+                .filter(Boolean)
+                .join('\n');
+              const hardErrorVisible = /suspect cache|failed|error|could not/i.test(statusText);
+              try {
+                if (window.IndexedDB?.loadAllPlans && window.IndexedDB?.loadMarketRunRecord) {
+                  const plans = await window.IndexedDB.loadAllPlans();
+                  const activePlan = Array.isArray(plans)
+                    ? plans.find(plan => getField(plan, 'marketIntelligenceSummaryJson', 'MarketIntelligenceSummaryJson'))
+                    : null;
+                  const summary = parseJsonObject(getField(activePlan, 'marketIntelligenceSummaryJson', 'MarketIntelligenceSummaryJson'));
+                  const activeRunId = getField(summary, 'activeRunId', 'ActiveRunId');
+                  if (activeRunId) {
+                    if (baselineRunId && activeRunId === baselineRunId) {
+                      return { completionState: 'baseline-run', activeRunId, analyzingVisible, hardErrorVisible };
+                    }
+
+                    const runRecord = await window.IndexedDB.loadMarketRunRecord(activeRunId);
+                    const completedAtUtc = getField(runRecord, 'completedAtUtc', 'CompletedAtUtc');
+                    if (completedAtUtc) {
+                      return { completionState: 'completed', activeRunId, completedAtUtc };
+                    }
+                  }
+                }
+              } catch (error) {
+                return {
+                  completionState: analyzingVisible ? 'analyzing' : 'run-record-error',
+                  warning: String(error?.message || error)
+                };
+              }
+
+              return {
+                completionState: hardErrorVisible ? 'hard-error' : analyzingVisible ? 'analyzing' : 'missing-run-record',
+                analyzingVisible,
+                hardErrorVisible
+              };
+            })()
+            """.Replace("__BASELINE_RUN_ID__", serializedBaselineRunId);
+    }
+
+    private static string? GetString(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
     }
 
     private static bool IsContaminated(
@@ -891,9 +1165,19 @@ internal sealed record BrowserBenchmarkReport
 
     public bool ProcessOnly { get; init; }
 
+    public bool WaitMarketAnalysisCompletion { get; init; }
+
+    public string? BaselineMarketAnalysisRunId { get; set; }
+
     public bool Contaminated { get; set; }
 
     public bool SafetyTripped { get; set; }
+
+    public bool ValidForComparison { get; set; }
+
+    public string ComparisonStatus { get; set; } = "not-evaluated";
+
+    public List<string> InconclusiveReasons { get; } = [];
 
     public List<BenchmarkCheckpoint> Checkpoints { get; } = [];
 
@@ -916,8 +1200,128 @@ internal sealed record BrowserBenchmarkReport
             DevToolsEndpoint = options.DevToolsEndpoint,
             PlanPath = options.PlanPath,
             PlanExists = !string.IsNullOrWhiteSpace(options.PlanPath) && File.Exists(options.PlanPath),
-            ProcessOnly = options.ProcessOnly
+            ProcessOnly = options.ProcessOnly,
+            WaitMarketAnalysisCompletion = options.WaitMarketAnalysisCompletion
         };
+    }
+
+    public void ApplyComparisonValidity()
+    {
+        InconclusiveReasons.Clear();
+        if (ProcessOnly)
+        {
+            ComparisonStatus = "process-only";
+            InconclusiveReasons.Add("Process-only reports do not include browser market-analysis completion state.");
+            ValidForComparison = false;
+            return;
+        }
+
+        if (Errors.Count > 0)
+        {
+            ComparisonStatus = "blocked";
+            InconclusiveReasons.AddRange(Errors.Select(error => $"Harness error: {error}"));
+            ValidForComparison = false;
+            return;
+        }
+
+        if (SafetyTripped)
+        {
+            ComparisonStatus = "safety-tripped";
+            InconclusiveReasons.Add("A browser memory safety guard tripped during the run.");
+            ValidForComparison = false;
+            return;
+        }
+
+        var finalSnapshot = Checkpoints.LastOrDefault(checkpoint => checkpoint.PageSnapshot.HasValue)?.PageSnapshot;
+        if (!finalSnapshot.HasValue || finalSnapshot.Value.ValueKind != JsonValueKind.Object)
+        {
+            ComparisonStatus = "missing-page-snapshot";
+            InconclusiveReasons.Add("No final page snapshot was captured.");
+            ValidForComparison = false;
+            return;
+        }
+
+        var completionState = ReadString(finalSnapshot.Value, "marketAnalysisCompletionState");
+        if (string.Equals(completionState, "completed", StringComparison.OrdinalIgnoreCase))
+        {
+            var activeRunId = ReadString(finalSnapshot.Value, "marketAnalysisActiveRunId");
+            if (!string.IsNullOrWhiteSpace(BaselineMarketAnalysisRunId) &&
+                string.Equals(activeRunId, BaselineMarketAnalysisRunId, StringComparison.Ordinal))
+            {
+                ComparisonStatus = "inconclusive";
+                InconclusiveReasons.Add("Final page snapshot still referenced the baseline market-analysis run id.");
+                ValidForComparison = false;
+                return;
+            }
+
+            if (HasCompletedRunTiming(finalSnapshot.Value))
+            {
+                if (!ReadBool(finalSnapshot.Value, "marketAnalysisHasTopLevelResults"))
+                {
+                    ComparisonStatus = "inconclusive";
+                    InconclusiveReasons.Add("Run timing completed, but top-level market-analysis results were not visible.");
+                    ValidForComparison = false;
+                    return;
+                }
+
+                ComparisonStatus = "completed";
+                ValidForComparison = true;
+                return;
+            }
+
+            ComparisonStatus = "inconclusive";
+            InconclusiveReasons.Add("Market analysis appeared completed, but no completed run-record timing was available.");
+            ValidForComparison = false;
+            return;
+        }
+
+        if (string.Equals(completionState, "hard-error", StringComparison.OrdinalIgnoreCase))
+        {
+            ComparisonStatus = "hard-error";
+            ValidForComparison = true;
+            return;
+        }
+
+        ComparisonStatus = "inconclusive";
+        InconclusiveReasons.Add($"Market analysis completion state was '{completionState ?? "missing"}'.");
+        if (ReadBool(finalSnapshot.Value, "marketAnalysisAnalyzingVisible"))
+        {
+            InconclusiveReasons.Add("The page still showed ANALYZING.");
+        }
+
+        var warning = ReadString(finalSnapshot.Value, "marketAnalysisRunTimingWarning");
+        if (!string.IsNullOrWhiteSpace(warning))
+        {
+            InconclusiveReasons.Add($"Run timing warning: {warning}");
+        }
+
+        ValidForComparison = false;
+    }
+
+    private static bool HasCompletedRunTiming(JsonElement snapshot)
+    {
+        if (!snapshot.TryGetProperty("marketAnalysisRunTiming", out var timing) ||
+            timing.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var completedAtUtc = ReadString(timing, "completedAtUtc");
+        return !string.IsNullOrWhiteSpace(completedAtUtc);
+    }
+
+    private static string? ReadString(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+    }
+
+    private static bool ReadBool(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.True;
     }
 
     private static string GitInfo(string arguments)

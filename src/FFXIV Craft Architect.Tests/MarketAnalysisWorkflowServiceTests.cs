@@ -145,6 +145,43 @@ public class MarketAnalysisWorkflowServiceTests
     }
 
     [Fact]
+    public async Task RunAnalysisAsync_PublishesHotResultsBeforeSourceFactsFinish()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        var jsRuntime = new RecordingJsRuntime();
+        var intelligenceStore = new InMemoryMarketIntelligenceStore();
+        var sourceFactStore = new BlockingMarketDataSourceStore();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateExecutionResultWithListingDetail());
+        var service = CreateService(
+            appState,
+            execution.Object,
+            jsRuntime,
+            marketIntelligenceStore: intelligenceStore,
+            marketDataSourceStore: sourceFactStore);
+
+        var runTask = service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+        await sourceFactStore.SaveStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Single(appState.MarketItemAnalyses);
+        Assert.Single(appState.ShoppingPlans);
+        Assert.NotNull(appState.MarketIntelligenceSummary);
+        Assert.False(runTask.IsCompleted);
+
+        sourceFactStore.AllowSave.SetResult();
+        var result = await runTask;
+
+        Assert.True(result.Published);
+        Assert.True(sourceFactStore.SavedFacts.Count > 0);
+    }
+
+    [Fact]
     public async Task ApplyLensAsync_AfterCompactPublication_ReprojectsFromColdDetailsAndKeepsHotStateCompact()
     {
         var appState = new AppState();
@@ -927,6 +964,33 @@ public class MarketAnalysisWorkflowServiceTests
             await Task.Yield();
             _afterYield();
             return new MarketAnalysisCandidateBuildResult(candidates, RecipeBasis: null);
+        }
+    }
+
+    private sealed class BlockingMarketDataSourceStore : IMarketDataSourceStore
+    {
+        public TaskCompletionSource SaveStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource AllowSave { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<CanonicalMarketListingFact> SavedFacts { get; } = [];
+
+        public async Task SaveListingFactsAsync(
+            IReadOnlyList<CanonicalMarketListingFact> facts,
+            CancellationToken cancellationToken = default)
+        {
+            SaveStarted.TrySetResult();
+            await AllowSave.Task.WaitAsync(cancellationToken);
+            SavedFacts.AddRange(facts);
+        }
+
+        public Task<IReadOnlyList<CanonicalMarketListingFact>> LoadListingFactsAsync(
+            MarketDataSourceQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<CanonicalMarketListingFact>>(SavedFacts);
         }
     }
 

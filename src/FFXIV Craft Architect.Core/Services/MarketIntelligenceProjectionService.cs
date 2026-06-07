@@ -46,7 +46,9 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
                 var itemDetail = new MarketListingDetail
                 {
                     Key = itemDetailKey,
+                    RunId = runId,
                     CreatedAtUtc = request.CompletedAtUtc,
+                    RetrievedAtUtc = request.CompletedAtUtc,
                     PriceEvaluation = analysis.PriceEvaluation,
                     ClassificationReasons = analysis.PriceEvaluation.Diagnostics.CompactReasonCodes.ToList()
                 };
@@ -68,7 +70,10 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
                 var detail = new MarketListingDetail
                 {
                     Key = key,
+                    RunId = runId,
                     CreatedAtUtc = request.CompletedAtUtc,
+                    RetrievedAtUtc = world.FetchedAtUtc ?? request.CompletedAtUtc,
+                    MarketUploadedAtUtc = world.MarketUploadedAtUtc,
                     PriceBands = world.PriceBands.ToList(),
                     Listings = world.Listings.ToList(),
                     ClassificationReasons = analysis.PriceEvaluation?.Diagnostics.CompactReasonCodes.ToList() ?? []

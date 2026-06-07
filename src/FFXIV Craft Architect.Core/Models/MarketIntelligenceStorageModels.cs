@@ -206,7 +206,13 @@ public sealed class MarketListingDetail
 {
     public MarketIntelligenceDetailKey Key { get; init; }
 
+    public Guid? RunId { get; init; }
+
     public DateTime CreatedAtUtc { get; init; } = DateTime.UtcNow;
+
+    public DateTime RetrievedAtUtc { get; init; }
+
+    public DateTime? MarketUploadedAtUtc { get; init; }
 
     public IReadOnlyList<MarketPriceBand> PriceBands { get; init; } = [];
 
