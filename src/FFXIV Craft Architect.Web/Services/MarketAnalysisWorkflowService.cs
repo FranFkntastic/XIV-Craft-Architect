@@ -93,7 +93,7 @@ public sealed class MarketAnalysisWorkflowService
                 Scope = scope,
                 SelectedDataCenter = _appState.SelectedDataCenter,
                 SelectedRegion = _appState.SelectedRegion,
-                MaxAge = request.ForceRefreshData ? TimeSpan.Zero : (TimeSpan?)null,
+                ForceRefreshData = request.ForceRefreshData,
                 RecommendationMode = RecommendationMode.MinimizeTotalCost,
                 Lens = _appState.MarketAnalysisLens,
                 ExpectedWorldsByDataCenter = _appState.GetExpectedMarketWorlds(scope)
@@ -126,6 +126,7 @@ public sealed class MarketAnalysisWorkflowService
             recipeBasis,
             _appState.CreateCurrentMarketAnalysisScopeSnapshot(),
             timings,
+            request.ForceRefreshData,
             ct);
         if (published == null)
         {
@@ -191,6 +192,7 @@ public sealed class MarketAnalysisWorkflowService
             _appState.MarketAnalysisRecipeBasis,
             publishedScope,
             timings,
+            forceRefreshData: false,
             ct);
         if (published == null)
         {
@@ -314,6 +316,7 @@ public sealed class MarketAnalysisWorkflowService
         StoredRecipeOperationSnapshot? recipeBasis,
         PublishedMarketAnalysisScopeSnapshot publishedScope,
         MarketAnalysisWorkflowTimings timings,
+        bool forceRefreshData,
         CancellationToken ct)
     {
         if (plan == null || !_appState.IsCurrentPlanSession(plan, planSessionVersion))
@@ -351,7 +354,26 @@ public sealed class MarketAnalysisWorkflowService
                 LadderAnalysisDuration = timings.LadderAnalysisDuration,
                 ShoppingPlanProjectionDuration = timings.ShoppingPlanProjectionDuration,
                 AnalysisDuration = timings.AnalysisDuration,
-                NetworkRequestCount = executionResult.Evidence.FetchedCount,
+                NetworkRequestCount = executionResult.Evidence.CacheDecision?.HttpChunkRequestCount
+                    ?? executionResult.Evidence.FetchedCount,
+                FetchedEvidencePairCount = executionResult.Evidence.FetchedCount,
+                FreshCacheHitCount = executionResult.Evidence.CacheDecision?.FreshHitCount ?? 0,
+                StaleExistingEntryCount = executionResult.Evidence.CacheDecision?.StaleExistingEntryCount ?? 0,
+                MissingCacheEntryCount = executionResult.Evidence.CacheDecision?.MissingEntryCount ?? 0,
+                OrdinaryFetchedPairCount = executionResult.Evidence.CacheDecision?.OrdinaryFetchedPairCount
+                    ?? executionResult.Evidence.FetchedCount,
+                SuspectRefreshPairCount = executionResult.Evidence.CacheDecision?.SuspectRefreshPairCount ?? 0,
+                ForcedRefreshPairCount = executionResult.Evidence.CacheDecision?.ForcedRefreshPairCount ?? 0,
+                HttpChunkRequestCount = executionResult.Evidence.CacheDecision?.HttpChunkRequestCount,
+                DataCenterFetchCallCount = executionResult.Evidence.CacheDecision?.DataCenterFetchCallCount ?? 0,
+                SplitCount = executionResult.Evidence.CacheDecision?.SplitCount ?? 0,
+                RateLimit429Count = executionResult.Evidence.CacheDecision?.RateLimit429Count ?? 0,
+                GatewayTimeout504Count = executionResult.Evidence.CacheDecision?.GatewayTimeout504Count ?? 0,
+                CleanupStaleDeletionCount = executionResult.Evidence.CacheDecision?.CleanupStaleDeletionCount ?? 0,
+                CacheSizeEvictionCount = executionResult.Evidence.CacheDecision?.CacheSizeEvictionCount ?? 0,
+                VerificationFailureCount = executionResult.Evidence.CacheDecision?.VerificationFailureCount ?? 0,
+                ForceRefreshData = forceRefreshData,
+                RunTrigger = forceRefreshData ? "manual-force-refresh" : "manual-run",
                 CacheMode = "mixed"
             });
         projectionStopwatch.Stop();
@@ -514,7 +536,23 @@ public sealed class MarketAnalysisWorkflowService
             LegacyPayloadBytes = runRecord.LegacyPayloadBytes,
             RetainedDetailBytes = runRecord.RetainedDetailBytes,
             NetworkRequestCount = runRecord.NetworkRequestCount,
+            FetchedEvidencePairCount = runRecord.FetchedEvidencePairCount,
             FreshCacheHitCount = runRecord.FreshCacheHitCount,
+            StaleExistingEntryCount = runRecord.StaleExistingEntryCount,
+            MissingCacheEntryCount = runRecord.MissingCacheEntryCount,
+            OrdinaryFetchedPairCount = runRecord.OrdinaryFetchedPairCount,
+            SuspectRefreshPairCount = runRecord.SuspectRefreshPairCount,
+            ForcedRefreshPairCount = runRecord.ForcedRefreshPairCount,
+            HttpChunkRequestCount = runRecord.HttpChunkRequestCount,
+            DataCenterFetchCallCount = runRecord.DataCenterFetchCallCount,
+            SplitCount = runRecord.SplitCount,
+            RateLimit429Count = runRecord.RateLimit429Count,
+            GatewayTimeout504Count = runRecord.GatewayTimeout504Count,
+            CleanupStaleDeletionCount = runRecord.CleanupStaleDeletionCount,
+            CacheSizeEvictionCount = runRecord.CacheSizeEvictionCount,
+            VerificationFailureCount = runRecord.VerificationFailureCount,
+            ForceRefreshData = runRecord.ForceRefreshData,
+            RunTrigger = runRecord.RunTrigger,
             StaleCacheRefreshCount = runRecord.StaleCacheRefreshCount
         };
 

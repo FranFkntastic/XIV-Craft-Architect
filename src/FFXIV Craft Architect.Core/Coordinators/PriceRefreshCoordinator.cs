@@ -243,12 +243,19 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
                 cacheRequests = cacheCandidateItemIds.Select(itemId => (itemId, dataCenter)).ToList();
             }
 
-            var effectiveCacheTtl = forceRefresh
-                ? TimeSpan.Zero
-                : TimeSpan.FromHours(_settingsService.Get("market.cache_ttl_hours", 3.0));
-            var missingBeforePopulate = await _marketCache.GetMissingAsync(cacheRequests, effectiveCacheTtl);
-            fetchedThisRunKeys = missingBeforePopulate.ToHashSet();
-            await _marketCache.EnsurePopulatedAsync(cacheRequests, effectiveCacheTtl, cacheProgress, ct);
+            var reusableCacheTtl = TimeSpan.FromHours(_settingsService.Get("market.cache_ttl_hours", 3.0));
+            TimeSpan? cacheReadMaxAge = forceRefresh ? null : reusableCacheTtl;
+            if (forceRefresh)
+            {
+                fetchedThisRunKeys = cacheRequests.ToHashSet();
+                await _marketCache.RefreshRequestedAsync(cacheRequests, cacheProgress, ct);
+            }
+            else
+            {
+                var missingBeforePopulate = await _marketCache.GetMissingAsync(cacheRequests, reusableCacheTtl);
+                fetchedThisRunKeys = missingBeforePopulate.ToHashSet();
+                await _marketCache.EnsurePopulatedAsync(cacheRequests, reusableCacheTtl, cacheProgress, ct);
+            }
 
             foreach (var itemId in cacheCandidateItemIds)
             {
@@ -257,7 +264,7 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
 
                 foreach (var itemDc in scopeDataCenters)
                 {
-                    var (cachedData, _) = await _marketCache.GetWithStaleAsync(itemId, itemDc, effectiveCacheTtl);
+                    var (cachedData, _) = await _marketCache.GetWithStaleAsync(itemId, itemDc, cacheReadMaxAge);
                     if (cachedData == null)
                     {
                         continue;

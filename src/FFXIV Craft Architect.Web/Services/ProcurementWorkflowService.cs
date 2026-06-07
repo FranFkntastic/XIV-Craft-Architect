@@ -177,7 +177,7 @@ public sealed class ProcurementWorkflowService
                 Scope = scope,
                 SelectedDataCenter = _appState.SelectedDataCenter,
                 SelectedRegion = _appState.SelectedRegion,
-                MaxAge = TimeSpan.Zero,
+                ForceRefreshData = true,
                 RecommendationMode = RecommendationMode.MinimizeTotalCost,
                 Lens = _appState.MarketAnalysisLens,
                 ExpectedWorldsByDataCenter = _appState.GetExpectedMarketWorlds(scope)

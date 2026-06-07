@@ -95,7 +95,7 @@ public sealed class CoreMarketAnalysisWorkflowService
                     Scope = request.Scope,
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,
-                    MaxAge = request.ForceRefreshData ? TimeSpan.Zero : null,
+                    ForceRefreshData = request.ForceRefreshData,
                     RecommendationMode = request.RecommendationMode,
                     Lens = request.Lens,
                     ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter

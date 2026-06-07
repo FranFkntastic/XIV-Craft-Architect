@@ -344,7 +344,8 @@ public class ProcurementWorkflowServiceTests
             It.Is<MarketAnalysisExecutionRequest>(request =>
                 request.Items.Count == 1 &&
                 request.Items[0].ItemId == 101 &&
-                request.MaxAge == TimeSpan.Zero),
+                request.ForceRefreshData &&
+                request.MaxAge == null),
             It.IsAny<IProgress<string>?>(),
             It.IsAny<CancellationToken>(),
             It.IsAny<MarketAnalysisExecutionOptions?>()));

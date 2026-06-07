@@ -257,7 +257,8 @@ public class CoreProcurementWorkflowServiceTests
                 request.Items.Count == 1 &&
                 request.Items[0].ItemId == 101 &&
                 request.Items[0].TotalQuantity == 5 &&
-                request.MaxAge == TimeSpan.Zero &&
+                request.ForceRefreshData &&
+                request.MaxAge == null &&
                 request.Scope == MarketFetchScope.SelectedDataCenter &&
                 request.SelectedDataCenter == "Aether"),
             It.IsAny<IProgress<string>?>(),

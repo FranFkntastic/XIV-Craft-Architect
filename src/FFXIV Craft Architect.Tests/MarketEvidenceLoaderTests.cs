@@ -76,18 +76,23 @@ public class MarketEvidenceLoaderTests
     }
 
     [Fact]
-    public async Task LoadAsync_ForceRefresh_UsesNormalFreshnessForPostFetchRead()
+    public async Task LoadAsync_ForceRefresh_UsesExplicitPairRefreshForPopulation()
     {
         var cache = new Mock<IMarketCacheService>();
-        TimeSpan? ensureMaxAge = TimeSpan.FromMinutes(5);
         TimeSpan? readMaxAge = TimeSpan.FromMinutes(5);
+        var refreshRequestedPairs = false;
         cache.Setup(c => c.EnsurePopulatedAsync(
                 It.IsAny<List<(int itemId, string dataCenter)>>(),
                 It.IsAny<TimeSpan?>(),
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<List<(int itemId, string dataCenter)>, TimeSpan?, IProgress<string>?, CancellationToken>(
-                (_, maxAge, _, _) => ensureMaxAge = maxAge)
+            .ReturnsAsync(1);
+        cache.Setup(c => c.RefreshRequestedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<List<(int itemId, string dataCenter)>, IProgress<string>?, CancellationToken>(
+                (_, _, _) => refreshRequestedPairs = true)
             .ReturnsAsync(1);
         cache.Setup(c => c.GetManyAsync(
                 It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
@@ -105,11 +110,34 @@ public class MarketEvidenceLoaderTests
             MarketFetchScope.SelectedDataCenter,
             selectedDataCenter: "Aether",
             selectedRegion: "North America",
-            maxAge: TimeSpan.Zero);
+            forceRefreshData: true);
 
-        Assert.Equal(TimeSpan.Zero, ensureMaxAge);
+        Assert.True(refreshRequestedPairs);
         Assert.Null(readMaxAge);
         Assert.False(evidence.IsPartial);
+        cache.Verify(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ZeroMaxAge_ThrowsInsteadOfOverloadingForceRefresh()
+    {
+        var cache = new Mock<IMarketCacheService>(MockBehavior.Strict);
+
+        var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            MarketEvidenceLoader.LoadAsync(
+                cache.Object,
+                [404],
+                MarketFetchScope.SelectedDataCenter,
+                selectedDataCenter: "Aether",
+                selectedRegion: "North America",
+                maxAge: TimeSpan.Zero));
+
+        Assert.Equal("maxAge", ex.ParamName);
     }
 
     [Fact]
@@ -119,6 +147,11 @@ public class MarketEvidenceLoaderTests
         cache.Setup(c => c.EnsurePopulatedAsync(
                 It.IsAny<List<(int itemId, string dataCenter)>>(),
                 It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+        cache.Setup(c => c.RefreshRequestedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(0);
@@ -136,11 +169,38 @@ public class MarketEvidenceLoaderTests
             MarketFetchScope.SelectedDataCenter,
             selectedDataCenter: "Aether",
             selectedRegion: "North America",
-            maxAge: TimeSpan.Zero);
+            forceRefreshData: true);
 
         Assert.Empty(evidence.Entries);
         Assert.True(evidence.IsPartial);
         Assert.Equal([(505, "Aether")], evidence.MissingRequests);
+    }
+
+    [Fact]
+    public async Task LoadAsync_DiagnosticCache_AttachesCacheDecisionSnapshot()
+    {
+        var snapshot = new MarketCacheDecisionSnapshot
+        {
+            RequestedItemCount = 1,
+            RequestedPairCount = 1,
+            FreshHitCount = 1,
+            MissingEntryCount = 0
+        };
+        var cache = new DiagnosticMarketCache(snapshot);
+
+        var evidence = await MarketEvidenceLoader.LoadAsync(
+            cache,
+            [606],
+            MarketFetchScope.SelectedDataCenter,
+            selectedDataCenter: "Aether",
+            selectedRegion: "North America");
+
+        Assert.NotSame(snapshot, evidence.CacheDecision);
+        Assert.Equal(1, evidence.CacheDecision!.FreshHitCount);
+        Assert.Equal(0, evidence.CacheDecision.MissingEntryCount);
+        Assert.Equal(MarketFetchScope.SelectedDataCenter, evidence.CacheDecision.Scope);
+        Assert.Equal("Aether", evidence.CacheDecision.SelectedDataCenter);
+        Assert.Equal("North America", evidence.CacheDecision.SelectedRegion);
     }
 
     private static CachedMarketData CreateCachedData(int itemId, string dataCenter, long? fetchedAtUnix = null)
@@ -168,5 +228,61 @@ public class MarketEvidenceLoaderTests
                 }
             ]
         };
+    }
+
+    private sealed class DiagnosticMarketCache : IMarketCacheService, IMarketCacheDiagnosticsProvider
+    {
+        public DiagnosticMarketCache(MarketCacheDecisionSnapshot snapshot)
+        {
+            LastDecisionSnapshot = snapshot;
+        }
+
+        public MarketCacheDecisionSnapshot? LastDecisionSnapshot { get; }
+
+        public Task<CachedMarketData?> GetAsync(int itemId, string dataCenter, TimeSpan? maxAge = null) =>
+            Task.FromResult<CachedMarketData?>(CreateCachedData(itemId, dataCenter));
+
+        public Task<(CachedMarketData? Data, bool IsStale)> GetWithStaleAsync(
+            int itemId,
+            string dataCenter,
+            TimeSpan? maxAge = null) =>
+            Task.FromResult<(CachedMarketData?, bool)>((CreateCachedData(itemId, dataCenter), false));
+
+        public Task<IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData>> GetManyAsync(
+            IReadOnlyCollection<(int itemId, string dataCenter)> requests,
+            TimeSpan? maxAge = null)
+        {
+            var entries = requests.ToDictionary(
+                request => request,
+                request => CreateCachedData(request.itemId, request.dataCenter));
+            return Task.FromResult<IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData>>(entries);
+        }
+
+        public Task SetAsync(int itemId, string dataCenter, CachedMarketData data) => Task.CompletedTask;
+
+        public Task<bool> HasValidCacheAsync(int itemId, string dataCenter, TimeSpan? maxAge = null) =>
+            Task.FromResult(true);
+
+        public Task<List<(int itemId, string dataCenter)>> GetMissingAsync(
+            List<(int itemId, string dataCenter)> requests,
+            TimeSpan? maxAge = null) =>
+            Task.FromResult(new List<(int itemId, string dataCenter)>());
+
+        public Task<int> CleanupStaleAsync(TimeSpan maxAge) => Task.FromResult(0);
+
+        public Task<CacheStats> GetStatsAsync() => Task.FromResult(new CacheStats());
+
+        public Task<int> EnsurePopulatedAsync(
+            List<(int itemId, string dataCenter)> requests,
+            TimeSpan? maxAge = null,
+            IProgress<string>? progress = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(0);
+
+        public Task<int> RefreshRequestedAsync(
+            List<(int itemId, string dataCenter)> requests,
+            IProgress<string>? progress = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(0);
     }
 }

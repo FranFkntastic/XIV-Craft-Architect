@@ -28,6 +28,13 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
         MarketAnalysisExecutionOptions? executionOptions = null)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (request.MaxAge <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.MaxAge),
+                request.MaxAge,
+                "Use ForceRefreshData when fresh market evidence is required.");
+        }
 
         var items = request.Items.ToList();
         var fetchStopwatch = Stopwatch.StartNew();
@@ -38,6 +45,7 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
             request.SelectedDataCenter,
             request.SelectedRegion,
             request.MaxAge,
+            request.ForceRefreshData,
             progress,
             ct);
         var suspectCacheRefresh = await RefreshSuspectCacheEntriesAsync(evidence, progress, ct);
@@ -108,7 +116,7 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
             for (var attempt = 1; attempt <= SuspectCacheRefreshAttemptLimit && pendingPairs.Count > 0; attempt++)
             {
                 var forceRefreshStartedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                forcedFetchedCount += await _marketCache.EnsurePopulatedAsync(pendingPairs, TimeSpan.Zero, progress, ct);
+                forcedFetchedCount += await _marketCache.RefreshRequestedAsync(pendingPairs, progress, ct);
                 var refreshedEntries = await _marketCache.GetManyAsync(pendingPairs, maxAge: null);
                 refreshedEntries = refreshedEntries
                     .Where(entry => entry.Value.FetchedAtUnix >= forceRefreshStartedAtUnix)
@@ -176,12 +184,30 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
             evidence.SelectedRegion,
             evidence.MaxAge,
             evidence.FetchedCount + forcedFetchedCount,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            MergeSuspectRefreshDecision(evidence.CacheDecision, suspectPairs.Count, forcedFetchedCount));
         return new SuspectCacheRefreshResult(
             repairedEvidence,
             unresolvedIssues.Count == 0
                 ? MarketCacheShapeReport.Empty
                 : new MarketCacheShapeReport(unresolvedIssues));
+    }
+
+    private static MarketCacheDecisionSnapshot? MergeSuspectRefreshDecision(
+        MarketCacheDecisionSnapshot? initialDecision,
+        int suspectPairCount,
+        int forcedFetchedCount)
+    {
+        if (initialDecision == null)
+        {
+            return null;
+        }
+
+        return initialDecision with
+        {
+            SuspectRefreshPairCount = suspectPairCount,
+            ForcedRefreshPairCount = initialDecision.ForcedRefreshPairCount + forcedFetchedCount
+        };
     }
 
     private static IEnumerable<MarketCacheShapeIssue> GetIssuesForPair(

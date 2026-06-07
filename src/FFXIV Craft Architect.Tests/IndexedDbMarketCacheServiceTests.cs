@@ -29,6 +29,65 @@ public class IndexedDbMarketCacheServiceTests
         Assert.Equal(4, fetchedCount);
         Assert.Equal(4, handler.MarketRequestCount);
         Assert.Equal(2, handler.MaximumConcurrentMarketRequests);
+        Assert.NotNull(cache.LastDecisionSnapshot);
+        Assert.Equal(4, cache.LastDecisionSnapshot!.MissingEntryCount);
+        Assert.Equal(4, cache.LastDecisionSnapshot.OrdinaryFetchedPairCount);
+        Assert.Equal(4, cache.LastDecisionSnapshot.DataCenterFetchCallCount);
+        Assert.Equal(0, cache.LastDecisionSnapshot.FreshHitCount);
+        Assert.Equal(4, jsRuntime.BatchSaveEntryCount);
+        Assert.Equal(0, jsRuntime.SingleSaveCount);
+    }
+
+    [Fact]
+    public async Task EnsurePopulatedAsync_AllFresh_RecordsFreshHitsWithoutFetching()
+    {
+        var jsRuntime = new RecordingMarketCacheJsRuntime();
+        var handler = new ConcurrentMarketFetchHandler();
+        var universalis = new UniversalisService(new HttpClient(handler));
+        var cache = new IndexedDbMarketCacheService(jsRuntime, universalis);
+        jsRuntime.Seed("101@Aether", new IndexedDbMarketCacheEntry
+        {
+            Key = "101@Aether",
+            ItemId = 101,
+            DataCenter = "Aether",
+            FetchedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            Worlds = []
+        });
+        var requests = new List<(int itemId, string dataCenter)>
+        {
+            (101, "Aether")
+        };
+
+        var fetchedCount = await cache.EnsurePopulatedAsync(requests, TimeSpan.FromMinutes(5));
+
+        Assert.Equal(0, fetchedCount);
+        Assert.Equal(0, handler.MarketRequestCount);
+        Assert.NotNull(cache.LastDecisionSnapshot);
+        Assert.Equal(1, cache.LastDecisionSnapshot!.RequestedItemCount);
+        Assert.Equal(1, cache.LastDecisionSnapshot.RequestedPairCount);
+        Assert.Equal(1, cache.LastDecisionSnapshot.FreshHitCount);
+        Assert.Equal(0, cache.LastDecisionSnapshot.StaleExistingEntryCount);
+        Assert.Equal(0, cache.LastDecisionSnapshot.MissingEntryCount);
+        Assert.Equal(0, cache.LastDecisionSnapshot.OrdinaryFetchedPairCount);
+    }
+
+    [Fact]
+    public async Task EnsurePopulatedAsync_ZeroMaxAge_ThrowsInsteadOfOverloadingForceRefresh()
+    {
+        var jsRuntime = new RecordingMarketCacheJsRuntime();
+        var handler = new ConcurrentMarketFetchHandler();
+        var universalis = new UniversalisService(new HttpClient(handler));
+        var cache = new IndexedDbMarketCacheService(jsRuntime, universalis);
+        var requests = new List<(int itemId, string dataCenter)>
+        {
+            (101, "Aether")
+        };
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            cache.EnsurePopulatedAsync(requests, TimeSpan.Zero));
+
+        Assert.Equal(0, handler.MarketRequestCount);
+        Assert.Equal(0, jsRuntime.DeleteStaleCallCount);
     }
 
     [Fact]
@@ -58,6 +117,40 @@ public class IndexedDbMarketCacheServiceTests
         Assert.Equal(4, fetchedCounts.Sum());
         Assert.Equal(4, handler.MarketRequestCount);
         Assert.Equal(2, handler.MaximumConcurrentMarketRequests);
+        Assert.NotNull(cache.LastDecisionSnapshot);
+        Assert.Equal(4, cache.LastDecisionSnapshot!.FreshHitCount);
+        Assert.Equal(0, cache.LastDecisionSnapshot.MissingEntryCount);
+    }
+
+    [Fact]
+    public async Task RefreshRequestedAsync_RecordsForcedFetchedPairsWithoutStaleCleanup()
+    {
+        var jsRuntime = new RecordingMarketCacheJsRuntime();
+        var handler = new ConcurrentMarketFetchHandler();
+        var universalis = new UniversalisService(new HttpClient(handler));
+        var cache = new IndexedDbMarketCacheService(jsRuntime, universalis);
+        jsRuntime.Seed("101@Aether", new IndexedDbMarketCacheEntry
+        {
+            Key = "101@Aether",
+            ItemId = 101,
+            DataCenter = "Aether",
+            FetchedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            Worlds = []
+        });
+        var requests = new List<(int itemId, string dataCenter)>
+        {
+            (101, "Aether")
+        };
+
+        var fetchedCount = await cache.RefreshRequestedAsync(requests);
+
+        Assert.Equal(1, fetchedCount);
+        Assert.Equal(1, handler.MarketRequestCount);
+        Assert.NotNull(cache.LastDecisionSnapshot);
+        Assert.True(cache.LastDecisionSnapshot!.RefreshRequestedPairs);
+        Assert.Equal(1, cache.LastDecisionSnapshot.ForcedRefreshPairCount);
+        Assert.Equal(0, cache.LastDecisionSnapshot.OrdinaryFetchedPairCount);
+        Assert.Equal(0, jsRuntime.DeleteStaleCallCount);
     }
 
     private sealed class ConcurrentMarketFetchHandler : HttpMessageHandler
@@ -136,6 +229,11 @@ public class IndexedDbMarketCacheServiceTests
     {
         private readonly Dictionary<string, IndexedDbMarketCacheEntry> _entries = new();
 
+        public void Seed(string key, IndexedDbMarketCacheEntry entry)
+        {
+            _entries[key] = entry;
+        }
+
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
         {
             return new ValueTask<TValue>(Invoke<TValue>(identifier, args));
@@ -153,13 +251,14 @@ public class IndexedDbMarketCacheServiceTests
         {
             if (identifier == "IndexedDB.loadMarketDataBulk")
             {
-                var keys = ((IEnumerable<string>)args![0]!).ToList();
+                var keys = (string[])args![0]!;
                 var cutoffUnix = Convert.ToInt64(args[1], System.Globalization.CultureInfo.InvariantCulture);
                 var entries = keys
-                    .Select(key => _entries.TryGetValue(key, out var entry) ? entry : null)
-                    .Where(entry => entry != null && entry.FetchedAtUnix > cutoffUnix)
+                    .Where(_entries.ContainsKey)
+                    .Select(key => _entries[key])
+                    .Where(entry => entry.FetchedAtUnix > cutoffUnix)
                     .ToList();
-                return (TValue)(object)entries!;
+                return (TValue)(object)entries;
             }
 
             if (identifier == "IndexedDB.getMarketCacheStats")
@@ -167,8 +266,13 @@ public class IndexedDbMarketCacheServiceTests
                 return (TValue)(object)new IndexedDbCacheStats();
             }
 
-            if (identifier == "IndexedDB.deleteStaleMarketData" ||
-                identifier == "IndexedDB.deleteOldestEntries")
+            if (identifier == "IndexedDB.deleteStaleMarketData")
+            {
+                DeleteStaleCallCount++;
+                return (TValue)(object)0;
+            }
+
+            if (identifier == "IndexedDB.deleteOldestEntries")
             {
                 return (TValue)(object)0;
             }
@@ -178,6 +282,20 @@ public class IndexedDbMarketCacheServiceTests
                 var key = (string)args![0]!;
                 var entry = (IndexedDbMarketCacheEntry)args[1]!;
                 _entries[key] = entry;
+                SingleSaveCount++;
+                return default!;
+            }
+
+            if (identifier == "IndexedDB.saveMarketDataBatch")
+            {
+                var batchEntries = (List<IndexedDbMarketCacheBatchEntry>)args![0]!;
+                foreach (var batchEntry in batchEntries)
+                {
+                    _entries[batchEntry.Key] = batchEntry.Data;
+                    BatchSaveEntryCount++;
+                }
+
+                BatchSaveCallCount++;
                 return default!;
             }
 
@@ -190,5 +308,13 @@ public class IndexedDbMarketCacheServiceTests
 
             return default!;
         }
+
+        public int BatchSaveCallCount { get; private set; }
+
+        public int BatchSaveEntryCount { get; private set; }
+
+        public int SingleSaveCount { get; private set; }
+
+        public int DeleteStaleCallCount { get; private set; }
     }
 }

@@ -55,13 +55,13 @@ public interface IMarketCacheService
     Task<CacheStats> GetStatsAsync();
     
     /// <summary>
-    /// Ensures the cache is populated with market data for the requested items.
+    /// Ensures the cache contains reusable market data for the requested items.
     /// Fetches missing or stale data from Universalis API and stores it in the cache.
-    /// This is the primary method for obtaining market data - callers should
-    /// call this first, then read from cache using GetAsync.
+    /// This method is for cache reuse only; use <see cref="RefreshRequestedAsync"/>
+    /// when the caller intentionally needs fresh data for the requested pairs.
     /// </summary>
     /// <param name="requests">List of (itemId, dataCenter) pairs to ensure are cached.</param>
-    /// <param name="maxAge">Maximum age for cached data. Items older than this will be refetched. Null uses default (1 hour).</param>
+    /// <param name="maxAge">Maximum age for cached data. Items older than this will be refetched. Null uses default (1 hour). Must be greater than zero.</param>
     /// <param name="progress">Optional progress reporter for fetch status.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Number of items fetched from API (0 if all were cached).</returns>
@@ -70,6 +70,21 @@ public interface IMarketCacheService
         TimeSpan? maxAge = null,
         IProgress<string>? progress = null,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Refreshes exactly the requested item/data-center pairs from Universalis.
+    /// This bypasses reusable-cache freshness checks without treating the refresh
+    /// request as a global stale-cache cleanup threshold.
+    /// </summary>
+    Task<int> RefreshRequestedAsync(
+        List<(int itemId, string dataCenter)> requests,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default);
+}
+
+public interface IMarketCacheDiagnosticsProvider
+{
+    MarketCacheDecisionSnapshot? LastDecisionSnapshot { get; }
 }
 
 /// <summary>

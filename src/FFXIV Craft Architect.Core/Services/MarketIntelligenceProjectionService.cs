@@ -162,7 +162,23 @@ public sealed class MarketIntelligenceProjectionService : IMarketIntelligencePro
             LegacyPayloadBytes = legacyPayloadBytes,
             RetainedDetailBytes = retainedDetailBytes,
             NetworkRequestCount = request.NetworkRequestCount,
+            FetchedEvidencePairCount = request.FetchedEvidencePairCount,
             FreshCacheHitCount = request.FreshCacheHitCount,
+            StaleExistingEntryCount = request.StaleExistingEntryCount,
+            MissingCacheEntryCount = request.MissingCacheEntryCount,
+            OrdinaryFetchedPairCount = request.OrdinaryFetchedPairCount,
+            SuspectRefreshPairCount = request.SuspectRefreshPairCount,
+            ForcedRefreshPairCount = request.ForcedRefreshPairCount,
+            HttpChunkRequestCount = request.HttpChunkRequestCount,
+            DataCenterFetchCallCount = request.DataCenterFetchCallCount,
+            SplitCount = request.SplitCount,
+            RateLimit429Count = request.RateLimit429Count,
+            GatewayTimeout504Count = request.GatewayTimeout504Count,
+            CleanupStaleDeletionCount = request.CleanupStaleDeletionCount,
+            CacheSizeEvictionCount = request.CacheSizeEvictionCount,
+            VerificationFailureCount = request.VerificationFailureCount,
+            ForceRefreshData = request.ForceRefreshData,
+            RunTrigger = request.RunTrigger,
             StaleCacheRefreshCount = request.StaleCacheRefreshCount
         };
 
@@ -459,9 +475,51 @@ public sealed class MarketIntelligenceProjectionRequest
 
     public string CacheMode { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Compatibility metric for fetched evidence pairs. Prefer HttpChunkRequestCount for actual HTTP calls.
+    /// </summary>
     public int NetworkRequestCount { get; init; }
 
+    public int FetchedEvidencePairCount { get; init; }
+
     public int FreshCacheHitCount { get; init; }
+
+    public int StaleExistingEntryCount { get; init; }
+
+    public int MissingCacheEntryCount { get; init; }
+
+    public int OrdinaryFetchedPairCount { get; init; }
+
+    public int SuspectRefreshPairCount { get; init; }
+
+    /// <summary>
+    /// Pairs fetched because a caller explicitly requested fresh data, including suspect-cache repair.
+    /// This is not derived from MaxAge.
+    /// </summary>
+    public int ForcedRefreshPairCount { get; init; }
+
+    public int? HttpChunkRequestCount { get; init; }
+
+    public int DataCenterFetchCallCount { get; init; }
+
+    public int SplitCount { get; init; }
+
+    public int RateLimit429Count { get; init; }
+
+    public int GatewayTimeout504Count { get; init; }
+
+    public int CleanupStaleDeletionCount { get; init; }
+
+    public int CacheSizeEvictionCount { get; init; }
+
+    public int VerificationFailureCount { get; init; }
+
+    /// <summary>
+    /// True when the market-analysis run was started from a user or workflow request for fresh data.
+    /// </summary>
+    public bool ForceRefreshData { get; init; }
+
+    public string RunTrigger { get; init; } = string.Empty;
 
     public int StaleCacheRefreshCount { get; init; }
 }

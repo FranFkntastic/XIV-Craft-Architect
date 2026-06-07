@@ -678,12 +678,31 @@ internal static class BenchmarkRunner
                 legacyPayloadBytes: getField(runRecord, 'legacyPayloadBytes', 'LegacyPayloadBytes'),
                 retainedDetailBytes: getField(runRecord, 'retainedDetailBytes', 'RetainedDetailBytes'),
                 networkRequestCount: getField(runRecord, 'networkRequestCount', 'NetworkRequestCount'),
+                networkRequestCountMeaning: 'compatibility field; use httpChunkRequestCount for HTTP chunks and fetchedEvidencePairCount for fetched item/data-center pairs when available',
+                fetchedEvidencePairCount: getField(runRecord, 'fetchedEvidencePairCount', 'FetchedEvidencePairCount'),
                 freshCacheHitCount: getField(runRecord, 'freshCacheHitCount', 'FreshCacheHitCount'),
+                staleExistingEntryCount: getField(runRecord, 'staleExistingEntryCount', 'StaleExistingEntryCount'),
+                missingCacheEntryCount: getField(runRecord, 'missingCacheEntryCount', 'MissingCacheEntryCount'),
+                ordinaryFetchedPairCount: getField(runRecord, 'ordinaryFetchedPairCount', 'OrdinaryFetchedPairCount'),
+                suspectRefreshPairCount: getField(runRecord, 'suspectRefreshPairCount', 'SuspectRefreshPairCount'),
+                forcedRefreshPairCount: getField(runRecord, 'forcedRefreshPairCount', 'ForcedRefreshPairCount'),
+                httpChunkRequestCount: getField(runRecord, 'httpChunkRequestCount', 'HttpChunkRequestCount'),
+                dataCenterFetchCallCount: getField(runRecord, 'dataCenterFetchCallCount', 'DataCenterFetchCallCount'),
+                splitCount: getField(runRecord, 'splitCount', 'SplitCount'),
+                rateLimit429Count: getField(runRecord, 'rateLimit429Count', 'RateLimit429Count'),
+                gatewayTimeout504Count: getField(runRecord, 'gatewayTimeout504Count', 'GatewayTimeout504Count'),
+                cleanupStaleDeletionCount: getField(runRecord, 'cleanupStaleDeletionCount', 'CleanupStaleDeletionCount'),
+                cacheSizeEvictionCount: getField(runRecord, 'cacheSizeEvictionCount', 'CacheSizeEvictionCount'),
+                verificationFailureCount: getField(runRecord, 'verificationFailureCount', 'VerificationFailureCount'),
+                forceRefreshData: getField(runRecord, 'forceRefreshData', 'ForceRefreshData'),
+                runTrigger: getField(runRecord, 'runTrigger', 'RunTrigger'),
                 staleCacheRefreshCount: getField(runRecord, 'staleCacheRefreshCount', 'StaleCacheRefreshCount')
               } : null;
 
               let marketAnalysisRunTiming = null;
               let marketAnalysisRunTimingWarning = null;
+              let marketCacheStats = null;
+              let marketCacheStatsWarning = null;
               let marketAnalysisActiveRunId = null;
               let marketAnalysisCompletionState = 'unknown';
               const marketAnalysisAnalyzingVisible = /\bANALYZING\b/i.test(text);
@@ -718,6 +737,15 @@ internal static class BenchmarkRunner
               } catch (error) {
                 marketAnalysisRunTimingWarning = String(error?.message || error);
                 marketAnalysisCompletionState = marketAnalysisAnalyzingVisible ? 'analyzing' : 'run-record-error';
+              }
+
+              try {
+                if (window.IndexedDB?.getMarketCacheStats) {
+                  const oneHourAgoUnix = Math.floor(Date.now() / 1000) - 3600;
+                  marketCacheStats = await window.IndexedDB.getMarketCacheStats(oneHourAgoUnix);
+                }
+              } catch (error) {
+                marketCacheStatsWarning = String(error?.message || error);
               }
 
               if (marketAnalysisCompletionState === 'unknown') {
@@ -777,7 +805,9 @@ internal static class BenchmarkRunner
                   usedJSHeapSize: performance.memory.usedJSHeapSize
                 } : null,
                 marketAnalysisRunTiming,
-                marketAnalysisRunTimingWarning
+                marketAnalysisRunTimingWarning,
+                marketCacheStats,
+                marketCacheStatsWarning
               };
             })()
             """;

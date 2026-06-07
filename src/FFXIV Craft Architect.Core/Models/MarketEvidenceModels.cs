@@ -13,7 +13,8 @@ public sealed class MarketEvidenceSet
         string selectedRegion,
         TimeSpan? maxAge,
         int fetchedCount,
-        DateTime loadedAtUtc)
+        DateTime loadedAtUtc,
+        MarketCacheDecisionSnapshot? cacheDecision = null)
     {
         Entries = entries;
         RequestedPairs = requestedPairs;
@@ -24,6 +25,7 @@ public sealed class MarketEvidenceSet
         MaxAge = maxAge;
         FetchedCount = fetchedCount;
         LoadedAtUtc = loadedAtUtc;
+        CacheDecision = cacheDecision;
         MissingRequests = requestedPairs
             .Where(pair => !entries.ContainsKey(pair))
             .ToList();
@@ -49,6 +51,8 @@ public sealed class MarketEvidenceSet
 
     public DateTime LoadedAtUtc { get; }
 
+    public MarketCacheDecisionSnapshot? CacheDecision { get; }
+
     public bool IsPartial => MissingRequests.Count > 0;
 
     public IReadOnlyList<CachedMarketData> GetEntriesForItem(int itemId)
@@ -59,6 +63,60 @@ public sealed class MarketEvidenceSet
             .Cast<CachedMarketData>()
             .ToList();
     }
+}
+
+public sealed record MarketCacheDecisionSnapshot
+{
+    public int RequestedItemCount { get; init; }
+
+    public int RequestedPairCount { get; init; }
+
+    public int FreshHitCount { get; init; }
+
+    public int StaleExistingEntryCount { get; init; }
+
+    public int MissingEntryCount { get; init; }
+
+    public int OrdinaryFetchedPairCount { get; init; }
+
+    public int SuspectRefreshPairCount { get; init; }
+
+    /// <summary>
+    /// Pairs fetched because a caller explicitly requested fresh data, including suspect-cache repair.
+    /// This must not be inferred from a cache age threshold.
+    /// </summary>
+    public int ForcedRefreshPairCount { get; init; }
+
+    public int? HttpChunkRequestCount { get; init; }
+
+    public int DataCenterFetchCallCount { get; init; }
+
+    public int SplitCount { get; init; }
+
+    public int RateLimit429Count { get; init; }
+
+    public int GatewayTimeout504Count { get; init; }
+
+    public int CleanupStaleDeletionCount { get; init; }
+
+    public int CacheSizeEvictionCount { get; init; }
+
+    public int VerificationFailureCount { get; init; }
+
+    public TimeSpan? MaxAge { get; init; }
+
+    /// <summary>
+    /// True when the cache was asked to refresh the requested pairs directly instead of reusing freshness checks.
+    /// </summary>
+    public bool RefreshRequestedPairs { get; init; }
+
+    public MarketFetchScope Scope { get; init; }
+
+    public string SelectedDataCenter { get; init; } = string.Empty;
+
+    public string SelectedRegion { get; init; } = string.Empty;
+
+    public string Trigger { get; init; } = string.Empty;
 }
 
 public sealed class MarketAnalysisRequest
