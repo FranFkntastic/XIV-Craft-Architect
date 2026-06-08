@@ -5,7 +5,7 @@ namespace FFXIV_Craft_Architect.Tests;
 public class MarketCacheShapeDiagnosticServiceTests
 {
     [Fact]
-    public void Analyze_RepeatedIdenticalListingFingerprintAboveThreshold_ReportsSpecificWarning()
+    public void Analyze_RepeatedIdenticalListingFingerprintAboveThreshold_DoesNotReportWithoutStrongerEvidence()
     {
         var service = new MarketCacheShapeDiagnosticService();
         var data = CachedData(
@@ -22,14 +22,7 @@ public class MarketCacheShapeDiagnosticServiceTests
 
         var report = service.Analyze(data);
 
-        var issue = Assert.Single(report.Issues);
-        Assert.Equal(MarketCacheShapeIssueKind.RepeatedListingFingerprint, issue.Kind);
-        Assert.Equal(MarketCacheShapeSeverity.Warning, issue.Severity);
-        Assert.Equal(42, issue.ItemId);
-        Assert.Equal("Aether", issue.DataCenter);
-        Assert.Equal("Siren", issue.WorldName);
-        Assert.Equal(30, issue.RepeatedListingCount);
-        Assert.Contains("Same Retainer", issue.Message, StringComparison.Ordinal);
+        Assert.Empty(report.Issues);
     }
 
     [Fact]
@@ -99,7 +92,7 @@ public class MarketCacheShapeDiagnosticServiceTests
     }
 
     [Fact]
-    public void Analyze_MultipleEntries_ReportsWorldContextForEachSuspiciousPayload()
+    public void Analyze_MultipleEntries_DoesNotReportRepeatedBulkSellerStacks()
     {
         var service = new MarketCacheShapeDiagnosticService();
         var entries = new Dictionary<(int itemId, string dataCenter), CachedMarketData>
@@ -138,20 +131,7 @@ public class MarketCacheShapeDiagnosticServiceTests
 
         var report = service.Analyze(entries);
 
-        Assert.Collection(
-            report.Issues,
-            issue =>
-            {
-                Assert.Equal(42, issue.ItemId);
-                Assert.Equal("Aether", issue.DataCenter);
-                Assert.Equal("Siren", issue.WorldName);
-            },
-            issue =>
-            {
-                Assert.Equal(84, issue.ItemId);
-                Assert.Equal("Crystal", issue.DataCenter);
-                Assert.Equal("Coeurl", issue.WorldName);
-            });
+        Assert.Empty(report.Issues);
     }
 
     private static CachedMarketData CachedData(
