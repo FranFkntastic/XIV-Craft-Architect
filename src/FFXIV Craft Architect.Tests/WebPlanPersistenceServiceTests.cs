@@ -1,6 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
-using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Services;
 using Microsoft.JSInterop;
 
@@ -27,6 +26,54 @@ public class WebPlanPersistenceServiceTests
         Assert.Equal("plan-id", jsRuntime.LastSavedPlan.Id);
         Assert.Equal("Saved Plan", jsRuntime.LastSavedPlan.Name);
         Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc), jsRuntime.LastSavedPlan.SavedAt);
+    }
+
+    [Fact]
+    public async Task SaveCurrentPlanAsync_WritesFullMarketAnalysisStateWithoutCompactSummary()
+    {
+        var jsRuntime = new RecordingJsRuntime();
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 100, Name = "Saved Item", Quantity = 12 }]);
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 200,
+                    Name = "Saved Material",
+                    QuantityNeeded = 7
+                }
+            ],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 200,
+                    Name = "Saved Material",
+                    QuantityNeeded = 7
+                }
+            ],
+            publishedScope: new PublishedMarketAnalysisScopeSnapshot(
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                ["Aether"],
+                MarketAcquisitionLens.MinimumUpfrontCost,
+                1,
+                new DateTime(2026, 6, 10, 12, 0, 0, DateTimeKind.Utc)));
+        var service = CreateService(jsRuntime, appState);
+
+        var saved = await service.SaveCurrentPlanAsync(
+            "plan-id",
+            "Saved Plan",
+            new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc));
+
+        Assert.True(saved);
+        Assert.NotNull(jsRuntime.LastSavedPlan);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketItemAnalysesJson);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketPlansJson);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketIntelligenceJson);
+        var serialized = System.Text.Json.JsonSerializer.Serialize(jsRuntime.LastSavedPlan);
+        Assert.DoesNotContain("MarketIntelligenceSummary", serialized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ActiveMarketIntelligencePublicationId", serialized, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -123,115 +170,14 @@ public class WebPlanPersistenceServiceTests
         Assert.Single(result.ShoppingPlans);
     }
 
-    [Fact]
-    public async Task LoadPlanIntoSessionAsync_ReferenceOnlyMarketSummaryHydratesFromStore()
-    {
-        var appState = new AppState();
-        var publicationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-        var store = new InMemoryMarketIntelligenceStore();
-        await store.SavePublicationAsync(new MarketIntelligencePublicationWrite(
-            CreateSummary(publicationId),
-            [],
-            []));
-        var jsRuntime = new RecordingJsRuntime
-        {
-            PlanToLoad = new StoredPlan
-            {
-                Id = "saved",
-                Name = "Saved",
-                ProjectItems = [new StoredProjectItem { Id = 100, Name = "Stored Item", Quantity = 4 }],
-                ActiveMarketIntelligencePublicationId = publicationId
-            }
-        };
-        var service = CreateService(jsRuntime, appState, store);
-
-        var result = await service.LoadPlanIntoSessionAsync("saved");
-
-        Assert.NotNull(result);
-        Assert.Equal(publicationId, appState.MarketIntelligenceSummary?.PublicationId);
-        Assert.Equal(100, Assert.Single(appState.MarketItemAnalyses).ItemId);
-        Assert.Equal(100, Assert.Single(appState.ShoppingPlans).ItemId);
-    }
-
-    [Fact]
-    public void PlanSessionLoadService_Prepare_MismatchedCompactSummaryReferenceWarnsAndSkipsSummary()
-    {
-        var activePublicationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-        var embeddedPublicationId = Guid.Parse("22222222-2222-2222-2222-222222222222");
-        var storedPlan = new StoredPlan
-        {
-            ProjectItems = [new StoredProjectItem { Id = 100, Name = "Stored Item", Quantity = 4 }],
-            ActiveMarketIntelligencePublicationId = activePublicationId,
-            MarketIntelligenceSummaryJson = System.Text.Json.JsonSerializer.Serialize(CreateSummary(embeddedPublicationId))
-        };
-
-        var result = PlanSessionLoadService.Prepare(storedPlan);
-
-        Assert.Null(result.MarketIntelligenceSummary);
-        Assert.Empty(result.MarketItemAnalyses);
-        Assert.Empty(result.ShoppingPlans);
-        Assert.Contains("active publication reference", result.Warning, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static WebPlanPersistenceService CreateService(
-        RecordingJsRuntime jsRuntime,
-        AppState? appState = null,
-        IMarketIntelligenceStore? marketIntelligenceStore = null)
+    private static WebPlanPersistenceService CreateService(RecordingJsRuntime jsRuntime, AppState? appState = null)
     {
         appState ??= new AppState();
         var indexedDb = new IndexedDbService(jsRuntime);
         return new WebPlanPersistenceService(
             indexedDb,
             new StoredPlanSnapshotBuilder(appState),
-            new PlanSessionLoadService(appState, new StubRecipeLayerWorkflowService()),
-            marketIntelligenceStore);
-    }
-
-    private static MarketIntelligencePublicationSummary CreateSummary(Guid publicationId)
-    {
-        return new MarketIntelligencePublicationSummary
-        {
-            PublicationId = publicationId,
-            PublicationContext = new MarketIntelligencePublicationContext(
-                MarketIntelligencePublicationContextKind.Known,
-                MarketFetchScope.SelectedDataCenter,
-                "Aether",
-                "North America",
-                ["Aether"],
-                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
-                null,
-                false,
-                RecommendationMode.MinimizeTotalCost,
-                MarketAcquisitionLens.BulkValue,
-                null,
-                7,
-                2,
-                new DateTime(2026, 6, 5, 12, 0, 0, DateTimeKind.Utc)),
-            Items =
-            [
-                new MarketItemSummary
-                {
-                    ItemId = 100,
-                    Name = "Stored Item",
-                    QuantityNeeded = 4,
-                    RecommendedTotalCost = 400,
-                    Worlds =
-                    [
-                        new WorldMarketSummary
-                        {
-                            World = new MarketWorldKey("Aether", "Siren"),
-                            QuantityNeeded = 4,
-                            CompetitiveQuantity = 4,
-                            TotalListingQuantity = 4,
-                            CompetitiveCoverageRatio = 1m,
-                            CompetitiveAverageUnitPrice = 100,
-                            CoverageBucket = MarketCoverageBucket.Full,
-                            DataQualityBucket = MarketDataQualityBucket.Current
-                        }
-                    ]
-                }
-            ]
-        };
+            new PlanSessionLoadService(appState, new StubRecipeLayerWorkflowService()));
     }
 
     private static CraftingPlan CreateSimplePlan()
@@ -317,14 +263,13 @@ public class WebPlanPersistenceServiceTests
     {
         public int LoadPlanCallCount { get; private set; }
         public StoredPlan? LastSavedPlan { get; private set; }
-        public StoredPlan? PlanToLoad { get; init; }
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
         {
             if (identifier == "IndexedDB.loadPlan")
             {
                 LoadPlanCallCount++;
-                return new ValueTask<TValue>((TValue)(object?)PlanToLoad!);
+                return new ValueTask<TValue>((TValue)(object?)null!);
             }
 
             if (identifier == "IndexedDB.savePlan")

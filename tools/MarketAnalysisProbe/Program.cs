@@ -1,8 +1,4 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Net;
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -78,20 +74,11 @@ internal sealed class MarketAnalysisBenchmark
         SampleMemory(memorySamples, "AfterPlanLoad");
 
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-        using var fakeMarketHttpClient = options.FakeHttpScenario == FakeUniversalisScenario.None
-            ? null
-            : new HttpClient(new ProbeFakeUniversalisHttpMessageHandler(
-                options.FakeHttpScenario,
-                TimeSpan.FromMilliseconds(options.FakeGatewayTimeoutDelayMs),
-                TimeSpan.FromMilliseconds(options.FakeSuccessDelayMs)))
-            {
-                Timeout = TimeSpan.FromSeconds(60)
-            };
         var universalis = new UniversalisService(httpClient);
         IMarketDataSource marketSource = fixture == null
-            ? new InstrumentedUniversalisMarketDataSource(fakeMarketHttpClient ?? httpClient, options)
+            ? new LiveMarketDataSource(universalis)
             : new FixtureMarketDataSource(fixture);
-        var cache = new BenchmarkMarketCache(marketSource, options);
+        var cache = new BenchmarkMarketCache(marketSource);
         cache.Seed(fixture, options.CacheMode, requests, options.StaleAge);
 
         var worldDataStage = Stopwatch.StartNew();
@@ -184,13 +171,6 @@ internal sealed class MarketAnalysisBenchmark
             .ToList();
 
         return new BenchmarkRunResult(
-            ToolVersion: "phase1-diagnostics-probe",
-            RepoRoot: GitInfo("rev-parse --show-toplevel"),
-            Branch: GitInfo("rev-parse --abbrev-ref HEAD"),
-            Commit: GitInfo("rev-parse HEAD"),
-            Dirty: !string.IsNullOrWhiteSpace(GitInfo("status --short")),
-            DirtyState: GitInfo("status --short"),
-            CommandLine: Environment.CommandLine,
             StartedAtUtc: startedAt,
             CompletedAtUtc: DateTimeOffset.UtcNow,
             PlanPath: options.PlanPath,
@@ -199,7 +179,7 @@ internal sealed class MarketAnalysisBenchmark
             Scope: options.SearchRegion ? "North America" : dataCenters[0],
             DataCenters: dataCenters,
             CacheMode: options.CacheMode.ToString(),
-            SourceMode: GetSourceMode(fixture, options),
+            SourceMode: fixture == null ? "LiveUniversalis" : "Fixture",
             FixturePath: options.FixturePath,
             PlanNodes: CountPlanNodes(plan),
             UniquePlanItemIds: plan.GetAllItemIds().Count,
@@ -210,7 +190,6 @@ internal sealed class MarketAnalysisBenchmark
             MemorySamples: memorySamples,
             ProgressEvents: progressEvents,
             Cache: cache.ToResult(),
-            Fetch: marketSource.GetMetrics(),
             Shape: shape,
             Payload: payload,
             Retention: BenchmarkRetentionMetrics.FromExecutionResult(executionResult),
@@ -221,35 +200,6 @@ internal sealed class MarketAnalysisBenchmark
             BestValueTotal: totalCost,
             TopRecommendedItems: topItems,
             ErrorItems: errorItems);
-    }
-
-    private static string GitInfo(string arguments)
-    {
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo
-            {
-                FileName = "git",
-                Arguments = arguments,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            });
-            if (process is null)
-            {
-                return string.Empty;
-            }
-
-            process.WaitForExit(5_000);
-            return process.ExitCode == 0
-                ? process.StandardOutput.ReadToEnd().Trim()
-                : string.Empty;
-        }
-        catch
-        {
-            return string.Empty;
-        }
     }
 
     public static void PrintSummary(BenchmarkRunResult run)
@@ -288,9 +238,6 @@ internal sealed class MarketAnalysisBenchmark
             $"shopping listings: {run.Shape.ShoppingListings}");
         Console.WriteLine("Payloads:");
         Console.WriteLine($"  Market intelligence bytes: {run.Payload.MarketIntelligenceJsonBytes:N0}");
-        Console.WriteLine($"  Compact summary bytes: {run.Payload.CompactSummaryJsonBytes:N0}");
-        Console.WriteLine($"  Cold detail bytes: {run.Payload.ColdDetailJsonBytes:N0}");
-        Console.WriteLine($"  Source fact bytes: {run.Payload.SourceFactJsonBytes:N0}");
         Console.WriteLine($"  Legacy plans JSON bytes: {run.Payload.LegacyPlansJsonBytes:N0}");
         Console.WriteLine($"  Legacy analyses JSON bytes: {run.Payload.LegacyAnalysesJsonBytes:N0}");
         Console.WriteLine($"  Retained detail estimate bytes: {run.Payload.RetainedDetailEstimateBytes:N0}");
@@ -299,33 +246,6 @@ internal sealed class MarketAnalysisBenchmark
             $"  Seeded={run.Cache.SeededEntries}; freshHits={run.Cache.FreshCacheHits}; " +
             $"staleHits={run.Cache.StaleCacheHits}; missing={run.Cache.MissingCacheRequests}; " +
             $"sourceFetches={run.Cache.SourceFetchRequests}");
-        Console.WriteLine("Fetch orchestration:");
-        Console.WriteLine(
-            $"  regionDcConcurrency={run.Fetch.RegionDataCenterConcurrency}; " +
-            $"adaptiveDc={run.Cache.AdaptiveDataCenterConcurrency}; " +
-            $"dcOrder={run.Cache.DataCenterOrder}; " +
-            $"perDcChunkConcurrency={run.Fetch.PerDataCenterChunkConcurrency}; " +
-            $"respectRetryAfter={run.Fetch.RespectRetryAfter}; " +
-            $"chunkRequests={run.Fetch.ChunkRequests}; retries={run.Fetch.RetryCount}; " +
-            $"splits={run.Fetch.SplitCount}; 429={run.Fetch.RateLimit429Count}; " +
-            $"504={run.Fetch.GatewayTimeout504Count}; timeouts={run.Fetch.TimeoutCount}; " +
-            $"finalMissing={run.Fetch.FinalMissingItemCount}; " +
-            $"retryAfter={run.Fetch.RetryAfterCount}; " +
-            $"retryDelay={FormatDuration(run.Fetch.RetryAfterDelay + run.Fetch.BackoffDelay)}; " +
-            $"observedDc={run.Cache.MinimumObservedDataCenterConcurrency}-{run.Cache.MaximumObservedDataCenterConcurrency}; " +
-            $"dcReductions={run.Cache.DataCenterConcurrencyReductions}; " +
-            $"dcIncreases={run.Cache.DataCenterConcurrencyIncreases}");
-        foreach (var dataCenter in run.Fetch.DataCenters)
-        {
-            Console.WriteLine(
-                $"  {dataCenter.DataCenter}: elapsed={FormatDuration(dataCenter.Elapsed)}; " +
-                $"requested={dataCenter.RequestedItems}; fetched={dataCenter.FetchedItems}; " +
-                $"missing={dataCenter.FinalMissingItems}; chunks={dataCenter.ChunkRequests}; " +
-                $"retries={dataCenter.RetryCount}; splits={dataCenter.SplitCount}; " +
-                $"429={dataCenter.RateLimit429Count}; 504={dataCenter.GatewayTimeout504Count}; " +
-                $"timeouts={dataCenter.TimeoutCount}; retryAfter={dataCenter.RetryAfterCount}; " +
-                $"retryDelay={FormatDuration(dataCenter.RetryAfterDelay + dataCenter.BackoffDelay)}");
-        }
         Console.WriteLine("Analysis complete.");
         Console.WriteLine($"Elapsed: {FormatDuration(run.TotalElapsed)}");
         Console.WriteLine($"Fetched: {run.Fetched}");
@@ -346,71 +266,22 @@ internal sealed class MarketAnalysisBenchmark
 
     private static List<string> ResolveDataCenters(ProbeOptions options, CraftingPlan plan)
     {
-        List<string> dataCenters;
         if (options.SearchRegion)
         {
-            dataCenters = ["Aether", "Primal", "Crystal", "Dynamis"];
-        }
-        else if (!string.IsNullOrWhiteSpace(options.DataCenter))
-        {
-            dataCenters = [options.DataCenter];
-        }
-        else if (!string.IsNullOrWhiteSpace(plan.DataCenter))
-        {
-            dataCenters = [plan.DataCenter];
-        }
-        else
-        {
-            dataCenters = ["Aether"];
+            return ["Aether", "Primal", "Crystal", "Dynamis"];
         }
 
-        return ApplyDataCenterOrder(dataCenters, options.DataCenterOrder);
-    }
-
-    private static List<string> ApplyDataCenterOrder(
-        List<string> dataCenters,
-        DataCenterOrderMode order)
-    {
-        return order switch
+        if (!string.IsNullOrWhiteSpace(options.DataCenter))
         {
-            DataCenterOrderMode.Alphabetical => dataCenters
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .ToList(),
-            DataCenterOrderMode.SlowFirst => dataCenters
-                .OrderBy(dataCenter => GetObservedSpeedRank(dataCenter))
-                .ToList(),
-            DataCenterOrderMode.FastFirst => dataCenters
-                .OrderByDescending(dataCenter => GetObservedSpeedRank(dataCenter))
-                .ToList(),
-            DataCenterOrderMode.Paired => dataCenters
-                .OrderBy(dataCenter => GetPairedRank(dataCenter))
-                .ToList(),
-            _ => dataCenters
-        };
-    }
+            return [options.DataCenter];
+        }
 
-    private static int GetObservedSpeedRank(string dataCenter)
-    {
-        return dataCenter.ToUpperInvariant() switch
+        if (!string.IsNullOrWhiteSpace(plan.DataCenter))
         {
-            "DYNAMIS" => 0,
-            "CRYSTAL" => 1,
-            "PRIMAL" => 2,
-            "AETHER" => 3,
-            _ => 4
-        };
-    }
+            return [plan.DataCenter];
+        }
 
-    private static int GetPairedRank(string dataCenter)
-    {
-        return dataCenter.ToUpperInvariant() switch
-        {
-            "DYNAMIS" => 0,
-            "AETHER" => 1,
-            "CRYSTAL" => 2,
-            "PRIMAL" => 3,
-            _ => 4
-        };
+        return ["Aether"];
     }
 
     private static async Task<Dictionary<string, IReadOnlyList<string>>> LoadWorldDataAsync(
@@ -430,18 +301,6 @@ internal sealed class MarketAnalysisBenchmark
             pair => pair.Key,
             pair => (IReadOnlyList<string>)pair.Value,
             StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static string GetSourceMode(MarketDataFixture? fixture, ProbeOptions options)
-    {
-        if (fixture != null)
-        {
-            return "Fixture";
-        }
-
-        return options.FakeHttpScenario == FakeUniversalisScenario.None
-            ? "LiveUniversalis"
-            : $"FakeHttp:{options.FakeHttpScenario}";
     }
 
     private static int CountPlanNodes(CraftingPlan plan)
@@ -485,17 +344,6 @@ internal sealed record ProbeOptions(
     string? JsonOutPath,
     TimeSpan? MaxAge,
     TimeSpan StaleAge,
-    int RegionDataCenterConcurrency,
-    bool AdaptiveDataCenterConcurrency,
-    DataCenterOrderMode DataCenterOrder,
-    int PerDataCenterChunkConcurrency,
-    int InitialChunkSize,
-    int MinChunkSize,
-    int MaxRetries,
-    bool RespectRetryAfter,
-    FakeUniversalisScenario FakeHttpScenario,
-    int FakeGatewayTimeoutDelayMs,
-    int FakeSuccessDelayMs,
     bool ShowHelp,
     bool HasError)
 {
@@ -513,17 +361,6 @@ internal sealed record ProbeOptions(
                 null,
                 null,
                 TimeSpan.FromDays(2),
-                1,
-                false,
-                DataCenterOrderMode.Default,
-                3,
-                25,
-                5,
-                3,
-                false,
-                FakeUniversalisScenario.None,
-                250,
-                0,
                 true,
                 args.Length == 0);
         }
@@ -537,27 +374,6 @@ internal sealed record ProbeOptions(
             : BenchmarkCacheMode.Cold;
         var maxAge = TryGetMinutes(args, "--max-age-minutes");
         var staleAge = TryGetMinutes(args, "--stale-age-minutes") ?? TimeSpan.FromDays(2);
-        var regionDataCenterConcurrency = Math.Max(1, TryGetInt(args, "--region-dc-concurrency") ?? 1);
-        var adaptiveDataCenterConcurrency = args.Contains("--adaptive-dc-concurrency", StringComparer.OrdinalIgnoreCase);
-        var dataCenterOrder = Enum.TryParse<DataCenterOrderMode>(
-            GetOption(args, "--dc-order") ?? "Default",
-            ignoreCase: true,
-            out var parsedDataCenterOrder)
-            ? parsedDataCenterOrder
-            : DataCenterOrderMode.Default;
-        var perDataCenterChunkConcurrency = Math.Max(1, TryGetInt(args, "--per-dc-chunk-concurrency") ?? 3);
-        var initialChunkSize = Math.Max(1, TryGetInt(args, "--initial-chunk-size") ?? 25);
-        var minChunkSize = Math.Max(1, TryGetInt(args, "--min-chunk-size") ?? 5);
-        var maxRetries = Math.Max(1, TryGetInt(args, "--max-retries") ?? 3);
-        var respectRetryAfter = args.Contains("--respect-retry-after", StringComparer.OrdinalIgnoreCase);
-        var fakeHttpScenario = Enum.TryParse<FakeUniversalisScenario>(
-            GetOption(args, "--fake-http-scenario") ?? "None",
-            ignoreCase: true,
-            out var parsedFakeHttpScenario)
-            ? parsedFakeHttpScenario
-            : FakeUniversalisScenario.None;
-        var fakeGatewayTimeoutDelayMs = Math.Max(0, TryGetInt(args, "--fake-504-delay-ms") ?? 250);
-        var fakeSuccessDelayMs = Math.Max(0, TryGetInt(args, "--fake-success-delay-ms") ?? 0);
 
         return new ProbeOptions(
             planPath,
@@ -569,17 +385,6 @@ internal sealed record ProbeOptions(
             GetOption(args, "--json-out"),
             maxAge,
             staleAge,
-            regionDataCenterConcurrency,
-            adaptiveDataCenterConcurrency,
-            dataCenterOrder,
-            perDataCenterChunkConcurrency,
-            initialChunkSize,
-            minChunkSize,
-            maxRetries,
-            respectRetryAfter,
-            fakeHttpScenario,
-            fakeGatewayTimeoutDelayMs,
-            fakeSuccessDelayMs,
             false,
             false);
     }
@@ -599,20 +404,6 @@ internal sealed record ProbeOptions(
         Console.WriteLine("  --json-out <path>               Write benchmark result JSON.");
         Console.WriteLine("  --max-age-minutes <minutes>     Cache freshness threshold.");
         Console.WriteLine("  --stale-age-minutes <minutes>   Age assigned to stale seeded fixture entries.");
-        Console.WriteLine("  --region-dc-concurrency <count> Number of data centers fetched in parallel. Default: 1.");
-        Console.WriteLine("  --adaptive-dc-concurrency       Start at bounded DC2, then raise/lower future DC batches by pressure.");
-        Console.WriteLine("  --dc-order <default|alphabetical|slowfirst|fastfirst|paired>");
-        Console.WriteLine("                                  Order regional data-center scheduling. Default preserves app order.");
-        Console.WriteLine("  --per-dc-chunk-concurrency <count>");
-        Console.WriteLine("                                  Number of bulk chunks per data center fetched in parallel. Default: 3.");
-        Console.WriteLine("  --initial-chunk-size <count>    Initial Universalis bulk chunk size. Default: 25.");
-        Console.WriteLine("  --min-chunk-size <count>        Minimum chunk size before permanent failure. Default: 5.");
-        Console.WriteLine("  --max-retries <count>           Retries per chunk attempt. Default: 3.");
-        Console.WriteLine("  --respect-retry-after           Honor server Retry-After headers when present.");
-        Console.WriteLine("  --fake-http-scenario <none|retryafter429firstperdatacenter|retryafter504firstperdatacenter|liveshaped504pressure>");
-        Console.WriteLine("                                  Use a probe-only fake Universalis market HTTP source.");
-        Console.WriteLine("  --fake-504-delay-ms <ms>        Delay before fake 504 responses. Default: 250.");
-        Console.WriteLine("  --fake-success-delay-ms <ms>    Delay before fake success responses. Default: 0.");
     }
 
     private static string? GetOption(string[] args, string name)
@@ -635,14 +426,6 @@ internal sealed record ProbeOptions(
             ? TimeSpan.FromMinutes(minutes)
             : null;
     }
-
-    private static int? TryGetInt(string[] args, string name)
-    {
-        var value = GetOption(args, name);
-        return int.TryParse(value, out var parsed)
-            ? parsed
-            : null;
-    }
 }
 
 internal enum BenchmarkCacheMode
@@ -653,287 +436,29 @@ internal enum BenchmarkCacheMode
     Stale
 }
 
-internal enum DataCenterOrderMode
-{
-    Default,
-    Alphabetical,
-    SlowFirst,
-    FastFirst,
-    Paired
-}
-
-internal enum FakeUniversalisScenario
-{
-    None,
-    RetryAfter429FirstPerDataCenter,
-    RetryAfter504FirstPerDataCenter,
-    LiveShaped504Pressure
-}
-
 internal interface IMarketDataSource
 {
     Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkAsync(
         string dataCenter,
         IReadOnlyList<int> itemIds,
         CancellationToken ct);
-
-    BenchmarkFetchMetrics GetMetrics();
 }
 
-internal sealed class InstrumentedUniversalisMarketDataSource : IMarketDataSource
+internal sealed class LiveMarketDataSource : IMarketDataSource
 {
-    private const string UniversalisApiUrl = "https://universalis.app/api/v2/{0}/{1}";
+    private readonly UniversalisService _universalis;
 
-    private readonly HttpClient _httpClient;
-    private readonly ProbeOptions _options;
-    private readonly ConcurrentDictionary<string, MutableDataCenterFetchMetrics> _dataCenters =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    public InstrumentedUniversalisMarketDataSource(HttpClient httpClient, ProbeOptions options)
+    public LiveMarketDataSource(UniversalisService universalis)
     {
-        _httpClient = httpClient;
-        _options = options;
+        _universalis = universalis;
     }
 
-    public async Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkAsync(
+    public Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkAsync(
         string dataCenter,
         IReadOnlyList<int> itemIds,
         CancellationToken ct)
     {
-        var distinctItemIds = itemIds.Distinct().ToList();
-        var dcMetrics = _dataCenters.GetOrAdd(dataCenter, static key => new MutableDataCenterFetchMetrics(key));
-        dcMetrics.AddRequested(distinctItemIds.Count);
-
-        if (distinctItemIds.Count == 0)
-        {
-            return new Dictionary<int, UniversalisResponse>();
-        }
-
-        var stopwatch = Stopwatch.StartNew();
-        var results = new ConcurrentDictionary<int, UniversalisResponse>();
-        var workQueue = new Queue<ProbeChunkWorkItem>();
-        foreach (var (chunk, index) in distinctItemIds.Chunk(_options.InitialChunkSize).Select((chunk, index) => (chunk, index)))
-        {
-            workQueue.Enqueue(new ProbeChunkWorkItem(chunk.ToList(), index, SplitDepth: 0));
-        }
-
-        var delay = new ProbeDelayStrategy();
-        while (workQueue.Count > 0)
-        {
-            var batch = new List<ProbeChunkWorkItem>();
-            while (workQueue.Count > 0 && batch.Count < _options.PerDataCenterChunkConcurrency)
-            {
-                batch.Add(workQueue.Dequeue());
-            }
-
-            var tasks = batch.Select(workItem => FetchChunkWithSplitAsync(
-                workItem,
-                dataCenter,
-                results,
-                delay,
-                dcMetrics,
-                ct));
-            var chunkResults = await Task.WhenAll(tasks);
-            foreach (var result in chunkResults)
-            {
-                if (result.ShouldSplit && result.WorkItem.CanSplit(_options.MinChunkSize))
-                {
-                    var split = result.WorkItem.Split();
-                    dcMetrics.AddSplit(split.Count);
-                    foreach (var splitItem in split)
-                    {
-                        workQueue.Enqueue(splitItem);
-                    }
-                }
-            }
-
-            if (workQueue.Count > 0)
-            {
-                var interBatchDelay = TimeSpan.FromMilliseconds(delay.GetDelay());
-                dcMetrics.AddBackoffDelay(interBatchDelay);
-                await Task.Delay(interBatchDelay, ct);
-            }
-        }
-
-        var missing = distinctItemIds.Where(itemId => !results.ContainsKey(itemId)).ToList();
-        if (missing.Count > 0)
-        {
-            dcMetrics.AddMissing(missing.Count);
-        }
-
-        stopwatch.Stop();
-        dcMetrics.AddElapsed(stopwatch.Elapsed);
-        dcMetrics.AddFetched(results.Count);
-        return new Dictionary<int, UniversalisResponse>(results);
-    }
-
-    public BenchmarkFetchMetrics GetMetrics()
-    {
-        var dataCenters = _dataCenters.Values
-            .Select(metrics => metrics.ToResult())
-            .OrderBy(metrics => metrics.DataCenter, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        return new BenchmarkFetchMetrics(
-            _options.RegionDataCenterConcurrency,
-            _options.PerDataCenterChunkConcurrency,
-            _options.InitialChunkSize,
-            _options.MinChunkSize,
-            _options.RespectRetryAfter,
-            dataCenters.Sum(metrics => metrics.RequestedItems),
-            dataCenters.Sum(metrics => metrics.FetchedItems),
-            dataCenters.Sum(metrics => metrics.ChunkRequests),
-            dataCenters.Sum(metrics => metrics.RetryCount),
-            dataCenters.Sum(metrics => metrics.SplitCount),
-            dataCenters.Sum(metrics => metrics.RateLimit429Count),
-            dataCenters.Sum(metrics => metrics.GatewayTimeout504Count),
-            dataCenters.Sum(metrics => metrics.TimeoutCount),
-            dataCenters.Sum(metrics => metrics.MissingInResponseCount),
-            dataCenters.Sum(metrics => metrics.FinalMissingItems),
-            dataCenters.Sum(metrics => metrics.RetryAfterCount),
-            TimeSpan.FromTicks(dataCenters.Sum(metrics => metrics.RetryAfterDelay.Ticks)),
-            TimeSpan.FromTicks(dataCenters.Sum(metrics => metrics.BackoffDelay.Ticks)),
-            dataCenters);
-    }
-
-    private async Task<ProbeChunkFetchResult> FetchChunkWithSplitAsync(
-        ProbeChunkWorkItem workItem,
-        string dataCenter,
-        ConcurrentDictionary<int, UniversalisResponse> results,
-        ProbeDelayStrategy delay,
-        MutableDataCenterFetchMetrics dcMetrics,
-        CancellationToken ct)
-    {
-        for (var retry = 0; retry < _options.MaxRetries; retry++)
-        {
-            if (retry > 0)
-            {
-                dcMetrics.IncrementRetries();
-                var retryDelay = delay.GetRetryDelay(retry);
-                dcMetrics.AddBackoffDelay(retryDelay);
-                await Task.Delay(retryDelay, ct);
-            }
-
-            dcMetrics.IncrementChunkRequests();
-            var url = string.Format(
-                UniversalisApiUrl,
-                Uri.EscapeDataString(dataCenter),
-                string.Join(",", workItem.ItemIds));
-
-            try
-            {
-                using var response = await _httpClient.GetAsync(url, ct);
-                if (response.StatusCode == HttpStatusCode.TooManyRequests)
-                {
-                    dcMetrics.Increment429();
-                    var retryAfter = _options.RespectRetryAfter
-                        ? GetRetryAfterDelay(response)
-                        : null;
-                    if (retryAfter.HasValue)
-                    {
-                        dcMetrics.AddRetryAfter(retryAfter.Value);
-                    }
-
-                    delay.ReportFailure(retryAfter);
-                    continue;
-                }
-
-                if ((int)response.StatusCode == 504)
-                {
-                    dcMetrics.Increment504();
-                    var retryAfter = _options.RespectRetryAfter
-                        ? GetRetryAfterDelay(response)
-                        : null;
-                    if (retryAfter.HasValue)
-                    {
-                        dcMetrics.AddRetryAfter(retryAfter.Value);
-                    }
-
-                    delay.ReportFailure(retryAfter);
-                    if (workItem.CanSplit(_options.MinChunkSize))
-                    {
-                        return new ProbeChunkFetchResult(workItem, ShouldSplit: true);
-                    }
-
-                    continue;
-                }
-
-                response.EnsureSuccessStatusCode();
-
-                if (workItem.ItemIds.Count == 1)
-                {
-                    var singleResult = await response.Content.ReadFromJsonAsync<UniversalisResponse>(ct);
-                    if (singleResult != null)
-                    {
-                        results[workItem.ItemIds[0]] = singleResult;
-                    }
-                }
-                else
-                {
-                    var bulkResult = await response.Content.ReadFromJsonAsync<UniversalisBulkResponse>(ct);
-                    if (bulkResult?.Items != null)
-                    {
-                        var returnedIds = new HashSet<int>();
-                        foreach (var (itemId, itemResponse) in bulkResult.Items)
-                        {
-                            results[itemId] = itemResponse;
-                            returnedIds.Add(itemId);
-                        }
-
-                        var missing = workItem.ItemIds.Except(returnedIds).ToList();
-                        if (missing.Count > 0)
-                        {
-                            dcMetrics.AddMissingInResponse(missing.Count);
-                            delay.ReportFailure(null);
-                            if (workItem.CanSplit(_options.MinChunkSize))
-                            {
-                                return new ProbeChunkFetchResult(workItem, ShouldSplit: true);
-                            }
-                        }
-                    }
-                }
-
-                delay.ReportSuccess();
-                return new ProbeChunkFetchResult(workItem, ShouldSplit: false);
-            }
-            catch (TaskCanceledException) when (!ct.IsCancellationRequested)
-            {
-                dcMetrics.IncrementTimeouts();
-                delay.ReportFailure(null);
-                if (workItem.CanSplit(_options.MinChunkSize))
-                {
-                    return new ProbeChunkFetchResult(workItem, ShouldSplit: true);
-                }
-            }
-            catch (HttpRequestException)
-            {
-                delay.ReportFailure(null);
-            }
-        }
-
-        return new ProbeChunkFetchResult(workItem, ShouldSplit: false);
-    }
-
-    private static TimeSpan? GetRetryAfterDelay(HttpResponseMessage response)
-    {
-        var retryAfter = response.Headers.RetryAfter;
-        if (retryAfter == null)
-        {
-            return null;
-        }
-
-        if (retryAfter.Delta.HasValue)
-        {
-            return retryAfter.Delta.Value;
-        }
-
-        if (retryAfter.Date.HasValue)
-        {
-            var delay = retryAfter.Date.Value - DateTimeOffset.UtcNow;
-            return delay > TimeSpan.Zero ? delay : TimeSpan.Zero;
-        }
-
-        return null;
+        return _universalis.GetMarketDataBulkAsync(dataCenter, itemIds, useParallel: true, ct);
     }
 }
 
@@ -963,372 +488,17 @@ internal sealed class FixtureMarketDataSource : IMarketDataSource
 
         return Task.FromResult(responses);
     }
-
-    public BenchmarkFetchMetrics GetMetrics()
-    {
-        return BenchmarkFetchMetrics.Empty;
-    }
-}
-
-internal sealed class ProbeFakeUniversalisHttpMessageHandler : HttpMessageHandler
-{
-    private static readonly IReadOnlyDictionary<string, string[]> WorldsByDataCenter =
-        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Aether"] = ["Cactuar", "Gilgamesh", "Jenova", "Sargatanas"],
-            ["Primal"] = ["Excalibur", "Famfrit", "Leviathan", "Ultros"],
-            ["Crystal"] = ["Balmung", "Brynhildr", "Mateus", "Zalera"],
-            ["Dynamis"] = ["Golem", "Marilith", "Rafflesia", "Seraph"]
-        };
-
-    private readonly FakeUniversalisScenario _scenario;
-    private readonly TimeSpan _gatewayTimeoutDelay;
-    private readonly TimeSpan _successDelay;
-    private readonly ConcurrentDictionary<string, int> _dataCenterAttempts =
-        new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, int> _liveShapedRemaining504s =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    public ProbeFakeUniversalisHttpMessageHandler(
-        FakeUniversalisScenario scenario,
-        TimeSpan? gatewayTimeoutDelay = null,
-        TimeSpan? successDelay = null)
-    {
-        _scenario = scenario;
-        _gatewayTimeoutDelay = gatewayTimeoutDelay ?? TimeSpan.FromMilliseconds(250);
-        _successDelay = successDelay ?? TimeSpan.Zero;
-    }
-
-    protected override async Task<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request,
-        CancellationToken cancellationToken)
-    {
-        var (dataCenter, itemIds) = ParseRequest(request);
-        if (itemIds.Count == 0)
-        {
-            return new HttpResponseMessage(HttpStatusCode.BadRequest);
-        }
-
-        var attempt = _dataCenterAttempts.AddOrUpdate(
-            dataCenter,
-            static _ => 1,
-            static (_, current) => current + 1);
-        if (attempt == 1 && _scenario == FakeUniversalisScenario.RetryAfter429FirstPerDataCenter)
-        {
-            return CreateRetryAfterResponse(HttpStatusCode.TooManyRequests);
-        }
-
-        if (attempt == 1 && _scenario == FakeUniversalisScenario.RetryAfter504FirstPerDataCenter)
-        {
-            return CreateRetryAfterResponse(HttpStatusCode.GatewayTimeout);
-        }
-
-        if (ShouldLiveShaped504(dataCenter, itemIds))
-        {
-            if (_gatewayTimeoutDelay > TimeSpan.Zero)
-            {
-                await Task.Delay(_gatewayTimeoutDelay, cancellationToken);
-            }
-
-            return new HttpResponseMessage(HttpStatusCode.GatewayTimeout);
-        }
-
-        if (_successDelay > TimeSpan.Zero)
-        {
-            await Task.Delay(_successDelay, cancellationToken);
-        }
-
-        return CreateSuccessResponse(dataCenter, itemIds);
-    }
-
-    private bool ShouldLiveShaped504(string dataCenter, IReadOnlyList<int> itemIds)
-    {
-        if (_scenario != FakeUniversalisScenario.LiveShaped504Pressure)
-        {
-            return false;
-        }
-
-        var threshold = string.Equals(dataCenter, "Aether", StringComparison.OrdinalIgnoreCase)
-            ? 5
-            : 10;
-        if (itemIds.Count <= threshold)
-        {
-            return false;
-        }
-
-        var budget = string.Equals(dataCenter, "Aether", StringComparison.OrdinalIgnoreCase)
-            ? 8
-            : 4;
-        while (true)
-        {
-            var current = _liveShapedRemaining504s.GetOrAdd(dataCenter, budget);
-            if (current <= 0)
-            {
-                return false;
-            }
-
-            if (_liveShapedRemaining504s.TryUpdate(dataCenter, current - 1, current))
-            {
-                return true;
-            }
-        }
-    }
-
-    private static (string DataCenter, IReadOnlyList<int> ItemIds) ParseRequest(HttpRequestMessage request)
-    {
-        var segments = request.RequestUri?.Segments
-            .Select(segment => segment.Trim('/'))
-            .Where(segment => !string.IsNullOrWhiteSpace(segment))
-            .ToList() ?? [];
-        if (segments.Count < 2)
-        {
-            return ("Aether", []);
-        }
-
-        var dataCenter = Uri.UnescapeDataString(segments[^2]);
-        var itemIds = Uri.UnescapeDataString(segments[^1])
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(value => int.TryParse(value, out var parsed) ? parsed : 0)
-            .Where(value => value > 0)
-            .ToList();
-        return (dataCenter, itemIds);
-    }
-
-    private static HttpResponseMessage CreateRetryAfterResponse(HttpStatusCode statusCode)
-    {
-        var response = new HttpResponseMessage(statusCode);
-        response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(1));
-        return response;
-    }
-
-    private static HttpResponseMessage CreateSuccessResponse(
-        string dataCenter,
-        IReadOnlyList<int> itemIds)
-    {
-        return itemIds.Count == 1
-            ? JsonResponse(CreateItemJson(dataCenter, itemIds[0]))
-            : JsonResponse(CreateBulkJson(dataCenter, itemIds));
-    }
-
-    private static HttpResponseMessage JsonResponse(string body)
-    {
-        return new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
-        };
-    }
-
-    private static string CreateBulkJson(string dataCenter, IReadOnlyList<int> itemIds)
-    {
-        var itemJson = string.Join(
-            ",",
-            itemIds.Select(itemId => $"\"{itemId}\":{CreateItemJson(dataCenter, itemId)}"));
-        return $$"""
-            {
-              "itemIDs": [{{string.Join(",", itemIds)}}],
-              "items": { {{itemJson}} }
-            }
-            """;
-    }
-
-    private static string CreateItemJson(string dataCenter, int itemId)
-    {
-        var worlds = WorldsByDataCenter.TryGetValue(dataCenter, out var knownWorlds)
-            ? knownWorlds
-            : WorldsByDataCenter["Aether"];
-        var basePrice = 1_000 + itemId % 250;
-        var uploadTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var reviewTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var listingsJson = string.Join(
-            ",",
-            worlds.Select((world, index) => $$"""
-                {
-                  "pricePerUnit": {{basePrice + index * 17}},
-                  "quantity": {{10000 + index * 100}},
-                  "worldName": "{{world}}",
-                  "dataCenterName": "{{dataCenter}}",
-                  "retainerName": "ProbeRetainer{{index + 1}}",
-                  "hq": false,
-                  "lastReviewTime": {{reviewTime - index * 60}}
-                }
-                """));
-        var worldUploadTimesJson = string.Join(
-            ",",
-            worlds.Select((_, index) => $"\"{1000 + index}\":{uploadTime - index * 60000}"));
-
-        return $$"""
-            {
-              "itemID": {{itemId}},
-              "dcName": "{{dataCenter}}",
-              "lastUploadTime": {{uploadTime}},
-              "worldUploadTimes": { {{worldUploadTimesJson}} },
-              "listings": [{{listingsJson}}],
-              "averagePrice": {{basePrice + 25}},
-              "minPrice": {{basePrice}},
-              "minPriceHQ": 0,
-              "minPriceNQ": {{basePrice}},
-              "averagePriceHQ": 0,
-              "averagePriceNQ": {{basePrice + 25}}
-            }
-            """;
-    }
-}
-
-internal sealed class MutableDataCenterFetchMetrics
-{
-    private long _elapsedTicks;
-    private int _requestedItems;
-    private int _fetchedItems;
-    private int _chunkRequests;
-    private int _retryCount;
-    private int _splitCount;
-    private int _rateLimit429Count;
-    private int _gatewayTimeout504Count;
-    private int _timeoutCount;
-    private int _missingInResponseCount;
-    private int _finalMissingItems;
-    private int _retryAfterCount;
-    private long _retryAfterDelayTicks;
-    private long _backoffDelayTicks;
-
-    public MutableDataCenterFetchMetrics(string dataCenter)
-    {
-        DataCenter = dataCenter;
-    }
-
-    public string DataCenter { get; }
-
-    public void AddElapsed(TimeSpan elapsed) => Interlocked.Add(ref _elapsedTicks, elapsed.Ticks);
-
-    public void AddRequested(int count) => Interlocked.Add(ref _requestedItems, count);
-
-    public void AddFetched(int count) => Interlocked.Add(ref _fetchedItems, count);
-
-    public void IncrementChunkRequests() => Interlocked.Increment(ref _chunkRequests);
-
-    public void IncrementRetries() => Interlocked.Increment(ref _retryCount);
-
-    public void AddSplit(int count) => Interlocked.Add(ref _splitCount, count);
-
-    public void Increment429() => Interlocked.Increment(ref _rateLimit429Count);
-
-    public void Increment504() => Interlocked.Increment(ref _gatewayTimeout504Count);
-
-    public void IncrementTimeouts() => Interlocked.Increment(ref _timeoutCount);
-
-    public void AddMissingInResponse(int count) => Interlocked.Add(ref _missingInResponseCount, count);
-
-    public void AddMissing(int count) => Interlocked.Add(ref _finalMissingItems, count);
-
-    public void AddRetryAfter(TimeSpan delay)
-    {
-        Interlocked.Increment(ref _retryAfterCount);
-        Interlocked.Add(ref _retryAfterDelayTicks, ClampDelay(delay).Ticks);
-    }
-
-    public void AddBackoffDelay(TimeSpan delay) => Interlocked.Add(ref _backoffDelayTicks, delay.Ticks);
-
-    public BenchmarkDataCenterFetchMetrics ToResult()
-    {
-        return new BenchmarkDataCenterFetchMetrics(
-            DataCenter,
-            TimeSpan.FromTicks(Interlocked.Read(ref _elapsedTicks)),
-            Volatile.Read(ref _requestedItems),
-            Volatile.Read(ref _fetchedItems),
-            Volatile.Read(ref _chunkRequests),
-            Volatile.Read(ref _retryCount),
-            Volatile.Read(ref _splitCount),
-            Volatile.Read(ref _rateLimit429Count),
-            Volatile.Read(ref _gatewayTimeout504Count),
-            Volatile.Read(ref _timeoutCount),
-            Volatile.Read(ref _missingInResponseCount),
-            Volatile.Read(ref _finalMissingItems),
-            Volatile.Read(ref _retryAfterCount),
-            TimeSpan.FromTicks(Interlocked.Read(ref _retryAfterDelayTicks)),
-            TimeSpan.FromTicks(Interlocked.Read(ref _backoffDelayTicks)));
-    }
-
-    private static TimeSpan ClampDelay(TimeSpan delay)
-    {
-        if (delay < TimeSpan.Zero)
-        {
-            return TimeSpan.Zero;
-        }
-
-        return delay > TimeSpan.FromSeconds(10)
-            ? TimeSpan.FromSeconds(10)
-            : delay;
-    }
-}
-
-internal sealed record ProbeChunkFetchResult(ProbeChunkWorkItem WorkItem, bool ShouldSplit);
-
-internal sealed record ProbeChunkWorkItem(
-    IReadOnlyList<int> ItemIds,
-    int ChunkIndex,
-    int SplitDepth)
-{
-    public bool CanSplit(int minChunkSize) => ItemIds.Count > minChunkSize;
-
-    public IReadOnlyList<ProbeChunkWorkItem> Split()
-    {
-        var midpoint = ItemIds.Count / 2;
-        return
-        [
-            new ProbeChunkWorkItem(ItemIds.Take(midpoint).ToList(), ChunkIndex * 2, SplitDepth + 1),
-            new ProbeChunkWorkItem(ItemIds.Skip(midpoint).ToList(), ChunkIndex * 2 + 1, SplitDepth + 1)
-        ];
-    }
-}
-
-internal sealed class ProbeDelayStrategy
-{
-    private int _currentDelayMs = 200;
-
-    public int GetDelay() => Volatile.Read(ref _currentDelayMs);
-
-    public TimeSpan GetRetryDelay(int retry) => TimeSpan.FromMilliseconds(GetDelay() * retry);
-
-    public void ReportSuccess()
-    {
-        var current = Volatile.Read(ref _currentDelayMs);
-        if (current > 200)
-        {
-            Interlocked.Exchange(ref _currentDelayMs, Math.Max(200, current / 2));
-        }
-    }
-
-    public void ReportFailure(TimeSpan? retryAfter)
-    {
-        var current = Volatile.Read(ref _currentDelayMs);
-        var retryAfterMs = retryAfter.HasValue
-            ? (int)Math.Ceiling(Math.Clamp(retryAfter.Value.TotalMilliseconds, 0, 10000))
-            : 0;
-        Interlocked.Exchange(ref _currentDelayMs, Math.Min(10000, Math.Max(current * 2, retryAfterMs)));
-    }
 }
 
 internal sealed class BenchmarkMarketCache : IMarketCacheService
 {
-    private readonly ConcurrentDictionary<(int ItemId, string DataCenter), CachedMarketData> _cache = new();
+    private readonly Dictionary<(int ItemId, string DataCenter), CachedMarketData> _cache = new();
     private readonly IMarketDataSource _marketSource;
-    private readonly int _regionDataCenterConcurrency;
-    private readonly bool _adaptiveDataCenterConcurrency;
-    private readonly DataCenterOrderMode _dataCenterOrder;
     private readonly Stopwatch _fetchStopwatch = new();
-    private int _sourceFetchRequests;
-    private int _sourceFetchItems;
-    private int _minimumObservedDataCenterConcurrency = int.MaxValue;
-    private int _maximumObservedDataCenterConcurrency;
-    private int _dataCenterConcurrencyReductions;
-    private int _dataCenterConcurrencyIncreases;
 
-    public BenchmarkMarketCache(IMarketDataSource marketSource, ProbeOptions options)
+    public BenchmarkMarketCache(IMarketDataSource marketSource)
     {
         _marketSource = marketSource;
-        _regionDataCenterConcurrency = Math.Max(1, options.RegionDataCenterConcurrency);
-        _adaptiveDataCenterConcurrency = options.AdaptiveDataCenterConcurrency;
-        _dataCenterOrder = options.DataCenterOrder;
     }
 
     public int SeededEntries { get; private set; }
@@ -1339,9 +509,9 @@ internal sealed class BenchmarkMarketCache : IMarketCacheService
 
     public int MissingCacheRequests { get; private set; }
 
-    public int SourceFetchRequests => Volatile.Read(ref _sourceFetchRequests);
+    public int SourceFetchRequests { get; private set; }
 
-    public int SourceFetchItems => Volatile.Read(ref _sourceFetchItems);
+    public int SourceFetchItems { get; private set; }
 
     public TimeSpan FetchElapsed => _fetchStopwatch.Elapsed;
 
@@ -1463,16 +633,29 @@ internal sealed class BenchmarkMarketCache : IMarketCacheService
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
-        if (maxAge <= TimeSpan.Zero)
+        var missing = await GetMissingAsync(requests, maxAge);
+        var fetched = 0;
+
+        foreach (var dcGroup in missing.GroupBy(request => request.dataCenter))
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(maxAge),
-                maxAge,
-                "Use RefreshRequestedAsync when fresh data is required for specific pairs.");
+            var dataCenter = dcGroup.Key;
+            var itemIds = dcGroup.Select(request => request.itemId).Distinct().ToList();
+            progress?.Report($"Fetching {itemIds.Count} items from {dataCenter}...");
+            SourceFetchRequests++;
+            SourceFetchItems += itemIds.Count;
+
+            _fetchStopwatch.Start();
+            var responses = await _marketSource.GetMarketDataBulkAsync(dataCenter, itemIds, ct);
+            _fetchStopwatch.Stop();
+
+            foreach (var (itemId, response) in responses)
+            {
+                _cache[(itemId, dataCenter)] = ConvertResponse(itemId, dataCenter, response, DateTimeOffset.UtcNow);
+                fetched++;
+            }
         }
 
-        var missing = await GetMissingAsync(requests, maxAge);
-        return await FetchMissingAsync(missing, progress, ct);
+        return fetched;
     }
 
     public async Task<int> RefreshRequestedAsync(
@@ -1480,200 +663,12 @@ internal sealed class BenchmarkMarketCache : IMarketCacheService
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
-        return await FetchMissingAsync(requests, progress, ct);
-    }
-
-    private async Task<int> FetchMissingAsync(
-        IReadOnlyCollection<(int itemId, string dataCenter)> requests,
-        IProgress<string>? progress,
-        CancellationToken ct)
-    {
-        var fetched = 0;
-        var dcGroups = requests
-            .GroupBy(request => request.dataCenter)
-            .Select(group => (DataCenter: group.Key, ItemIds: group.Select(request => request.itemId).Distinct().ToList()))
-            .OrderBy(group => GetDataCenterOrderRank(group.DataCenter))
-            .ToList();
-
-        _fetchStopwatch.Start();
-        if (_regionDataCenterConcurrency <= 1)
+        foreach (var request in requests.Distinct())
         {
-            foreach (var dcGroup in dcGroups)
-            {
-                RecordObservedDataCenterConcurrency(1);
-                fetched += await FetchDataCenterAsync(dcGroup.DataCenter, dcGroup.ItemIds, progress, ct);
-            }
-        }
-        else if (_adaptiveDataCenterConcurrency)
-        {
-            fetched = await FetchAdaptiveDataCenterBatchesAsync(dcGroups, progress, ct);
-        }
-        else
-        {
-            using var semaphore = new SemaphoreSlim(_regionDataCenterConcurrency);
-            var tasks = dcGroups.Select(async dcGroup =>
-            {
-                await semaphore.WaitAsync(ct);
-                try
-                {
-                    return await FetchDataCenterAsync(dcGroup.DataCenter, dcGroup.ItemIds, progress, ct);
-                }
-                finally
-                {
-                    semaphore.Release();
-                }
-            });
-
-            fetched = (await Task.WhenAll(tasks)).Sum();
-            RecordObservedDataCenterConcurrency(Math.Min(_regionDataCenterConcurrency, dcGroups.Count));
-        }
-        _fetchStopwatch.Stop();
-
-        return fetched;
-    }
-
-    private async Task<int> FetchAdaptiveDataCenterBatchesAsync(
-        IReadOnlyList<(string DataCenter, List<int> ItemIds)> dcGroups,
-        IProgress<string>? progress,
-        CancellationToken ct)
-    {
-        var fetched = 0;
-        var index = 0;
-        var currentConcurrency = Math.Min(2, _regionDataCenterConcurrency);
-
-        while (index < dcGroups.Count)
-        {
-            var batch = dcGroups
-                .Skip(index)
-                .Take(currentConcurrency)
-                .ToList();
-            RecordObservedDataCenterConcurrency(batch.Count);
-
-            var before = _marketSource.GetMetrics();
-            var tasks = batch.Select(dcGroup => FetchDataCenterAsync(
-                dcGroup.DataCenter,
-                dcGroup.ItemIds,
-                progress,
-                ct));
-            fetched += (await Task.WhenAll(tasks)).Sum();
-
-            var after = _marketSource.GetMetrics();
-            var pressure = (after.RateLimit429Count - before.RateLimit429Count) +
-                (after.GatewayTimeout504Count - before.GatewayTimeout504Count) +
-                (after.TimeoutCount - before.TimeoutCount) +
-                (after.FinalMissingItemCount - before.FinalMissingItemCount);
-            if (pressure > 0 && currentConcurrency > 1)
-            {
-                currentConcurrency--;
-                Interlocked.Increment(ref _dataCenterConcurrencyReductions);
-            }
-            else if (pressure == 0 && currentConcurrency < _regionDataCenterConcurrency)
-            {
-                currentConcurrency++;
-                Interlocked.Increment(ref _dataCenterConcurrencyIncreases);
-            }
-
-            index += batch.Count;
+            _cache.Remove((request.itemId, request.dataCenter));
         }
 
-        return fetched;
-    }
-
-    private int GetDataCenterOrderRank(string dataCenter)
-    {
-        return _dataCenterOrder switch
-        {
-            DataCenterOrderMode.Alphabetical => dataCenter.ToUpperInvariant() switch
-            {
-                "AETHER" => 0,
-                "CRYSTAL" => 1,
-                "DYNAMIS" => 2,
-                "PRIMAL" => 3,
-                _ => 4
-            },
-            DataCenterOrderMode.SlowFirst => dataCenter.ToUpperInvariant() switch
-            {
-                "DYNAMIS" => 0,
-                "CRYSTAL" => 1,
-                "PRIMAL" => 2,
-                "AETHER" => 3,
-                _ => 4
-            },
-            DataCenterOrderMode.FastFirst => dataCenter.ToUpperInvariant() switch
-            {
-                "AETHER" => 0,
-                "PRIMAL" => 1,
-                "CRYSTAL" => 2,
-                "DYNAMIS" => 3,
-                _ => 4
-            },
-            DataCenterOrderMode.Paired => dataCenter.ToUpperInvariant() switch
-            {
-                "DYNAMIS" => 0,
-                "AETHER" => 1,
-                "CRYSTAL" => 2,
-                "PRIMAL" => 3,
-                _ => 4
-            },
-            _ => dataCenter.ToUpperInvariant() switch
-            {
-                "AETHER" => 0,
-                "PRIMAL" => 1,
-                "CRYSTAL" => 2,
-                "DYNAMIS" => 3,
-                _ => 4
-            }
-        };
-    }
-
-    private void RecordObservedDataCenterConcurrency(int value)
-    {
-        int currentMin;
-        do
-        {
-            currentMin = Volatile.Read(ref _minimumObservedDataCenterConcurrency);
-            if (value >= currentMin)
-            {
-                break;
-            }
-        }
-        while (Interlocked.CompareExchange(
-            ref _minimumObservedDataCenterConcurrency,
-            value,
-            currentMin) != currentMin);
-
-        int currentMax;
-        do
-        {
-            currentMax = Volatile.Read(ref _maximumObservedDataCenterConcurrency);
-            if (value <= currentMax)
-            {
-                break;
-            }
-        }
-        while (Interlocked.CompareExchange(
-            ref _maximumObservedDataCenterConcurrency,
-            value,
-            currentMax) != currentMax);
-    }
-
-    private async Task<int> FetchDataCenterAsync(
-        string dataCenter,
-        IReadOnlyList<int> itemIds,
-        IProgress<string>? progress,
-        CancellationToken ct)
-    {
-        progress?.Report($"Fetching {itemIds.Count} items from {dataCenter}...");
-        Interlocked.Increment(ref _sourceFetchRequests);
-        Interlocked.Add(ref _sourceFetchItems, itemIds.Count);
-
-        var responses = await _marketSource.GetMarketDataBulkAsync(dataCenter, itemIds, ct);
-        foreach (var (itemId, response) in responses)
-        {
-            _cache[(itemId, dataCenter)] = ConvertResponse(itemId, dataCenter, response, DateTimeOffset.UtcNow);
-        }
-
-        return responses.Count;
+        return await EnsurePopulatedAsync(requests, TimeSpan.Zero, progress, ct);
     }
 
     public void Seed(
@@ -1721,16 +716,7 @@ internal sealed class BenchmarkMarketCache : IMarketCacheService
             SourceFetchRequests,
             SourceFetchItems,
             _cache.Count,
-            FetchElapsed,
-            _regionDataCenterConcurrency,
-            _adaptiveDataCenterConcurrency,
-            _dataCenterOrder.ToString(),
-            Volatile.Read(ref _minimumObservedDataCenterConcurrency) == int.MaxValue
-                ? 0
-                : Volatile.Read(ref _minimumObservedDataCenterConcurrency),
-            Volatile.Read(ref _maximumObservedDataCenterConcurrency),
-            Volatile.Read(ref _dataCenterConcurrencyReductions),
-            Volatile.Read(ref _dataCenterConcurrencyIncreases));
+            FetchElapsed);
     }
 
     private static bool IsStale(CachedMarketData data, TimeSpan? maxAge)
@@ -1777,13 +763,6 @@ internal sealed class BenchmarkMarketCache : IMarketCacheService
 }
 
 internal sealed record BenchmarkRunResult(
-    string ToolVersion,
-    string RepoRoot,
-    string Branch,
-    string Commit,
-    bool Dirty,
-    string DirtyState,
-    string CommandLine,
     DateTimeOffset StartedAtUtc,
     DateTimeOffset CompletedAtUtc,
     string PlanPath,
@@ -1803,7 +782,6 @@ internal sealed record BenchmarkRunResult(
     IReadOnlyList<BenchmarkMemorySample> MemorySamples,
     IReadOnlyList<BenchmarkProgressEvent> ProgressEvents,
     BenchmarkCacheResult Cache,
-    BenchmarkFetchMetrics Fetch,
     BenchmarkShapeMetrics Shape,
     BenchmarkPayloadMetrics Payload,
     BenchmarkRetentionMetrics Retention,
@@ -1839,74 +817,7 @@ internal sealed record BenchmarkCacheResult(
     int SourceFetchRequests,
     int SourceFetchItems,
     int StoredEntries,
-    TimeSpan FetchElapsed,
-    int InitialRegionDataCenterConcurrency,
-    bool AdaptiveDataCenterConcurrency,
-    string DataCenterOrder,
-    int MinimumObservedDataCenterConcurrency,
-    int MaximumObservedDataCenterConcurrency,
-    int DataCenterConcurrencyReductions,
-    int DataCenterConcurrencyIncreases);
-
-internal sealed record BenchmarkFetchMetrics(
-    int RegionDataCenterConcurrency,
-    int PerDataCenterChunkConcurrency,
-    int InitialChunkSize,
-    int MinChunkSize,
-    bool RespectRetryAfter,
-    int RequestedItems,
-    int FetchedItems,
-    int ChunkRequests,
-    int RetryCount,
-    int SplitCount,
-    int RateLimit429Count,
-    int GatewayTimeout504Count,
-    int TimeoutCount,
-    int MissingInResponseCount,
-    int FinalMissingItemCount,
-    int RetryAfterCount,
-    TimeSpan RetryAfterDelay,
-    TimeSpan BackoffDelay,
-    IReadOnlyList<BenchmarkDataCenterFetchMetrics> DataCenters)
-{
-    public static BenchmarkFetchMetrics Empty { get; } = new(
-        RegionDataCenterConcurrency: 1,
-        PerDataCenterChunkConcurrency: 0,
-        InitialChunkSize: 0,
-        MinChunkSize: 0,
-        RespectRetryAfter: false,
-        RequestedItems: 0,
-        FetchedItems: 0,
-        ChunkRequests: 0,
-        RetryCount: 0,
-        SplitCount: 0,
-        RateLimit429Count: 0,
-        GatewayTimeout504Count: 0,
-        TimeoutCount: 0,
-        MissingInResponseCount: 0,
-        FinalMissingItemCount: 0,
-        RetryAfterCount: 0,
-        RetryAfterDelay: TimeSpan.Zero,
-        BackoffDelay: TimeSpan.Zero,
-        DataCenters: Array.Empty<BenchmarkDataCenterFetchMetrics>());
-}
-
-internal sealed record BenchmarkDataCenterFetchMetrics(
-    string DataCenter,
-    TimeSpan Elapsed,
-    int RequestedItems,
-    int FetchedItems,
-    int ChunkRequests,
-    int RetryCount,
-    int SplitCount,
-    int RateLimit429Count,
-    int GatewayTimeout504Count,
-    int TimeoutCount,
-    int MissingInResponseCount,
-    int FinalMissingItems,
-    int RetryAfterCount,
-    TimeSpan RetryAfterDelay,
-    TimeSpan BackoffDelay);
+    TimeSpan FetchElapsed);
 
 internal sealed record BenchmarkRecommendedItem(
     int ItemId,
@@ -1950,9 +861,6 @@ internal sealed record BenchmarkShapeMetrics(
 
 internal sealed record BenchmarkPayloadMetrics(
     long MarketIntelligenceJsonBytes,
-    long CompactSummaryJsonBytes,
-    long ColdDetailJsonBytes,
-    long SourceFactJsonBytes,
     long LegacyPlansJsonBytes,
     long LegacyAnalysesJsonBytes,
     long RetainedDetailEstimateBytes)
@@ -1971,51 +879,14 @@ internal sealed record BenchmarkPayloadMetrics(
         var intelligenceJsonBytes = JsonSerializer
             .SerializeToUtf8Bytes(StoredMarketIntelligence.FromMarketIntelligence(intelligence), ProbeJson.Options)
             .LongLength;
-        var projection = new MarketIntelligenceProjectionService().Project(
-            new MarketIntelligenceProjectionRequest
-            {
-                ExecutionResult = result,
-                PublicationContext = new MarketIntelligencePublicationContext(
-                    MarketIntelligencePublicationContextKind.Known,
-                    result.Evidence.Scope,
-                    result.Evidence.SelectedDataCenter,
-                    result.Evidence.SelectedRegion,
-                    result.Evidence.DataCenters,
-                    new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
-                    null,
-                    false,
-                    RecommendationMode.MinimizeTotalCost,
-                    MarketAcquisitionLens.MinimumUpfrontCost,
-                    null,
-                    null,
-                    null,
-                    result.Evidence.LoadedAtUtc),
-                AnalyzerVersion = "market-analysis-probe",
-                StartedAtUtc = result.Evidence.LoadedAtUtc,
-                CompletedAtUtc = DateTime.UtcNow,
-                MarketFetchDuration = TimeSpan.Zero,
-                NetworkRequestCount = result.Evidence.FetchedCount
-            });
-        var compactSummaryJsonBytes = JsonSerializer
-            .SerializeToUtf8Bytes(projection.Publication.Summary, ProbeJson.Options)
-            .LongLength;
-        var coldDetailJsonBytes = JsonSerializer
-            .SerializeToUtf8Bytes(projection.Publication.Details, ProbeJson.Options)
-            .LongLength;
-        var sourceFactJsonBytes = JsonSerializer
-            .SerializeToUtf8Bytes(projection.SourceFacts, ProbeJson.Options)
-            .LongLength;
         var legacyPlansJsonBytes = JsonSerializer.SerializeToUtf8Bytes(result.ShoppingPlans, ProbeJson.Options).LongLength;
         var legacyAnalysesJsonBytes = JsonSerializer.SerializeToUtf8Bytes(result.Analyses, ProbeJson.Options).LongLength;
 
         return new BenchmarkPayloadMetrics(
             intelligenceJsonBytes,
-            compactSummaryJsonBytes,
-            coldDetailJsonBytes,
-            sourceFactJsonBytes,
             legacyPlansJsonBytes,
             legacyAnalysesJsonBytes,
-            coldDetailJsonBytes);
+            legacyPlansJsonBytes + legacyAnalysesJsonBytes);
     }
 }
 

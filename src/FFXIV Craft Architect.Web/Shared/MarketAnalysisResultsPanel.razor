@@ -23,7 +23,6 @@
     {
         <MarketAnalysisListPanel ShoppingPlans="ShoppingPlans"
                                  MarketItemAnalyses="MarketItemAnalyses"
-                                 MarketIntelligencePublicationId="MarketIntelligencePublicationId"
                                  CurrentLens="CurrentLens"
                                  CurrentSort="CurrentSort"
                                  SortColumn="SortColumn"
@@ -73,7 +72,6 @@
     [Parameter] public List<MaterialAggregate> BuyItems { get; set; } = new();
     [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
     [Parameter] public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses { get; set; } = Array.Empty<MarketItemAnalysis>();
-    [Parameter] public Guid? MarketIntelligencePublicationId { get; set; }
     [Parameter] public MarketAcquisitionLens CurrentLens { get; set; }
     [Parameter] public MarketSortOption CurrentSort { get; set; }
     [Parameter] public MarketAnalysisGridSortColumn? SortColumn { get; set; }

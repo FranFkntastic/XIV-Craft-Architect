@@ -92,40 +92,24 @@ public sealed class PlanSessionLoadService
                 ProjectItems: projectItems,
                 BuildMarketAnalysisCandidates: buildMarketAnalysisCandidates));
         warning = AppendWarning(warning, marketRestore.Warning);
-        var marketIntelligenceSummary = DeserializeMarketIntelligenceSummary(
-            storedPlan.MarketIntelligenceSummaryJson,
-            out var marketIntelligenceSummaryWarning);
-        warning = AppendWarning(warning, marketIntelligenceSummaryWarning);
-        if (marketIntelligenceSummary != null &&
-            storedPlan.ActiveMarketIntelligencePublicationId is { } activePublicationId &&
-            activePublicationId != Guid.Empty &&
-            marketIntelligenceSummary.PublicationId != activePublicationId)
-        {
-            warning = AppendWarning(
-                warning,
-                "Stored market intelligence summary does not match the active publication reference.");
-            marketIntelligenceSummary = null;
-        }
 
-        var publishedScope = ResolvePublishedScope(storedPlan, marketRestore, marketIntelligenceSummary);
+        var publishedScope = marketRestore.MarketItemAnalyses.Count > 0 ||
+                             marketRestore.MarketIntelligence?.HasUnavailableMarketItems == true
+            ? marketRestore.MarketIntelligence?.HasCompletePublicationContext == true
+                ? ToPublishedScope(marketRestore.MarketIntelligence.PublicationContext)
+                : DeserializeOrNull<PublishedMarketAnalysisScopeSnapshot>(storedPlan.MarketAnalysisScopeSnapshotJson)
+            : null;
         var marketIntelligence = ApplyPublishedScopeFallback(
             marketRestore.MarketIntelligence,
             publishedScope);
-        var marketItemAnalyses = marketRestore.MarketItemAnalyses.Count > 0
-            ? marketRestore.MarketItemAnalyses
-            : MarketIntelligenceSummaryHydrator.HydrateMarketItemAnalyses(marketIntelligenceSummary);
-        var recommendations = marketRestore.Recommendations.Count > 0
-            ? marketRestore.Recommendations
-            : MarketIntelligenceSummaryHydrator.HydrateShoppingPlans(marketIntelligenceSummary);
 
         return new PlanSessionLoadResult(
             storedPlan,
             plan,
             projectItems,
-            marketItemAnalyses,
-            recommendations,
+            marketRestore.MarketItemAnalyses,
+            marketRestore.Recommendations,
             marketIntelligence,
-            marketIntelligenceSummary,
             marketRestore.RecipeBasis,
             publishedScope,
             warning);
@@ -144,33 +128,6 @@ public sealed class PlanSessionLoadService
         }
 
         return $"{existingWarning} {newWarning}";
-    }
-
-    private static PublishedMarketAnalysisScopeSnapshot? ResolvePublishedScope(
-        StoredPlan storedPlan,
-        StoredMarketIntelligenceRestoreResult marketRestore,
-        MarketIntelligencePublicationSummary? marketIntelligenceSummary)
-    {
-        var hasMarketPayload = marketRestore.MarketItemAnalyses.Count > 0 ||
-                               marketRestore.MarketIntelligence?.HasUnavailableMarketItems == true ||
-                               marketIntelligenceSummary?.Items.Count > 0 ||
-                               marketIntelligenceSummary?.UnavailableMarketItems.Count > 0;
-        if (!hasMarketPayload)
-        {
-            return null;
-        }
-
-        if (marketRestore.MarketIntelligence?.HasCompletePublicationContext == true)
-        {
-            return ToPublishedScope(marketRestore.MarketIntelligence.PublicationContext);
-        }
-
-        if (marketIntelligenceSummary?.PublicationContext.Kind == MarketIntelligencePublicationContextKind.Known)
-        {
-            return ToPublishedScope(marketIntelligenceSummary.PublicationContext);
-        }
-
-        return DeserializeOrNull<PublishedMarketAnalysisScopeSnapshot>(storedPlan.MarketAnalysisScopeSnapshotJson);
     }
 
     private static void RestoreParentLinks(CraftingPlan? plan)
@@ -211,26 +168,6 @@ public sealed class PlanSessionLoadService
         {
             return default;
         }
-    }
-
-    private static MarketIntelligencePublicationSummary? DeserializeMarketIntelligenceSummary(
-        string? json,
-        out string? warning)
-    {
-        warning = null;
-        var summary = DeserializeOrNull<MarketIntelligencePublicationSummary>(json);
-        if (summary == null)
-        {
-            return null;
-        }
-
-        if (summary.SchemaVersion > MarketIntelligencePublicationSummary.CurrentSchemaVersion)
-        {
-            warning = "Stored market intelligence summary was saved with a newer schema version.";
-            return null;
-        }
-
-        return summary;
     }
 
     private static PublishedMarketAnalysisScopeSnapshot? ToPublishedScope(
@@ -308,7 +245,6 @@ public sealed record PlanSessionLoadResult(
     IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses,
     IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
     MarketIntelligence? MarketIntelligence,
-    MarketIntelligencePublicationSummary? MarketIntelligenceSummary,
     StoredRecipeOperationSnapshot? MarketAnalysisRecipeBasis,
     PublishedMarketAnalysisScopeSnapshot? PublishedMarketAnalysisScope,
     string? Warning);

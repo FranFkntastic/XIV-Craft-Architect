@@ -18,7 +18,6 @@
 @inject RecipeCalculationService RecipeService
 @inject UniversalisService UniversalisService
 @inject RecipePlannerCommandService RecipePlannerCommandService
-@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject MarketAnalysisDiagnosticDumpService MarketAnalysisDiagnosticDumpService
 @inject ILogger<MainLayout> Logger
 @inject Microsoft.AspNetCore.Components.WebAssembly.Hosting.IWebAssemblyHostEnvironment HostEnvironment
@@ -89,8 +88,7 @@
                 </MudButton>
                 <MudButton OnClick="@(() => NavigateTo("market"))"
                            Color="@GetTabColor("market")"
-                           Variant="@GetTabVariant("market")"
-                           data-benchmark-id="@BenchmarkHook("main-nav-market-analysis")">
+                           Variant="@GetTabVariant("market")">
                     Market Analysis
                 </MudButton>
                 <MudButton OnClick="@(() => NavigateTo("acquisition"))"
@@ -130,13 +128,10 @@
                      Color="Color.Secondary">
                 <ActivatorContent>
                     <MudButton Style="color: #cccccc; text-transform: none;"
-                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown"
-                               data-benchmark-id="@BenchmarkHook("main-import-menu")">Import</MudButton>
+                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Import</MudButton>
                 </ActivatorContent>
                 <ChildContent>
-                    <MudMenuItem OnClick="() => ShowImportDialog(0)"
-                                 Icon="@Icons.Material.Filled.FolderOpen"
-                                 data-benchmark-id="@BenchmarkHook("main-import-native-plan")">
+                    <MudMenuItem OnClick="() => ShowImportDialog(0)" Icon="@Icons.Material.Filled.FolderOpen">
                         From Craft Architect (Native)...
                     </MudMenuItem>
                     <MudMenuItem OnClick="() => ShowImportDialog(1)" Icon="@Icons.Material.Filled.ContentPaste">
@@ -253,7 +248,6 @@
     private bool IsDebugToolsAvailable => IsDevelopment || AppState.SecretDebugToolsEnabled;
     private bool IsTradeMode => IsTradeRoute(NavigationManager.Uri);
     private bool CanDumpSelectedMarketAnalysisItem => AppState.MarketItemAnalyses.Any();
-    private string? BenchmarkHook(string id) => AppState.SecretDebugToolsEnabled ? id : null;
     
     private readonly MudTheme _theme = AppTheme.CreateTheme();
 
@@ -658,7 +652,7 @@
 
         try
         {
-            var dump = await MarketAnalysisDiagnosticDumpService.BuildDumpAsync(
+            var dump = MarketAnalysisDiagnosticDumpService.BuildDump(
                 AppState.MarketItemAnalyses,
                 AppState.ShoppingPlans,
                 new MarketAnalysisDiagnosticDumpContext(
@@ -672,8 +666,7 @@
                     AppState.MarketAnalysisGridSortDescending,
                     AppState.MarketAnalysisWorldGridSortColumn,
                     AppState.MarketAnalysisWorldGridSortDescending,
-                    AppState.SelectedMarketAnalysisItemId,
-                    AppState.MarketIntelligenceSummary?.PublicationId));
+                    AppState.SelectedMarketAnalysisItemId));
             if (dump == null)
             {
                 Snackbar.Add("No market analysis to dump", Severity.Warning);
@@ -779,9 +772,21 @@
 
     private async Task OnCopyPlainText()
     {
-        var materials = CreateMaterialsForQuickCopy();
-        
-        if (materials.Count == 0)
+        var materials = AppState.CurrentPlan?.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList();
+
+        if ((materials == null || materials.Count == 0) && AppState.ShoppingItems.Any())
+        {
+            // Use shopping items instead
+            materials = AppState.ShoppingItems.Select(s => new Core.Models.MaterialAggregate
+            {
+                ItemId = s.Id,
+                Name = s.Name,
+                TotalQuantity = s.Quantity,
+                UnitPrice = 0
+            }).ToList();
+        }
+
+        if (materials == null || materials.Count == 0)
         {
             Snackbar.Add("Nothing to copy. Add items to your shopping list first.", Severity.Warning);
             return;
@@ -801,7 +806,20 @@
 
     private async Task OnCopyCsv()
     {
-        var materials = CreateMaterialsForQuickCopy();
+        var materials = AppState.CurrentPlan?.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList()
+            ?? new List<Core.Models.MaterialAggregate>();
+
+        if (materials.Count == 0 && AppState.ShoppingItems.Any())
+        {
+            // Convert shopping items to material format
+            materials = AppState.ShoppingItems.Select(s => new Core.Models.MaterialAggregate
+            {
+                ItemId = s.Id,
+                Name = s.Name,
+                TotalQuantity = s.Quantity,
+                UnitPrice = 0
+            }).ToList();
+        }
         
         if (materials.Count == 0)
         {
@@ -818,45 +836,6 @@
         }
         
         await CopyTextToClipboardAsync(csv.ToString(), "CSV copied to clipboard!");
-    }
-
-    private List<Core.Models.MaterialAggregate> CreateMaterialsForQuickCopy()
-    {
-        var planMaterials = RecipeLayerWorkflowService
-            .BuildActiveProcurementItems(AppState.CurrentPlan)
-            .Where(item => item.TotalQuantity > 0)
-            .Select(CloneMaterial)
-            .ToList();
-
-        return planMaterials.Count > 0
-            ? planMaterials
-            : CreateMaterialsFromShoppingItems();
-    }
-
-    private static Core.Models.MaterialAggregate CloneMaterial(Core.Models.MaterialAggregate item)
-    {
-        return new Core.Models.MaterialAggregate
-        {
-            ItemId = item.ItemId,
-            Name = item.Name,
-            TotalQuantity = item.TotalQuantity,
-            UnitPrice = item.UnitPrice,
-            Sources = item.Sources.ToList()
-        };
-    }
-
-    private List<Core.Models.MaterialAggregate> CreateMaterialsFromShoppingItems()
-    {
-        return AppState.ShoppingItems
-            .Where(item => item.Quantity > 0)
-            .Select(item => new Core.Models.MaterialAggregate
-            {
-                ItemId = item.Id,
-                Name = item.Name,
-                TotalQuantity = item.Quantity,
-                UnitPrice = 0
-            })
-            .ToList();
     }
     
     private async Task CopyTextToClipboardAsync(string text, string successMessage)

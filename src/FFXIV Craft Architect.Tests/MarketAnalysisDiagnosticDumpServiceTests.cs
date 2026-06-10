@@ -52,88 +52,17 @@ public class MarketAnalysisDiagnosticDumpServiceTests
         var dump = service.BuildDump(
             [Analysis(100, "First")],
             [],
-            Context(selectedItemId: 100))! with
-        {
-            DetailAvailability =
-            [
-                new MarketAnalysisDiagnosticDetailAvailability(
-                    "Aether",
-                    "Siren",
-                    MarketAnalysisWorldDetailHydrationStatus.Pruned,
-                    "Listing detail was pruned from local storage.",
-                    0,
-                    false)
-            ]
-        };
+            Context(selectedItemId: 100));
 
-        var json = service.Serialize(dump);
+        var json = service.Serialize(dump!);
 
         Assert.Contains(Environment.NewLine, json);
         Assert.Contains("\"lens\": \"BulkValue\"", json);
-        Assert.Contains("\"status\": \"Pruned\"", json);
         using var document = JsonDocument.Parse(json);
         Assert.Equal("market-analysis-diagnostic-dump", document.RootElement.GetProperty("tool").GetString());
     }
 
-    [Fact]
-    public async Task BuildDumpAsync_WhenColdDetailExists_HydratesSelectedAnalysisWorld()
-    {
-        var publicationId = Guid.NewGuid();
-        var hydration = new StubDetailHydrationService(
-            MarketAnalysisWorldDetailHydrationResult.Loaded(
-                [
-                    new AnalyzedMarketListing
-                    {
-                        SortIndex = 0,
-                        Quantity = 3,
-                        PricePerUnit = 120,
-                        RetainerName = "Cold Seller"
-                    }
-                ],
-                [],
-                fromEmbeddedHotState: false));
-        var service = new MarketAnalysisDiagnosticDumpService(hydration);
-
-        var dump = await service.BuildDumpAsync(
-            [Analysis(100, "First", includeListings: false)],
-            [],
-            Context(selectedItemId: 100, publicationId));
-
-        Assert.NotNull(dump);
-        Assert.Single(hydration.Requests);
-        Assert.Equal(publicationId, hydration.Requests[0].PublicationId);
-        Assert.Equal(100, hydration.Requests[0].ItemId);
-        Assert.Equal("Cold Seller", Assert.Single(Assert.Single(dump.Analysis.Worlds).Listings).RetainerName);
-        var detailAvailability = Assert.Single(dump.DetailAvailability);
-        Assert.Equal(MarketAnalysisWorldDetailHydrationStatus.Loaded, detailAvailability.Status);
-        Assert.Equal(1, detailAvailability.ListingCount);
-        Assert.False(detailAvailability.FromEmbeddedHotState);
-    }
-
-    [Fact]
-    public async Task BuildDumpAsync_WhenDetailMissing_AnnotatesUnavailableWorldWithoutDroppingSummary()
-    {
-        var hydration = new StubDetailHydrationService(
-            MarketAnalysisWorldDetailHydrationResult.Unavailable(
-                MarketIntelligenceDetailAvailability.Pruned,
-                "Listing detail was pruned from local storage."));
-        var service = new MarketAnalysisDiagnosticDumpService(hydration);
-
-        var dump = await service.BuildDumpAsync(
-            [Analysis(100, "First", includeListings: false)],
-            [],
-            Context(selectedItemId: 100, Guid.NewGuid()));
-
-        Assert.NotNull(dump);
-        Assert.Empty(Assert.Single(dump.Analysis.Worlds).Listings);
-        var detailAvailability = Assert.Single(dump.DetailAvailability);
-        Assert.Equal(MarketAnalysisWorldDetailHydrationStatus.Pruned, detailAvailability.Status);
-        Assert.Contains("pruned", detailAvailability.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static MarketAnalysisDiagnosticDumpContext Context(
-        int? selectedItemId,
-        Guid? publicationId = null)
+    private static MarketAnalysisDiagnosticDumpContext Context(int? selectedItemId)
     {
         return new MarketAnalysisDiagnosticDumpContext(
             PlanName: "Test Plan",
@@ -146,14 +75,10 @@ public class MarketAnalysisDiagnosticDumpServiceTests
             GridSortDescending: true,
             WorldSortColumn: MarketAnalysisWorldGridSortColumn.PriceValue,
             WorldSortDescending: false,
-            SelectedItemId: selectedItemId,
-            MarketIntelligencePublicationId: publicationId);
+            SelectedItemId: selectedItemId);
     }
 
-    private static MarketItemAnalysis Analysis(
-        int itemId,
-        string name,
-        bool includeListings = true)
+    private static MarketItemAnalysis Analysis(int itemId, string name)
     {
         return new MarketItemAnalysis
         {
@@ -173,8 +98,7 @@ public class MarketAnalysisDiagnosticDumpServiceTests
                     DataCenter = "Aether",
                     WorldName = "Siren",
                     ScopeCompetitiveQuantity = 10,
-                    Listings = includeListings
-                        ?
+                    Listings =
                     [
                         new AnalyzedMarketListing
                         {
@@ -186,7 +110,6 @@ public class MarketAnalysisDiagnosticDumpServiceTests
                             IsScopeCompetitive = true
                         }
                     ]
-                        : []
                 }
             ]
         };
@@ -200,27 +123,5 @@ public class MarketAnalysisDiagnosticDumpServiceTests
             Name = $"Item {itemId}",
             QuantityNeeded = 10
         };
-    }
-
-    private sealed class StubDetailHydrationService : IMarketAnalysisDetailHydrationService
-    {
-        private readonly MarketAnalysisWorldDetailHydrationResult _result;
-
-        public StubDetailHydrationService(MarketAnalysisWorldDetailHydrationResult result)
-        {
-            _result = result;
-        }
-
-        public List<(Guid? PublicationId, int ItemId, string DataCenter, string WorldName)> Requests { get; } = [];
-
-        public Task<MarketAnalysisWorldDetailHydrationResult> LoadWorldDetailAsync(
-            Guid? publicationId,
-            int itemId,
-            WorldMarketAnalysis world,
-            CancellationToken cancellationToken = default)
-        {
-            Requests.Add((publicationId, itemId, world.DataCenter, world.WorldName));
-            return Task.FromResult(_result);
-        }
     }
 }
