@@ -18,7 +18,9 @@
 @inject RecipeCalculationService RecipeService
 @inject UniversalisService UniversalisService
 @inject RecipePlannerCommandService RecipePlannerCommandService
+@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject MarketAnalysisDiagnosticDumpService MarketAnalysisDiagnosticDumpService
+@inject RecipeBuildDiagnosticService RecipeBuildDiagnosticService
 @inject ILogger<MainLayout> Logger
 @inject Microsoft.AspNetCore.Components.WebAssembly.Hosting.IWebAssemblyHostEnvironment HostEnvironment
 @implements IDisposable
@@ -88,7 +90,8 @@
                 </MudButton>
                 <MudButton OnClick="@(() => NavigateTo("market"))"
                            Color="@GetTabColor("market")"
-                           Variant="@GetTabVariant("market")">
+                           Variant="@GetTabVariant("market")"
+                           data-benchmark-id="@BenchmarkHook("main-nav-market-analysis")">
                     Market Analysis
                 </MudButton>
                 <MudButton OnClick="@(() => NavigateTo("acquisition"))"
@@ -128,10 +131,13 @@
                      Color="Color.Secondary">
                 <ActivatorContent>
                     <MudButton Style="color: #cccccc; text-transform: none;"
-                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Import</MudButton>
+                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown"
+                               data-benchmark-id="@BenchmarkHook("main-import-menu")">Import</MudButton>
                 </ActivatorContent>
                 <ChildContent>
-                    <MudMenuItem OnClick="() => ShowImportDialog(0)" Icon="@Icons.Material.Filled.FolderOpen">
+                    <MudMenuItem OnClick="() => ShowImportDialog(0)"
+                                 Icon="@Icons.Material.Filled.FolderOpen"
+                                 data-benchmark-id="@BenchmarkHook("main-import-native-plan")">
                         From Craft Architect (Native)...
                     </MudMenuItem>
                     <MudMenuItem OnClick="() => ShowImportDialog(1)" Icon="@Icons.Material.Filled.ContentPaste">
@@ -214,6 +220,11 @@
                                          Style="padding-left: 32px;">
                                 Dump Selected Market Analysis Item
                             </MudMenuItem>
+                            <MudMenuItem OnClick="OnBuildRecipePlanWithDiagnostics"
+                                         Icon="@Icons.Material.Filled.Assignment"
+                                         Style="padding-left: 32px;">
+                                Build Recipe Plan Diagnostic Dump
+                            </MudMenuItem>
                         }
                     }
                 </ChildContent>
@@ -248,6 +259,7 @@
     private bool IsDebugToolsAvailable => IsDevelopment || AppState.SecretDebugToolsEnabled;
     private bool IsTradeMode => IsTradeRoute(NavigationManager.Uri);
     private bool CanDumpSelectedMarketAnalysisItem => AppState.MarketItemAnalyses.Any();
+    private string? BenchmarkHook(string id) => AppState.SecretDebugToolsEnabled ? id : null;
     
     private readonly MudTheme _theme = AppTheme.CreateTheme();
 
@@ -699,6 +711,40 @@
         return $"market-analysis-{dump.Selection.ExportedItemId}-{itemName}-{timestamp}.json";
     }
 
+    private async Task OnBuildRecipePlanWithDiagnostics()
+    {
+        if (!IsDebugToolsAvailable)
+        {
+            Snackbar.Add("Diagnostic builds are not available.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var dump = await RecipeBuildDiagnosticService.BuildWithDiagnosticsAsync(CancellationToken.None);
+            var json = RecipeBuildDiagnosticService.Serialize(dump);
+            var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+            using var stream = new MemoryStream(bytes);
+            using var streamRef = new DotNetStreamReference(stream);
+            var fileName = RecipeBuildDiagnosticService.CreateFileName(
+                dump.Context.CurrentPlanName,
+                dump.ExportedAtUtc);
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
+            Snackbar.Add($"Downloaded {fileName}", dump.Status switch
+            {
+                RecipeBuildDiagnosticStatus.Succeeded => Severity.Success,
+                RecipeBuildDiagnosticStatus.TimedOut => Severity.Warning,
+                RecipeBuildDiagnosticStatus.Canceled => Severity.Info,
+                RecipeBuildDiagnosticStatus.NoProjectItems => Severity.Info,
+                _ => Severity.Error
+            });
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to run diagnostic build: {ex.Message}", Severity.Error);
+        }
+    }
+
     private async Task LoadNativePlanAsync(
         CraftingPlan plan,
         string successMessage,
@@ -772,21 +818,9 @@
 
     private async Task OnCopyPlainText()
     {
-        var materials = AppState.CurrentPlan?.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList();
+        var materials = CreateMaterialsForQuickCopy();
 
-        if ((materials == null || materials.Count == 0) && AppState.ShoppingItems.Any())
-        {
-            // Use shopping items instead
-            materials = AppState.ShoppingItems.Select(s => new Core.Models.MaterialAggregate
-            {
-                ItemId = s.Id,
-                Name = s.Name,
-                TotalQuantity = s.Quantity,
-                UnitPrice = 0
-            }).ToList();
-        }
-
-        if (materials == null || materials.Count == 0)
+        if (materials.Count == 0)
         {
             Snackbar.Add("Nothing to copy. Add items to your shopping list first.", Severity.Warning);
             return;
@@ -806,21 +840,8 @@
 
     private async Task OnCopyCsv()
     {
-        var materials = AppState.CurrentPlan?.AggregatedMaterials.Where(m => m.TotalQuantity > 0).ToList()
-            ?? new List<Core.Models.MaterialAggregate>();
+        var materials = CreateMaterialsForQuickCopy();
 
-        if (materials.Count == 0 && AppState.ShoppingItems.Any())
-        {
-            // Convert shopping items to material format
-            materials = AppState.ShoppingItems.Select(s => new Core.Models.MaterialAggregate
-            {
-                ItemId = s.Id,
-                Name = s.Name,
-                TotalQuantity = s.Quantity,
-                UnitPrice = 0
-            }).ToList();
-        }
-        
         if (materials.Count == 0)
         {
             Snackbar.Add("Nothing to copy. Add items to your shopping list first.", Severity.Warning);
@@ -834,8 +855,46 @@
         {
             csv.AppendLine($"\"{m.Name}\",{m.TotalQuantity},{m.UnitPrice},{m.TotalCost}");
         }
-        
+
         await CopyTextToClipboardAsync(csv.ToString(), "CSV copied to clipboard!");
+    }
+
+    private List<Core.Models.MaterialAggregate> CreateMaterialsForQuickCopy()
+    {
+        var planMaterials = RecipeLayerWorkflowService
+            .BuildActiveProcurementItems(AppState.CurrentPlan)
+            .Where(item => item.TotalQuantity > 0)
+            .Select(CloneMaterial)
+            .ToList();
+
+        return planMaterials.Count > 0
+            ? planMaterials
+            : CreateMaterialsFromShoppingItems();
+    }
+
+    private static Core.Models.MaterialAggregate CloneMaterial(Core.Models.MaterialAggregate item)
+    {
+        return new Core.Models.MaterialAggregate
+        {
+            ItemId = item.ItemId,
+            Name = item.Name,
+            TotalQuantity = item.TotalQuantity,
+            UnitPrice = item.UnitPrice,
+            Sources = item.Sources.ToList()
+        };
+    }
+
+    private List<Core.Models.MaterialAggregate> CreateMaterialsFromShoppingItems()
+    {
+        return AppState.ShoppingItems
+            .Select(item => new Core.Models.MaterialAggregate
+            {
+                ItemId = item.Id,
+                Name = item.Name,
+                TotalQuantity = item.Quantity,
+                UnitPrice = 0
+            })
+            .ToList();
     }
     
     private async Task CopyTextToClipboardAsync(string text, string successMessage)

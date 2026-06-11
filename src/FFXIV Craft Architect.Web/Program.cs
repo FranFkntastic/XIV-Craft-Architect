@@ -57,6 +57,8 @@ builder.Services.AddScoped<WebPlanPersistenceService>();
 builder.Services.AddScoped<StartupInitializationService>();
 builder.Services.AddScoped<CancellableOperationService>();
 builder.Services.AddScoped<RecipePlannerCommandService>();
+builder.Services.AddScoped<IRecipeBuildDiagnosticCommandRunner, RecipePlannerDiagnosticCommandRunner>();
+builder.Services.AddScoped<RecipeBuildDiagnosticService>();
 builder.Services.AddScoped<MarketAnalysisWorkflowService>();
 builder.Services.AddScoped<IMarketAnalysisAutoRunner, MarketAnalysisAutoRunner>();
 builder.Services.AddScoped<MarketAnalysisDiagnosticDumpService>();
