@@ -27,14 +27,14 @@ public sealed class RecipeBuildDiagnosticServiceTests
         var runner = new FakeDiagnosticCommandRunner
         {
             UsePublishGraceScenario = true,
-            DelayBeforePublish = TimeSpan.FromMilliseconds(35),
+            DelayBeforePublish = TimeSpan.FromMilliseconds(65),
             PublishDelay = TimeSpan.FromMilliseconds(75)
         };
         var service = new RecipeBuildDiagnosticService(
             appState,
             runner,
-            TimeSpan.FromMilliseconds(50),
-            TimeSpan.FromMilliseconds(125));
+            TimeSpan.FromMilliseconds(100),
+            TimeSpan.FromMilliseconds(150));
 
         var dump = await service.BuildWithDiagnosticsAsync(CancellationToken.None);
 
