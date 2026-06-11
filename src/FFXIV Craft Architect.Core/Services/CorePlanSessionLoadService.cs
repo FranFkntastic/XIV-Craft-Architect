@@ -123,53 +123,15 @@ public sealed class CorePlanSessionLoadService
                 projectItems,
                 BuildMarketAnalysisCandidates));
         warning = AppendWarning(warning, marketRestore.Warning);
-        var marketIntelligenceSummary = DeserializeMarketIntelligenceSummary(
-            storedPlan.MarketIntelligenceSummaryJson,
-            out var summaryWarning);
-        warning = AppendWarning(warning, summaryWarning);
-        if (marketIntelligenceSummary != null &&
-            storedPlan.ActiveMarketIntelligencePublicationId is { } activePublicationId &&
-            activePublicationId != Guid.Empty &&
-            marketIntelligenceSummary.PublicationId != activePublicationId)
-        {
-            warning = AppendWarning(
-                warning,
-                "Stored market intelligence summary does not match the active publication reference.");
-            marketIntelligenceSummary = null;
-        }
-
-        var marketItemAnalyses = marketRestore.MarketItemAnalyses.Count > 0
-            ? marketRestore.MarketItemAnalyses
-            : MarketIntelligenceSummaryHydrator.HydrateMarketItemAnalyses(marketIntelligenceSummary);
-        var recommendations = marketRestore.Recommendations.Count > 0
-            ? marketRestore.Recommendations
-            : MarketIntelligenceSummaryHydrator.HydrateShoppingPlans(marketIntelligenceSummary);
-        var unavailableMarketItemIds = marketRestore.UnavailableMarketItemIds.Count > 0
-            ? marketRestore.UnavailableMarketItemIds
-            : marketIntelligenceSummary?.UnavailableMarketItems.Select(item => item.ItemId).ToHashSet()
-              ?? new HashSet<int>();
-        var marketIntelligence = marketRestore.MarketIntelligence;
-        if (marketIntelligence == null &&
-            (marketItemAnalyses.Count > 0 || recommendations.Count > 0 || unavailableMarketItemIds.Count > 0) &&
-            marketIntelligenceSummary != null)
-        {
-            marketIntelligence = new MarketIntelligence(
-                marketIntelligenceSummary.PublicationId,
-                marketItemAnalyses,
-                recommendations,
-                marketIntelligenceSummary.UnavailableMarketItems,
-                marketIntelligenceSummary.PublicationContext,
-                marketRestore.RecipeBasis);
-        }
 
         return new CorePlanSessionLoadResult(
             storedPlan,
             plan,
             projectItems,
-            marketItemAnalyses,
-            recommendations,
-            unavailableMarketItemIds,
-            marketIntelligence,
+            marketRestore.MarketItemAnalyses,
+            marketRestore.Recommendations,
+            marketRestore.UnavailableMarketItemIds,
+            marketRestore.MarketIntelligence,
             marketRestore.RecipeBasis,
             CanLoad: true,
             warning);
@@ -216,43 +178,4 @@ public sealed class CorePlanSessionLoadService
             .Build(plan, snapshot: null)
             .ToMarketAnalysisMaterialAggregates();
     }
-
-    private static MarketIntelligencePublicationSummary? DeserializeMarketIntelligenceSummary(
-        string? json,
-        out string? warning)
-    {
-        warning = null;
-        if (string.IsNullOrWhiteSpace(json))
-        {
-            return null;
-        }
-
-        try
-        {
-            var summary = JsonSerializer.Deserialize<MarketIntelligencePublicationSummary>(json);
-            if (summary == null)
-            {
-                return null;
-            }
-
-            if (summary.SchemaVersion > MarketIntelligencePublicationSummary.CurrentSchemaVersion)
-            {
-                warning = "Stored market intelligence summary was saved with a newer schema version.";
-                return null;
-            }
-
-            return summary;
-        }
-        catch (JsonException ex)
-        {
-            warning = $"Stored market intelligence summary could not be deserialized: {ex.Message}";
-            return null;
-        }
-        catch (NotSupportedException ex)
-        {
-            warning = $"Stored market intelligence summary could not be deserialized: {ex.Message}";
-            return null;
-        }
-    }
-
 }

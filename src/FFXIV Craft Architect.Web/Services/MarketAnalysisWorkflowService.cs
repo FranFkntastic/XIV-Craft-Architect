@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
@@ -23,9 +21,6 @@ public sealed class MarketAnalysisWorkflowService
     private readonly WebPlanPersistenceService _planPersistence;
     private readonly IndexedDbService _indexedDb;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
-    private readonly IMarketIntelligenceProjectionService _marketIntelligenceProjection;
-    private readonly IMarketIntelligenceStore _marketIntelligenceStore;
-    private readonly IMarketDataSourceStore _marketDataSourceStore;
 
     public MarketAnalysisWorkflowService(
         AppState appState,
@@ -34,10 +29,7 @@ public sealed class MarketAnalysisWorkflowService
         IMarketPriceLadderAnalysisService marketPriceLadderAnalysis,
         WebPlanPersistenceService planPersistence,
         IndexedDbService indexedDb,
-        IRecipeLayerWorkflowService recipeLayerWorkflow,
-        IMarketIntelligenceProjectionService marketIntelligenceProjection,
-        IMarketIntelligenceStore marketIntelligenceStore,
-        IMarketDataSourceStore marketDataSourceStore)
+        IRecipeLayerWorkflowService recipeLayerWorkflow)
     {
         _appState = appState;
         _marketAnalysisExecution = marketAnalysisExecution;
@@ -46,9 +38,6 @@ public sealed class MarketAnalysisWorkflowService
         _planPersistence = planPersistence;
         _indexedDb = indexedDb;
         _recipeLayerWorkflow = recipeLayerWorkflow;
-        _marketIntelligenceProjection = marketIntelligenceProjection;
-        _marketIntelligenceStore = marketIntelligenceStore;
-        _marketDataSourceStore = marketDataSourceStore;
     }
 
     public async Task<MarketAnalysisWorkflowResult> RunAnalysisAsync(
@@ -60,9 +49,7 @@ public sealed class MarketAnalysisWorkflowService
         var plan = _appState.CurrentPlan;
         var planSessionVersion = _appState.PlanSessionVersion;
         var planId = _appState.CurrentPlanId;
-        var planBuildStopwatch = Stopwatch.StartNew();
         var candidateResult = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidateResultAsync(plan, ct);
-        planBuildStopwatch.Stop();
         var materials = candidateResult?.Candidates.ToList() ?? [];
         var recipeBasis = candidateResult?.RecipeBasis;
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
@@ -85,7 +72,6 @@ public sealed class MarketAnalysisWorkflowService
             _appState.SelectedDataCenter,
             _appState.SelectedRegion,
             _appState.MarketAnalysisLens);
-        var executionStopwatch = Stopwatch.StartNew();
         var executionResult = await _marketAnalysisExecution.ExecuteAsync(
             new MarketAnalysisExecutionRequest
             {
@@ -93,7 +79,7 @@ public sealed class MarketAnalysisWorkflowService
                 Scope = scope,
                 SelectedDataCenter = _appState.SelectedDataCenter,
                 SelectedRegion = _appState.SelectedRegion,
-                ForceRefreshData = request.ForceRefreshData,
+                MaxAge = request.ForceRefreshData ? TimeSpan.Zero : (TimeSpan?)null,
                 RecommendationMode = RecommendationMode.MinimizeTotalCost,
                 Lens = _appState.MarketAnalysisLens,
                 ExpectedWorldsByDataCenter = _appState.GetExpectedMarketWorlds(scope)
@@ -101,12 +87,7 @@ public sealed class MarketAnalysisWorkflowService
             progress,
             ct,
             executionOptions: executionOptions);
-        executionStopwatch.Stop();
         ct.ThrowIfCancellationRequested();
-        var timings = CreateWorkflowTimings(
-            planBuildStopwatch.Elapsed,
-            executionResult.Timings,
-            executionStopwatch.Elapsed);
 
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
@@ -122,11 +103,10 @@ public sealed class MarketAnalysisWorkflowService
             plan,
             planSessionVersion,
             planId,
-            executionResult,
+            executionResult.Analyses,
+            executionResult.ShoppingPlans,
             recipeBasis,
             _appState.CreateCurrentMarketAnalysisScopeSnapshot(),
-            timings,
-            request.ForceRefreshData,
             ct);
         if (published == null)
         {
@@ -158,41 +138,17 @@ public sealed class MarketAnalysisWorkflowService
         var plan = _appState.CurrentPlan;
         var planSessionVersion = _appState.PlanSessionVersion;
         var planId = _appState.CurrentPlanId;
-        var analyses = (await LoadAnalysesForLensProjectionAsync(ct)).ToList();
-        var currentPlansByItemId = _appState.ShoppingPlans
-            .GroupBy(plan => plan.ItemId)
-            .ToDictionary(group => group.Key, group => group.First());
-        var shoppingPlans = analyses
-            .Select(analysis =>
-            {
-                var shoppingPlan = _marketPriceLadderAnalysis.ProjectToShoppingPlan(analysis, lens);
-                if (currentPlansByItemId.TryGetValue(shoppingPlan.ItemId, out var currentPlan))
-                {
-                    shoppingPlan.IconId = currentPlan.IconId;
-                }
-
-                return shoppingPlan;
-            })
+        var shoppingPlans = _appState.MarketItemAnalyses
+            .Select(analysis => _marketPriceLadderAnalysis.ProjectToShoppingPlan(analysis, lens))
             .ToList();
-        var publishedScope = CreateLensPublicationScope(lens);
-        var executionResult = new MarketAnalysisExecutionResult(
-            CreateEmptyEvidence(publishedScope),
-            analyses,
-            shoppingPlans);
-        var timings = new MarketAnalysisWorkflowTimings(
-            TimeSpan.Zero,
-            TimeSpan.Zero,
-            TimeSpan.Zero,
-            TimeSpan.Zero);
         var published = await PublishMarketAnalysisAsync(
             plan,
             planSessionVersion,
             planId,
-            executionResult,
+            _appState.MarketItemAnalyses,
+            shoppingPlans,
             _appState.MarketAnalysisRecipeBasis,
-            publishedScope,
-            timings,
-            forceRefreshData: false,
+            _appState.CreateCurrentMarketAnalysisScopeSnapshot(),
             ct);
         if (published == null)
         {
@@ -206,117 +162,14 @@ public sealed class MarketAnalysisWorkflowService
             0);
     }
 
-    private async Task<IReadOnlyList<MarketItemAnalysis>> LoadAnalysesForLensProjectionAsync(CancellationToken ct)
-    {
-        var publicationId = _appState.MarketIntelligenceSummary?.PublicationId;
-        var analyses = _appState.MarketItemAnalyses.ToList();
-        if (publicationId is null || publicationId.Value == Guid.Empty)
-        {
-            return analyses;
-        }
-
-        var hydrated = new List<MarketItemAnalysis>(analyses.Count);
-        foreach (var analysis in analyses)
-        {
-            ct.ThrowIfCancellationRequested();
-            var details = await _marketIntelligenceStore.LoadDetailsAsync(
-                new MarketIntelligenceDetailQuery(publicationId.Value, analysis.ItemId),
-                ct);
-            hydrated.Add(CloneAnalysisWithDetails(analysis, details));
-        }
-
-        return hydrated;
-    }
-
-    private static MarketItemAnalysis CloneAnalysisWithDetails(
-        MarketItemAnalysis analysis,
-        IReadOnlyList<MarketListingDetail> details)
-    {
-        var itemDetail = details.FirstOrDefault(detail => detail.Key.World is null);
-        var detailByWorld = details
-            .Where(detail => detail.Key.World is not null)
-            .GroupBy(detail => detail.Key.World!.Value)
-            .ToDictionary(group => group.Key, group => group.First());
-
-        return new MarketItemAnalysis
-        {
-            ItemId = analysis.ItemId,
-            Name = analysis.Name,
-            QuantityNeeded = analysis.QuantityNeeded,
-            Scope = analysis.Scope,
-            LoadedAtUtc = analysis.LoadedAtUtc,
-            AnalysisScopeBaselineUnitPrice = analysis.AnalysisScopeBaselineUnitPrice,
-            AnalysisScopeAverageUnitPrice = analysis.AnalysisScopeAverageUnitPrice,
-            AnalysisScopeCompetitiveAverageUnitPrice = analysis.AnalysisScopeCompetitiveAverageUnitPrice,
-            AnalysisScopeMedianUnitPrice = analysis.AnalysisScopeMedianUnitPrice,
-            CompetitiveThresholdUnitPrice = analysis.CompetitiveThresholdUnitPrice,
-            SaneThresholdUnitPrice = analysis.SaneThresholdUnitPrice,
-            RequestedDataCenters = analysis.RequestedDataCenters,
-            PresentDataCenters = analysis.PresentDataCenters,
-            MissingDataCenters = analysis.MissingDataCenters,
-            WorstDataQualityBucket = analysis.WorstDataQualityBucket,
-            PriceEvaluation = itemDetail?.PriceEvaluation ?? analysis.PriceEvaluation,
-            Worlds = analysis.Worlds
-                .Select(world => CloneWorldWithDetails(
-                    world,
-                    detailByWorld.TryGetValue(new MarketWorldKey(world.DataCenter, world.WorldName), out var detail)
-                        ? detail
-                        : null))
-                .ToList(),
-            Warning = analysis.Warning
-        };
-    }
-
-    private static WorldMarketAnalysis CloneWorldWithDetails(
-        WorldMarketAnalysis world,
-        MarketListingDetail? detail)
-    {
-        return new WorldMarketAnalysis
-        {
-            DataCenter = world.DataCenter,
-            WorldName = world.WorldName,
-            QuantityNeeded = world.QuantityNeeded,
-            CompetitiveQuantity = world.CompetitiveQuantity,
-            LocalCompetitiveQuantity = world.LocalCompetitiveQuantity,
-            ScopeCompetitiveQuantity = world.ScopeCompetitiveQuantity,
-            ScopeSaneQuantity = world.ScopeSaneQuantity,
-            ScopeUncompetitiveQuantity = world.ScopeUncompetitiveQuantity,
-            ScopeInsaneQuantity = world.ScopeInsaneQuantity,
-            TotalSaneQuantity = world.TotalSaneQuantity,
-            TotalListingQuantity = world.TotalListingQuantity,
-            CompetitiveCoverageRatio = world.CompetitiveCoverageRatio,
-            ScopeCompetitiveCoverageRatio = world.ScopeCompetitiveCoverageRatio,
-            ScopeSaneCoverageRatio = world.ScopeSaneCoverageRatio,
-            SaneCoverageRatio = world.SaneCoverageRatio,
-            AnalysisScopeBaselineUnitPrice = world.AnalysisScopeBaselineUnitPrice,
-            AnalysisScopeAverageUnitPrice = world.AnalysisScopeAverageUnitPrice,
-            AnalysisScopeCompetitiveAverageUnitPrice = world.AnalysisScopeCompetitiveAverageUnitPrice,
-            ScopeCompetitiveAverageUnitPrice = world.ScopeCompetitiveAverageUnitPrice,
-            AnalysisScopeMedianUnitPrice = world.AnalysisScopeMedianUnitPrice,
-            CompetitiveThresholdUnitPrice = world.CompetitiveThresholdUnitPrice,
-            SaneThresholdUnitPrice = world.SaneThresholdUnitPrice,
-            CoverageBucket = world.CoverageBucket,
-            FetchedAtUtc = world.FetchedAtUtc,
-            MarketUploadedAtUtc = world.MarketUploadedAtUtc,
-            DataAgeSource = world.DataAgeSource,
-            DataAge = world.DataAge,
-            DataQualityScore = world.DataQualityScore,
-            DataQualityBucket = world.DataQualityBucket,
-            PriceBands = detail?.PriceBands.ToList() ?? world.PriceBands.ToList(),
-            Listings = detail?.Listings.ToList() ?? world.Listings.ToList(),
-            Scores = world.Scores.ToList()
-        };
-    }
-
     private async Task<PublishMarketAnalysisResult?> PublishMarketAnalysisAsync(
         CraftingPlan? plan,
         long planSessionVersion,
         string? planId,
-        MarketAnalysisExecutionResult executionResult,
+        IEnumerable<MarketItemAnalysis> analyses,
+        List<DetailedShoppingPlan> shoppingPlans,
         StoredRecipeOperationSnapshot? recipeBasis,
         PublishedMarketAnalysisScopeSnapshot publishedScope,
-        MarketAnalysisWorkflowTimings timings,
-        bool forceRefreshData,
         CancellationToken ct)
     {
         if (plan == null || !_appState.IsCurrentPlanSession(plan, planSessionVersion))
@@ -325,8 +178,7 @@ public sealed class MarketAnalysisWorkflowService
         }
 
         ct.ThrowIfCancellationRequested();
-        var analysisList = executionResult.Analyses.ToList();
-        var shoppingPlans = executionResult.ShoppingPlans.ToList();
+        var analysisList = analyses.ToList();
         var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(plan, shoppingPlans);
         _marketShoppingService.ApplyVendorPurchaseOverrides(plan, shoppingPlans);
 
@@ -335,92 +187,27 @@ public sealed class MarketAnalysisWorkflowService
             return null;
         }
 
-        var publicationStopwatch = Stopwatch.StartNew();
-        var projectionStopwatch = Stopwatch.StartNew();
-        var projection = _marketIntelligenceProjection.Project(
-            new MarketIntelligenceProjectionRequest
-            {
-                ExecutionResult = new MarketAnalysisExecutionResult(
-                    executionResult.Evidence,
-                    analysisList,
-                    shoppingPlans,
-                    executionResult.Timings),
-                PublicationContext = ToMarketIntelligencePublicationContext(publishedScope),
-                AnalyzerVersion = "web-market-analysis",
-                StartedAtUtc = publishedScope.PublishedAtUtc,
-                CompletedAtUtc = DateTime.UtcNow,
-                PlanBuildDuration = timings.PlanBuildDuration,
-                MarketFetchDuration = timings.MarketFetchDuration,
-                LadderAnalysisDuration = timings.LadderAnalysisDuration,
-                ShoppingPlanProjectionDuration = timings.ShoppingPlanProjectionDuration,
-                AnalysisDuration = timings.AnalysisDuration,
-                NetworkRequestCount = executionResult.Evidence.CacheDecision?.HttpChunkRequestCount
-                    ?? executionResult.Evidence.FetchedCount,
-                FetchedEvidencePairCount = executionResult.Evidence.FetchedCount,
-                FreshCacheHitCount = executionResult.Evidence.CacheDecision?.FreshHitCount ?? 0,
-                StaleExistingEntryCount = executionResult.Evidence.CacheDecision?.StaleExistingEntryCount ?? 0,
-                MissingCacheEntryCount = executionResult.Evidence.CacheDecision?.MissingEntryCount ?? 0,
-                OrdinaryFetchedPairCount = executionResult.Evidence.CacheDecision?.OrdinaryFetchedPairCount
-                    ?? executionResult.Evidence.FetchedCount,
-                SuspectRefreshPairCount = executionResult.Evidence.CacheDecision?.SuspectRefreshPairCount ?? 0,
-                ForcedRefreshPairCount = executionResult.Evidence.CacheDecision?.ForcedRefreshPairCount ?? 0,
-                HttpChunkRequestCount = executionResult.Evidence.CacheDecision?.HttpChunkRequestCount,
-                DataCenterFetchCallCount = executionResult.Evidence.CacheDecision?.DataCenterFetchCallCount ?? 0,
-                SplitCount = executionResult.Evidence.CacheDecision?.SplitCount ?? 0,
-                RateLimit429Count = executionResult.Evidence.CacheDecision?.RateLimit429Count ?? 0,
-                GatewayTimeout504Count = executionResult.Evidence.CacheDecision?.GatewayTimeout504Count ?? 0,
-                CleanupStaleDeletionCount = executionResult.Evidence.CacheDecision?.CleanupStaleDeletionCount ?? 0,
-                CacheSizeEvictionCount = executionResult.Evidence.CacheDecision?.CacheSizeEvictionCount ?? 0,
-                VerificationFailureCount = executionResult.Evidence.CacheDecision?.VerificationFailureCount ?? 0,
-                ForceRefreshData = forceRefreshData,
-                RunTrigger = forceRefreshData ? "manual-force-refresh" : "manual-run",
-                CacheMode = "mixed"
-            });
-        projectionStopwatch.Stop();
-
-        var detailPersistenceStopwatch = Stopwatch.StartNew();
-        await _marketIntelligenceStore.SavePublicationAsync(
-            projection.Publication with { RunRecords = [] },
-            ct);
-        detailPersistenceStopwatch.Stop();
-
-        var hotStatePublicationStopwatch = Stopwatch.StartNew();
-        var hotAnalyses = MarketIntelligenceSummaryHydrator
-            .HydrateMarketItemAnalyses(projection.Publication.Summary)
-            .ToList();
-        var hotShoppingPlans = MarketIntelligenceSummaryHydrator
-            .HydrateShoppingPlans(projection.Publication.Summary)
-            .ToList();
-
         _appState.ApplyMarketAnalysisPublication(
-            hotAnalyses,
-            hotShoppingPlans,
+            analysisList,
+            shoppingPlans,
             _recipeLayerWorkflow.BuildActiveProcurementItems(plan),
             changedDecisions > 0,
             recipeBasis,
-            publishedScope,
-            projection.Publication.Summary);
-        hotStatePublicationStopwatch.Stop();
-        await Task.Yield();
+            publishedScope);
 
-        var planPersistenceDuration = TimeSpan.Zero;
         if (!string.IsNullOrEmpty(planId) &&
             _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
             string.Equals(_appState.CurrentPlanId, planId, StringComparison.Ordinal))
         {
-            var planPersistenceStopwatch = Stopwatch.StartNew();
             await _planPersistence.SaveMarketAnalysisAsync(
                 planId,
-                hotShoppingPlans,
-                hotAnalyses,
+                shoppingPlans,
+                analysisList,
                 RecommendationMode.MinimizeTotalCost,
                 _appState.MarketAnalysisLens,
                 recipeBasis,
                 publishedScope,
-                _appState.MarketIntelligence,
-                projection.Publication.Summary);
-            planPersistenceStopwatch.Stop();
-            planPersistenceDuration = planPersistenceStopwatch.Elapsed;
+                _appState.MarketIntelligence);
         }
 
         ct.ThrowIfCancellationRequested();
@@ -429,182 +216,14 @@ public sealed class MarketAnalysisWorkflowService
             return null;
         }
 
-        var autosaveStopwatch = Stopwatch.StartNew();
         await _indexedDb.AutoSaveStateAsync(_appState);
-        autosaveStopwatch.Stop();
         ct.ThrowIfCancellationRequested();
-        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
-        {
-            return null;
-        }
-
-        var sourceFactPersistenceStopwatch = Stopwatch.StartNew();
-        await _marketDataSourceStore.SaveListingFactsAsync(projection.SourceFacts, ct);
-        sourceFactPersistenceStopwatch.Stop();
-        ct.ThrowIfCancellationRequested();
-        publicationStopwatch.Stop();
-        var runRecord = projection.Publication.RunRecords.Count > 0
-            ? FinalizeRunRecord(
-                projection.Publication.RunRecords[0],
-                projectionStopwatch.Elapsed,
-                publicationStopwatch.Elapsed,
-                detailPersistenceStopwatch.Elapsed,
-                sourceFactPersistenceStopwatch.Elapsed,
-                hotStatePublicationStopwatch.Elapsed,
-                planPersistenceDuration,
-                autosaveStopwatch.Elapsed)
-            : null;
-        if (runRecord != null)
-        {
-            await _marketIntelligenceStore.SaveRunRecordsAsync(
-                projection.Publication.Summary.PublicationId,
-                [runRecord],
-                ct);
-        }
-
         return _appState.IsCurrentPlanSession(plan, planSessionVersion)
             ? new PublishMarketAnalysisResult(changedDecisions)
             : null;
     }
 
     private sealed record PublishMarketAnalysisResult(int ChangedDecisionCount);
-
-    private sealed record MarketAnalysisWorkflowTimings(
-        TimeSpan PlanBuildDuration,
-        TimeSpan MarketFetchDuration,
-        TimeSpan LadderAnalysisDuration,
-        TimeSpan ShoppingPlanProjectionDuration)
-    {
-        public TimeSpan AnalysisDuration => LadderAnalysisDuration + ShoppingPlanProjectionDuration;
-    }
-
-    private static MarketAnalysisWorkflowTimings CreateWorkflowTimings(
-        TimeSpan planBuildDuration,
-        MarketAnalysisExecutionTimings executionTimings,
-        TimeSpan executionDuration)
-    {
-        if (executionTimings.HasMeasuredDuration)
-        {
-            return new MarketAnalysisWorkflowTimings(
-                planBuildDuration,
-                executionTimings.MarketFetchDuration,
-                executionTimings.LadderAnalysisDuration,
-                executionTimings.ShoppingPlanProjectionDuration);
-        }
-
-        return new MarketAnalysisWorkflowTimings(
-            planBuildDuration,
-            TimeSpan.Zero,
-            executionDuration,
-            TimeSpan.Zero);
-    }
-
-    private static MarketAnalysisRunRecord FinalizeRunRecord(
-        MarketAnalysisRunRecord runRecord,
-        TimeSpan projectionDuration,
-        TimeSpan publicationDuration,
-        TimeSpan detailPersistenceDuration,
-        TimeSpan sourceFactPersistenceDuration,
-        TimeSpan hotStatePublicationDuration,
-        TimeSpan planPersistenceDuration,
-        TimeSpan autosaveDuration) =>
-        new()
-        {
-            RunId = runRecord.RunId,
-            PublicationId = runRecord.PublicationId,
-            DemandFingerprint = runRecord.DemandFingerprint,
-            AnalyzerVersion = runRecord.AnalyzerVersion,
-            Scope = runRecord.Scope,
-            SelectedDataCenter = runRecord.SelectedDataCenter,
-            SelectedRegion = runRecord.SelectedRegion,
-            StartedAtUtc = runRecord.StartedAtUtc,
-            CompletedAtUtc = runRecord.CompletedAtUtc,
-            PlanBuildDuration = runRecord.PlanBuildDuration,
-            MarketFetchDuration = runRecord.MarketFetchDuration,
-            LadderAnalysisDuration = runRecord.LadderAnalysisDuration,
-            ShoppingPlanProjectionDuration = runRecord.ShoppingPlanProjectionDuration,
-            AnalysisDuration = runRecord.AnalysisDuration,
-            ProjectionDuration = projectionDuration,
-            PublicationDuration = publicationDuration,
-            DetailPersistenceDuration = detailPersistenceDuration,
-            SourceFactPersistenceDuration = sourceFactPersistenceDuration,
-            HotStatePublicationDuration = hotStatePublicationDuration,
-            PlanPersistenceDuration = planPersistenceDuration,
-            AutosaveDuration = autosaveDuration,
-            CacheMode = runRecord.CacheMode,
-            MarketIntelligencePayloadBytes = runRecord.MarketIntelligencePayloadBytes,
-            LegacyPayloadBytes = runRecord.LegacyPayloadBytes,
-            RetainedDetailBytes = runRecord.RetainedDetailBytes,
-            NetworkRequestCount = runRecord.NetworkRequestCount,
-            FetchedEvidencePairCount = runRecord.FetchedEvidencePairCount,
-            FreshCacheHitCount = runRecord.FreshCacheHitCount,
-            StaleExistingEntryCount = runRecord.StaleExistingEntryCount,
-            MissingCacheEntryCount = runRecord.MissingCacheEntryCount,
-            OrdinaryFetchedPairCount = runRecord.OrdinaryFetchedPairCount,
-            SuspectRefreshPairCount = runRecord.SuspectRefreshPairCount,
-            ForcedRefreshPairCount = runRecord.ForcedRefreshPairCount,
-            HttpChunkRequestCount = runRecord.HttpChunkRequestCount,
-            DataCenterFetchCallCount = runRecord.DataCenterFetchCallCount,
-            SplitCount = runRecord.SplitCount,
-            RateLimit429Count = runRecord.RateLimit429Count,
-            GatewayTimeout504Count = runRecord.GatewayTimeout504Count,
-            CleanupStaleDeletionCount = runRecord.CleanupStaleDeletionCount,
-            CacheSizeEvictionCount = runRecord.CacheSizeEvictionCount,
-            VerificationFailureCount = runRecord.VerificationFailureCount,
-            ForceRefreshData = runRecord.ForceRefreshData,
-            RunTrigger = runRecord.RunTrigger,
-            StaleCacheRefreshCount = runRecord.StaleCacheRefreshCount
-        };
-
-    private PublishedMarketAnalysisScopeSnapshot CreateLensPublicationScope(MarketAcquisitionLens lens)
-    {
-        var previousScope = _appState.PublishedMarketAnalysisScope;
-        if (previousScope == null)
-        {
-            return _appState.CreateCurrentMarketAnalysisScopeSnapshot();
-        }
-
-        return previousScope with
-        {
-            Lens = lens,
-            PlanSessionVersion = _appState.PlanSessionVersion,
-            PublishedAtUtc = DateTime.UtcNow
-        };
-    }
-
-    private static MarketIntelligencePublicationContext ToMarketIntelligencePublicationContext(
-        PublishedMarketAnalysisScopeSnapshot scope)
-    {
-        return new MarketIntelligencePublicationContext(
-            MarketIntelligencePublicationContextKind.Known,
-            scope.Scope,
-            scope.SelectedDataCenter,
-            scope.SelectedRegion,
-            scope.RequestedDataCenters.ToArray(),
-            new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
-            null,
-            false,
-            RecommendationMode.MinimizeTotalCost,
-            scope.Lens,
-            null,
-            scope.PlanSessionVersion,
-            null,
-            scope.PublishedAtUtc);
-    }
-
-    private static MarketEvidenceSet CreateEmptyEvidence(PublishedMarketAnalysisScopeSnapshot scope)
-    {
-        return new MarketEvidenceSet(
-            new Dictionary<(int itemId, string dataCenter), CachedMarketData>(),
-            Array.Empty<(int itemId, string dataCenter)>(),
-            scope.Scope,
-            scope.RequestedDataCenters.ToArray(),
-            scope.SelectedDataCenter,
-            scope.SelectedRegion,
-            TimeSpan.Zero,
-            fetchedCount: 0,
-            scope.PublishedAtUtc);
-    }
 
     private bool IsCurrentRequest(MarketAnalysisRequestSnapshot snapshot)
     {

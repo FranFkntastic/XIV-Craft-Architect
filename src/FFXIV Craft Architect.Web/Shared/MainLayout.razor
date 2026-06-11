@@ -20,6 +20,7 @@
 @inject RecipePlannerCommandService RecipePlannerCommandService
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject MarketAnalysisDiagnosticDumpService MarketAnalysisDiagnosticDumpService
+@inject RecipeBuildDiagnosticService RecipeBuildDiagnosticService
 @inject ILogger<MainLayout> Logger
 @inject Microsoft.AspNetCore.Components.WebAssembly.Hosting.IWebAssemblyHostEnvironment HostEnvironment
 @implements IDisposable
@@ -219,6 +220,11 @@
                                          Style="padding-left: 32px;">
                                 Dump Selected Market Analysis Item
                             </MudMenuItem>
+                            <MudMenuItem OnClick="OnBuildRecipePlanWithDiagnostics"
+                                         Icon="@Icons.Material.Filled.Assignment"
+                                         Style="padding-left: 32px;">
+                                Build Recipe Plan Diagnostic Dump
+                            </MudMenuItem>
                         }
                     }
                 </ChildContent>
@@ -252,7 +258,9 @@
     private bool IsDevelopment => string.Equals(HostEnvironment.Environment, "Development", StringComparison.OrdinalIgnoreCase);
     private bool IsDebugToolsAvailable => IsDevelopment || AppState.SecretDebugToolsEnabled;
     private bool IsTradeMode => IsTradeRoute(NavigationManager.Uri);
-    private bool CanDumpSelectedMarketAnalysisItem => AppState.MarketItemAnalyses.Any();
+    private bool CanDumpSelectedMarketAnalysisItem =>
+        AppState.SelectedMarketAnalysisItemId.HasValue &&
+        AppState.MarketItemAnalyses.Any(analysis => analysis.ItemId == AppState.SelectedMarketAnalysisItemId.Value);
     private string? BenchmarkHook(string id) => AppState.SecretDebugToolsEnabled ? id : null;
     
     private readonly MudTheme _theme = AppTheme.CreateTheme();
@@ -656,9 +664,15 @@
             return;
         }
 
+        if (!AppState.SelectedMarketAnalysisItemId.HasValue)
+        {
+            Snackbar.Add("Select a market analysis item before dumping diagnostics.", Severity.Warning);
+            return;
+        }
+
         try
         {
-            var dump = await MarketAnalysisDiagnosticDumpService.BuildDumpAsync(
+            var dump = MarketAnalysisDiagnosticDumpService.BuildDump(
                 AppState.MarketItemAnalyses,
                 AppState.ShoppingPlans,
                 new MarketAnalysisDiagnosticDumpContext(
@@ -672,11 +686,10 @@
                     AppState.MarketAnalysisGridSortDescending,
                     AppState.MarketAnalysisWorldGridSortColumn,
                     AppState.MarketAnalysisWorldGridSortDescending,
-                    AppState.SelectedMarketAnalysisItemId,
-                    AppState.MarketIntelligenceSummary?.PublicationId));
+                    AppState.SelectedMarketAnalysisItemId));
             if (dump == null)
             {
-                Snackbar.Add("No market analysis to dump", Severity.Warning);
+                Snackbar.Add("Selected market analysis item is no longer available.", Severity.Warning);
                 return;
             }
 
@@ -704,6 +717,40 @@
         }
 
         return $"market-analysis-{dump.Selection.ExportedItemId}-{itemName}-{timestamp}.json";
+    }
+
+    private async Task OnBuildRecipePlanWithDiagnostics()
+    {
+        if (!IsDebugToolsAvailable)
+        {
+            Snackbar.Add("Diagnostic builds are not available.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var dump = await RecipeBuildDiagnosticService.BuildWithDiagnosticsAsync(CancellationToken.None);
+            var json = RecipeBuildDiagnosticService.Serialize(dump);
+            var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+            using var stream = new MemoryStream(bytes);
+            using var streamRef = new DotNetStreamReference(stream);
+            var fileName = RecipeBuildDiagnosticService.CreateFileName(
+                dump.Context.CurrentPlanName,
+                dump.ExportedAtUtc);
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
+            Snackbar.Add($"Downloaded {fileName}", dump.Status switch
+            {
+                RecipeBuildDiagnosticStatus.Succeeded => Severity.Success,
+                RecipeBuildDiagnosticStatus.TimedOut => Severity.Warning,
+                RecipeBuildDiagnosticStatus.Canceled => Severity.Info,
+                RecipeBuildDiagnosticStatus.NoProjectItems => Severity.Info,
+                _ => Severity.Error
+            });
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to run diagnostic build: {ex.Message}", Severity.Error);
+        }
     }
 
     private async Task LoadNativePlanAsync(
@@ -780,7 +827,7 @@
     private async Task OnCopyPlainText()
     {
         var materials = CreateMaterialsForQuickCopy();
-        
+
         if (materials.Count == 0)
         {
             Snackbar.Add("Nothing to copy. Add items to your shopping list first.", Severity.Warning);
@@ -802,7 +849,7 @@
     private async Task OnCopyCsv()
     {
         var materials = CreateMaterialsForQuickCopy();
-        
+
         if (materials.Count == 0)
         {
             Snackbar.Add("Nothing to copy. Add items to your shopping list first.", Severity.Warning);
@@ -816,7 +863,7 @@
         {
             csv.AppendLine($"\"{m.Name}\",{m.TotalQuantity},{m.UnitPrice},{m.TotalCost}");
         }
-        
+
         await CopyTextToClipboardAsync(csv.ToString(), "CSV copied to clipboard!");
     }
 
@@ -848,7 +895,6 @@
     private List<Core.Models.MaterialAggregate> CreateMaterialsFromShoppingItems()
     {
         return AppState.ShoppingItems
-            .Where(item => item.Quantity > 0)
             .Select(item => new Core.Models.MaterialAggregate
             {
                 ItemId = item.Id,

@@ -46,6 +46,25 @@ public class RecipeCalculationServiceTests
         Assert.Equal(2, child.Quantity);
     }
 
+    [Fact]
+    public async Task BuildPlanAsync_WithDiagnostics_RecordsRecipeBuildSubphases()
+    {
+        var service = CreateService();
+        var diagnostics = new RecordingRecipePlanBuildDiagnostics();
+
+        await service.BuildPlanAsync(
+            [(300, "Resolver Selected Craft", 2, false)],
+            "Aether",
+            string.Empty,
+            diagnostics: diagnostics);
+
+        Assert.Contains(("build-plan.discover-tree", "Completed"), diagnostics.Phases);
+        Assert.Contains(("build-plan.fetch-level-0", "Completed"), diagnostics.Phases);
+        Assert.Contains(("build-plan.fetch-level-1", "Completed"), diagnostics.Phases);
+        Assert.Contains(("build-plan.build-tree-from-cache", "Completed"), diagnostics.Phases);
+        Assert.Contains(("build-plan.apply-vendor-prices-from-cache", "Completed"), diagnostics.Phases);
+    }
+
     private static RecipeCalculationService CreateService()
     {
         var garlandService = new GarlandService(
@@ -185,6 +204,70 @@ public class RecipeCalculationServiceTests
 
         public void Set(int itemId, VendorCacheEntry entry)
         {
+        }
+    }
+
+    private sealed class RecordingRecipePlanBuildDiagnostics : IRecipePlanBuildDiagnosticRecorder
+    {
+        public List<(string Name, string Status)> Phases { get; } = [];
+
+        public T RunPhase<T>(string name, Func<T> action)
+        {
+            try
+            {
+                var result = action();
+                Phases.Add((name, "Completed"));
+                return result;
+            }
+            catch
+            {
+                Phases.Add((name, "Failed"));
+                throw;
+            }
+        }
+
+        public void RunPhase(string name, Action action)
+        {
+            RunPhase(
+                name,
+                () =>
+                {
+                    action();
+                    return true;
+                });
+        }
+
+        public async Task<T> RunPhaseAsync<T>(
+            string name,
+            Func<CancellationToken, Task<T>> action,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                var result = await action(cancellationToken);
+                Phases.Add((name, "Completed"));
+                return result;
+            }
+            catch
+            {
+                Phases.Add((name, "Failed"));
+                throw;
+            }
+        }
+
+        public async Task RunPhaseAsync(
+            string name,
+            Func<CancellationToken, Task> action,
+            CancellationToken cancellationToken)
+        {
+            await RunPhaseAsync(
+                name,
+                async ct =>
+                {
+                    await action(ct);
+                    return true;
+                },
+                cancellationToken);
         }
     }
 }

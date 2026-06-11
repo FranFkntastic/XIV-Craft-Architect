@@ -2,15 +2,11 @@
 // Uses Unix timestamps (seconds since epoch) for serialization safety
 
 const DB_NAME = 'FFXIVCraftArchitect';
-const DB_VERSION = 5;  // Bumped for market-intelligence cold storage
+const DB_VERSION = 4;  // Bumped for plan-summary store
 const STORE_PLANS = 'plans';
 const STORE_PLAN_SUMMARIES = 'planSummaries';
 const STORE_SETTINGS = 'settings';
 const STORE_MARKET_CACHE = 'marketCache';
-const STORE_MARKET_PUBLICATIONS = 'marketPublications';
-const STORE_MARKET_LISTING_DETAILS = 'marketListingDetails';
-const STORE_MARKET_FETCHES = 'marketFetches';
-const STORE_MARKET_ANALYSIS_RUNS = 'marketAnalysisRuns';
 
 let db = null;
 
@@ -66,7 +62,7 @@ async function initDB() {
         request.onsuccess = () => {
             resolve(attachDatabaseConnection(
                 request.result,
-                '[IndexedDB] Database opened successfully (v5 - market intelligence)'));
+                '[IndexedDB] Database opened successfully (v4 - plan summaries)'));
         };
         
         request.onupgradeneeded = (event) => {
@@ -102,29 +98,6 @@ async function initDB() {
                 const cacheStore = database.createObjectStore(STORE_MARKET_CACHE, { keyPath: 'key' });
                 cacheStore.createIndex('fetchedAtUnix', 'fetchedAtUnix', { unique: false });
                 console.log('[IndexedDB] Created market cache store with Unix timestamp index');
-            }
-
-            if (!database.objectStoreNames.contains(STORE_MARKET_PUBLICATIONS)) {
-                const publicationStore = database.createObjectStore(STORE_MARKET_PUBLICATIONS, { keyPath: 'publicationId' });
-                publicationStore.createIndex('publishedAtUtc', 'publicationContext.publishedAtUtc', { unique: false });
-            }
-
-            if (!database.objectStoreNames.contains(STORE_MARKET_LISTING_DETAILS)) {
-                const detailStore = database.createObjectStore(STORE_MARKET_LISTING_DETAILS, { keyPath: 'storageKey' });
-                detailStore.createIndex('publicationId', 'publicationId', { unique: false });
-                detailStore.createIndex('itemId', 'itemId', { unique: false });
-            }
-
-            if (!database.objectStoreNames.contains(STORE_MARKET_FETCHES)) {
-                const fetchStore = database.createObjectStore(STORE_MARKET_FETCHES, { keyPath: 'storageKey' });
-                fetchStore.createIndex('publicationId', 'publicationId', { unique: false });
-                fetchStore.createIndex('runId', 'runId', { unique: false });
-                fetchStore.createIndex('itemId', 'itemId', { unique: false });
-            }
-
-            if (!database.objectStoreNames.contains(STORE_MARKET_ANALYSIS_RUNS)) {
-                const runStore = database.createObjectStore(STORE_MARKET_ANALYSIS_RUNS, { keyPath: 'runId' });
-                runStore.createIndex('publicationId', 'publicationId', { unique: false });
             }
 
         };
@@ -195,9 +168,7 @@ async function patchMarketAnalysis(
     recommendationMode,
     marketAnalysisLens,
     marketAnalysisRecipeBasisJson,
-    marketAnalysisScopeSnapshotJson,
-    activeMarketIntelligencePublicationId,
-    marketIntelligenceSummaryJson) {
+    marketAnalysisScopeSnapshotJson) {
     const database = await initDB();
 
     return new Promise((resolve, reject) => {
@@ -218,8 +189,6 @@ async function patchMarketAnalysis(
                 marketPlansJson,
                 marketIntelligenceJson,
                 marketItemAnalysesJson,
-                activeMarketIntelligencePublicationId,
-                marketIntelligenceSummaryJson,
                 marketAnalysisRecipeBasisJson,
                 marketAnalysisScopeSnapshotJson,
                 savedRecommendationMode: recommendationMode,
@@ -429,29 +398,10 @@ async function clearMarketCache() {
         
         request.onsuccess = () => {
             console.log('[IndexedDB] Cleared entire market cache');
+            resolve(true);
         };
         request.onerror = () => reject(request.error);
-        transaction.oncomplete = () => resolve(true);
-        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
-        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
-}
-
-function getInteropField(value, camel, pascal) {
-    return value?.[camel] ?? value?.[pascal];
-}
-
-function toMarketCacheEntry(key, data) {
-    return {
-        key: key,
-        itemId: getInteropField(data, 'itemId', 'ItemId'),
-        dataCenter: getInteropField(data, 'dataCenter', 'DataCenter'),
-        fetchedAtUnix: getInteropField(data, 'fetchedAtUnix', 'FetchedAtUnix'),
-        lastUploadTimeUnixMilliseconds: getInteropField(data, 'lastUploadTimeUnixMilliseconds', 'LastUploadTimeUnixMilliseconds'),
-        dcAvgPrice: getInteropField(data, 'dcAvgPrice', 'DcAvgPrice'),
-        hqAvgPrice: getInteropField(data, 'hqAvgPrice', 'HqAvgPrice'),
-        worlds: getInteropField(data, 'worlds', 'Worlds')
-    };
 }
 
 /**
@@ -464,68 +414,81 @@ async function saveMarketData(key, data) {
         const transaction = database.transaction([STORE_MARKET_CACHE], 'readwrite');
         const store = transaction.objectStore(STORE_MARKET_CACHE);
         
-        const cacheEntry = toMarketCacheEntry(key, data);
+        // Use Unix timestamp (seconds since epoch) for safe serialization
+        const cacheEntry = {
+            key: key,
+            itemId: data.itemId,
+            dataCenter: data.dataCenter,
+            fetchedAtUnix: data.fetchedAtUnix,  // Unix timestamp in seconds
+            lastUploadTimeUnixMilliseconds: data.lastUploadTimeUnixMilliseconds,
+            dcAvgPrice: data.dcAvgPrice,
+            hqAvgPrice: data.hqAvgPrice,
+            worlds: data.worlds
+        };
         
         const request = store.put(cacheEntry);
         
         request.onsuccess = () => {
             console.log('[IndexedDB] Saved market data for', key, 'timestamp:', cacheEntry.fetchedAtUnix);
+            resolve(true);
         };
         request.onerror = () => {
             console.error('[IndexedDB] Failed to save market data:', request.error);
             reject(request.error);
         };
-        transaction.oncomplete = () => resolve(true);
-        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
-        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
 }
 
 /**
- * Save multiple market cache entries in one IndexedDB transaction.
- * @param {{key:string,data:object}[]} entries
+ * Save multiple market data entries to cache in one transaction.
+ * Entries are objects shaped as { key, data } from IndexedDbMarketCacheService.
  */
 async function saveMarketDataBatch(entries) {
     const database = await initDB();
-    const cacheEntries = Array.isArray(entries) ? entries : [];
+    const batchEntries = entries || [];
 
-    if (cacheEntries.length === 0) {
-        return 0;
+    if (batchEntries.length === 0) {
+        return true;
     }
 
     return new Promise((resolve, reject) => {
         const transaction = database.transaction([STORE_MARKET_CACHE], 'readwrite');
         const store = transaction.objectStore(STORE_MARKET_CACHE);
-        let queuedCount = 0;
 
         transaction.oncomplete = () => {
-            console.log('[IndexedDB] Saved market data batch:', queuedCount);
-            resolve(queuedCount);
+            console.log('[IndexedDB] Saved market data batch:', batchEntries.length);
+            resolve(true);
         };
-        transaction.onerror = (event) => {
-            console.error('[IndexedDB] Failed to save market data batch:', transaction.error || event.target?.error);
-            reject(transaction.error || event.target?.error);
+        transaction.onerror = () => {
+            console.error('[IndexedDB] Failed to save market data batch:', transaction.error);
+            reject(transaction.error);
         };
-        transaction.onabort = (event) => {
-            console.error('[IndexedDB] Market data batch transaction aborted:', transaction.error || event.target?.error);
-            reject(transaction.error || event.target?.error);
+        transaction.onabort = () => {
+            console.error('[IndexedDB] Market data batch transaction aborted:', transaction.error);
+            reject(transaction.error);
         };
 
-        for (const entry of cacheEntries) {
-            const key = getInteropField(entry, 'key', 'Key');
-            const data = getInteropField(entry, 'data', 'Data');
+        for (const batchEntry of batchEntries) {
+            const data = batchEntry?.data ?? batchEntry?.Data;
+            const key = batchEntry?.key ?? batchEntry?.Key ?? data?.key;
             if (!key || !data) {
-                continue;
+                transaction.abort();
+                reject(new Error('Invalid market data batch entry.'));
+                return;
             }
 
-            const request = store.put(toMarketCacheEntry(key, data));
-            request.onsuccess = () => {
-                queuedCount++;
+            const cacheEntry = {
+                key: key,
+                itemId: data.itemId,
+                dataCenter: data.dataCenter,
+                fetchedAtUnix: data.fetchedAtUnix,
+                lastUploadTimeUnixMilliseconds: data.lastUploadTimeUnixMilliseconds,
+                dcAvgPrice: data.dcAvgPrice,
+                hqAvgPrice: data.hqAvgPrice,
+                worlds: data.worlds
             };
-            request.onerror = () => {
-                console.error('[IndexedDB] Failed to queue market data for', key, request.error);
-                reject(request.error);
-            };
+
+            store.put(cacheEntry);
         }
     });
 }
@@ -666,6 +629,11 @@ async function deleteStaleMarketData(cutoffUnix) {
                     deletedCount++;
                 }
                 cursor.continue();
+            } else {
+                if (deletedCount > 0) {
+                    console.log('[IndexedDB] Deleted', deletedCount, 'stale entries');
+                }
+                resolve(deletedCount);
             }
         };
         
@@ -673,14 +641,6 @@ async function deleteStaleMarketData(cutoffUnix) {
             console.error('[IndexedDB] Failed to delete stale entries:', request.error);
             reject(request.error);
         };
-        transaction.oncomplete = () => {
-            if (deletedCount > 0) {
-                console.log('[IndexedDB] Deleted', deletedCount, 'stale entries');
-            }
-            resolve(deletedCount);
-        };
-        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
-        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
 }
 
@@ -721,6 +681,7 @@ async function deleteOldestEntries(count) {
                     deletedCount++;
                 }
                 console.log('[IndexedDB] Deleted', deletedCount, 'oldest entries');
+                resolve(deletedCount);
             }
         };
         
@@ -728,9 +689,6 @@ async function deleteOldestEntries(count) {
             console.error('[IndexedDB] Failed to delete oldest entries:', request.error);
             reject(request.error);
         };
-        transaction.oncomplete = () => resolve(deletedCount);
-        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
-        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
 }
 
@@ -799,501 +757,6 @@ async function getMarketCacheStats(cutoffUnix) {
     });
 }
 
-function getField(value, camelName, pascalName) {
-    if (!value) {
-        return undefined;
-    }
-
-    return value[camelName] ?? value[pascalName];
-}
-
-function getFingerprintValue(value) {
-    if (!value) {
-        return '';
-    }
-
-    return typeof value === 'string'
-        ? value
-        : getField(value, 'value', 'Value') ?? '';
-}
-
-function normalizeGuid(value) {
-    return value ? String(value).toLowerCase() : '';
-}
-
-function marketWorldKeyPart(world) {
-    if (!world) {
-        return 'none';
-    }
-
-    const dataCenter = getField(world, 'dataCenter', 'DataCenter') ?? '';
-    const worldName = getField(world, 'worldName', 'WorldName') ?? '';
-    return `${dataCenter}|${worldName}`;
-}
-
-function marketDetailStorageKey(key) {
-    const publicationId = normalizeGuid(getField(key, 'publicationId', 'PublicationId'));
-    const scope = getField(key, 'scope', 'Scope') ?? 0;
-    const itemId = getField(key, 'itemId', 'ItemId') ?? 0;
-    const world = marketWorldKeyPart(getField(key, 'world', 'World'));
-    const demandFingerprint = getFingerprintValue(getField(key, 'demandFingerprint', 'DemandFingerprint'));
-    return `${publicationId}|${scope}|${itemId}|${world}|${demandFingerprint}`;
-}
-
-function marketListingFactStorageKey(fact, index) {
-    const publicationId = normalizeGuid(getField(fact, 'publicationId', 'PublicationId'));
-    const runId = normalizeGuid(getField(fact, 'runId', 'RunId'));
-    const scope = getField(fact, 'scope', 'Scope') ?? 0;
-    const itemId = getField(fact, 'itemId', 'ItemId') ?? 0;
-    const dataCenter = getField(fact, 'dataCenter', 'DataCenter') ?? '';
-    const worldName = getField(fact, 'worldName', 'WorldName') ?? '';
-    const demandFingerprint = getFingerprintValue(getField(fact, 'demandFingerprint', 'DemandFingerprint'));
-    const listingId = getField(fact, 'listingId', 'ListingId');
-    if (listingId) {
-        const dataCenter = getField(fact, 'dataCenter', 'DataCenter') ?? '';
-        const worldId = getField(fact, 'worldId', 'WorldId') ?? '';
-        const retrievedAt = getField(fact, 'retrievedAtUtc', 'RetrievedAtUtc') ?? '';
-        return `${publicationId}|${runId}|${scope}|${itemId}|${dataCenter}|${worldId}|${worldName}|${demandFingerprint}|${retrievedAt}|id:${listingId}`;
-    }
-
-    const retainer = getField(fact, 'retainerName', 'RetainerName') ?? '';
-    const unitPrice = getField(fact, 'unitPrice', 'UnitPrice') ?? 0;
-    const quantity = getField(fact, 'quantity', 'Quantity') ?? 0;
-    const isHq = getField(fact, 'isHq', 'IsHq') ? 'hq' : 'nq';
-    const retrievedAt = getField(fact, 'retrievedAtUtc', 'RetrievedAtUtc') ?? '';
-    return `${publicationId}|${runId}|${scope}|${itemId}|${dataCenter}|${worldName}|${demandFingerprint}|${retainer}|${unitPrice}|${quantity}|${isHq}|${retrievedAt}|${index}`;
-}
-
-function normalizeDetailForStorage(detail) {
-    const key = getField(detail, 'key', 'Key');
-    return {
-        ...detail,
-        storageKey: marketDetailStorageKey(key),
-        publicationId: normalizeGuid(getField(key, 'publicationId', 'PublicationId')),
-        itemId: getField(key, 'itemId', 'ItemId') ?? 0
-    };
-}
-
-function normalizeFactForStorage(fact, index) {
-    return {
-        ...fact,
-        storageKey: marketListingFactStorageKey(fact, index),
-        publicationId: normalizeGuid(getField(fact, 'publicationId', 'PublicationId')),
-        runId: normalizeGuid(getField(fact, 'runId', 'RunId')),
-        itemId: getField(fact, 'itemId', 'ItemId') ?? 0
-    };
-}
-
-async function saveMarketPublication(publicationWrite) {
-    const database = await initDB();
-
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction(
-            [STORE_MARKET_PUBLICATIONS, STORE_MARKET_LISTING_DETAILS, STORE_MARKET_ANALYSIS_RUNS],
-            'readwrite');
-        const publicationStore = transaction.objectStore(STORE_MARKET_PUBLICATIONS);
-        const detailStore = transaction.objectStore(STORE_MARKET_LISTING_DETAILS);
-        const runStore = transaction.objectStore(STORE_MARKET_ANALYSIS_RUNS);
-
-        const summary = getField(publicationWrite, 'summary', 'Summary');
-        const details = getField(publicationWrite, 'details', 'Details') ?? [];
-        const runRecords = getField(publicationWrite, 'runRecords', 'RunRecords') ?? [];
-
-        for (const detail of details) {
-            detailStore.put(normalizeDetailForStorage(detail));
-        }
-
-        for (const runRecord of runRecords) {
-            runStore.put(runRecord);
-        }
-
-        publicationStore.put(summary);
-
-        transaction.oncomplete = () => resolve(true);
-        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
-        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
-    });
-}
-
-async function saveMarketPublicationDetails(publicationId, details) {
-    const database = await initDB();
-
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_MARKET_LISTING_DETAILS], 'readwrite');
-        const detailStore = transaction.objectStore(STORE_MARKET_LISTING_DETAILS);
-
-        for (const detail of details ?? []) {
-            detailStore.put(normalizeDetailForStorage(detail));
-        }
-
-        transaction.oncomplete = () => resolve(true);
-        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
-        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
-    });
-}
-
-async function saveMarketPublicationRunRecords(publicationId, runRecords) {
-    const database = await initDB();
-
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_MARKET_ANALYSIS_RUNS], 'readwrite');
-        const runStore = transaction.objectStore(STORE_MARKET_ANALYSIS_RUNS);
-
-        for (const runRecord of runRecords ?? []) {
-            runStore.put(runRecord);
-        }
-
-        transaction.oncomplete = () => resolve(true);
-        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
-        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
-    });
-}
-
-async function saveMarketPublicationSummary(summary) {
-    const database = await initDB();
-
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_MARKET_PUBLICATIONS], 'readwrite');
-        const publicationStore = transaction.objectStore(STORE_MARKET_PUBLICATIONS);
-
-        publicationStore.put(summary);
-
-        transaction.oncomplete = () => resolve(true);
-        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
-        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
-    });
-}
-
-async function loadMarketPublicationSummary(publicationId) {
-    const database = await initDB();
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_MARKET_PUBLICATIONS], 'readonly');
-        const request = transaction.objectStore(STORE_MARKET_PUBLICATIONS).get(publicationId);
-        request.onsuccess = () => resolve(request.result || null);
-        request.onerror = () => reject(request.error);
-    });
-}
-
-async function loadMarketDetailManifest(publicationId) {
-    const summary = await loadMarketPublicationSummary(publicationId);
-    return getField(summary, 'detailManifest', 'DetailManifest') ?? null;
-}
-
-async function loadMarketDetails(query) {
-    const database = await initDB();
-    const publicationId = normalizeGuid(getField(query, 'publicationId', 'PublicationId'));
-    const itemId = getField(query, 'itemId', 'ItemId');
-    const world = getField(query, 'world', 'World');
-    const worldKey = world ? marketWorldKeyPart(world) : null;
-    const demandFingerprint = getFingerprintValue(getField(query, 'demandFingerprint', 'DemandFingerprint'));
-
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_MARKET_LISTING_DETAILS], 'readonly');
-        const store = transaction.objectStore(STORE_MARKET_LISTING_DETAILS);
-        const index = store.index('publicationId');
-        const request = index.openCursor(publicationId);
-        const results = [];
-
-        request.onsuccess = (event) => {
-            const cursor = event.target.result;
-            if (!cursor) {
-                resolve(results);
-                return;
-            }
-
-            const detail = cursor.value;
-            const key = getField(detail, 'key', 'Key');
-            const keyWorld = getField(key, 'world', 'World');
-            if ((itemId == null || getField(key, 'itemId', 'ItemId') === itemId) &&
-                (worldKey == null || marketWorldKeyPart(keyWorld) === worldKey) &&
-                (!demandFingerprint ||
-                    getFingerprintValue(getField(key, 'demandFingerprint', 'DemandFingerprint')) === demandFingerprint)) {
-                results.push(detail);
-            }
-
-            cursor.continue();
-        };
-
-        request.onerror = () => reject(request.error);
-    });
-}
-
-async function loadMarketRunRecord(runId) {
-    const database = await initDB();
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_MARKET_ANALYSIS_RUNS], 'readonly');
-        const request = transaction.objectStore(STORE_MARKET_ANALYSIS_RUNS).get(runId);
-        request.onsuccess = () => resolve(request.result || null);
-        request.onerror = () => reject(request.error);
-    });
-}
-
-async function pruneMarketDetails(pruneRequest) {
-    const database = await initDB();
-    const activePublicationId = normalizeGuid(getField(pruneRequest, 'keepActivePublicationId', 'KeepActivePublicationId'));
-    const pruneOlderThanRaw = getField(pruneRequest, 'pruneDetailsOlderThanUtc', 'PruneDetailsOlderThanUtc');
-    const pruneOlderThanTime = pruneOlderThanRaw ? new Date(pruneOlderThanRaw).getTime() : null;
-    const keepRecentPublicationCount = getField(pruneRequest, 'keepRecentPublicationCount', 'KeepRecentPublicationCount');
-
-    if (!activePublicationId && !pruneOlderThanTime && !keepRecentPublicationCount) {
-        return true;
-    }
-
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction(
-            [STORE_MARKET_PUBLICATIONS, STORE_MARKET_LISTING_DETAILS],
-            'readwrite');
-        const publicationStore = transaction.objectStore(STORE_MARKET_PUBLICATIONS);
-        const detailStore = transaction.objectStore(STORE_MARKET_LISTING_DETAILS);
-        const publicationRequest = publicationStore.openCursor();
-        const summaries = [];
-
-        publicationRequest.onsuccess = (event) => {
-            const cursor = event.target.result;
-            if (!cursor) {
-                const keepPublicationIds = buildMarketPublicationRetentionSet(
-                    summaries,
-                    activePublicationId,
-                    pruneOlderThanTime,
-                    keepRecentPublicationCount);
-
-                const detailRequest = detailStore.openCursor();
-                detailRequest.onsuccess = (detailEvent) => {
-                    const detailCursor = detailEvent.target.result;
-                    if (!detailCursor) {
-                        return;
-                    }
-
-                    if (!keepPublicationIds.has(normalizeGuid(detailCursor.value.publicationId))) {
-                        detailCursor.delete();
-                    }
-
-                    detailCursor.continue();
-                };
-
-                for (const summary of summaries) {
-                    const publicationId = normalizeGuid(getField(summary, 'publicationId', 'PublicationId'));
-                    if (!keepPublicationIds.has(publicationId)) {
-                        markMarketPublicationDetailsPruned(summary);
-                        publicationStore.put(summary);
-                    }
-                }
-                return;
-            }
-
-            summaries.push(cursor.value);
-            cursor.continue();
-        };
-
-        transaction.oncomplete = () => resolve(true);
-        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
-        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
-    });
-}
-
-function buildMarketPublicationRetentionSet(
-    summaries,
-    activePublicationId,
-    pruneOlderThanTime,
-    keepRecentPublicationCount) {
-    const keep = new Set();
-    if (activePublicationId) {
-        keep.add(activePublicationId);
-    }
-
-    if (pruneOlderThanTime) {
-        for (const summary of summaries) {
-            const publishedTime = getMarketPublicationPublishedTime(summary);
-            if (publishedTime >= pruneOlderThanTime) {
-                keep.add(normalizeGuid(getField(summary, 'publicationId', 'PublicationId')));
-            }
-        }
-    }
-
-    if (keepRecentPublicationCount && keepRecentPublicationCount > 0) {
-        const recent = [...summaries]
-            .sort((a, b) => getMarketPublicationPublishedTime(b) - getMarketPublicationPublishedTime(a))
-            .slice(0, keepRecentPublicationCount);
-        for (const summary of recent) {
-            keep.add(normalizeGuid(getField(summary, 'publicationId', 'PublicationId')));
-        }
-    }
-
-    return keep;
-}
-
-function getMarketPublicationPublishedTime(summary) {
-    const context = getField(summary, 'publicationContext', 'PublicationContext');
-    const publishedAt = getField(context, 'publishedAtUtc', 'PublishedAtUtc');
-    const parsed = publishedAt ? new Date(publishedAt).getTime() : 0;
-    return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function markMarketPublicationDetailsPruned(summary) {
-    const manifest = getField(summary, 'detailManifest', 'DetailManifest');
-    const entries = getField(manifest, 'entries', 'Entries') ?? [];
-    for (const entry of entries) {
-        const availability = getField(entry, 'availability', 'Availability');
-        if (availability === 1) {
-            entry.availability = 3;
-            entry.unavailableReason = 'Detail was pruned from local cold storage.';
-        }
-    }
-}
-
-async function saveMarketListingFacts(facts, startIndex = 0) {
-    const database = await initDB();
-
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_MARKET_FETCHES], 'readwrite');
-        const store = transaction.objectStore(STORE_MARKET_FETCHES);
-        let index = startIndex ?? 0;
-        for (const fact of facts ?? []) {
-            store.put(normalizeFactForStorage(fact, index++));
-        }
-
-        transaction.oncomplete = () => resolve(true);
-        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
-        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
-    });
-}
-
-function canonicalFactFromMarketDetail(detail, listing, listingIndex) {
-    const key = getField(detail, 'key', 'Key') ?? {};
-    const world = getField(key, 'world', 'World') ?? {};
-    const scope = getField(key, 'scope', 'Scope') ?? 0;
-    const dataCenter = getField(world, 'dataCenter', 'DataCenter') ?? '';
-    const worldName = getField(world, 'worldName', 'WorldName') ?? '';
-    const retrievedAt = getField(detail, 'retrievedAtUtc', 'RetrievedAtUtc') ??
-        getField(detail, 'createdAtUtc', 'CreatedAtUtc') ??
-        '';
-    const sourceScopeKey = `${scope}:${dataCenter}:${worldName}`;
-
-    return {
-        publicationId: normalizeGuid(getField(key, 'publicationId', 'PublicationId')),
-        runId: normalizeGuid(getField(detail, 'runId', 'RunId')),
-        demandFingerprint: getField(key, 'demandFingerprint', 'DemandFingerprint'),
-        itemId: getField(key, 'itemId', 'ItemId') ?? 0,
-        scope,
-        dataCenter,
-        worldName,
-        retrievedAtUtc: retrievedAt,
-        marketUploadedAtUtc: getField(detail, 'marketUploadedAtUtc', 'MarketUploadedAtUtc'),
-        lastReviewTimeUtc: getField(listing, 'lastReviewTimeUtc', 'LastReviewTimeUtc'),
-        quantity: getField(listing, 'quantity', 'Quantity') ?? 0,
-        unitPrice: getField(listing, 'pricePerUnit', 'PricePerUnit') ?? 0,
-        isHq: getField(listing, 'isHq', 'IsHq') ?? false,
-        retainerName: getField(listing, 'retainerName', 'RetainerName') ?? '',
-        listingId: getField(listing, 'listingId', 'ListingId') ?? `${sourceScopeKey}:${listingIndex}`,
-        priceSanity: getField(listing, 'priceSanity', 'PriceSanity') ?? 0,
-        competitiveness: getField(listing, 'competitiveness', 'Competitiveness') ?? 0,
-        classificationReasons: getField(detail, 'classificationReasons', 'ClassificationReasons') ?? [],
-        sourceProvider: 'Universalis',
-        sourceScopeKey
-    };
-}
-
-function marketDetailMatchesSourceQuery(detail, query) {
-    const key = getField(detail, 'key', 'Key') ?? {};
-    const world = getField(key, 'world', 'World');
-    if (!world) {
-        return false;
-    }
-
-    const itemId = getField(query, 'itemId', 'ItemId');
-    const scope = getField(query, 'scope', 'Scope');
-    const dataCenter = getField(query, 'dataCenter', 'DataCenter');
-    const worldName = getField(query, 'worldName', 'WorldName');
-    const publicationId = normalizeGuid(getField(query, 'publicationId', 'PublicationId'));
-    const runId = normalizeGuid(getField(query, 'runId', 'RunId'));
-    const demandFingerprint = getFingerprintValue(getField(query, 'demandFingerprint', 'DemandFingerprint'));
-    const keyDemandFingerprint = getFingerprintValue(getField(key, 'demandFingerprint', 'DemandFingerprint'));
-
-    return (itemId == null || getField(key, 'itemId', 'ItemId') === itemId) &&
-        (scope == null || getField(key, 'scope', 'Scope') === scope) &&
-        (!dataCenter || String(getField(world, 'dataCenter', 'DataCenter') ?? '').toLowerCase() === String(dataCenter).toLowerCase()) &&
-        (!worldName || String(getField(world, 'worldName', 'WorldName') ?? '').toLowerCase() === String(worldName).toLowerCase()) &&
-        (!publicationId || normalizeGuid(getField(key, 'publicationId', 'PublicationId')) === publicationId) &&
-        (!runId || normalizeGuid(getField(detail, 'runId', 'RunId')) === runId) &&
-        (!demandFingerprint || keyDemandFingerprint === demandFingerprint);
-}
-
-async function loadMarketListingFactsFromDetails(query) {
-    const database = await initDB();
-    const publicationId = normalizeGuid(getField(query, 'publicationId', 'PublicationId'));
-
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_MARKET_LISTING_DETAILS], 'readonly');
-        const store = transaction.objectStore(STORE_MARKET_LISTING_DETAILS);
-        const request = publicationId
-            ? store.index('publicationId').openCursor(publicationId)
-            : store.openCursor();
-        const results = [];
-
-        request.onsuccess = (event) => {
-            const cursor = event.target.result;
-            if (!cursor) {
-                resolve(results);
-                return;
-            }
-
-            const detail = cursor.value;
-            if (marketDetailMatchesSourceQuery(detail, query)) {
-                const listings = getField(detail, 'listings', 'Listings') ?? [];
-                for (let i = 0; i < listings.length; i++) {
-                    results.push(canonicalFactFromMarketDetail(detail, listings[i], i));
-                }
-            }
-
-            cursor.continue();
-        };
-
-        request.onerror = () => reject(request.error);
-    });
-}
-
-async function loadMarketListingFacts(query) {
-    const database = await initDB();
-    const itemId = getField(query, 'itemId', 'ItemId');
-    const scope = getField(query, 'scope', 'Scope');
-    const dataCenter = getField(query, 'dataCenter', 'DataCenter');
-    const worldName = getField(query, 'worldName', 'WorldName');
-    const publicationId = normalizeGuid(getField(query, 'publicationId', 'PublicationId'));
-    const runId = normalizeGuid(getField(query, 'runId', 'RunId'));
-    const demandFingerprint = getFingerprintValue(getField(query, 'demandFingerprint', 'DemandFingerprint'));
-
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_MARKET_FETCHES], 'readonly');
-        const store = transaction.objectStore(STORE_MARKET_FETCHES);
-        const request = store.openCursor();
-        const results = [];
-
-        request.onsuccess = (event) => {
-            const cursor = event.target.result;
-            if (!cursor) {
-                resolve(results);
-                return;
-            }
-
-            const fact = cursor.value;
-            if ((itemId == null || getField(fact, 'itemId', 'ItemId') === itemId) &&
-                (scope == null || getField(fact, 'scope', 'Scope') === scope) &&
-                (!dataCenter || String(getField(fact, 'dataCenter', 'DataCenter') ?? '').toLowerCase() === String(dataCenter).toLowerCase()) &&
-                (!worldName || String(getField(fact, 'worldName', 'WorldName') ?? '').toLowerCase() === String(worldName).toLowerCase()) &&
-                (!publicationId || normalizeGuid(getField(fact, 'publicationId', 'PublicationId')) === publicationId) &&
-                (!runId || normalizeGuid(getField(fact, 'runId', 'RunId')) === runId) &&
-                (!demandFingerprint ||
-                    getFingerprintValue(getField(fact, 'demandFingerprint', 'DemandFingerprint')) === demandFingerprint)) {
-                results.push(fact);
-            }
-
-            cursor.continue();
-        };
-
-        request.onerror = () => reject(request.error);
-    });
-}
-
 // Export functions for Blazor interop
 window.IndexedDB = {
     savePlan,
@@ -1312,19 +775,7 @@ window.IndexedDB = {
     loadMarketDataBulk,
     deleteStaleMarketData,
     deleteOldestEntries,
-    getMarketCacheStats,
-    saveMarketPublication,
-    saveMarketPublicationDetails,
-    saveMarketPublicationRunRecords,
-    saveMarketPublicationSummary,
-    loadMarketPublicationSummary,
-    loadMarketDetailManifest,
-    loadMarketDetails,
-    loadMarketRunRecord,
-    pruneMarketDetails,
-    saveMarketListingFacts,
-    loadMarketListingFactsFromDetails,
-    loadMarketListingFacts
+    getMarketCacheStats
 };
 
-console.log('[IndexedDB] Module loaded (v5 with market intelligence)');
+console.log('[IndexedDB] Module loaded (v4 with plan summaries)');

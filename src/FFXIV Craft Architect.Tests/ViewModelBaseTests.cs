@@ -58,9 +58,14 @@ public class ViewModelBaseTests
         var viewModel = new TestViewModel();
         var expectedException = new InvalidOperationException("Test exception");
         Exception? capturedException = null;
+        var handled = new TaskCompletionSource();
 
-        viewModel.TestSafeFireAndForget(Task.FromException(expectedException), ex => capturedException = ex);
-        await Task.Delay(100);
+        viewModel.TestSafeFireAndForget(Task.FromException(expectedException), ex =>
+        {
+            capturedException = ex;
+            handled.SetResult();
+        });
+        await handled.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Same(expectedException, capturedException);
     }

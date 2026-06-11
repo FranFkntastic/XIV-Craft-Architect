@@ -82,12 +82,10 @@ public class IndexedDbServiceAutoSaveTests
         Assert.True(saved);
         Assert.Equal("IndexedDB.patchMarketAnalysis", jsRuntime.LastIdentifier);
         Assert.Equal(0, jsRuntime.LoadPlanCallCount);
-        Assert.Equal(10, jsRuntime.LastArgs?.Length);
+        Assert.Equal(8, jsRuntime.LastArgs?.Length);
         Assert.Contains("\"ItemAnalyses\"", Assert.IsType<string>(jsRuntime.LastArgs?[3]));
         Assert.Contains("\"SchemaVersion\"", Assert.IsType<string>(jsRuntime.LastArgs?[6]));
         Assert.Null(jsRuntime.LastArgs?[7]);
-        Assert.Null(jsRuntime.LastArgs?[8]);
-        Assert.Null(jsRuntime.LastArgs?[9]);
     }
 
     [Fact]
@@ -118,45 +116,6 @@ public class IndexedDbServiceAutoSaveTests
         Assert.Contains("\"ItemAnalyses\"", Assert.IsType<string>(jsRuntime.LastArgs?[3]));
         Assert.Null(jsRuntime.LastArgs?[6]);
         Assert.Null(jsRuntime.LastArgs?[7]);
-        Assert.Null(jsRuntime.LastArgs?[8]);
-        Assert.Null(jsRuntime.LastArgs?[9]);
-    }
-
-    [Fact]
-    public async Task SaveMarketAnalysisAsync_WithCompactSummary_PatchesReferenceAndOmitsRichMarketPayloads()
-    {
-        var jsRuntime = new RecordingJsRuntime();
-        var service = new IndexedDbService(jsRuntime);
-        var publicationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-        var summary = new MarketIntelligencePublicationSummary
-        {
-            PublicationId = publicationId,
-            Items =
-            [
-                new MarketItemSummary
-                {
-                    ItemId = 100,
-                    Name = "Saved Item",
-                    QuantityNeeded = 2
-                }
-            ]
-        };
-
-        var saved = await service.SaveMarketAnalysisAsync(
-            "plan-id",
-            [new DetailedShoppingPlan { ItemId = 100, QuantityNeeded = 2 }],
-            [new MarketItemAnalysis { ItemId = 100, QuantityNeeded = 2 }],
-            RecommendationMode.MaximizeValue,
-            MarketAcquisitionLens.BulkValue,
-            marketIntelligenceSummary: summary);
-
-        Assert.True(saved);
-        Assert.Equal("IndexedDB.patchMarketAnalysis", jsRuntime.LastIdentifier);
-        Assert.Null(jsRuntime.LastArgs?[1]);
-        Assert.Null(jsRuntime.LastArgs?[2]);
-        Assert.Null(jsRuntime.LastArgs?[3]);
-        Assert.Equal(publicationId, jsRuntime.LastArgs?[8]);
-        Assert.Contains("\"PublicationId\":\"11111111-1111-1111-1111-111111111111\"", Assert.IsType<string>(jsRuntime.LastArgs?[9]));
     }
 
     private sealed class RecordingJsRuntime : IJSRuntime

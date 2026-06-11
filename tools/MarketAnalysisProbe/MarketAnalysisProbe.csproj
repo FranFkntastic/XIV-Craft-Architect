@@ -7,10 +7,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="FFXIV Craft Architect.Tests" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\..\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj" />
   </ItemGroup>
 </Project>

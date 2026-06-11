@@ -138,7 +138,8 @@ public class RecipeCalculationService
         List<(int itemId, string name, int quantity, bool isHqRequired)> targetItems,
         string dataCenter,
         string world,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IRecipePlanBuildDiagnosticRecorder? diagnostics = null)
     {
         _logger?.LogInformation("[RecipeCalc] Building plan for {Count} target items", targetItems.Count);
         
@@ -155,7 +156,11 @@ public class RecipeCalculationService
         {
             // Phase 1: Discover tree structure (breadth-first)
             _logger?.LogInformation("[RecipeCalc] Phase 1: Discovering tree structure");
-            var discovery = await DiscoverTreeLevelsAsync(targetItems, ct);
+            var discovery = await RunDiagnosticPhaseAsync(
+                diagnostics,
+                "build-plan.discover-tree",
+                token => DiscoverTreeLevelsAsync(targetItems, token),
+                ct);
             
             // Phase 2: Fetch all levels in batches
             _logger?.LogInformation("[RecipeCalc] Phase 2: Fetching {TotalItems} items across {Levels} levels", 
@@ -174,8 +179,17 @@ public class RecipeCalculationService
                 _logger?.LogInformation("[RecipeCalc] Fetching level {Level} ({Current}/{Total})", 
                     level.Depth, i + 1, discovery.Levels.Count);
                 
-                var levelItems = await FetchLevelBatchesAsync(
-                    level, batchSize, maxConcurrent, timeoutSeconds, null, ct);
+                var levelItems = await RunDiagnosticPhaseAsync(
+                    diagnostics,
+                    $"build-plan.fetch-level-{level.Depth}",
+                    token => FetchLevelBatchesAsync(
+                        level,
+                        batchSize,
+                        maxConcurrent,
+                        timeoutSeconds,
+                        null,
+                        token),
+                    ct);
                 
                 foreach (var kvp in levelItems)
                 {
@@ -186,38 +200,48 @@ public class RecipeCalculationService
             // Phase 3: Build tree from cache
             _logger?.LogInformation("[RecipeCalc] Phase 3: Building tree from cache");
             var nodeCache = new Dictionary<int, PlanNode>();
-            
-            foreach (var (itemId, name, quantity, isHqRequired) in targetItems)
-            {
-                try
+
+            RunDiagnosticPhase(
+                diagnostics,
+                "build-plan.build-tree-from-cache",
+                () =>
                 {
-                    var node = BuildTreeFromCache(itemId, quantity, 0, isHqRequired, isRootItem: true, itemCache, nodeCache);
-                    if (node != null)
+                    foreach (var (itemId, name, quantity, isHqRequired) in targetItems)
                     {
-                        plan.RootItems.Add(node);
-                        _logger?.LogDebug("[RecipeCalc] Added root item: {Name} x{Qty} (HQ: {Hq})", 
-                            node.Name, node.Quantity, isHqRequired);
+                        try
+                        {
+                            var node = BuildTreeFromCache(itemId, quantity, 0, isHqRequired, isRootItem: true, itemCache, nodeCache);
+                            if (node != null)
+                            {
+                                plan.RootItems.Add(node);
+                                _logger?.LogDebug("[RecipeCalc] Added root item: {Name} x{Qty} (HQ: {Hq})",
+                                    node.Name, node.Quantity, isHqRequired);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger?.LogError(ex, "[RecipeCalc] Failed to build tree from cache for item {ItemId}", itemId);
+                            plan.RootItems.Add(new PlanNode
+                            {
+                                ItemId = itemId,
+                                Name = $"{name} (Error: {ex.Message})",
+                                Quantity = quantity,
+                                Source = AcquisitionSource.MarketBuyNq,
+                                SourceReason = AcquisitionSourceReason.SystemDefault,
+                                MustBeHq = isHqRequired,
+                                CanCraft = false
+                            });
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogError(ex, "[RecipeCalc] Failed to build tree from cache for item {ItemId}", itemId);
-                    plan.RootItems.Add(new PlanNode
-                    {
-                        ItemId = itemId,
-                        Name = $"{name} (Error: {ex.Message})",
-                        Quantity = quantity,
-                        Source = AcquisitionSource.MarketBuyNq,
-                        SourceReason = AcquisitionSourceReason.SystemDefault,
-                        MustBeHq = isHqRequired,
-                        CanCraft = false
-                    });
-                }
-            }
+                });
             
             // Apply vendor prices (data is already in cache from Phase 2)
             _logger?.LogInformation("[RecipeCalc] Applying vendor prices from cache");
-            await ApplyVendorPricesFromCacheAsync(plan, itemCache, ct);
+            await RunDiagnosticPhaseAsync(
+                diagnostics,
+                "build-plan.apply-vendor-prices-from-cache",
+                token => ApplyVendorPricesFromCacheAsync(plan, itemCache, token),
+                ct);
         }
         catch (TreeCalculationException tex)
         {
@@ -233,6 +257,56 @@ public class RecipeCalculationService
 
         _logger?.LogInformation("[RecipeCalc] Plan built with {Count} root items", plan.RootItems.Count);
         return plan;
+    }
+
+    private static T RunDiagnosticPhase<T>(
+        IRecipePlanBuildDiagnosticRecorder? diagnostics,
+        string name,
+        Func<T> action)
+    {
+        return diagnostics == null
+            ? action()
+            : diagnostics.RunPhase(name, action);
+    }
+
+    private static void RunDiagnosticPhase(
+        IRecipePlanBuildDiagnosticRecorder? diagnostics,
+        string name,
+        Action action)
+    {
+        if (diagnostics == null)
+        {
+            action();
+            return;
+        }
+
+        diagnostics.RunPhase(name, action);
+    }
+
+    private static async Task<T> RunDiagnosticPhaseAsync<T>(
+        IRecipePlanBuildDiagnosticRecorder? diagnostics,
+        string name,
+        Func<CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken)
+    {
+        return diagnostics == null
+            ? await action(cancellationToken)
+            : await diagnostics.RunPhaseAsync(name, action, cancellationToken);
+    }
+
+    private static async Task RunDiagnosticPhaseAsync(
+        IRecipePlanBuildDiagnosticRecorder? diagnostics,
+        string name,
+        Func<CancellationToken, Task> action,
+        CancellationToken cancellationToken)
+    {
+        if (diagnostics == null)
+        {
+            await action(cancellationToken);
+            return;
+        }
+
+        await diagnostics.RunPhaseAsync(name, action, cancellationToken);
     }
 
     /// <summary>
@@ -1283,6 +1357,10 @@ public class RecipeCalculationService
                                 null));
                         }
                     }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
