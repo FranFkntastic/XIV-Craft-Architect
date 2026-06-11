@@ -75,7 +75,8 @@ public sealed record ImportProjectItemsResult(
 public sealed record RefreshRecipePlanPricesRequest(
     MarketFetchScope PriceFetchScope,
     string SelectedDataCenter,
-    string SelectedRegion);
+    string SelectedRegion,
+    bool ForceRefreshData = false);
 
 public sealed record ApplyPlanEditorEditRequest(
     IReadOnlyCollection<string> NodeIds,
@@ -441,6 +442,7 @@ public sealed class RecipePlannerCommandService
             request.PriceFetchScope,
             request.SelectedDataCenter,
             request.SelectedRegion,
+            forceRefreshData: request.ForceRefreshData,
             ct: ct);
         ct.ThrowIfCancellationRequested();
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))

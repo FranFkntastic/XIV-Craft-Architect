@@ -565,6 +565,50 @@ public class RecipePlannerCommandServiceTests
     }
 
     [Fact]
+    public async Task RefreshPricesAsync_WhenForceRefreshRequested_UsesExplicitPairRefresh()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan("Refresh Item", 100));
+        var builder = new FakeRecipePlanBuilder();
+        var cache = new Mock<IMarketCacheService>();
+        var refreshRequestedPairs = false;
+        cache.Setup(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+        cache.Setup(c => c.RefreshRequestedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<List<(int itemId, string dataCenter)>, IProgress<string>?, CancellationToken>(
+                (_, _, _) => refreshRequestedPairs = true)
+            .ReturnsAsync(1);
+        cache.Setup(c => c.GetManyAsync(
+                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>()))
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(100, "Aether")] = CachedData(100, "Aether", 88)
+            });
+        var service = CreateService(appState, builder, cache.Object);
+
+        await service.RefreshPricesAsync(new RefreshRecipePlanPricesRequest(
+            MarketFetchScope.SelectedDataCenter,
+            "Aether",
+            "North America",
+            ForceRefreshData: true));
+
+        Assert.True(refreshRequestedPairs);
+        cache.Verify(c => c.EnsurePopulatedAsync(
+            It.IsAny<List<(int itemId, string dataCenter)>>(),
+            TimeSpan.Zero,
+            It.IsAny<IProgress<string>?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task RefreshPricesAsync_WhenPlanChangesDuringFetch_DoesNotMutateNewPlan()
     {
         var oldPlan = CreatePlan("Old Plan", 100);

@@ -154,7 +154,8 @@
                 new RefreshRecipePlanPricesRequest(
                     AppState.SearchEntireRegion ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter,
                     AppState.SelectedDataCenter,
-                    AppState.SelectedRegion),
+                    AppState.SelectedRegion,
+                    ForceRefreshData: true),
                 operation.Token);
             if (!operation.IsCurrent)
             {
