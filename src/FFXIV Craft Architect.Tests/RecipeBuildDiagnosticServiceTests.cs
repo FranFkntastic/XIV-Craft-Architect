@@ -27,14 +27,14 @@ public sealed class RecipeBuildDiagnosticServiceTests
         var runner = new FakeDiagnosticCommandRunner
         {
             UsePublishGraceScenario = true,
-            DelayBeforePublish = TimeSpan.FromMilliseconds(65),
-            PublishDelay = TimeSpan.FromMilliseconds(75)
+            DelayBeforePublish = TimeSpan.FromMilliseconds(125),
+            PublishDelay = TimeSpan.FromMilliseconds(125)
         };
         var service = new RecipeBuildDiagnosticService(
             appState,
             runner,
-            TimeSpan.FromMilliseconds(100),
-            TimeSpan.FromMilliseconds(150));
+            TimeSpan.FromMilliseconds(200),
+            TimeSpan.FromMilliseconds(300));
 
         var dump = await service.BuildWithDiagnosticsAsync(CancellationToken.None);
 
@@ -52,15 +52,15 @@ public sealed class RecipeBuildDiagnosticServiceTests
         var runner = new FakeDiagnosticCommandRunner
         {
             UsePostBuildWatchdogScenario = true,
-            BuildDelay = TimeSpan.FromMilliseconds(10),
-            FollowUpDelay = TimeSpan.FromMilliseconds(75)
+            BuildDelay = TimeSpan.FromMilliseconds(125),
+            FollowUpDelay = TimeSpan.FromMilliseconds(125)
         };
         var service = new RecipeBuildDiagnosticService(
             appState,
             runner,
-            TimeSpan.FromMilliseconds(25),
-            TimeSpan.FromMilliseconds(250),
-            TimeSpan.FromMilliseconds(250));
+            TimeSpan.FromMilliseconds(200),
+            TimeSpan.FromMilliseconds(300),
+            TimeSpan.FromMilliseconds(300));
 
         var dump = await service.BuildWithDiagnosticsAsync(CancellationToken.None);
 
