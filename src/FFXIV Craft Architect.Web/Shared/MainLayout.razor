@@ -258,7 +258,9 @@
     private bool IsDevelopment => string.Equals(HostEnvironment.Environment, "Development", StringComparison.OrdinalIgnoreCase);
     private bool IsDebugToolsAvailable => IsDevelopment || AppState.SecretDebugToolsEnabled;
     private bool IsTradeMode => IsTradeRoute(NavigationManager.Uri);
-    private bool CanDumpSelectedMarketAnalysisItem => AppState.MarketItemAnalyses.Any();
+    private bool CanDumpSelectedMarketAnalysisItem =>
+        AppState.SelectedMarketAnalysisItemId.HasValue &&
+        AppState.MarketItemAnalyses.Any(analysis => analysis.ItemId == AppState.SelectedMarketAnalysisItemId.Value);
     private string? BenchmarkHook(string id) => AppState.SecretDebugToolsEnabled ? id : null;
     
     private readonly MudTheme _theme = AppTheme.CreateTheme();
@@ -662,6 +664,12 @@
             return;
         }
 
+        if (!AppState.SelectedMarketAnalysisItemId.HasValue)
+        {
+            Snackbar.Add("Select a market analysis item before dumping diagnostics.", Severity.Warning);
+            return;
+        }
+
         try
         {
             var dump = MarketAnalysisDiagnosticDumpService.BuildDump(
@@ -681,7 +689,7 @@
                     AppState.SelectedMarketAnalysisItemId));
             if (dump == null)
             {
-                Snackbar.Add("No market analysis to dump", Severity.Warning);
+                Snackbar.Add("Selected market analysis item is no longer available.", Severity.Warning);
                 return;
             }
 
