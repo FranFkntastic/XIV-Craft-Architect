@@ -60,6 +60,7 @@ builder.Services.AddScoped<RecipePlannerCommandService>();
 builder.Services.AddScoped<IRecipeBuildDiagnosticCommandRunner, RecipePlannerDiagnosticCommandRunner>();
 builder.Services.AddScoped<RecipeBuildDiagnosticService>();
 builder.Services.AddScoped<MarketAnalysisWorkflowService>();
+builder.Services.AddScoped<MarketAnalysisItemRefreshService>();
 builder.Services.AddScoped<IMarketAnalysisAutoRunner, MarketAnalysisAutoRunner>();
 builder.Services.AddScoped<MarketAnalysisDiagnosticDumpService>();
 builder.Services.AddScoped<ProcurementWorkflowService>();

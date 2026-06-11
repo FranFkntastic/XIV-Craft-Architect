@@ -557,13 +557,18 @@ public class ProcurementWorkflowServiceTests
             indexedDb,
             new StoredPlanSnapshotBuilder(appState),
             new PlanSessionLoadService(appState));
+        var itemRefreshService = new MarketAnalysisItemRefreshService(
+            appState,
+            marketExecution ?? Mock.Of<IMarketAnalysisExecutionService>(),
+            new MarketShoppingService(Mock.Of<IMarketCacheService>()),
+            persistence,
+            indexedDb,
+            recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService());
 
         return new ProcurementWorkflowService(
             appState,
             procurementExecution ?? Mock.Of<IProcurementRouteExecutionService>(),
-            marketExecution ?? Mock.Of<IMarketAnalysisExecutionService>(),
-            new MarketShoppingService(Mock.Of<IMarketCacheService>()),
-            persistence,
+            itemRefreshService,
             recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService());
     }
 
@@ -830,6 +835,11 @@ public class ProcurementWorkflowServiceTests
             if (identifier == "IndexedDB.patchMarketAnalysis")
             {
                 PatchedPlanIds.Add((string)args![0]!);
+                return new ValueTask<TValue>((TValue)(object)true);
+            }
+
+            if (identifier == "IndexedDB.savePlan")
+            {
                 return new ValueTask<TValue>((TValue)(object)true);
             }
 

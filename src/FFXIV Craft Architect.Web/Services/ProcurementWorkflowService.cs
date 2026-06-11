@@ -8,24 +8,18 @@ public sealed class ProcurementWorkflowService
 {
     private readonly AppState _appState;
     private readonly IProcurementRouteExecutionService _procurementRouteExecutionService;
-    private readonly IMarketAnalysisExecutionService _marketAnalysisExecutionService;
-    private readonly MarketShoppingService _marketShoppingService;
-    private readonly WebPlanPersistenceService _planPersistence;
+    private readonly MarketAnalysisItemRefreshService _itemRefreshService;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
 
     public ProcurementWorkflowService(
         AppState appState,
         IProcurementRouteExecutionService procurementRouteExecutionService,
-        IMarketAnalysisExecutionService marketAnalysisExecutionService,
-        MarketShoppingService marketShoppingService,
-        WebPlanPersistenceService planPersistence,
+        MarketAnalysisItemRefreshService itemRefreshService,
         IRecipeLayerWorkflowService recipeLayerWorkflow)
     {
         _appState = appState;
         _procurementRouteExecutionService = procurementRouteExecutionService;
-        _marketAnalysisExecutionService = marketAnalysisExecutionService;
-        _marketShoppingService = marketShoppingService;
-        _planPersistence = planPersistence;
+        _itemRefreshService = itemRefreshService;
         _recipeLayerWorkflow = recipeLayerWorkflow;
     }
 
@@ -130,130 +124,36 @@ public sealed class ProcurementWorkflowService
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
-        var plan = _appState.CurrentPlan;
-        var planSessionVersion = _appState.PlanSessionVersion;
-        if (plan == null)
-        {
-            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.NoPlan);
-        }
-
-        var marketCandidates = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidatesAsync(plan, ct);
-        if (marketCandidates == null)
-        {
-            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StalePlan);
-        }
-
-        var candidate = marketCandidates
-            .FirstOrDefault(item => item.ItemId == request.ItemId);
-        if (candidate == null)
-        {
-            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.NotFound);
-        }
-
-        var capturedPlanId = _appState.CurrentPlanId;
-        var capturedDecisionVersion = _appState.CurrentVersions.PlanDecisionVersion;
-        var capturedMarketAnalysisVersion = _appState.CurrentVersions.MarketAnalysisVersion;
         var scope = _appState.ProcurementSearchEntireRegion
             ? MarketFetchScope.EntireRegion
             : MarketFetchScope.SelectedDataCenter;
         var requestSnapshot = CreateRequestSnapshot(scope);
-        var guardedProgress = progress == null
-            ? null
-            : new Progress<string>(message =>
+        var result = await _itemRefreshService.RefreshItemMarketDataAsync(
+            new MarketAnalysisItemRefreshWorkflowRequest(
+                request.ItemId,
+                request.IsCurrentOperation,
+                request.ExecutionOptions)
             {
-                if (IsCurrentRequest(requestSnapshot) &&
-                    _appState.CurrentVersions.MarketAnalysisVersion == capturedMarketAnalysisVersion &&
-                    _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
-                    (request.IsCurrentOperation?.Invoke() ?? true))
-                {
-                    progress.Report(message);
-                }
-            });
-
-        var result = await _marketAnalysisExecutionService.ExecuteAsync(
-            new MarketAnalysisExecutionRequest
-            {
-                Items = [candidate],
                 Scope = scope,
-                SelectedDataCenter = _appState.SelectedDataCenter,
-                SelectedRegion = _appState.SelectedRegion,
-                ForceRefreshData = true,
-                RecommendationMode = RecommendationMode.MinimizeTotalCost,
-                Lens = _appState.MarketAnalysisLens,
-                ExpectedWorldsByDataCenter = _appState.GetExpectedMarketWorlds(scope)
+                IsCurrentConfiguration = () => IsCurrentRequest(requestSnapshot)
             },
-            guardedProgress,
-            ct,
-            executionOptions: request.ExecutionOptions);
+            progress,
+            ct);
 
-        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        return result.Status switch
         {
-            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StalePlan);
-        }
-
-        if (_appState.CurrentVersions.PlanDecisionVersion != capturedDecisionVersion)
-        {
-            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StaleDecision);
-        }
-
-        if (_appState.CurrentVersions.MarketAnalysisVersion != capturedMarketAnalysisVersion)
-        {
-            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StaleConfiguration);
-        }
-
-        if (!IsCurrentRequest(requestSnapshot))
-        {
-            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StaleConfiguration);
-        }
-
-        if (request.IsCurrentOperation?.Invoke() == false)
-        {
-            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.Superseded);
-        }
-
-        var refreshedAnalysis = result.Analyses.SingleOrDefault();
-        if (refreshedAnalysis == null || result.ShoppingPlans.Count == 0)
-        {
-            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.NoData);
-        }
-
-        var refreshedPlans = new List<DetailedShoppingPlan> { result.ShoppingPlans.Single() };
-        _marketShoppingService.ApplyVendorPurchaseOverrides(plan, refreshedPlans);
-        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
-        {
-            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StalePlan);
-        }
-
-        _appState.ReplaceMarketAnalysisItem(refreshedAnalysis, refreshedPlans[0]);
-
-        if (!string.IsNullOrEmpty(capturedPlanId) &&
-            _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
-            string.Equals(_appState.CurrentPlanId, capturedPlanId, StringComparison.Ordinal))
-        {
-            await _planPersistence.SaveMarketAnalysisAsync(
-                capturedPlanId,
-                _appState.ShoppingPlans,
-                _appState.MarketItemAnalyses,
-                _appState.RecommendationMode,
-                _appState.MarketAnalysisLens,
-                _appState.MarketAnalysisRecipeBasis,
-                _appState.PublishedMarketAnalysisScope,
-                _appState.MarketIntelligence);
-        }
-
-        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
-        {
-            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StalePlan);
-        }
-
-        if (request.IsCurrentOperation?.Invoke() == false)
-        {
-            return ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.Superseded);
-        }
-
-        return new ProcurementItemRefreshWorkflowResult(
-            ProcurementItemRefreshStatus.Refreshed,
-            candidate.Name);
+            MarketAnalysisItemRefreshStatus.Refreshed => new ProcurementItemRefreshWorkflowResult(
+                ProcurementItemRefreshStatus.Refreshed,
+                result.ItemName),
+            MarketAnalysisItemRefreshStatus.NoPlan => ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.NoPlan),
+            MarketAnalysisItemRefreshStatus.StalePlan => ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StalePlan),
+            MarketAnalysisItemRefreshStatus.NotFound => ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.NotFound),
+            MarketAnalysisItemRefreshStatus.NoData => ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.NoData),
+            MarketAnalysisItemRefreshStatus.StaleDecision => ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StaleDecision),
+            MarketAnalysisItemRefreshStatus.StaleConfiguration => ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.StaleConfiguration),
+            MarketAnalysisItemRefreshStatus.Superseded => ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.Superseded),
+            _ => ProcurementItemRefreshWorkflowResult.Noop(ProcurementItemRefreshStatus.Superseded)
+        };
     }
 
     private bool IsCurrent(
