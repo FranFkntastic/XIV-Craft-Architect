@@ -32,7 +32,9 @@
                                  SelectedItemId="SelectedItemId"
                                  ExpandedWorldKeys="ExpandedWorldKeys"
                                  ShowWorldsColumn="ShowWorldsColumn"
+                                 IsRefreshingItem="IsRefreshingItem"
                                  OnSelectedItemChanged="OnSelectedItemChanged"
+                                 OnRefreshItemRequested="OnRefreshItemRequested"
                                  OnWorldExpansionToggled="OnWorldExpansionToggled"
                                  OnSortChanged="OnSortChanged"
                                  OnWorldSortChanged="OnWorldSortChanged" />
@@ -82,10 +84,12 @@
     [Parameter] public IReadOnlySet<MarketAnalysisExpandedWorldKey> ExpandedWorldKeys { get; set; } = new HashSet<MarketAnalysisExpandedWorldKey>();
     [Parameter] public bool ShowWorldsColumn { get; set; }
     [Parameter] public bool IsAnalyzing { get; set; }
+    [Parameter] public bool IsRefreshingItem { get; set; }
 
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
     [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
     [Parameter] public EventCallback<int?> OnSelectedItemChanged { get; set; }
+    [Parameter] public EventCallback<DetailedShoppingPlan> OnRefreshItemRequested { get; set; }
     [Parameter] public EventCallback<MarketAnalysisExpandedWorldKey> OnWorldExpansionToggled { get; set; }
     [Parameter] public EventCallback<MarketAnalysisGridSortState> OnSortChanged { get; set; }
     [Parameter] public EventCallback<MarketAnalysisWorldGridSortState> OnWorldSortChanged { get; set; }

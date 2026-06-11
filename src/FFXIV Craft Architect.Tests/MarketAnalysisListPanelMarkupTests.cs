@@ -57,6 +57,25 @@ public class MarketAnalysisListPanelMarkupTests
         Assert.Contains(".ma-detail-copy-button", styles);
     }
 
+    [Fact]
+    public void MarketAnalysisListPanel_SelectedDetailHasRefreshItemAction()
+    {
+        var source = File.ReadAllText(GetListPanelPath());
+        var resultsSource = File.ReadAllText(GetSharedPath("MarketAnalysisResultsPanel.razor"));
+
+        Assert.Contains("[Parameter] public EventCallback<DetailedShoppingPlan> OnRefreshItemRequested", source);
+        Assert.Contains("Icons.Material.Filled.Refresh", source);
+        Assert.Contains("Class=\"ma-detail-refresh-button\"", source);
+        Assert.Contains("Title=\"Refresh market data for this item\"", source);
+        Assert.Contains("AriaLabel=\"Refresh market data for this item\"", source);
+        Assert.Contains("OnClick=\"() => RefreshSelectedItemAsync(_selectedPlan)\"", source);
+        Assert.Contains("OnClick:StopPropagation=\"true\"", source);
+        Assert.Contains("await OnRefreshItemRequested.InvokeAsync(plan)", source);
+
+        Assert.Contains("[Parameter] public EventCallback<DetailedShoppingPlan> OnRefreshItemRequested", resultsSource);
+        Assert.Contains("OnRefreshItemRequested=\"OnRefreshItemRequested\"", resultsSource);
+    }
+
     private static string GetListPanelPath()
     {
         return GetSharedPath("MarketAnalysisListPanel.razor");

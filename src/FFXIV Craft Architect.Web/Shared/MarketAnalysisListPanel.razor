@@ -101,6 +101,14 @@
                                            OnClick:StopPropagation="true"
                                            Title="Copy item name"
                                            AriaLabel="Copy item name" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                           Size="Size.Small"
+                                           Class="ma-detail-refresh-button"
+                                           Disabled="IsRefreshingItem"
+                                           OnClick="() => RefreshSelectedItemAsync(_selectedPlan)"
+                                           OnClick:StopPropagation="true"
+                                           Title="Refresh market data for this item"
+                                           AriaLabel="Refresh market data for this item" />
                         </div>
                         <MudText Typo="Typo.caption" Class="ma-detail-subtitle">
                             @FormatQuantity(_selectedPlan.QuantityNeeded) needed
@@ -153,7 +161,9 @@
     [Parameter] public int? SelectedItemId { get; set; }
     [Parameter] public IReadOnlySet<MarketAnalysisExpandedWorldKey> ExpandedWorldKeys { get; set; } = new HashSet<MarketAnalysisExpandedWorldKey>();
     [Parameter] public bool ShowWorldsColumn { get; set; }
+    [Parameter] public bool IsRefreshingItem { get; set; }
     [Parameter] public EventCallback<int?> OnSelectedItemChanged { get; set; }
+    [Parameter] public EventCallback<DetailedShoppingPlan> OnRefreshItemRequested { get; set; }
     [Parameter] public EventCallback<MarketAnalysisExpandedWorldKey> OnWorldExpansionToggled { get; set; }
     [Parameter] public EventCallback<MarketAnalysisGridSortState> OnSortChanged { get; set; }
     [Parameter] public EventCallback<MarketAnalysisWorldGridSortState> OnWorldSortChanged { get; set; }
@@ -181,6 +191,11 @@
     {
         _selectedPlan = plan;
         await OnSelectedItemChanged.InvokeAsync(plan.ItemId);
+    }
+
+    private async Task RefreshSelectedItemAsync(DetailedShoppingPlan plan)
+    {
+        await OnRefreshItemRequested.InvokeAsync(plan);
     }
 
     private RenderFragment SortHeader(string label, MarketAnalysisGridSortColumn column, string? title = null) => builder =>

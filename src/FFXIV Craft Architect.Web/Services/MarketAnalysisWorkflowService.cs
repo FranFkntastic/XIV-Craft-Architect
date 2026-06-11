@@ -79,7 +79,7 @@ public sealed class MarketAnalysisWorkflowService
                 Scope = scope,
                 SelectedDataCenter = _appState.SelectedDataCenter,
                 SelectedRegion = _appState.SelectedRegion,
-                MaxAge = request.ForceRefreshData ? TimeSpan.Zero : (TimeSpan?)null,
+                ForceRefreshData = request.ForceRefreshData,
                 RecommendationMode = RecommendationMode.MinimizeTotalCost,
                 Lens = _appState.MarketAnalysisLens,
                 ExpectedWorldsByDataCenter = _appState.GetExpectedMarketWorlds(scope)
