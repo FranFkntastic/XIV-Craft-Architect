@@ -332,6 +332,69 @@ public class AcquisitionEvaluationSnapshotBuilderTests
     }
 
     [Fact]
+    public void Build_HqEstimateWithoutHqEvidenceDoesNotUsePlannerUnitPriceFallback()
+    {
+        var root = CreateRoot(100, "Final Craft");
+        var material = new PlanNode
+        {
+            ItemId = 200,
+            Name = "HQ Material",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyHq,
+            MustBeHq = true,
+            CanBeHq = true,
+            CanBuyFromMarket = true,
+            HqMarketPrice = 10_000,
+            Parent = root
+        };
+        root.Children.Add(material);
+        var plan = new CraftingPlan { RootItems = [root] };
+        var projection = new RecipeDemandProjection(
+            AllPlanDemand:
+            [
+                CreateDemandRow(RecipeDemandViewKind.PlanOccurrence, material, quantity: 2, canBeHq: true, hqUnitPrice: 10_000)
+            ],
+            MarketAnalysisCandidates: [CreateDemandRow(RecipeDemandViewKind.MarketAnalysisCandidate, material, quantity: 2, canBeHq: true, hqUnitPrice: 10_000)],
+            ActiveProcurementDemand: [CreateDemandRow(RecipeDemandViewKind.ActiveProcurement, material, quantity: 2, canBeHq: true, hqUnitPrice: 10_000)],
+            SuppressedDemand: Array.Empty<RecipeDemandRow>());
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 200,
+                Name = "HQ Material",
+                QuantityNeeded = 2,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 500,
+                    TotalQuantityPurchased = 2,
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 2,
+                            PricePerUnit = 250,
+                            IsHq = false
+                        }
+                    ]
+                }
+            }
+        };
+
+        var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
+            plan,
+            marketPlans,
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
+            AcquisitionFilter.All,
+            projection);
+
+        var row = snapshot.Rows.Single(row => row.Node.ItemId == 200);
+
+        Assert.Equal("-", row.EstimatedCost);
+    }
+
+    [Fact]
     public void Build_UsesRecipeDemandProjectionMembershipForDecisionRoles()
     {
         var root = CreateRoot(100, "Final Craft");
