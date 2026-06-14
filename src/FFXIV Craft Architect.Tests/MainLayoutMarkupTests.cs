@@ -60,6 +60,19 @@ public class MainLayoutMarkupTests
     }
 
     [Fact]
+    public void MainLayout_BenchmarkHooks_AreDeveloperModeGated()
+    {
+        var source = File.ReadAllText(GetMainLayoutPath());
+
+        Assert.Contains("BenchmarkHook(", source);
+        Assert.Contains("AppState.SecretDebugToolsEnabled ? id : null", source);
+        Assert.Contains("data-benchmark-id=\"@BenchmarkHook(\"", source);
+        Assert.Contains("main-import-menu", source);
+        Assert.Contains("main-import-native-plan", source);
+        Assert.Contains("main-nav-market-analysis", source);
+    }
+
+    [Fact]
     public void MainLayout_ReRendersWhenSettingsChange()
     {
         var source = File.ReadAllText(GetMainLayoutPath());
@@ -94,6 +107,19 @@ public class MainLayoutMarkupTests
         Assert.DoesNotContain("Href=\"about\"", source);
         Assert.DoesNotContain(">About</MudLink>", source);
         Assert.Contains("Href=\"https://github.com/FranFkntastic/XIV-Craft-Architect\"", source);
+    }
+
+    [Fact]
+    public void MainLayout_QuickCopy_PrefersChoiceAwarePlanMaterialsBeforeShoppingFallback()
+    {
+        var source = File.ReadAllText(GetMainLayoutPath());
+
+        Assert.Contains("@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService", source);
+        Assert.Contains("var materials = CreateMaterialsForQuickCopy();", source);
+        Assert.Contains("BuildActiveProcurementItems(AppState.CurrentPlan)", source);
+        Assert.Contains("? planMaterials", source);
+        Assert.Contains(": CreateMaterialsFromShoppingItems()", source);
+        Assert.Contains("UnitPrice = item.UnitPrice", source);
     }
 
     private static string GetMainLayoutPath()

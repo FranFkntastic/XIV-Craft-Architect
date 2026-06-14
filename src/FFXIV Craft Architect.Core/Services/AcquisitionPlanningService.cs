@@ -25,7 +25,10 @@ public static class AcquisitionPlanningService
 
     public static List<MaterialAggregate> GetActiveProcurementItems(CraftingPlan? plan)
     {
-        return plan?.AggregatedMaterials ?? new List<MaterialAggregate>();
+        return new RecipeDemandProjectionService()
+            .Build(plan, snapshot: null)
+            .ToActiveProcurementMaterialAggregates()
+            .ToList();
     }
 
     public static List<DetailedShoppingPlan> FilterShoppingPlansForActiveProcurement(
@@ -453,11 +456,13 @@ public static class AcquisitionPlanningService
                 : AcquisitionSourceReason.Coerced;
         }
 
-        if (node.Source == AcquisitionSource.MarketBuyHq)
+        if (reason == AcquisitionSourceReason.UserSelected &&
+            node.Source == AcquisitionSource.MarketBuyHq)
         {
             node.MustBeHq = true;
         }
-        else if (node.Source == AcquisitionSource.MarketBuyNq)
+        else if (reason == AcquisitionSourceReason.UserSelected &&
+            node.Source == AcquisitionSource.MarketBuyNq)
         {
             node.MustBeHq = false;
         }

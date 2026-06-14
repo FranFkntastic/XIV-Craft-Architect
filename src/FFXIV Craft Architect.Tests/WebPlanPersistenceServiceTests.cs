@@ -29,6 +29,54 @@ public class WebPlanPersistenceServiceTests
     }
 
     [Fact]
+    public async Task SaveCurrentPlanAsync_WritesFullMarketAnalysisStateWithoutCompactSummary()
+    {
+        var jsRuntime = new RecordingJsRuntime();
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 100, Name = "Saved Item", Quantity = 12 }]);
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 200,
+                    Name = "Saved Material",
+                    QuantityNeeded = 7
+                }
+            ],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 200,
+                    Name = "Saved Material",
+                    QuantityNeeded = 7
+                }
+            ],
+            publishedScope: new PublishedMarketAnalysisScopeSnapshot(
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                ["Aether"],
+                MarketAcquisitionLens.MinimumUpfrontCost,
+                1,
+                new DateTime(2026, 6, 10, 12, 0, 0, DateTimeKind.Utc)));
+        var service = CreateService(jsRuntime, appState);
+
+        var saved = await service.SaveCurrentPlanAsync(
+            "plan-id",
+            "Saved Plan",
+            new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc));
+
+        Assert.True(saved);
+        Assert.NotNull(jsRuntime.LastSavedPlan);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketItemAnalysesJson);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketPlansJson);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketIntelligenceJson);
+        var serialized = System.Text.Json.JsonSerializer.Serialize(jsRuntime.LastSavedPlan);
+        Assert.DoesNotContain("MarketIntelligenceSummary", serialized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ActiveMarketIntelligencePublicationId", serialized, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void PlanSessionLoadService_Prepare_InvalidPlanJsonReturnsWarning()
     {
         var storedPlan = new StoredPlan

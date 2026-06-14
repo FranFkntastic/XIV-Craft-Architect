@@ -440,6 +440,60 @@ async function saveMarketData(key, data) {
 }
 
 /**
+ * Save multiple market data entries to cache in one transaction.
+ * Entries are objects shaped as { key, data } from IndexedDbMarketCacheService.
+ */
+async function saveMarketDataBatch(entries) {
+    const database = await initDB();
+    const batchEntries = entries || [];
+
+    if (batchEntries.length === 0) {
+        return true;
+    }
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_MARKET_CACHE], 'readwrite');
+        const store = transaction.objectStore(STORE_MARKET_CACHE);
+
+        transaction.oncomplete = () => {
+            console.log('[IndexedDB] Saved market data batch:', batchEntries.length);
+            resolve(true);
+        };
+        transaction.onerror = () => {
+            console.error('[IndexedDB] Failed to save market data batch:', transaction.error);
+            reject(transaction.error);
+        };
+        transaction.onabort = () => {
+            console.error('[IndexedDB] Market data batch transaction aborted:', transaction.error);
+            reject(transaction.error);
+        };
+
+        for (const batchEntry of batchEntries) {
+            const data = batchEntry?.data ?? batchEntry?.Data;
+            const key = batchEntry?.key ?? batchEntry?.Key ?? data?.key;
+            if (!key || !data) {
+                transaction.abort();
+                reject(new Error('Invalid market data batch entry.'));
+                return;
+            }
+
+            const cacheEntry = {
+                key: key,
+                itemId: data.itemId,
+                dataCenter: data.dataCenter,
+                fetchedAtUnix: data.fetchedAtUnix,
+                lastUploadTimeUnixMilliseconds: data.lastUploadTimeUnixMilliseconds,
+                dcAvgPrice: data.dcAvgPrice,
+                hqAvgPrice: data.hqAvgPrice,
+                worlds: data.worlds
+            };
+
+            store.put(cacheEntry);
+        }
+    });
+}
+
+/**
  * Load market data from cache
  * Normalizes old format (fetchedAt string) to new format (fetchedAtUnix number)
  */
@@ -716,6 +770,7 @@ window.IndexedDB = {
     clearAllPlans,
     clearMarketCache,
     saveMarketData,
+    saveMarketDataBatch,
     loadMarketData,
     loadMarketDataBulk,
     deleteStaleMarketData,

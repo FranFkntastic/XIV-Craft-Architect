@@ -19,6 +19,8 @@ public class MarketAnalysisWorldGridMarkupTests
         Assert.Contains("GetScoreClass(scoreBucket)", source);
         Assert.Contains("ma-world-muted", source);
         Assert.Contains("MarketAnalysisGridViewService.FormatCompetitiveValue(world)", source);
+        Assert.DoesNotContain("\"ItemId\", ItemId", source);
+        Assert.DoesNotContain("\"PublicationId\", PublicationId", source);
     }
 
     private static string GetWorldGridPath()

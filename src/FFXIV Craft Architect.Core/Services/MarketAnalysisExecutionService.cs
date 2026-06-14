@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
@@ -23,8 +25,16 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
         MarketAnalysisExecutionOptions? executionOptions = null)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (request.MaxAge <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.MaxAge),
+                request.MaxAge,
+                "Use ForceRefreshData when fresh market evidence is required.");
+        }
 
         var items = request.Items.ToList();
+        var fetchStopwatch = Stopwatch.StartNew();
         var evidence = await MarketEvidenceLoader.LoadAsync(
             _marketCache,
             items.Select(item => item.ItemId),
@@ -32,8 +42,12 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
             request.SelectedDataCenter,
             request.SelectedRegion,
             request.MaxAge,
+            request.ForceRefreshData,
             progress,
             ct);
+        fetchStopwatch.Stop();
+
+        var ladderAnalysisStopwatch = Stopwatch.StartNew();
         var analyses = await _marketPriceLadderAnalysisService.AnalyzeAsync(
             new MarketAnalysisRequest
             {
@@ -46,13 +60,25 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
             progress,
             ct,
             executionOptions);
+        ladderAnalysisStopwatch.Stop();
+
+        progress?.Report($"Projecting market recommendations for {analyses.Count} items...");
+        var shoppingPlanProjectionStopwatch = Stopwatch.StartNew();
         var shoppingPlans = analyses
             .Select(analysis => _marketPriceLadderAnalysisService.ProjectToShoppingPlan(
                 analysis,
                 request.Lens,
                 request.AnalysisConfig))
             .ToList();
+        shoppingPlanProjectionStopwatch.Stop();
 
-        return new MarketAnalysisExecutionResult(evidence, analyses, shoppingPlans);
+        return new MarketAnalysisExecutionResult(
+            evidence,
+            analyses,
+            shoppingPlans,
+            new MarketAnalysisExecutionTimings(
+                fetchStopwatch.Elapsed,
+                ladderAnalysisStopwatch.Elapsed,
+                shoppingPlanProjectionStopwatch.Elapsed));
     }
 }

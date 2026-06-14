@@ -11,6 +11,7 @@ public static class MarketScopedPriceLoader
         string selectedDataCenter,
         string selectedRegion,
         TimeSpan? maxAge = null,
+        bool forceRefreshData = false,
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
@@ -22,9 +23,10 @@ public static class MarketScopedPriceLoader
             scope,
             selectedDataCenter,
             selectedRegion,
-            maxAge,
-            progress,
-            ct);
+            maxAge: maxAge,
+            forceRefreshData: forceRefreshData,
+            progress: progress,
+            ct: ct);
 
         var entries = new Dictionary<int, CachedMarketData>();
         foreach (var itemId in evidence.RequestedPairs.Select(pair => pair.itemId).Distinct())
@@ -49,6 +51,7 @@ public static class MarketScopedPriceLoader
         string selectedDataCenter,
         string selectedRegion,
         TimeSpan? maxAge = null,
+        bool forceRefreshData = false,
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
@@ -58,9 +61,10 @@ public static class MarketScopedPriceLoader
             scope,
             selectedDataCenter,
             selectedRegion,
-            maxAge,
-            progress,
-            ct);
+            maxAge: maxAge,
+            forceRefreshData: forceRefreshData,
+            progress: progress,
+            ct: ct);
 
         return entries.ToDictionary(
             pair => pair.Key,

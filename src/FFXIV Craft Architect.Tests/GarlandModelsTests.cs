@@ -9,6 +9,25 @@ namespace FFXIV_Craft_Architect.Tests;
 public class GarlandModelsTests
 {
     [Fact]
+    public void GarlandItemResponse_IconPathString_DeserializesWithZeroIconId()
+    {
+        var json = @"{
+            ""item"": {
+                ""id"": 52288,
+                ""name"": ""Shovel"",
+                ""icon"": ""t/58056""
+            }
+        }";
+
+        var response = JsonSerializer.Deserialize<GarlandItemResponse>(json);
+
+        Assert.NotNull(response);
+        Assert.Equal(52288, response.Item.Id);
+        Assert.Equal("Shovel", response.Item.Name);
+        Assert.Equal(0, response.Item.IconId);
+    }
+
+    [Fact]
     public void GarlandPartial_Id_FromNumber_IsParsed()
     {
         var partial = JsonSerializer.Deserialize<GarlandPartial>("{\"type\":\"npc\",\"id\":123}");

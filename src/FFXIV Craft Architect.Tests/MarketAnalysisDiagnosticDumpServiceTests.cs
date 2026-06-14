@@ -28,21 +28,29 @@ public class MarketAnalysisDiagnosticDumpServiceTests
     }
 
     [Fact]
-    public void BuildDump_MissingSelection_FallsBackToFirstAnalysis()
+    public void BuildDump_NoSelectedItem_ReturnsNull()
     {
         var service = new MarketAnalysisDiagnosticDumpService();
-        var first = Analysis(100, "First");
 
         var dump = service.BuildDump(
-            [first, Analysis(200, "Second")],
+            [Analysis(100, "First")],
+            [],
+            Context(selectedItemId: null));
+
+        Assert.Null(dump);
+    }
+
+    [Fact]
+    public void BuildDump_SelectedItemMissing_ReturnsNullInsteadOfFirstAnalysis()
+    {
+        var service = new MarketAnalysisDiagnosticDumpService();
+
+        var dump = service.BuildDump(
+            [Analysis(100, "First"), Analysis(200, "Second")],
             [],
             Context(selectedItemId: 999));
 
-        Assert.NotNull(dump);
-        Assert.Equal(999, dump.Selection.RequestedItemId);
-        Assert.Equal(100, dump.Selection.ExportedItemId);
-        Assert.True(dump.Selection.UsedFallbackSelection);
-        Assert.Null(dump.ShoppingPlan);
+        Assert.Null(dump);
     }
 
     [Fact]

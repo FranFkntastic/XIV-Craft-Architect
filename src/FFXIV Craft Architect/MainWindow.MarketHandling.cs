@@ -178,20 +178,22 @@ public partial class MainWindow
         var allItems = new List<(int itemId, string name, int quantity)>();
         _recipeCalcService.CollectAllItemsWithQuantity(_currentPlan.RootItems, allItems);
 
+        var activeProcurementItems = AcquisitionPlanningService.GetActiveProcurementItems(_currentPlan);
+
         _logger.LogInformation(
-            "[OnFetchPricesAsync] RootItems.Count={RootCount}, AggregatedMaterials.Count={AggCount}",
+            "[OnFetchPricesAsync] RootItems.Count={RootCount}, ActiveProcurement.Count={ActiveCount}",
             _currentPlan.RootItems.Count,
-            _currentPlan.AggregatedMaterials?.Count ?? 0);
+            activeProcurementItems.Count);
         _logger.LogInformation(
             "[OnFetchPricesAsync] Collected {Count} items for price check: [{Items}]",
             allItems.Count,
             string.Join(", ", allItems.Select(i => $"{i.name}({i.itemId})x{i.quantity}")));
 
-        if (_currentPlan.AggregatedMaterials?.Any() == true)
+        if (activeProcurementItems.Any())
         {
             _logger.LogInformation(
-                "[OnFetchPricesAsync] AggregatedMaterials: [{Materials}]",
-                string.Join(", ", _currentPlan.AggregatedMaterials.Select(m => $"{m.Name}({m.ItemId})x{m.TotalQuantity}")));
+                "[OnFetchPricesAsync] ActiveProcurement: [{Materials}]",
+                string.Join(", ", activeProcurementItems.Select(m => $"{m.Name}({m.ItemId})x{m.TotalQuantity}")));
         }
 
         _marketDataStatusSession.InitializeItems(allItems);
@@ -301,12 +303,12 @@ public partial class MainWindow
         _logger.LogInformation("[RunMarketAnalysisFromCacheAsync] Extracted {Count} prices. Keys: [{Keys}]",
             prices.Count, string.Join(", ", prices.Keys));
 
-        // Log which items are in AggregatedMaterials but NOT in prices
-        var aggMaterials = _currentPlan.AggregatedMaterials ?? new List<MaterialAggregate>();
-        var missingPrices = aggMaterials.Where(m => !prices.ContainsKey(m.ItemId)).ToList();
+        // Log which active procurement items do not have cached price data.
+        var activeProcurementItems = AcquisitionPlanningService.GetActiveProcurementItems(_currentPlan);
+        var missingPrices = activeProcurementItems.Where(m => !prices.ContainsKey(m.ItemId)).ToList();
         if (missingPrices.Any())
         {
-            _logger.LogWarning("[RunMarketAnalysisFromCacheAsync] {Count} items in AggregatedMaterials have no price data: [{Items}]",
+            _logger.LogWarning("[RunMarketAnalysisFromCacheAsync] {Count} active procurement items have no price data: [{Items}]",
                 missingPrices.Count, string.Join(", ", missingPrices.Select(m => $"{m.Name}({m.ItemId})")));
         }
 
@@ -411,12 +413,14 @@ public partial class MainWindow
 
         ClearMarketLogisticsPanels();
 
-        var aggMaterials = _currentPlan?.AggregatedMaterials ?? new List<MaterialAggregate>();
-        _logger.LogInformation("[UpdateMarketLogisticsAsync] AggregatedMaterials.Count={Count}, Items=[{Items}]",
-            aggMaterials.Count, string.Join(", ", aggMaterials.Select(m => $"{m.Name}({m.ItemId})x{m.TotalQuantity}")));
+        var activeProcurementItems = _currentPlan is null
+            ? new List<MaterialAggregate>()
+            : AcquisitionPlanningService.GetActiveProcurementItems(_currentPlan);
+        _logger.LogInformation("[UpdateMarketLogisticsAsync] ActiveProcurement.Count={Count}, Items=[{Items}]",
+            activeProcurementItems.Count, string.Join(", ", activeProcurementItems.Select(m => $"{m.Name}({m.ItemId})x{m.TotalQuantity}")));
 
         // Pass plan to check for VendorBuy acquisition source in addition to PriceSource
-        var categorized = _marketShoppingService.CategorizeMaterials(aggMaterials, prices, _currentPlan);
+        var categorized = _marketShoppingService.CategorizeMaterials(activeProcurementItems, prices, _currentPlan);
 
         _logger.LogInformation("[UpdateMarketLogisticsAsync] Categorized: Vendor={VendorCount}, Market={MarketCount}, Untradeable={UntradeableCount}",
             categorized.VendorItems.Count, categorized.MarketItems.Count, categorized.UntradeableItems.Count);

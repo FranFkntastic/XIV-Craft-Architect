@@ -29,7 +29,7 @@ namespace FFXIV_Craft_Architect.ViewModels;
 ///    - User changes AcquisitionSource via dropdown
 ///    - NodeAcquisitionChanged event bubbles up
 ///    - Calls SetAcquisitionSource() on the node
-///    - Refreshes AggregatedMaterials
+///    - Refreshes active procurement materials
 ///    - Triggers shopping list update
 /// 
 /// 4. Plan Persistence:
@@ -185,9 +185,11 @@ public partial class RecipePlannerViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Aggregated materials from the current plan.
+    /// Choice-aware procurement materials from the current plan.
     /// </summary>
-    public List<MaterialAggregate> AggregatedMaterials => _currentPlan?.AggregatedMaterials ?? new();
+    public List<MaterialAggregate> AggregatedMaterials => _currentPlan is null
+        ? new()
+        : AcquisitionPlanningService.GetActiveProcurementItems(_currentPlan);
 
     /// <summary>
     /// Current status message for display.

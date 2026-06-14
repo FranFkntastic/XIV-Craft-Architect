@@ -51,25 +51,9 @@ inventory_cache.json
 .tmp/
 tmp/
 
-# Agent-specific files
-.kimi/
-.codex/
-.aider*
-.claude/
 
-# Build rules (agent-specific, regenerate as needed)
 .builderrules
-
-# Local notes/workspace state
 .obsidian/
-
-# Agent documentation (regenerate as needed)
 AGENTS.md
-
-Feb 5 Refactor/
-restart-with-save.ps1
-run-web.ps1
-start-app.ps1
-publish.bat
 docs/
-DATA_FLOW.md
+

@@ -1597,6 +1597,34 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void ApplyCheapestAcquisitionDefaults_HqMarketDefault_DoesNotMakeItemHqRequired()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Market Root",
+            Quantity = 1,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            MustBeHq = false,
+            CanBuyFromMarket = true,
+            CanBeHq = true,
+            MarketPrice = 1_000,
+            HqMarketPrice = 10,
+            Yield = 1
+        };
+        var plan = new CraftingPlan { RootItems = [root] };
+
+        var changed = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(plan, Array.Empty<DetailedShoppingPlan>());
+
+        Assert.Equal(1, changed);
+        Assert.Equal(AcquisitionSource.MarketBuyHq, root.Source);
+        Assert.Equal(AcquisitionSourceReason.SystemDefault, root.SourceReason);
+        Assert.False(root.MustBeHq);
+        Assert.Contains(AcquisitionSource.MarketBuyNq, AcquisitionPlanningService.GetAvailableSources(root));
+    }
+
+    [Fact]
     public void TryGetAcquisitionCost_MarketBuyNq_IgnoresVendorOverrideRecommendation()
     {
         var node = new PlanNode

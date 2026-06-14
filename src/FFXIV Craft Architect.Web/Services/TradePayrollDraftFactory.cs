@@ -7,13 +7,16 @@ public sealed class TradePayrollDraftFactory
 {
     private readonly CommissionCostBasisResolver _costBasisResolver;
     private readonly CommissionPayrollService _payrollService;
+    private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
 
     public TradePayrollDraftFactory(
         CommissionCostBasisResolver costBasisResolver,
-        CommissionPayrollService payrollService)
+        CommissionPayrollService payrollService,
+        IRecipeLayerWorkflowService recipeLayerWorkflow)
     {
         _costBasisResolver = costBasisResolver;
         _payrollService = payrollService;
+        _recipeLayerWorkflow = recipeLayerWorkflow;
     }
 
     public TradePayrollDraftCreateResult CreateFromCurrentPlan(AppState appState)
@@ -25,7 +28,7 @@ public sealed class TradePayrollDraftFactory
             return TradePayrollDraftCreateResult.Unavailable("Create or load a craft plan before starting payroll.");
         }
 
-        var demand = appState.CurrentPlan.AggregatedMaterials
+        var demand = _recipeLayerWorkflow.BuildActiveProcurementItems(appState.CurrentPlan)
             .Select(CloneMaterial)
             .ToArray();
         if (demand.Length == 0)

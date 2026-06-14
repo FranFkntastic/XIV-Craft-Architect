@@ -16,6 +16,7 @@ namespace FFXIV_Craft_Architect.Services;
 public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisposable
 {
     private const int BulkReadChunkSize = 400;
+    private const int MaxDataCenterFetchConcurrency = 2;
 
     private readonly ILogger<SqliteMarketCacheService> _logger;
     private readonly UniversalisService _universalisService;
@@ -358,6 +359,14 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
+        if (maxAge <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxAge),
+                maxAge,
+                "Use RefreshRequestedAsync when fresh data is required for specific pairs.");
+        }
+
         var effectiveMaxAge = maxAge ?? _defaultMaxAge;
         var cutoff = DateTime.UtcNow - effectiveMaxAge;
         
@@ -374,55 +383,115 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
                 requests.Count, effectiveMaxAge);
             return 0;
         }
+
+        return await FetchAndStoreAsync(missing, progress, ct);
+    }
+
+    public async Task<int> RefreshRequestedAsync(
+        List<(int itemId, string dataCenter)> requests,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        _logger.LogInformation("[SqliteMarketCache] RefreshRequestedAsync START - {Count} requests", requests.Count);
+        if (requests.Count == 0)
+        {
+            return 0;
+        }
+
+        return await FetchAndStoreAsync(requests, progress, ct);
+    }
+
+    private async Task<int> FetchAndStoreAsync(
+        List<(int itemId, string dataCenter)> requests,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
+        if (requests.Count == 0)
+        {
+            return 0;
+        }
         
         _logger.LogInformation("[SqliteMarketCache] Fetching {MissingCount}/{TotalCount} items from Universalis", 
-            missing.Count, requests.Count);
-        progress?.Report($"Fetching market data for {missing.Count} items...");
+            requests.Count, requests.Count);
+        progress?.Report($"Fetching market data for {requests.Count} items...");
         
         // Group by data center for efficient bulk fetching
-        var byDataCenter = missing.GroupBy(x => x.dataCenter).ToList();
+        var byDataCenter = requests.GroupBy(x => x.dataCenter).ToList();
         int fetchedCount = 0;
-        
-        foreach (var dcGroup in byDataCenter)
+
+        var fetchResults = await FetchDataCentersAsync(byDataCenter, progress, ct);
+        var shouldLoadWorldData = fetchResults.Any(result => result.FetchedData.Count > 0);
+        var worldData = shouldLoadWorldData
+            ? await GetWorldDataForCachingAsync(ct)
+            : null;
+
+        foreach (var result in fetchResults)
         {
-            var dc = dcGroup.Key;
-            var itemIds = dcGroup.Select(x => x.itemId).ToList();
-            
-            try
+            // Store each result in cache
+            foreach (var kvp in result.FetchedData)
             {
-                progress?.Report($"Fetching {itemIds.Count} items from {dc}...");
-                
-                var fetchedData = await _universalisService.GetMarketDataBulkAsync(dc, itemIds, useParallel: true, ct: ct);
-                WorldData? worldData = null;
-                try
-                {
-                    worldData = await _universalisService.GetWorldDataAsync(ct);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[SqliteMarketCache] World metadata unavailable; caching {DC} without per-world upload mapping", dc);
-                }
-                
-                // Store each result in cache
-                foreach (var kvp in fetchedData)
-                {
-                    var cachedData = ConvertUniversalisResponseToCachedData(kvp.Key, dc, kvp.Value, worldData);
-                    await SetAsync(kvp.Key, dc, cachedData);
-                    fetchedCount++;
-                }
-                
-                _logger.LogInformation("[SqliteMarketCache] Fetched and cached {FetchedCount}/{RequestedCount} items from {DC}",
-                    fetchedData.Count, itemIds.Count, dc);
+                var cachedData = ConvertUniversalisResponseToCachedData(kvp.Key, result.DataCenter, kvp.Value, worldData);
+                await SetAsync(kvp.Key, result.DataCenter, cachedData);
+                fetchedCount++;
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[SqliteMarketCache] Failed to fetch items from {DC}", dc);
-                // Continue with other DCs - partial failure is acceptable
-            }
+
+            _logger.LogInformation("[SqliteMarketCache] Fetched and cached {FetchedCount}/{RequestedCount} items from {DC}",
+                result.FetchedData.Count, result.RequestedItemIds.Count, result.DataCenter);
         }
         
         return fetchedCount;
     }
+
+    private async Task<List<DataCenterFetchResult>> FetchDataCentersAsync(
+        IReadOnlyCollection<IGrouping<string, (int itemId, string dataCenter)>> dataCenterGroups,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
+        using var semaphore = new SemaphoreSlim(MaxDataCenterFetchConcurrency);
+        var tasks = dataCenterGroups.Select(async dcGroup =>
+        {
+            await semaphore.WaitAsync(ct);
+            try
+            {
+                var dc = dcGroup.Key;
+                var itemIds = dcGroup.Select(x => x.itemId).ToList();
+                progress?.Report($"Fetching {itemIds.Count} items from {dc}...");
+
+                var fetchedData = await _universalisService.GetMarketDataBulkAsync(dc, itemIds, useParallel: true, ct: ct);
+                return new DataCenterFetchResult(dc, itemIds, fetchedData);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SqliteMarketCache] Failed to fetch items from {DC}", dcGroup.Key);
+                // Continue with other DCs - partial failure is acceptable
+                return new DataCenterFetchResult(dcGroup.Key, dcGroup.Select(x => x.itemId).ToList(), new Dictionary<int, UniversalisResponse>());
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        });
+
+        return (await Task.WhenAll(tasks)).ToList();
+    }
+
+    private async Task<WorldData?> GetWorldDataForCachingAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await _universalisService.GetWorldDataAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[SqliteMarketCache] World metadata unavailable; caching data without per-world upload mapping");
+            return null;
+        }
+    }
+
+    private sealed record DataCenterFetchResult(
+        string DataCenter,
+        IReadOnlyCollection<int> RequestedItemIds,
+        Dictionary<int, UniversalisResponse> FetchedData);
     
     private Core.Services.CachedMarketData ConvertUniversalisResponseToCachedData(
         int itemId,

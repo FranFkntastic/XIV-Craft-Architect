@@ -343,7 +343,12 @@
                 return;
             }
 
-            Snackbar.Add($"Refreshed {result.ItemName ?? action.Item.ItemName}; re-running procurement.", Severity.Info);
+            if (string.IsNullOrWhiteSpace(result.ItemName))
+            {
+                throw new InvalidOperationException("Item refresh reported success without a refreshed item name.");
+            }
+
+            Snackbar.Add($"Refreshed {result.ItemName}; re-running procurement.", Severity.Info);
             await RunAnalysisAsync();
         }
         catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))

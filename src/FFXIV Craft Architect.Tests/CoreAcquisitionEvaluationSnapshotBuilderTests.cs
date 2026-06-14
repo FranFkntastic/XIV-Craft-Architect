@@ -55,13 +55,85 @@ public class CoreAcquisitionEvaluationSnapshotBuilderTests
             projection);
 
         var row = snapshot.Rows.Single(row => row.ItemId == 200);
-        Assert.Equal(12, row.TotalQuantity);
+        Assert.Equal(7, row.TotalQuantity);
         Assert.Equal(7, row.ActiveQuantity);
         Assert.True(row.IsActiveProcurement);
         Assert.True(row.HasSuppressedOccurrences);
         Assert.Equal(["Final Craft"], row.SuppressedBy);
         Assert.Equal(11, snapshot.MarketAnalysisCandidates.Single(item => item.ItemId == 200).TotalQuantity);
         Assert.Equal(7, snapshot.ActiveProcurementItems.Single(item => item.ItemId == 200).TotalQuantity);
+    }
+
+    [Fact]
+    public void Build_MixedActiveAndSuppressedRows_UsesActiveOccurrenceForQuantityUsedInAndReadState()
+    {
+        var activeParent = CreateRoot(100, "Active Parent");
+        var boughtParent = CreateRoot(101, "Bought Parent");
+        var activeMaterial = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Shared Material",
+            Quantity = 5,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 25,
+            Parent = activeParent
+        };
+        var suppressedMaterial = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Shared Material",
+            Quantity = 7,
+            Source = AcquisitionSource.VendorBuy,
+            CanBuyFromVendor = true,
+            VendorPrice = 5,
+            Parent = boughtParent
+        };
+        activeParent.Children.Add(activeMaterial);
+        boughtParent.Children.Add(suppressedMaterial);
+        var plan = new CraftingPlan { RootItems = [activeParent, boughtParent] };
+        var projection = new RecipeDemandProjection(
+            AllPlanDemand:
+            [
+                CreateDemandRow(
+                    RecipeDemandViewKind.PlanOccurrence,
+                    suppressedMaterial,
+                    quantity: 7,
+                    suppressedByNodeId: boughtParent.NodeId,
+                    suppressedByItemId: boughtParent.ItemId,
+                    suppressedByItemName: boughtParent.Name),
+                CreateDemandRow(RecipeDemandViewKind.PlanOccurrence, activeMaterial, quantity: 5)
+            ],
+            MarketAnalysisCandidates: [],
+            ActiveProcurementDemand: [CreateDemandRow(RecipeDemandViewKind.ActiveProcurement, activeMaterial, quantity: 5)],
+            SuppressedDemand:
+            [
+                CreateDemandRow(
+                    RecipeDemandViewKind.Suppressed,
+                    suppressedMaterial,
+                    quantity: 7,
+                    suppressedByNodeId: boughtParent.NodeId,
+                    suppressedByItemId: boughtParent.ItemId,
+                    suppressedByItemName: boughtParent.Name)
+            ]);
+
+        var snapshot = CoreAcquisitionEvaluationSnapshotBuilder.Build(
+            plan,
+            shoppingPlans: [],
+            unavailableMarketItemIds: new HashSet<int>(),
+            CoreAcquisitionFilter.All,
+            projection);
+
+        var row = snapshot.Rows.Single(row => row.ItemId == 200);
+        Assert.Same(activeMaterial, row.Node);
+        Assert.Equal(activeMaterial.NodeId, row.NodeId);
+        Assert.Equal(5, row.TotalQuantity);
+        Assert.Equal("Active Parent x1", row.UsedIn);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, row.Source);
+        Assert.Equal(25, row.UnitPrice);
+        Assert.Equal("125g", row.EstimatedCost);
+        Assert.True(row.HasSuppressedOccurrences);
+        Assert.Equal(["Bought Parent"], row.SuppressedBy);
     }
 
     [Fact]

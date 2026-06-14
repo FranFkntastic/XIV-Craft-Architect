@@ -137,9 +137,10 @@ public class CraftingPlan
     public List<DetailedShoppingPlan> SavedMarketPlans { get; set; } = new();
     
     /// <summary>
-    /// Flattened list of all materials needed (aggregated)
+    /// Legacy material projection from the plan tree. Prefer RecipeDemandProjection for workflow logic.
     /// </summary>
     [JsonIgnore]
+    [Obsolete("Use RecipeDemandProjection/AcquisitionPlanningService.GetActiveProcurementItems for choice-aware material demand.")]
     public List<MaterialAggregate> AggregatedMaterials => AggregateMaterials();
     
     /// <summary>
@@ -306,7 +307,7 @@ public class CraftingPlan
     
     private decimal CalculateTotalCost()
     {
-        return AggregatedMaterials.Sum(m => m.TotalQuantity * m.UnitPrice);
+        return AcquisitionPlanningService.GetActiveProcurementItems(this).Sum(m => m.TotalQuantity * m.UnitPrice);
     }
     
     /// <summary>

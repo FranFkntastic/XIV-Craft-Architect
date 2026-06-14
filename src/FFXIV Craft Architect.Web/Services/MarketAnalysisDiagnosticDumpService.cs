@@ -27,17 +27,17 @@ public sealed class MarketAnalysisDiagnosticDumpService
         ArgumentNullException.ThrowIfNull(analyses);
         ArgumentNullException.ThrowIfNull(shoppingPlans);
 
-        if (analyses.Count == 0)
+        if (analyses.Count == 0 || !context.SelectedItemId.HasValue)
         {
             return null;
         }
 
-        var selectedAnalysis = context.SelectedItemId.HasValue
-            ? analyses.FirstOrDefault(analysis => analysis.ItemId == context.SelectedItemId.Value)
-            : null;
-        var selection = selectedAnalysis == null
-            ? analyses[0]
-            : selectedAnalysis;
+        var selection = analyses.FirstOrDefault(analysis => analysis.ItemId == context.SelectedItemId.Value);
+        if (selection == null)
+        {
+            return null;
+        }
+
         var shoppingPlan = shoppingPlans.FirstOrDefault(plan => plan.ItemId == selection.ItemId);
 
         return new MarketAnalysisDiagnosticDump(
@@ -48,7 +48,7 @@ public sealed class MarketAnalysisDiagnosticDumpService
                 RequestedItemId: context.SelectedItemId,
                 ExportedItemId: selection.ItemId,
                 ExportedItemName: selection.Name,
-                UsedFallbackSelection: selectedAnalysis == null),
+                UsedFallbackSelection: false),
             Context: context,
             Analysis: selection,
             ShoppingPlan: shoppingPlan);

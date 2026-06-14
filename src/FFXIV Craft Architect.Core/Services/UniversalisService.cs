@@ -93,7 +93,7 @@ public class UniversalisService : IUniversalisService
         bool useParallel = true,
         CancellationToken ct = default)
     {
-        const int initialChunkSize = 25; // Start smaller to avoid timeouts
+        const int initialChunkSize = 10; // Live regional tests showed chunk 10 avoids 504 split cascades
         const int minChunkSize = 5;      // Don't split below this
         const int maxConcurrency = 3;
         const int maxGlobalRetries = 2;  // How many times to retry missing IDs

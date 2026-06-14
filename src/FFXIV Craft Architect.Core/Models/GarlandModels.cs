@@ -153,6 +153,7 @@ public class GarlandItem
     public string Name { get; set; } = string.Empty;
     
     [JsonPropertyName("icon")]
+    [JsonConverter(typeof(GarlandIconIdConverter))]
     public int IconId { get; set; }
     
     [JsonPropertyName("description")]
@@ -667,6 +668,39 @@ public class FlexibleStringConverter : JsonConverter<string>
     public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
     {
         writer.WriteStringValue(value);
+    }
+}
+
+/// <summary>
+/// JSON converter for Garland item icon IDs.
+/// Some cosmetic unlock items return texture paths like "t/58056" instead of numeric icon IDs.
+/// </summary>
+public class GarlandIconIdConverter : JsonConverter<int>
+{
+    public override int Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Number)
+        {
+            return reader.TryGetInt32(out var value) ? value : 0;
+        }
+
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            var stringValue = reader.GetString();
+            return int.TryParse(stringValue, out var value) ? value : 0;
+        }
+
+        if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+        {
+            reader.Skip();
+        }
+
+        return 0;
+    }
+
+    public override void Write(Utf8JsonWriter writer, int value, JsonSerializerOptions options)
+    {
+        writer.WriteNumberValue(value);
     }
 }
 

@@ -100,8 +100,16 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
                 aggregate = new CoreDecisionAggregate(
                     node,
                     CoreDecisionRowReadState.FromDemandRow(demandRow),
-                    marketCandidateItemIds.Contains(demandRow.ItemId));
+                    marketCandidateItemIds.Contains(demandRow.ItemId),
+                    isSuppressed);
                 rowsByItemId[demandRow.ItemId] = aggregate;
+            }
+            else
+            {
+                aggregate.PreferPrimary(
+                    node,
+                    CoreDecisionRowReadState.FromDemandRow(demandRow),
+                    isSuppressed);
             }
 
             aggregate.Occurrences.Add(new CoreDecisionOccurrence(
@@ -189,8 +197,16 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
             aggregate = new CoreDecisionAggregate(
                 node,
                 CoreDecisionRowReadState.FromNode(node),
-                marketCandidateItemIds.Contains(node.ItemId));
+                marketCandidateItemIds.Contains(node.ItemId),
+                isSuppressed: suppressingAncestor != null);
             rowsByItemId[node.ItemId] = aggregate;
+        }
+        else
+        {
+            aggregate.PreferPrimary(
+                node,
+                CoreDecisionRowReadState.FromNode(node),
+                isSuppressed: suppressingAncestor != null);
         }
 
         var isSuppressed = suppressingAncestor != null;
@@ -253,7 +269,8 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
         var activeQuantity = aggregate.Occurrences
             .Where(occurrence => occurrence.IsActiveProcurement)
             .Sum(occurrence => occurrence.Quantity);
-        var totalQuantity = aggregate.Occurrences.Sum(occurrence => occurrence.Quantity);
+        var effectiveOccurrences = GetEffectiveOccurrences(aggregate.Occurrences);
+        var totalQuantity = effectiveOccurrences.Sum(occurrence => occurrence.Quantity);
         var suppressedBy = aggregate.Occurrences
             .Where(occurrence => occurrence.IsSuppressed)
             .Select(occurrence => occurrence.SuppressedBy)
@@ -285,7 +302,7 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
             aggregate.ReadState.VendorOptions,
             totalQuantity,
             activeQuantity,
-            GetUsedInText(aggregate.Occurrences),
+            GetUsedInText(effectiveOccurrences),
             aggregate.Occurrences.Any(occurrence => occurrence.IsSuppressed),
             aggregate.Occurrences.All(occurrence => occurrence.IsSuppressed),
             suppressedBy,
@@ -297,18 +314,19 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
                 marketPlan,
                 unavailableMarketItemIds,
                 aggregate.ReadState.Source == AcquisitionSource.MarketBuyHq),
-            GetEstimatedCost(aggregate, totalQuantity, costContext));
+            GetEstimatedCost(aggregate, effectiveOccurrences, totalQuantity, costContext));
     }
 
     private static string GetEstimatedCost(
         CoreDecisionAggregate aggregate,
+        IReadOnlyList<CoreDecisionOccurrence> effectiveOccurrences,
         int quantity,
         AcquisitionCostContext costContext)
     {
         if (aggregate.ReadState.Source == AcquisitionSource.Craft)
         {
             decimal cost = 0;
-            foreach (var occurrence in aggregate.Occurrences)
+            foreach (var occurrence in effectiveOccurrences)
             {
                 if (AcquisitionPlanningService.TryGetAcquisitionCost(
                     occurrence.Node,
@@ -332,6 +350,18 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
             out var directCost)
                 ? $"{directCost:N0}g"
                 : "-";
+    }
+
+    private static IReadOnlyList<CoreDecisionOccurrence> GetEffectiveOccurrences(
+        IReadOnlyList<CoreDecisionOccurrence> occurrences)
+    {
+        var activeOccurrences = occurrences
+            .Where(occurrence => !occurrence.IsSuppressed)
+            .ToList();
+
+        return activeOccurrences.Count > 0
+            ? activeOccurrences
+            : occurrences;
     }
 
     private static string GetMarketEvidence(
@@ -521,17 +551,35 @@ public sealed record CoreAcquisitionEvaluationSnapshot(
 
 internal sealed class CoreDecisionAggregate
 {
-    public CoreDecisionAggregate(PlanNode primaryNode, CoreDecisionRowReadState readState, bool isMarketCandidate)
+    public CoreDecisionAggregate(
+        PlanNode primaryNode,
+        CoreDecisionRowReadState readState,
+        bool isMarketCandidate,
+        bool isSuppressed)
     {
         PrimaryNode = primaryNode;
         ReadState = readState;
         IsMarketCandidate = isMarketCandidate;
+        PrimaryIsSuppressed = isSuppressed;
     }
 
-    public PlanNode PrimaryNode { get; }
-    public CoreDecisionRowReadState ReadState { get; }
+    public PlanNode PrimaryNode { get; private set; }
+    public CoreDecisionRowReadState ReadState { get; private set; }
     public bool IsMarketCandidate { get; }
+    public bool PrimaryIsSuppressed { get; private set; }
     public List<CoreDecisionOccurrence> Occurrences { get; } = [];
+
+    public void PreferPrimary(PlanNode node, CoreDecisionRowReadState readState, bool isSuppressed)
+    {
+        if (!PrimaryIsSuppressed || isSuppressed)
+        {
+            return;
+        }
+
+        PrimaryNode = node;
+        ReadState = readState;
+        PrimaryIsSuppressed = false;
+    }
 }
 
 public sealed record CoreDecisionRowReadState(

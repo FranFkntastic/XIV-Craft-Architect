@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
@@ -10,7 +12,8 @@ public interface IRecipePlanBuilder
         List<(int itemId, string name, int quantity, bool isHqRequired)> targetItems,
         string dataCenter,
         string world,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        IRecipePlanBuildDiagnosticRecorder? diagnostics = null);
 
     Task FetchVendorPricesAsync(CraftingPlan plan, CancellationToken ct = default);
 }
@@ -28,9 +31,10 @@ public sealed class RecipeCalculationPlanBuilder : IRecipePlanBuilder
         List<(int itemId, string name, int quantity, bool isHqRequired)> targetItems,
         string dataCenter,
         string world,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IRecipePlanBuildDiagnosticRecorder? diagnostics = null)
     {
-        return _recipeCalculationService.BuildPlanAsync(targetItems, dataCenter, world, ct);
+        return _recipeCalculationService.BuildPlanAsync(targetItems, dataCenter, world, ct, diagnostics);
     }
 
     public Task FetchVendorPricesAsync(CraftingPlan plan, CancellationToken ct = default)
@@ -46,7 +50,8 @@ public sealed record BuildRecipePlanRequest(
     IReadOnlyList<ProjectItem> ProjectItems,
     string SelectedDataCenter,
     string SelectedRegion,
-    MarketFetchScope PriceFetchScope);
+    MarketFetchScope PriceFetchScope,
+    IRecipeBuildDiagnosticRecorder? Diagnostics = null);
 
 public sealed record BuildRecipePlanResult(
     bool Built,
@@ -70,7 +75,8 @@ public sealed record ImportProjectItemsResult(
 public sealed record RefreshRecipePlanPricesRequest(
     MarketFetchScope PriceFetchScope,
     string SelectedDataCenter,
-    string SelectedRegion);
+    string SelectedRegion,
+    bool ForceRefreshData = false);
 
 public sealed record ApplyPlanEditorEditRequest(
     IReadOnlyCollection<string> NodeIds,
@@ -133,6 +139,7 @@ public sealed class RecipePlannerCommandService
         BuildRecipePlanRequest request,
         CancellationToken ct = default)
     {
+        var buildStopwatch = Stopwatch.StartNew();
         if (request.ProjectItems.Count == 0)
         {
             return new BuildRecipePlanResult(
@@ -158,28 +165,44 @@ public sealed class RecipePlannerCommandService
 
         try
         {
-            var builtPlan = await _recipePlanBuilder.BuildPlanAsync(
-                targetItems,
-                request.SelectedDataCenter,
-                string.Empty,
+            var diagnostics = request.Diagnostics;
+            var builtPlan = await RunDiagnosticPhaseAsync(
+                diagnostics,
+                "build-plan",
+                token => _recipePlanBuilder.BuildPlanAsync(
+                    targetItems,
+                    request.SelectedDataCenter,
+                    string.Empty,
+                    token,
+                    diagnostics),
                 operation.Token);
             if (!operation.IsCurrent)
             {
                 return CanceledBuildResult();
             }
 
-            _cancellableOperations.CancelPlanDependentOperations();
-            _appState.ApplyBuiltRecipePlan(builtPlan, GetActiveProcurementItems(builtPlan));
+            RunDiagnosticPhase(
+                diagnostics,
+                "apply-plan",
+                () =>
+                {
+                    _cancellableOperations.CancelPlanDependentOperations();
+                    _appState.ApplyBuiltRecipePlan(builtPlan, GetActiveProcurementItems(builtPlan));
+                });
             var builtPlanSessionVersion = _appState.PlanSessionVersion;
             publishedPlanSessionVersion = builtPlanSessionVersion;
             publishedPlan = builtPlan;
             selectedNode = builtPlan.RootItems.FirstOrDefault();
             var priceRefresh = CoreMarketPriceAvailability.Empty;
-            priceRefresh = await RefreshPricesAsync(
-                new RefreshRecipePlanPricesRequest(
-                    request.PriceFetchScope,
-                    request.SelectedDataCenter,
-                    request.SelectedRegion),
+            priceRefresh = await RunDiagnosticPhaseAsync(
+                diagnostics,
+                "refresh-prices",
+                token => RefreshPricesAsync(
+                    new RefreshRecipePlanPricesRequest(
+                        request.PriceFetchScope,
+                        request.SelectedDataCenter,
+                        request.SelectedRegion),
+                    token),
                 operation.Token);
             if (!operation.IsCurrent)
             {
@@ -191,17 +214,29 @@ public sealed class RecipePlannerCommandService
                 return CanceledBuildResult();
             }
 
-            var changedDefaults = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(
-                builtPlan,
-                Array.Empty<DetailedShoppingPlan>());
+            var changedDefaults = RunDiagnosticPhase(
+                diagnostics,
+                "apply-defaults",
+                () =>
+                {
+                    var defaults = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(
+                        builtPlan,
+                        Array.Empty<DetailedShoppingPlan>());
 
-            _appState.ApplyPlanDefaultsReconciled(
-                GetActiveProcurementItems(builtPlan),
-                changedDefaults > 0);
+                    _appState.ApplyPlanDefaultsReconciled(
+                        GetActiveProcurementItems(builtPlan),
+                        defaults > 0);
+                    return defaults;
+                });
 
-            var autoAnalysisResult = await RunMarketAnalysisAfterBuildAsync(
-                builtPlan,
-                builtPlanSessionVersion,
+            var autoAnalysisResult = await RunDiagnosticPhaseAsync(
+                diagnostics,
+                "auto-market-analysis",
+                token => RunMarketAnalysisAfterBuildAsync(
+                    builtPlan,
+                    builtPlanSessionVersion,
+                    diagnostics,
+                    token),
                 operation.Token);
             if (!operation.IsCurrent)
             {
@@ -211,28 +246,32 @@ public sealed class RecipePlannerCommandService
             if (priceRefresh.HasUnavailableItems)
             {
                 var warning = CoreMarketPriceAvailability.FormatUnavailableMessage(priceRefresh.UnavailableItems);
-                operation.Complete($"Plan built with partial market pricing. {warning}");
+                LogBuildElapsed(buildStopwatch.Elapsed);
+                var partialMessage = WithElapsed($"Plan built with partial market pricing. {warning}", buildStopwatch.Elapsed);
+                operation.Complete(partialMessage);
                 return new BuildRecipePlanResult(
                     true,
                     selectedNode,
                     priceRefresh,
                     changedDefaults,
-                    $"Plan built with partial market pricing. {warning}",
+                    partialMessage,
                     RecipePlannerCommandMessageLevel.Warning);
             }
 
             var message = autoAnalysisResult.Published
                 ? $"Plan built with {builtPlan.RootItems.Count} items. Market analysis is ready."
                 : $"Plan built with {builtPlan.RootItems.Count} items. Go to Procurement Planner to analyze.";
-            operation.Complete(message);
+            LogBuildElapsed(buildStopwatch.Elapsed);
+            operation.Complete(WithElapsed(message, buildStopwatch.Elapsed));
+            var resultMessage = autoAnalysisResult.Published
+                ? "Plan built! Prices fetched and market analysis is ready."
+                : "Plan built! Prices fetched. Go to Procurement Planner to run market analysis.";
             return new BuildRecipePlanResult(
                 true,
                 selectedNode,
                 priceRefresh,
                 changedDefaults,
-                autoAnalysisResult.Published
-                    ? "Plan built! Prices fetched and market analysis is ready."
-                    : "Plan built! Prices fetched. Go to Procurement Planner to run market analysis.",
+                WithElapsed(resultMessage, buildStopwatch.Elapsed),
                 RecipePlannerCommandMessageLevel.Success);
         }
         catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
@@ -242,12 +281,15 @@ public sealed class RecipePlannerCommandService
                 publishedPlanSessionVersion.HasValue &&
                 _appState.IsCurrentPlanSession(publishedPlan, publishedPlanSessionVersion.Value))
             {
+                LogBuildElapsed(buildStopwatch.Elapsed);
                 return new BuildRecipePlanResult(
                     true,
                     selectedNode,
                     CoreMarketPriceAvailability.Empty,
                     0,
-                    "Plan built; price refresh canceled.",
+                    WithElapsed(
+                        "Plan built; follow-up work canceled before all refresh/analysis steps completed.",
+                        buildStopwatch.Elapsed),
                     RecipePlannerCommandMessageLevel.Info);
             }
 
@@ -275,6 +317,58 @@ public sealed class RecipePlannerCommandService
                 "Plan build canceled.",
                 RecipePlannerCommandMessageLevel.Info);
         }
+    }
+
+    private static void LogBuildElapsed(TimeSpan elapsed)
+    {
+        Console.WriteLine($"[RecipePlanner] Normal recipe plan build elapsed: {FormatElapsed(elapsed)} ({elapsed.TotalSeconds:0.000}s).");
+    }
+
+    private static string WithElapsed(string message, TimeSpan elapsed)
+    {
+        return $"{message} Elapsed: {FormatElapsed(elapsed)}.";
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        return elapsed.TotalMinutes >= 1
+            ? $"{elapsed.TotalMinutes:0.0}m"
+            : $"{elapsed.TotalSeconds:0.0}s";
+    }
+
+    private static T RunDiagnosticPhase<T>(
+        IRecipeBuildDiagnosticRecorder? diagnostics,
+        string name,
+        Func<T> action)
+    {
+        return diagnostics == null
+            ? action()
+            : diagnostics.RunPhase(name, action);
+    }
+
+    private static void RunDiagnosticPhase(
+        IRecipeBuildDiagnosticRecorder? diagnostics,
+        string name,
+        Action action)
+    {
+        if (diagnostics == null)
+        {
+            action();
+            return;
+        }
+
+        diagnostics.RunPhase(name, action);
+    }
+
+    private static async Task<T> RunDiagnosticPhaseAsync<T>(
+        IRecipeBuildDiagnosticRecorder? diagnostics,
+        string name,
+        Func<CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken)
+    {
+        return diagnostics == null
+            ? await action(cancellationToken)
+            : await diagnostics.RunPhaseAsync(name, action, cancellationToken);
     }
 
     public async Task<ImportProjectItemsResult> ImportProjectItemsAsync(
@@ -348,6 +442,7 @@ public sealed class RecipePlannerCommandService
             request.PriceFetchScope,
             request.SelectedDataCenter,
             request.SelectedRegion,
+            forceRefreshData: request.ForceRefreshData,
             ct: ct);
         ct.ThrowIfCancellationRequested();
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
@@ -380,6 +475,7 @@ public sealed class RecipePlannerCommandService
     private async Task<MarketAnalysisWorkflowResult> RunMarketAnalysisAfterBuildAsync(
         CraftingPlan builtPlan,
         long builtPlanSessionVersion,
+        IRecipeBuildDiagnosticRecorder? diagnostics,
         CancellationToken ct)
     {
         if (_marketAnalysisAutoRunner == null ||
@@ -476,6 +572,7 @@ public sealed class RecipePlannerCommandService
                 ? await RunMarketAnalysisAfterBuildAsync(
                     request.Plan,
                     activatedPlanSessionVersion,
+                    null,
                     operation.Token)
                 : new MarketAnalysisWorkflowResult(false, 0, 0, 0);
             if (!operation.IsCurrent)

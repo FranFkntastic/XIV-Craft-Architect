@@ -1,5 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Services;
 using Moq;
 
@@ -102,6 +103,7 @@ public class RecipePlannerCommandServiceTests
         Assert.Equal(beforeVersions.ProcurementOverlayVersion + 1, appState.CurrentVersions.ProcurementOverlayVersion);
         Assert.False(result.PriceRefresh.HasUnavailableItems);
         Assert.Equal(RecipePlannerCommandMessageLevel.Success, result.MessageLevel);
+        Assert.Contains("Elapsed:", result.Message);
     }
 
     [Fact]
@@ -141,6 +143,48 @@ public class RecipePlannerCommandServiceTests
         Assert.Same(builtPlan, autoRunner.LastPlan);
         Assert.Equal(appState.PlanSessionVersion, autoRunner.LastPlanSessionVersion);
         Assert.Contains("market analysis", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task BuildPlanAsync_WithDiagnostics_RecordsBuildRefreshAndAutoAnalysisPhases()
+    {
+        var appState = new AppState();
+        var builtPlan = CreatePlan("Built Item", 100, marketPrice: 12);
+        var builder = new FakeRecipePlanBuilder
+        {
+            PlanToReturn = builtPlan
+        };
+        var cache = new Mock<IMarketCacheService>();
+        cache.Setup(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+        cache.Setup(c => c.GetManyAsync(
+                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>()))
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(100, "Aether")] = CachedData(100, "Aether", 77)
+            });
+        var autoRunner = new RecordingMarketAnalysisAutoRunner();
+        var service = CreateService(appState, builder, cache.Object, autoRunner);
+        var diagnostics = new RecordingRecipeBuildDiagnostics();
+
+        var result = await service.BuildPlanAsync(new BuildRecipePlanRequest(
+            [new ProjectItem { Id = 100, Name = "Built Item", Quantity = 2 }],
+            "Aether",
+            "North America",
+            MarketFetchScope.SelectedDataCenter,
+            diagnostics));
+
+        Assert.True(result.Built);
+        Assert.Contains(("build-plan", RecipeBuildDiagnosticPhaseStatus.Completed), diagnostics.Phases);
+        Assert.Contains(("apply-plan", RecipeBuildDiagnosticPhaseStatus.Completed), diagnostics.Phases);
+        Assert.Contains(("refresh-prices", RecipeBuildDiagnosticPhaseStatus.Completed), diagnostics.Phases);
+        Assert.Contains(("apply-defaults", RecipeBuildDiagnosticPhaseStatus.Completed), diagnostics.Phases);
+        Assert.Contains(("auto-market-analysis", RecipeBuildDiagnosticPhaseStatus.Completed), diagnostics.Phases);
     }
 
     [Fact]
@@ -518,6 +562,50 @@ public class RecipePlannerCommandServiceTests
         Assert.Equal(beforePlanStructureVersion, appState.CurrentVersions.PlanStructureVersion);
         Assert.Contains(changes, change => change.HasScope(AppStateChangeScope.PlanPrice));
         Assert.DoesNotContain(changes, change => change.HasScope(AppStateChangeScope.PlanStructure));
+    }
+
+    [Fact]
+    public async Task RefreshPricesAsync_WhenForceRefreshRequested_UsesExplicitPairRefresh()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan("Refresh Item", 100));
+        var builder = new FakeRecipePlanBuilder();
+        var cache = new Mock<IMarketCacheService>();
+        var refreshRequestedPairs = false;
+        cache.Setup(c => c.EnsurePopulatedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+        cache.Setup(c => c.RefreshRequestedAsync(
+                It.IsAny<List<(int itemId, string dataCenter)>>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<List<(int itemId, string dataCenter)>, IProgress<string>?, CancellationToken>(
+                (_, _, _) => refreshRequestedPairs = true)
+            .ReturnsAsync(1);
+        cache.Setup(c => c.GetManyAsync(
+                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
+                It.IsAny<TimeSpan?>()))
+            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
+            {
+                [(100, "Aether")] = CachedData(100, "Aether", 88)
+            });
+        var service = CreateService(appState, builder, cache.Object);
+
+        await service.RefreshPricesAsync(new RefreshRecipePlanPricesRequest(
+            MarketFetchScope.SelectedDataCenter,
+            "Aether",
+            "North America",
+            ForceRefreshData: true));
+
+        Assert.True(refreshRequestedPairs);
+        cache.Verify(c => c.EnsurePopulatedAsync(
+            It.IsAny<List<(int itemId, string dataCenter)>>(),
+            TimeSpan.Zero,
+            It.IsAny<IProgress<string>?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -914,7 +1002,8 @@ public class RecipePlannerCommandServiceTests
             List<(int itemId, string name, int quantity, bool isHqRequired)> targetItems,
             string dataCenter,
             string world,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            IRecipePlanBuildDiagnosticRecorder? diagnostics = null)
         {
             BuildPlanCallCount++;
             if (BuildAsync != null)
@@ -952,6 +1041,75 @@ public class RecipePlannerCommandServiceTests
             LastPlan = plan;
             LastPlanSessionVersion = planSessionVersion;
             return Task.FromResult(new MarketAnalysisWorkflowResult(true, 1, 0, 0));
+        }
+    }
+
+    private sealed class RecordingRecipeBuildDiagnostics : IRecipeBuildDiagnosticRecorder
+    {
+        public List<(string Name, RecipeBuildDiagnosticPhaseStatus Status)> Phases { get; } = [];
+
+        public T RunPhase<T>(string name, Func<T> action)
+        {
+            try
+            {
+                var result = action();
+                Phases.Add((name, RecipeBuildDiagnosticPhaseStatus.Completed));
+                return result;
+            }
+            catch
+            {
+                Phases.Add((name, RecipeBuildDiagnosticPhaseStatus.Failed));
+                throw;
+            }
+        }
+
+        public void RunPhase(string name, Action action)
+        {
+            try
+            {
+                action();
+                Phases.Add((name, RecipeBuildDiagnosticPhaseStatus.Completed));
+            }
+            catch
+            {
+                Phases.Add((name, RecipeBuildDiagnosticPhaseStatus.Failed));
+                throw;
+            }
+        }
+
+        public async Task<T> RunPhaseAsync<T>(
+            string name,
+            Func<CancellationToken, Task<T>> action,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                var result = await action(cancellationToken);
+                Phases.Add((name, RecipeBuildDiagnosticPhaseStatus.Completed));
+                return result;
+            }
+            catch
+            {
+                Phases.Add((name, RecipeBuildDiagnosticPhaseStatus.Failed));
+                throw;
+            }
+        }
+
+        public async Task RunPhaseAsync(
+            string name,
+            Func<CancellationToken, Task> action,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                await action(cancellationToken);
+                Phases.Add((name, RecipeBuildDiagnosticPhaseStatus.Completed));
+            }
+            catch
+            {
+                Phases.Add((name, RecipeBuildDiagnosticPhaseStatus.Failed));
+                throw;
+            }
         }
     }
 }

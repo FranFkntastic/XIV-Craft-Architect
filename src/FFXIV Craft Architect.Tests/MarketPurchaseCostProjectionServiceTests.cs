@@ -115,4 +115,39 @@ public class MarketPurchaseCostProjectionServiceTests
         Assert.Equal(80_000, estimate.Cost);
         Assert.True(estimate.IsUnsupportedProjection);
     }
+
+    [Fact]
+    public void Estimate_BlockedPlan_DoesNotUseFallbackProjection()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Blocked Item",
+            QuantityNeeded = 10,
+            Error = "Suspicious cached market evidence could not be refreshed.",
+            DCAveragePrice = 6_408,
+            WorldOptions =
+            [
+                new WorldShoppingSummary
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Siren",
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 10,
+                            PricePerUnit = 100
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var estimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: false);
+
+        Assert.Equal(MarketPurchaseCostEstimateKind.Unavailable, estimate.Kind);
+        Assert.False(estimate.HasCost);
+        Assert.False(MarketPurchaseCostProjectionService.IsUnsupportedProjectedCost(plan));
+    }
 }

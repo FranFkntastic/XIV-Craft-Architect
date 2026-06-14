@@ -240,7 +240,7 @@ internal sealed class MarketAnalysisBenchmark
         Console.WriteLine($"  Market intelligence bytes: {run.Payload.MarketIntelligenceJsonBytes:N0}");
         Console.WriteLine($"  Legacy plans JSON bytes: {run.Payload.LegacyPlansJsonBytes:N0}");
         Console.WriteLine($"  Legacy analyses JSON bytes: {run.Payload.LegacyAnalysesJsonBytes:N0}");
-        Console.WriteLine($"  Retained detail estimate bytes: {run.Payload.RetainedDetailEstimateBytes:N0}");
+        Console.WriteLine($"  Full legacy market JSON bytes: {run.Payload.FullLegacyMarketJsonBytes:N0}");
         Console.WriteLine("Cache:");
         Console.WriteLine(
             $"  Seeded={run.Cache.SeededEntries}; freshHits={run.Cache.FreshCacheHits}; " +
@@ -658,6 +658,19 @@ internal sealed class BenchmarkMarketCache : IMarketCacheService
         return fetched;
     }
 
+    public async Task<int> RefreshRequestedAsync(
+        List<(int itemId, string dataCenter)> requests,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        foreach (var request in requests.Distinct())
+        {
+            _cache.Remove((request.itemId, request.dataCenter));
+        }
+
+        return await EnsurePopulatedAsync(requests, TimeSpan.Zero, progress, ct);
+    }
+
     public void Seed(
         MarketDataFixture? fixture,
         BenchmarkCacheMode mode,
@@ -850,7 +863,7 @@ internal sealed record BenchmarkPayloadMetrics(
     long MarketIntelligenceJsonBytes,
     long LegacyPlansJsonBytes,
     long LegacyAnalysesJsonBytes,
-    long RetainedDetailEstimateBytes)
+    long FullLegacyMarketJsonBytes)
 {
     public static BenchmarkPayloadMetrics FromExecutionResult(MarketAnalysisExecutionResult result)
     {

@@ -46,7 +46,8 @@ public class ShoppingOptimizationCoordinator : IShoppingOptimizationCoordinator
                 "No plan - build a plan first");
         }
 
-        if (plan.AggregatedMaterials.Count == 0)
+        var activeProcurementItems = AcquisitionPlanningService.GetActiveProcurementItems(plan);
+        if (activeProcurementItems.Count == 0)
         {
             _logger.LogWarning("[ShoppingOptimization] Plan has no materials");
             return new OptimizationResult(
@@ -164,7 +165,7 @@ public class ShoppingOptimizationCoordinator : IShoppingOptimizationCoordinator
         var marketItems = new List<MaterialAggregate>();
         var untradeableItems = new List<MaterialAggregate>();
 
-        foreach (var material in plan.AggregatedMaterials)
+        foreach (var material in AcquisitionPlanningService.GetActiveProcurementItems(plan))
         {
             // All materials default to market for optimization
             // The actual price source (vendor/market/untradeable) is determined 

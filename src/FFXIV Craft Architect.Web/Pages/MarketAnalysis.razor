@@ -5,6 +5,7 @@
 @using static FFXIV_Craft_Architect.Core.Models.MarketSortOption
 @inject RecipePlannerCommandService RecipePlannerCommandService
 @inject MarketAnalysisWorkflowService MarketAnalysisWorkflow
+@inject MarketAnalysisItemRefreshService MarketAnalysisItemRefreshService
 @inject ISnackbar Snackbar
 @inject AppState AppState
 @inject NavigationManager NavigationManager
@@ -40,7 +41,9 @@
             ExpandedWorldKeys="AppState.ExpandedMarketAnalysisWorlds"
             ShowWorldsColumn="AppState.SearchEntireRegion"
             IsAnalyzing="_isAnalyzing"
+            IsRefreshingItem="_isRefreshingSelectedItem || _isAnalyzing || _isRefreshingPrices"
             OnSelectedItemChanged="SelectMarketAnalysisItem"
+            OnRefreshItemRequested="RefreshSelectedMarketItemAsync"
             OnWorldExpansionToggled="ToggleMarketAnalysisWorld"
             OnSortChanged="SetMarketAnalysisSort"
             OnWorldSortChanged="SetMarketAnalysisWorldSort"
@@ -52,8 +55,10 @@
 @code {
     private bool _isAnalyzing = false;
     private bool _isRefreshingPrices = false;
+    private bool _isRefreshingSelectedItem = false;
     private CancellableOperationLease? _marketAnalysisOperation;
     private CancellableOperationLease? _priceRefreshOperation;
+    private CancellableOperationLease? _itemRefreshOperation;
 
     // Settings now stored in AppState for persistence across page navigations
 
@@ -108,8 +113,10 @@
     {
         CancellableOperations.Cancel(CancellableOperationWorkflow.MarketAnalysis);
         CancellableOperations.Cancel(CancellableOperationWorkflow.PriceRefresh);
+        CancellableOperations.Cancel(CancellableOperationWorkflow.ItemMarketRefresh);
         _marketAnalysisOperation = null;
         _priceRefreshOperation = null;
+        _itemRefreshOperation = null;
         AppState.OnStateChanged -= OnStateChanged;
         AppState.OnPlanChanged -= OnPlanChanged;
         AppState.OnShoppingListChanged -= OnShoppingListChanged;
@@ -140,6 +147,7 @@
     {
         if (AppState.CurrentPlan == null) return;
 
+        CancellableOperations.Cancel(CancellableOperationWorkflow.ItemMarketRefresh);
         _isRefreshingPrices = true;
         using var operation = CancellableOperations.Start(
             CancellableOperationWorkflow.PriceRefresh,
@@ -154,7 +162,8 @@
                 new RefreshRecipePlanPricesRequest(
                     AppState.SearchEntireRegion ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter,
                     AppState.SelectedDataCenter,
-                    AppState.SelectedRegion),
+                    AppState.SelectedRegion,
+                    ForceRefreshData: true),
                 operation.Token);
             if (!operation.IsCurrent)
             {
@@ -223,6 +232,101 @@
         }
     }
 
+    private async Task RefreshSelectedMarketItemAsync(DetailedShoppingPlan plan)
+    {
+        if (AppState.CurrentPlan == null)
+        {
+            Snackbar.Add("Refresh market data failed: no active recipe plan.", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+        {
+            Snackbar.Add("Refresh market data failed: no selected data center.", Severity.Warning);
+            return;
+        }
+
+        var refreshScope = AppState.SearchEntireRegion
+            ? MarketFetchScope.EntireRegion
+            : MarketFetchScope.SelectedDataCenter;
+        var selectedDataCenter = AppState.SelectedDataCenter;
+        var selectedRegion = AppState.SelectedRegion;
+        var lens = AppState.MarketAnalysisLens;
+
+        _isRefreshingSelectedItem = true;
+        using var operation = CancellableOperations.Start(
+            CancellableOperationWorkflow.ItemMarketRefresh,
+            "Item Market Refresh",
+            $"Refreshing {plan.Name} market data...");
+        _itemRefreshOperation = operation;
+
+        try
+        {
+            var progress = new Progress<string>(message => operation.ReportStatus(message));
+            var result = await MarketAnalysisItemRefreshService.RefreshItemMarketDataAsync(
+                new MarketAnalysisItemRefreshWorkflowRequest(
+                    plan.ItemId,
+                    IsCurrentOperation: () => operation.IsCurrent,
+                    ExecutionOptions: MarketAnalysisExecutionOptions.Interactive)
+                {
+                    Scope = refreshScope,
+                    IsCurrentConfiguration = () =>
+                        (AppState.SearchEntireRegion ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter) == refreshScope &&
+                        string.Equals(AppState.SelectedDataCenter, selectedDataCenter, StringComparison.Ordinal) &&
+                        string.Equals(AppState.SelectedRegion, selectedRegion, StringComparison.Ordinal) &&
+                        AppState.MarketAnalysisLens == lens
+                },
+                progress,
+                operation.Token);
+            if (!operation.IsCurrent)
+            {
+                return;
+            }
+
+            if (result.Status == MarketAnalysisItemRefreshStatus.Refreshed)
+            {
+                if (string.IsNullOrWhiteSpace(result.ItemName))
+                {
+                    throw new InvalidOperationException("Item refresh reported success without a refreshed item name.");
+                }
+
+                operation.Complete($"{result.ItemName} market data refreshed.");
+                Snackbar.Add($"Refreshed {result.ItemName} market data.", Severity.Success);
+                return;
+            }
+
+            if (IsDiscardedItemRefreshStatus(result.Status))
+            {
+                operation.Cancel(FormatItemRefreshStatus(result.Status));
+                Snackbar.Add($"Item refresh was discarded: {FormatItemRefreshStatus(result.Status)}.", Severity.Info);
+                return;
+            }
+
+            operation.Complete($"Refresh market data failed: {result.Status}");
+            Snackbar.Add($"Refresh market data failed for {plan.Name}: {FormatItemRefreshStatus(result.Status)}", Severity.Warning);
+        }
+        catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
+        {
+            operation.Cancel();
+        }
+        catch (Exception ex)
+        {
+            if (operation.ShouldReportError(ex))
+            {
+                operation.Complete($"Refresh market data failed: {ex.Message}");
+                Snackbar.Add($"Refresh market data failed for {plan.Name}: {ex.Message}", Severity.Error);
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_itemRefreshOperation, operation))
+            {
+                _itemRefreshOperation = null;
+                _isRefreshingSelectedItem = false;
+            }
+        }
+    }
+
     private async Task RunMarketAnalysisAsync()
     {
         await RunMarketAnalysisAsync(forceRefreshData: false, showCompletionSnackbar: true);
@@ -240,6 +344,7 @@
 
         _isAnalyzing = true;
         AppState.ClearMarketAnalysisState();
+        CancellableOperations.Cancel(CancellableOperationWorkflow.ItemMarketRefresh);
         using var operation = CancellableOperations.Start(
             CancellableOperationWorkflow.MarketAnalysis,
             "Market Analysis",
@@ -300,6 +405,30 @@
     private async Task OnLensChanged(MarketAcquisitionLens lens)
     {
         await MarketAnalysisWorkflow.ApplyLensAsync(lens);
+    }
+
+    private static string FormatItemRefreshStatus(MarketAnalysisItemRefreshStatus status)
+    {
+        return status switch
+        {
+            MarketAnalysisItemRefreshStatus.NoPlan => "no active recipe plan",
+            MarketAnalysisItemRefreshStatus.NotFound => "item is not present in the current market-analysis candidate set",
+            MarketAnalysisItemRefreshStatus.NoData => "Universalis returned no market data for the item",
+            MarketAnalysisItemRefreshStatus.StaleDecision => "plan decisions changed before the refresh finished",
+            MarketAnalysisItemRefreshStatus.StaleConfiguration => "market analysis settings changed before the refresh finished",
+            MarketAnalysisItemRefreshStatus.StalePlan => "recipe plan changed before the refresh finished",
+            MarketAnalysisItemRefreshStatus.Superseded => "a newer item refresh replaced this request",
+            _ => status.ToString()
+        };
+    }
+
+    private static bool IsDiscardedItemRefreshStatus(MarketAnalysisItemRefreshStatus status)
+    {
+        return status is
+            MarketAnalysisItemRefreshStatus.StaleDecision or
+            MarketAnalysisItemRefreshStatus.StaleConfiguration or
+            MarketAnalysisItemRefreshStatus.StalePlan or
+            MarketAnalysisItemRefreshStatus.Superseded;
     }
 
     private void GoToPlanner()
