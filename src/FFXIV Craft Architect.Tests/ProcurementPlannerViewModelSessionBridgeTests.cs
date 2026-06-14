@@ -76,7 +76,10 @@ public class ProcurementPlannerViewModelSessionBridgeTests
 
         Assert.Equal(CoreProcurementWorkflowStatus.Published, result.Status);
         Assert.Equal("Procurement route published from Core workflow", viewModel.StatusMessage);
-        var overlayPlan = Assert.Single(session.ProcurementOverlay!.ShoppingPlans);
+        Assert.NotNull(session.ProcurementOverlay);
+        var overlay = session.ProcurementOverlay;
+        Assert.NotNull(overlay.ShoppingPlans);
+        var overlayPlan = Assert.Single(overlay.ShoppingPlans!);
         Assert.Equal(200, overlayPlan.ItemId);
         routeExecution.Verify(service => service.AnalyzeAsync(
             It.Is<ProcurementRouteExecutionRequest>(request =>
