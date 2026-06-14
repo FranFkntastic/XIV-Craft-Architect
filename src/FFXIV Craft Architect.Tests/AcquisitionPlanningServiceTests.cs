@@ -1161,6 +1161,55 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void TryGetAcquisitionCost_MarketBuyHq_WithoutHqEvidenceDoesNotUsePlannerPriceFallback()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 100,
+            Name = "HQ Buy",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyHq,
+            MustBeHq = true,
+            CanBeHq = true,
+            CanBuyFromMarket = true,
+            HqMarketPrice = 10_000
+        };
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 100,
+                Name = "HQ Buy",
+                QuantityNeeded = 2,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 500,
+                    TotalQuantityPurchased = 2,
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 2,
+                            PricePerUnit = 250,
+                            IsHq = false
+                        }
+                    ]
+                }
+            }
+        };
+
+        var hasCost = AcquisitionPlanningService.TryGetAcquisitionCost(
+            node,
+            AcquisitionSource.MarketBuyHq,
+            marketPlans,
+            out var cost);
+
+        Assert.False(hasCost);
+        Assert.Equal(0, cost);
+    }
+
+    [Fact]
     public void TryGetAcquisitionCost_MarketBuyNq_WithQuantityOverride_UsesOverrideForEvidence()
     {
         var node = new PlanNode

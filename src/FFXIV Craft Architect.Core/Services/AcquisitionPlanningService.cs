@@ -916,6 +916,8 @@ public static class AcquisitionPlanningService
             {
                 return estimate.Cost;
             }
+
+            return 0;
         }
 
         return (hqOnly ? node.HqMarketPrice : node.MarketPrice) * quantity;
@@ -938,10 +940,7 @@ public static class AcquisitionPlanningService
                 return estimate.Cost;
             }
 
-            if (estimate.IsUnsupportedProjection)
-            {
-                return 0;
-            }
+            return 0;
         }
 
         return (hqOnly ? node.HqMarketPrice : node.MarketPrice) * node.Quantity;
@@ -1035,6 +1034,8 @@ public static class AcquisitionPlanningService
             {
                 return estimate.Cost;
             }
+
+            return 0;
         }
 
         if (node.Source is AcquisitionSource.MarketBuyHq &&
@@ -1049,6 +1050,8 @@ public static class AcquisitionPlanningService
             {
                 return estimate.Cost;
             }
+
+            return 0;
         }
 
         return node.Source switch
