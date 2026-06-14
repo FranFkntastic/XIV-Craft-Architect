@@ -67,9 +67,11 @@ public class CoreProcurementWorkflowServiceTests
         Assert.Equal(CoreProcurementWorkflowStatus.Published, result.Status);
         Assert.Equal(2, result.ShoppingPlanCount);
         Assert.Equal(before.Procurement + 1, service.Session.Versions.Procurement);
-        Assert.Equal([101, 202], service.Session.ProcurementOverlay?.ActiveItemIds);
-        Assert.Equal([101, 202], service.Session.ProcurementOverlay?.ShoppingPlans.Select(plan => plan.ItemId));
-        Assert.Equal(["Faerie", "Siren"], service.Session.ProcurementOverlay?.RouteCards?.Select(card => card.WorldName));
+        Assert.NotNull(service.Session.ProcurementOverlay);
+        var overlay = service.Session.ProcurementOverlay;
+        Assert.Equal([101, 202], overlay.ActiveItemIds);
+        Assert.Equal([101, 202], overlay.ShoppingPlans?.Select(plan => plan.ItemId));
+        Assert.Equal(["Faerie", "Siren"], overlay.RouteCards?.Select(card => card.WorldName));
         execution.Verify(e => e.AnalyzeAsync(
             It.Is<ProcurementRouteExecutionRequest>(request =>
                 request.ActiveProcurementItems.Count == 2 &&

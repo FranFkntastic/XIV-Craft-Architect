@@ -400,7 +400,10 @@ public class SettingsService : ISettingsService
             else if (targetValue is JsonElement targetJson && targetJson.ValueKind == JsonValueKind.Object)
             {
                 targetDict = JsonSerializer.Deserialize<Dictionary<string, object>>(targetJson.GetRawText());
-                merged[kvp.Key] = targetDict; // Replace with proper dictionary
+                if (targetDict != null)
+                {
+                    merged[kvp.Key] = targetDict; // Replace with proper dictionary
+                }
             }
             
             if (loadedDict != null && targetDict != null)
