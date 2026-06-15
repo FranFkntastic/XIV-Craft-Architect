@@ -295,6 +295,45 @@ public class MarketPriceLadderAnalysisServiceTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_ThinSingletonBridgeShelf_DoesNotAnchorRegionalBaseline()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            quantityNeeded: 2_997,
+            itemId: 5_094,
+            worlds:
+            [
+                World("Coeurl",
+                [
+                    Listing(quantity: 5, price: 1, retainer: "Low Outlier A"),
+                    Listing(quantity: 9, price: 2, retainer: "Low Outlier B"),
+                    Listing(quantity: 1, price: 800, retainer: "First Real Seller")
+                ]),
+                World("Malboro",
+                [
+                    Listing(quantity: 2, price: 12, retainer: "Thin Bridge Seller"),
+                    Listing(quantity: 99, price: 982, retainer: "Representative Seller A"),
+                    Listing(quantity: 99, price: 988, retainer: "Representative Seller B"),
+                    Listing(quantity: 50, price: 988, retainer: "Representative Seller B")
+                ]),
+                World("Seraph",
+                [
+                    Listing(quantity: 70, price: 1_002, retainer: "Deep Seller A"),
+                    Listing(quantity: 99, price: 1_102, retainer: "Deep Seller B"),
+                    Listing(quantity: 99, price: 1_102, retainer: "Deep Seller B")
+                ])
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        Assert.True(analysis.AnalysisScopeBaselineUnitPrice >= 800);
+        Assert.True(analysis.AnalysisScopeAverageUnitPrice >= 800);
+        Assert.Equal(2, analysis.PriceEvaluation?.ListingClassCounts.LowOutlierCount);
+        Assert.True(analysis.Worlds.Sum(world => world.ScopeSaneQuantity) > 2);
+        Assert.True(analysis.Worlds.Sum(world => world.ScopeCompetitiveQuantity) > 2);
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_ExtremeHighOutlierStack_DoesNotPoisonRegionalAverages()
     {
         var service = CreateService();
