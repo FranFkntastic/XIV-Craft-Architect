@@ -162,6 +162,56 @@ public static class MarketAnalysisGridViewService
             : "No listings";
     }
 
+    public static string FormatWorldPriceBandRole(WorldMarketAnalysis world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+
+        var bestBand = GetBestSortPriceBand(world);
+        if (bestBand == null)
+        {
+            return "unavailable";
+        }
+
+        return GetPriceBandRole(world, bestBand) switch
+        {
+            ListingPriceBandRole.Representative => "included evidence",
+            ListingPriceBandRole.Thin => "thin",
+            ListingPriceBandRole.LowOutlier => "low outlier",
+            ListingPriceBandRole.ExpensiveTail => "expensive tail",
+            _ => "other band"
+        };
+    }
+
+    public static string GetWorldPriceBandScoreClass(WorldMarketAnalysis world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+
+        var bestBand = GetBestSortPriceBand(world);
+        if (bestBand == null)
+        {
+            return "is-unavailable";
+        }
+
+        return GetPriceBandRole(world, bestBand) switch
+        {
+            ListingPriceBandRole.Representative => "is-optimal",
+            ListingPriceBandRole.Thin => "is-competitive",
+            ListingPriceBandRole.LowOutlier => "is-competitive",
+            ListingPriceBandRole.ExpensiveTail => "is-expensive",
+            _ => "is-unavailable"
+        };
+    }
+
+    public static string FormatWorldPriceBandSummary(WorldMarketAnalysis world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+
+        var bestBand = GetBestSortPriceBand(world);
+        return bestBand != null
+            ? $"{bestBand.Quantity:N0} in band at ~{bestBand.WeightedAverageUnitPrice:N0}g"
+            : "No price bands";
+    }
+
     public static string FormatAnalysisScopePriceSummary(MarketItemAnalysis analysis)
     {
         ArgumentNullException.ThrowIfNull(analysis);
@@ -209,7 +259,8 @@ public static class MarketAnalysisGridViewService
         MarketItemAnalysis analysis,
         MarketAcquisitionLens lens,
         MarketAnalysisWorldGridSortColumn? sortColumn = null,
-        bool sortDescending = false)
+        bool sortDescending = false,
+        MarketAnalysisEvidenceOverlay evidenceOverlay = MarketAnalysisEvidenceOverlay.ShelfOverlay)
     {
         ArgumentNullException.ThrowIfNull(analysis);
 
@@ -220,7 +271,7 @@ public static class MarketAnalysisGridViewService
         return WebTableOrdering.Apply(
             analysis.Worlds,
             sortState,
-            GetWorldSortRules(lens),
+            GetWorldSortRules(lens, evidenceOverlay),
             worlds => GetDefaultWorldOrder(worlds, lens),
             ordered => ordered
                 .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
@@ -362,6 +413,54 @@ public static class MarketAnalysisGridViewService
         return dividers;
     }
 
+    public static string GetListingRowClass(
+        WorldMarketAnalysis world,
+        AnalyzedMarketListing listing,
+        MarketAnalysisEvidenceOverlay evidenceOverlay)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(listing);
+
+        var classes = GetShelfListingClasses(listing);
+        if (evidenceOverlay == MarketAnalysisEvidenceOverlay.PriceBandOverlay)
+        {
+            classes.Add(GetListingPriceBandToneClass(world, listing));
+            classes.Add(GetListingPriceBandEdgeClass(world, listing));
+        }
+
+        return string.Join(" ", classes.Where(cssClass => !string.IsNullOrWhiteSpace(cssClass)));
+    }
+
+    public static string GetListingPriceBandTooltip(
+        WorldMarketAnalysis world,
+        AnalyzedMarketListing listing,
+        MarketAnalysisEvidenceOverlay evidenceOverlay)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(listing);
+
+        if (evidenceOverlay != MarketAnalysisEvidenceOverlay.PriceBandOverlay)
+        {
+            return string.Empty;
+        }
+
+        return GetListingPriceBandRole(world, listing) switch
+        {
+            ListingPriceBandRole.LowOutlier => "Low outlier price band: cheap shelf evidence is visible but does not contribute to representative market evidence.",
+            ListingPriceBandRole.Thin => "Thin price band: low stock depth is visible but does not contribute to representative market evidence.",
+            ListingPriceBandRole.Representative => "Representative price band: this listing contributes to the readable market evidence for ordinary pricing.",
+            ListingPriceBandRole.ExpensiveTail => "Expensive tail price band: high-price evidence is visible but does not contribute to representative market evidence.",
+            _ => "Price band role could not be classified from the loaded listing evidence."
+        };
+    }
+
+    public static bool IsUncompetitiveListing(AnalyzedMarketListing listing)
+    {
+        ArgumentNullException.ThrowIfNull(listing);
+
+        return IsUncompetitive(listing);
+    }
+
     public static int GetCompetitiveQuantity(WorldMarketAnalysis world)
     {
         ArgumentNullException.ThrowIfNull(world);
@@ -456,7 +555,8 @@ public static class MarketAnalysisGridViewService
     }
 
     private static IReadOnlyList<WebTableSortRule<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>> GetWorldSortRules(
-        MarketAcquisitionLens lens)
+        MarketAcquisitionLens lens,
+        MarketAnalysisEvidenceOverlay evidenceOverlay)
     {
         return
         [
@@ -472,7 +572,7 @@ public static class MarketAnalysisGridViewService
                 GetWorldCoverageSortValue),
             WebTableSortRule<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>.Create(
                 MarketAnalysisWorldGridSortColumn.PriceValue,
-                world => GetWorldPriceValueSortValue(world, lens)),
+                world => GetWorldPriceValueSortValue(world, lens, evidenceOverlay)),
             WebTableSortRule<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>.Create(
                 MarketAnalysisWorldGridSortColumn.Value,
                 GetCompetitiveValueSortValue),
@@ -518,12 +618,58 @@ public static class MarketAnalysisGridViewService
         return bucketRank * 1_000_000 - Math.Min(GetCoverageQuantity(world), world.QuantityNeeded);
     }
 
-    private static int GetWorldPriceValueSortValue(WorldMarketAnalysis world, MarketAcquisitionLens lens)
+    private static decimal GetWorldPriceValueSortValue(
+        WorldMarketAnalysis world,
+        MarketAcquisitionLens lens,
+        MarketAnalysisEvidenceOverlay evidenceOverlay)
     {
+        if (evidenceOverlay == MarketAnalysisEvidenceOverlay.PriceBandOverlay)
+        {
+            return GetWorldPriceBandSortValue(world);
+        }
+
         var displayRank = GetDisplayScoreRank(world, lens);
         var rank = GetScore(world, lens).Rank;
         var lensRank = rank == 0 ? int.MaxValue : rank;
         return displayRank * 1_000_000 + lensRank;
+    }
+
+    private static decimal GetWorldPriceBandSortValue(WorldMarketAnalysis world)
+    {
+        var bestBand = GetBestSortPriceBand(world);
+
+        if (bestBand == null)
+        {
+            return decimal.MaxValue;
+        }
+
+        return GetPriceBandSortRank(world, bestBand) * 1_000_000_000m
+            - Math.Min(bestBand.Quantity, 999_999)
+            + bestBand.WeightedAverageUnitPrice / 1_000_000m;
+    }
+
+    private static MarketPriceBand? GetBestSortPriceBand(WorldMarketAnalysis world)
+    {
+        return world.PriceBands
+            .OrderBy(band => GetPriceBandSortRank(world, band))
+            .ThenByDescending(band => band.Quantity)
+            .ThenBy(band => band.WeightedAverageUnitPrice)
+            .FirstOrDefault();
+    }
+
+    private static int GetPriceBandSortRank(WorldMarketAnalysis world, MarketPriceBand band)
+    {
+        if (band.IsCompetitiveShelf && IsCredibleCompetitiveBand(world, band))
+        {
+            return 0;
+        }
+
+        if (IsThinBand(world, band))
+        {
+            return 2;
+        }
+
+        return 1;
     }
 
     private static decimal GetCompetitiveValueSortValue(WorldMarketAnalysis world)
@@ -562,6 +708,163 @@ public static class MarketAnalysisGridViewService
     private static bool IsVendorPlan(DetailedShoppingPlan plan)
     {
         return plan.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName || plan.Vendors.Any();
+    }
+
+    private static List<string> GetShelfListingClasses(AnalyzedMarketListing listing)
+    {
+        var classes = new List<string>();
+        if (listing.IsInCompetitiveShelf || IsCompetitive(listing))
+        {
+            classes.Add("is-competitive");
+        }
+
+        if (listing.PriceSanity == MarketListingPriceSanity.Insane)
+        {
+            classes.Add("is-insane");
+        }
+        else if (listing.PriceSanity == MarketListingPriceSanity.Outlier)
+        {
+            classes.Add("is-outlier");
+        }
+        else if (listing.PriceSanity == MarketListingPriceSanity.LowOutlier)
+        {
+            classes.Add("is-low-outlier");
+        }
+
+        if (IsUncompetitive(listing))
+        {
+            classes.Add("is-uncompetitive");
+        }
+
+        return classes;
+    }
+
+    private static bool IsCompetitive(AnalyzedMarketListing listing)
+    {
+        return listing.Competitiveness switch
+        {
+            MarketListingCompetitiveness.Deal or MarketListingCompetitiveness.Competitive => true,
+            MarketListingCompetitiveness.Unknown => listing.IsScopeCompetitive,
+            _ => false
+        };
+    }
+
+    private static bool IsUncompetitive(AnalyzedMarketListing listing)
+    {
+        return listing.Competitiveness switch
+        {
+            MarketListingCompetitiveness.Fair or MarketListingCompetitiveness.Uncompetitive => true,
+            MarketListingCompetitiveness.Unknown => listing.IsScopeUncompetitive,
+            _ => false
+        };
+    }
+
+    private static string GetListingPriceBandToneClass(
+        WorldMarketAnalysis world,
+        AnalyzedMarketListing listing)
+    {
+        if (listing.PriceSanity == MarketListingPriceSanity.LowOutlier)
+        {
+            return "ma-band-tone-low";
+        }
+
+        if (listing.PriceSanity is MarketListingPriceSanity.Insane or MarketListingPriceSanity.Outlier ||
+            IsUncompetitive(listing))
+        {
+            return "ma-band-tone-high";
+        }
+
+        var band = GetContainingPriceBand(world, listing);
+        if (band != null &&
+            world.AnalysisScopeCompetitiveAverageUnitPrice > 0 &&
+            band.WeightedAverageUnitPrice < world.AnalysisScopeCompetitiveAverageUnitPrice * 0.8m)
+        {
+            return "ma-band-tone-low";
+        }
+
+        return "ma-band-tone-mid";
+    }
+
+    private static string GetListingPriceBandEdgeClass(
+        WorldMarketAnalysis world,
+        AnalyzedMarketListing listing)
+    {
+        return GetListingPriceBandRole(world, listing) switch
+        {
+            ListingPriceBandRole.LowOutlier => "ma-band-edge-low-outlier",
+            ListingPriceBandRole.Thin => "ma-band-edge-thin",
+            ListingPriceBandRole.Representative => "ma-band-edge-representative",
+            ListingPriceBandRole.ExpensiveTail => "ma-band-edge-expensive-tail",
+            _ => "ma-band-edge-unknown"
+        };
+    }
+
+    private static ListingPriceBandRole GetListingPriceBandRole(
+        WorldMarketAnalysis world,
+        AnalyzedMarketListing listing)
+    {
+        if (listing.PriceSanity == MarketListingPriceSanity.LowOutlier)
+        {
+            return ListingPriceBandRole.LowOutlier;
+        }
+
+        if (listing.PriceSanity is MarketListingPriceSanity.Insane or MarketListingPriceSanity.Outlier ||
+            IsUncompetitive(listing))
+        {
+            return ListingPriceBandRole.ExpensiveTail;
+        }
+
+        var band = GetContainingPriceBand(world, listing);
+        if (band?.IsCompetitiveShelf == true && IsCredibleCompetitiveBand(world, band))
+        {
+            return ListingPriceBandRole.Representative;
+        }
+
+        if (band != null && IsThinBand(world, band))
+        {
+            return ListingPriceBandRole.Thin;
+        }
+
+        if (IsCompetitive(listing))
+        {
+            return ListingPriceBandRole.Representative;
+        }
+
+        return ListingPriceBandRole.Unknown;
+    }
+
+    private static ListingPriceBandRole GetPriceBandRole(WorldMarketAnalysis world, MarketPriceBand band)
+    {
+        if (band.IsCompetitiveShelf && IsCredibleCompetitiveBand(world, band))
+        {
+            return ListingPriceBandRole.Representative;
+        }
+
+        if (IsThinBand(world, band))
+        {
+            return ListingPriceBandRole.Thin;
+        }
+
+        return ListingPriceBandRole.Unknown;
+    }
+
+    private static MarketPriceBand? GetContainingPriceBand(
+        WorldMarketAnalysis world,
+        AnalyzedMarketListing listing)
+    {
+        return world.PriceBands.FirstOrDefault(band =>
+            listing.SortIndex >= band.FirstListingIndex &&
+            listing.SortIndex <= band.LastListingIndex);
+    }
+
+    private static bool IsThinBand(WorldMarketAnalysis world, MarketPriceBand band)
+    {
+        return !IsCredibleCompetitiveBand(world, band);
+    }
+
+    private static bool IsCredibleCompetitiveBand(WorldMarketAnalysis world, MarketPriceBand band)
+    {
+        return band.ListingCount >= 2 || band.Quantity >= Math.Max(world.QuantityNeeded / 4, 1);
     }
 
     private static bool HasScopePriceContext(WorldMarketAnalysis world)
@@ -643,3 +946,12 @@ public static class MarketAnalysisGridViewService
 }
 
 public sealed record MarketListingDivider(string Label);
+
+internal enum ListingPriceBandRole
+{
+    Unknown,
+    LowOutlier,
+    Thin,
+    Representative,
+    ExpensiveTail
+}

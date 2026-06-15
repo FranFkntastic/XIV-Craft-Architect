@@ -83,6 +83,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
             ApplyLensRanks(worlds, MarketAcquisitionLens.MinimumUpfrontCost);
             ApplyLensRanks(worlds, MarketAcquisitionLens.BulkValue);
+            var scopePriceBands = BuildScopePriceBands(worlds, item.TotalQuantity, scopePriceContext);
 
             analyses.Add(new MarketItemAnalysis
             {
@@ -102,6 +103,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 PresentDataCenters = presentDataCenters,
                 MissingDataCenters = missingDataCenters,
                 WorstDataQualityBucket = GetWorstDataQuality(worlds, missingDataCenters),
+                ScopePriceBands = scopePriceBands,
                 Worlds = worlds,
                 Warning = CreateWarning(entries.Count, missingDataCenters)
             });
@@ -567,6 +569,148 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         };
     }
 
+    private static List<MarketScopePriceBand> BuildScopePriceBands(
+        IReadOnlyList<WorldMarketAnalysis> worlds,
+        int quantityNeeded,
+        MarketPriceEvaluationContext scopePriceContext)
+    {
+        var listings = worlds
+            .SelectMany(world => world.Listings.Select(listing => new ScopeBandListing(world.WorldName, listing)))
+            .Where(entry => entry.Listing.Quantity > 0 && entry.Listing.PricePerUnit > 0)
+            .OrderBy(entry => entry.Listing.PricePerUnit)
+            .ThenByDescending(entry => entry.Listing.Quantity)
+            .ThenBy(entry => entry.WorldName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(entry => entry.Listing.RetainerName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var grouped = new List<List<ScopeBandListing>>();
+        var current = new List<ScopeBandListing>();
+
+        foreach (var listing in listings)
+        {
+            if (current.Count > 0 && listing.Listing.PricePerUnit > CalculateWeightedAverage(current) * (1 + BandTolerance))
+            {
+                grouped.Add(current);
+                current = [];
+            }
+
+            current.Add(listing);
+        }
+
+        if (current.Count > 0)
+        {
+            grouped.Add(current);
+        }
+
+        return grouped
+            .Select((band, index) =>
+            {
+                var nextBand = index < grouped.Count - 1 ? grouped[index + 1] : null;
+                var scopeBand = CreateScopePriceBand(band, quantityNeeded, scopePriceContext);
+                return new MarketScopePriceBand
+                {
+                    MinUnitPrice = scopeBand.MinUnitPrice,
+                    MaxUnitPrice = scopeBand.MaxUnitPrice,
+                    WeightedAverageUnitPrice = scopeBand.WeightedAverageUnitPrice,
+                    TotalQuantity = scopeBand.TotalQuantity,
+                    ListingCount = scopeBand.ListingCount,
+                    DistinctWorldCount = scopeBand.DistinctWorldCount,
+                    DistinctRetainerCount = scopeBand.DistinctRetainerCount,
+                    BandRole = scopeBand.BandRole,
+                    IsRepresentative = scopeBand.IsRepresentative,
+                    IsThin = scopeBand.IsThin,
+                    BreakPercentToNextBand = nextBand is null
+                        ? null
+                        : CalculateBreakPercent(scopeBand.WeightedAverageUnitPrice, nextBand.Min(entry => entry.Listing.PricePerUnit))
+                };
+            })
+            .ToList();
+    }
+
+    private static MarketScopePriceBand CreateScopePriceBand(
+        IReadOnlyList<ScopeBandListing> band,
+        int quantityNeeded,
+        MarketPriceEvaluationContext scopePriceContext)
+    {
+        var minUnitPrice = band.Min(entry => entry.Listing.PricePerUnit);
+        var maxUnitPrice = band.Max(entry => entry.Listing.PricePerUnit);
+        var listingCount = band.Count;
+        var totalQuantity = band.Sum(entry => entry.Listing.Quantity);
+        var overlapsCentralRegion = IsRepresentativeScopeBand(minUnitPrice, maxUnitPrice, scopePriceContext.PriceEvaluation.CentralRegion);
+        var isThin = listingCount < 2 &&
+            totalQuantity < Math.Max(quantityNeeded / 4, 1);
+        var isRepresentative = overlapsCentralRegion && !isThin;
+
+        return new MarketScopePriceBand
+        {
+            MinUnitPrice = minUnitPrice,
+            MaxUnitPrice = maxUnitPrice,
+            WeightedAverageUnitPrice = CalculateWeightedAverage(band),
+            TotalQuantity = totalQuantity,
+            ListingCount = listingCount,
+            DistinctWorldCount = band
+                .Select(entry => entry.WorldName)
+                .Where(world => !string.IsNullOrWhiteSpace(world))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count(),
+            DistinctRetainerCount = band
+                .Select(entry => entry.Listing.RetainerName)
+                .Where(retainer => !string.IsNullOrWhiteSpace(retainer))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count(),
+            BandRole = DetermineScopePriceBandRole(band, scopePriceContext, isRepresentative, isThin),
+            IsRepresentative = isRepresentative,
+            IsThin = isThin
+        };
+    }
+
+    private static bool IsRepresentativeScopeBand(
+        long minUnitPrice,
+        long maxUnitPrice,
+        MarketCentralPriceRegion centralRegion)
+    {
+        return centralRegion.MinUnitPrice > 0 &&
+            centralRegion.MaxUnitPrice > 0 &&
+            minUnitPrice <= centralRegion.MaxUnitPrice &&
+            maxUnitPrice >= centralRegion.MinUnitPrice;
+    }
+
+    private static MarketScopePriceBandRole DetermineScopePriceBandRole(
+        IReadOnlyList<ScopeBandListing> band,
+        MarketPriceEvaluationContext scopePriceContext,
+        bool isRepresentative,
+        bool isThin)
+    {
+        if (band.All(entry => entry.Listing.PriceSanity == MarketListingPriceSanity.LowOutlier))
+        {
+            return MarketScopePriceBandRole.LowOutlier;
+        }
+
+        if (band.All(entry =>
+            entry.Listing.PriceSanity is MarketListingPriceSanity.Outlier or MarketListingPriceSanity.Insane ||
+            entry.Listing.Competitiveness == MarketListingCompetitiveness.Excluded ||
+            entry.Listing.PricePerUnit > scopePriceContext.PriceEvaluation.CentralRegion.MaxUnitPrice))
+        {
+            return MarketScopePriceBandRole.ExpensiveTail;
+        }
+
+        if (isThin)
+        {
+            return MarketScopePriceBandRole.Thin;
+        }
+
+        if (band.Any(entry => entry.Listing.IsScopeCompetitive))
+        {
+            return MarketScopePriceBandRole.Competitive;
+        }
+
+        if (isRepresentative)
+        {
+            return MarketScopePriceBandRole.Representative;
+        }
+
+        return MarketScopePriceBandRole.Unknown;
+    }
+
     private static HashSet<int> SelectCompetitiveShelf(IReadOnlyList<MarketPriceBand> bands, int quantityNeeded)
     {
         var selected = new HashSet<int>();
@@ -908,6 +1052,14 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             : 0;
     }
 
+    private static decimal CalculateWeightedAverage(IReadOnlyList<ScopeBandListing> listings)
+    {
+        var quantity = listings.Sum(entry => entry.Listing.Quantity);
+        return quantity > 0
+            ? listings.Sum(entry => entry.Listing.PricePerUnit * entry.Listing.Quantity) / (decimal)quantity
+            : 0;
+    }
+
     private static decimal CalculateBreakPercent(decimal currentAverage, long nextMinimum)
     {
         return currentAverage <= 0
@@ -932,4 +1084,6 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
         return null;
     }
+
+    private sealed record ScopeBandListing(string WorldName, AnalyzedMarketListing Listing);
 }

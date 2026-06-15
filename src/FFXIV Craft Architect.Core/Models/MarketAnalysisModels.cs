@@ -122,6 +122,7 @@ public sealed class MarketItemAnalysis
     public bool HasCompleteScopeData => MissingDataCenters.Count == 0;
     public MarketDataQualityBucket WorstDataQualityBucket { get; init; } = MarketDataQualityBucket.Missing;
     public MarketPriceEvaluation? PriceEvaluation { get; init; }
+    public List<MarketScopePriceBand> ScopePriceBands { get; init; } = new();
     public List<WorldMarketAnalysis> Worlds { get; init; } = new();
     public string? Warning { get; init; }
 }
@@ -258,6 +259,31 @@ public sealed class MarketPriceBand
     public int Quantity { get; init; }
     public decimal? NextBreakPercent { get; init; }
     public bool IsCompetitiveShelf { get; init; }
+}
+
+public enum MarketScopePriceBandRole
+{
+    Unknown = 0,
+    LowOutlier = 1,
+    Thin = 2,
+    Representative = 3,
+    Competitive = 4,
+    ExpensiveTail = 5
+}
+
+public sealed class MarketScopePriceBand
+{
+    public long MinUnitPrice { get; init; }
+    public long MaxUnitPrice { get; init; }
+    public decimal WeightedAverageUnitPrice { get; init; }
+    public int TotalQuantity { get; init; }
+    public int ListingCount { get; init; }
+    public int DistinctWorldCount { get; init; }
+    public int DistinctRetainerCount { get; init; }
+    public MarketScopePriceBandRole BandRole { get; init; }
+    public bool IsRepresentative { get; init; }
+    public bool IsThin { get; init; }
+    public decimal? BreakPercentToNextBand { get; init; }
 }
 
 public sealed class AnalyzedMarketListing

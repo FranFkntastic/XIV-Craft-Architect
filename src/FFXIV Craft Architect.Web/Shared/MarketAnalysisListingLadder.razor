@@ -23,7 +23,8 @@
                     </tr>
                 }
 
-                <tr class="@GetListingClass(listing)">
+                <tr class="@MarketAnalysisGridViewService.GetListingRowClass(World, listing, EvidenceOverlay)"
+                    title="@MarketAnalysisGridViewService.GetListingPriceBandTooltip(World, listing, EvidenceOverlay)">
                     <td>@listing.Quantity.ToString("N0")</td>
                     <td>@listing.PricePerUnit.ToString("N0")g</td>
                     <td>@((listing.Quantity * listing.PricePerUnit).ToString("N0"))g</td>
@@ -43,7 +44,7 @@
                         {
                             <span class="ma-ladder-flag is-low-outlier">low outlier</span>
                         }
-                        else if (IsUncompetitive(listing))
+                        else if (MarketAnalysisGridViewService.IsUncompetitiveListing(listing))
                         {
                             <span class="ma-ladder-flag is-uncompetitive">uncompetitive</span>
                         }
@@ -56,55 +57,7 @@
 
 @code {
     [Parameter, EditorRequired] public WorldMarketAnalysis World { get; set; } = default!;
-
-    private static string GetListingClass(AnalyzedMarketListing listing)
-    {
-        var classes = new List<string>();
-        if (listing.IsInCompetitiveShelf || IsCompetitive(listing))
-        {
-            classes.Add("is-competitive");
-        }
-
-        if (listing.PriceSanity == MarketListingPriceSanity.Insane)
-        {
-            classes.Add("is-insane");
-        }
-        else if (listing.PriceSanity == MarketListingPriceSanity.Outlier)
-        {
-            classes.Add("is-outlier");
-        }
-        else if (listing.PriceSanity == MarketListingPriceSanity.LowOutlier)
-        {
-            classes.Add("is-low-outlier");
-        }
-
-        if (IsUncompetitive(listing))
-        {
-            classes.Add("is-uncompetitive");
-        }
-
-        return string.Join(" ", classes);
-    }
-
-    private static bool IsCompetitive(AnalyzedMarketListing listing)
-    {
-        return listing.Competitiveness switch
-        {
-            MarketListingCompetitiveness.Deal or MarketListingCompetitiveness.Competitive => true,
-            MarketListingCompetitiveness.Unknown => listing.IsScopeCompetitive,
-            _ => false
-        };
-    }
-
-    private static bool IsUncompetitive(AnalyzedMarketListing listing)
-    {
-        return listing.Competitiveness switch
-        {
-            MarketListingCompetitiveness.Fair or MarketListingCompetitiveness.Uncompetitive => true,
-            MarketListingCompetitiveness.Unknown => listing.IsScopeUncompetitive,
-            _ => false
-        };
-    }
+    [Parameter] public MarketAnalysisEvidenceOverlay EvidenceOverlay { get; set; } = MarketAnalysisEvidenceOverlay.ShelfOverlay;
 
     private static string FormatReviewAge(AnalyzedMarketListing listing)
     {

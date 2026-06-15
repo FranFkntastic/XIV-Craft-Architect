@@ -59,6 +59,38 @@
     color: #b8e986;
 }
 
+.ma-ladder-table tr.ma-band-tone-low td {
+    background: rgba(104, 159, 56, 0.12);
+}
+
+.ma-ladder-table tr.ma-band-tone-mid td {
+    background: rgba(66, 133, 166, 0.10);
+}
+
+.ma-ladder-table tr.ma-band-tone-high td {
+    background: rgba(171, 71, 188, 0.12);
+}
+
+.ma-ladder-table tr.ma-band-edge-low-outlier td:first-child {
+    box-shadow: inset 3px 0 0 #b8e986;
+}
+
+.ma-ladder-table tr.ma-band-edge-thin td:first-child {
+    box-shadow: inset 3px 0 0 #64b5f6;
+}
+
+.ma-ladder-table tr.ma-band-edge-representative td:first-child {
+    box-shadow: inset 3px 0 0 #81c784;
+}
+
+.ma-ladder-table tr.ma-band-edge-expensive-tail td:first-child {
+    box-shadow: inset 3px 0 0 #ce93d8;
+}
+
+.ma-ladder-table tr.ma-band-edge-unknown td:first-child {
+    box-shadow: inset 3px 0 0 #8d949c;
+}
+
 .ma-ladder-break-row td {
     color: #f2c166;
     font-size: 10px;

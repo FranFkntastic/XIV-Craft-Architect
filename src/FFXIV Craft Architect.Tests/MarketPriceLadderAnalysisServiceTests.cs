@@ -331,6 +331,24 @@ public class MarketPriceLadderAnalysisServiceTests
         Assert.Equal(2, analysis.PriceEvaluation?.ListingClassCounts.LowOutlierCount);
         Assert.True(analysis.Worlds.Sum(world => world.ScopeSaneQuantity) > 2);
         Assert.True(analysis.Worlds.Sum(world => world.ScopeCompetitiveQuantity) > 2);
+
+        var lowOutlierBands = analysis.ScopePriceBands
+            .Where(band => band.BandRole == MarketScopePriceBandRole.LowOutlier)
+            .ToList();
+        Assert.Equal(14, lowOutlierBands.Sum(band => band.TotalQuantity));
+        Assert.Contains(lowOutlierBands, band => band.MinUnitPrice == 1 && band.TotalQuantity == 5);
+        Assert.Contains(lowOutlierBands, band => band.MinUnitPrice == 2 && band.TotalQuantity == 9);
+        Assert.All(lowOutlierBands, band => Assert.False(band.IsRepresentative));
+
+        var thinBridgeBand = Assert.Single(analysis.ScopePriceBands, band => band.MinUnitPrice == 12);
+        Assert.Equal(MarketScopePriceBandRole.Thin, thinBridgeBand.BandRole);
+        Assert.Equal(2, thinBridgeBand.TotalQuantity);
+        Assert.Equal(1, thinBridgeBand.ListingCount);
+        Assert.Equal(1, thinBridgeBand.DistinctWorldCount);
+        Assert.True(thinBridgeBand.IsThin);
+        Assert.False(thinBridgeBand.IsRepresentative);
+
+        Assert.Contains(analysis.ScopePriceBands, band => band.MinUnitPrice >= 800 && band.IsRepresentative);
     }
 
     [Fact]
@@ -540,6 +558,64 @@ public class MarketPriceLadderAnalysisServiceTests
         Assert.Equal(165, evaluation.CentralRegion.TotalQuantity);
         Assert.Equal(3, evaluation.CentralRegion.DistinctRetainerCount);
         Assert.Equal(2, evaluation.CentralRegion.DistinctWorldCount);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_PopulatesScopePriceBandsAcrossSelectedScopeWorlds()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            quantityNeeded: 100,
+            worlds:
+            [
+                World("Siren",
+                [
+                    Listing(quantity: 10, price: 100, retainer: "Anchor A")
+                ]),
+                World("Faerie",
+                [
+                    Listing(quantity: 20, price: 105, retainer: "Anchor B"),
+                    Listing(quantity: 30, price: 107, retainer: "Anchor C")
+                ]),
+                World("Cactuar",
+                [
+                    Listing(quantity: 5, price: 180, retainer: "High Ask")
+                ])
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        var representativeBand = Assert.Single(analysis.ScopePriceBands, band => band.MinUnitPrice == 100);
+        Assert.Equal(107, representativeBand.MaxUnitPrice);
+        Assert.Equal((10 * 100 + 20 * 105 + 30 * 107) / 60m, representativeBand.WeightedAverageUnitPrice);
+        Assert.Equal(60, representativeBand.TotalQuantity);
+        Assert.Equal(3, representativeBand.ListingCount);
+        Assert.Equal(2, representativeBand.DistinctWorldCount);
+        Assert.Equal(3, representativeBand.DistinctRetainerCount);
+        Assert.Equal(MarketScopePriceBandRole.Competitive, representativeBand.BandRole);
+        Assert.True(representativeBand.IsRepresentative);
+        Assert.False(representativeBand.IsThin);
+        Assert.True(representativeBand.BreakPercentToNextBand > 60);
+
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ScopePriceBandsClassifyInsaneListingsAsExpensiveTail()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            quantityNeeded: 100,
+            listings:
+            [
+                Listing(quantity: 100, price: 100, retainer: "Fair Stack"),
+                Listing(quantity: 10, price: 250, retainer: "Wild Ask")
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+
+        var expensiveTailBand = Assert.Single(analysis.ScopePriceBands, band => band.MinUnitPrice == 250);
+        Assert.Equal(MarketScopePriceBandRole.ExpensiveTail, expensiveTailBand.BandRole);
+        Assert.False(expensiveTailBand.IsRepresentative);
     }
 
     [Fact]

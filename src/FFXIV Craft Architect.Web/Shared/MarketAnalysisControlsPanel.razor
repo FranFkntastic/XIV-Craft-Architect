@@ -17,22 +17,23 @@
                    ValueChanged="OnLensChangedRequested"
                    Variant="Variant.Outlined"
                    Dense="true"
+                   Title="@LensSelectorTooltip"
                    Class="ma-full-width">
-            <MudSelectItem Value="@MarketAcquisitionLens.MinimumUpfrontCost">Minimum Upfront Cost</MudSelectItem>
-            <MudSelectItem Value="@MarketAcquisitionLens.BulkValue">Best Value / Bulk Acquisition</MudSelectItem>
+            <MudSelectItem Value="@MarketAcquisitionLens.MinimumUpfrontCost" Title="@MinimumUpfrontCostLensTooltip">Minimum Upfront Cost</MudSelectItem>
+            <MudSelectItem Value="@MarketAcquisitionLens.BulkValue" Title="@BulkValueLensTooltip">Best Value / Bulk Acquisition</MudSelectItem>
         </MudSelect>
     </div>
 
     <div class="ma-field-block">
-        <div class="ma-field-label">Sort</div>
-        <MudSelect T="MarketSortOption"
-                   Value="AppState.MarketSortPreference"
-                   ValueChanged="OnSortPreferenceChanged"
+        <div class="ma-field-label">Evidence Overlay</div>
+        <MudSelect T="MarketAnalysisEvidenceOverlay"
+                   Value="AppState.MarketAnalysisEvidenceOverlay"
+                   ValueChanged="OnEvidenceOverlayChanged"
                    Variant="Variant.Outlined"
                    Dense="true"
                    Class="ma-full-width">
-            <MudSelectItem Value="@MarketSortOption.ByRecommended">By Lens Score</MudSelectItem>
-            <MudSelectItem Value="@MarketSortOption.Alphabetical">Alphabetical</MudSelectItem>
+            <MudSelectItem Value="@MarketAnalysisEvidenceOverlay.ShelfOverlay">Shelf Overlay</MudSelectItem>
+            <MudSelectItem Value="@MarketAnalysisEvidenceOverlay.PriceBandOverlay">Price Band Overlay</MudSelectItem>
         </MudSelect>
     </div>
 
@@ -122,6 +123,10 @@
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
     [Parameter] public EventCallback OnGoToProcurementRequested { get; set; }
 
+    private const string LensSelectorTooltip = "Acquisition lenses change how worlds are ranked for buying logistics; they do not change the underlying market evidence.";
+    private const string MinimumUpfrontCostLensTooltip = "Minimum upfront cost ranks worlds by needed-quantity coverage and estimated cost to cover the plan need.";
+    private const string BulkValueLensTooltip = "Best value / bulk acquisition favors deeper competitive stock and partial shelves that may still be useful.";
+
     private void OnSearchEntireRegionChanged(bool searchEntireRegion)
     {
         AppState.SetMarketEvidenceSettings(
@@ -131,9 +136,9 @@
             searchEntireRegion);
     }
 
-    private void OnSortPreferenceChanged(MarketSortOption preference)
+    private void OnEvidenceOverlayChanged(MarketAnalysisEvidenceOverlay overlay)
     {
-        AppState.SetMarketSortPreference(preference);
+        AppState.SetMarketAnalysisEvidenceOverlay(overlay);
     }
 
     private string? BenchmarkHook(string id) => AppState.SecretDebugToolsEnabled ? id : null;
