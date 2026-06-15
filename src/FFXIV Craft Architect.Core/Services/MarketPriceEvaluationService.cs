@@ -58,7 +58,7 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
             baselineListings = listings;
         }
 
-        baselineListings = TrimHighOutlierTail(baselineListings);
+        baselineListings = TrimHighOutlierTail(itemId, baselineListings);
 
         var median = CalculateWeightedMedian(baselineListings);
         if (median <= 0)
@@ -393,11 +393,19 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
         return lowOutlierBand.MaxUnitPrice;
     }
 
-    private static List<ScopeListing> TrimHighOutlierTail(IReadOnlyList<ScopeListing> listings)
+    private static List<ScopeListing> TrimHighOutlierTail(int itemId, IReadOnlyList<ScopeListing> listings)
     {
         var bands = BuildCachedPriceBands(listings);
         var lastBaselineBand = bands.FirstOrDefault(band => band.NextBreakPercent >= LowOutlierBreakPercent);
         if (lastBaselineBand == null)
+        {
+            return listings.ToList();
+        }
+
+        var baselineBands = bands
+            .Where(band => band.MinUnitPrice <= lastBaselineBand.MaxUnitPrice)
+            .ToList();
+        if (!IsCrediblePriceRegion(itemId, baselineBands))
         {
             return listings.ToList();
         }
