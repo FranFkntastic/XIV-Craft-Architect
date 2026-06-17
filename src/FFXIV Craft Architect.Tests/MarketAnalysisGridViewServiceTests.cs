@@ -101,8 +101,8 @@ public class MarketAnalysisGridViewServiceTests
         };
         var analyses = new[]
         {
-            ScopeAnalysis(100, "Baited Ore", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100),
-            ScopeAnalysis(200, "Thin Ore", scopeSaneQuantity: 10, scopeCompetitiveQuantity: 10)
+            ScopeAnalysis(100, "Baited Ore", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100),
+            ScopeAnalysis(200, "Thin Ore", scopeSaneQuantity: 10, scopePrimaryUsableQuantity: 10)
         };
 
         var ordered = MarketAnalysisGridViewService.GetOrderedPlans(
@@ -128,9 +128,9 @@ public class MarketAnalysisGridViewServiceTests
                 Name = "Baited Ore",
                 Worlds =
                 [
-                    ScopeWorld("Full", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100),
-                    ScopeWorld("Thin", scopeSaneQuantity: 25, scopeCompetitiveQuantity: 5),
-                    ScopeWorld("Missing", scopeSaneQuantity: 0, scopeCompetitiveQuantity: 0)
+                    ScopeWorld("Full", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100),
+                    ScopeWorld("Thin", scopeSaneQuantity: 25, scopePrimaryUsableQuantity: 5),
+                    ScopeWorld("Missing", scopeSaneQuantity: 0, scopePrimaryUsableQuantity: 0)
                 ]
             }
         };
@@ -143,17 +143,34 @@ public class MarketAnalysisGridViewServiceTests
     [Fact]
     public void FormatCoverage_UsesCompetitiveStockWhenScopeContextExists()
     {
-        var world = ScopeWorld("Uncompetitive Full", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 25);
+        var world = ScopeWorld("Uncompetitive Full", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 25);
 
         Assert.Equal("25/100", MarketAnalysisGridViewService.FormatCoverage(world));
         Assert.Equal(MarketCoverageBucket.PartialThin, MarketAnalysisGridViewService.GetDisplayCoverageBucket(world));
     }
 
     [Fact]
+    public void FormatCoverage_DoesNotCapViableStockAtNeededQuantity()
+    {
+        var world = new WorldMarketAnalysis
+        {
+            DataCenter = "Crystal",
+            WorldName = "Surplus",
+            QuantityNeeded = 5_994,
+            SaneThresholdUnitPrice = 200,
+            ScopeSaneQuantity = 7_000,
+            PrimaryUsableQuantity = 7_000
+        };
+
+        Assert.Equal("7,000/5,994", MarketAnalysisGridViewService.FormatCoverage(world));
+        Assert.Equal(MarketCoverageBucket.Full, MarketAnalysisGridViewService.GetDisplayCoverageBucket(world));
+    }
+
+    [Fact]
     public void GetOrderedWorlds_UsesScopeAwareDisplayScoreBeforeStoredLensRank()
     {
-        var optimal = ScopeWorld("Later Rank", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, rank: 50);
-        var partial = ScopeWorld("Early Rank", scopeSaneQuantity: 50, scopeCompetitiveQuantity: 10, rank: 1);
+        var optimal = ScopeWorld("Later Rank", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, rank: 50);
+        var partial = ScopeWorld("Early Rank", scopeSaneQuantity: 50, scopePrimaryUsableQuantity: 10, rank: 1);
         var analysis = new MarketItemAnalysis
         {
             ItemId = 100,
@@ -177,9 +194,9 @@ public class MarketAnalysisGridViewServiceTests
             Name = "Baited Ore",
             Worlds =
             [
-                ScopeWorld("Siren", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100),
-                ScopeWorld("Faerie", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100),
-                ScopeWorld("Jenova", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100)
+                ScopeWorld("Siren", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100),
+                ScopeWorld("Faerie", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100),
+                ScopeWorld("Jenova", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100)
             ]
         };
 
@@ -199,18 +216,45 @@ public class MarketAnalysisGridViewServiceTests
     }
 
     [Fact]
-    public void GetOrderedWorlds_StockDepthSort_UsesCompetitiveQuantity()
+    public void GetOrderedWorlds_StockDepthSort_UsesPriceSignalQuantity()
     {
+        var broadStockThinBand = ScopeWorld("Broad Stock Thin Band", scopeSaneQuantity: 5, scopePrimaryUsableQuantity: 0, worldCompetitiveAverage: 100);
+        broadStockThinBand.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 0,
+            MinUnitPrice = 100,
+            MaxUnitPrice = 100,
+            WeightedAverageUnitPrice = 100,
+            Quantity = 5,
+            ListingCount = 1,
+            IsPriceSignalBand = true,
+            IsPrimaryUsableBand = false,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Thin
+        });
+
+        var deeperBand = ScopeWorld("Deeper Band", scopeSaneQuantity: 80, scopePrimaryUsableQuantity: 80, worldCompetitiveAverage: 122);
+        deeperBand.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 2,
+            MinUnitPrice = 120,
+            MaxUnitPrice = 124,
+            WeightedAverageUnitPrice = 122,
+            Quantity = 80,
+            ListingCount = 3,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Deep,
+            IsPriceSignalBand = true,
+            IsPrimaryUsableBand = true
+        });
+
         var analysis = new MarketItemAnalysis
         {
             ItemId = 100,
             Name = "Baited Ore",
-            Worlds =
-            [
-                ScopeWorld("Medium", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 50),
-                ScopeWorld("Low", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 10),
-                ScopeWorld("High", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 90)
-            ]
+            Worlds = [broadStockThinBand, deeperBand]
         };
 
         var ordered = MarketAnalysisGridViewService.GetOrderedWorlds(
@@ -219,28 +263,381 @@ public class MarketAnalysisGridViewServiceTests
             MarketAnalysisWorldGridSortColumn.StockDepth,
             sortDescending: true);
 
-        Assert.Equal(["High", "Medium", "Low"], ordered.Select(world => world.WorldName));
+        Assert.Equal(["Deeper Band", "Broad Stock Thin Band"], ordered.Select(world => world.WorldName));
     }
 
     [Fact]
-    public void GetOrderedWorlds_PriceValueSort_UsesDisplayedProjectFitBeforeStoredLensRank()
+    public void GetOrderedWorlds_UnitPriceSort_UsesPriceSignalAverageForCompetitivenessOverlay()
     {
-        var optimal = ScopeWorld("Displayed Optimal", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, rank: 50);
-        var poorFit = ScopeWorld("Stored Rank Winner", scopeSaneQuantity: 5, scopeCompetitiveQuantity: 5, rank: 1);
+        var cheaperLaterRank = ScopeWorld("Cheaper Later Rank", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, rank: 50, worldCompetitiveAverage: 103);
+        cheaperLaterRank.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 1,
+            MinUnitPrice = 100,
+            MaxUnitPrice = 105,
+            WeightedAverageUnitPrice = 103,
+            Quantity = 40,
+            ListingCount = 2,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Usable,
+            IsPriceSignalBand = true,
+            IsPrimaryUsableBand = true
+        });
+
+        var pricierEarlyRank = ScopeWorld("Pricier Early Rank", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, rank: 1, worldCompetitiveAverage: 153);
+        pricierEarlyRank.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 1,
+            MinUnitPrice = 150,
+            MaxUnitPrice = 155,
+            WeightedAverageUnitPrice = 153,
+            Quantity = 80,
+            ListingCount = 2,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Deep,
+            IsPriceSignalBand = true,
+            IsPrimaryUsableBand = true
+        });
+
         var analysis = new MarketItemAnalysis
         {
             ItemId = 100,
             Name = "Baited Ore",
-            Worlds = [poorFit, optimal]
+            Worlds = [pricierEarlyRank, cheaperLaterRank]
         };
 
         var ordered = MarketAnalysisGridViewService.GetOrderedWorlds(
             analysis,
             MarketAcquisitionLens.MinimumUpfrontCost,
             MarketAnalysisWorldGridSortColumn.PriceValue,
-            sortDescending: false);
+            sortDescending: false,
+            MarketAnalysisEvidenceOverlay.CompetitivenessOverlay);
 
-        Assert.Equal(["Displayed Optimal", "Stored Rank Winner"], ordered.Select(world => world.WorldName));
+        Assert.Equal(["Cheaper Later Rank", "Pricier Early Rank"], ordered.Select(world => world.WorldName));
+    }
+
+    [Fact]
+    public void GetOrderedWorlds_UnitPriceSortDescending_UsesPriceSignalAverage()
+    {
+        var cheaperWorld = ScopeWorld("Cheaper", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, worldCompetitiveAverage: 103);
+        cheaperWorld.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 1,
+            MinUnitPrice = 100,
+            MaxUnitPrice = 105,
+            WeightedAverageUnitPrice = 103,
+            Quantity = 40,
+            ListingCount = 2,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Usable,
+            IsPriceSignalBand = true,
+            IsPrimaryUsableBand = true
+        });
+
+        var pricierWorld = ScopeWorld("Pricier", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, worldCompetitiveAverage: 153);
+        pricierWorld.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 1,
+            MinUnitPrice = 150,
+            MaxUnitPrice = 155,
+            WeightedAverageUnitPrice = 153,
+            Quantity = 80,
+            ListingCount = 2,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Deep,
+            IsPriceSignalBand = true,
+            IsPrimaryUsableBand = true
+        });
+
+        var analysis = new MarketItemAnalysis
+        {
+            ItemId = 100,
+            Name = "Baited Ore",
+            Worlds = [cheaperWorld, pricierWorld]
+        };
+
+        var ordered = MarketAnalysisGridViewService.GetOrderedWorlds(
+            analysis,
+            MarketAcquisitionLens.MinimumUpfrontCost,
+            MarketAnalysisWorldGridSortColumn.PriceValue,
+            sortDescending: true,
+            MarketAnalysisEvidenceOverlay.PriceBandOverlay);
+
+        Assert.Equal(["Pricier", "Cheaper"], ordered.Select(world => world.WorldName));
+    }
+
+    [Fact]
+    public void GetOrderedWorlds_UnitPriceSort_UsesPriceSignalAverageForPriceBandOverlay()
+    {
+        var thinCheapWorld = ScopeWorld("Thin Cheap", scopeSaneQuantity: 2, scopePrimaryUsableQuantity: 0, rank: 1, worldCompetitiveAverage: 10);
+        thinCheapWorld.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 0,
+            MinUnitPrice = 10,
+            MaxUnitPrice = 10,
+            WeightedAverageUnitPrice = 10,
+            Quantity = 2,
+            ListingCount = 1,
+            IsPriceSignalBand = true,
+            IsPrimaryUsableBand = false,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Thin
+        });
+
+        var competitiveWorld = ScopeWorld("Competitive", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, rank: 50, worldCompetitiveAverage: 100);
+        competitiveWorld.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 0,
+            MinUnitPrice = 100,
+            MaxUnitPrice = 100,
+            WeightedAverageUnitPrice = 100,
+            Quantity = 100,
+            ListingCount = 4,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Deep,
+            IsPriceSignalBand = true,
+            IsPrimaryUsableBand = true
+        });
+
+        var analysis = new MarketItemAnalysis
+        {
+            ItemId = 100,
+            Name = "Baited Ore",
+            Worlds = [thinCheapWorld, competitiveWorld]
+        };
+
+        var ordered = MarketAnalysisGridViewService.GetOrderedWorlds(
+            analysis,
+            MarketAcquisitionLens.MinimumUpfrontCost,
+            MarketAnalysisWorldGridSortColumn.PriceValue,
+            sortDescending: false,
+            MarketAnalysisEvidenceOverlay.PriceBandOverlay);
+
+        Assert.Equal(["Thin Cheap", "Competitive"], ordered.Select(world => world.WorldName));
+    }
+
+    [Fact]
+    public void FormatWorldUnitPrice_UsesPriceSignalInsteadOfLowOutlierBand()
+    {
+        var world = ScopeWorld("Diabolos", scopeSaneQuantity: 4_402, scopePrimaryUsableQuantity: 4_402, worldCompetitiveAverage: 890);
+        world.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 1,
+            MinUnitPrice = 1,
+            MaxUnitPrice = 1,
+            WeightedAverageUnitPrice = 1,
+            Quantity = 4,
+            ListingCount = 2,
+            Competitiveness = PriceBandCompetitiveness.LowOutlier,
+            Depth = PriceBandDepth.Thin
+        });
+        world.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 2,
+            LastListingIndex = 3,
+            MinUnitPrice = 880,
+            MaxUnitPrice = 900,
+            WeightedAverageUnitPrice = 890,
+            Quantity = 4_402,
+            ListingCount = 2,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Deep,
+            IsPriceSignalBand = true,
+            IsPrimaryUsableBand = true
+        });
+
+        Assert.Equal("~890g / unit", MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
+        Assert.Equal("4,402", MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world));
+        Assert.Equal("deep", MarketAnalysisGridViewService.FormatWorldMarketDepthDescriptor(world));
+        Assert.Equal("is-optimal", MarketAnalysisGridViewService.GetWorldUnitPriceScoreClass(world));
+    }
+
+    [Fact]
+    public void FormatWorldUnitPrice_UsesThinPriceSignalWhenProcurementCandidateIsMissing()
+    {
+        var world = new WorldMarketAnalysis
+        {
+            DataCenter = "Aether",
+            WorldName = "ThinWorld",
+            QuantityNeeded = 999,
+            SaneThresholdUnitPrice = 14_200,
+            ScopeSaneQuantity = 150,
+            PrimaryUsableQuantity = 0,
+            AnalysisCompetitiveAverageUnitPrice = 7_100,
+            PriceSignalQuantity = 150,
+            PriceSignalAverageUnitPrice = 7_000,
+            PriceSignalDepth = PriceBandDepth.Thin,
+            DataQualityBucket = MarketDataQualityBucket.Current,
+            PriceBands =
+            [
+                new MarketPriceBand
+                {
+                    FirstListingIndex = 0,
+                    LastListingIndex = 0,
+                    MinUnitPrice = 7_000,
+                    MaxUnitPrice = 7_000,
+                    WeightedAverageUnitPrice = 7_000,
+                    Quantity = 150,
+                    ListingCount = 1,
+                    Competitiveness = PriceBandCompetitiveness.Competitive,
+                    Depth = PriceBandDepth.Thin,
+                    IsPriceSignalBand = true,
+                    IsPrimaryUsableBand = false
+                }
+            ]
+        };
+
+        Assert.Equal("~7,000g / unit", MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
+        Assert.Equal("150", MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world));
+        Assert.Equal("thin", MarketAnalysisGridViewService.FormatWorldMarketDepthDescriptor(world));
+        Assert.Equal("-1%", MarketAnalysisGridViewService.FormatCompetitiveValue(world));
+        Assert.Equal("is-competitive", MarketAnalysisGridViewService.GetWorldUnitPriceScoreClass(world));
+        Assert.Equal(MarketScoreBucket.Unavailable, MarketAnalysisGridViewService.GetDisplayScoreBucket(world, MarketAcquisitionLens.BulkValue));
+    }
+
+    [Fact]
+    public void GetOrderedWorlds_PriceValueSort_PriceBandOverlayTreatsCredibleCompetitiveBandAsCompetitive()
+    {
+        var credibleCompetitiveWorld = ScopeWorld("Credible Competitive", scopeSaneQuantity: 30, scopePrimaryUsableQuantity: 30, rank: 50, worldCompetitiveAverage: 103);
+        credibleCompetitiveWorld.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 1,
+            MinUnitPrice = 100,
+            MaxUnitPrice = 105,
+            WeightedAverageUnitPrice = 103,
+            Quantity = 30,
+            ListingCount = 2,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Usable,
+            IsPriceSignalBand = true,
+            IsPrimaryUsableBand = true
+        });
+
+        var deeperNonCompetitiveWorld = ScopeWorld("Deeper Noncompetitive", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 0, rank: 1);
+        deeperNonCompetitiveWorld.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 0,
+            MinUnitPrice = 150,
+            MaxUnitPrice = 150,
+            WeightedAverageUnitPrice = 150,
+            Quantity = 100,
+            ListingCount = 1,
+            IsPrimaryUsableBand = false,
+            Competitiveness = PriceBandCompetitiveness.Uncompetitive,
+            Depth = PriceBandDepth.Deep
+        });
+
+        var analysis = new MarketItemAnalysis
+        {
+            ItemId = 100,
+            Name = "Baited Ore",
+            Worlds = [deeperNonCompetitiveWorld, credibleCompetitiveWorld]
+        };
+
+        var ordered = MarketAnalysisGridViewService.GetOrderedWorlds(
+            analysis,
+            MarketAcquisitionLens.MinimumUpfrontCost,
+            MarketAnalysisWorldGridSortColumn.PriceValue,
+            sortDescending: false,
+            MarketAnalysisEvidenceOverlay.PriceBandOverlay);
+
+        Assert.Equal(["Credible Competitive", "Deeper Noncompetitive"], ordered.Select(world => world.WorldName));
+    }
+
+    [Fact]
+    public void FormatWorldUnitPriceAndStockDepth_ExposePriceSignalWithoutRoleText()
+    {
+        var world = ScopeWorld("Credible Competitive", scopeSaneQuantity: 30, scopePrimaryUsableQuantity: 30, worldCompetitiveAverage: 103);
+        world.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 1,
+            MinUnitPrice = 100,
+            MaxUnitPrice = 105,
+            WeightedAverageUnitPrice = 103,
+            Quantity = 30,
+            ListingCount = 2,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Usable,
+            IsPriceSignalBand = true,
+            IsPrimaryUsableBand = true
+        });
+
+        Assert.Equal("~103g / unit", MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
+        Assert.Equal("30", MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world));
+        Assert.Equal("moderate", MarketAnalysisGridViewService.FormatWorldMarketDepthDescriptor(world));
+        Assert.Equal("is-optimal", MarketAnalysisGridViewService.GetWorldPriceBandScoreClass(world));
+        Assert.Equal("is-optimal", MarketAnalysisGridViewService.GetWorldUnitPriceScoreClass(world));
+    }
+
+    [Fact]
+    public void GetWorldUnitPriceScoreClass_DoesNotDependOnEvidenceOverlay()
+    {
+        var world = ScopeWorld("Thin", scopeSaneQuantity: 2, scopePrimaryUsableQuantity: 2, rank: 50);
+        world.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 0,
+            MinUnitPrice = 10,
+            MaxUnitPrice = 10,
+            WeightedAverageUnitPrice = 10,
+            Quantity = 2,
+            ListingCount = 1,
+            IsPrimaryUsableBand = false,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Thin
+        });
+
+        Assert.Equal("is-unavailable", MarketAnalysisGridViewService.GetWorldUnitPriceScoreClass(world));
+        Assert.Equal(
+            MarketAnalysisGridViewService.GetWorldPriceBandScoreClass(world),
+            MarketAnalysisGridViewService.GetWorldUnitPriceScoreClass(world));
+    }
+
+    [Fact]
+    public void GetWorldPriceBandScoreClass_UsesExistingWorldScorePalette()
+    {
+        var thin = ScopeWorld("Thin", scopeSaneQuantity: 2, scopePrimaryUsableQuantity: 2);
+        thin.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 0,
+            MinUnitPrice = 10,
+            MaxUnitPrice = 10,
+            WeightedAverageUnitPrice = 10,
+            Quantity = 2,
+            ListingCount = 1,
+            IsPrimaryUsableBand = false,
+            Competitiveness = PriceBandCompetitiveness.Competitive,
+            Depth = PriceBandDepth.Thin
+        });
+
+        var unclassified = ScopeWorld("Unclassified", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 0);
+        unclassified.PriceBands.Add(new MarketPriceBand
+        {
+            FirstListingIndex = 0,
+            LastListingIndex = 0,
+            MinUnitPrice = 150,
+            MaxUnitPrice = 150,
+            WeightedAverageUnitPrice = 150,
+            Quantity = 100,
+            ListingCount = 1,
+            IsPrimaryUsableBand = false,
+            Competitiveness = PriceBandCompetitiveness.Uncompetitive,
+            Depth = PriceBandDepth.Deep
+        });
+
+        Assert.Equal("is-unavailable", MarketAnalysisGridViewService.GetWorldPriceBandScoreClass(thin));
+        Assert.Equal("is-unavailable", MarketAnalysisGridViewService.GetWorldPriceBandScoreClass(unclassified));
     }
 
     [Fact]
@@ -252,9 +649,9 @@ public class MarketAnalysisGridViewServiceTests
             Name = "Baited Ore",
             Worlds =
             [
-                ScopeWorld("Small Discount", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, goodAverage: 100, worldCompetitiveAverage: 95),
-                ScopeWorld("Large Discount", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, goodAverage: 100, worldCompetitiveAverage: 80),
-                ScopeWorld("Above Average", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, goodAverage: 100, worldCompetitiveAverage: 110)
+                ScopeWorld("Small Discount", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, goodAverage: 100, worldCompetitiveAverage: 95),
+                ScopeWorld("Large Discount", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, goodAverage: 100, worldCompetitiveAverage: 80),
+                ScopeWorld("Above Average", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, goodAverage: 100, worldCompetitiveAverage: 110)
             ]
         };
 
@@ -273,15 +670,15 @@ public class MarketAnalysisGridViewServiceTests
     [InlineData(110, "+10%")]
     public void FormatCompetitiveValue_DescribesDistanceFromGoodAverage(decimal worldAverage, string expected)
     {
-        var world = ScopeWorld("Siren", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, goodAverage: 100, worldCompetitiveAverage: worldAverage);
+        var world = ScopeWorld("Siren", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, goodAverage: 100, worldCompetitiveAverage: worldAverage);
 
         Assert.Equal(expected, MarketAnalysisGridViewService.FormatCompetitiveValue(world));
     }
 
     [Fact]
-    public void FormatCompetitiveValue_LowOutlierStockStillContributesToWorldValue()
+    public void FormatCompetitiveValue_PriceSignalDiscountContributesToWorldValue()
     {
-        var world = ScopeWorld("Zalera", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, goodAverage: 100, worldCompetitiveAverage: 1);
+        var world = ScopeWorld("Zalera", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, goodAverage: 100, worldCompetitiveAverage: 1);
 
         Assert.Equal("-99%", MarketAnalysisGridViewService.FormatCompetitiveValue(world));
     }
@@ -289,21 +686,21 @@ public class MarketAnalysisGridViewServiceTests
     [Fact]
     public void FormatCompetitiveValueTooltip_ExplainsSignedDifferenceFromGoodAverage()
     {
-        var world = ScopeWorld("Siren", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, goodAverage: 1_100, worldCompetitiveAverage: 1_055);
+        var world = ScopeWorld("Siren", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, goodAverage: 1_100, worldCompetitiveAverage: 1_055);
 
         var tooltip = MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world);
 
-        Assert.Equal("Siren's competitive average is 4% less than the regional good average: 1,055g vs 1,100g.", tooltip);
+        Assert.Equal("Siren's competitive price signal is 4% less than the regional good average: 1,055g vs 1,100g.", tooltip);
     }
 
     [Fact]
     public void FormatCompetitiveValueTooltip_ExplainsSignedDifferenceAboveGoodAverage()
     {
-        var world = ScopeWorld("Siren", scopeSaneQuantity: 100, scopeCompetitiveQuantity: 100, goodAverage: 1_100, worldCompetitiveAverage: 1_210);
+        var world = ScopeWorld("Siren", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, goodAverage: 1_100, worldCompetitiveAverage: 1_210);
 
         var tooltip = MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world);
 
-        Assert.Equal("Siren's competitive average is 10% greater than the regional good average: 1,210g vs 1,100g.", tooltip);
+        Assert.Equal("Siren's competitive price signal is 10% greater than the regional good average: 1,210g vs 1,100g.", tooltip);
     }
 
     [Fact]
@@ -316,8 +713,8 @@ public class MarketAnalysisGridViewServiceTests
             QuantityNeeded = 100,
             SaneThresholdUnitPrice = 200,
             ScopeSaneQuantity = 100,
-            ScopeCompetitiveQuantity = 100,
-            AnalysisScopeCompetitiveAverageUnitPrice = 100,
+            PrimaryUsableQuantity = 100,
+            AnalysisCompetitiveAverageUnitPrice = 100,
             AnalysisScopeAverageUnitPrice = 150,
             DataQualityBucket = MarketDataQualityBucket.Current,
             PriceBands =
@@ -328,7 +725,7 @@ public class MarketAnalysisGridViewServiceTests
                     LastListingIndex = 0,
                     WeightedAverageUnitPrice = 80,
                     NextBreakPercent = 100,
-                    IsCompetitiveShelf = true
+                    IsPrimaryUsableBand = true
                 }
             ],
             Listings =
@@ -353,7 +750,7 @@ public class MarketAnalysisGridViewServiceTests
         var third = MarketAnalysisGridViewService.GetListingDividersBefore(world, world.Listings[2]);
 
         Assert.Empty(first);
-        Assert.Equal(["Price shelf +100%", "Above good avg"], second.Select(divider => divider.Label));
+        Assert.Equal(["Price band +100%", "Above good avg"], second.Select(divider => divider.Label));
         Assert.Equal(["Above avg"], third.Select(divider => divider.Label));
     }
 
@@ -375,68 +772,13 @@ public class MarketAnalysisGridViewServiceTests
     }
 
     [Fact]
-    public void FormatWorldPriceSummary_WithScopeContext_UsesPerWorldLensSummary()
-    {
-        var world = new WorldMarketAnalysis
-        {
-            DataCenter = "Aether",
-            WorldName = "Siren",
-            AnalysisScopeBaselineUnitPrice = 100,
-            SaneThresholdUnitPrice = 200,
-            Scores =
-            [
-                new WorldLensScore
-                {
-                    Lens = MarketAcquisitionLens.MinimumUpfrontCost,
-                    Summary = "12,000g to cover need"
-                }
-            ]
-        };
-
-        var summary = MarketAnalysisGridViewService.FormatWorldPriceSummary(
-            world,
-            MarketAcquisitionLens.MinimumUpfrontCost);
-
-        Assert.Equal("12,000g to cover need", summary);
-    }
-
-    [Fact]
-    public void FormatWorldPriceSummary_WithScopeCompetitiveAverage_IgnoresStaleShelfSummary()
-    {
-        var world = new WorldMarketAnalysis
-        {
-            DataCenter = "Dynamis",
-            WorldName = "Kraken",
-            QuantityNeeded = 500,
-            CompetitiveThresholdUnitPrice = 1_661,
-            SaneThresholdUnitPrice = 2_215,
-            ScopeCompetitiveQuantity = 603,
-            ScopeCompetitiveAverageUnitPrice = 907,
-            Scores =
-            [
-                new WorldLensScore
-                {
-                    Lens = MarketAcquisitionLens.BulkValue,
-                    Summary = "0 competitive at ~602g"
-                }
-            ]
-        };
-
-        var summary = MarketAnalysisGridViewService.FormatWorldPriceSummary(
-            world,
-            MarketAcquisitionLens.BulkValue);
-
-        Assert.Equal("603 competitive at ~907g", summary);
-    }
-
-    [Fact]
     public void FormatAnalysisScopePriceSummary_ShowsCompetitiveAverageAndThresholds()
     {
         var analysis = new MarketItemAnalysis
         {
             AnalysisScopeBaselineUnitPrice = 100,
             AnalysisScopeAverageUnitPrice = 125,
-            AnalysisScopeCompetitiveAverageUnitPrice = 110,
+            AnalysisCompetitiveAverageUnitPrice = 110,
             AnalysisScopeMedianUnitPrice = 90,
             CompetitiveThresholdUnitPrice = 150,
             SaneThresholdUnitPrice = 200
@@ -454,7 +796,7 @@ public class MarketAnalysisGridViewServiceTests
         {
             AnalysisScopeBaselineUnitPrice = 1,
             AnalysisScopeAverageUnitPrice = 1,
-            AnalysisScopeCompetitiveAverageUnitPrice = 100,
+            AnalysisCompetitiveAverageUnitPrice = 100,
             CompetitiveThresholdUnitPrice = 1,
             SaneThresholdUnitPrice = 1,
             PriceEvaluation = new MarketPriceEvaluation
@@ -546,6 +888,49 @@ public class MarketAnalysisGridViewServiceTests
     }
 
     [Theory]
+    [MemberData(nameof(PriceBandListingClassCases))]
+    public void GetListingRowClass_PriceBandOverlayAddsToneAndEdgeClasses(
+        WorldMarketAnalysis world,
+        AnalyzedMarketListing listing,
+        string expectedToneClass,
+        string expectedEdgeClass)
+    {
+        var competitivenessClass = MarketAnalysisGridViewService.GetListingRowClass(
+            world,
+            listing,
+            MarketAnalysisEvidenceOverlay.CompetitivenessOverlay);
+        var bandClass = MarketAnalysisGridViewService.GetListingRowClass(
+            world,
+            listing,
+            MarketAnalysisEvidenceOverlay.PriceBandOverlay);
+
+        Assert.DoesNotContain("ma-band-tone-", competitivenessClass);
+        Assert.DoesNotContain("ma-band-edge-", competitivenessClass);
+        Assert.Contains(expectedToneClass, bandClass);
+        Assert.Contains(expectedEdgeClass, bandClass);
+    }
+
+    [Fact]
+    public void GetListingPriceBandTooltip_ExplainsBandSignalForPriceBandOverlayOnly()
+    {
+        var listing = Listing(sortIndex: 0, quantity: 2, pricePerUnit: 120);
+        var world = WorldWithListingBand(listing, quantityNeeded: 100, bandQuantity: 2, isPrimaryUsableBand: false);
+
+        var competitivenessTooltip = MarketAnalysisGridViewService.GetListingPriceBandTooltip(
+            world,
+            listing,
+            MarketAnalysisEvidenceOverlay.CompetitivenessOverlay);
+        var bandTooltip = MarketAnalysisGridViewService.GetListingPriceBandTooltip(
+            world,
+            listing,
+            MarketAnalysisEvidenceOverlay.PriceBandOverlay);
+
+        Assert.Equal(string.Empty, competitivenessTooltip);
+        Assert.Contains("Thin price band", bandTooltip);
+        Assert.Contains("does not drive procurement pricing", bandTooltip);
+    }
+
+    [Theory]
     [InlineData(null, false, MarketAnalysisGridSortColumn.Item, false)]
     [InlineData(MarketAnalysisGridSortColumn.Item, false, MarketAnalysisGridSortColumn.Item, true)]
     [InlineData(MarketAnalysisGridSortColumn.Item, true, MarketAnalysisGridSortColumn.Item, false)]
@@ -560,6 +945,66 @@ public class MarketAnalysisGridViewServiceTests
 
         Assert.Equal(clickedColumn, next.Column);
         Assert.Equal(expectedDescending, next.Descending);
+    }
+
+    public static IEnumerable<object[]> PriceBandListingClassCases()
+    {
+        var lowOutlier = Listing(sortIndex: 0, quantity: 5, pricePerUnit: 1, priceSanity: MarketListingPriceSanity.LowOutlier);
+        yield return
+        [
+            WorldWithListingBand(lowOutlier, quantityNeeded: 100, bandQuantity: 5, isPrimaryUsableBand: false),
+            lowOutlier,
+            "ma-band-tone-low",
+            "ma-band-edge-low-outlier"
+        ];
+
+        var thin = Listing(
+            sortIndex: 0,
+            quantity: 2,
+            pricePerUnit: 120,
+            competitiveness: MarketListingCompetitiveness.Competitive);
+        yield return
+        [
+            WorldWithListingBand(thin, quantityNeeded: 100, bandQuantity: 2, isPrimaryUsableBand: false),
+            thin,
+            "ma-band-tone-mid",
+            "ma-band-edge-thin"
+        ];
+
+        var competitive = Listing(
+            sortIndex: 0,
+            quantity: 100,
+            pricePerUnit: 100,
+            competitiveness: MarketListingCompetitiveness.Competitive);
+        yield return
+        [
+            WorldWithListingBand(competitive, quantityNeeded: 100, bandQuantity: 100, isPrimaryUsableBand: true),
+            competitive,
+            "ma-band-tone-mid",
+            "ma-band-edge-competitive"
+        ];
+
+        var credibleCompetitive = Listing(
+            sortIndex: 0,
+            quantity: 30,
+            pricePerUnit: 100,
+            competitiveness: MarketListingCompetitiveness.Competitive);
+        yield return
+        [
+            WorldWithListingBand(credibleCompetitive, quantityNeeded: 100, bandQuantity: 30, isPrimaryUsableBand: true, listingCount: 2),
+            credibleCompetitive,
+            "ma-band-tone-mid",
+            "ma-band-edge-competitive"
+        ];
+
+        var insane = Listing(sortIndex: 0, quantity: 10, pricePerUnit: 1_000, priceSanity: MarketListingPriceSanity.Insane);
+        yield return
+        [
+            WorldWithListingBand(insane, quantityNeeded: 100, bandQuantity: 10, isPrimaryUsableBand: false),
+            insane,
+            "ma-band-tone-high",
+            "ma-band-edge-insane"
+        ];
     }
 
     private static DetailedShoppingPlan Plan(int itemId, string name, long totalCost)
@@ -615,11 +1060,76 @@ public class MarketAnalysisGridViewServiceTests
         };
     }
 
+    private static WorldMarketAnalysis WorldWithListingBand(
+        AnalyzedMarketListing listing,
+        int quantityNeeded,
+        int bandQuantity,
+        bool isPrimaryUsableBand,
+        int listingCount = 1)
+    {
+        var depth = bandQuantity >= Math.Max(quantityNeeded / 2, 1)
+            ? PriceBandDepth.Deep
+            : bandQuantity >= Math.Max(quantityNeeded / 4, 1)
+                ? PriceBandDepth.Usable
+                : PriceBandDepth.Thin;
+        var competitiveness = listing.PriceSanity switch
+        {
+            MarketListingPriceSanity.LowOutlier => PriceBandCompetitiveness.LowOutlier,
+            MarketListingPriceSanity.Insane or MarketListingPriceSanity.Outlier => PriceBandCompetitiveness.Insane,
+            _ when listing.Competitiveness is MarketListingCompetitiveness.Fair or MarketListingCompetitiveness.Uncompetitive => PriceBandCompetitiveness.Uncompetitive,
+            _ => PriceBandCompetitiveness.Competitive
+        };
+
+        return new WorldMarketAnalysis
+        {
+            DataCenter = "Aether",
+            WorldName = "Siren",
+            QuantityNeeded = quantityNeeded,
+            PrimaryUsableAverageUnitPrice = 100,
+            Listings = [listing],
+            PriceBands =
+            [
+                new MarketPriceBand
+                {
+                    FirstListingIndex = listing.SortIndex,
+                    LastListingIndex = listing.SortIndex,
+                    MinUnitPrice = listing.PricePerUnit,
+                    MaxUnitPrice = listing.PricePerUnit,
+                    WeightedAverageUnitPrice = listing.PricePerUnit,
+                    ListingCount = listingCount,
+                    Quantity = bandQuantity,
+                    Competitiveness = competitiveness,
+                    Depth = depth,
+                    IsPrimaryUsableBand = isPrimaryUsableBand &&
+                        competitiveness == PriceBandCompetitiveness.Competitive &&
+                        depth is PriceBandDepth.Usable or PriceBandDepth.Deep
+                }
+            ]
+        };
+    }
+
+    private static AnalyzedMarketListing Listing(
+        int sortIndex,
+        int quantity,
+        long pricePerUnit,
+        MarketListingPriceSanity priceSanity = MarketListingPriceSanity.Sane,
+        MarketListingCompetitiveness competitiveness = MarketListingCompetitiveness.Unknown)
+    {
+        return new AnalyzedMarketListing
+        {
+            SortIndex = sortIndex,
+            Quantity = quantity,
+            PricePerUnit = pricePerUnit,
+            PriceSanity = priceSanity,
+            Competitiveness = competitiveness
+        };
+    }
+
     private static MarketItemAnalysis ScopeAnalysis(
         int itemId,
         string name,
         int scopeSaneQuantity,
-        int scopeCompetitiveQuantity)
+        int scopePrimaryUsableQuantity)
     {
         return new MarketItemAnalysis
         {
@@ -634,7 +1144,7 @@ public class MarketAnalysisGridViewServiceTests
                     QuantityNeeded = 100,
                     SaneThresholdUnitPrice = 200,
                     ScopeSaneQuantity = scopeSaneQuantity,
-                    ScopeCompetitiveQuantity = scopeCompetitiveQuantity,
+                    PrimaryUsableQuantity = scopePrimaryUsableQuantity,
                     CoverageBucket = MarketCoverageBucket.None,
                     Scores =
                     [
@@ -653,11 +1163,15 @@ public class MarketAnalysisGridViewServiceTests
     private static WorldMarketAnalysis ScopeWorld(
         string worldName,
         int scopeSaneQuantity,
-        int scopeCompetitiveQuantity,
+        int scopePrimaryUsableQuantity,
         int rank = 1,
         decimal goodAverage = 0,
         decimal worldCompetitiveAverage = 0)
     {
+        var priceSignalQuantity = worldCompetitiveAverage > 0
+            ? scopeSaneQuantity
+            : 0;
+
         return new WorldMarketAnalysis
         {
             DataCenter = "Aether",
@@ -665,9 +1179,12 @@ public class MarketAnalysisGridViewServiceTests
             QuantityNeeded = 100,
             SaneThresholdUnitPrice = 200,
             ScopeSaneQuantity = scopeSaneQuantity,
-            ScopeCompetitiveQuantity = scopeCompetitiveQuantity,
-            AnalysisScopeCompetitiveAverageUnitPrice = goodAverage,
-            ScopeCompetitiveAverageUnitPrice = worldCompetitiveAverage,
+            PrimaryUsableQuantity = scopePrimaryUsableQuantity,
+            PriceSignalQuantity = priceSignalQuantity,
+            AnalysisCompetitiveAverageUnitPrice = goodAverage,
+            PrimaryUsableAverageUnitPrice = worldCompetitiveAverage,
+            PriceSignalAverageUnitPrice = worldCompetitiveAverage,
+            PriceSignalDepth = GetPriceSignalDepth(priceSignalQuantity, 100),
             DataQualityBucket = MarketDataQualityBucket.Current,
             Scores =
             [
@@ -679,5 +1196,22 @@ public class MarketAnalysisGridViewServiceTests
                 }
             ]
         };
+    }
+
+    private static PriceBandDepth GetPriceSignalDepth(int quantity, int quantityNeeded)
+    {
+        if (quantity <= 0 || quantityNeeded <= 0)
+        {
+            return PriceBandDepth.None;
+        }
+
+        if (quantity >= Math.Max(quantityNeeded / 2, 1))
+        {
+            return PriceBandDepth.Deep;
+        }
+
+        return quantity >= Math.Max(quantityNeeded / 4, 1)
+            ? PriceBandDepth.Usable
+            : PriceBandDepth.Thin;
     }
 }

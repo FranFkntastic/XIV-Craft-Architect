@@ -775,6 +775,8 @@ public static class CoreAcquisitionEvaluationCostCalculator
             {
                 return estimate.Cost;
             }
+
+            return 0;
         }
 
         return (hqOnly ? readState.HqUnitPrice : readState.UnitPrice) * quantity;

@@ -66,6 +66,23 @@ public class AcquisitionEvaluationViewModelTests
     }
 
     [Fact]
+    public async Task RefreshAsync_HqOptionWithoutHqEvidenceDoesNotUsePlannerPriceFallback()
+    {
+        var host = CreateHost(CreateNqOnlyShoppingPlan());
+        var viewModel = host.ViewModel;
+
+        await viewModel.RefreshAsync();
+
+        var material = Assert.Single(viewModel.Rows, row => row.ItemId == 200);
+        var hqOption = Assert.Single(material.OptionRows, option => option.Source == AcquisitionSource.MarketBuyHq);
+
+        Assert.Equal("-", hqOption.CostText);
+        Assert.False(hqOption.IsAvailable);
+        Assert.False(hqOption.IsProjectedUnsupported);
+        Assert.Contains("Run Market Analysis", hqOption.Detail);
+    }
+
+    [Fact]
     public async Task CurrentFilter_ReprojectsVisibleRowsThroughLedgerCache()
     {
         var host = CreateHost();
@@ -298,6 +315,29 @@ public class AcquisitionEvaluationViewModelTests
                     ]
                 }
             ]
+        };
+
+    private static DetailedShoppingPlan CreateNqOnlyShoppingPlan() =>
+        new()
+        {
+            ItemId = 200,
+            Name = "Material",
+            QuantityNeeded = 2,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                WorldName = "Siren",
+                TotalCost = 500,
+                TotalQuantityPurchased = 2,
+                Listings =
+                [
+                    new ShoppingListingEntry
+                    {
+                        Quantity = 2,
+                        PricePerUnit = 250,
+                        IsHq = false
+                    }
+                ]
+            }
         };
 
     private sealed class StubRecipeLayerWorkflowService : ICoreRecipeLayerWorkflowService

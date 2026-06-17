@@ -212,7 +212,12 @@ public class PriceCheckService
             var vendorPrice = GetVendorPrice(garlandItem);
             
             // Fetch market prices from Universalis
-            var marketData = await _universalisService.GetMarketDataAsync(worldOrDc, itemId, ct: ct);
+            var marketDataByItemId = await _universalisService.GetMarketDataBulkAsync(worldOrDc, [itemId], useParallel: false, ct);
+            if (!marketDataByItemId.TryGetValue(itemId, out var marketData))
+            {
+                throw new InvalidOperationException($"Universalis bulk response did not include item {itemId}.");
+            }
+
             var marketPriceNq = GetAverageMarketPrice(marketData, hqOnly: false);
             var marketPriceHq = GetAverageMarketPrice(marketData, hqOnly: true);
 

@@ -466,8 +466,11 @@ public sealed partial class AcquisitionDecisionRowViewModel : ObservableObject
         AcquisitionCostContext costContext,
         bool hqOnly)
     {
-        if (costContext.TryGetShoppingPlan(row.ItemId, out var marketPlan))
+        DetailedShoppingPlan? marketPlan = null;
+        if (costContext.TryGetShoppingPlan(row.ItemId, out var resolvedMarketPlan) &&
+            resolvedMarketPlan != null)
         {
+            marketPlan = resolvedMarketPlan;
             var estimate = MarketPurchaseCostProjectionService.Estimate(
                 marketPlan,
                 row.TotalQuantity,

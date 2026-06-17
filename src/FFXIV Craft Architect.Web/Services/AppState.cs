@@ -185,6 +185,7 @@ public class AppState
     public int MaxWorldsPerItem { get; private set; } = 0; // 0 = unlimited
     public bool SearchEntireRegion { get; private set; } = true;
     public MarketSortOption MarketSortPreference { get; private set; } = MarketSortOption.ByRecommended;
+    public MarketAnalysisEvidenceOverlay MarketAnalysisEvidenceOverlay { get; private set; } = MarketAnalysisEvidenceOverlay.CompetitivenessOverlay;
 
     // Procurement Planning Settings
     public bool ProcurementSearchEntireRegion { get; private set; } = false;
@@ -729,6 +730,18 @@ public class AppState
 
         MarketSortPreference = preference;
         NotifySettingsChanged();
+        return true;
+    }
+
+    public bool SetMarketAnalysisEvidenceOverlay(MarketAnalysisEvidenceOverlay overlay)
+    {
+        if (MarketAnalysisEvidenceOverlay == overlay)
+        {
+            return false;
+        }
+
+        MarketAnalysisEvidenceOverlay = overlay;
+        PublishChange(AppStateChangeScope.MarketAnalysisView);
         return true;
     }
 
@@ -1908,6 +1921,12 @@ public enum MarketAnalysisWorldGridSortColumn
     PriceValue,
     Value,
     Data
+}
+
+public enum MarketAnalysisEvidenceOverlay
+{
+    CompetitivenessOverlay,
+    PriceBandOverlay
 }
 
 public readonly record struct MarketAnalysisExpandedWorldKey(

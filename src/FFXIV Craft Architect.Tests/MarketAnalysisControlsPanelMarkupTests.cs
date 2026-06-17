@@ -14,6 +14,38 @@ public class MarketAnalysisControlsPanelMarkupTests
         Assert.Contains("market-analysis-refresh-prices", source);
     }
 
+    [Fact]
+    public void MarketAnalysisControlsPanel_ReplacesSortPreferenceWithEvidenceOverlaySelector()
+    {
+        var source = File.ReadAllText(GetMarketAnalysisControlsPanelPath());
+
+        Assert.Contains("Evidence Overlay", source);
+        Assert.Contains("MarketAnalysisEvidenceOverlay", source);
+        Assert.Contains("AppState.MarketAnalysisEvidenceOverlay", source);
+        Assert.Contains("Competitiveness Overlay", source);
+        Assert.Contains("Price Band Overlay", source);
+        Assert.Contains("SetMarketAnalysisEvidenceOverlay", source);
+
+        Assert.DoesNotContain("<div class=\"ma-field-label\">Sort</div>", source);
+        Assert.DoesNotContain("MudSelect T=\"MarketSortOption\"", source);
+        Assert.DoesNotContain("By Lens Score", source);
+        Assert.DoesNotContain("Alphabetical", source);
+    }
+
+    [Fact]
+    public void MarketAnalysisControlsPanel_AcquisitionLensOptionsHaveClarifyingTooltips()
+    {
+        var source = File.ReadAllText(GetMarketAnalysisControlsPanelPath());
+
+        Assert.Contains("Minimum upfront cost ranks worlds by needed-quantity coverage and estimated cost to cover the plan need.", source);
+        Assert.Contains("Best value / bulk acquisition favors deeper procurement-qualified stock that may still be useful.", source);
+        Assert.Contains("Title=\"@LensSelectorTooltip\"", source);
+        Assert.Contains("Title=\"@MinimumUpfrontCostLensTooltip\"", source);
+        Assert.Contains("Title=\"@BulkValueLensTooltip\"", source);
+        Assert.Contains("Minimum Upfront Cost", source);
+        Assert.Contains("Best Value / Bulk Acquisition", source);
+    }
+
     private static string GetMarketAnalysisControlsPanelPath()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

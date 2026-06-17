@@ -56,6 +56,18 @@ public class StoredMarketIntelligenceRestorerTests
     }
 
     [Fact]
+    public void Restore_CanonicalPayloadWithObsoleteSchema_ClearsMarketEvidenceAndWarns()
+    {
+        var stored = CreateStoredIntelligence();
+        stored.SchemaVersion = StoredMarketIntelligence.CurrentSchemaVersion - 1;
+
+        var result = RestoreCanonical(stored);
+
+        AssertMarketEvidenceCleared(result);
+        Assert.Contains("obsolete schema", result.Warning);
+    }
+
+    [Fact]
     public void Restore_CanonicalPayloadWithMarketDataAndNullContext_RepairsLegacySettings()
     {
         var result = RestoreCanonical(

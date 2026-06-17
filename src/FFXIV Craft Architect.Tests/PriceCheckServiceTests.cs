@@ -88,7 +88,7 @@ public class PriceCheckServiceTests
 
         // Garland is consulted for vendor data; Universalis is not called in cache-read path.
         _mockGarlandService.Verify(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()), Times.Once);
-        _mockUniversalisService.Verify(u => u.GetMarketDataAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockUniversalisService.Verify(u => u.GetMarketDataBulkAsync(It.IsAny<string>(), It.IsAny<IEnumerable<int>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class PriceCheckServiceTests
         Assert.Equal(PriceSource.Unknown, result.Source);
 
         _mockGarlandService.Verify(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()), Times.Once);
-        _mockUniversalisService.Verify(u => u.GetMarketDataAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockUniversalisService.Verify(u => u.GetMarketDataBulkAsync(It.IsAny<string>(), It.IsAny<IEnumerable<int>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public class PriceCheckServiceTests
         Assert.Contains("stale", result.SourceDetails, StringComparison.OrdinalIgnoreCase);
 
         _mockGarlandService.Verify(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()), Times.Once);
-        _mockUniversalisService.Verify(u => u.GetMarketDataAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockUniversalisService.Verify(u => u.GetMarketDataBulkAsync(It.IsAny<string>(), It.IsAny<IEnumerable<int>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -215,8 +215,12 @@ public class PriceCheckServiceTests
             AveragePrice = 1500
         };
         _mockUniversalisService
-            .Setup(u => u.GetMarketDataAsync(worldOrDc, itemId, It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(marketData);
+            .Setup(u => u.GetMarketDataBulkAsync(
+                worldOrDc,
+                It.Is<IEnumerable<int>>(itemIds => itemIds.SequenceEqual(new[] { itemId })),
+                false,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<int, UniversalisResponse> { [itemId] = marketData });
 
         // Act
         var result = await _service.GetPriceAsync(itemId, itemName, worldOrDc, allowStale: false);
@@ -225,7 +229,11 @@ public class PriceCheckServiceTests
         Assert.NotNull(result);
         Assert.Equal(1500m, result.UnitPrice);
         Assert.Equal(PriceSource.Market, result.Source);
-        _mockUniversalisService.Verify(u => u.GetMarketDataAsync(worldOrDc, itemId, It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockUniversalisService.Verify(u => u.GetMarketDataBulkAsync(
+            worldOrDc,
+            It.Is<IEnumerable<int>>(itemIds => itemIds.SequenceEqual(new[] { itemId })),
+            false,
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -272,8 +280,12 @@ public class PriceCheckServiceTests
             AveragePrice = 2500
         };
         _mockUniversalisService
-            .Setup(u => u.GetMarketDataAsync(worldOrDc, itemId, It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(marketData);
+            .Setup(u => u.GetMarketDataBulkAsync(
+                worldOrDc,
+                It.Is<IEnumerable<int>>(itemIds => itemIds.SequenceEqual(new[] { itemId })),
+                false,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<int, UniversalisResponse> { [itemId] = marketData });
         
         // Act
         var result = await _service.ForceRefreshAsync(itemId, itemName, worldOrDc);
@@ -284,7 +296,11 @@ public class PriceCheckServiceTests
         
         // Verify API was called even though cache was valid
         _mockGarlandService.Verify(g => g.GetItemAsync(itemId, It.IsAny<CancellationToken>()), Times.Once);
-        _mockUniversalisService.Verify(u => u.GetMarketDataAsync(worldOrDc, itemId, It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockUniversalisService.Verify(u => u.GetMarketDataBulkAsync(
+            worldOrDc,
+            It.Is<IEnumerable<int>>(itemIds => itemIds.SequenceEqual(new[] { itemId })),
+            false,
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -319,7 +335,7 @@ public class PriceCheckServiceTests
         Assert.Equal(0m, result.UnitPrice);
         
         // Universalis should NOT be called for untradeable
-        _mockUniversalisService.Verify(u => u.GetMarketDataAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockUniversalisService.Verify(u => u.GetMarketDataBulkAsync(It.IsAny<string>(), It.IsAny<IEnumerable<int>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -377,8 +393,12 @@ public class PriceCheckServiceTests
             AveragePrice = 200
         };
         _mockUniversalisService
-            .Setup(u => u.GetMarketDataAsync(worldOrDc, itemId, It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(marketData);
+            .Setup(u => u.GetMarketDataBulkAsync(
+                worldOrDc,
+                It.Is<IEnumerable<int>>(itemIds => itemIds.SequenceEqual(new[] { itemId })),
+                false,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<int, UniversalisResponse> { [itemId] = marketData });
         
         // Act
         var result = await _service.GetBestPriceAsync(itemId, itemName, worldOrDc);

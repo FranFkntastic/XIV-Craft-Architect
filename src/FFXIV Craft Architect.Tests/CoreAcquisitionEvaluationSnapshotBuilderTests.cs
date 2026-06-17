@@ -137,6 +137,61 @@ public class CoreAcquisitionEvaluationSnapshotBuilderTests
     }
 
     [Fact]
+    public void Build_HqEstimateWithoutHqEvidenceDoesNotUsePlannerUnitPriceFallback()
+    {
+        var root = CreateRoot(100, "Final Craft");
+        var material = new PlanNode
+        {
+            ItemId = 200,
+            Name = "HQ Material",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyHq,
+            MustBeHq = true,
+            CanBeHq = true,
+            CanBuyFromMarket = true,
+            HqMarketPrice = 10_000,
+            Parent = root
+        };
+        root.Children.Add(material);
+        var plan = new CraftingPlan { RootItems = [root] };
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 200,
+                Name = "HQ Material",
+                QuantityNeeded = 2,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Siren",
+                    TotalCost = 500,
+                    TotalQuantityPurchased = 2,
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 2,
+                            PricePerUnit = 250,
+                            IsHq = false
+                        }
+                    ]
+                }
+            }
+        };
+
+        var snapshot = CoreAcquisitionEvaluationSnapshotBuilder.Build(
+            plan,
+            marketPlans,
+            unavailableMarketItemIds: new HashSet<int>(),
+            CoreAcquisitionFilter.All,
+            CreateProjection(plan));
+
+        var row = snapshot.Rows.Single(row => row.ItemId == 200);
+
+        Assert.Equal("-", row.EstimatedCost);
+    }
+
+    [Fact]
     public void CompareWithLegacyTraversal_MixedAcquisitionPlan_ReturnsNoMismatches()
     {
         var plan = CreateMixedAcquisitionPlan();

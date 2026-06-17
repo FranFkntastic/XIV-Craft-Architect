@@ -211,9 +211,11 @@ public static class StoredMarketIntelligenceRestorer
                 return null;
             }
 
-            if (stored.SchemaVersion > StoredMarketIntelligence.CurrentSchemaVersion)
+            if (stored.SchemaVersion != StoredMarketIntelligence.CurrentSchemaVersion)
             {
-                warning = "Stored market intelligence was saved with a newer schema version.";
+                warning = stored.SchemaVersion > StoredMarketIntelligence.CurrentSchemaVersion
+                    ? "Stored market intelligence was saved with a newer schema version."
+                    : "Stored market intelligence was saved with an obsolete schema version.";
                 return null;
             }
 

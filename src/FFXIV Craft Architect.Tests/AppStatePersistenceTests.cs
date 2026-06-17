@@ -161,11 +161,10 @@ public class AppStatePersistenceTests
                             AnalysisScopeAverageUnitPrice = 650,
                             AnalysisScopeMedianUnitPrice = 630,
                             SaneThresholdUnitPrice = 1280,
-                            LocalCompetitiveQuantity = 2,
-                            ScopeCompetitiveQuantity = 8,
+                            PrimaryUsableQuantity = 8,
                             ScopeSaneQuantity = 10,
                             ScopeInsaneQuantity = 3,
-                            ScopeCompetitiveCoverageRatio = 0.8m,
+                            PrimaryUsableCoverageRatio = 0.8m,
                             ScopeSaneCoverageRatio = 1.0m
                         }
                     ]
@@ -186,11 +185,10 @@ public class AppStatePersistenceTests
         Assert.Equal(650, world.AnalysisScopeAverageUnitPrice);
         Assert.Equal(630, world.AnalysisScopeMedianUnitPrice);
         Assert.Equal(1280, world.SaneThresholdUnitPrice);
-        Assert.Equal(2, world.LocalCompetitiveQuantity);
-        Assert.Equal(8, world.ScopeCompetitiveQuantity);
+        Assert.Equal(8, world.PrimaryUsableQuantity);
         Assert.Equal(10, world.ScopeSaneQuantity);
         Assert.Equal(3, world.ScopeInsaneQuantity);
-        Assert.Equal(0.8m, world.ScopeCompetitiveCoverageRatio);
+        Assert.Equal(0.8m, world.PrimaryUsableCoverageRatio);
         Assert.Equal(1.0m, world.ScopeSaneCoverageRatio);
     }
 
@@ -295,7 +293,7 @@ public class AppStatePersistenceTests
         Assert.Equal(0, world.AnalysisScopeAverageUnitPrice);
         Assert.Equal(0, world.AnalysisScopeMedianUnitPrice);
         Assert.Equal(0, world.SaneThresholdUnitPrice);
-        Assert.Equal(0, world.ScopeCompetitiveQuantity);
+        Assert.Equal(0, world.PrimaryUsableQuantity);
         Assert.Equal(0, world.ScopeSaneQuantity);
         Assert.Equal(0, world.ScopeInsaneQuantity);
     }
@@ -715,11 +713,10 @@ public class AppStatePersistenceTests
                             AnalysisScopeAverageUnitPrice = 650,
                             AnalysisScopeMedianUnitPrice = 630,
                             SaneThresholdUnitPrice = 1280,
-                            LocalCompetitiveQuantity = 2,
-                            ScopeCompetitiveQuantity = 8,
+                            PrimaryUsableQuantity = 8,
                             ScopeSaneQuantity = 10,
                             ScopeInsaneQuantity = 3,
-                            ScopeCompetitiveCoverageRatio = 0.8m,
+                            PrimaryUsableCoverageRatio = 0.8m,
                             ScopeSaneCoverageRatio = 1.0m
                         }
                     ]
@@ -749,11 +746,10 @@ public class AppStatePersistenceTests
         Assert.Equal(650, world.AnalysisScopeAverageUnitPrice);
         Assert.Equal(630, world.AnalysisScopeMedianUnitPrice);
         Assert.Equal(1280, world.SaneThresholdUnitPrice);
-        Assert.Equal(2, world.LocalCompetitiveQuantity);
-        Assert.Equal(8, world.ScopeCompetitiveQuantity);
+        Assert.Equal(8, world.PrimaryUsableQuantity);
         Assert.Equal(10, world.ScopeSaneQuantity);
         Assert.Equal(3, world.ScopeInsaneQuantity);
-        Assert.Equal(0.8m, world.ScopeCompetitiveCoverageRatio);
+        Assert.Equal(0.8m, world.PrimaryUsableCoverageRatio);
         Assert.Equal(1.0m, world.ScopeSaneCoverageRatio);
         Assert.Single(restored.ShoppingPlans);
     }

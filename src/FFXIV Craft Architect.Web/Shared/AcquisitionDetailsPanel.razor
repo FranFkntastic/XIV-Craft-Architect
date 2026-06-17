@@ -259,9 +259,7 @@
             return marketPlan.Error;
         }
 
-        return UnitPrice > 0
-            ? $"Uses the current planner {quality} market price."
-            : "Run Market Analysis for actionable market evidence.";
+        return "Run Market Analysis for actionable market evidence.";
     }
 
     private string GetVendorDetail()

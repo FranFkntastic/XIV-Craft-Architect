@@ -122,28 +122,76 @@
                     </MudText>
                 </div>
 
-                <div class="ma-detail-scroll">
-                    @if (GetSelectedAnalysis() is { } analysis)
-                    {
-                        <MarketAnalysisWorldGrid Analysis="analysis"
-                                                 Lens="CurrentLens"
-                                                 ItemId="_selectedPlan.ItemId"
-                                                 SortColumn="WorldSortColumn"
-                                                 SortDescending="WorldSortDescending"
-                                                 ExpandedWorldKeys="ExpandedWorldKeys"
-                                                 OnWorldExpansionToggled="OnWorldExpansionToggled"
-                                                 OnSortChanged="OnWorldSortChanged" />
-                    }
-                    else
-                    {
+                @if (GetSelectedAnalysis() is { } analysis)
+                {
+                    <div class="ma-detail-tabs" role="tablist" aria-label="Market detail views">
+                        <button type="button"
+                                class="@GetDetailTabClass(MarketAnalysisDetailTab.Worlds)"
+                                role="tab"
+                                aria-selected="@IsDetailTabSelected(MarketAnalysisDetailTab.Worlds)"
+                                @onclick="() => SelectDetailTab(MarketAnalysisDetailTab.Worlds)">
+                            Worlds
+                        </button>
+                        <button type="button"
+                                class="@GetDetailTabClass(MarketAnalysisDetailTab.PriceBands)"
+                                role="tab"
+                                aria-selected="@IsDetailTabSelected(MarketAnalysisDetailTab.PriceBands)"
+                                @onclick="() => SelectDetailTab(MarketAnalysisDetailTab.PriceBands)">
+                            Price Bands
+                        </button>
+                    </div>
+
+                    <div class="ma-detail-scroll">
+                        @if (_selectedDetailTab == MarketAnalysisDetailTab.Worlds)
+                        {
+                            <MarketAnalysisWorldGrid Analysis="analysis"
+                                                     Lens="CurrentLens"
+                                                     ItemId="_selectedPlan.ItemId"
+                                                     EvidenceOverlay="EvidenceOverlay"
+                                                     SortColumn="WorldSortColumn"
+                                                     SortDescending="WorldSortDescending"
+                                                     ExpandedWorldKeys="ExpandedWorldKeys"
+                                                     OnWorldExpansionToggled="OnWorldExpansionToggled"
+                                                     OnSortChanged="OnWorldSortChanged" />
+                        }
+                        else
+                        {
+                            <div class="ma-price-band-view">
+                                @if (analysis.ScopePriceBands.Count > 0)
+                                {
+                                    <WebDataTable TItem="PriceBandRow"
+                                                  TColumnId="PriceBandColumn"
+                                                  CssClass="ma-price-band-grid"
+                                                  Items="@GetPriceBandRows(analysis)"
+                                                  Columns="@GetPriceBandColumns()"
+                                                  GetRowKey="row => row.Key"
+                                                  IsRowExpanded="row => _expandedPriceBandKeys.Contains(row.Key)"
+                                                  ExpandedContent="RenderExpandedPriceBand"
+                                                  SortState="_priceBandSortState"
+                                                  SortChanged="OnPriceBandSortChanged" />
+                                }
+                                else
+                                {
+                                    <div class="ma-analysis-missing">
+                                        <MudIcon Icon="@Icons.Material.Filled.SyncProblem" Size="Size.Large" />
+                                        <MudText Typo="Typo.body2">Price band data is not available for this item.</MudText>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="ma-detail-scroll">
                         <div class="ma-analysis-missing">
                             <MudIcon Icon="@Icons.Material.Filled.SyncProblem" Size="Size.Large" />
                             <MudText Typo="Typo.body2">
                                 Analytics for this item are not available in the current session. Run Market Analysis again to rebuild the source data.
                             </MudText>
                         </div>
-                    }
-                </div>
+                    </div>
+                }
             }
         </aside>
     </div>
@@ -154,6 +202,7 @@
     [Parameter] public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses { get; set; } = Array.Empty<MarketItemAnalysis>();
     [Parameter] public MarketAcquisitionLens CurrentLens { get; set; } = MarketAcquisitionLens.MinimumUpfrontCost;
     [Parameter] public MarketSortOption CurrentSort { get; set; } = MarketSortOption.ByRecommended;
+    [Parameter] public MarketAnalysisEvidenceOverlay EvidenceOverlay { get; set; } = MarketAnalysisEvidenceOverlay.CompetitivenessOverlay;
     [Parameter] public MarketAnalysisGridSortColumn? SortColumn { get; set; }
     [Parameter] public bool SortDescending { get; set; }
     [Parameter] public MarketAnalysisWorldGridSortColumn? WorldSortColumn { get; set; }
@@ -171,6 +220,11 @@
     private DetailedShoppingPlan? _selectedPlan;
     private IReadOnlyList<DetailedShoppingPlan> _orderedPlans = Array.Empty<DetailedShoppingPlan>();
     private IReadOnlyDictionary<int, MarketItemAnalysis> _analysisByItemId = new Dictionary<int, MarketItemAnalysis>();
+    private MarketAnalysisDetailTab _selectedDetailTab = MarketAnalysisDetailTab.Worlds;
+    private int? _lastSelectedItemId;
+    private readonly HashSet<string> _expandedPriceBandKeys = new(StringComparer.Ordinal);
+    private WebTableSortState<PriceBandColumn> _priceBandSortState = WebTableSortState<PriceBandColumn>.Unsorted;
+    private WebTableSortState<PriceBandListingColumn> _priceBandListingSortState = new(PriceBandListingColumn.Unit, false);
 
     private string ItemColumnStyle => ShowWorldsColumn ? "width: 27%;" : "width: 29%;";
 
@@ -185,6 +239,12 @@
         _analysisByItemId = MarketItemAnalyses.ToDictionary(analysis => analysis.ItemId);
         _orderedPlans = GetGridPlans();
         _selectedPlan = MarketAnalysisGridViewService.ResolveSelectedPlan(_orderedPlans, SelectedItemId);
+        if (_lastSelectedItemId != _selectedPlan?.ItemId)
+        {
+            _selectedDetailTab = MarketAnalysisDetailTab.Worlds;
+            _expandedPriceBandKeys.Clear();
+            _lastSelectedItemId = _selectedPlan?.ItemId;
+        }
     }
 
     private async Task SelectPlan(DetailedShoppingPlan plan)
@@ -241,6 +301,284 @@
             : null;
     }
 
+    private void SelectDetailTab(MarketAnalysisDetailTab tab)
+    {
+        _selectedDetailTab = tab;
+    }
+
+    private bool IsDetailTabSelected(MarketAnalysisDetailTab tab)
+    {
+        return _selectedDetailTab == tab;
+    }
+
+    private string GetDetailTabClass(MarketAnalysisDetailTab tab)
+    {
+        return IsDetailTabSelected(tab)
+            ? "ma-detail-tab is-active"
+            : "ma-detail-tab";
+    }
+
+    private IReadOnlyList<PriceBandRow> GetPriceBandRows(MarketItemAnalysis analysis)
+    {
+        var rows = analysis.ScopePriceBands
+            .Select(band => new PriceBandRow(
+                Key: GetPriceBandKey(band),
+                Band: band,
+                Listings: GetListingsForBand(analysis, band)))
+            .ToList();
+
+        IOrderedEnumerable<PriceBandRow> ordered = _priceBandSortState.Column switch
+        {
+            PriceBandColumn.Band => OrderPriceBands(rows, row => row.Band.MinUnitPrice, _priceBandSortState.Descending),
+            PriceBandColumn.Stock => OrderPriceBands(rows, row => row.Band.TotalQuantity, _priceBandSortState.Descending),
+            PriceBandColumn.Listings => OrderPriceBands(rows, row => row.Band.ListingCount, _priceBandSortState.Descending),
+            PriceBandColumn.Worlds => OrderPriceBands(rows, row => row.Band.DistinctWorldCount, _priceBandSortState.Descending),
+            PriceBandColumn.Signal => OrderPriceBands(rows, row => GetBandSignalSortValue(row.Band), _priceBandSortState.Descending),
+            _ => rows.OrderBy(row => row.Band.MinUnitPrice)
+        };
+
+        return ordered
+            .ThenBy(row => row.Band.MaxUnitPrice)
+            .ThenBy(row => row.Band.Competitiveness)
+            .ThenBy(row => row.Band.Depth)
+            .ToList();
+    }
+
+    private static IOrderedEnumerable<PriceBandRow> OrderPriceBands<TKey>(
+        IEnumerable<PriceBandRow> rows,
+        Func<PriceBandRow, TKey> selector,
+        bool descending)
+    {
+        return descending
+            ? rows.OrderByDescending(selector)
+            : rows.OrderBy(selector);
+    }
+
+    private IReadOnlyList<PriceBandListingRow> GetListingsForBand(
+        MarketItemAnalysis analysis,
+        MarketScopePriceBand band)
+    {
+        var rows = analysis.Worlds
+            .SelectMany(world => world.Listings
+                .Where(listing => listing.PricePerUnit >= band.MinUnitPrice && listing.PricePerUnit <= band.MaxUnitPrice)
+                .Select(listing => new PriceBandListingRow(world.DataCenter, world.WorldName, listing)))
+            .ToList();
+
+        return GetOrderedPriceBandListings(rows);
+    }
+
+    private IReadOnlyList<PriceBandListingRow> GetOrderedPriceBandListings(IReadOnlyList<PriceBandListingRow> rows)
+    {
+        IOrderedEnumerable<PriceBandListingRow> ordered = _priceBandListingSortState.Column switch
+        {
+            PriceBandListingColumn.Quantity => OrderPriceBandListings(rows, row => row.Listing.Quantity, _priceBandListingSortState.Descending),
+            PriceBandListingColumn.Unit => OrderPriceBandListings(rows, row => row.Listing.PricePerUnit, _priceBandListingSortState.Descending),
+            PriceBandListingColumn.Total => OrderPriceBandListings(rows, row => row.Listing.PricePerUnit * row.Listing.Quantity, _priceBandListingSortState.Descending),
+            PriceBandListingColumn.World => OrderPriceBandListings(rows, row => row.WorldName, _priceBandListingSortState.Descending),
+            PriceBandListingColumn.Retainer => OrderPriceBandListings(rows, row => row.Listing.RetainerName, _priceBandListingSortState.Descending),
+            PriceBandListingColumn.Quality => OrderPriceBandListings(rows, row => row.Listing.IsHq ? 1 : 0, _priceBandListingSortState.Descending),
+            PriceBandListingColumn.Reviewed => OrderPriceBandListings(rows, row => row.Listing.LastReviewTimeUtc ?? DateTime.MinValue, _priceBandListingSortState.Descending),
+            PriceBandListingColumn.Flags => OrderPriceBandListings(rows, row => FormatListingFlags(row.Listing), _priceBandListingSortState.Descending),
+            _ => rows.OrderBy(row => row.Listing.PricePerUnit)
+        };
+
+        return ordered
+            .ThenBy(row => row.WorldName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.Listing.SortIndex)
+            .ToList();
+    }
+
+    private static IOrderedEnumerable<PriceBandListingRow> OrderPriceBandListings<TKey>(
+        IEnumerable<PriceBandListingRow> rows,
+        Func<PriceBandListingRow, TKey> selector,
+        bool descending)
+    {
+        return descending
+            ? rows.OrderByDescending(selector)
+            : rows.OrderBy(selector);
+    }
+
+    private IReadOnlyList<WebTableColumn<PriceBandRow, PriceBandColumn>> GetPriceBandColumns()
+    {
+        return
+        [
+            new WebTableColumn<PriceBandRow, PriceBandColumn>
+            {
+                Id = PriceBandColumn.Band,
+                Header = "Band",
+                Size = WebTableColumnSize.Percent(34m),
+                CellTemplate = RenderBandCell
+            },
+            WebTableColumn<PriceBandRow, PriceBandColumn>.Text(
+                PriceBandColumn.Stock,
+                "Stock",
+                row => row.Band.TotalQuantity.ToString("N0"),
+                widthPx: 88,
+                minWidthPx: 70,
+                alignEnd: true),
+            WebTableColumn<PriceBandRow, PriceBandColumn>.Text(
+                PriceBandColumn.Listings,
+                "Listings",
+                row => row.Band.ListingCount.ToString("N0"),
+                widthPx: 88,
+                minWidthPx: 70,
+                alignEnd: true),
+            WebTableColumn<PriceBandRow, PriceBandColumn>.Text(
+                PriceBandColumn.Worlds,
+                "Worlds",
+                row => row.Band.DistinctWorldCount.ToString("N0"),
+                widthPx: 80,
+                minWidthPx: 64,
+                alignEnd: true),
+            new WebTableColumn<PriceBandRow, PriceBandColumn>
+            {
+                Id = PriceBandColumn.Signal,
+                Header = "Signal",
+                Size = WebTableColumnSize.Percent(20m),
+                CellTemplate = RenderBandSignalCell
+            }
+        ];
+    }
+
+    private RenderFragment<PriceBandRow> RenderBandCell => row => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "button");
+        builder.AddAttribute(sequence++, "type", "button");
+        builder.AddAttribute(sequence++, "class", "ma-price-band-expand-button");
+        builder.AddAttribute(sequence++, "title", "Show listings in this price band");
+        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => TogglePriceBand(row.Key)));
+        builder.OpenElement(sequence++, "span");
+        builder.AddAttribute(sequence++, "class", "ma-price-band-toggle-marker");
+        builder.AddContent(sequence++, _expandedPriceBandKeys.Contains(row.Key) ? "-" : "+");
+        builder.CloseElement();
+        builder.OpenElement(sequence++, "span");
+        builder.AddAttribute(sequence++, "class", "ma-price-band-range");
+        builder.AddContent(sequence++, FormatBandRange(row.Band));
+        builder.CloseElement();
+        builder.OpenElement(sequence++, "span");
+        builder.AddAttribute(sequence++, "class", "ma-price-band-average");
+        builder.AddContent(sequence++, $"{FormatGil(row.Band.WeightedAverageUnitPrice)} avg");
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment<PriceBandRow> RenderBandSignalCell => row => builder =>
+    {
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "class", GetPriceBandSignalClass(row.Band));
+        builder.OpenElement(2, "span");
+        builder.AddAttribute(3, "class", "ma-price-band-signal-primary");
+        builder.AddContent(4, FormatBandCompetitiveness(row.Band.Competitiveness));
+        builder.CloseElement();
+        builder.OpenElement(5, "span");
+        builder.AddAttribute(6, "class", "ma-price-band-signal-secondary");
+        builder.AddContent(7, MarketAnalysisGridViewService.FormatPriceBandDepth(row.Band.Depth));
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment<PriceBandRow> RenderExpandedPriceBand => row => builder =>
+    {
+        var sequence = 0;
+        if (row.Listings.Count == 0)
+        {
+            builder.OpenElement(sequence++, "div");
+            builder.AddAttribute(sequence++, "class", "ma-price-band-empty");
+            builder.AddContent(sequence++, "No loaded listings matched this band range.");
+            builder.CloseElement();
+            return;
+        }
+
+        builder.OpenComponent<WebDataTable<PriceBandListingRow, PriceBandListingColumn>>(sequence++);
+        builder.AddAttribute(sequence++, "CssClass", "ma-price-band-listing-grid");
+        builder.AddAttribute(sequence++, "Items", row.Listings);
+        builder.AddAttribute(sequence++, "Columns", GetPriceBandListingColumns());
+        builder.AddAttribute(sequence++, "GetRowKey", (Func<PriceBandListingRow, string>)GetPriceBandListingKey);
+        builder.AddAttribute(sequence++, "SortState", _priceBandListingSortState);
+        builder.AddAttribute(sequence++, "SortChanged", EventCallback.Factory.Create<WebTableSortState<PriceBandListingColumn>>(this, OnPriceBandListingSortChanged));
+        builder.CloseComponent();
+    };
+
+    private IReadOnlyList<WebTableColumn<PriceBandListingRow, PriceBandListingColumn>> GetPriceBandListingColumns()
+    {
+        return
+        [
+            WebTableColumn<PriceBandListingRow, PriceBandListingColumn>.Text(
+                PriceBandListingColumn.Quantity,
+                "Qty",
+                row => row.Listing.Quantity.ToString("N0"),
+                widthPx: 62,
+                minWidthPx: 54,
+                alignEnd: true),
+            WebTableColumn<PriceBandListingRow, PriceBandListingColumn>.Text(
+                PriceBandListingColumn.Unit,
+                "Unit",
+                row => FormatGil(row.Listing.PricePerUnit),
+                widthPx: 80,
+                minWidthPx: 64,
+                alignEnd: true),
+            WebTableColumn<PriceBandListingRow, PriceBandListingColumn>.Text(
+                PriceBandListingColumn.Total,
+                "Total",
+                row => FormatGil(row.Listing.PricePerUnit * row.Listing.Quantity),
+                widthPx: 88,
+                minWidthPx: 70,
+                alignEnd: true),
+            WebTableColumn<PriceBandListingRow, PriceBandListingColumn>.Text(
+                PriceBandListingColumn.World,
+                "World",
+                row => row.WorldName,
+                widthPx: 92,
+                minWidthPx: 72),
+            WebTableColumn<PriceBandListingRow, PriceBandListingColumn>.Text(
+                PriceBandListingColumn.Retainer,
+                "Retainer",
+                row => row.Listing.RetainerName,
+                widthPx: 150,
+                minWidthPx: 100,
+                cellCssClass: "ma-price-band-retainer-cell"),
+            WebTableColumn<PriceBandListingRow, PriceBandListingColumn>.Text(
+                PriceBandListingColumn.Quality,
+                "HQ/NQ",
+                row => row.Listing.IsHq ? "HQ" : "NQ",
+                widthPx: 64,
+                minWidthPx: 56),
+            new WebTableColumn<PriceBandListingRow, PriceBandListingColumn>
+            {
+                Id = PriceBandListingColumn.Reviewed,
+                Header = "Reviewed",
+                Size = new WebTableColumnSize(78, 66),
+                CellTitleSelector = row => FormatReviewTooltip(row.Listing),
+                CellTemplate = row => builder => builder.AddContent(0, FormatReviewAge(row.Listing))
+            },
+            WebTableColumn<PriceBandListingRow, PriceBandListingColumn>.Text(
+                PriceBandListingColumn.Flags,
+                "Flags",
+                row => FormatListingFlags(row.Listing),
+                widthPx: 104,
+                minWidthPx: 80)
+        ];
+    }
+
+    private void TogglePriceBand(string key)
+    {
+        if (!_expandedPriceBandKeys.Add(key))
+        {
+            _expandedPriceBandKeys.Remove(key);
+        }
+    }
+
+    private void OnPriceBandSortChanged(WebTableSortState<PriceBandColumn> state)
+    {
+        _priceBandSortState = state;
+    }
+
+    private void OnPriceBandListingSortChanged(WebTableSortState<PriceBandListingColumn> state)
+    {
+        _priceBandListingSortState = state;
+    }
+
     private IReadOnlyList<DetailedShoppingPlan> GetGridPlans()
     {
         return MarketAnalysisGridViewService.GetOrderedPlans(
@@ -289,6 +627,139 @@
         return $"x{quantity:N0}";
     }
 
+    private static string FormatGil(decimal value)
+    {
+        return $"{value:N0}g";
+    }
+
+    private static string FormatGil(long value)
+    {
+        return $"{value:N0}g";
+    }
+
+    private static string FormatBandRange(MarketScopePriceBand band)
+    {
+        return band.MinUnitPrice == band.MaxUnitPrice
+            ? FormatGil(band.MinUnitPrice)
+            : $"{FormatGil(band.MinUnitPrice)} - {FormatGil(band.MaxUnitPrice)}";
+    }
+
+    private static string FormatBandCompetitiveness(PriceBandCompetitiveness competitiveness)
+    {
+        return competitiveness switch
+        {
+            PriceBandCompetitiveness.LowOutlier => "Low outlier",
+            PriceBandCompetitiveness.Competitive => "Competitive",
+            PriceBandCompetitiveness.Uncompetitive => "Uncompetitive",
+            PriceBandCompetitiveness.Insane => "Insane",
+            _ => "Unclassified"
+        };
+    }
+
+    private static string GetPriceBandSignalClass(MarketScopePriceBand band)
+    {
+        return band.Competitiveness switch
+        {
+            PriceBandCompetitiveness.LowOutlier => "ma-price-band-signal is-low-outlier",
+            PriceBandCompetitiveness.Competitive when band.Depth == PriceBandDepth.Thin => "ma-price-band-signal is-thin",
+            PriceBandCompetitiveness.Competitive => "ma-price-band-signal is-competitive",
+            PriceBandCompetitiveness.Uncompetitive => "ma-price-band-signal is-uncompetitive",
+            PriceBandCompetitiveness.Insane => "ma-price-band-signal is-insane",
+            _ => "ma-price-band-signal"
+        };
+    }
+
+    private static string GetPriceBandKey(MarketScopePriceBand band)
+    {
+        return $"{band.MinUnitPrice}:{band.MaxUnitPrice}:{band.Competitiveness}:{band.Depth}";
+    }
+
+    private static int GetBandSignalSortValue(MarketScopePriceBand band)
+    {
+        var competitivenessRank = band.Competitiveness switch
+        {
+            PriceBandCompetitiveness.LowOutlier => 0,
+            PriceBandCompetitiveness.Competitive => 1,
+            PriceBandCompetitiveness.Uncompetitive => 2,
+            PriceBandCompetitiveness.Insane => 3,
+            _ => 4
+        };
+        var depthRank = band.Depth switch
+        {
+            PriceBandDepth.Deep => 0,
+            PriceBandDepth.Usable => 1,
+            PriceBandDepth.Thin => 2,
+            _ => 3
+        };
+
+        return competitivenessRank * 10 + depthRank;
+    }
+
+    private static string GetPriceBandListingKey(PriceBandListingRow row)
+    {
+        return $"{row.WorldName}:{row.Listing.SortIndex}:{row.Listing.PricePerUnit}:{row.Listing.RetainerName}";
+    }
+
+    private static string FormatReviewAge(AnalyzedMarketListing listing)
+    {
+        if (!listing.LastReviewTimeUtc.HasValue)
+        {
+            return "-";
+        }
+
+        var age = DateTime.UtcNow - listing.LastReviewTimeUtc.Value;
+        if (age < TimeSpan.Zero)
+        {
+            age = TimeSpan.Zero;
+        }
+
+        if (age < TimeSpan.FromMinutes(1))
+        {
+            return "<1m";
+        }
+
+        if (age < TimeSpan.FromHours(1))
+        {
+            return $"{Math.Floor(age.TotalMinutes):N0}m";
+        }
+
+        return age < TimeSpan.FromDays(1)
+            ? $"{Math.Floor(age.TotalHours):N0}h"
+            : $"{Math.Floor(age.TotalDays):N0}d";
+    }
+
+    private static string FormatReviewTooltip(AnalyzedMarketListing listing)
+    {
+        return listing.LastReviewTimeUtc.HasValue
+            ? $"Reviewed: {listing.LastReviewTimeUtc.Value.ToLocalTime():g}"
+            : "Review time unavailable";
+    }
+
+    private static string FormatListingFlags(AnalyzedMarketListing listing)
+    {
+        if (listing.PriceSanity == MarketListingPriceSanity.Insane)
+        {
+            return "insane";
+        }
+
+        if (listing.PriceSanity == MarketListingPriceSanity.Outlier)
+        {
+            return "outlier";
+        }
+
+        if (listing.PriceSanity == MarketListingPriceSanity.LowOutlier)
+        {
+            return "low outlier";
+        }
+
+        if (listing.Competitiveness is MarketListingCompetitiveness.Fair or MarketListingCompetitiveness.Uncompetitive)
+        {
+            return "uncompetitive";
+        }
+
+        return string.Empty;
+    }
+
     private string GetRowClass(DetailedShoppingPlan plan)
     {
         var classes = new List<string>();
@@ -324,5 +795,42 @@
             Snackbar.Add("Failed to copy item name", Severity.Error);
         }
     }
+
+    private enum MarketAnalysisDetailTab
+    {
+        Worlds,
+        PriceBands
+    }
+
+    private enum PriceBandColumn
+    {
+        Band,
+        Stock,
+        Listings,
+        Worlds,
+        Signal
+    }
+
+    private enum PriceBandListingColumn
+    {
+        Quantity,
+        Unit,
+        Total,
+        World,
+        Retainer,
+        Quality,
+        Reviewed,
+        Flags
+    }
+
+    private sealed record PriceBandRow(
+        string Key,
+        MarketScopePriceBand Band,
+        IReadOnlyList<PriceBandListingRow> Listings);
+
+    private sealed record PriceBandListingRow(
+        string DataCenter,
+        string WorldName,
+        AnalyzedMarketListing Listing);
 
 }
