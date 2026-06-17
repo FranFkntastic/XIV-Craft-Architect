@@ -9,6 +9,11 @@ public class MarketAnalysisWorldGridMarkupTests
         var styles = File.ReadAllText(GetWorldGridStylesPath());
 
         Assert.Contains("<WebDataTable", source);
+        Assert.Contains("Header = \"Unit Price\"", source);
+        Assert.DoesNotContain("Header = \"Price / Value\"", source);
+        Assert.Contains("Header = \"Market Depth\"", source);
+        Assert.Contains("Header = \"Viable Stock\"", source);
+        Assert.DoesNotContain("Header = \"Buy Coverage\"", source);
         Assert.Contains("Header = \"% Diff\"", source);
         Assert.Contains("Header = \"Data\"", source);
         Assert.Contains("WebTableColumnSize.Percent", source);
@@ -16,12 +21,15 @@ public class MarketAnalysisWorldGridMarkupTests
         Assert.Contains("CellTitleSelector = MarketAnalysisGridViewService.FormatCompetitiveValueTooltip", source);
         Assert.Contains("RenderExpandedWorld", source);
         Assert.Contains("ma-world-score", source);
-        Assert.Contains("GetScoreClass(scoreBucket)", source);
         Assert.Contains("ma-world-muted", source);
         Assert.Contains("MarketAnalysisGridViewService.FormatCompetitiveValue(world)", source);
-        Assert.Contains("MarketAnalysisGridViewService.FormatWorldPriceBandRole(world)", source);
-        Assert.Contains("MarketAnalysisGridViewService.FormatWorldPriceBandSummary(world)", source);
-        Assert.Contains("MarketAnalysisGridViewService.GetWorldPriceBandScoreClass(world)", source);
+        Assert.Contains("MarketAnalysisGridViewService.FormatWorldUnitPrice(world)", source);
+        Assert.Contains("MarketAnalysisGridViewService.GetWorldUnitPriceScoreClass(world)", source);
+        Assert.DoesNotContain("GetWorldUnitPriceScoreClass(world, EvidenceOverlay, Lens)", source);
+        Assert.Contains("MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world)", source);
+        Assert.Contains("MarketAnalysisGridViewService.FormatWorldMarketDepthDescriptor(world)", source);
+        Assert.DoesNotContain("MarketAnalysisGridViewService.FormatWorldPriceBandSignal(world)", source);
+        Assert.DoesNotContain("MarketAnalysisGridViewService.FormatWorldPriceBandSummary(world)", source);
         Assert.DoesNotContain("\"ItemId\", ItemId", source);
         Assert.DoesNotContain("\"PublicationId\", PublicationId", source);
     }

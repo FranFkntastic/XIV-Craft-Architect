@@ -77,7 +77,7 @@
     [Parameter] public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses { get; set; } = Array.Empty<MarketItemAnalysis>();
     [Parameter] public MarketAcquisitionLens CurrentLens { get; set; }
     [Parameter] public MarketSortOption CurrentSort { get; set; }
-    [Parameter] public MarketAnalysisEvidenceOverlay EvidenceOverlay { get; set; } = MarketAnalysisEvidenceOverlay.ShelfOverlay;
+    [Parameter] public MarketAnalysisEvidenceOverlay EvidenceOverlay { get; set; } = MarketAnalysisEvidenceOverlay.CompetitivenessOverlay;
     [Parameter] public MarketAnalysisGridSortColumn? SortColumn { get; set; }
     [Parameter] public bool SortDescending { get; set; }
     [Parameter] public MarketAnalysisWorldGridSortColumn? WorldSortColumn { get; set; }

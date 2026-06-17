@@ -22,7 +22,7 @@ public class MarketAnalysisControlsPanelMarkupTests
         Assert.Contains("Evidence Overlay", source);
         Assert.Contains("MarketAnalysisEvidenceOverlay", source);
         Assert.Contains("AppState.MarketAnalysisEvidenceOverlay", source);
-        Assert.Contains("Shelf Overlay", source);
+        Assert.Contains("Competitiveness Overlay", source);
         Assert.Contains("Price Band Overlay", source);
         Assert.Contains("SetMarketAnalysisEvidenceOverlay", source);
 
@@ -38,7 +38,7 @@ public class MarketAnalysisControlsPanelMarkupTests
         var source = File.ReadAllText(GetMarketAnalysisControlsPanelPath());
 
         Assert.Contains("Minimum upfront cost ranks worlds by needed-quantity coverage and estimated cost to cover the plan need.", source);
-        Assert.Contains("Best value / bulk acquisition favors deeper competitive stock and partial shelves that may still be useful.", source);
+        Assert.Contains("Best value / bulk acquisition favors deeper procurement-qualified stock that may still be useful.", source);
         Assert.Contains("Title=\"@LensSelectorTooltip\"", source);
         Assert.Contains("Title=\"@MinimumUpfrontCostLensTooltip\"", source);
         Assert.Contains("Title=\"@BulkValueLensTooltip\"", source);

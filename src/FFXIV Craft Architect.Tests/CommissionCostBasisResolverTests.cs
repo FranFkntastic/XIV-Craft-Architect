@@ -29,7 +29,7 @@ public class CommissionCostBasisResolverTests
                     Name = "Thread",
                     QuantityNeeded = 3,
                     LoadedAtUtc = loadedAt,
-                    AnalysisScopeCompetitiveAverageUnitPrice = 120m,
+                    AnalysisCompetitiveAverageUnitPrice = 120m,
                     AnalysisScopeAverageUnitPrice = 180m,
                     AnalysisScopeMedianUnitPrice = 150m
                 }
@@ -82,7 +82,7 @@ public class CommissionCostBasisResolverTests
                     ItemId = 30,
                     Name = "Ingot",
                     LoadedAtUtc = loadedAt,
-                    AnalysisScopeCompetitiveAverageUnitPrice = 100m,
+                    AnalysisCompetitiveAverageUnitPrice = 100m,
                     WorstDataQualityBucket = MarketDataQualityBucket.Ancient
                 }
             ],
@@ -120,7 +120,7 @@ public class CommissionCostBasisResolverTests
                     ItemId = 40,
                     Name = "Silk",
                     LoadedAtUtc = loadedAt,
-                    AnalysisScopeCompetitiveAverageUnitPrice = 100m,
+                    AnalysisCompetitiveAverageUnitPrice = 100m,
                     WorstDataQualityBucket = MarketDataQualityBucket.VeryOld
                 }
             ],
@@ -162,7 +162,7 @@ public class CommissionCostBasisResolverTests
                     ItemId = 50,
                     Name = "Leather",
                     LoadedAtUtc = loadedAt,
-                    AnalysisScopeCompetitiveAverageUnitPrice = 100m,
+                    AnalysisCompetitiveAverageUnitPrice = 100m,
                     WorstDataQualityBucket = MarketDataQualityBucket.Ancient
                 }
             ],

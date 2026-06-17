@@ -66,6 +66,9 @@ public class MarketAnalysisDiagnosticDumpServiceTests
 
         Assert.Contains(Environment.NewLine, json);
         Assert.Contains("\"lens\": \"BulkValue\"", json);
+        Assert.Contains("\"competitiveness\": \"Competitive\"", json);
+        Assert.Contains("\"depth\": \"Deep\"", json);
+        Assert.Contains("\"isPrimaryUsableBand\": true", json);
         using var document = JsonDocument.Parse(json);
         Assert.Equal("market-analysis-diagnostic-dump", document.RootElement.GetProperty("tool").GetString());
     }
@@ -96,16 +99,47 @@ public class MarketAnalysisDiagnosticDumpServiceTests
             Scope = MarketFetchScope.SelectedDataCenter,
             AnalysisScopeBaselineUnitPrice = 100,
             AnalysisScopeAverageUnitPrice = 110,
-            AnalysisScopeCompetitiveAverageUnitPrice = 100,
+            AnalysisCompetitiveAverageUnitPrice = 100,
             CompetitiveThresholdUnitPrice = 150,
             SaneThresholdUnitPrice = 200,
+            ScopePriceBands =
+            [
+                new MarketScopePriceBand
+                {
+                    MinUnitPrice = 100,
+                    MaxUnitPrice = 100,
+                    WeightedAverageUnitPrice = 100,
+                    TotalQuantity = 10,
+                    ListingCount = 1,
+                    DistinctWorldCount = 1,
+                    DistinctRetainerCount = 1,
+                    Competitiveness = PriceBandCompetitiveness.Competitive,
+                    Depth = PriceBandDepth.Deep
+                }
+            ],
             Worlds =
             [
                 new WorldMarketAnalysis
                 {
                     DataCenter = "Aether",
                     WorldName = "Siren",
-                    ScopeCompetitiveQuantity = 10,
+                    PrimaryUsableQuantity = 10,
+                    PriceBands =
+                    [
+                        new MarketPriceBand
+                        {
+                            FirstListingIndex = 0,
+                            LastListingIndex = 0,
+                            MinUnitPrice = 100,
+                            MaxUnitPrice = 100,
+                            WeightedAverageUnitPrice = 100,
+                            ListingCount = 1,
+                            Quantity = 10,
+                            Competitiveness = PriceBandCompetitiveness.Competitive,
+                            Depth = PriceBandDepth.Deep,
+                            IsPrimaryUsableBand = true
+                        }
+                    ],
                     Listings =
                     [
                         new AnalyzedMarketListing
@@ -115,7 +149,8 @@ public class MarketAnalysisDiagnosticDumpServiceTests
                             PricePerUnit = 100,
                             RetainerName = "Seller",
                             PriceSanity = MarketListingPriceSanity.Sane,
-                            IsScopeCompetitive = true
+                            Competitiveness = MarketListingCompetitiveness.Competitive,
+                            IsInPrimaryUsableBand = true
                         }
                     ]
                 }

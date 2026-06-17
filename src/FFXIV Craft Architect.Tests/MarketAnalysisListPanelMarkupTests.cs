@@ -97,7 +97,7 @@ public class MarketAnalysisListPanelMarkupTests
         Assert.Contains("Band", source);
         Assert.Contains("Stock", source);
         Assert.Contains("Listings", source);
-        Assert.Contains("Role", source);
+        Assert.Contains("Signal", source);
         Assert.Contains("<WebDataTable TItem=\"PriceBandRow\"", source);
         Assert.Contains("ExpandedContent=\"RenderExpandedPriceBand\"", source);
         Assert.Contains("OpenComponent<WebDataTable<PriceBandListingRow, PriceBandListingColumn>>", source);
@@ -105,8 +105,8 @@ public class MarketAnalysisListPanelMarkupTests
 
         Assert.Contains(".ma-detail-tabs", styles);
         Assert.Contains(".ma-price-band-listing-grid", styles);
-        Assert.Contains("::deep .ma-price-band-role.is-competitive", styles);
-        Assert.Contains("::deep .ma-price-band-role.is-thin", styles);
+        Assert.Contains("::deep .ma-price-band-signal.is-competitive", styles);
+        Assert.Contains("::deep .ma-price-band-signal.is-thin", styles);
         Assert.DoesNotContain(".ma-price-band-table", styles);
     }
 
@@ -124,8 +124,8 @@ public class MarketAnalysisListPanelMarkupTests
         };
         var analyses = new[]
         {
-            CreateAnalysis(100, "Cobalt Rivets", 100, 125, 72, 3, 2, MarketScopePriceBandRole.Competitive, includeListings: true),
-            CreateAnalysis(200, "Rose Gold Nugget", 800, 950, 12, 1, 1, MarketScopePriceBandRole.Thin)
+            CreateAnalysis(100, "Cobalt Rivets", 100, 125, 72, 3, 2, PriceBandCompetitiveness.Competitive, PriceBandDepth.Deep, includeListings: true),
+            CreateAnalysis(200, "Rose Gold Nugget", 800, 950, 12, 1, 1, PriceBandCompetitiveness.Competitive, PriceBandDepth.Thin)
         };
 
         var component = context.Render<MarketAnalysisListPanel>(parameters => parameters
@@ -146,7 +146,8 @@ public class MarketAnalysisListPanelMarkupTests
         Assert.Contains("72", priceBandTable.TextContent);
         Assert.Contains("3", priceBandTable.TextContent);
         Assert.Contains("2", priceBandTable.TextContent);
-        Assert.Contains("Best shelf", priceBandTable.TextContent);
+        Assert.Contains("Competitive", priceBandTable.TextContent);
+        Assert.Contains("deep", priceBandTable.TextContent);
         Assert.Empty(component.FindAll(".ma-price-band-listing-grid"));
         Assert.DoesNotContain("Band Retainer", component.Markup);
 
@@ -176,7 +177,7 @@ public class MarketAnalysisListPanelMarkupTests
         var component = context.Render<MarketAnalysisListPanel>(parameters => parameters
             .Add(panel => panel.ShoppingPlans, [CreatePlan(100, "Cobalt Rivets")])
             .Add(panel => panel.MarketItemAnalyses, [
-                CreateAnalysis(100, "Cobalt Rivets", 100, 125, 72, 3, 2, MarketScopePriceBandRole.Competitive, includeListings: true)
+                CreateAnalysis(100, "Cobalt Rivets", 100, 125, 72, 3, 2, PriceBandCompetitiveness.Competitive, PriceBandDepth.Deep, includeListings: true)
             ])
             .Add(panel => panel.SelectedItemId, 100));
 
@@ -240,7 +241,8 @@ public class MarketAnalysisListPanelMarkupTests
         int quantity,
         int listingCount,
         int worldCount,
-        MarketScopePriceBandRole role,
+        PriceBandCompetitiveness competitiveness,
+        PriceBandDepth depth,
         bool includeListings = false)
     {
         return new MarketItemAnalysis
@@ -259,9 +261,8 @@ public class MarketAnalysisListPanelMarkupTests
                     ListingCount = listingCount,
                     DistinctWorldCount = worldCount,
                     DistinctRetainerCount = listingCount,
-                    BandRole = role,
-                    IsRepresentative = role is MarketScopePriceBandRole.Competitive or MarketScopePriceBandRole.Representative,
-                    IsThin = role == MarketScopePriceBandRole.Thin
+                    Competitiveness = competitiveness,
+                    Depth = depth
                 }
             ],
             Worlds = includeListings

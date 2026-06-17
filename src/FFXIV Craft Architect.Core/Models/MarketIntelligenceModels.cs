@@ -179,7 +179,7 @@ public sealed record MarketIntelligence(
 
 public sealed class StoredMarketIntelligence
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 3;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 

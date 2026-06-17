@@ -79,11 +79,15 @@
     box-shadow: inset 3px 0 0 #64b5f6;
 }
 
-.ma-ladder-table tr.ma-band-edge-representative td:first-child {
+.ma-ladder-table tr.ma-band-edge-competitive td:first-child {
     box-shadow: inset 3px 0 0 #81c784;
 }
 
-.ma-ladder-table tr.ma-band-edge-expensive-tail td:first-child {
+.ma-ladder-table tr.ma-band-edge-uncompetitive td:first-child {
+    box-shadow: inset 3px 0 0 #ffcc80;
+}
+
+.ma-ladder-table tr.ma-band-edge-insane td:first-child {
     box-shadow: inset 3px 0 0 #ce93d8;
 }
 

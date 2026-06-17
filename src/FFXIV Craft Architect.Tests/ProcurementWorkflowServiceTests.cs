@@ -78,7 +78,7 @@ public class ProcurementWorkflowServiceTests
                             SaneThresholdUnitPrice = 200,
                             ScopeSaneQuantity = 5,
                             ScopeInsaneQuantity = 99,
-                            ScopeCompetitiveQuantity = 1
+                            PrimaryUsableQuantity = 1
                         }
                     ]
                 }
@@ -679,7 +679,7 @@ public class ProcurementWorkflowServiceTests
                             SaneThresholdUnitPrice = includeDisplayFields ? 200 : 0,
                             ScopeSaneQuantity = includeDisplayFields ? 5 : 0,
                             ScopeInsaneQuantity = includeDisplayFields ? 99 : 0,
-                            ScopeCompetitiveQuantity = includeDisplayFields ? 1 : 0
+                            PrimaryUsableQuantity = includeDisplayFields ? 1 : 0
                         }
                     ]
                 }

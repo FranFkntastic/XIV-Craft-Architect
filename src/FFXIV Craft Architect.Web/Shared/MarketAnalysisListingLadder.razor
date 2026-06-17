@@ -57,7 +57,7 @@
 
 @code {
     [Parameter, EditorRequired] public WorldMarketAnalysis World { get; set; } = default!;
-    [Parameter] public MarketAnalysisEvidenceOverlay EvidenceOverlay { get; set; } = MarketAnalysisEvidenceOverlay.ShelfOverlay;
+    [Parameter] public MarketAnalysisEvidenceOverlay EvidenceOverlay { get; set; } = MarketAnalysisEvidenceOverlay.CompetitivenessOverlay;
 
     private static string FormatReviewAge(AnalyzedMarketListing listing)
     {

@@ -185,10 +185,10 @@ public sealed class CommissionCostBasisResolver
 
     private static SelectedUnitCost SelectUnitCost(MarketItemAnalysis analysis)
     {
-        if (analysis.AnalysisScopeCompetitiveAverageUnitPrice > 0)
+        if (analysis.AnalysisCompetitiveAverageUnitPrice > 0)
         {
             return new SelectedUnitCost(
-                analysis.AnalysisScopeCompetitiveAverageUnitPrice,
+                analysis.AnalysisCompetitiveAverageUnitPrice,
                 "Market competitive average",
                 "the market-analysis competitive average");
         }

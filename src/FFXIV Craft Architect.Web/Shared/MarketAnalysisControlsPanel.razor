@@ -32,7 +32,7 @@
                    Variant="Variant.Outlined"
                    Dense="true"
                    Class="ma-full-width">
-            <MudSelectItem Value="@MarketAnalysisEvidenceOverlay.ShelfOverlay">Shelf Overlay</MudSelectItem>
+            <MudSelectItem Value="@MarketAnalysisEvidenceOverlay.CompetitivenessOverlay">Competitiveness Overlay</MudSelectItem>
             <MudSelectItem Value="@MarketAnalysisEvidenceOverlay.PriceBandOverlay">Price Band Overlay</MudSelectItem>
         </MudSelect>
     </div>
@@ -125,7 +125,7 @@
 
     private const string LensSelectorTooltip = "Acquisition lenses change how worlds are ranked for buying logistics; they do not change the underlying market evidence.";
     private const string MinimumUpfrontCostLensTooltip = "Minimum upfront cost ranks worlds by needed-quantity coverage and estimated cost to cover the plan need.";
-    private const string BulkValueLensTooltip = "Best value / bulk acquisition favors deeper competitive stock and partial shelves that may still be useful.";
+    private const string BulkValueLensTooltip = "Best value / bulk acquisition favors deeper procurement-qualified stock that may still be useful.";
 
     private void OnSearchEntireRegionChanged(bool searchEntireRegion)
     {

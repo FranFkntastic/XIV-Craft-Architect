@@ -185,7 +185,7 @@ public class AppState
     public int MaxWorldsPerItem { get; private set; } = 0; // 0 = unlimited
     public bool SearchEntireRegion { get; private set; } = true;
     public MarketSortOption MarketSortPreference { get; private set; } = MarketSortOption.ByRecommended;
-    public MarketAnalysisEvidenceOverlay MarketAnalysisEvidenceOverlay { get; private set; } = MarketAnalysisEvidenceOverlay.ShelfOverlay;
+    public MarketAnalysisEvidenceOverlay MarketAnalysisEvidenceOverlay { get; private set; } = MarketAnalysisEvidenceOverlay.CompetitivenessOverlay;
 
     // Procurement Planning Settings
     public bool ProcurementSearchEntireRegion { get; private set; } = false;
@@ -1925,7 +1925,7 @@ public enum MarketAnalysisWorldGridSortColumn
 
 public enum MarketAnalysisEvidenceOverlay
 {
-    ShelfOverlay,
+    CompetitivenessOverlay,
     PriceBandOverlay
 }
 

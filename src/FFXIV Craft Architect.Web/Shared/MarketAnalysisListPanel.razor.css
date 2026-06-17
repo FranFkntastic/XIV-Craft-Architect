@@ -394,31 +394,44 @@
     font-size: 11px;
 }
 
-.ma-price-band-role,
-::deep .ma-price-band-role {
+.ma-price-band-signal,
+::deep .ma-price-band-signal {
+    display: inline-grid;
+    gap: 2px;
     color: #b7c0c8;
     font-weight: 700;
 }
 
-.ma-price-band-role.is-low-outlier,
-::deep .ma-price-band-role.is-low-outlier {
+.ma-price-band-signal-secondary,
+::deep .ma-price-band-signal-secondary {
+    color: #8f98a0;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+.ma-price-band-signal.is-low-outlier,
+::deep .ma-price-band-signal.is-low-outlier {
     color: #ffb74d;
 }
 
-.ma-price-band-role.is-thin,
-::deep .ma-price-band-role.is-thin {
+.ma-price-band-signal.is-thin,
+::deep .ma-price-band-signal.is-thin {
     color: #64b5f6;
 }
 
-.ma-price-band-role.is-representative,
-.ma-price-band-role.is-competitive,
-::deep .ma-price-band-role.is-representative,
-::deep .ma-price-band-role.is-competitive {
+.ma-price-band-signal.is-competitive,
+::deep .ma-price-band-signal.is-competitive {
     color: #81c784;
 }
 
-.ma-price-band-role.is-expensive-tail,
-::deep .ma-price-band-role.is-expensive-tail {
+.ma-price-band-signal.is-uncompetitive,
+::deep .ma-price-band-signal.is-uncompetitive {
+    color: #ffcc80;
+}
+
+.ma-price-band-signal.is-insane,
+::deep .ma-price-band-signal.is-insane {
     color: #ce93d8;
 }
 
