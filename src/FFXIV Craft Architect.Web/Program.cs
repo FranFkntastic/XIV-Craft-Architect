@@ -66,6 +66,8 @@ builder.Services.AddScoped<MarketAnalysisDiagnosticDumpService>();
 builder.Services.AddScoped<ProcurementWorkflowService>();
 builder.Services.AddScoped<AcquisitionEvaluationWorkflowService>();
 builder.Services.AddScoped<TradePayrollDraftFactory>();
+builder.Services.AddScoped<TradeOrderDraftFactory>();
+builder.Services.AddScoped<TradeOperationsPersistenceService>();
 
 // Register IndexedDB service for browser persistence
 builder.Services.AddScoped<IndexedDbService>();

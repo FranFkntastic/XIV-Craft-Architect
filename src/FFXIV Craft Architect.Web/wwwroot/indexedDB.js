@@ -2,11 +2,14 @@
 // Uses Unix timestamps (seconds since epoch) for serialization safety
 
 const DB_NAME = 'FFXIVCraftArchitect';
-const DB_VERSION = 4;  // Bumped for plan-summary store
+const DB_VERSION = 6;  // Bumped to repair partial Trade operations migrations
 const STORE_PLANS = 'plans';
 const STORE_PLAN_SUMMARIES = 'planSummaries';
 const STORE_SETTINGS = 'settings';
 const STORE_MARKET_CACHE = 'marketCache';
+const STORE_TRADE_COMPANY_PROFILES = 'tradeCompanyProfiles';
+const STORE_TRADE_CRAFTERS = 'tradeCrafters';
+const STORE_TRADE_ORDERS = 'tradeOrders';
 
 let db = null;
 
@@ -60,9 +63,10 @@ async function initDB() {
             reject(new Error(message));
         };
         request.onsuccess = () => {
-            resolve(attachDatabaseConnection(
+            const database = attachDatabaseConnection(
                 request.result,
-                '[IndexedDB] Database opened successfully (v4 - plan summaries)'));
+                '[IndexedDB] Database opened successfully (v6 - Trade operations repair)');
+            ensureTradeStores(database).then(resolve).catch(reject);
         };
         
         request.onupgradeneeded = (event) => {
@@ -100,8 +104,135 @@ async function initDB() {
                 console.log('[IndexedDB] Created market cache store with Unix timestamp index');
             }
 
+            if (!database.objectStoreNames.contains(STORE_TRADE_COMPANY_PROFILES)) {
+                const profileStore = database.createObjectStore(STORE_TRADE_COMPANY_PROFILES, { keyPath: 'id' });
+                profileStore.createIndex('updatedAtUtc', 'updatedAtUtc', { unique: false });
+                console.log('[IndexedDB] Created Trade company profile store');
+            }
+
+            if (!database.objectStoreNames.contains(STORE_TRADE_CRAFTERS)) {
+                const crafterStore = database.createObjectStore(STORE_TRADE_CRAFTERS, { keyPath: 'id' });
+                crafterStore.createIndex('companyProfileId', 'companyProfileId', { unique: false });
+                crafterStore.createIndex('displayName', 'displayName', { unique: false });
+                console.log('[IndexedDB] Created Trade crafter store');
+            }
+
+            if (!database.objectStoreNames.contains(STORE_TRADE_ORDERS)) {
+                const orderStore = database.createObjectStore(STORE_TRADE_ORDERS, { keyPath: 'id' });
+                orderStore.createIndex('companyProfileId', 'companyProfileId', { unique: false });
+                orderStore.createIndex('status', 'status', { unique: false });
+                orderStore.createIndex('commissionedAtUtc', 'commissionedAtUtc', { unique: false });
+                console.log('[IndexedDB] Created Trade order store');
+            }
+
         };
     });
+}
+
+function formatIndexedDbError(error) {
+    if (!error) {
+        return 'Unknown IndexedDB error.';
+    }
+
+    if (error.message) {
+        return error.message;
+    }
+
+    if (error.name) {
+        return error.name;
+    }
+
+    return String(error);
+}
+
+function createTradeStoreDiagnostics(database, errorMessage = null) {
+    return {
+        databaseVersion: database?.version || 0,
+        hasCompanyProfilesStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_COMPANY_PROFILES)),
+        hasCraftersStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_CRAFTERS)),
+        hasOrdersStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_ORDERS)),
+        errorMessage
+    };
+}
+
+function hasRequiredTradeStores(database) {
+    return database.objectStoreNames.contains(STORE_TRADE_COMPANY_PROFILES) &&
+        database.objectStoreNames.contains(STORE_TRADE_CRAFTERS) &&
+        database.objectStoreNames.contains(STORE_TRADE_ORDERS);
+}
+
+async function ensureTradeStores(database) {
+    if (hasRequiredTradeStores(database)) {
+        return database;
+    }
+
+    console.warn(
+        `[IndexedDB] Trade stores missing in database v${database.version}; opening a repair upgrade.`);
+    if (db === database) {
+        db = null;
+    }
+    database.close();
+    return await openTradeStoreRepairUpgrade(database.version + 1);
+}
+
+function openTradeStoreRepairUpgrade(repairVersion) {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, repairVersion);
+
+        request.onerror = () => reject(request.error);
+        request.onblocked = () => {
+            const message = '[IndexedDB] Trade store repair blocked by another open tab. Close other FFXIV Craft Architect tabs and reload.';
+            console.warn(message);
+            reject(new Error(message));
+        };
+        request.onupgradeneeded = (event) => {
+            const database = event.target.result;
+
+            if (!database.objectStoreNames.contains(STORE_TRADE_COMPANY_PROFILES)) {
+                const profileStore = database.createObjectStore(STORE_TRADE_COMPANY_PROFILES, { keyPath: 'id' });
+                profileStore.createIndex('updatedAtUtc', 'updatedAtUtc', { unique: false });
+                console.log('[IndexedDB] Repaired missing Trade company profile store');
+            }
+
+            if (!database.objectStoreNames.contains(STORE_TRADE_CRAFTERS)) {
+                const crafterStore = database.createObjectStore(STORE_TRADE_CRAFTERS, { keyPath: 'id' });
+                crafterStore.createIndex('companyProfileId', 'companyProfileId', { unique: false });
+                crafterStore.createIndex('displayName', 'displayName', { unique: false });
+                console.log('[IndexedDB] Repaired missing Trade crafter store');
+            }
+
+            if (!database.objectStoreNames.contains(STORE_TRADE_ORDERS)) {
+                const orderStore = database.createObjectStore(STORE_TRADE_ORDERS, { keyPath: 'id' });
+                orderStore.createIndex('companyProfileId', 'companyProfileId', { unique: false });
+                orderStore.createIndex('status', 'status', { unique: false });
+                orderStore.createIndex('commissionedAtUtc', 'commissionedAtUtc', { unique: false });
+                console.log('[IndexedDB] Repaired missing Trade order store');
+            }
+        };
+        request.onsuccess = () => {
+            resolve(attachDatabaseConnection(
+                request.result,
+                `[IndexedDB] Database opened successfully (v${request.result.version} - Trade store repair)`));
+        };
+    });
+}
+
+function requireTradeStore(database, storeName) {
+    if (!database.objectStoreNames.contains(storeName)) {
+        throw new Error(
+            `[IndexedDB] Missing required Trade store "${storeName}". ` +
+            `Opened database v${database.version}; app requested v${DB_VERSION}. ` +
+            'Close other FFXIV Craft Architect tabs and reload so the browser can finish the storage upgrade.');
+    }
+}
+
+async function getTradeStoreDiagnostics() {
+    try {
+        const database = await ensureTradeStores(await initDB());
+        return createTradeStoreDiagnostics(database);
+    } catch (error) {
+        return createTradeStoreDiagnostics(null, formatIndexedDbError(error));
+    }
 }
 
 function toPlanSummary(planData) {
@@ -249,6 +380,98 @@ async function loadPlanSummaries() {
 
     await rebuildPlanSummaries(database);
     return await readPlanSummaries(database);
+}
+
+async function saveStoreRecord(storeName, record) {
+    let database = await initDB();
+    database = await ensureTradeStores(database);
+    requireTradeStore(database, storeName);
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([storeName], 'readwrite');
+        const store = transaction.objectStore(storeName);
+        store.put(record);
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
+async function loadStoreRecords(storeName) {
+    let database = await initDB();
+    database = await ensureTradeStores(database);
+    requireTradeStore(database, storeName);
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([storeName], 'readonly');
+        const store = transaction.objectStore(storeName);
+        const request = store.openCursor();
+        const records = [];
+
+        request.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+                records.push(cursor.value);
+                cursor.continue();
+            } else {
+                resolve(records);
+            }
+        };
+
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function deleteStoreRecord(storeName, id) {
+    let database = await initDB();
+    database = await ensureTradeStores(database);
+    requireTradeStore(database, storeName);
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([storeName], 'readwrite');
+        const store = transaction.objectStore(storeName);
+        store.delete(id);
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
+async function saveTradeCompanyProfile(profile) {
+    return await saveStoreRecord(STORE_TRADE_COMPANY_PROFILES, profile);
+}
+
+async function loadTradeCompanyProfiles() {
+    const profiles = await loadStoreRecords(STORE_TRADE_COMPANY_PROFILES);
+    return profiles.sort((a, b) => String(b.updatedAtUtc || '').localeCompare(String(a.updatedAtUtc || '')));
+}
+
+async function saveTradeCrafter(crafter) {
+    return await saveStoreRecord(STORE_TRADE_CRAFTERS, crafter);
+}
+
+async function loadTradeCrafters(companyProfileId) {
+    const crafters = await loadStoreRecords(STORE_TRADE_CRAFTERS);
+    return crafters
+        .filter(crafter => crafter.companyProfileId === companyProfileId)
+        .sort((a, b) => String(a.displayName || '').localeCompare(String(b.displayName || '')));
+}
+
+async function saveTradeOrder(order) {
+    return await saveStoreRecord(STORE_TRADE_ORDERS, order);
+}
+
+async function loadTradeOrders(companyProfileId) {
+    const orders = await loadStoreRecords(STORE_TRADE_ORDERS);
+    return orders
+        .filter(order => order.companyProfileId === companyProfileId)
+        .sort((a, b) => String(b.commissionedAtUtc || '').localeCompare(String(a.commissionedAtUtc || '')));
+}
+
+async function deleteTradeOrder(orderId) {
+    return await deleteStoreRecord(STORE_TRADE_ORDERS, orderId);
 }
 
 async function readPlanSummaries(database) {
@@ -775,7 +998,15 @@ window.IndexedDB = {
     loadMarketDataBulk,
     deleteStaleMarketData,
     deleteOldestEntries,
-    getMarketCacheStats
+    getMarketCacheStats,
+    saveTradeCompanyProfile,
+    loadTradeCompanyProfiles,
+    saveTradeCrafter,
+    loadTradeCrafters,
+    saveTradeOrder,
+    loadTradeOrders,
+    deleteTradeOrder,
+    getTradeStoreDiagnostics
 };
 
-console.log('[IndexedDB] Module loaded (v4 with plan summaries)');
+console.log('[IndexedDB] Module loaded (v6 with Trade operations repair)');

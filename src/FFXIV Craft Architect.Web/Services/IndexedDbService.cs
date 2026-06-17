@@ -184,6 +184,121 @@ public class IndexedDbService
         }
     }
 
+    public async Task<bool> SaveTradeCompanyProfileAsync(TradeCompanyProfile profile)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradeCompanyProfile", profile);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save Trade company profile {ProfileId}", profile.Id);
+            return false;
+        }
+    }
+
+    public async Task<TradeIndexedDbDiagnostics> GetTradeStoreDiagnosticsAsync()
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<TradeIndexedDbDiagnostics>("IndexedDB.getTradeStoreDiagnostics");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to get Trade IndexedDB diagnostics");
+            return new TradeIndexedDbDiagnostics
+            {
+                ErrorMessage = $"Could not run Trade storage diagnostics: {ex.Message}"
+            };
+        }
+    }
+
+    public async Task<List<TradeCompanyProfile>> LoadTradeCompanyProfilesAsync()
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<List<TradeCompanyProfile>>("IndexedDB.loadTradeCompanyProfiles");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to load Trade company profiles");
+            throw new InvalidOperationException("Failed to load Trade company profiles from browser storage.", ex);
+        }
+    }
+
+    public async Task<bool> SaveTradeCrafterAsync(TradeCrafterProfile crafter)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradeCrafter", crafter);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save Trade crafter {CrafterId}", crafter.Id);
+            return false;
+        }
+    }
+
+    public async Task<List<TradeCrafterProfile>> LoadTradeCraftersAsync(Guid companyProfileId)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<List<TradeCrafterProfile>>("IndexedDB.loadTradeCrafters", companyProfileId);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to load Trade crafters for company profile {ProfileId}", companyProfileId);
+            throw new InvalidOperationException("Failed to load Trade crafters from browser storage.", ex);
+        }
+    }
+
+    public async Task<bool> SaveTradeOrderAsync(TradeOrder order)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradeOrder", order);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save Trade order {OrderId}", order.Id);
+            return false;
+        }
+    }
+
+    public async Task<List<TradeOrder>> LoadTradeOrdersAsync(Guid companyProfileId)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<List<TradeOrder>>("IndexedDB.loadTradeOrders", companyProfileId);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to load Trade orders for company profile {ProfileId}", companyProfileId);
+            throw new InvalidOperationException("Failed to load Trade orders from browser storage.", ex);
+        }
+    }
+
+    public async Task<bool> DeleteTradeOrderAsync(Guid orderId)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.deleteTradeOrder", orderId);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to delete Trade order {OrderId}", orderId);
+            return false;
+        }
+    }
+
     /// <summary>
     /// Save the current app state (auto-save functionality).
     /// </summary>
@@ -369,6 +484,37 @@ public class IndexedDbService
             _isInitialized = true;
         }
         await Task.CompletedTask;
+    }
+}
+
+public sealed class TradeIndexedDbDiagnostics
+{
+    public int DatabaseVersion { get; set; }
+    public bool HasCompanyProfilesStore { get; set; }
+    public bool HasCraftersStore { get; set; }
+    public bool HasOrdersStore { get; set; }
+    public string? ErrorMessage { get; set; }
+
+    public bool IsReady =>
+        string.IsNullOrWhiteSpace(ErrorMessage) &&
+        HasCompanyProfilesStore &&
+        HasCraftersStore &&
+        HasOrdersStore;
+
+    public string ToDisplayMessage()
+    {
+        var details = $"Trade storage diagnostics: database v{DatabaseVersion}; stores company={HasCompanyProfilesStore}, crafters={HasCraftersStore}, orders={HasOrdersStore}.";
+        if (!string.IsNullOrWhiteSpace(ErrorMessage))
+        {
+            return $"{details} {ErrorMessage}";
+        }
+
+        if (!IsReady)
+        {
+            return $"{details} Reload the page after closing other FFXIV Craft Architect tabs so the browser can finish the IndexedDB upgrade.";
+        }
+
+        return details;
     }
 }
 
