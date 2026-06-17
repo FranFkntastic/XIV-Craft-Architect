@@ -1,0 +1,92 @@
+.trade-crafters-page {
+  padding: 16px;
+}
+
+.trade-crafters-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 16px;
+}
+
+.trade-crafters-main,
+.trade-crafters-detail,
+.trade-crafters-panel {
+  min-width: 0;
+}
+
+.trade-crafters-header,
+.trade-crafters-create-row {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trade-crafters-panel {
+  background: #252525;
+  border: 1px solid #343434;
+  border-radius: 6px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+.trade-crafters-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.trade-crafters-table {
+  width: 100%;
+}
+
+.trade-crafter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  background: #1f1f1f;
+  color: #e0e0e0;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.trade-crafter-row small {
+  color: #9f9f9f;
+}
+
+.trade-crafter-jobs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.trade-crafters-detail {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+}
+
+.trade-crafter-assignments {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+@media (max-width: 1100px) {
+  .trade-crafters-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .trade-crafters-detail {
+    position: static;
+  }
+
+  .trade-crafters-create-row {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+}

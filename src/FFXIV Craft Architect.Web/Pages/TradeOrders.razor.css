@@ -1,0 +1,71 @@
+.trade-orders-page {
+  padding: 16px;
+}
+
+.trade-orders-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 16px;
+}
+
+.trade-orders-main,
+.trade-orders-detail,
+.trade-orders-panel,
+.trade-orders-group {
+  min-width: 0;
+}
+
+.trade-orders-header,
+.trade-orders-group-title,
+.trade-orders-note-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trade-orders-panel,
+.trade-orders-group {
+  background: #252525;
+  border: 1px solid #343434;
+  border-radius: 6px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+.trade-orders-import-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 260px) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.trade-orders-detail {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+}
+
+.trade-orders-table {
+  width: 100%;
+}
+
+.trade-orders-list,
+.trade-orders-history {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+@media (max-width: 1100px) {
+  .trade-orders-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .trade-orders-detail {
+    position: static;
+  }
+
+  .trade-orders-import-grid {
+    grid-template-columns: 1fr;
+  }
+}

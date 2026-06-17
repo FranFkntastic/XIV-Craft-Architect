@@ -1,0 +1,383 @@
+@page "/trade/crafters"
+@using FFXIV_Craft_Architect.Web.Shared.TablePrimitives
+@inject AppState AppState
+@inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject ISnackbar Snackbar
+
+<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-crafters-page">
+    @if (!AppState.SecretDebugToolsEnabled)
+    {
+        <MudAlert Severity="Severity.Info" Class="ma-4">Returning to Craft Architect...</MudAlert>
+    }
+    else
+    {
+        @if (!string.IsNullOrWhiteSpace(_loadError))
+        {
+            <MudAlert Severity="Severity.Error" Class="ma-4">
+                <MudText Typo="Typo.subtitle2">Trade operations storage is unavailable.</MudText>
+                <MudText Typo="Typo.body2">@_loadError</MudText>
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Secondary"
+                           Class="mt-2"
+                           OnClick="LoadAsync">
+                    Retry
+                </MudButton>
+            </MudAlert>
+        }
+        else
+        {
+            <div class="trade-crafters-layout">
+            <section class="trade-crafters-main">
+                <div class="trade-crafters-header">
+                    <div>
+                        <MudText Typo="Typo.h5">Crafters</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@_companyProfile?.Name</MudText>
+                    </div>
+                </div>
+
+                <section class="trade-crafters-panel">
+                    <MudText Typo="Typo.subtitle1">Create Crafter</MudText>
+                    <div class="trade-crafters-create-row">
+                        <MudTextField @bind-Value="_newCrafterName"
+                                      Label="Display name"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Immediate="true" />
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   Disabled="@string.IsNullOrWhiteSpace(_newCrafterName)"
+                                   OnClick="CreateCrafterAsync">
+                            Create Crafter
+                        </MudButton>
+                    </div>
+                </section>
+
+                <section class="trade-crafters-panel">
+                    <MudText Typo="Typo.subtitle1">Roster</MudText>
+                    <WebDataTable TItem="TradeCrafterProfile"
+                                  TColumnId="TradeCrafterColumn"
+                                  Items="SortedCrafters"
+                                  Columns="CrafterColumns"
+                                  GetRowKey="GetCrafterKey"
+                                  CssClass="trade-crafters-table">
+                        <EmptyContent>
+                            <span>No crafters on the roster.</span>
+                        </EmptyContent>
+                    </WebDataTable>
+                </section>
+            </section>
+
+            <aside class="trade-crafters-detail">
+                @if (_selectedCrafter == null)
+                {
+                    <section class="trade-crafters-panel">
+                        <MudText Typo="Typo.subtitle1">Crafter Details</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">Select a crafter to edit profile details, crafting job levels, and current assignments.</MudText>
+                    </section>
+                }
+                else
+                {
+                    <section class="trade-crafters-panel">
+                        <MudText Typo="Typo.subtitle1">Crafter Details</MudText>
+                        <MudTextField @bind-Value="_detailName"
+                                      Label="Display name"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Immediate="true" />
+                        <MudTextField @bind-Value="_detailContact"
+                                      Label="Contact handle"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" />
+                        <MudTextField @bind-Value="_detailWorld"
+                                      Label="World"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" />
+                        <MudTextField @bind-Value="_detailDataCenter"
+                                      Label="Data center"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" />
+                        <MudTextField @bind-Value="_detailPaymentNotes"
+                                      Label="Payment notes"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Lines="2" />
+                        <MudTextField @bind-Value="_detailOperatorNotes"
+                                      Label="Operator notes"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Lines="2" />
+                    </section>
+
+                    <section class="trade-crafters-panel">
+                        <MudText Typo="Typo.subtitle1">Crafting Job Levels</MudText>
+                        <div class="trade-crafter-jobs">
+                            @foreach (var job in Enum.GetValues<TradeCraftingJob>())
+                            {
+                                <MudNumericField T="int"
+                                                 Value="@GetJobLevel(job)"
+                                                 ValueChanged="value => SetJobLevel(job, value)"
+                                                 Label="@FormatJob(job)"
+                                                 Min="0"
+                                                 Max="100"
+                                                 Variant="Variant.Outlined"
+                                                 Margin="Margin.Dense" />
+                            }
+                        </div>
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   FullWidth="true"
+                                   OnClick="SaveSelectedCrafterAsync"
+                                   Disabled="@string.IsNullOrWhiteSpace(_detailName)">
+                            Save Crafter
+                        </MudButton>
+                    </section>
+
+                    <section class="trade-crafters-panel">
+                        <MudText Typo="Typo.subtitle1">Current Assignments</MudText>
+                        <ul class="trade-crafter-assignments">
+                            @foreach (var order in GetAssignmentsForSelectedCrafter())
+                            {
+                                <li>@order.Title - @FormatStatus(order.Status)</li>
+                            }
+                        </ul>
+                    </section>
+                }
+            </aside>
+            </div>
+        }
+    }
+</MudContainer>
+
+@code {
+    private TradeCompanyProfile? _companyProfile;
+    private List<TradeCrafterProfile> _crafters = [];
+    private List<TradeOrder> _orders = [];
+    private TradeCrafterProfile? _selectedCrafter;
+    private string _newCrafterName = string.Empty;
+    private string _detailName = string.Empty;
+    private string? _detailContact;
+    private string? _detailWorld;
+    private string? _detailDataCenter;
+    private string? _detailPaymentNotes;
+    private string? _detailOperatorNotes;
+    private Dictionary<TradeCraftingJob, int> _jobLevels = [];
+    private string? _loadError;
+
+    private IReadOnlyList<TradeCrafterProfile> SortedCrafters => _crafters
+        .OrderBy(crafter => crafter.DisplayName, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    private IReadOnlyList<WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>> CrafterColumns => CreateCrafterColumns();
+
+    private IReadOnlyList<WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>> CreateCrafterColumns()
+    {
+        return
+        [
+            WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.Name, "Crafter", crafter => crafter.DisplayName, widthPx: 220),
+            WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.World, "World", FormatWorld, widthPx: 180),
+            WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.Jobs, "Jobs", FormatJobSummary, widthPx: 120),
+            new WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>
+            {
+                Id = TradeCrafterColumn.Action,
+                Header = "Details",
+                Size = new WebTableColumnSize(110, 90),
+                Sortable = false,
+                CellTemplate = crafter => builder =>
+                {
+                    builder.OpenComponent<MudButton>(0);
+                    builder.AddAttribute(1, "Size", Size.Small);
+                    builder.AddAttribute(2, "Variant", Variant.Text);
+                    builder.AddAttribute(3, "OnClick", EventCallback.Factory.Create(this, () => SelectCrafter(crafter)));
+                    builder.AddContent(4, "Open");
+                    builder.CloseComponent();
+                }
+            }
+        ];
+    }
+
+    private static string GetCrafterKey(TradeCrafterProfile crafter)
+    {
+        return crafter.Id.ToString("N");
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!AppState.SecretDebugToolsEnabled)
+        {
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _loadError = null;
+            _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
+            _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
+        }
+        catch (Exception ex)
+        {
+            _companyProfile = null;
+            _crafters = [];
+            _orders = [];
+            _selectedCrafter = null;
+            _loadError = ex.Message;
+            Snackbar.Add("Trade operations storage is unavailable.", Severity.Error);
+        }
+    }
+
+    private async Task CreateCrafterAsync()
+    {
+        if (_companyProfile == null || string.IsNullOrWhiteSpace(_newCrafterName))
+        {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        var crafter = new TradeCrafterProfile
+        {
+            Id = Guid.NewGuid(),
+            CompanyProfileId = _companyProfile.Id,
+            DisplayName = _newCrafterName.Trim(),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now
+        };
+
+        var saved = await TradeOperationsPersistence.SaveCrafterAsync(crafter);
+        if (!saved)
+        {
+            Snackbar.Add("Failed to save crafter.", Severity.Error);
+            return;
+        }
+
+        _newCrafterName = string.Empty;
+        await LoadAsync();
+        SelectCrafter(crafter);
+        Snackbar.Add("Crafter created", Severity.Success);
+    }
+
+    private void SelectCrafter(TradeCrafterProfile crafter)
+    {
+        _selectedCrafter = crafter;
+        _detailName = crafter.DisplayName;
+        _detailContact = crafter.ContactHandle;
+        _detailWorld = crafter.WorldName;
+        _detailDataCenter = crafter.DataCenter;
+        _detailPaymentNotes = crafter.PaymentNotes;
+        _detailOperatorNotes = crafter.OperatorNotes;
+        _jobLevels = crafter.JobLevels.ToDictionary(level => level.Job, level => level.Level);
+    }
+
+    private async Task SaveSelectedCrafterAsync()
+    {
+        if (_selectedCrafter == null || string.IsNullOrWhiteSpace(_detailName))
+        {
+            return;
+        }
+
+        _selectedCrafter.DisplayName = _detailName.Trim();
+        _selectedCrafter.ContactHandle = _detailContact;
+        _selectedCrafter.WorldName = _detailWorld;
+        _selectedCrafter.DataCenter = _detailDataCenter;
+        _selectedCrafter.PaymentNotes = _detailPaymentNotes;
+        _selectedCrafter.OperatorNotes = _detailOperatorNotes;
+        _selectedCrafter.JobLevels = _jobLevels
+            .Where(pair => pair.Value > 0)
+            .OrderBy(pair => pair.Key)
+            .Select(pair => new TradeCraftingJobLevel(pair.Key, pair.Value))
+            .ToArray();
+
+        var saved = await TradeOperationsPersistence.SaveCrafterAsync(_selectedCrafter);
+        if (!saved)
+        {
+            Snackbar.Add("Failed to save crafter.", Severity.Error);
+            return;
+        }
+
+        await LoadAsync();
+        SelectCrafter(_selectedCrafter);
+        Snackbar.Add("Crafter saved", Severity.Success);
+    }
+
+    private int GetJobLevel(TradeCraftingJob job)
+    {
+        return _jobLevels.TryGetValue(job, out var level) ? level : 0;
+    }
+
+    private void SetJobLevel(TradeCraftingJob job, int level)
+    {
+        _jobLevels[job] = Math.Clamp(level, 0, 100);
+    }
+
+    private IReadOnlyList<TradeOrder> GetAssignmentsForSelectedCrafter()
+    {
+        if (_selectedCrafter == null)
+        {
+            return [];
+        }
+
+        return _orders
+            .Where(order => order.AssignedCrafterId == _selectedCrafter.Id && !TradeOrderStatusWorkflow.IsArchived(order.Status))
+            .OrderByDescending(order => order.CommissionedAtUtc)
+            .ToArray();
+    }
+
+    private static string FormatWorld(TradeCrafterProfile crafter)
+    {
+        if (string.IsNullOrWhiteSpace(crafter.WorldName))
+        {
+            return "No world set";
+        }
+
+        return string.IsNullOrWhiteSpace(crafter.DataCenter)
+            ? crafter.WorldName
+            : $"{crafter.WorldName} / {crafter.DataCenter}";
+    }
+
+    private static string FormatStatus(TradeOrderStatus status)
+    {
+        return status switch
+        {
+            TradeOrderStatus.ReadyToAssign => "Ready to Assign",
+            TradeOrderStatus.InProgress => "In Progress",
+            TradeOrderStatus.AwaitingDelivery => "Awaiting Delivery",
+            _ => status.ToString()
+        };
+    }
+
+    private static string FormatJobSummary(TradeCrafterProfile crafter)
+    {
+        var maxLevel = crafter.JobLevels.Count == 0 ? 0 : crafter.JobLevels.Max(level => level.Level);
+        return maxLevel == 0
+            ? "No levels"
+            : $"{crafter.JobLevels.Count:N0} jobs / {maxLevel:N0}";
+    }
+
+    private static string FormatJob(TradeCraftingJob job)
+    {
+        return job switch
+        {
+            TradeCraftingJob.Carpenter => "Carpenter",
+            TradeCraftingJob.Blacksmith => "Blacksmith",
+            TradeCraftingJob.Armorer => "Armorer",
+            TradeCraftingJob.Goldsmith => "Goldsmith",
+            TradeCraftingJob.Leatherworker => "Leatherworker",
+            TradeCraftingJob.Weaver => "Weaver",
+            TradeCraftingJob.Alchemist => "Alchemist",
+            TradeCraftingJob.Culinarian => "Culinarian",
+            _ => job.ToString()
+        };
+    }
+
+    private enum TradeCrafterColumn
+    {
+        Name,
+        World,
+        Jobs,
+        Action
+    }
+}

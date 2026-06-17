@@ -1,0 +1,59 @@
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Close Order</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">
+            This will move @OrderTitle to @FormatStatus(Status) and archive it from the active operations board.
+        </MudAlert>
+        <MudTextField @bind-Value="_note"
+                      Label="Optional completion notes"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Lines="3" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="Cancel">Back</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="@ConfirmColor"
+                   OnClick="Confirm">
+            Confirm @FormatStatus(Status)
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    public MudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter]
+    public TradeOrderStatus Status { get; set; }
+
+    [Parameter]
+    public string OrderTitle { get; set; } = "this order";
+
+    private string _note = string.Empty;
+
+    private Color ConfirmColor => Status == TradeOrderStatus.Completed ? Color.Success : Color.Error;
+
+    private void Confirm()
+    {
+        var note = string.IsNullOrWhiteSpace(_note) ? null : _note.Trim();
+        MudDialog.Close(DialogResult.Ok(new TradeOrderCloseDialogResult(Status, note)));
+    }
+
+    private void Cancel()
+    {
+        MudDialog.Cancel();
+    }
+
+    private static string FormatStatus(TradeOrderStatus status)
+    {
+        return status switch
+        {
+            TradeOrderStatus.Completed => "Completed",
+            TradeOrderStatus.Canceled => "Canceled",
+            _ => status.ToString()
+        };
+    }
+}

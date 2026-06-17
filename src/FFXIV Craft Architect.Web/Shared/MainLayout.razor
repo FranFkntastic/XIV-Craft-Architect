@@ -75,6 +75,16 @@
         <MudButtonGroup Size="Size.Small" Style="margin-right: 24px;">
             @if (IsTradeMode)
             {
+                <MudButton OnClick="@(() => NavigateTo("trade/orders"))"
+                           Color="@GetTabColor("orders")"
+                           Variant="@GetTabVariant("orders")">
+                    Orders
+                </MudButton>
+                <MudButton OnClick="@(() => NavigateTo("trade/crafters"))"
+                           Color="@GetTabColor("crafters")"
+                           Variant="@GetTabVariant("crafters")">
+                    Crafters
+                </MudButton>
                 <MudButton OnClick="@(() => NavigateTo("trade"))"
                            Color="@GetTabColor("payroll")"
                            Variant="@GetTabVariant("payroll")">
@@ -436,7 +446,11 @@
     private void UpdateActiveTab(string uri)
     {
         var uriLower = uri.ToLowerInvariant();
-        if (IsTradeRoute(uri))
+        if (IsTradeRoute(uri) && uriLower.Contains("/trade/orders"))
+            _activeTab = "orders";
+        else if (IsTradeRoute(uri) && uriLower.Contains("/trade/crafters"))
+            _activeTab = "crafters";
+        else if (IsTradeRoute(uri))
             _activeTab = "payroll";
         else if (uriLower.Contains("/procurement"))
             _activeTab = "procurement";
