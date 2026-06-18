@@ -299,6 +299,48 @@ public class IndexedDbService
         }
     }
 
+    public async Task<bool> SaveTradePayrollDraftAsync(TradePayrollWorkflowDraft draft)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradePayrollDraft", draft);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save Trade payroll draft {DraftId}", draft.Id);
+            return false;
+        }
+    }
+
+    public async Task<List<TradePayrollWorkflowDraft>> LoadTradePayrollDraftsAsync(Guid companyProfileId)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<List<TradePayrollWorkflowDraft>>("IndexedDB.loadTradePayrollDrafts", companyProfileId);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to load Trade payroll drafts for company profile {ProfileId}", companyProfileId);
+            throw new InvalidOperationException("Failed to load Trade payroll drafts from browser storage.", ex);
+        }
+    }
+
+    public async Task<bool> DeleteTradePayrollDraftAsync(string draftId)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.deleteTradePayrollDraft", draftId);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to delete Trade payroll draft {DraftId}", draftId);
+            return false;
+        }
+    }
+
     /// <summary>
     /// Save the current app state (auto-save functionality).
     /// </summary>
@@ -493,17 +535,19 @@ public sealed class TradeIndexedDbDiagnostics
     public bool HasCompanyProfilesStore { get; set; }
     public bool HasCraftersStore { get; set; }
     public bool HasOrdersStore { get; set; }
+    public bool HasPayrollDraftsStore { get; set; }
     public string? ErrorMessage { get; set; }
 
     public bool IsReady =>
         string.IsNullOrWhiteSpace(ErrorMessage) &&
         HasCompanyProfilesStore &&
         HasCraftersStore &&
-        HasOrdersStore;
+        HasOrdersStore &&
+        HasPayrollDraftsStore;
 
     public string ToDisplayMessage()
     {
-        var details = $"Trade storage diagnostics: database v{DatabaseVersion}; stores company={HasCompanyProfilesStore}, crafters={HasCraftersStore}, orders={HasOrdersStore}.";
+        var details = $"Trade storage diagnostics: database v{DatabaseVersion}; stores company={HasCompanyProfilesStore}, crafters={HasCraftersStore}, orders={HasOrdersStore}, payrollDrafts={HasPayrollDraftsStore}.";
         if (!string.IsNullOrWhiteSpace(ErrorMessage))
         {
             return $"{details} {ErrorMessage}";

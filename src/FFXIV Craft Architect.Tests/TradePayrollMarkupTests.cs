@@ -17,7 +17,10 @@ public class TradePayrollMarkupTests
         Assert.Contains("Responsibility", source);
         Assert.Contains("CommissionMaterialResponsibility.Crafter", source);
         Assert.Contains("CommissionMaterialResponsibility.Provided", source);
-        Assert.Contains("Commissioner name", source);
+        Assert.Contains("Assigned Crafter", source);
+        Assert.DoesNotContain("Commissioner name", source);
+        Assert.Contains("TradeOperationsPersistenceService", source);
+        Assert.Contains("TradePayrollPersistenceService", source);
         Assert.Contains("FormatPayrollDate(_source.ImportedAtUtc)", source);
         Assert.Contains("Being made", source);
         Assert.Contains("_source.CraftedItems", source);
@@ -30,12 +33,12 @@ public class TradePayrollMarkupTests
     }
 
     [Fact]
-    public void TradePayrollSummary_UsesCommissionerAndMaterialResponsibilitySections()
+    public void TradePayrollSummary_UsesAssignedCrafterAndMaterialResponsibilitySections()
     {
         var source = File.ReadAllText(GetTradePayrollPath());
 
         Assert.Contains("summary.AppendLine($\"Plan: {FormatPayrollDate(_source!.ImportedAtUtc)}\")", source);
-        Assert.Contains("summary.AppendLine($\"Name: {FormatCommissionerName()}\")", source);
+        Assert.Contains("summary.AppendLine($\"Assigned crafter: {FormatAssignedCrafterName()}\")", source);
         Assert.Contains("AppendCraftedItemsSection(summary, _source.CraftedItems)", source);
         Assert.Contains("AppendMaterialSection(summary, \"Crafter procures\"", source);
         Assert.Contains("AppendMaterialSection(summary, \"Provided by commissioner\"", source);
@@ -43,8 +46,20 @@ public class TradePayrollMarkupTests
         Assert.DoesNotContain("summary.AppendLine($\"Plan: {_source!.SourcePlanName}\")", source);
         Assert.DoesNotContain("summary.AppendLine($\"Cost basis:", source);
         Assert.DoesNotContain("summary.AppendLine($\"Evidence:", source);
+        Assert.DoesNotContain("summary.AppendLine($\"Name:", source);
         Assert.DoesNotContain("Provided materials excluded", source);
         Assert.DoesNotContain("Commission on full estimate", source);
+    }
+
+    [Fact]
+    public void TradePayrollPage_PersistsResponsibilityWorkflowChanges()
+    {
+        var source = File.ReadAllText(GetTradePayrollPath());
+
+        Assert.Contains("SetResponsibilityAsync", source);
+        Assert.Contains("SaveWorkflowDraftAsync", source);
+        Assert.Contains("TradePayrollResponsibilityLine", source);
+        Assert.Contains("ApplyResponsibilities", source);
     }
 
     [Fact]

@@ -28,13 +28,6 @@
         {
             <div class="trade-crafters-layout">
             <section class="trade-crafters-main">
-                <div class="trade-crafters-header">
-                    <div>
-                        <MudText Typo="Typo.h5">Crafters</MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">@_companyProfile?.Name</MudText>
-                    </div>
-                </div>
-
                 <section class="trade-crafters-panel">
                     <MudText Typo="Typo.subtitle1">Create Crafter</MudText>
                     <div class="trade-crafters-create-row">
@@ -43,9 +36,42 @@
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
                                       Immediate="true" />
+                        <MudSelect T="string"
+                                   Value="@_newCrafterRegion"
+                                   ValueChanged="SetNewCrafterRegion"
+                                   Label="Region"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense">
+                            @foreach (var region in TradeRegions)
+                            {
+                                <MudSelectItem Value="@region">@region</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudSelect T="string"
+                                   Value="@_newCrafterDataCenter"
+                                   ValueChanged="SetNewCrafterDataCenter"
+                                   Label="Data center"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense">
+                            @foreach (var dataCenter in GetDataCentersForRegion(_newCrafterRegion))
+                            {
+                                <MudSelectItem Value="@dataCenter">@dataCenter</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudSelect T="string"
+                                   Value="@_newCrafterWorld"
+                                   ValueChanged="SetNewCrafterWorld"
+                                   Label="World"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense">
+                            <MudSelectItem Value="@string.Empty">No world selected</MudSelectItem>
+                            @foreach (var world in GetWorldsForDataCenter(_newCrafterDataCenter))
+                            {
+                                <MudSelectItem Value="@world">@world</MudSelectItem>
+                            }
+                        </MudSelect>
                         <MudButton Variant="Variant.Filled"
                                    Color="Color.Primary"
-                                   Disabled="@string.IsNullOrWhiteSpace(_newCrafterName)"
                                    OnClick="CreateCrafterAsync">
                             Create Crafter
                         </MudButton>
@@ -59,6 +85,8 @@
                                   Items="SortedCrafters"
                                   Columns="CrafterColumns"
                                   GetRowKey="GetCrafterKey"
+                                  GetRowClass="GetCrafterRowClass"
+                                  RowClicked="SelectCrafter"
                                   CssClass="trade-crafters-table">
                         <EmptyContent>
                             <span>No crafters on the roster.</span>
@@ -88,14 +116,40 @@
                                       Label="Contact handle"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense" />
-                        <MudTextField @bind-Value="_detailWorld"
-                                      Label="World"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense" />
-                        <MudTextField @bind-Value="_detailDataCenter"
-                                      Label="Data center"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense" />
+                        <MudSelect T="string"
+                                   Value="@_detailRegion"
+                                   ValueChanged="SetDetailRegion"
+                                   Label="Region"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense">
+                            @foreach (var region in TradeRegions)
+                            {
+                                <MudSelectItem Value="@region">@region</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudSelect T="string"
+                                   Value="@_detailDataCenter"
+                                   ValueChanged="SetDetailDataCenter"
+                                   Label="Data center"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense">
+                            @foreach (var dataCenter in GetDataCentersForRegion(_detailRegion))
+                            {
+                                <MudSelectItem Value="@dataCenter">@dataCenter</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudSelect T="string"
+                                   Value="@_detailWorld"
+                                   ValueChanged="SetDetailWorld"
+                                   Label="World"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense">
+                            <MudSelectItem Value="@string.Empty">No world selected</MudSelectItem>
+                            @foreach (var world in GetWorldsForDataCenter(_detailDataCenter))
+                            {
+                                <MudSelectItem Value="@world">@world</MudSelectItem>
+                            }
+                        </MudSelect>
                         <MudTextField @bind-Value="_detailPaymentNotes"
                                       Label="Payment notes"
                                       Variant="Variant.Outlined"
@@ -154,14 +208,19 @@
     private List<TradeOrder> _orders = [];
     private TradeCrafterProfile? _selectedCrafter;
     private string _newCrafterName = string.Empty;
+    private string _newCrafterRegion = string.Empty;
+    private string _newCrafterDataCenter = string.Empty;
+    private string _newCrafterWorld = string.Empty;
     private string _detailName = string.Empty;
     private string? _detailContact;
-    private string? _detailWorld;
-    private string? _detailDataCenter;
+    private string _detailRegion = string.Empty;
+    private string _detailWorld = string.Empty;
+    private string _detailDataCenter = string.Empty;
     private string? _detailPaymentNotes;
     private string? _detailOperatorNotes;
     private Dictionary<TradeCraftingJob, int> _jobLevels = [];
     private string? _loadError;
+    private static readonly IReadOnlyList<string> TradeRegions = ["North America", "Europe", "Japan", "Oceania"];
 
     private IReadOnlyList<TradeCrafterProfile> SortedCrafters => _crafters
         .OrderBy(crafter => crafter.DisplayName, StringComparer.OrdinalIgnoreCase)
@@ -175,23 +234,7 @@
         [
             WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.Name, "Crafter", crafter => crafter.DisplayName, widthPx: 220),
             WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.World, "World", FormatWorld, widthPx: 180),
-            WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.Jobs, "Jobs", FormatJobSummary, widthPx: 120),
-            new WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>
-            {
-                Id = TradeCrafterColumn.Action,
-                Header = "Details",
-                Size = new WebTableColumnSize(110, 90),
-                Sortable = false,
-                CellTemplate = crafter => builder =>
-                {
-                    builder.OpenComponent<MudButton>(0);
-                    builder.AddAttribute(1, "Size", Size.Small);
-                    builder.AddAttribute(2, "Variant", Variant.Text);
-                    builder.AddAttribute(3, "OnClick", EventCallback.Factory.Create(this, () => SelectCrafter(crafter)));
-                    builder.AddContent(4, "Open");
-                    builder.CloseComponent();
-                }
-            }
+            WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.Jobs, "Jobs", FormatJobSummary, widthPx: 120)
         ];
     }
 
@@ -218,6 +261,7 @@
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
+            EnsureNewCrafterLocationDefaults();
         }
         catch (Exception ex)
         {
@@ -232,8 +276,14 @@
 
     private async Task CreateCrafterAsync()
     {
-        if (_companyProfile == null || string.IsNullOrWhiteSpace(_newCrafterName))
+        if (_companyProfile == null)
         {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_newCrafterName))
+        {
+            Snackbar.Add("Crafter display name is required.", Severity.Warning);
             return;
         }
 
@@ -243,6 +293,8 @@
             Id = Guid.NewGuid(),
             CompanyProfileId = _companyProfile.Id,
             DisplayName = _newCrafterName.Trim(),
+            DataCenter = NormalizeOptionalText(_newCrafterDataCenter),
+            WorldName = NormalizeOptionalText(_newCrafterWorld),
             CreatedAtUtc = now,
             UpdatedAtUtc = now
         };
@@ -256,7 +308,12 @@
 
         _newCrafterName = string.Empty;
         await LoadAsync();
-        SelectCrafter(crafter);
+        if (!string.IsNullOrWhiteSpace(_loadError) ||
+            !SelectCrafterAfterReload(crafter.Id, "Crafter was saved, but it could not be loaded."))
+        {
+            return;
+        }
+
         Snackbar.Add("Crafter created", Severity.Success);
     }
 
@@ -265,11 +322,34 @@
         _selectedCrafter = crafter;
         _detailName = crafter.DisplayName;
         _detailContact = crafter.ContactHandle;
-        _detailWorld = crafter.WorldName;
-        _detailDataCenter = crafter.DataCenter;
+        _detailDataCenter = string.IsNullOrWhiteSpace(crafter.DataCenter)
+            ? GetDefaultDataCenter()
+            : crafter.DataCenter;
+        _detailRegion = MarketFetchScopeResolver.ResolveRegionForDataCenter(_detailDataCenter, GetDefaultRegion());
+        _detailWorld = IsWorldInDataCenter(crafter.WorldName, _detailDataCenter) ? crafter.WorldName! : string.Empty;
         _detailPaymentNotes = crafter.PaymentNotes;
         _detailOperatorNotes = crafter.OperatorNotes;
         _jobLevels = crafter.JobLevels.ToDictionary(level => level.Job, level => level.Level);
+    }
+
+    private string GetCrafterRowClass(TradeCrafterProfile crafter)
+    {
+        return _selectedCrafter?.Id == crafter.Id ? "is-selected" : string.Empty;
+    }
+
+    private bool SelectCrafterAfterReload(Guid crafterId, string missingMessage)
+    {
+        var reloadedCrafter = _crafters.FirstOrDefault(crafter => crafter.Id == crafterId);
+        if (reloadedCrafter == null)
+        {
+            _selectedCrafter = null;
+            _jobLevels = [];
+            Snackbar.Add(missingMessage, Severity.Warning);
+            return false;
+        }
+
+        SelectCrafter(reloadedCrafter);
+        return true;
     }
 
     private async Task SaveSelectedCrafterAsync()
@@ -279,19 +359,22 @@
             return;
         }
 
-        _selectedCrafter.DisplayName = _detailName.Trim();
-        _selectedCrafter.ContactHandle = _detailContact;
-        _selectedCrafter.WorldName = _detailWorld;
-        _selectedCrafter.DataCenter = _detailDataCenter;
-        _selectedCrafter.PaymentNotes = _detailPaymentNotes;
-        _selectedCrafter.OperatorNotes = _detailOperatorNotes;
-        _selectedCrafter.JobLevels = _jobLevels
+        var crafterId = _selectedCrafter.Id;
+        var crafterToSave = CopyCrafter(_selectedCrafter);
+        crafterToSave.DisplayName = _detailName.Trim();
+        crafterToSave.ContactHandle = _detailContact;
+        crafterToSave.WorldName = NormalizeOptionalText(_detailWorld);
+        crafterToSave.DataCenter = NormalizeOptionalText(_detailDataCenter);
+        crafterToSave.PaymentNotes = _detailPaymentNotes;
+        crafterToSave.OperatorNotes = _detailOperatorNotes;
+        crafterToSave.UpdatedAtUtc = DateTime.UtcNow;
+        crafterToSave.JobLevels = _jobLevels
             .Where(pair => pair.Value > 0)
             .OrderBy(pair => pair.Key)
             .Select(pair => new TradeCraftingJobLevel(pair.Key, pair.Value))
             .ToArray();
 
-        var saved = await TradeOperationsPersistence.SaveCrafterAsync(_selectedCrafter);
+        var saved = await TradeOperationsPersistence.SaveCrafterAsync(crafterToSave);
         if (!saved)
         {
             Snackbar.Add("Failed to save crafter.", Severity.Error);
@@ -299,13 +382,78 @@
         }
 
         await LoadAsync();
-        SelectCrafter(_selectedCrafter);
+        if (!string.IsNullOrWhiteSpace(_loadError) ||
+            !SelectCrafterAfterReload(crafterId, "Crafter was saved, but it could not be loaded."))
+        {
+            return;
+        }
+
         Snackbar.Add("Crafter saved", Severity.Success);
     }
 
     private int GetJobLevel(TradeCraftingJob job)
     {
         return _jobLevels.TryGetValue(job, out var level) ? level : 0;
+    }
+
+    private void SetNewCrafterRegion(string region)
+    {
+        _newCrafterRegion = string.IsNullOrWhiteSpace(region) ? GetDefaultRegion() : region;
+        var dataCenters = GetDataCentersForRegion(_newCrafterRegion);
+        if (!dataCenters.Contains(_newCrafterDataCenter, StringComparer.OrdinalIgnoreCase))
+        {
+            _newCrafterDataCenter = dataCenters.FirstOrDefault() ?? GetDefaultDataCenter();
+        }
+
+        if (!IsWorldInDataCenter(_newCrafterWorld, _newCrafterDataCenter))
+        {
+            _newCrafterWorld = string.Empty;
+        }
+    }
+
+    private void SetNewCrafterDataCenter(string dataCenter)
+    {
+        _newCrafterDataCenter = string.IsNullOrWhiteSpace(dataCenter) ? GetDefaultDataCenter() : dataCenter;
+        _newCrafterRegion = MarketFetchScopeResolver.ResolveRegionForDataCenter(_newCrafterDataCenter, GetDefaultRegion());
+        if (!IsWorldInDataCenter(_newCrafterWorld, _newCrafterDataCenter))
+        {
+            _newCrafterWorld = string.Empty;
+        }
+    }
+
+    private void SetNewCrafterWorld(string world)
+    {
+        _newCrafterWorld = world ?? string.Empty;
+    }
+
+    private void SetDetailRegion(string region)
+    {
+        _detailRegion = string.IsNullOrWhiteSpace(region) ? GetDefaultRegion() : region;
+        var dataCenters = GetDataCentersForRegion(_detailRegion);
+        if (!dataCenters.Contains(_detailDataCenter, StringComparer.OrdinalIgnoreCase))
+        {
+            _detailDataCenter = dataCenters.FirstOrDefault() ?? GetDefaultDataCenter();
+        }
+
+        if (!IsWorldInDataCenter(_detailWorld, _detailDataCenter))
+        {
+            _detailWorld = string.Empty;
+        }
+    }
+
+    private void SetDetailDataCenter(string dataCenter)
+    {
+        _detailDataCenter = string.IsNullOrWhiteSpace(dataCenter) ? GetDefaultDataCenter() : dataCenter;
+        _detailRegion = MarketFetchScopeResolver.ResolveRegionForDataCenter(_detailDataCenter, GetDefaultRegion());
+        if (!IsWorldInDataCenter(_detailWorld, _detailDataCenter))
+        {
+            _detailWorld = string.Empty;
+        }
+    }
+
+    private void SetDetailWorld(string world)
+    {
+        _detailWorld = world ?? string.Empty;
     }
 
     private void SetJobLevel(TradeCraftingJob job, int level)
@@ -328,9 +476,14 @@
 
     private static string FormatWorld(TradeCrafterProfile crafter)
     {
-        if (string.IsNullOrWhiteSpace(crafter.WorldName))
+        if (string.IsNullOrWhiteSpace(crafter.WorldName) && string.IsNullOrWhiteSpace(crafter.DataCenter))
         {
             return "No world set";
+        }
+
+        if (string.IsNullOrWhiteSpace(crafter.WorldName))
+        {
+            return $"{crafter.DataCenter} / No world selected";
         }
 
         return string.IsNullOrWhiteSpace(crafter.DataCenter)
@@ -373,11 +526,83 @@
         };
     }
 
+    private void EnsureNewCrafterLocationDefaults()
+    {
+        _newCrafterRegion = string.IsNullOrWhiteSpace(_newCrafterRegion) ? GetDefaultRegion() : _newCrafterRegion;
+        _newCrafterDataCenter = string.IsNullOrWhiteSpace(_newCrafterDataCenter) ? GetDefaultDataCenter() : _newCrafterDataCenter;
+        _newCrafterRegion = MarketFetchScopeResolver.ResolveRegionForDataCenter(_newCrafterDataCenter, _newCrafterRegion);
+        if (!IsWorldInDataCenter(_newCrafterWorld, _newCrafterDataCenter))
+        {
+            _newCrafterWorld = string.Empty;
+        }
+    }
+
+    private string GetDefaultRegion()
+    {
+        return string.IsNullOrWhiteSpace(AppState.SelectedRegion) ? "North America" : AppState.SelectedRegion;
+    }
+
+    private string GetDefaultDataCenter()
+    {
+        return string.IsNullOrWhiteSpace(AppState.SelectedDataCenter) ? "Aether" : AppState.SelectedDataCenter;
+    }
+
+    private IReadOnlyList<string> GetDataCentersForRegion(string region)
+    {
+        return MarketFetchScopeResolver.GetDataCenters(
+            MarketFetchScope.EntireRegion,
+            GetDefaultDataCenter(),
+            string.IsNullOrWhiteSpace(region) ? GetDefaultRegion() : region);
+    }
+
+    private IReadOnlyList<string> GetWorldsForDataCenter(string dataCenter)
+    {
+        if (string.IsNullOrWhiteSpace(dataCenter))
+        {
+            return [];
+        }
+
+        return AppState.WorldData?.DataCenterToWorlds.TryGetValue(dataCenter, out var worlds) == true
+            ? worlds.Order(StringComparer.OrdinalIgnoreCase).ToArray()
+            : [];
+    }
+
+    private bool IsWorldInDataCenter(string? world, string dataCenter)
+    {
+        return !string.IsNullOrWhiteSpace(world) &&
+               GetWorldsForDataCenter(dataCenter).Contains(world, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string? NormalizeOptionalText(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static TradeCrafterProfile CopyCrafter(TradeCrafterProfile crafter)
+    {
+        return new TradeCrafterProfile
+        {
+            Id = crafter.Id,
+            CompanyProfileId = crafter.CompanyProfileId,
+            DisplayName = crafter.DisplayName,
+            ContactHandle = crafter.ContactHandle,
+            WorldName = crafter.WorldName,
+            DataCenter = crafter.DataCenter,
+            AvailabilityNotes = crafter.AvailabilityNotes,
+            PaymentNotes = crafter.PaymentNotes,
+            OperatorNotes = crafter.OperatorNotes,
+            JobLevels = crafter.JobLevels.ToArray(),
+            RemoteId = crafter.RemoteId,
+            SyncState = crafter.SyncState,
+            CreatedAtUtc = crafter.CreatedAtUtc,
+            UpdatedAtUtc = crafter.UpdatedAtUtc
+        };
+    }
+
     private enum TradeCrafterColumn
     {
         Name,
         World,
-        Jobs,
-        Action
+        Jobs
     }
 }

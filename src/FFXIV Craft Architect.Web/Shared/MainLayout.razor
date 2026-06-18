@@ -77,17 +77,20 @@
             {
                 <MudButton OnClick="@(() => NavigateTo("trade/orders"))"
                            Color="@GetTabColor("orders")"
-                           Variant="@GetTabVariant("orders")">
+                           Variant="@GetTabVariant("orders")"
+                           Style="@GetTabStyle("orders")">
                     Orders
                 </MudButton>
                 <MudButton OnClick="@(() => NavigateTo("trade/crafters"))"
                            Color="@GetTabColor("crafters")"
-                           Variant="@GetTabVariant("crafters")">
+                           Variant="@GetTabVariant("crafters")"
+                           Style="@GetTabStyle("crafters")">
                     Crafters
                 </MudButton>
                 <MudButton OnClick="@(() => NavigateTo("trade"))"
                            Color="@GetTabColor("payroll")"
-                           Variant="@GetTabVariant("payroll")">
+                           Variant="@GetTabVariant("payroll")"
+                           Style="@GetTabStyle("payroll")">
                     Payroll
                 </MudButton>
             }
@@ -480,6 +483,17 @@
     private Variant GetTabVariant(string tab)
     {
         return IsActiveTab(tab) ? Variant.Filled : Variant.Text;
+    }
+
+    private string? GetTabStyle(string tab)
+    {
+        if (!IsActiveTab(tab))
+        {
+            return "text-transform: none;";
+        }
+
+        var accent = IsTradeMode ? "#8fbf7f" : "#d4a73a";
+        return $"background-color: {accent}; color: #111; font-weight: 700; text-transform: none;";
     }
 
     private void NavigateTo(string page)

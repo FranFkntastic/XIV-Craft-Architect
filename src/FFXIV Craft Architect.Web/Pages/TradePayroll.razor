@@ -6,6 +6,8 @@
 @inject AppState AppState
 @inject NavigationManager NavigationManager
 @inject TradePayrollDraftFactory DraftFactory
+@inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject TradePayrollPersistenceService TradePayrollPersistence
 @inject CommissionPayrollService PayrollService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
@@ -38,7 +40,7 @@
             <MudButton Variant="Variant.Filled"
                        Color="Color.Primary"
                        StartIcon="@Icons.Material.Filled.Payments"
-                       OnClick="CreateDraft">
+                       OnClick="CreateDraftAsync">
                 New payroll calculation from active craft plan
             </MudButton>
         </section>
@@ -57,7 +59,7 @@
                     <MudButton Variant="Variant.Outlined"
                                Color="Color.Secondary"
                                StartIcon="@Icons.Material.Filled.Refresh"
-                               OnClick="CreateDraft">
+                               OnClick="CreateDraftAsync">
                         Re-import Craft Evidence
                     </MudButton>
                 </div>
@@ -91,7 +93,7 @@
                             <span>@line.Quantity.ToString("N0")</span>
                             <MudSelect T="CommissionMaterialResponsibility"
                                        Value="line.Responsibility"
-                                       ValueChanged="value => SetResponsibility(line, value)"
+                                       ValueChanged="value => SetResponsibilityAsync(line, value)"
                                        Dense="true"
                                        Margin="Margin.Dense"
                                        Variant="Variant.Outlined"
@@ -110,13 +112,19 @@
             <aside class="trade-side">
                 <section class="trade-panel">
                     <MudText Typo="Typo.subtitle1" Class="mb-3">Payroll Details</MudText>
-                    <MudTextField @bind-Value="_commissionerName"
-                                  Label="Commissioner name"
-                                  Placeholder="Name to include in copied payroll"
-                                  Variant="Variant.Outlined"
-                                  Margin="Margin.Dense"
-                                  Immediate="true"
-                                  Class="mb-3" />
+                    <MudSelect T="Guid?"
+                               Value="_assignedCrafterId"
+                               ValueChanged="SetAssignedCrafterAsync"
+                               Label="Assigned Crafter"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Clearable="true"
+                               Class="mb-3">
+                        @foreach (var crafter in _crafters)
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
+                        }
+                    </MudSelect>
                     <div class="trade-policy-rule">
                         <span>Plan</span>
                         <strong>@FormatPayrollDate(_source.ImportedAtUtc)</strong>
@@ -177,9 +185,14 @@
     private string? _unavailableReason;
     private List<TradePayrollLineEditor> _lines = [];
     private decimal _commissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
-    private string _commissionerName = string.Empty;
+    private TradeCompanyProfile? _companyProfile;
+    private TradePayrollWorkflowDraft? _workflowDraft;
+    private TradeOrder? _linkedOrder;
+    private List<TradeCrafterProfile> _crafters = [];
+    private List<TradeOrder> _orders = [];
+    private Guid? _assignedCrafterId;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         AppState.OnStateChanged += OnAppStateChanged;
         if (!EnsureDeveloperMode())
@@ -187,7 +200,7 @@
             return;
         }
 
-        CreateDraft();
+        await CreateDraftAsync();
     }
 
     private void OnAppStateChanged(AppStateChange change)
@@ -209,7 +222,7 @@
         return false;
     }
 
-    private void CreateDraft()
+    private async Task CreateDraftAsync()
     {
         var result = DraftFactory.CreateFromCurrentPlan(AppState);
         if (!result.CanCreate || result.Draft == null)
@@ -217,6 +230,9 @@
             _source = null;
             _payroll = null;
             _lines.Clear();
+            _workflowDraft = null;
+            _linkedOrder = null;
+            _assignedCrafterId = null;
             _unavailableReason = result.UnavailableReason;
             return;
         }
@@ -224,9 +240,59 @@
         _unavailableReason = null;
         _source = result.Draft.Source;
         _payroll = result.Draft.Payroll;
-        _lines = _source.Lines.Select(TradePayrollLineEditor.FromInput).ToList();
         ResetPolicy(result.Draft.Payroll.Policy);
+        await LoadTradeWorkflowAsync();
+        var lines = _workflowDraft != null
+            ? TradePayrollPersistence.ApplyResponsibilities(_source.Lines, _workflowDraft)
+            : _source.Lines;
+        _lines = lines.Select(TradePayrollLineEditor.FromInput).ToList();
+        if (_workflowDraft != null && _workflowDraft.CommissionPercent > 0)
+        {
+            _commissionPercent = _workflowDraft.CommissionPercent;
+        }
+
         Recalculate();
+    }
+
+    private async Task LoadTradeWorkflowAsync()
+    {
+        if (_source == null)
+        {
+            return;
+        }
+
+        _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+        _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
+        _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
+        _linkedOrder = FindMatchingOrder();
+
+        var orderCrafterId = _linkedOrder?.AssignedCrafterId;
+        var orderCrafterName = orderCrafterId.HasValue ? GetCrafterDisplayName(orderCrafterId.Value) : null;
+        _workflowDraft = await TradePayrollPersistence.GetOrCreateDraftAsync(
+            _companyProfile.Id,
+            _linkedOrder?.Id,
+            _source.PlanSessionVersion,
+            _source.MarketAnalysisVersion,
+            _source.SourcePlanName,
+            orderCrafterId,
+            orderCrafterName);
+
+        _assignedCrafterId = _workflowDraft.AssignedCrafterId;
+        await LinkPayrollDraftToOrderAsync();
+    }
+
+    private TradeOrder? FindMatchingOrder()
+    {
+        if (_source == null)
+        {
+            return null;
+        }
+
+        return _orders
+            .Where(order => order.SourceSnapshot.PlanSessionVersion == _source.PlanSessionVersion)
+            .Where(order => !TradeOrderStatusWorkflow.IsArchived(order.Status))
+            .OrderByDescending(order => order.CommissionedAtUtc)
+            .FirstOrDefault();
     }
 
     private void ResetPolicy(CommissionPayoutPolicy policy)
@@ -234,10 +300,96 @@
         _commissionPercent = policy.CommissionPercent;
     }
 
-    private void SetResponsibility(TradePayrollLineEditor line, CommissionMaterialResponsibility responsibility)
+    private async Task SetAssignedCrafterAsync(Guid? crafterId)
+    {
+        _assignedCrafterId = crafterId;
+        if (_workflowDraft == null)
+        {
+            return;
+        }
+
+        _workflowDraft.AssignedCrafterId = crafterId;
+        _workflowDraft.AssignedCrafterDisplayName = crafterId.HasValue
+            ? GetCrafterDisplayName(crafterId.Value)
+            : null;
+        await SaveWorkflowDraftAsync();
+    }
+
+    private async Task SetResponsibilityAsync(TradePayrollLineEditor line, CommissionMaterialResponsibility responsibility)
     {
         line.Responsibility = responsibility;
         Recalculate();
+        await SaveWorkflowDraftAsync();
+    }
+
+    private async Task SaveWorkflowDraftAsync()
+    {
+        if (_workflowDraft == null)
+        {
+            return;
+        }
+
+        _workflowDraft.CommissionPercent = _commissionPercent;
+        _workflowDraft.Responsibilities = _lines
+            .Select(line => new TradePayrollResponsibilityLine(
+                line.ItemId,
+                line.RequiresHq,
+                line.Responsibility))
+            .ToArray();
+
+        var saved = await TradePayrollPersistence.SaveDraftAsync(_workflowDraft);
+        if (!saved)
+        {
+            Snackbar.Add("Failed to save payroll workflow state.", Severity.Error);
+        }
+    }
+
+    private async Task LinkPayrollDraftToOrderAsync()
+    {
+        if (_linkedOrder == null || _workflowDraft == null)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_linkedOrder.PayrollDraftId) &&
+            !string.Equals(_linkedOrder.PayrollDraftId, _workflowDraft.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var alreadyLinked = string.Equals(_linkedOrder.PayrollDraftId, _workflowDraft.Id, StringComparison.OrdinalIgnoreCase) &&
+            _linkedOrder.History.Any(history => history.Kind == TradeOrderHistoryEventKind.PayrollLinked);
+        if (alreadyLinked)
+        {
+            return;
+        }
+
+        var orderToSave = CopyOrder(_linkedOrder);
+        orderToSave.PayrollDraftId = _workflowDraft.Id;
+        orderToSave.UpdatedAtUtc = DateTime.UtcNow;
+        if (!orderToSave.History.Any(history => history.Kind == TradeOrderHistoryEventKind.PayrollLinked))
+        {
+            var history = orderToSave.History.ToList();
+            history.Add(new TradeOrderHistoryEvent
+            {
+                Id = Guid.NewGuid(),
+                CompanyProfileId = orderToSave.CompanyProfileId,
+                OrderId = orderToSave.Id,
+                Kind = TradeOrderHistoryEventKind.PayrollLinked,
+                Note = "Payroll workflow draft linked.",
+                CreatedAtUtc = DateTime.UtcNow
+            });
+            orderToSave.History = history;
+        }
+
+        var saved = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
+        if (saved)
+        {
+            _linkedOrder = orderToSave;
+            return;
+        }
+
+        Snackbar.Add("Failed to link payroll workflow to Trade order.", Severity.Warning);
     }
 
     private void Recalculate()
@@ -275,7 +427,7 @@
         var summary = new StringBuilder();
         summary.AppendLine("FFXIV Trade Architect Payroll");
         summary.AppendLine($"Plan: {FormatPayrollDate(_source!.ImportedAtUtc)}");
-        summary.AppendLine($"Name: {FormatCommissionerName()}");
+        summary.AppendLine($"Assigned crafter: {FormatAssignedCrafterName()}");
         summary.AppendLine();
         AppendCraftedItemsSection(summary, _source.CraftedItems);
         summary.AppendLine();
@@ -343,11 +495,20 @@
             .Sum(line => line.EstimatedMaterialCost) ?? 0m;
     }
 
-    private string FormatCommissionerName()
+    private string FormatAssignedCrafterName()
     {
-        return string.IsNullOrWhiteSpace(_commissionerName)
-            ? "Unspecified"
-            : _commissionerName.Trim();
+        if (_assignedCrafterId.HasValue)
+        {
+            return GetCrafterDisplayName(_assignedCrafterId.Value) ?? "Assigned";
+        }
+
+        return "Unassigned";
+    }
+
+    private string? GetCrafterDisplayName(Guid crafterId)
+    {
+        return _crafters.FirstOrDefault(crafter => crafter.Id == crafterId)?.DisplayName
+            ?? _workflowDraft?.AssignedCrafterDisplayName;
     }
 
     private static string FormatPayrollDate(DateTime generatedAtUtc)
@@ -364,6 +525,27 @@
     private static string FormatGil(decimal value)
     {
         return $"{value:N0}g";
+    }
+
+    private static TradeOrder CopyOrder(TradeOrder order)
+    {
+        return new TradeOrder
+        {
+            Id = order.Id,
+            CompanyProfileId = order.CompanyProfileId,
+            Title = order.Title,
+            Status = order.Status,
+            AssignedCrafterId = order.AssignedCrafterId,
+            CommissionedAtUtc = order.CommissionedAtUtc,
+            CreatedAtUtc = order.CreatedAtUtc,
+            UpdatedAtUtc = order.UpdatedAtUtc,
+            Notes = order.Notes,
+            SourceSnapshot = order.SourceSnapshot,
+            History = order.History.ToArray(),
+            PayrollDraftId = order.PayrollDraftId,
+            RemoteId = order.RemoteId,
+            SyncState = order.SyncState
+        };
     }
 
     public void Dispose()

@@ -16,10 +16,19 @@
 
 .trade-crafters-header,
 .trade-crafters-create-row {
+  gap: 12px;
+}
+
+.trade-crafters-header {
   display: flex;
   align-items: end;
   justify-content: space-between;
-  gap: 12px;
+}
+
+.trade-crafters-create-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(140px, 180px)) auto;
+  align-items: end;
 }
 
 .trade-crafters-panel {

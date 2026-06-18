@@ -1,9 +1,12 @@
 .web-table-header-cell {
     position: relative;
+    width: 100%;
     min-width: 0;
     height: 100%;
     display: flex;
     align-items: center;
+    justify-content: flex-start;
+    text-align: left;
 }
 
 .web-table-sort-button {
@@ -20,6 +23,13 @@
     text-align: left;
     text-transform: inherit;
     cursor: pointer;
+    justify-content: flex-start;
+}
+
+.web-table-header-cell.is-align-end,
+.web-table-header-cell.is-align-end .web-table-sort-button {
+    justify-content: flex-end;
+    text-align: right;
 }
 
 .web-table-header-label {

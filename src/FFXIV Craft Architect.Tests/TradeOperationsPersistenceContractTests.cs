@@ -10,6 +10,7 @@ public class TradeOperationsPersistenceContractTests
         Assert.Contains("const STORE_TRADE_COMPANY_PROFILES = 'tradeCompanyProfiles';", source);
         Assert.Contains("const STORE_TRADE_CRAFTERS = 'tradeCrafters';", source);
         Assert.Contains("const STORE_TRADE_ORDERS = 'tradeOrders';", source);
+        Assert.Contains("const STORE_TRADE_PAYROLL_DRAFTS = 'tradePayrollDrafts';", source);
         Assert.Contains("saveTradeCompanyProfile", source);
         Assert.Contains("loadTradeCompanyProfiles", source);
         Assert.Contains("saveTradeCrafter", source);
@@ -17,6 +18,10 @@ public class TradeOperationsPersistenceContractTests
         Assert.Contains("saveTradeOrder", source);
         Assert.Contains("loadTradeOrders", source);
         Assert.Contains("deleteTradeOrder", source);
+        Assert.Contains("saveTradePayrollDraft", source);
+        Assert.Contains("loadTradePayrollDrafts", source);
+        Assert.Contains("deleteTradePayrollDraft", source);
+        Assert.Contains("hasPayrollDraftsStore", source);
     }
 
     [Fact]
@@ -31,6 +36,10 @@ public class TradeOperationsPersistenceContractTests
         Assert.Contains("SaveTradeOrderAsync", source);
         Assert.Contains("LoadTradeOrdersAsync", source);
         Assert.Contains("DeleteTradeOrderAsync", source);
+        Assert.Contains("SaveTradePayrollDraftAsync", source);
+        Assert.Contains("LoadTradePayrollDraftsAsync", source);
+        Assert.Contains("DeleteTradePayrollDraftAsync", source);
+        Assert.Contains("HasPayrollDraftsStore", source);
     }
 
     [Fact]

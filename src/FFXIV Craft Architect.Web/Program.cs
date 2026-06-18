@@ -66,6 +66,8 @@ builder.Services.AddScoped<MarketAnalysisDiagnosticDumpService>();
 builder.Services.AddScoped<ProcurementWorkflowService>();
 builder.Services.AddScoped<AcquisitionEvaluationWorkflowService>();
 builder.Services.AddScoped<TradePayrollDraftFactory>();
+builder.Services.AddScoped<ITradePayrollDraftStore, IndexedDbTradePayrollDraftStore>();
+builder.Services.AddScoped<TradePayrollPersistenceService>();
 builder.Services.AddScoped<TradeOrderDraftFactory>();
 builder.Services.AddScoped<TradeOperationsPersistenceService>();
 

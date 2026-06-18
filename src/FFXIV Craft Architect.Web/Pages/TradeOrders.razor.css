@@ -24,6 +24,11 @@
   gap: 12px;
 }
 
+.trade-orders-header {
+  justify-content: flex-end;
+  margin-bottom: 14px;
+}
+
 .trade-orders-panel,
 .trade-orders-group {
   background: #252525;
@@ -31,6 +36,14 @@
   border-radius: 6px;
   padding: 14px;
   margin-bottom: 14px;
+}
+
+.trade-orders-empty-state {
+  border: 1px solid #343434;
+  border-radius: 6px;
+  padding: 18px;
+  margin-bottom: 14px;
+  background: #202020;
 }
 
 .trade-orders-import-grid {

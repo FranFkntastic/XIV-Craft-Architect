@@ -45,6 +45,117 @@ public class CommissionCostBasisResolverTests
     }
 
     [Fact]
+    public void BuildMarketRecommendationLines_UsesVendorAcquisitionEvidenceBeforeMarketAverage()
+    {
+        var resolver = new CommissionCostBasisResolver();
+
+        var line = Assert.Single(resolver.BuildMarketRecommendationLines(
+            [Material(11, "Vendor Thread", quantity: 5, unitPrice: 999m)],
+            [Analysis(11, "Vendor Thread", competitiveAverage: 800m)],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 11,
+                    Name = "Vendor Thread",
+                    QuantityNeeded = 10,
+                    RecommendedWorld = new WorldShoppingSummary
+                    {
+                        WorldName = MarketShoppingConstants.VendorWorldName,
+                        TotalCost = 1_200,
+                        TotalQuantityPurchased = 10
+                    }
+                }
+            ]));
+
+        Assert.Equal(120m, line.UnitCost);
+        Assert.Equal("Acquisition recommendation", line.EvidenceSource);
+        Assert.Contains("vendor", line.UnitCostExplanation, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("competitive average", line.UnitCostExplanation, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildMarketRecommendationLines_UsesSupportedWorldAcquisitionEvidenceBeforeMarketAverage()
+    {
+        var resolver = new CommissionCostBasisResolver();
+        var uploadedAt = new DateTime(2026, 6, 18, 12, 0, 0, DateTimeKind.Utc);
+
+        var line = Assert.Single(resolver.BuildMarketRecommendationLines(
+            [Material(12, "World Ore", quantity: 4, unitPrice: 999m)],
+            [Analysis(12, "World Ore", competitiveAverage: 600m)],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 12,
+                    Name = "World Ore",
+                    QuantityNeeded = 8,
+                    RecommendedWorld = new WorldShoppingSummary
+                    {
+                        DataCenter = "Aether",
+                        WorldName = "Siren",
+                        TotalCost = 1_600,
+                        TotalQuantityPurchased = 8,
+                        MarketUploadedAtUtc = uploadedAt
+                    }
+                }
+            ]));
+
+        Assert.Equal(200m, line.UnitCost);
+        Assert.Equal("Acquisition recommendation", line.EvidenceSource);
+        Assert.Contains("Siren", line.UnitCostExplanation);
+        Assert.Equal(uploadedAt, line.EvidenceTimestampUtc);
+    }
+
+    [Fact]
+    public void BuildMarketRecommendationLines_UsesSupportedSplitAcquisitionEvidenceBeforeMarketAverage()
+    {
+        var resolver = new CommissionCostBasisResolver();
+
+        var line = Assert.Single(resolver.BuildMarketRecommendationLines(
+            [Material(13, "Split Leather", quantity: 5, unitPrice: 999m)],
+            [Analysis(13, "Split Leather", competitiveAverage: 300m)],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 13,
+                    Name = "Split Leather",
+                    QuantityNeeded = 10,
+                    RecommendedSplit =
+                    [
+                        new SplitWorldPurchase { DataCenter = "Aether", WorldName = "Siren", QuantityToBuy = 5, TotalCost = 300 },
+                        new SplitWorldPurchase { DataCenter = "Aether", WorldName = "Faerie", QuantityToBuy = 5, TotalCost = 500 }
+                    ]
+                }
+            ]));
+
+        Assert.Equal(80m, line.UnitCost);
+        Assert.Equal("Acquisition recommendation", line.EvidenceSource);
+        Assert.Contains("split", line.UnitCostExplanation, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildMarketRecommendationLines_DoesNotUseUnsupportedProjectionAsAcquisitionEvidence()
+    {
+        var resolver = new CommissionCostBasisResolver();
+
+        var line = Assert.Single(resolver.BuildMarketRecommendationLines(
+            [Material(14, "Projected Ore", quantity: 10, unitPrice: 999m)],
+            [Analysis(14, "Projected Ore", competitiveAverage: 250m)],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 14,
+                    Name = "Projected Ore",
+                    QuantityNeeded = 10,
+                    DCAveragePrice = 50m
+                }
+            ]));
+
+        Assert.Equal(250m, line.UnitCost);
+        Assert.Equal("Market competitive average", line.EvidenceSource);
+        Assert.Contains("competitive average", line.UnitCostExplanation);
+    }
+
+    [Fact]
     public void BuildMarketRecommendationLines_MissingEvidenceUsesPlanPriceWithWarning()
     {
         var resolver = new CommissionCostBasisResolver();
@@ -204,14 +315,25 @@ public class CommissionCostBasisResolverTests
         Assert.Contains("27h", warning);
     }
 
-    private static MaterialAggregate Material(int itemId, string name)
+    private static MaterialAggregate Material(int itemId, string name, int quantity = 2, decimal unitPrice = 50m)
     {
         return new MaterialAggregate
         {
             ItemId = itemId,
             Name = name,
-            TotalQuantity = 2,
-            UnitPrice = 50m
+            TotalQuantity = quantity,
+            UnitPrice = unitPrice
+        };
+    }
+
+    private static MarketItemAnalysis Analysis(int itemId, string name, decimal competitiveAverage)
+    {
+        return new MarketItemAnalysis
+        {
+            ItemId = itemId,
+            Name = name,
+            LoadedAtUtc = new DateTime(2026, 6, 18, 11, 0, 0, DateTimeKind.Utc),
+            AnalysisCompetitiveAverageUnitPrice = competitiveAverage
         };
     }
 }
