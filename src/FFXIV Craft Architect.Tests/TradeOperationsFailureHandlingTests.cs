@@ -181,6 +181,52 @@ public class TradeOperationsFailureHandlingTests
         Assert.Contains("TradeCommissionPaymentSummary.FromOrder", source);
         Assert.Contains("FormatResponsibility", source);
         Assert.Contains("Not priced", source);
+        Assert.Contains("SetOrderMaterialResponsibilityAsync", source);
+        Assert.Contains("TradePayrollResponsibilityLine", source);
+        Assert.Contains("CopyOrderPaymentSummaryAsync", source);
+        Assert.Contains("CopyGilAmountAsync", source);
+        Assert.Contains("ToString(\"0\")", source);
+        Assert.Contains("Disabled=\"@(paymentSummary.TotalPayment <= 0)\"", source);
+        Assert.Contains("Disabled=\"@(paymentSummary.EstimatedProcurementTotal <= 0)\"", source);
+        Assert.Contains("BuildOrderPaymentSummary", source);
+    }
+
+    [Fact]
+    public void OrdersPage_PaymentResponsibilityDoesNotMutateLoadedDraftBeforeSave()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
+        var method = GetMethodSource(source, "private async Task SetOrderMaterialResponsibilityAsync", "private async Task<TradePayrollWorkflowDraft> GetOrCreatePayrollDraftForOrderAsync");
+
+        Assert.Contains("var draftToSave = CopyPayrollDraft(currentDraft);", method);
+        Assert.Contains("draftToSave.Responsibilities = responsibilities;", method);
+        Assert.Contains("TradePayrollPersistence.SaveDraftAsync(draftToSave)", method);
+        Assert.True(
+            method.IndexOf("if (!savedDraft)", StringComparison.Ordinal) <
+            method.IndexOf("_payrollDrafts = _payrollDrafts", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void OrdersPage_PaymentDraftLookupDoesNotFallbackByPlanSession()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
+
+        Assert.DoesNotContain("draft.PlanSessionVersion == order.SourceSnapshot.PlanSessionVersion", source);
+        Assert.Contains("GetOrCreatePayrollDraftForOrderAsync", source);
+        Assert.Contains("order.Id", source);
+    }
+
+    [Fact]
+    public void OrdersPage_OpensOrderCraftPlanFromOrderOutputsThroughPlannerImport()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
+        var method = GetMethodSource(source, "private async Task OpenSelectedOrderCraftPlanAsync()", "private string GetOrderDataCenter");
+
+        Assert.Contains("Open Craft Plan", source);
+        Assert.Contains("RecipePlannerCommandService.ImportProjectItemsAsync", method);
+        Assert.Contains("new ImportProjectItemsRequest", method);
+        Assert.Contains("GetOrderRootItems(_selectedOrder)", method);
+        Assert.Contains("NavigationManager.NavigateTo(\"./\")", method);
+        Assert.DoesNotContain("AppState.CurrentPlan", method);
     }
 
     [Fact]
@@ -339,13 +385,13 @@ public class TradeOperationsFailureHandlingTests
     }
 
     [Fact]
-    public void CraftersPage_UsesDenseRosterTableWithoutAssignmentColumn()
+    public void CraftersPage_UsesDenseRosterTableWithAssignmentColumn()
     {
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeCrafters.razor"));
 
         Assert.Contains("WebDataTable TItem=\"TradeCrafterProfile\"", source);
         Assert.Contains("TradeCrafterColumn", source);
-        Assert.DoesNotContain("Assignment", GetCrafterColumnsSource(source));
+        Assert.Contains("Assignments", GetCrafterColumnsSource(source));
     }
 
     private static string GetWorkspacePath(params string[] parts)

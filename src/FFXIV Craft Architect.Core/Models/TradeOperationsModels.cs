@@ -101,6 +101,13 @@ public static class TradeOrderStatusWorkflow
     }
 }
 
+public enum TradeOrderSourceKind
+{
+    ActiveCraftPlan,
+    TradeRequestedOutputs,
+    ImportedExternal
+}
+
 public sealed class TradeOrder
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -121,12 +128,17 @@ public sealed class TradeOrder
 
 public sealed class TradeOrderSourceSnapshot
 {
+    public TradeOrderSourceKind SourceKind { get; set; } = TradeOrderSourceKind.ActiveCraftPlan;
+    public string? SourcePlanId { get; set; }
     public string SourcePlanName { get; set; } = "Active craft plan";
+    public string? DataCenter { get; set; }
+    public string? World { get; set; }
     public long PlanSessionVersion { get; set; }
     public long MarketAnalysisVersion { get; set; }
     public DateTime ImportedAtUtc { get; set; } = DateTime.UtcNow;
     public IReadOnlyList<TradeOrderRootItemSnapshot> RootItems { get; set; } = Array.Empty<TradeOrderRootItemSnapshot>();
     public IReadOnlyList<TradeOrderMaterialSnapshot> Materials { get; set; } = Array.Empty<TradeOrderMaterialSnapshot>();
+    public IReadOnlyList<string> Warnings { get; set; } = Array.Empty<string>();
 }
 
 public sealed record TradeOrderRootItemSnapshot(
@@ -142,7 +154,11 @@ public sealed record TradeOrderMaterialSnapshot(
     int Quantity,
     bool RequiresHq,
     decimal UnitCost,
-    decimal TotalCost);
+    decimal TotalCost,
+    string EvidenceSource = "",
+    string UnitCostExplanation = "",
+    DateTime? EvidenceTimestampUtc = null,
+    IReadOnlyList<string>? Warnings = null);
 
 public enum TradeOrderHistoryEventKind
 {

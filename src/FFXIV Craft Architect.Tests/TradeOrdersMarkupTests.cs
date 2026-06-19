@@ -16,7 +16,6 @@ public class TradeOrdersMarkupTests
         Assert.Contains("Close Order", source);
         Assert.Contains("Reopen Order", source);
         Assert.Contains("Add Note", source);
-        Assert.DoesNotContain("Manual order", source);
         Assert.DoesNotContain("DragDrop", source);
     }
 
@@ -31,6 +30,25 @@ public class TradeOrdersMarkupTests
         Assert.Contains("Assigned crafter", source);
         Assert.Contains("TradeOrderDraftFactory", source);
         Assert.Contains("TradeOperationsPersistenceService", source);
+    }
+
+    [Fact]
+    public void TradeOrdersPage_CreatesTradeNativeOrdersThroughCraftPlanBoundary()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
+
+        Assert.Contains("New Order", source);
+        Assert.Contains("Add output item", source);
+        Assert.Contains("SearchRequestedOrderItemsAsync", source);
+        Assert.Contains("GarlandService.SearchAsync", source);
+        Assert.Contains("TradeOrderCraftPlanBuildService.BuildAsync", source);
+        Assert.Contains("CreateFromRequestedOutputs", source);
+        Assert.Contains("AppState.SelectedDataCenter", source);
+        Assert.Contains("TradeRequestedOrderWorkflow.BuildMaterialSnapshots", source);
+        Assert.Contains("TradeRequestedOrderWorkflow.CreateSuggestedTitle", source);
+        Assert.Contains("_usingSuggestedRequestedOrderTitle", source);
+        Assert.Contains("OnRequestedOrderTitleChanged(value)", source);
+        Assert.DoesNotContain("!string.IsNullOrWhiteSpace(_newRequestedOrderTitle) &&", source);
     }
 
     private static string GetWorkspacePath(params string[] parts)

@@ -30,14 +30,21 @@ public sealed record TradeCommissionPaymentMaterial(
     bool RequiresHq,
     decimal UnitCost,
     decimal TotalCost,
-    CommissionMaterialResponsibility Responsibility);
+    CommissionMaterialResponsibility Responsibility,
+    string EvidenceSource,
+    string UnitCostExplanation,
+    DateTime? EvidenceTimestampUtc,
+    IReadOnlyList<string> Warnings);
 
 public sealed record TradeCommissionPaymentSummary(
     IReadOnlyList<TradeCommissionPaymentMaterial> Materials,
     decimal EstimatedProcurementTotal,
     decimal MaterialReimbursementTotal,
+    decimal ProvidedMaterialTotal,
+    decimal CommissionPercent,
     decimal CommissionAmount,
-    decimal TotalPayment)
+    decimal TotalPayment,
+    IReadOnlyList<string> Warnings)
 {
     public static TradeCommissionPaymentSummary FromOrder(
         TradeOrder order,
@@ -45,10 +52,11 @@ public sealed record TradeCommissionPaymentSummary(
     {
         ArgumentNullException.ThrowIfNull(order);
 
-        var responsibilities = draft?.Responsibilities.ToDictionary(
+        var sourceSnapshot = order.SourceSnapshot ?? new TradeOrderSourceSnapshot();
+        var responsibilities = (draft?.Responsibilities ?? Array.Empty<TradePayrollResponsibilityLine>()).ToDictionary(
             line => (line.ItemId, line.RequiresHq),
             line => line.Responsibility) ?? [];
-        var materials = order.SourceSnapshot.Materials
+        var materials = (sourceSnapshot.Materials ?? Array.Empty<TradeOrderMaterialSnapshot>())
             .Select(material =>
             {
                 var responsibility = responsibilities.TryGetValue((material.ItemId, material.RequiresHq), out var saved)
@@ -61,23 +69,36 @@ public sealed record TradeCommissionPaymentSummary(
                     material.RequiresHq,
                     material.UnitCost,
                     material.TotalCost,
-                    responsibility);
+                    responsibility,
+                    material.EvidenceSource,
+                    material.UnitCostExplanation,
+                    material.EvidenceTimestampUtc,
+                    material.Warnings ?? Array.Empty<string>());
             })
             .ToArray();
         var estimatedProcurementTotal = materials.Sum(material => material.TotalCost);
         var materialReimbursementTotal = materials
             .Where(material => material.Responsibility == CommissionMaterialResponsibility.Crafter)
             .Sum(material => material.TotalCost);
+        var providedMaterialTotal = estimatedProcurementTotal - materialReimbursementTotal;
         var commissionPercent = draft?.CommissionPercent > 0
             ? draft.CommissionPercent
             : CommissionPayoutPolicy.Default.CommissionPercent;
         var commissionAmount = estimatedProcurementTotal * (commissionPercent / 100m);
+        var warnings = (sourceSnapshot.Warnings ?? Array.Empty<string>())
+            .Concat(materials.SelectMany(material => material.Warnings))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         return new TradeCommissionPaymentSummary(
             materials,
             estimatedProcurementTotal,
             materialReimbursementTotal,
+            providedMaterialTotal,
+            commissionPercent,
             commissionAmount,
-            materialReimbursementTotal + commissionAmount);
+            materialReimbursementTotal + commissionAmount,
+            warnings);
     }
 }

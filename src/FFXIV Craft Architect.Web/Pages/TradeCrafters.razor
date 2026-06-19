@@ -2,7 +2,9 @@
 @using FFXIV_Craft_Architect.Web.Shared.TablePrimitives
 @inject AppState AppState
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
+@implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-crafters-page">
     @if (!AppState.SecretDebugToolsEnabled)
@@ -188,12 +190,24 @@
 
                     <section class="trade-crafters-panel">
                         <MudText Typo="Typo.subtitle1">Current Assignments</MudText>
-                        <ul class="trade-crafter-assignments">
-                            @foreach (var order in GetAssignmentsForSelectedCrafter())
-                            {
-                                <li>@order.Title - @FormatStatus(order.Status)</li>
-                            }
-                        </ul>
+                        @if (GetAssignmentsForSelectedCrafter().Count == 0)
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">No active assignments.</MudText>
+                        }
+                        else
+                        {
+                            <div class="trade-crafter-assignments">
+                                @foreach (var order in GetAssignmentsForSelectedCrafter())
+                                {
+                                    <button type="button"
+                                            class="trade-crafter-assignment-link"
+                                            @onclick="@(() => OpenOrderAssignment(order.Id))">
+                                        <span>@order.Title</span>
+                                        <small>@FormatStatus(order.Status)</small>
+                                    </button>
+                                }
+                            </div>
+                        }
                     </section>
                 }
             </aside>
@@ -207,6 +221,7 @@
     private List<TradeCrafterProfile> _crafters = [];
     private List<TradeOrder> _orders = [];
     private TradeCrafterProfile? _selectedCrafter;
+    private bool _hasLoaded;
     private string _newCrafterName = string.Empty;
     private string _newCrafterRegion = string.Empty;
     private string _newCrafterDataCenter = string.Empty;
@@ -234,6 +249,32 @@
         [
             WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.Name, "Crafter", crafter => crafter.DisplayName, widthPx: 220),
             WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.World, "World", FormatWorld, widthPx: 180),
+            new WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>
+            {
+                Id = TradeCrafterColumn.Assignments,
+                Header = "Assignments",
+                Size = new WebTableColumnSize(180, 120),
+                CellTemplate = crafter => @<div class="trade-crafter-assignment-cell">
+                    @{
+                        var assignments = GetAssignmentsForCrafter(crafter.Id);
+                    }
+                    @if (assignments.Count == 0)
+                    {
+                        <span class="trade-crafter-assignment-empty">None</span>
+                    }
+                    else
+                    {
+                        var firstOrder = assignments[0];
+                        <button type="button"
+                                class="trade-crafter-assignment-chip"
+                                title="@firstOrder.Title"
+                                @onclick="@(() => OpenOrderAssignment(firstOrder.Id))"
+                                @onclick:stopPropagation="true">
+                            @(assignments.Count == 1 ? firstOrder.Title : $"{assignments.Count:N0} active")
+                        </button>
+                    }
+                </div>
+            },
             WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.Jobs, "Jobs", FormatJobSummary, widthPx: 120)
         ];
     }
@@ -245,12 +286,31 @@
 
     protected override async Task OnInitializedAsync()
     {
-        if (!AppState.SecretDebugToolsEnabled)
+        AppState.OnStateChanged += OnAppStateChanged;
+        await EnsureLoadedForDeveloperModeAsync();
+    }
+
+    private void OnAppStateChanged(AppStateChange change)
+    {
+        if (!change.HasScope(AppStateChangeScope.Settings))
         {
             return;
         }
 
+        _ = InvokeAsync(EnsureLoadedForDeveloperModeAsync);
+    }
+
+    private async Task EnsureLoadedForDeveloperModeAsync()
+    {
+        if (!AppState.SecretDebugToolsEnabled || _hasLoaded)
+        {
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
         await LoadAsync();
+        _hasLoaded = string.IsNullOrWhiteSpace(_loadError);
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task LoadAsync()
@@ -262,9 +322,11 @@
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
             EnsureNewCrafterLocationDefaults();
+            _hasLoaded = true;
         }
         catch (Exception ex)
         {
+            _hasLoaded = false;
             _companyProfile = null;
             _crafters = [];
             _orders = [];
@@ -468,10 +530,20 @@
             return [];
         }
 
+        return GetAssignmentsForCrafter(_selectedCrafter.Id);
+    }
+
+    private IReadOnlyList<TradeOrder> GetAssignmentsForCrafter(Guid crafterId)
+    {
         return _orders
-            .Where(order => order.AssignedCrafterId == _selectedCrafter.Id && !TradeOrderStatusWorkflow.IsArchived(order.Status))
+            .Where(order => order.AssignedCrafterId == crafterId && !TradeOrderStatusWorkflow.IsArchived(order.Status))
             .OrderByDescending(order => order.CommissionedAtUtc)
             .ToArray();
+    }
+
+    private void OpenOrderAssignment(Guid orderId)
+    {
+        NavigationManager.NavigateTo($"trade/orders?orderId={Uri.EscapeDataString(orderId.ToString("D"))}");
     }
 
     private static string FormatWorld(TradeCrafterProfile crafter)
@@ -496,6 +568,7 @@
         return status switch
         {
             TradeOrderStatus.ReadyToAssign => "Ready to Assign",
+            TradeOrderStatus.Assigned => "Assigned Awaiting Payment",
             TradeOrderStatus.InProgress => "In Progress",
             TradeOrderStatus.AwaitingDelivery => "Awaiting Delivery",
             _ => status.ToString()
@@ -603,6 +676,12 @@
     {
         Name,
         World,
+        Assignments,
         Jobs
+    }
+
+    public void Dispose()
+    {
+        AppState.OnStateChanged -= OnAppStateChanged;
     }
 }

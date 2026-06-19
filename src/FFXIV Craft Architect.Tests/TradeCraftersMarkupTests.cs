@@ -19,27 +19,28 @@ public class TradeCraftersMarkupTests
     }
 
     [Fact]
-    public void TradeCraftersPage_ShowsAssignmentsOnlyInDetailPanel()
+    public void TradeCraftersPage_ShowsAssignmentsInRosterAndDetailPanel()
     {
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeCrafters.razor"));
 
         Assert.Contains("Crafter Details", source);
         Assert.Contains("Current Assignments", source);
+        Assert.Contains("TradeCrafterColumn.Assignments", source);
+        Assert.Contains("OpenOrderAssignment", source);
+        Assert.Contains("trade/orders?orderId=", source);
         Assert.Contains("_selectedCrafter", source);
-        Assert.DoesNotContain("current-assignment-column", source);
     }
 
     [Fact]
-    public void MainLayout_TradeModeShowsOrdersCraftersAndPayrollTabs()
+    public void MainLayout_TradeModeShowsOrdersAndCraftersTabs()
     {
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Shared", "MainLayout.razor"));
 
         Assert.Contains("NavigateTo(\"trade/orders\")", source);
         Assert.Contains("NavigateTo(\"trade/crafters\")", source);
-        Assert.Contains("NavigateTo(\"trade\")", source);
         Assert.Contains("Orders", source);
         Assert.Contains("Crafters", source);
-        Assert.Contains("Payroll", source);
+        Assert.DoesNotContain(">Payroll", source);
     }
 
     private static string GetWorkspacePath(params string[] parts)

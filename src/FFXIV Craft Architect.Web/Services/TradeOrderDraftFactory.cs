@@ -6,10 +6,14 @@ namespace FFXIV_Craft_Architect.Web.Services;
 public sealed class TradeOrderDraftFactory
 {
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
+    private readonly CommissionCostBasisResolver _costBasisResolver;
 
-    public TradeOrderDraftFactory(IRecipeLayerWorkflowService recipeLayerWorkflow)
+    public TradeOrderDraftFactory(
+        IRecipeLayerWorkflowService recipeLayerWorkflow,
+        CommissionCostBasisResolver costBasisResolver)
     {
         _recipeLayerWorkflow = recipeLayerWorkflow;
+        _costBasisResolver = costBasisResolver;
     }
 
     public TradeOrderDraftCreateResult CreateFromCurrentPlan(TradeOrderCreateRequest request)
@@ -31,8 +35,25 @@ public sealed class TradeOrderDraftFactory
             return TradeOrderDraftCreateResult.Unavailable("The active craft plan does not contain root items to commission.");
         }
 
-        var materials = _recipeLayerWorkflow.BuildActiveProcurementItems(plan)
+        var activeProcurementItems = _recipeLayerWorkflow.BuildActiveProcurementItems(plan)
             .Where(item => item.TotalQuantity > 0)
+            .ToArray();
+        var warnings = new List<string>();
+        if (appState.MarketItemAnalyses.Count == 0)
+        {
+            warnings.Add("No market-analysis evidence is loaded. Payment uses plan prices where available and may be incomplete.");
+        }
+        else if (!string.IsNullOrWhiteSpace(appState.MarketAnalysisScopeWarning))
+        {
+            warnings.Add(appState.MarketAnalysisScopeWarning);
+        }
+
+        var lines = _costBasisResolver.BuildMarketRecommendationLines(
+            activeProcurementItems,
+            appState.MarketItemAnalyses.ToArray(),
+            appState.ShoppingPlans.ToArray());
+        warnings.AddRange(lines.SelectMany(line => line.Warnings));
+        var materials = lines
             .Select(ToMaterialSnapshot)
             .ToArray();
         var title = string.IsNullOrWhiteSpace(request.Title)
@@ -84,12 +105,75 @@ public sealed class TradeOrderDraftFactory
             UpdatedAtUtc = request.CreatedAtUtc,
             SourceSnapshot = new TradeOrderSourceSnapshot
             {
+                SourceKind = TradeOrderSourceKind.ActiveCraftPlan,
+                SourcePlanId = appState.CurrentPlanId,
                 SourcePlanName = GetPlanName(appState),
+                DataCenter = appState.SelectedDataCenter,
                 PlanSessionVersion = appState.PlanSessionVersion,
                 MarketAnalysisVersion = versions.MarketAnalysisVersion,
                 ImportedAtUtc = request.CreatedAtUtc,
                 RootItems = rootItems,
-                Materials = materials
+                Materials = materials,
+                Warnings = warnings
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
+            },
+            History = history
+        };
+
+        return TradeOrderDraftCreateResult.Available(order);
+    }
+
+    public TradeOrderDraftCreateResult CreateFromRequestedOutputs(TradeRequestedOrderCreateRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var requestedOutputs = request.Outputs ?? [];
+        var rootItems = requestedOutputs
+            .Where(output => output.Quantity > 0)
+            .Select(ToRootSnapshot)
+            .ToArray();
+        if (rootItems.Length == 0)
+        {
+            return TradeOrderDraftCreateResult.Unavailable("Add at least one requested output before creating a Trade order.");
+        }
+
+        var title = string.IsNullOrWhiteSpace(request.Title)
+            ? TradeRequestedOrderWorkflow.CreateSuggestedTitle(requestedOutputs)
+            : request.Title.Trim();
+        var orderId = Guid.NewGuid();
+        var status = request.AssignedCrafterId.HasValue
+            ? TradeOrderStatus.Assigned
+            : TradeOrderStatus.ReadyToAssign;
+        var history = CreateInitialHistory(
+            request.CompanyProfileId,
+            orderId,
+            request.AssignedCrafterId,
+            status,
+            "Created from requested outputs.",
+            request.CreatedAtUtc);
+
+        var order = new TradeOrder
+        {
+            Id = orderId,
+            CompanyProfileId = request.CompanyProfileId,
+            Title = title,
+            Status = status,
+            AssignedCrafterId = request.AssignedCrafterId,
+            CommissionedAtUtc = request.CreatedAtUtc,
+            CreatedAtUtc = request.CreatedAtUtc,
+            UpdatedAtUtc = request.CreatedAtUtc,
+            Notes = NormalizeOptionalText(request.Notes),
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                SourceKind = TradeOrderSourceKind.TradeRequestedOutputs,
+                SourcePlanName = "Trade requested outputs",
+                DataCenter = request.DataCenter,
+                World = NormalizeOptionalText(request.World),
+                ImportedAtUtc = request.CreatedAtUtc,
+                RootItems = rootItems,
+                Materials = []
             },
             History = history
         };
@@ -114,6 +198,16 @@ public sealed class TradeOrderDraftFactory
             EstimateRootSaleValue(node));
     }
 
+    private static TradeOrderRootItemSnapshot ToRootSnapshot(TradeRequestedOrderOutput output)
+    {
+        return new TradeOrderRootItemSnapshot(
+            output.ItemId,
+            output.Name.Trim(),
+            output.Quantity,
+            output.MustBeHq,
+            output.EstimatedSaleValue);
+    }
+
     private static decimal EstimateRootSaleValue(PlanNode node)
     {
         var unitPrice = node.MustBeHq && node.HqMarketPrice > 0
@@ -122,15 +216,24 @@ public sealed class TradeOrderDraftFactory
         return unitPrice * node.Quantity;
     }
 
-    private static TradeOrderMaterialSnapshot ToMaterialSnapshot(MaterialAggregate material)
+    private static TradeOrderMaterialSnapshot ToMaterialSnapshot(CommissionPayrollInputLine material)
     {
+        var totalCost = Math.Round(
+            material.UnitCost * material.Quantity,
+            0,
+            MidpointRounding.AwayFromZero);
+
         return new TradeOrderMaterialSnapshot(
             material.ItemId,
             material.Name,
-            material.TotalQuantity,
+            material.Quantity,
             material.RequiresHq,
-            material.UnitPrice,
-            material.UnitPrice * material.TotalQuantity);
+            material.UnitCost,
+            totalCost,
+            material.EvidenceSource,
+            material.UnitCostExplanation,
+            material.EvidenceTimestampUtc,
+            material.Warnings.ToArray());
     }
 
     private static string CreateSuggestedTitle(IReadOnlyList<TradeOrderRootItemSnapshot> rootItems)
@@ -141,6 +244,51 @@ public sealed class TradeOrderDraftFactory
             .First();
         return $"{root.Name} Commission";
     }
+
+    private static IReadOnlyList<TradeOrderHistoryEvent> CreateInitialHistory(
+        Guid companyProfileId,
+        Guid orderId,
+        Guid? assignedCrafterId,
+        TradeOrderStatus status,
+        string createdNote,
+        DateTime createdAtUtc)
+    {
+        var history = new List<TradeOrderHistoryEvent>
+        {
+            new()
+            {
+                Id = Guid.NewGuid(),
+                CompanyProfileId = companyProfileId,
+                OrderId = orderId,
+                Kind = TradeOrderHistoryEventKind.Created,
+                Note = createdNote,
+                ToStatus = status,
+                CreatedAtUtc = createdAtUtc
+            }
+        };
+
+        if (assignedCrafterId.HasValue)
+        {
+            history.Add(new TradeOrderHistoryEvent
+            {
+                Id = Guid.NewGuid(),
+                CompanyProfileId = companyProfileId,
+                OrderId = orderId,
+                Kind = TradeOrderHistoryEventKind.Assigned,
+                Note = "Assigned during order creation.",
+                CrafterId = assignedCrafterId,
+                ToStatus = status,
+                CreatedAtUtc = createdAtUtc
+            });
+        }
+
+        return history;
+    }
+
+    private static string? NormalizeOptionalText(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
 }
 
 public sealed record TradeOrderCreateRequest(
@@ -149,6 +297,23 @@ public sealed record TradeOrderCreateRequest(
     Guid? AssignedCrafterId,
     string? Title,
     DateTime CreatedAtUtc);
+
+public sealed record TradeRequestedOrderCreateRequest(
+    Guid CompanyProfileId,
+    Guid? AssignedCrafterId,
+    string? Title,
+    IReadOnlyList<TradeRequestedOrderOutput> Outputs,
+    string DataCenter,
+    string? World,
+    string? Notes,
+    DateTime CreatedAtUtc);
+
+public sealed record TradeRequestedOrderOutput(
+    int ItemId,
+    string Name,
+    int Quantity,
+    bool MustBeHq,
+    decimal EstimatedSaleValue);
 
 public sealed record TradeOrderDraftCreateResult(
     bool CanCreate,

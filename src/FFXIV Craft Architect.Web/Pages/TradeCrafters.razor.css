@@ -81,8 +81,53 @@
 }
 
 .trade-crafter-assignments {
-  margin: 8px 0 0;
-  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.trade-crafter-assignment-cell {
+  min-width: 0;
+}
+
+.trade-crafter-assignment-empty {
+  color: #9f9f9f;
+}
+
+.trade-crafter-assignment-chip,
+.trade-crafter-assignment-link {
+  border: 1px solid #4b5f3c;
+  border-radius: 6px;
+  background: #20281d;
+  color: #d7f1c3;
+  cursor: pointer;
+  text-align: left;
+}
+
+.trade-crafter-assignment-chip {
+  max-width: 100%;
+  padding: 4px 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-crafter-assignment-link {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+}
+
+.trade-crafter-assignment-link span,
+.trade-crafter-assignment-link small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-crafter-assignment-link small {
+  color: #b8c9ad;
 }
 
 @media (max-width: 1100px) {

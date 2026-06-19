@@ -76,4 +76,16 @@ public class TradeOperationsModelTests
         Assert.Equal("Crafter asked for mats to be mailed.", history.Note);
         Assert.Equal(createdAt, history.CreatedAtUtc);
     }
+
+    [Fact]
+    public void OrderSourceSnapshot_DefaultsToActiveCraftPlanForExistingOrders()
+    {
+        var snapshot = new TradeOrderSourceSnapshot();
+
+        Assert.Equal(TradeOrderSourceKind.ActiveCraftPlan, snapshot.SourceKind);
+        Assert.Equal("Active craft plan", snapshot.SourcePlanName);
+        Assert.Null(snapshot.SourcePlanId);
+        Assert.Null(snapshot.DataCenter);
+        Assert.Null(snapshot.World);
+    }
 }

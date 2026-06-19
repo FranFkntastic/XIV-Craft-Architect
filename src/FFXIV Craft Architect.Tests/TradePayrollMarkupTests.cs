@@ -8,8 +8,10 @@ public class TradePayrollMarkupTests
         var source = File.ReadAllText(GetTradePayrollPath());
 
         Assert.Contains("@page \"/trade\"", source);
+        Assert.Contains("@page \"/trade/payroll\"", source);
         Assert.Contains("AppState.SecretDebugToolsEnabled", source);
         Assert.Contains("NavigationManager.NavigateTo(\"./\")", source);
+        Assert.Contains("NavigationManager.NavigateTo(\"trade/orders\", replace: true)", source);
         Assert.Contains("Payroll Calculator", source);
         Assert.Contains("New payroll calculation from active craft plan", source);
         Assert.Contains("Copy Payroll Summary", source);
@@ -21,13 +23,24 @@ public class TradePayrollMarkupTests
         Assert.DoesNotContain("Commissioner name", source);
         Assert.Contains("TradeOperationsPersistenceService", source);
         Assert.Contains("TradePayrollPersistenceService", source);
+        Assert.Contains("TradeOrderDraftFactory", source);
+        Assert.DoesNotContain("TradeOrderCraftSnapshotService", source);
         Assert.Contains("FormatPayrollDate(_source.ImportedAtUtc)", source);
         Assert.Contains("Being made", source);
         Assert.Contains("_source.CraftedItems", source);
-        Assert.Contains("Guild commission", source);
         Assert.Contains("Commission is @_commissionPercent.ToString(\"N0\")% of full estimated material cost", source);
         Assert.Contains("Crafter procures", source);
         Assert.Contains("Provided by commissioner", source);
+        Assert.Contains("trade-assignment-actions", source);
+        Assert.Contains("trade-assign-button", source);
+        Assert.Contains("trade-open-orders-button", source);
+        Assert.Contains("trade-meta-list", source);
+        Assert.Contains("trade-crafted-table", source);
+        Assert.Contains("trade-payroll-note", source);
+        Assert.Contains("FormatProjectName(item)", source);
+        Assert.Contains("TradeDisplayFormatter.FormatQuantity(item.Quantity)", source);
+        Assert.DoesNotContain("<ul>\r\n                            @foreach (var item in _source.CraftedItems", source);
+        Assert.DoesNotContain("Guild commission", source);
         Assert.DoesNotContain("MudNumericField", source);
         Assert.DoesNotContain("Handling", source);
     }
@@ -60,6 +73,23 @@ public class TradePayrollMarkupTests
         Assert.Contains("SaveWorkflowDraftAsync", source);
         Assert.Contains("TradePayrollResponsibilityLine", source);
         Assert.Contains("ApplyResponsibilities", source);
+    }
+
+    [Fact]
+    public void TradePayrollPage_AssignsCraftJobsThroughOrders()
+    {
+        var source = File.ReadAllText(GetTradePayrollPath());
+
+        Assert.Contains("Assign Craft Job", source);
+        Assert.Contains("AssignCraftJobAsync", source);
+        Assert.Contains("TradeOrderDraftFactory.CreateFromCurrentPlan", source);
+        Assert.Contains("TradeOperationsPersistence.SaveOrderAsync(orderToSave)", source);
+        Assert.DoesNotContain("DeleteSnapshotAsync(snapshot.Id)", source);
+        Assert.Contains("_workflowDraft.OrderId = orderToSave.Id", source);
+        Assert.Contains("TradeOrderHistoryEventKind.Assigned", source);
+        Assert.Contains("TradeOrderHistoryEventKind.PayrollLinked", source);
+        Assert.Contains("Open Orders", source);
+        Assert.Contains("trade/orders?orderId=", source);
     }
 
     [Fact]

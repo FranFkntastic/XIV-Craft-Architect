@@ -4,7 +4,7 @@
 
 .trade-orders-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) clamp(500px, 32vw, 680px);
   gap: 16px;
 }
 
@@ -17,6 +17,7 @@
 
 .trade-orders-header,
 .trade-orders-group-title,
+.trade-orders-panel-heading,
 .trade-orders-note-row {
   display: flex;
   align-items: center;
@@ -27,6 +28,7 @@
 .trade-orders-header {
   justify-content: flex-end;
   margin-bottom: 14px;
+  flex-wrap: wrap;
 }
 
 .trade-orders-panel,
@@ -36,6 +38,23 @@
   border-radius: 6px;
   padding: 14px;
   margin-bottom: 14px;
+}
+
+.trade-orders-group-title {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.trade-orders-group-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .trade-orders-empty-state {
@@ -51,6 +70,91 @@
   grid-template-columns: minmax(220px, 1fr) minmax(180px, 260px) auto;
   gap: 12px;
   align-items: end;
+}
+
+.trade-orders-new-order-grid,
+.trade-orders-search-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 260px) minmax(220px, 1fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.trade-orders-search-row {
+  grid-template-columns: minmax(220px, 1fr) auto;
+  margin-top: 8px;
+}
+
+.trade-orders-search-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.trade-orders-search-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid #3f3f3f;
+  border-radius: 4px;
+  background: #1f1f1f;
+  color: #f3f3f3;
+  cursor: pointer;
+  text-align: left;
+}
+
+.trade-orders-search-result:hover {
+  border-color: #d8b13d;
+  background: #292713;
+}
+
+.trade-orders-search-result span:last-child {
+  color: #a7a7a7;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.trade-orders-output-table {
+  margin: 10px 0 12px;
+  border: 1px solid #343434;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.trade-orders-output-header,
+.trade-orders-output-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 100px 72px 48px;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.trade-orders-output-header {
+  color: #cfcfcf;
+  font-size: 0.78rem;
+  font-weight: 700;
+  background: #1f1f1f;
+  border-bottom: 1px solid #343434;
+}
+
+.trade-orders-output-row {
+  min-height: 44px;
+  border-bottom: 1px solid #303030;
+}
+
+.trade-orders-output-row:last-child {
+  border-bottom: 0;
+}
+
+.trade-orders-output-empty {
+  padding: 12px;
+  color: #aaa;
 }
 
 .trade-orders-detail {
@@ -69,6 +173,148 @@
   padding-left: 18px;
 }
 
+.trade-orders-breakdown-table,
+.trade-orders-material-table {
+  margin: 8px 0 12px;
+  border: 1px solid #343434;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.trade-orders-breakdown-header,
+.trade-orders-breakdown-row,
+.trade-orders-material-header,
+.trade-orders-material-row {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.trade-orders-breakdown-header,
+.trade-orders-material-header {
+  color: #cfcfcf;
+  font-size: 0.78rem;
+  font-weight: 700;
+  background: #1f1f1f;
+  border-bottom: 1px solid #343434;
+}
+
+.trade-orders-breakdown-row,
+.trade-orders-material-row {
+  border-bottom: 1px solid #303030;
+}
+
+.trade-orders-breakdown-row:last-child,
+.trade-orders-material-row:last-child {
+  border-bottom: 0;
+}
+
+.trade-orders-breakdown-header,
+.trade-orders-breakdown-row {
+  grid-template-columns: minmax(160px, 1fr) 72px 48px;
+}
+
+.trade-orders-material-header,
+.trade-orders-material-row {
+  grid-template-columns: minmax(150px, 1fr) 64px 86px 96px minmax(112px, 132px);
+}
+
+.trade-orders-payment-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.trade-orders-hq {
+  display: inline-block;
+  margin-left: 6px;
+  color: #d8b13d;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.trade-orders-material-cell {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.trade-orders-material-cell strong {
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.trade-orders-material-cell span {
+  color: #b8b8b8;
+  font-size: 0.68rem;
+  line-height: 1.2;
+}
+
+.trade-orders-material-warning {
+  color: #f0b45f !important;
+}
+
+.trade-orders-warning-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.trade-orders-payment-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.trade-orders-payment-subtotals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trade-orders-payment-subtotals div {
+  border: 1px solid #343434;
+  border-radius: 6px;
+  padding: 8px;
+  background: #202020;
+  min-width: 0;
+}
+
+.trade-orders-payment-subtotals span {
+  display: block;
+  color: #b8b8b8;
+  font-size: 0.68rem;
+  line-height: 1.1;
+}
+
+.trade-orders-payment-subtotals strong {
+  display: block;
+  color: #f0f0f0;
+  font-size: 0.82rem;
+  line-height: 1.2;
+  margin-top: 3px;
+}
+
+.trade-orders-payment-total {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto 36px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid #373737;
+}
+
+.trade-orders-payment-total span {
+  color: #cfcfcf;
+}
+
+.trade-orders-payment-total strong {
+  color: #f0f0f0;
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
 @media (max-width: 1100px) {
   .trade-orders-layout {
     grid-template-columns: 1fr;
@@ -79,6 +325,22 @@
   }
 
   .trade-orders-import-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .trade-orders-new-order-grid,
+  .trade-orders-search-row,
+  .trade-orders-output-header,
+  .trade-orders-output-row,
+  .trade-orders-breakdown-header,
+  .trade-orders-breakdown-row,
+  .trade-orders-material-header,
+  .trade-orders-material-row,
+  .trade-orders-payment-total {
+    grid-template-columns: 1fr;
+  }
+
+  .trade-orders-payment-subtotals {
     grid-template-columns: 1fr;
   }
 }
