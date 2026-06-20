@@ -9,7 +9,8 @@ public sealed record LodestoneLookupClientOptions(Uri BaseAddress);
 public sealed class HttpLodestoneCrafterLookupService : ILodestoneCrafterLookupService
 {
     private const string HelperUnavailableMessage =
-        "Lodestone lookup helper is unavailable. Start the local Lodestone lookup helper and try again.";
+        "Lodestone lookup helper is unavailable or blocked by browser local-device permissions. " +
+        "Start the helper, then allow Apps on device or Local Network Access for this site if your browser asks.";
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<HttpLodestoneCrafterLookupService> _logger;

@@ -3,6 +3,8 @@ using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.LodestoneLookup.Services;
 
 const string CorsPolicyName = "CraftArchitectWeb";
+const string PrivateNetworkAccessRequestHeader = "Access-Control-Request-Private-Network";
+const string PrivateNetworkAccessResponseHeader = "Access-Control-Allow-Private-Network";
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options =>
@@ -22,6 +24,17 @@ builder.Services.AddCors(options =>
 builder.Services.AddSingleton<ILodestoneCrafterLookupService, NetStoneLodestoneCrafterLookupService>();
 
 var app = builder.Build();
+
+app.Use(async (context, next) =>
+{
+    if (context.Request.Headers.ContainsKey("Origin") ||
+        context.Request.Headers.ContainsKey(PrivateNetworkAccessRequestHeader))
+    {
+        context.Response.Headers[PrivateNetworkAccessResponseHeader] = "true";
+    }
+
+    await next();
+});
 
 app.UseCors(CorsPolicyName);
 
