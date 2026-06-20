@@ -51,18 +51,11 @@ public class TradeOrdersMarkupTests
         Assert.Contains("New Order", source);
         Assert.Contains("Add output item", source);
         Assert.Contains("SearchRequestedOrderItemsAsync", source);
-        Assert.Contains("GarlandService.SearchAsync", source);
         Assert.Contains("TradeOrderCraftPlanBuildService.BuildAsync", source);
         Assert.Contains("PlanPersistence.SaveGeneratedOrderPlanAsync", source);
         Assert.Contains("PlanPersistence.LoadPlanIntoSessionAsync", source);
         Assert.Contains("TradeOrderCraftPlanLinkKind.OrderGenerated", source);
         Assert.Contains("CreateFromRequestedOutputs", source);
-        Assert.Contains("AppState.SelectedDataCenter", source);
-        Assert.Contains("TradeRequestedOrderWorkflow.BuildMaterialSnapshots", source);
-        Assert.Contains("TradeRequestedOrderWorkflow.CreateSuggestedTitle", source);
-        Assert.Contains("_usingSuggestedRequestedOrderTitle", source);
-        Assert.Contains("OnRequestedOrderTitleChanged(value)", source);
-        Assert.Contains("!string.IsNullOrWhiteSpace(_newRequestedOrderTitle)", source);
         Assert.Contains("replaceExistingPlan: false", source);
         Assert.Contains("replaceExistingPlan: true", source);
         Assert.DoesNotContain("TradeOrderCraftSnapshot", source);

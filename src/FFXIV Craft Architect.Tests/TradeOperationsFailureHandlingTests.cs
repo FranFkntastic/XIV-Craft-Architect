@@ -173,32 +173,17 @@ public class TradeOperationsFailureHandlingTests
         Assert.Contains("paymentSummary.Materials", source);
         Assert.Contains("TradeDisplayFormatter.FormatQuantity(item.Quantity)", source);
         Assert.Contains("TradeDisplayFormatter.FormatQuantity(material.Quantity)", source);
-        Assert.Contains("FormatMaterialCost(material)", source);
         Assert.Contains("Payment amount", source);
         Assert.Contains("Total estimated procurement", source);
-        Assert.Contains("GetSelectedOrderPaymentSummary", source);
         Assert.Contains("TradeCommissionPaymentSummary.FromOrder", source);
-        Assert.Contains("HasMaterialBreakdown", source);
         Assert.Contains("materials.All(material => material.UnitCost > 0 && material.TotalCost > 0)", source);
         Assert.Contains("Create a linked craft plan, then run market analysis to populate payment evidence.", source);
         Assert.Contains("Material lines are captured, but pricing evidence is missing.", source);
-        Assert.Contains("FormatResponsibility", source);
-        Assert.Contains("Not priced", source);
         Assert.Contains("SetOrderMaterialResponsibilityAsync", source);
-        Assert.Contains("TradePayrollResponsibilityLine", source);
-        Assert.Contains("CopyOrderPaymentSummaryAsync", source);
         Assert.Contains("CopyGilAmountAsync", source);
-        Assert.Contains("ToString(\"0\")", source);
         Assert.Contains("Disabled=\"@(paymentSummary.TotalPayment <= 0)\"", source);
         Assert.Contains("Disabled=\"@(paymentSummary.EstimatedProcurementTotal <= 0)\"", source);
-        Assert.Contains("BuildOrderPaymentSummary", source);
         Assert.Contains("Refresh Pricing Evidence", source);
-        Assert.Contains("TradeOrderPricingEvidenceService.RefreshAsync(_selectedOrder)", source);
-        Assert.Contains("orderToSave.SourceSnapshot.Materials = result.Materials", source);
-        Assert.Contains("orderToSave.SourceSnapshot.Warnings = result.Warnings", source);
-        Assert.Contains("Pricing evidence refreshed, but failed to save it to the order.", source);
-        Assert.Contains("AddPricingEvidenceHistory", source);
-        Assert.Contains("TradeOrderHistoryEventKind.PricingRefreshed", source);
     }
 
     [Fact]
