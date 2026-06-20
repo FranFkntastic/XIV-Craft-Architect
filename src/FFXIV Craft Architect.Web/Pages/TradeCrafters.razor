@@ -2,6 +2,8 @@
 @using FFXIV_Craft_Architect.Web.Shared.TablePrimitives
 @inject AppState AppState
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject ILodestoneCrafterLookupService LodestoneCrafterLookup
+@inject TradeCrafterProfileImportMapper LodestoneImportMapper
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
 @implements IDisposable
@@ -30,6 +32,87 @@
         {
             <div class="trade-crafters-layout">
             <section class="trade-crafters-main">
+                <section class="trade-crafters-panel trade-crafters-lodestone-import">
+                    <MudText Typo="Typo.subtitle1">Import from Lodestone</MudText>
+                    <div class="trade-crafters-lodestone-search-row">
+                        <MudTextField @bind-Value="_lodestoneSearchName"
+                                      Label="Character name"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Immediate="true" />
+                        <MudSelect T="string"
+                                   @bind-Value="_lodestoneSearchWorld"
+                                   Label="World"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense">
+                            <MudSelectItem Value="@string.Empty">Use selected data center</MudSelectItem>
+                            @foreach (var world in GetWorldsForDataCenter(GetDefaultDataCenter()))
+                            {
+                                <MudSelectItem Value="@world">@world</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   OnClick="SearchLodestoneAsync"
+                                   Disabled="@(_lodestoneIsBusy || string.IsNullOrWhiteSpace(_lodestoneSearchName))">
+                            Search Lodestone
+                        </MudButton>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_lodestoneError))
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">@_lodestoneError</MudAlert>
+                    }
+                    @if (_lodestoneCandidates.Count > 0)
+                    {
+                        <div class="trade-crafters-lodestone-results">
+                            @foreach (var candidate in _lodestoneCandidates)
+                            {
+                                <button type="button"
+                                        class="trade-crafters-lodestone-result"
+                                        @onclick="@(() => PreviewLodestoneCandidateAsync(candidate))">
+                                    <span>@candidate.DisplayName</span>
+                                    <small>@FormatLodestoneCandidateLocation(candidate) @candidate.LodestoneCharacterId</small>
+                                </button>
+                            }
+                        </div>
+                    }
+                    @if (_lodestonePreview != null)
+                    {
+                        <div class="trade-crafters-lodestone-preview">
+                            <div class="trade-crafters-lodestone-preview-heading">
+                                <strong>@_lodestonePreview.DisplayName</strong>
+                                <span>@FormatPreviewLocation(_lodestonePreview)</span>
+                            </div>
+                            <span>@FormatImportedJobSummary(_lodestonePreview)</span>
+                            @if (!string.IsNullOrWhiteSpace(_lodestonePreview.FreeCompanyName))
+                            {
+                                <span>@_lodestonePreview.FreeCompanyName</span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(FormatLodestonePreviewIdentity(_lodestonePreview)))
+                            {
+                                <span>@FormatLodestonePreviewIdentity(_lodestonePreview)</span>
+                            }
+                            <div class="trade-crafters-lodestone-actions">
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           OnClick="CreateCrafterFromLodestoneAsync"
+                                           Disabled="@_lodestoneIsBusy">
+                                    Create Crafter From Lodestone
+                                </MudButton>
+                                @if (_selectedCrafter != null)
+                                {
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Secondary"
+                                               OnClick="UpdateSelectedCrafterFromLodestoneAsync"
+                                               Disabled="@_lodestoneIsBusy">
+                                        Update Selected Crafter
+                                    </MudButton>
+                                }
+                            </div>
+                        </div>
+                    }
+                </section>
+
                 <section class="trade-crafters-panel">
                     <MudText Typo="Typo.subtitle1">Create Crafter</MudText>
                     <div class="trade-crafters-create-row">
@@ -114,8 +197,20 @@
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
                                       Immediate="true" />
+                        <MudTextField @bind-Value="_detailAlias"
+                                      Label="Alias"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" />
                         <MudTextField @bind-Value="_detailContact"
-                                      Label="Contact handle"
+                                      Label="General contact"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" />
+                        <MudTextField @bind-Value="_detailDiscordHandle"
+                                      Label="Discord"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" />
+                        <MudTextField @bind-Value="_detailSocialProfileUrl"
+                                      Label="Social/profile URL"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense" />
                         <MudSelect T="string"
@@ -152,6 +247,43 @@
                                 <MudSelectItem Value="@world">@world</MudSelectItem>
                             }
                         </MudSelect>
+                        @if (HasLodestoneFlair(_selectedCrafter))
+                        {
+                            <div class="trade-crafter-lodestone-flair">
+                                @if (!string.IsNullOrWhiteSpace(_selectedCrafter.LodestonePortraitUrl) ||
+                                     !string.IsNullOrWhiteSpace(_selectedCrafter.LodestoneAvatarUrl))
+                                {
+                                    <img src="@(_selectedCrafter.LodestonePortraitUrl ?? _selectedCrafter.LodestoneAvatarUrl)"
+                                         alt=""
+                                         loading="lazy" />
+                                }
+                                <div>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Lodestone</MudText>
+                                    @if (!string.IsNullOrWhiteSpace(_selectedCrafter.LodestoneProfileUrl))
+                                    {
+                                        <MudLink Href="@_selectedCrafter.LodestoneProfileUrl"
+                                                 Target="_blank"
+                                                 Typo="Typo.body2">
+                                            Open profile
+                                        </MudLink>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(FormatLodestoneIdentity(_selectedCrafter)))
+                                    {
+                                        <MudText Typo="Typo.body2">@FormatLodestoneIdentity(_selectedCrafter)</MudText>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(_selectedCrafter.LodestoneFreeCompanyName))
+                                    {
+                                        <MudText Typo="Typo.body2">@_selectedCrafter.LodestoneFreeCompanyName</MudText>
+                                    }
+                                    @if (_selectedCrafter.LodestoneLastSyncedAtUtc != null)
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            Synced @_selectedCrafter.LodestoneLastSyncedAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd h:mm tt")
+                                        </MudText>
+                                    }
+                                </div>
+                            </div>
+                        }
                         <MudTextField @bind-Value="_detailPaymentNotes"
                                       Label="Payment notes"
                                       Variant="Variant.Outlined"
@@ -227,7 +359,10 @@
     private string _newCrafterDataCenter = string.Empty;
     private string _newCrafterWorld = string.Empty;
     private string _detailName = string.Empty;
+    private string? _detailAlias;
     private string? _detailContact;
+    private string? _detailDiscordHandle;
+    private string? _detailSocialProfileUrl;
     private string _detailRegion = string.Empty;
     private string _detailWorld = string.Empty;
     private string _detailDataCenter = string.Empty;
@@ -235,6 +370,12 @@
     private string? _detailOperatorNotes;
     private Dictionary<TradeCraftingJob, int> _jobLevels = [];
     private string? _loadError;
+    private string _lodestoneSearchName = string.Empty;
+    private string _lodestoneSearchWorld = string.Empty;
+    private bool _lodestoneIsBusy;
+    private string? _lodestoneError;
+    private IReadOnlyList<LodestoneCrafterSearchCandidate> _lodestoneCandidates = [];
+    private LodestoneCrafterImportPreview? _lodestonePreview;
     private static readonly IReadOnlyList<string> TradeRegions = ["North America", "Europe", "Japan", "Oceania"];
 
     private IReadOnlyList<TradeCrafterProfile> SortedCrafters => _crafters
@@ -379,11 +520,117 @@
         Snackbar.Add("Crafter created", Severity.Success);
     }
 
+    private async Task SearchLodestoneAsync()
+    {
+        _lodestoneIsBusy = true;
+        _lodestoneError = null;
+        _lodestonePreview = null;
+        try
+        {
+            var result = await LodestoneCrafterLookup.SearchAsync(new LodestoneCrafterSearchRequest(
+                _lodestoneSearchName,
+                NormalizeOptionalText(_lodestoneSearchWorld),
+                string.IsNullOrWhiteSpace(_lodestoneSearchWorld) ? GetDefaultDataCenter() : null));
+
+            if (!result.Succeeded || result.Value == null)
+            {
+                _lodestoneCandidates = [];
+                _lodestoneError = result.ErrorMessage ?? "Lodestone search failed.";
+                return;
+            }
+
+            _lodestoneCandidates = result.Value;
+            if (_lodestoneCandidates.Count == 0)
+            {
+                _lodestoneError = "No Lodestone characters matched that search.";
+            }
+        }
+        finally
+        {
+            _lodestoneIsBusy = false;
+        }
+    }
+
+    private async Task PreviewLodestoneCandidateAsync(LodestoneCrafterSearchCandidate candidate)
+    {
+        _lodestoneIsBusy = true;
+        _lodestoneError = null;
+        try
+        {
+            var result = await LodestoneCrafterLookup.GetImportPreviewAsync(candidate.LodestoneCharacterId);
+            if (!result.Succeeded || result.Value == null)
+            {
+                _lodestonePreview = null;
+                _lodestoneError = result.ErrorMessage ?? "Lodestone preview failed.";
+                return;
+            }
+
+            _lodestonePreview = EnrichPreviewLocation(result.Value);
+        }
+        finally
+        {
+            _lodestoneIsBusy = false;
+        }
+    }
+
+    private async Task CreateCrafterFromLodestoneAsync()
+    {
+        if (_companyProfile == null || _lodestonePreview == null)
+        {
+            return;
+        }
+
+        var crafter = LodestoneImportMapper.CreateProfile(_companyProfile.Id, _lodestonePreview);
+        var saved = await TradeOperationsPersistence.SaveCrafterAsync(crafter);
+        if (!saved)
+        {
+            Snackbar.Add("Failed to save Lodestone crafter.", Severity.Error);
+            return;
+        }
+
+        await LoadAsync();
+        if (_loadError != null ||
+            !SelectCrafterAfterReload(crafter.Id, "Crafter imported, but it could not be loaded."))
+        {
+            return;
+        }
+
+        Snackbar.Add("Crafter imported from Lodestone", Severity.Success);
+    }
+
+    private async Task UpdateSelectedCrafterFromLodestoneAsync()
+    {
+        if (_selectedCrafter == null || _lodestonePreview == null)
+        {
+            return;
+        }
+
+        var crafter = LodestoneImportMapper.UpdateProfile(_selectedCrafter, _lodestonePreview);
+        var saved = await TradeOperationsPersistence.SaveCrafterAsync(crafter);
+        if (!saved)
+        {
+            Snackbar.Add("Failed to update crafter from Lodestone.", Severity.Error);
+            return;
+        }
+
+        await LoadAsync();
+        if (_loadError != null ||
+            !SelectCrafterAfterReload(crafter.Id, "Crafter updated, but it could not be loaded."))
+        {
+            return;
+        }
+
+        Snackbar.Add("Crafter updated from Lodestone", Severity.Success);
+    }
+
     private void SelectCrafter(TradeCrafterProfile crafter)
     {
         _selectedCrafter = crafter;
         _detailName = crafter.DisplayName;
+        _detailAlias = crafter.Alias;
         _detailContact = crafter.ContactHandle;
+        _detailDiscordHandle = crafter.DiscordHandle;
+        _detailSocialProfileUrl = crafter.SocialProfileUrl;
         _detailDataCenter = string.IsNullOrWhiteSpace(crafter.DataCenter)
             ? GetDefaultDataCenter()
             : crafter.DataCenter;
@@ -424,7 +671,10 @@
         var crafterId = _selectedCrafter.Id;
         var crafterToSave = CopyCrafter(_selectedCrafter);
         crafterToSave.DisplayName = _detailName.Trim();
-        crafterToSave.ContactHandle = _detailContact;
+        crafterToSave.Alias = NormalizeOptionalText(_detailAlias);
+        crafterToSave.ContactHandle = NormalizeOptionalText(_detailContact);
+        crafterToSave.DiscordHandle = NormalizeOptionalText(_detailDiscordHandle);
+        crafterToSave.SocialProfileUrl = NormalizeOptionalText(_detailSocialProfileUrl);
         crafterToSave.WorldName = NormalizeOptionalText(_detailWorld);
         crafterToSave.DataCenter = NormalizeOptionalText(_detailDataCenter);
         crafterToSave.PaymentNotes = _detailPaymentNotes;
@@ -583,6 +833,74 @@
             : $"{crafter.JobLevels.Count:N0} jobs / {maxLevel:N0}";
     }
 
+    private static string FormatImportedJobSummary(LodestoneCrafterImportPreview preview)
+    {
+        var maxLevel = preview.JobLevels.Count == 0 ? 0 : preview.JobLevels.Max(level => level.Level);
+        return maxLevel == 0
+            ? "No crafter levels found"
+            : $"{preview.JobLevels.Count(level => level.Level > 0):N0} jobs / {maxLevel:N0}";
+    }
+
+    private static string FormatLodestonePreviewIdentity(LodestoneCrafterImportPreview preview)
+    {
+        return string.Join(" / ", new[]
+        {
+            preview.Race,
+            preview.Clan,
+            preview.Gender
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+    }
+
+    private static bool HasLodestoneFlair(TradeCrafterProfile crafter)
+    {
+        return !string.IsNullOrWhiteSpace(crafter.LodestoneProfileUrl) ||
+               !string.IsNullOrWhiteSpace(crafter.LodestoneAvatarUrl) ||
+               !string.IsNullOrWhiteSpace(crafter.LodestonePortraitUrl) ||
+               !string.IsNullOrWhiteSpace(crafter.LodestoneFreeCompanyName) ||
+               !string.IsNullOrWhiteSpace(crafter.LodestoneRace) ||
+               !string.IsNullOrWhiteSpace(crafter.LodestoneClan) ||
+               !string.IsNullOrWhiteSpace(crafter.LodestoneGender);
+    }
+
+    private static string FormatLodestoneIdentity(TradeCrafterProfile crafter)
+    {
+        return string.Join(" / ", new[]
+        {
+            crafter.LodestoneRace,
+            crafter.LodestoneClan,
+            crafter.LodestoneGender
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+    }
+
+    private static string FormatLodestoneCandidateLocation(LodestoneCrafterSearchCandidate candidate)
+    {
+        if (!string.IsNullOrWhiteSpace(candidate.WorldName) && !string.IsNullOrWhiteSpace(candidate.DataCenter))
+        {
+            return $"{candidate.WorldName} / {candidate.DataCenter}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(candidate.WorldName))
+        {
+            return candidate.WorldName;
+        }
+
+        return string.IsNullOrWhiteSpace(candidate.DataCenter)
+            ? "Lodestone"
+            : candidate.DataCenter;
+    }
+
+    private static string FormatPreviewLocation(LodestoneCrafterImportPreview preview)
+    {
+        if (!string.IsNullOrWhiteSpace(preview.WorldName) && !string.IsNullOrWhiteSpace(preview.DataCenter))
+        {
+            return $"{preview.WorldName} / {preview.DataCenter}";
+        }
+
+        return string.IsNullOrWhiteSpace(preview.WorldName)
+            ? "No world reported"
+            : preview.WorldName;
+    }
+
     private static string FormatJob(TradeCraftingJob job)
     {
         return job switch
@@ -640,6 +958,37 @@
             : [];
     }
 
+    private LodestoneCrafterImportPreview EnrichPreviewLocation(LodestoneCrafterImportPreview preview)
+    {
+        if (!string.IsNullOrWhiteSpace(preview.DataCenter) || string.IsNullOrWhiteSpace(preview.WorldName))
+        {
+            return preview;
+        }
+
+        var dataCenter = ResolveDataCenterForWorld(preview.WorldName);
+        return string.IsNullOrWhiteSpace(dataCenter)
+            ? preview
+            : preview with { DataCenter = dataCenter };
+    }
+
+    private string? ResolveDataCenterForWorld(string worldName)
+    {
+        if (AppState.WorldData?.DataCenterToWorlds == null)
+        {
+            return null;
+        }
+
+        foreach (var pair in AppState.WorldData.DataCenterToWorlds)
+        {
+            if (pair.Value.Contains(worldName, StringComparer.OrdinalIgnoreCase))
+            {
+                return pair.Key;
+            }
+        }
+
+        return null;
+    }
+
     private bool IsWorldInDataCenter(string? world, string dataCenter)
     {
         return !string.IsNullOrWhiteSpace(world) &&
@@ -658,9 +1007,21 @@
             Id = crafter.Id,
             CompanyProfileId = crafter.CompanyProfileId,
             DisplayName = crafter.DisplayName,
+            Alias = crafter.Alias,
             ContactHandle = crafter.ContactHandle,
+            DiscordHandle = crafter.DiscordHandle,
+            SocialProfileUrl = crafter.SocialProfileUrl,
             WorldName = crafter.WorldName,
             DataCenter = crafter.DataCenter,
+            LodestoneCharacterId = crafter.LodestoneCharacterId,
+            LodestoneProfileUrl = crafter.LodestoneProfileUrl,
+            LodestoneLastSyncedAtUtc = crafter.LodestoneLastSyncedAtUtc,
+            LodestoneAvatarUrl = crafter.LodestoneAvatarUrl,
+            LodestonePortraitUrl = crafter.LodestonePortraitUrl,
+            LodestoneFreeCompanyName = crafter.LodestoneFreeCompanyName,
+            LodestoneRace = crafter.LodestoneRace,
+            LodestoneClan = crafter.LodestoneClan,
+            LodestoneGender = crafter.LodestoneGender,
             AvailabilityNotes = crafter.AvailabilityNotes,
             PaymentNotes = crafter.PaymentNotes,
             OperatorNotes = crafter.OperatorNotes,

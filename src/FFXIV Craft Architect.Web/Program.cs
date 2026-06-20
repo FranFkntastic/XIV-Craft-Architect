@@ -71,6 +71,22 @@ builder.Services.AddScoped<TradePayrollPersistenceService>();
 builder.Services.AddScoped<TradeOrderDraftFactory>();
 builder.Services.AddScoped<TradeOrderCraftPlanBuildService>();
 builder.Services.AddScoped<TradeOrderPricingEvidenceService>();
+builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
+builder.Services.AddScoped(_ => new LodestoneLookupClientOptions(new Uri(
+    builder.Configuration["LodestoneLookup:BaseAddress"] ?? "http://localhost:5128/")));
+builder.Services.AddScoped<ILodestoneCrafterLookupService>(sp =>
+{
+    var options = sp.GetRequiredService<LodestoneLookupClientOptions>();
+    var logger = sp.GetRequiredService<ILogger<HttpLodestoneCrafterLookupService>>();
+    return new HttpLodestoneCrafterLookupService(
+        new HttpClient
+        {
+            BaseAddress = options.BaseAddress,
+            Timeout = TimeSpan.FromSeconds(30)
+        },
+        options,
+        logger);
+});
 builder.Services.AddScoped<TradeOperationsPersistenceService>();
 
 // Register IndexedDB service for browser persistence

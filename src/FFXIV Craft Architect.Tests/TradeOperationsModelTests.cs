@@ -40,6 +40,52 @@ public class TradeOperationsModelTests
     }
 
     [Fact]
+    public void TradeCrafterProfile_CanStoreLodestoneProvenance()
+    {
+        var syncedAt = new DateTime(2026, 6, 20, 4, 0, 0, DateTimeKind.Utc);
+
+        var crafter = new TradeCrafterProfile
+        {
+            DisplayName = "Level Checker",
+            LodestoneCharacterId = "16331040",
+            LodestoneProfileUrl = "https://na.finalfantasyxiv.com/lodestone/character/16331040/",
+            LodestoneAvatarUrl = "https://img2.finalfantasyxiv.com/example.jpg",
+            LodestonePortraitUrl = "https://img2.finalfantasyxiv.com/portrait.jpg",
+            LodestoneFreeCompanyName = "Terms of Service",
+            LodestoneRace = "Viera",
+            LodestoneClan = "Veena",
+            LodestoneGender = "Female",
+            LodestoneLastSyncedAtUtc = syncedAt
+        };
+
+        Assert.Equal("16331040", crafter.LodestoneCharacterId);
+        Assert.Equal("https://na.finalfantasyxiv.com/lodestone/character/16331040/", crafter.LodestoneProfileUrl);
+        Assert.Equal("https://img2.finalfantasyxiv.com/example.jpg", crafter.LodestoneAvatarUrl);
+        Assert.Equal("https://img2.finalfantasyxiv.com/portrait.jpg", crafter.LodestonePortraitUrl);
+        Assert.Equal("Terms of Service", crafter.LodestoneFreeCompanyName);
+        Assert.Equal("Viera", crafter.LodestoneRace);
+        Assert.Equal("Veena", crafter.LodestoneClan);
+        Assert.Equal("Female", crafter.LodestoneGender);
+        Assert.Equal(syncedAt, crafter.LodestoneLastSyncedAtUtc);
+    }
+
+    [Fact]
+    public void TradeCrafterProfile_CanStoreLocalContactIdentity()
+    {
+        var crafter = new TradeCrafterProfile
+        {
+            DisplayName = "Level Checker",
+            Alias = "LC",
+            DiscordHandle = "levelchecker",
+            SocialProfileUrl = "https://example.com/levelchecker"
+        };
+
+        Assert.Equal("LC", crafter.Alias);
+        Assert.Equal("levelchecker", crafter.DiscordHandle);
+        Assert.Equal("https://example.com/levelchecker", crafter.SocialProfileUrl);
+    }
+
+    [Fact]
     public void OrderStatus_WorkflowOrderKeepsActiveStatusesBeforeArchiveStatuses()
     {
         var ordered = TradeOrderStatusWorkflow.ActiveStatuses.Concat(TradeOrderStatusWorkflow.ArchiveStatuses).ToArray();

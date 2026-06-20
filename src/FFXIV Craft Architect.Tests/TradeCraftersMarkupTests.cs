@@ -13,6 +13,15 @@ public class TradeCraftersMarkupTests
         Assert.Contains("TradeCraftingJob", source);
         Assert.Contains("Carpenter", source);
         Assert.Contains("Culinarian", source);
+        Assert.Contains("ILodestoneCrafterLookupService", source);
+        Assert.Contains("Import from Lodestone", source);
+        Assert.Contains("Search Lodestone", source);
+        Assert.Contains("PreviewLodestoneCandidateAsync", source);
+        Assert.Contains("CreateCrafterFromLodestoneAsync", source);
+        Assert.Contains("Alias", source);
+        Assert.Contains("Discord", source);
+        Assert.Contains("Social/profile URL", source);
+        Assert.Contains("trade-crafter-lodestone-flair", source);
         Assert.DoesNotContain("Miner", source);
         Assert.DoesNotContain("Botanist", source);
         Assert.DoesNotContain("Fisher", source);
