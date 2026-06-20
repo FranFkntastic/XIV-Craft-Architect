@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using System.Text.Json;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -56,9 +57,15 @@ public sealed class WebPlanPersistenceService
         string planId,
         string planName,
         DateTime? savedAt = null,
-        bool includeSourcePlanIdentity = false)
+        bool includeSourcePlanIdentity = false,
+        bool includeLegacyMarketAnalysisFields = true)
     {
-        return _snapshotBuilder.Build(planId, planName, savedAt, includeSourcePlanIdentity);
+        return _snapshotBuilder.Build(
+            planId,
+            planName,
+            savedAt,
+            includeSourcePlanIdentity,
+            includeLegacyMarketAnalysisFields);
     }
 
     public async Task<bool> SaveSnapshotAsync(StoredPlan snapshot)
@@ -70,9 +77,56 @@ public sealed class WebPlanPersistenceService
         string planId,
         string planName,
         DateTime? savedAt = null,
-        bool includeSourcePlanIdentity = false)
+        bool includeSourcePlanIdentity = false,
+        bool includeLegacyMarketAnalysisFields = true)
     {
-        var snapshot = BuildSnapshot(planId, planName, savedAt, includeSourcePlanIdentity);
+        var snapshot = BuildSnapshot(
+            planId,
+            planName,
+            savedAt,
+            includeSourcePlanIdentity,
+            includeLegacyMarketAnalysisFields);
+        return await SaveSnapshotAsync(snapshot);
+    }
+
+    public async Task<bool> SaveGeneratedOrderPlanAsync(
+        string planId,
+        string planName,
+        CraftingPlan plan,
+        IReadOnlyList<TradeOrderRootItemSnapshot> rootItems,
+        DateTime? savedAt = null)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(rootItems);
+
+        var timestamp = savedAt ?? DateTime.UtcNow;
+        var snapshot = new StoredPlan
+        {
+            Id = planId,
+            Name = planName,
+            DataCenter = plan.DataCenter,
+            ModifiedAt = timestamp,
+            SavedAt = timestamp,
+            ProjectItems = rootItems
+                .Where(item => item.Quantity > 0)
+                .Select(item => new StoredProjectItem
+                {
+                    Id = item.ItemId,
+                    Name = item.Name,
+                    Quantity = item.Quantity,
+                    MustBeHq = item.MustBeHq
+                })
+                .ToList(),
+            PlanJson = JsonSerializer.Serialize(plan),
+            MarketPlansJson = null,
+            MarketIntelligenceJson = null,
+            MarketItemAnalysesJson = null,
+            MarketAnalysisRecipeBasisJson = null,
+            MarketAnalysisScopeSnapshotJson = null,
+            SavedRecommendationMode = RecommendationMode.MinimizeTotalCost,
+            SavedMarketAnalysisLens = MarketAcquisitionLens.MinimumUpfrontCost
+        };
+
         return await SaveSnapshotAsync(snapshot);
     }
 

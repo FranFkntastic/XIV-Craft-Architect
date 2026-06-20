@@ -26,6 +26,9 @@ public class TradeOrderDraftFactoryTests
         Assert.Equal(TradeOrderSourceKind.ActiveCraftPlan, result.Order.SourceSnapshot.SourceKind);
         Assert.Equal("Aether", result.Order.SourceSnapshot.DataCenter);
         Assert.Equal(12_000m, result.Order.SourceSnapshot.RootItems.Single(item => item.Name == "Fancy Robe").EstimatedSaleValue);
+        Assert.Null(result.Order.CraftPlanId);
+        Assert.Null(result.Order.CraftPlanName);
+        Assert.Null(result.Order.CraftPlanSavedAtUtc);
     }
 
     [Fact]

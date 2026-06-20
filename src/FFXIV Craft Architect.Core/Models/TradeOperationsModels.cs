@@ -108,6 +108,12 @@ public enum TradeOrderSourceKind
     ImportedExternal
 }
 
+public enum TradeOrderCraftPlanLinkKind
+{
+    Unknown,
+    OrderGenerated
+}
+
 public sealed class TradeOrder
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -122,6 +128,10 @@ public sealed class TradeOrder
     public TradeOrderSourceSnapshot SourceSnapshot { get; set; } = new();
     public IReadOnlyList<TradeOrderHistoryEvent> History { get; set; } = Array.Empty<TradeOrderHistoryEvent>();
     public string? PayrollDraftId { get; set; }
+    public string? CraftPlanId { get; set; }
+    public string? CraftPlanName { get; set; }
+    public DateTime? CraftPlanSavedAtUtc { get; set; }
+    public TradeOrderCraftPlanLinkKind CraftPlanLinkKind { get; set; } = TradeOrderCraftPlanLinkKind.Unknown;
     public string? RemoteId { get; set; }
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;
 }

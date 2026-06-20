@@ -3,6 +3,8 @@
 Date: 2026-06-19
 Branch: company-profile-work
 
+> Follow-up note, 2026-06-19: references to plan snapshot controls now mean linked Craft Architect saved-plan controls. Payment/pricing evidence refresh is specified separately in `2026-06-19-trade-order-pricing-evidence.md`.
+
 ## Goal
 
 Make Orders the primary Trade Architect operational surface while preserving the current durable company, crafter, order, payroll, and craft-plan workflow model.

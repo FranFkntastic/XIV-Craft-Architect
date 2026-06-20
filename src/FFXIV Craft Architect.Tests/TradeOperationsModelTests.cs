@@ -88,4 +88,13 @@ public class TradeOperationsModelTests
         Assert.Null(snapshot.DataCenter);
         Assert.Null(snapshot.World);
     }
+
+    [Fact]
+    public void TradeOrder_DefaultCraftPlanLinkKindIsUnknownForLegacySafety()
+    {
+        var order = new TradeOrder();
+
+        Assert.Null(order.CraftPlanId);
+        Assert.Equal(TradeOrderCraftPlanLinkKind.Unknown, order.CraftPlanLinkKind);
+    }
 }

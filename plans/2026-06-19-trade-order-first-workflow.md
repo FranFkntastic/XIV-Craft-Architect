@@ -1,5 +1,7 @@
 # Trade Order-First Workflow Implementation Plan
 
+> Superseded storage note, 2026-06-19: this plan's `TradeOrderCraftSnapshot` language was an intermediate design. Current direction is to use normal Craft Architect saved plans for order craft plans, with Trade orders storing linked-plan identity and order-facing pricing evidence. See `2026-06-19-trade-orders-saved-plan-roadmap.md` and `2026-06-19-trade-order-pricing-evidence.md`.
+
 ## Goal
 
 Move Trade Architect toward an order-first operations workflow where orders are the durable object, requested outputs are the entry point, and payment/payroll becomes part of the selected order workflow rather than a separate top-level destination.

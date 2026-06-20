@@ -1,13 +1,12 @@
 @page "/trade/orders"
 @using System.Text
-@using FFXIV_Craft_Architect.Web.Shared.TablePrimitives
 @inject AppState AppState
 @inject GarlandService GarlandService
 @inject TradeOrderDraftFactory TradeOrderDraftFactory
 @inject TradeOrderCraftPlanBuildService TradeOrderCraftPlanBuildService
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradePayrollPersistenceService TradePayrollPersistence
-@inject RecipePlannerCommandService RecipePlannerCommandService
+@inject WebPlanPersistenceService PlanPersistence
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject IJSRuntime JSRuntime
@@ -35,489 +34,634 @@
         }
         else
         {
-            <div class="trade-orders-layout">
-            <section class="trade-orders-main">
-                <div class="trade-orders-header">
-                    <MudButton Variant="Variant.Filled"
-                               Color="Color.Primary"
-                               StartIcon="@Icons.Material.Filled.AddTask"
-                               OnClick="ToggleNewOrderPanel">
-                        New Order
-                    </MudButton>
-                    <MudButton Variant="Variant.Filled"
-                               Color="Color.Secondary"
-                               StartIcon="@Icons.Material.Filled.Assignment"
-                               OnClick="PrepareOrderImport">
-                        Create Order from Active Craft Plan
-                    </MudButton>
-                </div>
-
-                @if (_showNewOrderPanel)
-                {
-                    <section class="trade-orders-panel trade-orders-new-order">
-                        <div class="trade-orders-panel-heading">
-                            <MudText Typo="Typo.subtitle1">New Order</MudText>
-                            <MudButton Variant="Variant.Text"
-                                       Color="Color.Secondary"
-                                       Size="Size.Small"
-                                       OnClick="ResetNewOrderDraft">
-                                Clear
-                            </MudButton>
-                        </div>
-                        <div class="trade-orders-new-order-grid">
-                            <MudTextField T="string"
-                                          Value="@_newRequestedOrderTitle"
-                                          ValueChanged="value => OnRequestedOrderTitleChanged(value)"
-                                          Label="Order title"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          Immediate="true" />
-                            <MudSelect T="Guid?"
-                                       @bind-Value="_newRequestedOrderCrafterId"
-                                       Label="Assigned crafter"
-                                       Variant="Variant.Outlined"
-                                       Margin="Margin.Dense"
-                                       Clearable="true">
-                                @foreach (var crafter in _crafters)
-                                {
-                                    <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
-                                }
-                            </MudSelect>
-                            <MudTextField @bind-Value="_newRequestedOrderNotes"
-                                          Label="Notes"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          Lines="1" />
-                        </div>
-
-                        <div class="trade-orders-search-row">
-                            <MudTextField @bind-Value="_requestedOrderSearchQuery"
-                                          Label="Add output item"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          Immediate="true"
-                                          OnKeyUp="OnRequestedOrderSearchKeyUp" />
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Secondary"
-                                       OnClick="SearchRequestedOrderItemsAsync"
-                                       Disabled="@(_isSearchingRequestedOrderItems || string.IsNullOrWhiteSpace(_requestedOrderSearchQuery))">
-                                @(_isSearchingRequestedOrderItems ? "Searching..." : "Search")
-                            </MudButton>
-                        </div>
-
-                        @if (_requestedOrderSearchResults.Count > 0)
-                        {
-                            <div class="trade-orders-search-results">
-                                @foreach (var result in _requestedOrderSearchResults)
-                                {
-                                    <button type="button"
-                                            class="trade-orders-search-result"
-                                            @onclick="() => AddRequestedOrderOutput(result)">
-                                        <span>@result.Object.Name</span>
-                                        <span>ID @result.Id</span>
-                                    </button>
-                                }
-                            </div>
-                        }
-
-                        <div class="trade-orders-output-table">
-                            <div class="trade-orders-output-header">
-                                <span>Item</span>
-                                <span>Qty</span>
-                                <span>HQ</span>
-                                <span></span>
-                            </div>
-                            @if (_requestedOrderOutputs.Count == 0)
-                            {
-                                <div class="trade-orders-output-empty">Add at least one requested output.</div>
-                            }
-                            else
-                            {
-                                @foreach (var output in _requestedOrderOutputs)
-                                {
-                                    <div class="trade-orders-output-row">
-                                        <span>@output.Name</span>
-                                        <MudNumericField T="int"
-                                                         Value="@output.Quantity"
-                                                         ValueChanged="quantity => UpdateRequestedOrderOutputQuantity(output, quantity)"
-                                                         Min="1"
-                                                         Max="9999"
-                                                         Variant="Variant.Outlined"
-                                                         Margin="Margin.Dense" />
-                                        <MudCheckBox T="bool"
-                                                     Value="@output.MustBeHq"
-                                                     ValueChanged="mustBeHq => UpdateRequestedOrderOutputHq(output, mustBeHq)"
-                                                     Color="Color.Primary" />
-                                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
-                                                       Color="Color.Error"
-                                                       Size="Size.Small"
-                                                       OnClick="() => RemoveRequestedOrderOutput(output)" />
-                                    </div>
-                                }
-                            }
-                        </div>
-
-                        <MudButton Variant="Variant.Filled"
-                                   Color="Color.Primary"
-                                   OnClick="CreateRequestedOrderAsync"
-                                   Disabled="@(!CanCreateRequestedOrder || _isCreatingRequestedOrder)">
-                            @(_isCreatingRequestedOrder ? "Creating Order..." : "Create Order")
-                        </MudButton>
-                    </section>
-                }
-
-                @if (_pendingImport != null)
-                {
-                    <section class="trade-orders-panel">
-                        <MudText Typo="Typo.subtitle1">Suggested title</MudText>
-                        <div class="trade-orders-import-grid">
-                            <MudTextField @bind-Value="_newOrderTitle"
-                                          Label="Order title"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          Immediate="true" />
-                            <MudSelect T="Guid?"
-                                       @bind-Value="_newOrderCrafterId"
-                                       Label="Assigned crafter"
-                                       Variant="Variant.Outlined"
-                                       Margin="Margin.Dense"
-                                       Clearable="true">
-                                @foreach (var crafter in _crafters)
-                                {
-                                    <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
-                                }
-                            </MudSelect>
-                            <MudButton Variant="Variant.Filled"
+            <div class="trade-orders-board">
+                <aside class="trade-orders-rail">
+                    <div class="trade-orders-rail-header">
+                        <MudText Typo="Typo.subtitle1">Orders</MudText>
+                        <MudIconButton Icon="@Icons.Material.Filled.Add"
                                        Color="Color.Primary"
-                                       OnClick="CreatePendingOrderAsync"
-                                       Disabled="@string.IsNullOrWhiteSpace(_newOrderTitle)">
-                                Confirm Order
-                            </MudButton>
-                        </div>
-                    </section>
-                }
-
-                @if (ActiveOrderGroups.Count == 0 && ArchivedOrders.Count == 0)
-                {
-                    <section class="trade-orders-empty-state">
-                        <MudText Typo="Typo.subtitle1">No orders yet</MudText>
-                        <MudText Typo="Typo.body2" Color="Color.Secondary">Create an order from the active craft plan to start tracking assignments.</MudText>
-                    </section>
-                }
-
-                @foreach (var group in ActiveOrderGroups)
-                {
-                    <section class="trade-orders-group">
-                        <button type="button"
-                                class="trade-orders-group-title"
-                                @onclick="@(() => ToggleStatusGroup(group.Status))"
-                                aria-expanded="@(!IsStatusGroupCollapsed(group.Status))">
-                            <span class="trade-orders-group-label">
-                                <MudIcon Icon="@(IsStatusGroupCollapsed(group.Status) ? Icons.Material.Filled.ChevronRight : Icons.Material.Filled.ExpandMore)" Size="Size.Small" />
-                                <MudText Typo="Typo.subtitle1">@FormatStatus(group.Status)</MudText>
-                            </span>
-                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@group.Orders.Count.ToString("N0")</MudChip>
-                        </button>
-                        @if (!IsStatusGroupCollapsed(group.Status))
-                        {
-                            <WebDataTable TItem="TradeOrder"
-                                          TColumnId="TradeOrderColumn"
-                                          Items="group.Orders"
-                                          Columns="Columns"
-                                          GetRowKey="GetOrderKey"
-                                          GetRowClass="GetOrderRowClass"
-                                          RowClicked="SelectOrder"
-                                          CssClass="trade-orders-table">
-                                <EmptyContent>
-                                    <span>No orders in @FormatStatus(group.Status).</span>
-                                </EmptyContent>
-                            </WebDataTable>
-                        }
-                    </section>
-                }
-
-                @if (ArchivedOrders.Count > 0)
-                {
-                    <section class="trade-orders-group">
-                        <button type="button"
-                                class="trade-orders-group-title"
-                                @onclick="ToggleArchiveGroup"
-                                aria-expanded="@(!_isArchiveCollapsed)">
-                            <span class="trade-orders-group-label">
-                                <MudIcon Icon="@(_isArchiveCollapsed ? Icons.Material.Filled.ChevronRight : Icons.Material.Filled.ExpandMore)" Size="Size.Small" />
-                                <MudText Typo="Typo.subtitle1">Archive</MudText>
-                            </span>
-                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@ArchivedOrders.Count.ToString("N0")</MudChip>
-                        </button>
-                        @if (!_isArchiveCollapsed)
-                        {
-                            <WebDataTable TItem="TradeOrder"
-                                          TColumnId="TradeOrderColumn"
-                                          Items="ArchivedOrders"
-                                          Columns="Columns"
-                                          GetRowKey="GetOrderKey"
-                                          GetRowClass="GetOrderRowClass"
-                                          RowClicked="SelectOrder"
-                                          CssClass="trade-orders-table">
-                                <EmptyContent>
-                                    <span>No completed or canceled orders.</span>
-                                </EmptyContent>
-                            </WebDataTable>
-                        }
-                    </section>
-                }
-            </section>
-
-            <aside class="trade-orders-detail">
-                @if (_selectedOrder == null)
-                {
-                    <section class="trade-orders-panel">
-                        <MudText Typo="Typo.subtitle1">Order Details</MudText>
-                        <MudText Typo="Typo.body2" Color="Color.Secondary">Select an order to inspect status, assignment, breakdown, and history.</MudText>
-                    </section>
-                }
-                else
-                {
-                    <section class="trade-orders-panel">
-                        <div class="trade-orders-panel-heading">
-                            <MudText Typo="Typo.subtitle1">Order Details</MudText>
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Secondary"
                                        Size="Size.Small"
-                                       StartIcon="@Icons.Material.Filled.OpenInNew"
-                                       OnClick="OpenSelectedOrderCraftPlanAsync"
-                                       Disabled="@(_isOpeningSelectedOrderCraftPlan || GetOrderRootItems(_selectedOrder).Count == 0)">
-                                @(_isOpeningSelectedOrderCraftPlan ? "Opening..." : "Open Craft Plan")
-                            </MudButton>
-                        </div>
-                        <MudTextField @bind-Value="_detailTitle"
-                                      Label="Title"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      Immediate="true"
-                                      Disabled="@IsSelectedOrderArchived" />
-                        <MudSelect T="Guid?"
-                                   @bind-Value="_detailCrafterId"
-                                   Label="Assigned crafter"
-                                   Variant="Variant.Outlined"
-                                   Margin="Margin.Dense"
-                                   Clearable="true"
-                                   Disabled="@IsSelectedOrderArchived">
-                            @foreach (var crafter in _crafters)
-                            {
-                                <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
-                            }
-                        </MudSelect>
-                        @if (IsSelectedOrderArchived)
+                                       OnClick="StartNewOrderWorkspace"
+                                       aria-label="New order" />
+                    </div>
+                    <MudTextField @bind-Value="_orderSearchText"
+                                  Placeholder="Search orders"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Search" />
+                    <div class="trade-orders-rail-scroll">
+                        @if (ActiveOrderGroups.Count == 0 && ArchivedOrders.Count == 0)
                         {
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">Archived as @FormatStatus(_selectedOrder.Status).</MudText>
+                            <div class="trade-orders-rail-empty">No orders yet.</div>
                         }
-                        else
+                        else if (FilteredActiveOrderGroups.Count == 0 && FilteredArchivedOrders.Count == 0)
                         {
-                            <MudSelect T="TradeOrderStatus"
-                                       @bind-Value="_detailStatus"
-                                       Label="Change status"
-                                       Variant="Variant.Outlined"
-                                       Margin="Margin.Dense">
-                                @foreach (var status in TradeOrderStatusWorkflow.ActiveStatuses.Where(status => status != TradeOrderStatus.Draft))
-                                {
-                                    <MudSelectItem Value="@status">@FormatStatus(status)</MudSelectItem>
-                                }
-                            </MudSelect>
+                            <div class="trade-orders-rail-empty">No matching orders.</div>
                         }
-                        <MudTextField @bind-Value="_detailNotes"
-                                      Label="Notes"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      Lines="3"
-                                      Disabled="@IsSelectedOrderArchived" />
-                        <MudButton Variant="Variant.Filled"
-                                   Color="Color.Primary"
-                                   FullWidth="true"
-                                   OnClick="SaveSelectedOrderAsync"
-                                   Disabled="@(IsSelectedOrderArchived || string.IsNullOrWhiteSpace(_detailTitle))">
-                            Save Details
-                        </MudButton>
-                    </section>
-
-                    <section class="trade-orders-panel">
-                        <MudText Typo="Typo.subtitle1">Payment & Evidence</MudText>
-                        <MudText Typo="Typo.subtitle2">Outputs</MudText>
-                        <div class="trade-orders-breakdown-table">
-                            <div class="trade-orders-breakdown-header">
-                                <span>Item</span>
-                                <span>Qty</span>
-                                <span>HQ</span>
-                            </div>
-                            @foreach (var item in _selectedOrder.SourceSnapshot.RootItems)
-                            {
-                                <div class="trade-orders-breakdown-row">
-                                    <span>@item.Name</span>
-                                    <span>@TradeDisplayFormatter.FormatQuantity(item.Quantity)</span>
-                                    <span>@FormatHq(item.MustBeHq)</span>
-                                </div>
-                            }
-                        </div>
-                        @if (_selectedOrder.SourceSnapshot.Materials.Count > 0)
+                        @foreach (var group in FilteredActiveOrderGroups)
                         {
-                            var paymentSummary = GetSelectedOrderPaymentSummary();
-                            <div class="trade-orders-payment-heading">
-                                <MudText Typo="Typo.subtitle2">Materials</MudText>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Responsibility affects reimbursement, not commission.</MudText>
-                            </div>
-                            <div class="trade-orders-material-table">
-                                <div class="trade-orders-material-header">
-                                    <span>Item</span>
-                                    <span>Qty</span>
-                                    <span>Unit</span>
-                                    <span>Est. Cost</span>
-                                    <span>Resp.</span>
-                                </div>
-                                @foreach (var material in paymentSummary.Materials)
+                            <section class="trade-orders-rail-group">
+                                <button type="button"
+                                        class="trade-orders-rail-group-title"
+                                        @onclick="@(() => ToggleStatusGroup(group.Status))"
+                                        aria-expanded="@(!IsStatusGroupCollapsed(group.Status))">
+                                    <span>
+                                        <MudIcon Icon="@(IsStatusGroupCollapsed(group.Status) ? Icons.Material.Filled.ChevronRight : Icons.Material.Filled.ExpandMore)" Size="Size.Small" />
+                                        @FormatStatus(group.Status)
+                                    </span>
+                                    <span class="trade-orders-count-chip">@group.Orders.Count.ToString("N0")</span>
+                                </button>
+                                @if (!IsStatusGroupCollapsed(group.Status))
                                 {
-                                    <div class="trade-orders-material-row" @key="GetPaymentMaterialKey(material)">
-                                        <span class="trade-orders-material-cell">
-                                            <strong>@material.Name</strong>
-                                            @if (material.RequiresHq)
-                                            {
-                                                <span class="trade-orders-hq">HQ</span>
-                                            }
-                                            @if (!string.IsNullOrWhiteSpace(material.EvidenceSource))
-                                            {
-                                                <span title="@material.UnitCostExplanation">@material.EvidenceSource</span>
-                                            }
-                                            @if (material.Warnings.Count > 0)
-                                            {
-                                                <span class="trade-orders-material-warning">@material.Warnings[0]</span>
-                                            }
-                                        </span>
-                                        <span>@TradeDisplayFormatter.FormatQuantity(material.Quantity)</span>
-                                        <span>@FormatMaterialUnitCost(material)</span>
-                                        <span>@FormatMaterialCost(material)</span>
-                                        <MudSelect T="CommissionMaterialResponsibility"
-                                                   Value="material.Responsibility"
-                                                   ValueChanged="value => SetOrderMaterialResponsibilityAsync(material, value)"
-                                                   Dense="true"
-                                                   Margin="Margin.Dense"
-                                                   Variant="Variant.Outlined"
-                                                   Disabled="@IsSelectedOrderArchived"
-                                                   aria-label="@($"{material.Name} material responsibility")">
-                                            <MudSelectItem Value="@CommissionMaterialResponsibility.Crafter">Crafter</MudSelectItem>
-                                            <MudSelectItem Value="@CommissionMaterialResponsibility.Provided">Provided</MudSelectItem>
-                                        </MudSelect>
-                                    </div>
-                                }
-                            </div>
-                            @if (paymentSummary.Warnings.Count > 0)
-                            {
-                                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">
-                                    <ul class="trade-orders-warning-list">
-                                        @foreach (var warning in paymentSummary.Warnings)
+                                    <div class="trade-orders-rail-list">
+                                        @foreach (var order in group.Orders)
                                         {
-                                            <li>@warning</li>
+                                            <button type="button"
+                                                    class="@GetRailOrderClass(order)"
+                                                    @onclick="() => SelectOrder(order)">
+                                                <span class="trade-orders-rail-title">@order.Title</span>
+                                                <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
+                                                <span class="trade-orders-status-chip">@FormatRailStatusChip(order)</span>
+                                            </button>
                                         }
-                                    </ul>
-                                </MudAlert>
-                            }
-                            <div class="trade-orders-payment-summary">
-                                <div class="trade-orders-payment-subtotals">
-                                    <div>
-                                        <span>Crafter procures</span>
-                                        <strong>@FormatGil(paymentSummary.MaterialReimbursementTotal)</strong>
                                     </div>
-                                    <div>
-                                        <span>Provided by company</span>
-                                        <strong>@FormatGil(paymentSummary.ProvidedMaterialTotal)</strong>
+                                }
+                            </section>
+                        }
+                        @if (FilteredArchivedOrders.Count > 0)
+                        {
+                            <section class="trade-orders-rail-group">
+                                <button type="button"
+                                        class="trade-orders-rail-group-title"
+                                        @onclick="ToggleArchiveGroup"
+                                        aria-expanded="@(!_isArchiveCollapsed)">
+                                    <span>
+                                        <MudIcon Icon="@(_isArchiveCollapsed ? Icons.Material.Filled.ChevronRight : Icons.Material.Filled.ExpandMore)" Size="Size.Small" />
+                                        Archive
+                                    </span>
+                                    <span class="trade-orders-count-chip">@FilteredArchivedOrders.Count.ToString("N0")</span>
+                                </button>
+                                @if (!_isArchiveCollapsed)
+                                {
+                                    <div class="trade-orders-rail-list">
+                                        @foreach (var order in FilteredArchivedOrders)
+                                        {
+                                            <button type="button"
+                                                    class="@GetRailOrderClass(order)"
+                                                    @onclick="() => SelectOrder(order)">
+                                                <span class="trade-orders-rail-title">@order.Title</span>
+                                                <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
+                                                <span class="trade-orders-status-chip">@FormatRailStatusChip(order)</span>
+                                            </button>
+                                        }
                                     </div>
-                                    <div>
-                                        <span>Commission (@paymentSummary.CommissionPercent.ToString("N0")%)</span>
-                                        <strong>@FormatGil(paymentSummary.CommissionAmount)</strong>
-                                    </div>
+                                }
+                            </section>
+                        }
+                    </div>
+                </aside>
+
+                <main class="trade-orders-workspace">
+                    @if (_pendingImport != null)
+                    {
+                        <section class="trade-orders-workspace-card is-import">
+                            <div class="trade-orders-workspace-header">
+                                <div>
+                                    <MudText Typo="Typo.overline">Active Craft Plan</MudText>
+                                    <MudText Typo="Typo.h6">Create Order</MudText>
                                 </div>
-                                <div class="trade-orders-payment-total">
-                                    <span>Payment amount</span>
-                                    <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
-                                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
-                                                   Color="Color.Primary"
-                                                   Size="Size.Small"
-                                                   Disabled="@(paymentSummary.TotalPayment <= 0)"
-                                                   OnClick='@(() => CopyGilAmountAsync(paymentSummary.TotalPayment, "Payment amount copied"))' />
-                                </div>
-                                <div class="trade-orders-payment-total">
-                                    <span>Total estimated procurement</span>
-                                    <strong>@FormatGil(paymentSummary.EstimatedProcurementTotal)</strong>
-                                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
-                                                   Color="Color.Secondary"
-                                                   Size="Size.Small"
-                                                   Disabled="@(paymentSummary.EstimatedProcurementTotal <= 0)"
-                                                   OnClick='@(() => CopyGilAmountAsync(paymentSummary.EstimatedProcurementTotal, "Procurement estimate copied"))' />
-                                </div>
-                                <MudButton Variant="Variant.Outlined"
-                                           Color="Color.Secondary"
-                                           StartIcon="@Icons.Material.Filled.ContentCopy"
-                                           OnClick="CopyOrderPaymentSummaryAsync">
-                                    Copy Payment Summary
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           OnClick="CreatePendingOrderAsync"
+                                           Disabled="@string.IsNullOrWhiteSpace(_newOrderTitle)">
+                                    Save Order
                                 </MudButton>
                             </div>
-                        }
-                        else
-                        {
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">Build or refresh the order craft plan to populate material payment details.</MudText>
-                        }
-                    </section>
+                            <div class="trade-orders-editor-grid">
+                                <MudTextField @bind-Value="_newOrderTitle"
+                                              Label="Order title"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Immediate="true" />
+                                <MudSelect T="Guid?"
+                                           @bind-Value="_newOrderCrafterId"
+                                           Label="Assigned crafter"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense"
+                                           Clearable="true">
+                                    @foreach (var crafter in _crafters)
+                                    {
+                                        <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </div>
+                            <section class="trade-orders-work-section">
+                                <MudText Typo="Typo.subtitle2">Requested Outputs</MudText>
+                                <div class="trade-orders-breakdown-table">
+                                    <div class="trade-orders-breakdown-header">
+                                        <span>Item</span>
+                                        <span>Qty</span>
+                                        <span>HQ</span>
+                                    </div>
+                                    @foreach (var item in GetOrderRootItems(_pendingImport))
+                                    {
+                                        <div class="trade-orders-breakdown-row">
+                                            <span>@item.Name</span>
+                                            <span>@TradeDisplayFormatter.FormatQuantity(item.Quantity)</span>
+                                            <span>@FormatHq(item.MustBeHq)</span>
+                                        </div>
+                                    }
+                                </div>
+                            </section>
+                        </section>
+                    }
+                    else if (_showNewOrderPanel || _selectedOrder == null)
+                    {
+                        <section class="trade-orders-workspace-card is-new">
+                            <div class="trade-orders-workspace-header">
+                                <div>
+                                    <MudText Typo="Typo.overline">New Order</MudText>
+                                    <MudText Typo="Typo.h6">Requested Outputs</MudText>
+                                </div>
+                                <div class="trade-orders-workspace-actions">
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Secondary"
+                                               StartIcon="@Icons.Material.Filled.Clear"
+                                               OnClick="ResetNewOrderDraft">
+                                        Clear
+                                    </MudButton>
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Secondary"
+                                               StartIcon="@Icons.Material.Filled.Assignment"
+                                               OnClick="PrepareOrderImport">
+                                        Create From Active Plan
+                                    </MudButton>
+                                    <MudButton Variant="Variant.Filled"
+                                               Color="Color.Primary"
+                                               OnClick="CreateRequestedOrderAsync"
+                                               Disabled="@(!CanCreateRequestedOrder || _isCreatingRequestedOrder)">
+                                        @(_isCreatingRequestedOrder ? "Creating..." : "Save Order")
+                                    </MudButton>
+                                </div>
+                            </div>
+                            <div class="trade-orders-editor-grid">
+                                <MudTextField T="string"
+                                              Value="@_newRequestedOrderTitle"
+                                              ValueChanged="value => OnRequestedOrderTitleChanged(value)"
+                                              Label="Order title"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Immediate="true" />
+                                <MudSelect T="Guid?"
+                                           @bind-Value="_newRequestedOrderCrafterId"
+                                           Label="Assigned crafter"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense"
+                                           Clearable="true">
+                                    @foreach (var crafter in _crafters)
+                                    {
+                                        <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
+                                    }
+                                </MudSelect>
+                                <MudTextField @bind-Value="_newRequestedOrderNotes"
+                                              Label="Notes"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Lines="1" />
+                            </div>
+                            <section class="trade-orders-work-section">
+                                <div class="trade-orders-search-row">
+                                    <MudTextField @bind-Value="_requestedOrderSearchQuery"
+                                                  Label="Add output item"
+                                                  Variant="Variant.Outlined"
+                                                  Margin="Margin.Dense"
+                                                  Immediate="true"
+                                                  OnKeyUp="OnRequestedOrderSearchKeyUp" />
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Secondary"
+                                               OnClick="SearchRequestedOrderItemsAsync"
+                                               Disabled="@(_isSearchingRequestedOrderItems || string.IsNullOrWhiteSpace(_requestedOrderSearchQuery))">
+                                        @(_isSearchingRequestedOrderItems ? "Searching..." : "Search")
+                                    </MudButton>
+                                </div>
+                                @if (_requestedOrderSearchResults.Count > 0)
+                                {
+                                    <div class="trade-orders-search-results">
+                                        @foreach (var result in _requestedOrderSearchResults)
+                                        {
+                                            <button type="button"
+                                                    class="trade-orders-search-result"
+                                                    @onclick="() => AddRequestedOrderOutput(result)">
+                                                <span>@result.Object.Name</span>
+                                                <span>ID @result.Id</span>
+                                            </button>
+                                        }
+                                    </div>
+                                }
+                                <div class="trade-orders-output-table">
+                                    <div class="trade-orders-output-header">
+                                        <span>Item</span>
+                                        <span>Qty</span>
+                                        <span>HQ</span>
+                                        <span></span>
+                                    </div>
+                                    @if (_requestedOrderOutputs.Count == 0)
+                                    {
+                                        <div class="trade-orders-output-empty">Add at least one requested output.</div>
+                                    }
+                                    else
+                                    {
+                                        @foreach (var output in _requestedOrderOutputs)
+                                        {
+                                            <div class="trade-orders-output-row">
+                                                <span>@output.Name</span>
+                                                <MudNumericField T="int"
+                                                                 Value="@output.Quantity"
+                                                                 ValueChanged="quantity => UpdateRequestedOrderOutputQuantity(output, quantity)"
+                                                                 Min="1"
+                                                                 Max="9999"
+                                                                 Variant="Variant.Outlined"
+                                                                 Margin="Margin.Dense" />
+                                                <MudCheckBox T="bool"
+                                                             Value="@output.MustBeHq"
+                                                             ValueChanged="mustBeHq => UpdateRequestedOrderOutputHq(output, mustBeHq)"
+                                                             Color="Color.Primary" />
+                                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                               Color="Color.Error"
+                                                               Size="Size.Small"
+                                                               OnClick="() => RemoveRequestedOrderOutput(output)" />
+                                            </div>
+                                        }
+                                    }
+                                </div>
+                            </section>
+                        </section>
+                    }
+                    else
+                    {
+                        <section class="trade-orders-workspace-card">
+                            <div class="trade-orders-workspace-header">
+                                <div>
+                                    <MudText Typo="Typo.overline">Selected Order</MudText>
+                                    <MudText Typo="Typo.h6">@_selectedOrder.Title</MudText>
+                                </div>
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           OnClick="SaveSelectedOrderAsync"
+                                           Disabled="@(IsSelectedOrderArchived || string.IsNullOrWhiteSpace(_detailTitle))">
+                                    Save Order
+                                </MudButton>
+                            </div>
+                            <div class="trade-orders-editor-grid">
+                                <MudTextField @bind-Value="_detailTitle"
+                                              Label="Order title"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Immediate="true"
+                                              Disabled="@IsSelectedOrderArchived" />
+                                <MudSelect T="Guid?"
+                                           @bind-Value="_detailCrafterId"
+                                           Label="Assigned crafter"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense"
+                                           Clearable="true"
+                                           Disabled="@IsSelectedOrderArchived">
+                                    @foreach (var crafter in _crafters)
+                                    {
+                                        <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
+                                    }
+                                </MudSelect>
+                                <MudTextField @bind-Value="_detailNotes"
+                                              Label="Notes"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Lines="1"
+                                              Disabled="@IsSelectedOrderArchived" />
+                            </div>
+                            <section class="trade-orders-work-section">
+                                <MudText Typo="Typo.subtitle2">Requested Outputs</MudText>
+                                <div class="trade-orders-breakdown-table">
+                                    <div class="trade-orders-breakdown-header">
+                                        <span>Item</span>
+                                        <span>Qty</span>
+                                        <span>HQ</span>
+                                    </div>
+                                    @foreach (var item in GetOrderRootItems(_selectedOrder))
+                                    {
+                                        <div class="trade-orders-breakdown-row">
+                                            <span>@item.Name</span>
+                                            <span>@TradeDisplayFormatter.FormatQuantity(item.Quantity)</span>
+                                            <span>@FormatHq(item.MustBeHq)</span>
+                                        </div>
+                                    }
+                                </div>
+                            </section>
+                            <section class="trade-orders-work-section">
+                                <div class="trade-orders-section-heading">
+                                    <MudText Typo="Typo.subtitle2">Craft Architect Pipeline</MudText>
+                                </div>
+                                <div class="trade-orders-pipeline">
+                                    <div class="@GetPipelineStageClass(GetOrderRootItems(_selectedOrder).Count > 0)">
+                                        <span>1 - Order request</span>
+                                        <strong>@(GetOrderRootItems(_selectedOrder).Count > 0 ? "Outputs captured" : "Add requested outputs")</strong>
+                                    </div>
+                                    <div class="@GetPipelineStageClass(HasLinkedCraftPlan(_selectedOrder), !HasLinkedCraftPlan(_selectedOrder))">
+                                        <span>2 - Craft plan</span>
+                                        <strong>@(HasLinkedCraftPlan(_selectedOrder) ? "Linked plan saved" : "Craft plan missing")</strong>
+                                    </div>
+                                    <div class="@GetPipelineStageClass(HasProcurementEvidence(_selectedOrder), HasMaterialBreakdown(_selectedOrder) && !HasProcurementEvidence(_selectedOrder))">
+                                        <span>3 - Procurement evidence</span>
+                                        <strong>@(HasProcurementEvidence(_selectedOrder) ? "Priced evidence available" : "Pricing evidence missing")</strong>
+                                    </div>
+                                    <div class="@GetPipelineStageClass(IsPaymentReady(_selectedOrder))">
+                                        <span>4 - Settlement</span>
+                                        <strong>@GetSettlementStageLabel(_selectedOrder)</strong>
+                                    </div>
+                                </div>
+                            </section>
+                            <section class="trade-orders-work-section">
+                                <div class="trade-orders-section-heading">
+                                    <MudText Typo="Typo.subtitle2">Linked Craft Plan</MudText>
+                                    <div class="trade-orders-section-actions">
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.Build"
+                                                   OnClick="CreateOrReplaceSelectedOrderCraftPlanAsync"
+                                                   Disabled="@(_isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || GetOrderRootItems(_selectedOrder).Count == 0)">
+                                            @GetCraftPlanBuildButtonText(_selectedOrder)
+                                        </MudButton>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.OpenInNew"
+                                                   OnClick="OpenSelectedOrderCraftPlanAsync"
+                                                   Disabled="@(_isOpeningSelectedOrderCraftPlan || !HasLinkedCraftPlan(_selectedOrder))">
+                                            @(_isOpeningSelectedOrderCraftPlan ? "Opening..." : "Open Craft Plan")
+                                        </MudButton>
+                                    </div>
+                                </div>
+                                <div class="trade-orders-linked-plan-grid">
+                                    <div>
+                                        <span>Plan</span>
+                                        <strong>@GetLinkedCraftPlanName(_selectedOrder)</strong>
+                                    </div>
+                                    <div>
+                                        <span>Procurement evidence</span>
+                                        <strong>@GetProcurementEvidenceLabel(_selectedOrder)</strong>
+                                    </div>
+                                    <div>
+                                        <span>Last saved</span>
+                                        <strong>@FormatLinkedCraftPlanDate(_selectedOrder)</strong>
+                                    </div>
+                                </div>
+                            </section>
+                        </section>
+                    }
+                </main>
 
-                    <section class="trade-orders-panel">
-                        <MudText Typo="Typo.subtitle1">History</MudText>
-                        <div class="trade-orders-note-row">
-                            <MudTextField @bind-Value="_manualNote"
-                                          Label="Add Note"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          Lines="2" />
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Secondary"
-                                       OnClick="AddManualNoteAsync"
-                                       Disabled="@string.IsNullOrWhiteSpace(_manualNote)">
-                                Add Note
-                            </MudButton>
+                <aside class="trade-orders-ops">
+                    @if (_selectedOrder == null)
+                    {
+                        <section class="trade-orders-panel">
+                            <MudText Typo="Typo.subtitle1">Operations</MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">Select an order to view payment, procurement, and history.</MudText>
+                        </section>
+                    }
+                    else
+                    {
+                        var paymentSummary = GetSelectedOrderPaymentSummary();
+                        <div class="trade-orders-ops-header">
+                            <div>
+                                <MudText Typo="Typo.subtitle1">@_selectedOrder.Title</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@GetLatestHistoryCue(_selectedOrder)</MudText>
+                            </div>
                         </div>
-                        <ul class="trade-orders-history">
-                            @foreach (var item in _selectedOrder.History.OrderByDescending(item => item.CreatedAtUtc))
-                            {
-                                <li><strong>@FormatHistoryKind(item.Kind)</strong> @item.Note</li>
-                            }
-                        </ul>
-                    </section>
-
-                    <section class="trade-orders-panel">
-                        <MudText Typo="Typo.subtitle1">Close Order</MudText>
-                        @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
-                        {
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Secondary"
-                                       FullWidth="true"
-                                       OnClick="ReopenSelectedOrderAsync">
-                                Reopen Order
-                            </MudButton>
-                        }
-                        else
-                        {
-                            <MudButton Variant="Variant.Filled"
-                                       Color="Color.Success"
-                                       FullWidth="true"
-                                       OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Completed))">
-                                Complete Order
-                            </MudButton>
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Error"
-                                       FullWidth="true"
-                                       OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled))">
-                                Cancel Order
-                            </MudButton>
-                        }
-                    </section>
-                }
-            </aside>
+                        <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="trade-orders-tab-panel" @bind-ActivePanelIndex="_activeOpsTab">
+                            <MudTabPanel Text="Payment">
+                                <div class="trade-orders-payment-metrics">
+                                    <div class="trade-orders-payment-metric">
+                                        <span>Payment amount</span>
+                                        <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
+                                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       Disabled="@(paymentSummary.TotalPayment <= 0)"
+                                                       OnClick='@(() => CopyGilAmountAsync(paymentSummary.TotalPayment, "Payment amount copied"))'
+                                                       aria-label="Copy payment amount" />
+                                    </div>
+                                    <div class="trade-orders-payment-metric">
+                                        <span>Total estimated procurement</span>
+                                        <strong>@FormatGil(paymentSummary.EstimatedProcurementTotal)</strong>
+                                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       Disabled="@(paymentSummary.EstimatedProcurementTotal <= 0)"
+                                                       OnClick='@(() => CopyGilAmountAsync(paymentSummary.EstimatedProcurementTotal, "Procurement estimate copied"))'
+                                                       aria-label="Copy procurement amount" />
+                                    </div>
+                                </div>
+                                @if (paymentSummary.Materials.Count > 0 && paymentSummary.EstimatedProcurementTotal <= 0)
+                                {
+                                    <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">Material lines are captured, but pricing evidence is missing. Run market analysis from the linked craft plan before using payment totals.</MudAlert>
+                                }
+                                @if (paymentSummary.Materials.Count > 0)
+                                {
+                                    <div class="trade-orders-payment-subtotals">
+                                        <div>
+                                            <span>Crafter procures</span>
+                                            <strong>@FormatGil(paymentSummary.MaterialReimbursementTotal)</strong>
+                                        </div>
+                                        <div>
+                                            <span>Provided by company</span>
+                                            <strong>@FormatGil(paymentSummary.ProvidedMaterialTotal)</strong>
+                                        </div>
+                                        <div>
+                                            <span>Commission (@paymentSummary.CommissionPercent.ToString("N0")%)</span>
+                                            <strong>@FormatGil(paymentSummary.CommissionAmount)</strong>
+                                        </div>
+                                    </div>
+                                    <div class="trade-orders-payment-heading">
+                                        <MudText Typo="Typo.subtitle2">Material Responsibility</MudText>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.ContentCopy"
+                                                   OnClick="CopyOrderPaymentSummaryAsync">
+                                            Copy Summary
+                                        </MudButton>
+                                    </div>
+                                    <div class="trade-orders-material-table is-compact">
+                                        <div class="trade-orders-material-header">
+                                            <span>Item</span>
+                                            <span>Qty</span>
+                                            <span>Resp.</span>
+                                        </div>
+                                        @foreach (var material in paymentSummary.Materials)
+                                        {
+                                            <div class="trade-orders-material-row" @key="GetPaymentMaterialKey(material)">
+                                                <span class="trade-orders-material-cell">
+                                                    <strong>@material.Name</strong>
+                                                    @if (material.RequiresHq)
+                                                    {
+                                                        <span class="trade-orders-hq">HQ</span>
+                                                    }
+                                                </span>
+                                                <span>@TradeDisplayFormatter.FormatQuantity(material.Quantity)</span>
+                                                <MudSelect T="CommissionMaterialResponsibility"
+                                                           Value="material.Responsibility"
+                                                           ValueChanged="value => SetOrderMaterialResponsibilityAsync(material, value)"
+                                                           Dense="true"
+                                                           Margin="Margin.Dense"
+                                                           Variant="Variant.Outlined"
+                                                           Disabled="@IsSelectedOrderArchived"
+                                                           aria-label="@($"{material.Name} material responsibility")">
+                                                    <MudSelectItem Value="@CommissionMaterialResponsibility.Crafter">Crafter</MudSelectItem>
+                                                    <MudSelectItem Value="@CommissionMaterialResponsibility.Provided">Provided</MudSelectItem>
+                                                </MudSelect>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else
+                                {
+                                    <MudAlert Severity="Severity.Info" Dense="true">Create a linked craft plan, then run market analysis to populate payment evidence.</MudAlert>
+                                }
+                                <section class="trade-orders-status-panel">
+                                    <MudText Typo="Typo.subtitle2">Status</MudText>
+                                    @if (IsSelectedOrderArchived)
+                                    {
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary">Archived as @FormatStatus(_selectedOrder.Status).</MudText>
+                                    }
+                                    else
+                                    {
+                                        <MudSelect T="TradeOrderStatus"
+                                                   @bind-Value="_detailStatus"
+                                                   Label="Order status"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense">
+                                            @foreach (var status in TradeOrderStatusWorkflow.ActiveStatuses.Where(status => status != TradeOrderStatus.Draft))
+                                            {
+                                                <MudSelectItem Value="@status">@FormatStatus(status)</MudSelectItem>
+                                            }
+                                        </MudSelect>
+                                        <MudButton Variant="Variant.Filled"
+                                                   Color="Color.Primary"
+                                                   FullWidth="true"
+                                                   OnClick="SaveSelectedOrderAsync"
+                                                   Disabled="@(string.IsNullOrWhiteSpace(_detailTitle))">
+                                            Save Status
+                                        </MudButton>
+                                    }
+                                </section>
+                                <section class="trade-orders-close-panel">
+                                    <MudText Typo="Typo.subtitle2">Close Order</MudText>
+                                    @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+                                    {
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   FullWidth="true"
+                                                   OnClick="ReopenSelectedOrderAsync">
+                                            Reopen Order
+                                        </MudButton>
+                                    }
+                                    else
+                                    {
+                                        <MudButton Variant="Variant.Filled"
+                                                   Color="Color.Success"
+                                                   FullWidth="true"
+                                                   OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Completed))">
+                                            Complete Order
+                                        </MudButton>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Error"
+                                                   FullWidth="true"
+                                                   OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled))">
+                                            Cancel Order
+                                        </MudButton>
+                                    }
+                                </section>
+                            </MudTabPanel>
+                            <MudTabPanel Text="Procurement">
+                                <MudText Typo="Typo.subtitle2">Procurement Evidence</MudText>
+                                @if (paymentSummary.Materials.Count == 0)
+                                {
+                                    <MudAlert Severity="Severity.Info" Dense="true">No material evidence has been captured for this order yet.</MudAlert>
+                                }
+                                else
+                                {
+                                    <div class="trade-orders-material-table">
+                                        <div class="trade-orders-material-header">
+                                            <span>Item</span>
+                                            <span>Qty</span>
+                                            <span>Unit</span>
+                                            <span>Est. Cost</span>
+                                            <span>Resp.</span>
+                                        </div>
+                                        @foreach (var material in paymentSummary.Materials)
+                                        {
+                                            <div class="trade-orders-material-row" @key="GetPaymentMaterialKey(material)">
+                                                <span class="trade-orders-material-cell">
+                                                    <strong>@material.Name</strong>
+                                                    @if (material.RequiresHq)
+                                                    {
+                                                        <span class="trade-orders-hq">HQ</span>
+                                                    }
+                                                    @if (!string.IsNullOrWhiteSpace(material.EvidenceSource))
+                                                    {
+                                                        <span title="@material.UnitCostExplanation">@material.EvidenceSource</span>
+                                                    }
+                                                    @if (material.Warnings.Count > 0)
+                                                    {
+                                                        <span class="trade-orders-material-warning">@material.Warnings[0]</span>
+                                                    }
+                                                </span>
+                                                <span>@TradeDisplayFormatter.FormatQuantity(material.Quantity)</span>
+                                                <span>@FormatMaterialUnitCost(material)</span>
+                                                <span>@FormatMaterialCost(material)</span>
+                                                <span>@FormatResponsibility(material.Responsibility)</span>
+                                            </div>
+                                        }
+                                    </div>
+                                    @if (paymentSummary.Warnings.Count > 0)
+                                    {
+                                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">
+                                            <ul class="trade-orders-warning-list">
+                                                @foreach (var warning in paymentSummary.Warnings)
+                                                {
+                                                    <li>@warning</li>
+                                                }
+                                            </ul>
+                                        </MudAlert>
+                                    }
+                                }
+                            </MudTabPanel>
+                            <MudTabPanel Text="History">
+                                <div class="trade-orders-note-row">
+                                    <MudTextField @bind-Value="_manualNote"
+                                                  Label="Add Note"
+                                                  Variant="Variant.Outlined"
+                                                  Margin="Margin.Dense"
+                                                  Lines="2" />
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Secondary"
+                                               OnClick="AddManualNoteAsync"
+                                               Disabled="@string.IsNullOrWhiteSpace(_manualNote)">
+                                        Add Note
+                                    </MudButton>
+                                </div>
+                                <ul class="trade-orders-history">
+                                    @foreach (var item in _selectedOrder.History.OrderByDescending(item => item.CreatedAtUtc))
+                                    {
+                                        <li><strong>@FormatHistoryKind(item.Kind)</strong> @item.Note</li>
+                                    }
+                                </ul>
+                            </MudTabPanel>
+                        </MudTabs>
+                    }
+                </aside>
             </div>
         }
     }
@@ -538,9 +682,12 @@
     private Guid? _newRequestedOrderCrafterId;
     private string? _newRequestedOrderNotes;
     private string _requestedOrderSearchQuery = string.Empty;
+    private string _orderSearchText = string.Empty;
     private bool _isSearchingRequestedOrderItems;
     private bool _isCreatingRequestedOrder;
     private bool _isOpeningSelectedOrderCraftPlan;
+    private bool _isSavingSelectedOrderCraftPlan;
+    private int _activeOpsTab;
     private List<GarlandSearchResult> _requestedOrderSearchResults = [];
     private List<RequestedOrderOutputEditor> _requestedOrderOutputs = [];
     private string _detailTitle = string.Empty;
@@ -553,9 +700,8 @@
     private bool _isArchiveCollapsed = true;
     private HashSet<TradeOrderStatus> _collapsedStatuses = [];
 
-    private IReadOnlyList<WebTableColumn<TradeOrder, TradeOrderColumn>> Columns => CreateColumns();
-
     private bool CanCreateRequestedOrder =>
+        !string.IsNullOrWhiteSpace(_newRequestedOrderTitle) &&
         _requestedOrderOutputs.Any(output => output.Quantity > 0);
 
     private IReadOnlyList<OrderStatusGroup> ActiveOrderGroups => TradeOrderStatusWorkflow.ActiveStatuses
@@ -569,16 +715,15 @@
         .OrderByDescending(order => order.CommissionedAtUtc)
         .ToArray();
 
-    private IReadOnlyList<WebTableColumn<TradeOrder, TradeOrderColumn>> CreateColumns()
-    {
-        return
-        [
-            WebTableColumn<TradeOrder, TradeOrderColumn>.Text(TradeOrderColumn.Title, "Order", order => order.Title, widthPx: 260),
-            WebTableColumn<TradeOrder, TradeOrderColumn>.Text(TradeOrderColumn.Commissioned, "Commissioned", order => order.CommissionedAtUtc.ToLocalTime().ToString("g"), widthPx: 160),
-            WebTableColumn<TradeOrder, TradeOrderColumn>.Text(TradeOrderColumn.Crafter, "Crafter", FormatAssignedCrafter, widthPx: 140),
-            WebTableColumn<TradeOrder, TradeOrderColumn>.Text(TradeOrderColumn.Quantity, "Qty", order => GetRootQuantity(order).ToString("N0"), widthPx: 80, alignEnd: true, headerCssClass: "is-align-end")
-        ];
-    }
+    private IReadOnlyList<OrderStatusGroup> FilteredActiveOrderGroups => TradeOrderStatusWorkflow.ActiveStatuses
+        .Where(status => status != TradeOrderStatus.Draft)
+        .Select(status => new OrderStatusGroup(status, GetOrdersForStatus(status).Where(OrderMatchesSearch).ToArray()))
+        .Where(group => group.Orders.Count > 0)
+        .ToArray();
+
+    private IReadOnlyList<TradeOrder> FilteredArchivedOrders => ArchivedOrders
+        .Where(OrderMatchesSearch)
+        .ToArray();
 
     protected override async Task OnInitializedAsync()
     {
@@ -635,14 +780,26 @@
 
         _pendingImport = result.Order;
         _newOrderTitle = result.Order.Title;
+        _selectedOrder = null;
+        _showNewOrderPanel = false;
+        ClearSelectedOrderNavigation();
     }
 
     private void ToggleNewOrderPanel()
     {
-        _showNewOrderPanel = !_showNewOrderPanel;
-        if (_showNewOrderPanel && string.IsNullOrWhiteSpace(_newRequestedOrderTitle))
+        StartNewOrderWorkspace();
+    }
+
+    private void StartNewOrderWorkspace()
+    {
+        _pendingImport = null;
+        _selectedOrder = null;
+        _showNewOrderPanel = true;
+        _activeOpsTab = 0;
+        ClearSelectedOrderNavigation();
+        if (string.IsNullOrWhiteSpace(_newRequestedOrderTitle))
         {
-            RefreshRequestedOrderSuggestedTitle();
+            RefreshRequestedOrderSuggestedTitle(force: true);
         }
     }
 
@@ -794,9 +951,18 @@
                 return;
             }
 
-            result.Order.SourceSnapshot.Materials = TradeRequestedOrderWorkflow.BuildMaterialSnapshots(
-                buildResult.ActiveProcurementItems,
-                outputs);
+            var savedAt = DateTime.UtcNow;
+            var linked = await SaveGeneratedCraftPlanForOrderAsync(
+                result.Order,
+                buildResult,
+                outputs,
+                savedAt,
+                replaceExistingPlan: false);
+            if (!linked)
+            {
+                return;
+            }
+
             var saved = await TradeOperationsPersistence.SaveOrderAsync(result.Order);
             if (!saved)
             {
@@ -832,19 +998,46 @@
             return;
         }
 
-        var result = TradeOrderDraftFactory.CreateFromCurrentPlan(new TradeOrderCreateRequest(
-            AppState,
-            _companyProfile.Id,
-            _newOrderCrafterId,
-            _newOrderTitle,
-            DateTime.UtcNow));
-        if (!result.CanCreate || result.Order == null)
+        var orderToSave = CopyOrder(_pendingImport);
+        var previousCrafterId = orderToSave.AssignedCrafterId;
+        orderToSave.Title = _newOrderTitle.Trim();
+        orderToSave.AssignedCrafterId = _newOrderCrafterId;
+        orderToSave.Status = _newOrderCrafterId.HasValue
+            ? TradeOrderStatus.Assigned
+            : TradeOrderStatus.ReadyToAssign;
+        orderToSave.UpdatedAtUtc = DateTime.UtcNow;
+        AddHistoryIfAssignmentChanged(orderToSave, previousCrafterId, _newOrderCrafterId);
+
+        var outputs = GetOrderRootItems(orderToSave)
+            .Select(item => new TradeRequestedOrderOutput(
+                item.ItemId,
+                item.Name,
+                item.Quantity,
+                item.MustBeHq,
+                item.EstimatedSaleValue))
+            .ToArray();
+        var buildResult = await TradeOrderCraftPlanBuildService.BuildFromOrderAsync(
+            orderToSave,
+            GetOrderDataCenter(orderToSave),
+            orderToSave.SourceSnapshot.World ?? string.Empty);
+        if (!buildResult.Built || buildResult.Plan == null)
         {
-            Snackbar.Add(result.UnavailableReason ?? "Could not create order from the active plan.", Severity.Warning);
+            Snackbar.Add(buildResult.UnavailableReason ?? "Could not build a craft plan for this order.", Severity.Warning);
             return;
         }
 
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(result.Order);
+        var linked = await SaveGeneratedCraftPlanForOrderAsync(
+            orderToSave,
+            buildResult,
+            outputs,
+            DateTime.UtcNow,
+            replaceExistingPlan: false);
+        if (!linked)
+        {
+            return;
+        }
+
+        var saved = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
         if (!saved)
         {
             Snackbar.Add("Failed to save Trade order.", Severity.Error);
@@ -856,7 +1049,7 @@
         _newOrderCrafterId = null;
         await LoadAsync();
         if (!string.IsNullOrWhiteSpace(_loadError) ||
-            !SelectOrderAfterReload(result.Order.Id, "Trade order was saved, but it could not be loaded."))
+            !SelectOrderAfterReload(orderToSave.Id, "Trade order was saved, but it could not be loaded."))
         {
             return;
         }
@@ -872,24 +1065,171 @@
             .ToArray();
     }
 
-    private static string GetOrderKey(TradeOrder order)
+    private bool OrderMatchesSearch(TradeOrder order)
     {
-        return order.Id.ToString("N");
+        if (string.IsNullOrWhiteSpace(_orderSearchText))
+        {
+            return true;
+        }
+
+        var query = _orderSearchText.Trim();
+        return order.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+            FormatAssignedCrafter(order).Contains(query, StringComparison.OrdinalIgnoreCase) ||
+            FormatStatus(order.Status).Contains(query, StringComparison.OrdinalIgnoreCase);
     }
 
-    private string GetOrderRowClass(TradeOrder order)
+    private string GetRailOrderClass(TradeOrder order)
     {
-        return _selectedOrder?.Id == order.Id ? "is-selected" : string.Empty;
+        return _selectedOrder?.Id == order.Id
+            ? "trade-orders-rail-order is-selected"
+            : "trade-orders-rail-order";
+    }
+
+    private string FormatOrderRailMeta(TradeOrder order)
+    {
+        return $"{FormatAssignedCrafter(order)} - {order.CommissionedAtUtc.ToLocalTime():yyyy-MM-dd}";
+    }
+
+    private static string FormatRailStatusChip(TradeOrder order)
+    {
+        return order.Status switch
+        {
+            TradeOrderStatus.ReadyToAssign => "New",
+            TradeOrderStatus.Assigned => "Pay",
+            TradeOrderStatus.InProgress => "Work",
+            TradeOrderStatus.AwaitingDelivery => "Deliver",
+            TradeOrderStatus.Completed => "Done",
+            TradeOrderStatus.Canceled => "Canceled",
+            _ => order.Status.ToString()
+        };
+    }
+
+    private static bool CanOpenCraftPlan(TradeOrder order)
+    {
+        return GetOrderRootItems(order).Any(item => item.Quantity > 0);
+    }
+
+    private static bool HasLinkedCraftPlan(TradeOrder order)
+    {
+        return !string.IsNullOrWhiteSpace(order.CraftPlanId);
+    }
+
+    private static bool HasMaterialBreakdown(TradeOrder order)
+    {
+        return (order.SourceSnapshot?.Materials ?? Array.Empty<TradeOrderMaterialSnapshot>()).Count > 0;
+    }
+
+    private static bool HasProcurementEvidence(TradeOrder order)
+    {
+        var materials = order.SourceSnapshot?.Materials ?? Array.Empty<TradeOrderMaterialSnapshot>();
+        return materials.Count > 0 && materials.All(material => material.UnitCost > 0 && material.TotalCost > 0);
+    }
+
+    private bool IsPaymentReady(TradeOrder order)
+    {
+        return HasProcurementEvidence(order) &&
+            TradeCommissionPaymentSummary.FromOrder(order, GetPayrollDraftForOrder(order)).TotalPayment > 0;
+    }
+
+    private static string GetPipelineStageClass(bool isComplete, bool isWarning = false)
+    {
+        return isComplete
+            ? "trade-orders-pipeline-stage is-complete"
+            : isWarning
+                ? "trade-orders-pipeline-stage is-warning"
+                : "trade-orders-pipeline-stage";
+    }
+
+    private string GetSettlementStageLabel(TradeOrder order)
+    {
+        if (TradeOrderStatusWorkflow.IsArchived(order.Status))
+        {
+            return FormatStatus(order.Status);
+        }
+
+        if (order.Status == TradeOrderStatus.AwaitingDelivery)
+        {
+            return "Awaiting delivery";
+        }
+
+        if (order.Status == TradeOrderStatus.InProgress)
+        {
+            return "In progress";
+        }
+
+        return IsPaymentReady(order) ? "Payment ready" : "Awaiting payment";
+    }
+
+    private static string GetLinkedCraftPlanName(TradeOrder order)
+    {
+        if (!string.IsNullOrWhiteSpace(order.CraftPlanName))
+        {
+            return order.CraftPlanName;
+        }
+
+        return HasLinkedCraftPlan(order) ? "Saved craft plan" : "No linked plan";
+    }
+
+    private static string GetProcurementEvidenceLabel(TradeOrder order)
+    {
+        var materials = order.SourceSnapshot?.Materials ?? Array.Empty<TradeOrderMaterialSnapshot>();
+        if (materials.Count == 0)
+        {
+            return "No material breakdown";
+        }
+
+        var pricedCount = materials.Count(material => material.UnitCost > 0 && material.TotalCost > 0);
+        return pricedCount == materials.Count
+            ? $"{pricedCount:N0} priced material lines"
+            : $"{pricedCount:N0} of {materials.Count:N0} material lines priced";
+    }
+
+    private static string FormatLinkedCraftPlanDate(TradeOrder order)
+    {
+        return order.CraftPlanSavedAtUtc.HasValue
+            ? order.CraftPlanSavedAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            : "Not saved yet";
+    }
+
+    private string GetCraftPlanBuildButtonText(TradeOrder order)
+    {
+        if (_isSavingSelectedOrderCraftPlan)
+        {
+            return "Saving...";
+        }
+
+        return HasLinkedCraftPlan(order) ? "Replace Craft Plan" : "Create Craft Plan";
+    }
+
+    private static string BuildOrderCraftPlanName(TradeOrder order)
+    {
+        return string.IsNullOrWhiteSpace(order.Title)
+            ? $"Trade Order {order.Id:N}"
+            : $"Order - {order.Title.Trim()}";
+    }
+
+    private static string GetLatestHistoryCue(TradeOrder order)
+    {
+        var latest = order.History
+            .OrderByDescending(item => item.CreatedAtUtc)
+            .FirstOrDefault();
+        return latest == null
+            ? "No history yet"
+            : $"{latest.CreatedAtUtc.ToLocalTime():yyyy-MM-dd HH:mm} - {latest.Note}";
     }
 
     private void SelectOrder(TradeOrder order)
     {
         _selectedOrder = order;
+        _pendingImport = null;
+        _showNewOrderPanel = false;
+        _activeOpsTab = 0;
         _detailTitle = order.Title;
         _detailCrafterId = order.AssignedCrafterId;
         _detailStatus = order.Status;
         _detailNotes = order.Notes;
         _manualNote = string.Empty;
+        PersistSelectedOrderInNavigation(order.Id);
     }
 
     private bool IsSelectedOrderArchived => _selectedOrder != null && TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status);
@@ -977,6 +1317,28 @@
         return true;
     }
 
+    private void PersistSelectedOrderInNavigation(Guid orderId)
+    {
+        var current = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
+        var target = new UriBuilder(current)
+        {
+            Query = $"orderId={Uri.EscapeDataString(orderId.ToString("D"))}"
+        }.Uri;
+        if (!string.Equals(current.PathAndQuery, target.PathAndQuery, StringComparison.Ordinal))
+        {
+            NavigationManager.NavigateTo(target.PathAndQuery, replace: true);
+        }
+    }
+
+    private void ClearSelectedOrderNavigation()
+    {
+        var current = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
+        if (!string.IsNullOrWhiteSpace(current.Query))
+        {
+            NavigationManager.NavigateTo(current.AbsolutePath, replace: true);
+        }
+    }
+
     private async Task SaveSelectedOrderAsync()
     {
         if (_selectedOrder == null)
@@ -1005,7 +1367,7 @@
 
         if (_detailCrafterId.HasValue && _detailStatus == TradeOrderStatus.ReadyToAssign)
         {
-            Snackbar.Add("Change status to Assigned before saving this assignment.", Severity.Warning);
+            Snackbar.Add("Change status to Assigned Awaiting Payment before saving this assignment.", Severity.Warning);
             return;
         }
         else if (!_detailCrafterId.HasValue && _detailStatus == TradeOrderStatus.Assigned)
@@ -1068,8 +1430,129 @@
         await LoadAsync();
         if (string.IsNullOrWhiteSpace(_loadError))
         {
-            SelectOrderAfterReload(orderId, "Trade order note was saved, but the order could not be loaded.");
+            if (SelectOrderAfterReload(orderId, "Trade order note was saved, but the order could not be loaded."))
+            {
+                _activeOpsTab = 2;
+            }
         }
+    }
+
+    private async Task CreateOrReplaceSelectedOrderCraftPlanAsync()
+    {
+        if (_selectedOrder == null || _companyProfile == null || _isSavingSelectedOrderCraftPlan)
+        {
+            return;
+        }
+
+        if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+        {
+            Snackbar.Add("Reopen archived orders before replacing the linked craft plan.", Severity.Warning);
+            return;
+        }
+
+        _isSavingSelectedOrderCraftPlan = true;
+        var orderId = _selectedOrder.Id;
+
+        try
+        {
+            var result = await TradeOrderCraftPlanBuildService.BuildFromOrderAsync(
+                _selectedOrder,
+                GetOrderDataCenter(_selectedOrder),
+                _selectedOrder.SourceSnapshot.World ?? string.Empty);
+            if (!result.Built || result.Plan == null)
+            {
+                Snackbar.Add(result.UnavailableReason ?? "Could not build the order craft plan.", Severity.Warning);
+                return;
+            }
+
+            var outputs = GetOrderRootItems(_selectedOrder)
+                .Select(item => new TradeRequestedOrderOutput(
+                    item.ItemId,
+                    item.Name,
+                    item.Quantity,
+                    item.MustBeHq,
+                    item.EstimatedSaleValue))
+                .ToArray();
+            var orderToSave = CopyOrder(_selectedOrder);
+            var savedAt = DateTime.UtcNow;
+            var linked = await SaveGeneratedCraftPlanForOrderAsync(
+                orderToSave,
+                result,
+                outputs,
+                savedAt,
+                replaceExistingPlan: true);
+            if (!linked)
+            {
+                return;
+            }
+            var saved = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
+            if (!saved)
+            {
+                Snackbar.Add("Craft plan saved, but failed to link it to the order.", Severity.Error);
+                return;
+            }
+
+            await LoadAsync();
+            if (string.IsNullOrWhiteSpace(_loadError))
+            {
+                SelectOrderAfterReload(orderId, "Craft plan was saved, but the order could not be loaded.");
+            }
+
+            Snackbar.Add("Linked craft plan saved", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save linked craft plan: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSavingSelectedOrderCraftPlan = false;
+        }
+    }
+
+    private async Task<bool> SaveGeneratedCraftPlanForOrderAsync(
+        TradeOrder order,
+        TradeOrderCraftPlanBuildResult buildResult,
+        IReadOnlyList<TradeRequestedOrderOutput> outputs,
+        DateTime savedAt,
+        bool replaceExistingPlan)
+    {
+        if (buildResult.Plan == null)
+        {
+            Snackbar.Add("Could not save a linked craft plan because the build did not return a plan.", Severity.Error);
+            return false;
+        }
+
+        var canReplaceLinkedPlan =
+            replaceExistingPlan &&
+            order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated &&
+            !string.IsNullOrWhiteSpace(order.CraftPlanId);
+        var planId = canReplaceLinkedPlan
+            ? order.CraftPlanId!
+            : Guid.NewGuid().ToString("D");
+        var planName = BuildOrderCraftPlanName(order);
+        var savedPlan = await PlanPersistence.SaveGeneratedOrderPlanAsync(
+            planId,
+            planName,
+            buildResult.Plan,
+            GetOrderRootItems(order),
+            savedAt);
+        if (!savedPlan)
+        {
+            Snackbar.Add("Failed to save linked Craft Architect plan.", Severity.Error);
+            return false;
+        }
+
+        order.CraftPlanId = planId;
+        order.CraftPlanName = planName;
+        order.CraftPlanSavedAtUtc = savedAt;
+        order.CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.OrderGenerated;
+        order.SourceSnapshot.Materials = TradeRequestedOrderWorkflow.BuildMaterialSnapshots(
+            buildResult.ActiveProcurementItems,
+            outputs);
+        order.SourceSnapshot.ImportedAtUtc = savedAt;
+        order.UpdatedAtUtc = savedAt;
+        return true;
     }
 
     private async Task OpenSelectedOrderCraftPlanAsync()
@@ -1079,19 +1562,9 @@
             return;
         }
 
-        var projectItems = GetOrderRootItems(_selectedOrder)
-            .Where(item => item.Quantity > 0)
-            .Select(item => new ProjectItem
-            {
-                Id = item.ItemId,
-                Name = item.Name,
-                Quantity = item.Quantity,
-                MustBeHq = item.MustBeHq
-            })
-            .ToArray();
-        if (projectItems.Length == 0)
+        if (!HasLinkedCraftPlan(_selectedOrder))
         {
-            Snackbar.Add("This order does not have requested outputs to open.", Severity.Warning);
+            Snackbar.Add("Create a linked craft plan before opening it.", Severity.Warning);
             return;
         }
 
@@ -1099,26 +1572,23 @@
 
         try
         {
-            var result = await RecipePlannerCommandService.ImportProjectItemsAsync(
-                new ImportProjectItemsRequest(
-                    projectItems,
-                    GetOrderDataCenter(_selectedOrder),
-                    AppState.SelectedRegion,
-                    AppState.DefaultMarketFetchScope));
-            Snackbar.Add(
-                result.Message,
-                result.MessageLevel switch
-                {
-                    RecipePlannerCommandMessageLevel.Success => Severity.Success,
-                    RecipePlannerCommandMessageLevel.Warning => Severity.Warning,
-                    RecipePlannerCommandMessageLevel.Error => Severity.Error,
-                    _ => Severity.Info
-                });
-
-            if (result.BuildResult.Built)
+            var result = await PlanPersistence.LoadPlanIntoSessionAsync(_selectedOrder.CraftPlanId!);
+            if (result == null)
             {
-                NavigationManager.NavigateTo("./");
+                Snackbar.Add("Linked Craft Architect plan could not be loaded.", Severity.Warning);
+                return;
             }
+
+            if (!string.IsNullOrWhiteSpace(result.Warning))
+            {
+                Snackbar.Add(result.Warning, Severity.Warning);
+            }
+            else
+            {
+                Snackbar.Add("Linked craft plan loaded", Severity.Success);
+            }
+
+            NavigationManager.NavigateTo("./");
         }
         finally
         {
@@ -1408,6 +1878,7 @@
         return status switch
         {
             TradeOrderStatus.ReadyToAssign => "Ready to Assign",
+            TradeOrderStatus.Assigned => "Assigned Awaiting Payment",
             TradeOrderStatus.InProgress => "In Progress",
             TradeOrderStatus.AwaitingDelivery => "Awaiting Delivery",
             _ => status.ToString()
@@ -1434,16 +1905,6 @@
     private static string GetPaymentMaterialKey(TradeCommissionPaymentMaterial material)
     {
         return $"{material.ItemId}:{material.RequiresHq}";
-    }
-
-    private static int GetRootQuantity(TradeOrder order)
-    {
-        return order.SourceSnapshot.RootItems.Sum(item => item.Quantity);
-    }
-
-    private static decimal GetTotalMaterialCost(TradeOrder order)
-    {
-        return order.SourceSnapshot.Materials.Sum(material => material.TotalCost);
     }
 
     private TradeRequestedOrderOutput[] ToRequestedOrderOutputs()
@@ -1591,6 +2052,10 @@
             SourceSnapshot = CopySourceSnapshot(order.SourceSnapshot),
             History = order.History.ToArray(),
             PayrollDraftId = order.PayrollDraftId,
+            CraftPlanId = order.CraftPlanId,
+            CraftPlanName = order.CraftPlanName,
+            CraftPlanSavedAtUtc = order.CraftPlanSavedAtUtc,
+            CraftPlanLinkKind = order.CraftPlanLinkKind,
             RemoteId = order.RemoteId,
             SyncState = order.SyncState
         };
@@ -1633,14 +2098,6 @@
             CreatedAtUtc = draft.CreatedAtUtc,
             UpdatedAtUtc = draft.UpdatedAtUtc
         };
-    }
-
-    private enum TradeOrderColumn
-    {
-        Title,
-        Commissioned,
-        Crafter,
-        Quantity
     }
 
     private sealed record OrderStatusGroup(TradeOrderStatus Status, IReadOnlyList<TradeOrder> Orders);

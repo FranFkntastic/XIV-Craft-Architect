@@ -121,7 +121,6 @@ public sealed class TradeOrderDraftFactory
             },
             History = history
         };
-
         return TradeOrderDraftCreateResult.Available(order);
     }
 

@@ -155,14 +155,13 @@ public class TradeOperationsFailureHandlingTests
     }
 
     [Fact]
-    public void OrdersPage_TableShowsRootQuantityInsteadOfLineCount()
+    public void OrdersPage_OutputTablesShowRootQuantitiesInsteadOfLineCounts()
     {
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
 
-        Assert.Contains("TradeOrderColumn.Quantity", source);
-        Assert.Contains("\"Qty\"", source);
-        Assert.Contains("GetRootQuantity(order).ToString(\"N0\")", source);
-        Assert.Contains("RootItems.Sum(item => item.Quantity)", source);
+        Assert.Contains(">Qty<", source);
+        Assert.Contains("TradeDisplayFormatter.FormatQuantity(item.Quantity)", source);
+        Assert.Contains("TradeDisplayFormatter.FormatQuantity(material.Quantity)", source);
         Assert.DoesNotContain("RootItems.Count.ToString(\"N0\")", source);
     }
 
@@ -171,7 +170,7 @@ public class TradeOperationsFailureHandlingTests
     {
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
 
-        Assert.Contains("_selectedOrder.SourceSnapshot.Materials", source);
+        Assert.Contains("paymentSummary.Materials", source);
         Assert.Contains("TradeDisplayFormatter.FormatQuantity(item.Quantity)", source);
         Assert.Contains("TradeDisplayFormatter.FormatQuantity(material.Quantity)", source);
         Assert.Contains("FormatMaterialCost(material)", source);
@@ -179,6 +178,10 @@ public class TradeOperationsFailureHandlingTests
         Assert.Contains("Total estimated procurement", source);
         Assert.Contains("GetSelectedOrderPaymentSummary", source);
         Assert.Contains("TradeCommissionPaymentSummary.FromOrder", source);
+        Assert.Contains("HasMaterialBreakdown", source);
+        Assert.Contains("materials.All(material => material.UnitCost > 0 && material.TotalCost > 0)", source);
+        Assert.Contains("Create a linked craft plan, then run market analysis to populate payment evidence.", source);
+        Assert.Contains("Material lines are captured, but pricing evidence is missing.", source);
         Assert.Contains("FormatResponsibility", source);
         Assert.Contains("Not priced", source);
         Assert.Contains("SetOrderMaterialResponsibilityAsync", source);
@@ -216,16 +219,18 @@ public class TradeOperationsFailureHandlingTests
     }
 
     [Fact]
-    public void OrdersPage_OpensOrderCraftPlanFromOrderOutputsThroughPlannerImport()
+    public void OrdersPage_OpensOrderCraftPlanFromLinkedSavedPlan()
     {
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
         var method = GetMethodSource(source, "private async Task OpenSelectedOrderCraftPlanAsync()", "private string GetOrderDataCenter");
 
         Assert.Contains("Open Craft Plan", source);
-        Assert.Contains("RecipePlannerCommandService.ImportProjectItemsAsync", method);
-        Assert.Contains("new ImportProjectItemsRequest", method);
-        Assert.Contains("GetOrderRootItems(_selectedOrder)", method);
+        Assert.Contains("HasLinkedCraftPlan(_selectedOrder)", method);
+        Assert.Contains("PlanPersistence.LoadPlanIntoSessionAsync(_selectedOrder.CraftPlanId!)", method);
+        Assert.Contains("Create a linked craft plan before opening it.", method);
         Assert.Contains("NavigationManager.NavigateTo(\"./\")", method);
+        Assert.DoesNotContain("RecipePlannerCommandService.ImportProjectItemsAsync", method);
+        Assert.DoesNotContain("new ImportProjectItemsRequest", method);
         Assert.DoesNotContain("AppState.CurrentPlan", method);
     }
 
@@ -237,7 +242,7 @@ public class TradeOperationsFailureHandlingTests
         Assert.Contains("Reopen archived orders before editing details.", source);
         Assert.Contains("Order title is required.", source);
         Assert.Contains("Use the close order controls for archive transitions.", source);
-        Assert.Contains("Change status to Assigned before saving this assignment.", source);
+        Assert.Contains("Change status to Assigned Awaiting Payment before saving this assignment.", source);
         Assert.Contains("Change status to Ready to Assign before clearing this assignment.", source);
         Assert.Contains("Assign a crafter before using this status.", source);
     }
@@ -318,13 +323,13 @@ public class TradeOperationsFailureHandlingTests
 
         Assert.Contains("RowClicked", tableSource);
         Assert.Contains("@onclick=\"@(() => OnRowClickedAsync(item))\"", tableSource);
-        Assert.Contains("RowClicked=\"SelectOrder\"", ordersSource);
-        Assert.Contains("GetRowClass=\"GetOrderRowClass\"", ordersSource);
+        Assert.Contains("trade-orders-rail-order", ordersSource);
+        Assert.Contains("@onclick=\"() => SelectOrder(order)\"", ordersSource);
         Assert.Contains("RowClicked=\"SelectCrafter\"", craftersSource);
         Assert.Contains("GetRowClass=\"GetCrafterRowClass\"", craftersSource);
         Assert.DoesNotContain("Header = \"Details\"", ordersSource);
         Assert.DoesNotContain("Header = \"Details\"", craftersSource);
-        Assert.DoesNotContain("TradeOrderColumn.Action", ordersSource);
+        Assert.DoesNotContain("TradeOrderColumn", ordersSource);
         Assert.DoesNotContain("TradeCrafterColumn.Action", craftersSource);
     }
 

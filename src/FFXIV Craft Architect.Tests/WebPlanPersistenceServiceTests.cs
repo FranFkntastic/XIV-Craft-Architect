@@ -77,6 +77,58 @@ public class WebPlanPersistenceServiceTests
     }
 
     [Fact]
+    public async Task SaveGeneratedOrderPlanAsync_WritesLeanSavedPlanWithoutMarketAnalysisPayloads()
+    {
+        var jsRuntime = new RecordingJsRuntime();
+        var service = CreateService(jsRuntime);
+        var savedAt = new DateTime(2026, 6, 19, 12, 0, 0, DateTimeKind.Utc);
+
+        var saved = await service.SaveGeneratedOrderPlanAsync(
+            "order-plan-id",
+            "Order - Cobalt Ingot Commission",
+            new CraftingPlan
+            {
+                DataCenter = "Aether",
+                RootItems =
+                [
+                    new PlanNode
+                    {
+                        ItemId = 100,
+                        Name = "Cobalt Ingot",
+                        NodeId = "root",
+                        Quantity = 999
+                    }
+                ]
+            },
+            [
+                new TradeOrderRootItemSnapshot(
+                    100,
+                    "Cobalt Ingot",
+                    999,
+                    MustBeHq: false,
+                    EstimatedSaleValue: 1_000_000m)
+            ],
+            savedAt);
+
+        Assert.True(saved);
+        Assert.NotNull(jsRuntime.LastSavedPlan);
+        Assert.Equal("order-plan-id", jsRuntime.LastSavedPlan.Id);
+        Assert.Equal("Order - Cobalt Ingot Commission", jsRuntime.LastSavedPlan.Name);
+        Assert.Equal("Aether", jsRuntime.LastSavedPlan.DataCenter);
+        Assert.Equal(savedAt, jsRuntime.LastSavedPlan.SavedAt);
+        var projectItem = Assert.Single(jsRuntime.LastSavedPlan.ProjectItems);
+        Assert.Equal(100, projectItem.Id);
+        Assert.Equal("Cobalt Ingot", projectItem.Name);
+        Assert.Equal(999, projectItem.Quantity);
+        Assert.NotNull(jsRuntime.LastSavedPlan.PlanJson);
+        Assert.Null(jsRuntime.LastSavedPlan.MarketPlansJson);
+        Assert.Null(jsRuntime.LastSavedPlan.MarketIntelligenceJson);
+        Assert.Null(jsRuntime.LastSavedPlan.MarketItemAnalysesJson);
+        Assert.Null(jsRuntime.LastSavedPlan.MarketAnalysisRecipeBasisJson);
+        Assert.Null(jsRuntime.LastSavedPlan.MarketAnalysisScopeSnapshotJson);
+    }
+
+    [Fact]
     public void PlanSessionLoadService_Prepare_InvalidPlanJsonReturnsWarning()
     {
         var storedPlan = new StoredPlan
