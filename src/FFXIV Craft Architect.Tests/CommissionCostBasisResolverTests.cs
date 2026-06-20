@@ -6,7 +6,7 @@ namespace FFXIV_Craft_Architect.Tests;
 public class CommissionCostBasisResolverTests
 {
     [Fact]
-    public void BuildMarketRecommendationLines_UsesCompetitiveAverageBeforeOtherPrices()
+    public void BuildMarketRecommendationLines_UsesPrimaryProcurementShelfBeforeMarketFallback()
     {
         var resolver = new CommissionCostBasisResolver();
         var loadedAt = DateTime.UtcNow;
@@ -29,6 +29,8 @@ public class CommissionCostBasisResolverTests
                     Name = "Thread",
                     QuantityNeeded = 3,
                     LoadedAtUtc = loadedAt,
+                    CostToCoverUnitPrice = 110m,
+                    PrimaryProcurementShelfAverageUnitPrice = 115m,
                     AnalysisCompetitiveAverageUnitPrice = 120m,
                     AnalysisScopeAverageUnitPrice = 180m,
                     AnalysisScopeMedianUnitPrice = 150m
@@ -36,10 +38,10 @@ public class CommissionCostBasisResolverTests
             ]);
 
         var line = Assert.Single(lines);
-        Assert.Equal(120m, line.UnitCost);
-        Assert.Equal("Market competitive average", line.EvidenceSource);
-        Assert.Contains("competitive average", line.UnitCostExplanation);
-        Assert.Contains("120g", line.UnitCostExplanation);
+        Assert.Equal(110m, line.UnitCost);
+        Assert.Equal("Primary procurement shelf", line.EvidenceSource);
+        Assert.Contains("primary procurement shelf", line.UnitCostExplanation);
+        Assert.Contains("110g", line.UnitCostExplanation);
         Assert.Equal(loadedAt, line.EvidenceTimestampUtc);
         Assert.True(line.RequiresHq);
     }
@@ -68,9 +70,9 @@ public class CommissionCostBasisResolverTests
             ]));
 
         Assert.Equal(120m, line.UnitCost);
-        Assert.Equal("Acquisition recommendation", line.EvidenceSource);
+        Assert.Equal("Vendor price", line.EvidenceSource);
         Assert.Contains("vendor", line.UnitCostExplanation, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("competitive average", line.UnitCostExplanation, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("market evidence fallback", line.UnitCostExplanation, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -98,7 +100,7 @@ public class CommissionCostBasisResolverTests
             ]));
 
         Assert.Equal(200m, line.UnitCost);
-        Assert.Equal("Acquisition recommendation", line.EvidenceSource);
+        Assert.Equal("Procurement route", line.EvidenceSource);
         Assert.DoesNotContain(line.Warnings, warning => warning.Contains("No market-analysis evidence", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -130,7 +132,7 @@ public class CommissionCostBasisResolverTests
             ]));
 
         Assert.Equal(200m, line.UnitCost);
-        Assert.Equal("Acquisition recommendation", line.EvidenceSource);
+        Assert.Equal("Procurement route", line.EvidenceSource);
         Assert.Contains("Siren", line.UnitCostExplanation);
         Assert.Equal(uploadedAt, line.EvidenceTimestampUtc);
     }
@@ -158,7 +160,7 @@ public class CommissionCostBasisResolverTests
             ]));
 
         Assert.Equal(80m, line.UnitCost);
-        Assert.Equal("Acquisition recommendation", line.EvidenceSource);
+        Assert.Equal("Split procurement route", line.EvidenceSource);
         Assert.Contains("split", line.UnitCostExplanation, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -181,8 +183,8 @@ public class CommissionCostBasisResolverTests
             ]));
 
         Assert.Equal(250m, line.UnitCost);
-        Assert.Equal("Market competitive average", line.EvidenceSource);
-        Assert.Contains("competitive average", line.UnitCostExplanation);
+        Assert.Equal("Market evidence fallback", line.EvidenceSource);
+        Assert.Contains("market evidence fallback", line.UnitCostExplanation);
     }
 
     [Fact]

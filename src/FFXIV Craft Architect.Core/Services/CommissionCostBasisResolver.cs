@@ -213,15 +213,15 @@ public sealed class CommissionCostBasisResolver
         }
 
         var unitCost = Math.Ceiling(acquisition.Cost / item.TotalQuantity);
-        var sourceDescription = FormatAcquisitionSourceDescription(shoppingPlan, acquisition);
+        var source = FormatAcquisitionSource(shoppingPlan, acquisition);
         return new SelectedUnitCost(
             unitCost,
-            "Acquisition recommendation",
-            sourceDescription,
+            source.Label,
+            source.Description,
             acquisition.World?.MarketUploadedAtUtc);
     }
 
-    private static string FormatAcquisitionSourceDescription(
+    private static (string Label, string Description) FormatAcquisitionSource(
         DetailedShoppingPlan shoppingPlan,
         MarketPurchaseCostEstimate acquisition)
     {
@@ -230,30 +230,46 @@ public sealed class CommissionCostBasisResolver
                 MarketShoppingConstants.VendorWorldName,
                 StringComparison.OrdinalIgnoreCase))
         {
-            return "the vendor acquisition recommendation";
+            return ("Vendor price", "loaded gil vendor pricing");
         }
 
         if (shoppingPlan.RecommendedSplit is { Count: > 0 } && acquisition.World == null)
         {
-            return "the recommended split acquisition route";
+            return ("Split procurement route", "the recommended split procurement route");
         }
 
         if (acquisition.World != null)
         {
-            return $"the acquisition recommendation from {acquisition.World.WorldName}";
+            return ("Procurement route", $"the recommended procurement route from {acquisition.World.WorldName}");
         }
 
-        return "the acquisition recommendation";
+        return ("Procurement route", "the recommended procurement route");
     }
 
     private static SelectedUnitCost SelectUnitCost(MarketItemAnalysis analysis)
     {
+        if (analysis.CostToCoverUnitPrice > 0)
+        {
+            return new SelectedUnitCost(
+                analysis.CostToCoverUnitPrice,
+                "Primary procurement shelf",
+                "the primary procurement shelf cost to cover the requested quantity");
+        }
+
+        if (analysis.PrimaryProcurementShelfAverageUnitPrice > 0)
+        {
+            return new SelectedUnitCost(
+                analysis.PrimaryProcurementShelfAverageUnitPrice,
+                "Primary procurement shelf",
+                "the primary procurement shelf average");
+        }
+
         if (analysis.AnalysisCompetitiveAverageUnitPrice > 0)
         {
             return new SelectedUnitCost(
                 analysis.AnalysisCompetitiveAverageUnitPrice,
-                "Market competitive average",
-                "the market-analysis competitive average");
+                "Market evidence fallback",
+                "the broad market evidence fallback");
         }
 
         if (analysis.AnalysisScopeAverageUnitPrice > 0)

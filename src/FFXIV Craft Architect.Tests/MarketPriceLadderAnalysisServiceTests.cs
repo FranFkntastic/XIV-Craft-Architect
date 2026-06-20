@@ -77,6 +77,35 @@ public class MarketPriceLadderAnalysisServiceTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_PrimaryProcurementShelf_DoesNotAverageLaterAcceptableShelves()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            quantityNeeded: 1_998,
+            listings:
+            [
+                Listing(quantity: 7, price: 500, retainer: "Tiny Deal"),
+                Listing(quantity: 97, price: 578, retainer: "Thin Deal"),
+                Listing(quantity: 999, price: 740, retainer: "Primary A"),
+                Listing(quantity: 999, price: 768, retainer: "Primary B"),
+                Listing(quantity: 3_546, price: 800, retainer: "Primary Excess"),
+                Listing(quantity: 42_227, price: 945, retainer: "Next Shelf"),
+                Listing(quantity: 47_880, price: 1_130, retainer: "Later Shelf"),
+                Listing(quantity: 7_596, price: 1_311, retainer: "Pricy Shelf")
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+        var world = Assert.Single(analysis.Worlds);
+
+        Assert.Equal(5_544, world.PriceSignalQuantity);
+        Assert.Equal(754m, world.CostToCoverUnitPrice);
+        Assert.Equal(754m, analysis.CostToCoverUnitPrice);
+        Assert.Equal(world.PrimaryUsableAverageUnitPrice, world.PriceSignalAverageUnitPrice);
+        Assert.True(world.PriceSignalAverageUnitPrice < analysis.AnalysisCompetitiveAverageUnitPrice);
+        Assert.DoesNotContain(world.PriceBands, band => band.MinUnitPrice >= 900 && band.IsPriceSignalBand);
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_TinyBaitWithFairRegionalBand_TreatsRealBandAsPrimaryUsable()
     {
         var service = CreateService();
@@ -397,7 +426,7 @@ public class MarketPriceLadderAnalysisServiceTests
     }
 
     [Fact]
-    public async Task AnalyzeAsync_ThinCompetitiveBand_ProvidesPriceSignalWithoutProcurementCandidate()
+    public async Task AnalyzeAsync_ThinAcceptableBand_DoesNotProvideProcurementSignal()
     {
         var service = CreateService();
         var request = CreateRequest(
@@ -419,16 +448,17 @@ public class MarketPriceLadderAnalysisServiceTests
 
         Assert.Equal(0, thinWorld.PrimaryUsableQuantity);
         Assert.Equal(0, thinWorld.PrimaryUsableAverageUnitPrice);
-        Assert.Equal(150, thinWorld.PriceSignalQuantity);
-        Assert.Equal(7_000, thinWorld.PriceSignalAverageUnitPrice);
+        Assert.Equal(0, thinWorld.PriceSignalQuantity);
+        Assert.Equal(0, thinWorld.PriceSignalAverageUnitPrice);
 
-        var signalBand = Assert.Single(thinWorld.PriceBands, band => band.IsPriceSignalBand);
-        Assert.Equal(PriceBandCompetitiveness.Competitive, signalBand.Competitiveness);
-        Assert.Equal(PriceBandDepth.Thin, signalBand.Depth);
-        Assert.False(signalBand.IsPrimaryUsableBand);
+        var thinBand = Assert.Single(thinWorld.PriceBands);
+        Assert.Equal(PriceBandCompetitiveness.Competitive, thinBand.Competitiveness);
+        Assert.Equal(PriceBandDepth.Thin, thinBand.Depth);
+        Assert.False(thinBand.IsPriceSignalBand);
+        Assert.False(thinBand.IsPrimaryUsableBand);
 
         var listing = Assert.Single(thinWorld.Listings);
-        Assert.True(listing.IsInPriceSignalBand);
+        Assert.False(listing.IsInPriceSignalBand);
         Assert.False(listing.IsInPrimaryUsableBand);
     }
 
