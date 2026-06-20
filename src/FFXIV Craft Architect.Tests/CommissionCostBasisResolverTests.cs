@@ -74,6 +74,36 @@ public class CommissionCostBasisResolverTests
     }
 
     [Fact]
+    public void BuildMarketRecommendationLines_DoesNotWarnWhenRecommendationEvidenceExistsWithoutAnalysis()
+    {
+        var resolver = new CommissionCostBasisResolver();
+
+        var line = Assert.Single(resolver.BuildMarketRecommendationLines(
+            [Material(15, "Recommended Ore", quantity: 4, unitPrice: 999m)],
+            [],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 15,
+                    Name = "Recommended Ore",
+                    QuantityNeeded = 4,
+                    RecommendedWorld = new WorldShoppingSummary
+                    {
+                        DataCenter = "Aether",
+                        WorldName = "Siren",
+                        TotalCost = 800,
+                        TotalQuantityPurchased = 4
+                    }
+                }
+            ]));
+
+        Assert.Equal(200m, line.UnitCost);
+        Assert.Equal("Acquisition recommendation", line.EvidenceSource);
+        Assert.DoesNotContain(line.Warnings, warning => warning.Contains("No market-analysis evidence", StringComparison.OrdinalIgnoreCase));
+    }
+
+
+    [Fact]
     public void BuildMarketRecommendationLines_UsesSupportedWorldAcquisitionEvidenceBeforeMarketAverage()
     {
         var resolver = new CommissionCostBasisResolver();

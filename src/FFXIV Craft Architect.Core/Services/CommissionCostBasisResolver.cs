@@ -76,7 +76,7 @@ public sealed class CommissionCostBasisResolver
                 warnings.Add($"{item.Name}: {analysis.Warning}");
             }
         }
-        else
+        else if (selectedCost == null)
         {
             warnings.Add($"No market-analysis evidence was available for {item.Name}.");
         }

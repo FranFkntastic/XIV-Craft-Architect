@@ -192,6 +192,13 @@ public class TradeOperationsFailureHandlingTests
         Assert.Contains("Disabled=\"@(paymentSummary.TotalPayment <= 0)\"", source);
         Assert.Contains("Disabled=\"@(paymentSummary.EstimatedProcurementTotal <= 0)\"", source);
         Assert.Contains("BuildOrderPaymentSummary", source);
+        Assert.Contains("Refresh Pricing Evidence", source);
+        Assert.Contains("TradeOrderPricingEvidenceService.RefreshAsync(_selectedOrder)", source);
+        Assert.Contains("orderToSave.SourceSnapshot.Materials = result.Materials", source);
+        Assert.Contains("orderToSave.SourceSnapshot.Warnings = result.Warnings", source);
+        Assert.Contains("Pricing evidence refreshed, but failed to save it to the order.", source);
+        Assert.Contains("AddPricingEvidenceHistory", source);
+        Assert.Contains("TradeOrderHistoryEventKind.PricingRefreshed", source);
     }
 
     [Fact]
@@ -232,6 +239,22 @@ public class TradeOperationsFailureHandlingTests
         Assert.DoesNotContain("RecipePlannerCommandService.ImportProjectItemsAsync", method);
         Assert.DoesNotContain("new ImportProjectItemsRequest", method);
         Assert.DoesNotContain("AppState.CurrentPlan", method);
+    }
+
+    [Fact]
+    public void PricingEvidenceRefresh_ReusesCraftArchitectProcurementPipeline()
+    {
+        var serviceSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Services", "TradeOrderPricingEvidenceService.cs"));
+
+        Assert.Contains("WebPlanPersistenceService", serviceSource);
+        Assert.Contains("PlanSessionLoadService.Prepare(storedPlan)", serviceSource);
+        Assert.Contains("IRecipeLayerWorkflowService", serviceSource);
+        Assert.Contains("BuildActiveProcurementItems(loaded.Plan)", serviceSource);
+        Assert.Contains("IProcurementRouteExecutionService", serviceSource);
+        Assert.Contains("_procurementRouteExecution.AnalyzeAsync", serviceSource);
+        Assert.Contains("BuildMarketRecommendationLines", serviceSource);
+        Assert.Contains("TradeOrderMaterialEvidenceMapper.ToMaterialSnapshots(lines)", serviceSource);
+        Assert.DoesNotContain("AppState.CurrentPlan", serviceSource);
     }
 
     [Fact]

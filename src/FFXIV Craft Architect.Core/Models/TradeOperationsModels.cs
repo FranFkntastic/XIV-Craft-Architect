@@ -178,7 +178,8 @@ public enum TradeOrderHistoryEventKind
     ManualNote,
     Closed,
     Reopened,
-    PayrollLinked
+    PayrollLinked,
+    PricingRefreshed
 }
 
 public sealed class TradeOrderHistoryEvent

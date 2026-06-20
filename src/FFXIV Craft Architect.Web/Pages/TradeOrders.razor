@@ -4,6 +4,7 @@
 @inject GarlandService GarlandService
 @inject TradeOrderDraftFactory TradeOrderDraftFactory
 @inject TradeOrderCraftPlanBuildService TradeOrderCraftPlanBuildService
+@inject TradeOrderPricingEvidenceService TradeOrderPricingEvidenceService
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradePayrollPersistenceService TradePayrollPersistence
 @inject WebPlanPersistenceService PlanPersistence
@@ -396,6 +397,14 @@
                                         <MudButton Variant="Variant.Outlined"
                                                    Color="Color.Secondary"
                                                    Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.PriceCheck"
+                                                   OnClick="RefreshSelectedOrderPricingEvidenceAsync"
+                                                   Disabled="@(_isRefreshingSelectedOrderPricing || IsSelectedOrderArchived || !HasLinkedCraftPlan(_selectedOrder))">
+                                            @(_isRefreshingSelectedOrderPricing ? "Refreshing..." : "Refresh Pricing Evidence")
+                                        </MudButton>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.OpenInNew"
                                                    OnClick="OpenSelectedOrderCraftPlanAsync"
                                                    Disabled="@(_isOpeningSelectedOrderCraftPlan || !HasLinkedCraftPlan(_selectedOrder))">
@@ -686,6 +695,7 @@
     private bool _isSearchingRequestedOrderItems;
     private bool _isCreatingRequestedOrder;
     private bool _isOpeningSelectedOrderCraftPlan;
+    private bool _isRefreshingSelectedOrderPricing;
     private bool _isSavingSelectedOrderCraftPlan;
     private int _activeOpsTab;
     private List<GarlandSearchResult> _requestedOrderSearchResults = [];
@@ -1596,6 +1606,73 @@
         }
     }
 
+    private async Task RefreshSelectedOrderPricingEvidenceAsync()
+    {
+        if (_selectedOrder == null || _companyProfile == null || _isRefreshingSelectedOrderPricing)
+        {
+            return;
+        }
+
+        if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+        {
+            Snackbar.Add("Reopen archived orders before refreshing pricing evidence.", Severity.Warning);
+            return;
+        }
+
+        if (!HasLinkedCraftPlan(_selectedOrder))
+        {
+            Snackbar.Add("Create a linked craft plan before refreshing pricing evidence.", Severity.Warning);
+            return;
+        }
+
+        _isRefreshingSelectedOrderPricing = true;
+        var orderId = _selectedOrder.Id;
+
+        try
+        {
+            var result = await TradeOrderPricingEvidenceService.RefreshAsync(_selectedOrder);
+            if (!result.Succeeded)
+            {
+                Snackbar.Add(result.FailureReason ?? "Could not refresh pricing evidence.", Severity.Warning);
+                return;
+            }
+
+            var refreshedAt = DateTime.UtcNow;
+            var orderToSave = CopyOrder(_selectedOrder);
+            orderToSave.SourceSnapshot.Materials = result.Materials;
+            orderToSave.SourceSnapshot.Warnings = result.Warnings;
+            orderToSave.SourceSnapshot.ImportedAtUtc = refreshedAt;
+            orderToSave.UpdatedAtUtc = refreshedAt;
+            AddPricingEvidenceHistory(orderToSave, result.Materials.Count, result.RefreshedEvidenceCount, refreshedAt);
+
+            var saved = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
+            if (!saved)
+            {
+                Snackbar.Add("Pricing evidence refreshed, but failed to save it to the order.", Severity.Error);
+                return;
+            }
+
+            await LoadAsync();
+            if (string.IsNullOrWhiteSpace(_loadError))
+            {
+                if (SelectOrderAfterReload(orderId, "Pricing evidence was saved, but the order could not be loaded."))
+                {
+                    _activeOpsTab = 0;
+                }
+            }
+
+            Snackbar.Add("Pricing evidence refreshed", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to refresh pricing evidence: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isRefreshingSelectedOrderPricing = false;
+        }
+    }
+
     private string GetOrderDataCenter(TradeOrder order)
     {
         return string.IsNullOrWhiteSpace(order.SourceSnapshot.DataCenter)
@@ -1829,6 +1906,28 @@
         order.History = history;
     }
 
+    private static void AddPricingEvidenceHistory(
+        TradeOrder order,
+        int materialCount,
+        int refreshedEvidenceCount,
+        DateTime refreshedAtUtc)
+    {
+        var history = order.History.ToList();
+        var refreshedEvidenceText = refreshedEvidenceCount > 0
+            ? $" Refreshed {refreshedEvidenceCount:N0} market evidence entries."
+            : string.Empty;
+        history.Add(new TradeOrderHistoryEvent
+        {
+            Id = Guid.NewGuid(),
+            CompanyProfileId = order.CompanyProfileId,
+            OrderId = order.Id,
+            Kind = TradeOrderHistoryEventKind.PricingRefreshed,
+            Note = $"Pricing evidence refreshed for {materialCount:N0} material lines.{refreshedEvidenceText}",
+            CreatedAtUtc = refreshedAtUtc
+        });
+        order.History = history;
+    }
+
     private static void AddPayrollLinkedHistory(TradeOrder order)
     {
         if (order.History.Any(history => history.Kind == TradeOrderHistoryEventKind.PayrollLinked))
@@ -1893,6 +1992,7 @@
             TradeOrderHistoryEventKind.StatusChanged => "Status",
             TradeOrderHistoryEventKind.Reopened => "Reopened",
             TradeOrderHistoryEventKind.PayrollLinked => "Payroll",
+            TradeOrderHistoryEventKind.PricingRefreshed => "Pricing",
             _ => kind.ToString()
         };
     }

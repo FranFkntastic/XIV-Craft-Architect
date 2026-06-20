@@ -53,9 +53,7 @@ public sealed class TradeOrderDraftFactory
             appState.MarketItemAnalyses.ToArray(),
             appState.ShoppingPlans.ToArray());
         warnings.AddRange(lines.SelectMany(line => line.Warnings));
-        var materials = lines
-            .Select(ToMaterialSnapshot)
-            .ToArray();
+        var materials = TradeOrderMaterialEvidenceMapper.ToMaterialSnapshots(lines);
         var title = string.IsNullOrWhiteSpace(request.Title)
             ? CreateSuggestedTitle(rootItems)
             : request.Title.Trim();
@@ -213,26 +211,6 @@ public sealed class TradeOrderDraftFactory
             ? node.HqMarketPrice
             : node.MarketPrice;
         return unitPrice * node.Quantity;
-    }
-
-    private static TradeOrderMaterialSnapshot ToMaterialSnapshot(CommissionPayrollInputLine material)
-    {
-        var totalCost = Math.Round(
-            material.UnitCost * material.Quantity,
-            0,
-            MidpointRounding.AwayFromZero);
-
-        return new TradeOrderMaterialSnapshot(
-            material.ItemId,
-            material.Name,
-            material.Quantity,
-            material.RequiresHq,
-            material.UnitCost,
-            totalCost,
-            material.EvidenceSource,
-            material.UnitCostExplanation,
-            material.EvidenceTimestampUtc,
-            material.Warnings.ToArray());
     }
 
     private static string CreateSuggestedTitle(IReadOnlyList<TradeOrderRootItemSnapshot> rootItems)

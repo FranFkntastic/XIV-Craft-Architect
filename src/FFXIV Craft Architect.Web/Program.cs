@@ -70,6 +70,7 @@ builder.Services.AddScoped<ITradePayrollDraftStore, IndexedDbTradePayrollDraftSt
 builder.Services.AddScoped<TradePayrollPersistenceService>();
 builder.Services.AddScoped<TradeOrderDraftFactory>();
 builder.Services.AddScoped<TradeOrderCraftPlanBuildService>();
+builder.Services.AddScoped<TradeOrderPricingEvidenceService>();
 builder.Services.AddScoped<TradeOperationsPersistenceService>();
 
 // Register IndexedDB service for browser persistence
