@@ -43,7 +43,8 @@ public sealed class HttpLodestoneCrafterLookupService : ILodestoneCrafterLookupS
         var query = BuildQuery(
             ("name", request.CharacterName),
             ("world", request.WorldName),
-            ("dataCenter", request.DataCenter));
+            ("dataCenter", request.DataCenter),
+            ("region", request.Region));
 
         return await GetAsync<IReadOnlyList<LodestoneCrafterSearchCandidate>>(
             $"lodestone/crafters/search{query}",

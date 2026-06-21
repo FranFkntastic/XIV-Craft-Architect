@@ -16,6 +16,12 @@ public class TradeCraftersMarkupTests
         Assert.Contains("ILodestoneCrafterLookupService", source);
         Assert.Contains("Import from Lodestone", source);
         Assert.Contains("Search Lodestone", source);
+        Assert.Contains("Entire region", source);
+        Assert.Contains("Selected data center", source);
+        Assert.Contains("Specific world", source);
+        Assert.Contains("MudTooltip", source);
+        Assert.Contains("LodestoneSearchScope", source);
+        Assert.Contains("GetLodestoneSearchWorlds", source);
         Assert.Contains("PreviewLodestoneCandidateAsync", source);
         Assert.Contains("CreateCrafterFromLodestoneAsync", source);
         Assert.Contains("Alias", source);

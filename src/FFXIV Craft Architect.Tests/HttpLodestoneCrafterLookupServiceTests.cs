@@ -43,6 +43,30 @@ public sealed class HttpLodestoneCrafterLookupServiceTests
     }
 
     [Fact]
+    public async Task SearchAsync_WhenRegionProvided_SendsRegionSearchRequest()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var response = LodestoneCrafterLookupResult<IReadOnlyList<LodestoneCrafterSearchCandidate>>.Success([]);
+        var service = CreateService(request =>
+        {
+            capturedRequest = request;
+            return JsonResponse(response);
+        });
+
+        var result = await service.SearchAsync(new LodestoneCrafterSearchRequest(
+            "Level Checker",
+            null,
+            null,
+            "North America"));
+
+        Assert.True(result.Succeeded);
+        Assert.NotNull(capturedRequest?.RequestUri);
+        Assert.Equal(
+            "/lodestone/crafters/search?name=Level%20Checker&region=North%20America",
+            capturedRequest!.RequestUri!.PathAndQuery);
+    }
+
+    [Fact]
     public async Task GetImportPreviewAsync_WhenHelperUnavailable_ReturnsNetworkFailure()
     {
         var service = CreateService(_ => throw new HttpRequestException("No connection could be made."));

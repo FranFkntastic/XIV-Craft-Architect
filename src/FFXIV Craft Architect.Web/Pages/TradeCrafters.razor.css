@@ -27,15 +27,23 @@
 
 .trade-crafters-create-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(140px, 180px)) auto;
+  grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(160px, 210px)) auto;
   align-items: end;
 }
 
 .trade-crafters-lodestone-search-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(160px, 220px) auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 230px) minmax(180px, 230px) auto;
   gap: 12px;
   align-items: end;
+}
+
+.trade-crafters-field-shell {
+  min-width: 0;
+}
+
+.trade-crafters-field-shell > * {
+  width: 100%;
 }
 
 .trade-crafters-panel {

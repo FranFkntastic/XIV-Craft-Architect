@@ -3,7 +3,8 @@ namespace FFXIV_Craft_Architect.Core.Models;
 public sealed record LodestoneCrafterSearchRequest(
     string CharacterName,
     string? WorldName,
-    string? DataCenter);
+    string? DataCenter,
+    string? Region = null);
 
 public sealed record LodestoneCrafterSearchCandidate(
     string LodestoneCharacterId,

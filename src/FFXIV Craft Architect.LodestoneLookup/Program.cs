@@ -50,11 +50,12 @@ app.MapGet(
         string name,
         string? world,
         string? dataCenter,
+        string? region,
         ILodestoneCrafterLookupService lookup,
         CancellationToken cancellationToken) =>
     {
         var result = await lookup.SearchAsync(
-            new LodestoneCrafterSearchRequest(name, world, dataCenter),
+            new LodestoneCrafterSearchRequest(name, world, dataCenter, region),
             cancellationToken);
         return Results.Ok(result);
     });

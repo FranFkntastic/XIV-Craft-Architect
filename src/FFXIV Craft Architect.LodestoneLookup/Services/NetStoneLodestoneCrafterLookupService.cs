@@ -32,25 +32,46 @@ public sealed class NetStoneLodestoneCrafterLookupService : ILodestoneCrafterLoo
         {
             cancellationToken.ThrowIfCancellationRequested();
             var client = await GetClientAsync(cancellationToken);
-            var page = await client.SearchCharacter(new CharacterSearchQuery
-            {
-                CharacterName = request.CharacterName.Trim(),
-                World = request.WorldName?.Trim() ?? string.Empty,
-                DataCenter = string.IsNullOrWhiteSpace(request.WorldName)
-                    ? request.DataCenter?.Trim() ?? string.Empty
-                    : string.Empty
-            });
+            var candidates = new List<LodestoneCrafterSearchCandidate>();
+            var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            var candidates = page?.Results
-                .Where(result => !string.IsNullOrWhiteSpace(result.Id))
-                .Take(10)
-                .Select(result => new LodestoneCrafterSearchCandidate(
-                    result.Id!,
-                    result.Name,
-                    request.WorldName,
-                    request.DataCenter,
-                    $"{LodestoneProfileBaseUrl}{result.Id}/"))
-                .ToArray() ?? Array.Empty<LodestoneCrafterSearchCandidate>();
+            foreach (var dataCenter in GetSearchDataCenters(request))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var page = await client.SearchCharacter(new CharacterSearchQuery
+                {
+                    CharacterName = request.CharacterName.Trim(),
+                    World = request.WorldName?.Trim() ?? string.Empty,
+                    DataCenter = string.IsNullOrWhiteSpace(request.WorldName)
+                        ? dataCenter ?? string.Empty
+                        : string.Empty
+                });
+
+                if (page?.Results == null)
+                {
+                    continue;
+                }
+
+                foreach (var result in page.Results.Where(result => !string.IsNullOrWhiteSpace(result.Id)))
+                {
+                    if (!seenIds.Add(result.Id!))
+                    {
+                        continue;
+                    }
+
+                    candidates.Add(new LodestoneCrafterSearchCandidate(
+                        result.Id!,
+                        result.Name,
+                        request.WorldName,
+                        string.IsNullOrWhiteSpace(request.WorldName) ? dataCenter : request.DataCenter,
+                        $"{LodestoneProfileBaseUrl}{result.Id}/"));
+
+                    if (candidates.Count >= 10)
+                    {
+                        return LodestoneCrafterLookupResult<IReadOnlyList<LodestoneCrafterSearchCandidate>>.Success(candidates);
+                    }
+                }
+            }
 
             return LodestoneCrafterLookupResult<IReadOnlyList<LodestoneCrafterSearchCandidate>>.Success(candidates);
         }
@@ -169,6 +190,38 @@ public sealed class NetStoneLodestoneCrafterLookupService : ILodestoneCrafterLoo
         {
             _clientLock.Release();
         }
+    }
+
+    private static IReadOnlyList<string?> GetSearchDataCenters(LodestoneCrafterSearchRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.WorldName))
+        {
+            return [null];
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.DataCenter))
+        {
+            return [request.DataCenter.Trim()];
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Region))
+        {
+            var regionDataCenters = MarketFetchScopeResolver.GetDataCenters(
+                    MarketFetchScope.EntireRegion,
+                    string.Empty,
+                    request.Region.Trim())
+                .Where(dataCenter => !string.IsNullOrWhiteSpace(dataCenter))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(dataCenter => (string?)dataCenter)
+                .ToArray();
+
+            if (regionDataCenters.Length > 0)
+            {
+                return regionDataCenters;
+            }
+        }
+
+        return [null];
     }
 
     private static string? FormatGender(char gender)

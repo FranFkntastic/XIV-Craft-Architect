@@ -40,21 +40,48 @@
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
                                       Immediate="true" />
-                        <MudSelect T="string"
-                                   @bind-Value="_lodestoneSearchWorld"
-                                   Label="World"
-                                   Variant="Variant.Outlined"
-                                   Margin="Margin.Dense">
-                            <MudSelectItem Value="@string.Empty">Use selected data center</MudSelectItem>
-                            @foreach (var world in GetWorldsForDataCenter(GetDefaultDataCenter()))
-                            {
-                                <MudSelectItem Value="@world">@world</MudSelectItem>
-                            }
-                        </MudSelect>
+                        <MudTooltip Text="Choose how widely Lodestone should search. Entire region checks every data center in your selected region; specific world is only needed when you already know the home world.">
+                            <div class="trade-crafters-field-shell">
+                                <MudSelect T="LodestoneSearchScope"
+                                           @bind-Value="_lodestoneSearchScope"
+                                           Label="Search scope"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Normal">
+                                    <MudSelectItem Value="@LodestoneSearchScope.EntireRegion">Entire region</MudSelectItem>
+                                    <MudSelectItem Value="@LodestoneSearchScope.SelectedDataCenter">Selected data center</MudSelectItem>
+                                    <MudSelectItem Value="@LodestoneSearchScope.SpecificWorld">Specific world</MudSelectItem>
+                                </MudSelect>
+                            </div>
+                        </MudTooltip>
+                        @if (_lodestoneSearchScope == LodestoneSearchScope.SpecificWorld)
+                        {
+                            <MudSelect T="string"
+                                       @key="_lodestoneSearchScope"
+                                       @bind-Value="_lodestoneSearchWorld"
+                                       Label="World"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Normal">
+                                <MudSelectItem Value="@string.Empty">Choose world</MudSelectItem>
+                                @foreach (var world in GetLodestoneSearchWorlds())
+                                {
+                                    <MudSelectItem Value="@world">@world</MudSelectItem>
+                                }
+                            </MudSelect>
+                        }
+                        else
+                        {
+                            <MudTextField T="string"
+                                          @key="_lodestoneSearchScope"
+                                          Value="@GetLodestoneSearchScopeSummary()"
+                                          Label="Location"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Normal"
+                                          ReadOnly="true" />
+                        }
                         <MudButton Variant="Variant.Filled"
                                    Color="Color.Primary"
                                    OnClick="SearchLodestoneAsync"
-                                   Disabled="@(_lodestoneIsBusy || string.IsNullOrWhiteSpace(_lodestoneSearchName))">
+                                   Disabled="@(_lodestoneIsBusy || string.IsNullOrWhiteSpace(_lodestoneSearchName) || IsLodestoneSearchLocationMissing())">
                             Search Lodestone
                         </MudButton>
                     </div>
@@ -126,7 +153,7 @@
                                    ValueChanged="SetNewCrafterRegion"
                                    Label="Region"
                                    Variant="Variant.Outlined"
-                                   Margin="Margin.Dense">
+                                   Margin="Margin.Normal">
                             @foreach (var region in TradeRegions)
                             {
                                 <MudSelectItem Value="@region">@region</MudSelectItem>
@@ -137,7 +164,7 @@
                                    ValueChanged="SetNewCrafterDataCenter"
                                    Label="Data center"
                                    Variant="Variant.Outlined"
-                                   Margin="Margin.Dense">
+                                   Margin="Margin.Normal">
                             @foreach (var dataCenter in GetDataCentersForRegion(_newCrafterRegion))
                             {
                                 <MudSelectItem Value="@dataCenter">@dataCenter</MudSelectItem>
@@ -148,7 +175,7 @@
                                    ValueChanged="SetNewCrafterWorld"
                                    Label="World"
                                    Variant="Variant.Outlined"
-                                   Margin="Margin.Dense">
+                                   Margin="Margin.Normal">
                             <MudSelectItem Value="@string.Empty">No world selected</MudSelectItem>
                             @foreach (var world in GetWorldsForDataCenter(_newCrafterDataCenter))
                             {
@@ -218,7 +245,7 @@
                                    ValueChanged="SetDetailRegion"
                                    Label="Region"
                                    Variant="Variant.Outlined"
-                                   Margin="Margin.Dense">
+                                   Margin="Margin.Normal">
                             @foreach (var region in TradeRegions)
                             {
                                 <MudSelectItem Value="@region">@region</MudSelectItem>
@@ -229,7 +256,7 @@
                                    ValueChanged="SetDetailDataCenter"
                                    Label="Data center"
                                    Variant="Variant.Outlined"
-                                   Margin="Margin.Dense">
+                                   Margin="Margin.Normal">
                             @foreach (var dataCenter in GetDataCentersForRegion(_detailRegion))
                             {
                                 <MudSelectItem Value="@dataCenter">@dataCenter</MudSelectItem>
@@ -240,7 +267,7 @@
                                    ValueChanged="SetDetailWorld"
                                    Label="World"
                                    Variant="Variant.Outlined"
-                                   Margin="Margin.Dense">
+                                   Margin="Margin.Normal">
                             <MudSelectItem Value="@string.Empty">No world selected</MudSelectItem>
                             @foreach (var world in GetWorldsForDataCenter(_detailDataCenter))
                             {
@@ -371,6 +398,7 @@
     private Dictionary<TradeCraftingJob, int> _jobLevels = [];
     private string? _loadError;
     private string _lodestoneSearchName = string.Empty;
+    private LodestoneSearchScope _lodestoneSearchScope = LodestoneSearchScope.EntireRegion;
     private string _lodestoneSearchWorld = string.Empty;
     private bool _lodestoneIsBusy;
     private string? _lodestoneError;
@@ -527,10 +555,20 @@
         _lodestonePreview = null;
         try
         {
+            var worldName = _lodestoneSearchScope == LodestoneSearchScope.SpecificWorld
+                ? NormalizeOptionalText(_lodestoneSearchWorld)
+                : null;
+            var dataCenter = _lodestoneSearchScope == LodestoneSearchScope.SelectedDataCenter
+                ? GetDefaultDataCenter()
+                : null;
+            var region = _lodestoneSearchScope == LodestoneSearchScope.EntireRegion
+                ? GetDefaultRegion()
+                : null;
             var result = await LodestoneCrafterLookup.SearchAsync(new LodestoneCrafterSearchRequest(
                 _lodestoneSearchName,
-                NormalizeOptionalText(_lodestoneSearchWorld),
-                string.IsNullOrWhiteSpace(_lodestoneSearchWorld) ? GetDefaultDataCenter() : null));
+                worldName,
+                dataCenter,
+                region));
 
             if (!result.Succeeded || result.Value == null)
             {
@@ -542,7 +580,7 @@
             _lodestoneCandidates = result.Value;
             if (_lodestoneCandidates.Count == 0)
             {
-                _lodestoneError = "No Lodestone characters matched that search.";
+                _lodestoneError = $"No Lodestone characters matched that {GetLodestoneSearchScopeSummary().ToLowerInvariant()} search.";
             }
         }
         finally
@@ -958,6 +996,33 @@
             : [];
     }
 
+    private IReadOnlyList<string> GetLodestoneSearchWorlds()
+    {
+        return GetDataCentersForRegion(GetDefaultRegion())
+            .SelectMany(GetWorldsForDataCenter)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private string GetLodestoneSearchScopeSummary()
+    {
+        return _lodestoneSearchScope switch
+        {
+            LodestoneSearchScope.SelectedDataCenter => GetDefaultDataCenter(),
+            LodestoneSearchScope.SpecificWorld => string.IsNullOrWhiteSpace(_lodestoneSearchWorld)
+                ? "Specific world"
+                : _lodestoneSearchWorld,
+            _ => GetDefaultRegion()
+        };
+    }
+
+    private bool IsLodestoneSearchLocationMissing()
+    {
+        return _lodestoneSearchScope == LodestoneSearchScope.SpecificWorld &&
+            string.IsNullOrWhiteSpace(_lodestoneSearchWorld);
+    }
+
     private LodestoneCrafterImportPreview EnrichPreviewLocation(LodestoneCrafterImportPreview preview)
     {
         if (!string.IsNullOrWhiteSpace(preview.DataCenter) || string.IsNullOrWhiteSpace(preview.WorldName))
@@ -1039,6 +1104,13 @@
         World,
         Assignments,
         Jobs
+    }
+
+    private enum LodestoneSearchScope
+    {
+        EntireRegion,
+        SelectedDataCenter,
+        SpecificWorld
     }
 
     public void Dispose()
