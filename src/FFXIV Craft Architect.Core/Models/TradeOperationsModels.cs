@@ -170,6 +170,13 @@ public sealed record TradeOrderRootItemSnapshot(
     bool MustBeHq,
     decimal EstimatedSaleValue);
 
+public sealed record TradeRequestedOrderOutput(
+    int ItemId,
+    string Name,
+    int Quantity,
+    bool MustBeHq,
+    decimal EstimatedSaleValue);
+
 public sealed record TradeOrderMaterialSnapshot(
     int ItemId,
     string Name,
@@ -191,6 +198,7 @@ public enum TradeOrderHistoryEventKind
     Closed,
     Reopened,
     PayrollLinked,
+    CraftPlanLinked,
     PricingRefreshed
 }
 

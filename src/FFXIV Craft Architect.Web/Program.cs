@@ -70,7 +70,7 @@ builder.Services.AddScoped<ITradePayrollDraftStore, IndexedDbTradePayrollDraftSt
 builder.Services.AddScoped<TradePayrollPersistenceService>();
 builder.Services.AddScoped<TradeOrderDraftFactory>();
 builder.Services.AddScoped<TradeOrderCraftPlanBuildService>();
-builder.Services.AddScoped<TradeOrderPricingEvidenceService>();
+builder.Services.AddScoped<TradeOrderPricingWorkflowService>();
 builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
 builder.Services.AddScoped(_ => new LodestoneLookupClientOptions(new Uri(
     builder.Configuration["LodestoneLookup:BaseAddress"] ?? "http://localhost:5128/")));

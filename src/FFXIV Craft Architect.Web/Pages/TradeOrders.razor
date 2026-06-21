@@ -1,13 +1,15 @@
 @page "/trade/orders"
 @using System.Text
+@using FFXIV_Craft_Architect.Core.Helpers
 @inject AppState AppState
 @inject GarlandService GarlandService
 @inject TradeOrderDraftFactory TradeOrderDraftFactory
-@inject TradeOrderCraftPlanBuildService TradeOrderCraftPlanBuildService
-@inject TradeOrderPricingEvidenceService TradeOrderPricingEvidenceService
+@inject TradeOrderPricingWorkflowService TradeOrderPricingWorkflow
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradePayrollPersistenceService TradePayrollPersistence
 @inject WebPlanPersistenceService PlanPersistence
+@inject AcquisitionDecisionService AcquisitionDecisionService
+@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject IJSRuntime JSRuntime
@@ -391,16 +393,16 @@
                                                    Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.Build"
                                                    OnClick="CreateOrReplaceSelectedOrderCraftPlanAsync"
-                                                   Disabled="@(_isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || GetOrderRootItems(_selectedOrder).Count == 0)">
+                                                   Disabled="@(_isSavingSelectedOrderCraftPlan || _isRepricingSelectedOrder || IsSelectedOrderArchived || GetOrderRootItems(_selectedOrder).Count == 0)">
                                             @GetCraftPlanBuildButtonText(_selectedOrder)
                                         </MudButton>
                                         <MudButton Variant="Variant.Outlined"
                                                    Color="Color.Secondary"
                                                    Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.PriceCheck"
-                                                   OnClick="RefreshSelectedOrderPricingEvidenceAsync"
-                                                   Disabled="@(_isRefreshingSelectedOrderPricing || IsSelectedOrderArchived || !HasLinkedCraftPlan(_selectedOrder))">
-                                            @(_isRefreshingSelectedOrderPricing ? "Refreshing..." : "Refresh Pricing Evidence")
+                                                   OnClick="RepriceSelectedOrderAsync"
+                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || !HasLinkedCraftPlan(_selectedOrder))">
+                                            @(_isRepricingSelectedOrder ? "Repricing..." : "Reprice Order")
                                         </MudButton>
                                         <MudButton Variant="Variant.Outlined"
                                                    Color="Color.Secondary"
@@ -595,45 +597,25 @@
                             </MudTabPanel>
                             <MudTabPanel Text="Procurement">
                                 <MudText Typo="Typo.subtitle2">Procurement Evidence</MudText>
-                                @if (paymentSummary.Materials.Count == 0)
+                                @{
+                                    var procurementRows = GetSelectedOrderProcurementRows();
+                                }
+                                @if (procurementRows.Count == 0)
                                 {
                                     <MudAlert Severity="Severity.Info" Dense="true">No material evidence has been captured for this order yet.</MudAlert>
                                 }
                                 else
                                 {
-                                    <div class="trade-orders-material-table">
-                                        <div class="trade-orders-material-header">
-                                            <span>Item</span>
-                                            <span>Qty</span>
-                                            <span>Unit</span>
-                                            <span>Est. Cost</span>
-                                            <span>Resp.</span>
-                                        </div>
-                                        @foreach (var material in paymentSummary.Materials)
-                                        {
-                                            <div class="trade-orders-material-row" @key="GetPaymentMaterialKey(material)">
-                                                <span class="trade-orders-material-cell">
-                                                    <strong>@material.Name</strong>
-                                                    @if (material.RequiresHq)
-                                                    {
-                                                        <span class="trade-orders-hq">HQ</span>
-                                                    }
-                                                    @if (!string.IsNullOrWhiteSpace(material.EvidenceSource))
-                                                    {
-                                                        <span title="@material.UnitCostExplanation">@material.EvidenceSource</span>
-                                                    }
-                                                    @if (material.Warnings.Count > 0)
-                                                    {
-                                                        <span class="trade-orders-material-warning">@material.Warnings[0]</span>
-                                                    }
-                                                </span>
-                                                <span>@TradeDisplayFormatter.FormatQuantity(material.Quantity)</span>
-                                                <span>@FormatMaterialUnitCost(material)</span>
-                                                <span>@FormatMaterialCost(material)</span>
-                                                <span>@FormatResponsibility(material.Responsibility)</span>
-                                            </div>
-                                        }
-                                    </div>
+                                    <WebGridTable TItem="TradeOrderProcurementRow"
+                                                  TColumnId="TradeOrderProcurementColumn"
+                                                  CssClass="trade-orders-procurement-grid"
+                                                  Items="@GetOrderedProcurementRows(procurementRows)"
+                                                  Columns="@GetProcurementColumns()"
+                                                  GetRowKey="row => row.RowKey"
+                                                  SortState="@_procurementSortState"
+                                                  SortChanged="OnProcurementSortChanged"
+                                                  ColumnGapPx="4"
+                                                  HorizontalPaddingPx="8" />
                                     @if (paymentSummary.Warnings.Count > 0)
                                     {
                                         <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">
@@ -695,9 +677,11 @@
     private bool _isSearchingRequestedOrderItems;
     private bool _isCreatingRequestedOrder;
     private bool _isOpeningSelectedOrderCraftPlan;
-    private bool _isRefreshingSelectedOrderPricing;
+    private bool _isRepricingSelectedOrder;
     private bool _isSavingSelectedOrderCraftPlan;
     private int _activeOpsTab;
+    private WebTableSortState<TradeOrderProcurementColumn> _procurementSortState =
+        WebTableSortState<TradeOrderProcurementColumn>.Unsorted;
     private List<GarlandSearchResult> _requestedOrderSearchResults = [];
     private List<RequestedOrderOutputEditor> _requestedOrderOutputs = [];
     private string _detailTitle = string.Empty;
@@ -742,7 +726,7 @@
             return;
         }
 
-        _pendingNavigationOrderId = TryGetOrderIdFromNavigation();
+        _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
         await LoadAsync();
     }
 
@@ -769,6 +753,17 @@
         }
     }
 
+    private async Task<bool> SaveOrderAndNotifyAsync(TradeOrder order)
+    {
+        var saved = await TradeOperationsPersistence.SaveOrderAsync(order);
+        if (saved)
+        {
+            AppState.NotifyTradeOperationsDataChanged();
+        }
+
+        return saved;
+    }
+
     private void PrepareOrderImport()
     {
         if (_companyProfile == null)
@@ -792,6 +787,7 @@
         _newOrderTitle = result.Order.Title;
         _selectedOrder = null;
         _showNewOrderPanel = false;
+        AppState.SelectTradeOrder(null);
         ClearSelectedOrderNavigation();
     }
 
@@ -806,6 +802,7 @@
         _selectedOrder = null;
         _showNewOrderPanel = true;
         _activeOpsTab = 0;
+        AppState.SelectTradeOrder(null);
         ClearSelectedOrderNavigation();
         if (string.IsNullOrWhiteSpace(_newRequestedOrderTitle))
         {
@@ -929,24 +926,15 @@
 
         try
         {
-            var outputs = ToRequestedOrderOutputs();
-            var buildResult = await TradeOrderCraftPlanBuildService.BuildAsync(
-                new TradeOrderCraftPlanBuildRequest(
-                    outputs.Select(output => new TradeRequestedCraftOutput(
-                            output.ItemId,
-                            output.Name,
-                            output.Quantity,
-                            output.MustBeHq))
-                        .ToArray(),
-                    AppState.SelectedDataCenter,
-                    string.Empty));
-            if (!buildResult.Built || buildResult.Plan == null)
+            if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+                "Creating this Trade order",
+                targetPlanId: null))
             {
-                Snackbar.Add(buildResult.UnavailableReason ?? "Could not build a craft plan for this order.", Severity.Warning);
                 return;
             }
 
-            var result = TradeOrderDraftFactory.CreateFromRequestedOutputs(new TradeRequestedOrderCreateRequest(
+            var outputs = ToRequestedOrderOutputs();
+            var draftResult = TradeOrderDraftFactory.CreateFromRequestedOutputs(new TradeRequestedOrderCreateRequest(
                 _companyProfile.Id,
                 _newRequestedOrderCrafterId,
                 _newRequestedOrderTitle,
@@ -955,25 +943,25 @@
                 World: null,
                 _newRequestedOrderNotes,
                 DateTime.UtcNow));
-            if (!result.CanCreate || result.Order == null)
+            if (!draftResult.CanCreate || draftResult.Order == null)
             {
-                Snackbar.Add(result.UnavailableReason ?? "Could not create Trade order.", Severity.Warning);
+                Snackbar.Add(draftResult.UnavailableReason ?? "Could not create Trade order.", Severity.Warning);
                 return;
             }
 
-            var savedAt = DateTime.UtcNow;
-            var linked = await SaveGeneratedCraftPlanForOrderAsync(
-                result.Order,
-                buildResult,
-                outputs,
-                savedAt,
-                replaceExistingPlan: false);
-            if (!linked)
+            var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
+                draftResult.Order,
+                new TradeOrderPricingWorkflowOptions(
+                    AppState.SelectedDataCenter,
+                    draftResult.Order.SourceSnapshot.World ?? string.Empty,
+                    ForceRefreshMarketData: false));
+            if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
+                Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
                 return;
             }
 
-            var saved = await TradeOperationsPersistence.SaveOrderAsync(result.Order);
+            var saved = await SaveOrderAndNotifyAsync(pricingResult.UpdatedOrder);
             if (!saved)
             {
                 Snackbar.Add("Failed to save Trade order.", Severity.Error);
@@ -984,12 +972,12 @@
             _showNewOrderPanel = false;
             await LoadAsync();
             if (!string.IsNullOrWhiteSpace(_loadError) ||
-                !SelectOrderAfterReload(result.Order.Id, "Trade order was saved, but it could not be loaded."))
+                !SelectOrderAfterReload(pricingResult.UpdatedOrder.Id, "Trade order was saved, but it could not be loaded."))
             {
                 return;
             }
 
-            Snackbar.Add("Trade order created", Severity.Success);
+            Snackbar.Add("Trade order created and priced", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -1008,7 +996,7 @@
             return;
         }
 
-        var orderToSave = CopyOrder(_pendingImport);
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_pendingImport);
         var previousCrafterId = orderToSave.AssignedCrafterId;
         orderToSave.Title = _newOrderTitle.Trim();
         orderToSave.AssignedCrafterId = _newOrderCrafterId;
@@ -1018,36 +1006,26 @@
         orderToSave.UpdatedAtUtc = DateTime.UtcNow;
         AddHistoryIfAssignmentChanged(orderToSave, previousCrafterId, _newOrderCrafterId);
 
-        var outputs = GetOrderRootItems(orderToSave)
-            .Select(item => new TradeRequestedOrderOutput(
-                item.ItemId,
-                item.Name,
-                item.Quantity,
-                item.MustBeHq,
-                item.EstimatedSaleValue))
-            .ToArray();
-        var buildResult = await TradeOrderCraftPlanBuildService.BuildFromOrderAsync(
-            orderToSave,
-            GetOrderDataCenter(orderToSave),
-            orderToSave.SourceSnapshot.World ?? string.Empty);
-        if (!buildResult.Built || buildResult.Plan == null)
-        {
-            Snackbar.Add(buildResult.UnavailableReason ?? "Could not build a craft plan for this order.", Severity.Warning);
-            return;
-        }
-
-        var linked = await SaveGeneratedCraftPlanForOrderAsync(
-            orderToSave,
-            buildResult,
-            outputs,
-            DateTime.UtcNow,
-            replaceExistingPlan: false);
-        if (!linked)
+        if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+            "Creating this Trade order",
+            targetPlanId: orderToSave.CraftPlanId))
         {
             return;
         }
 
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
+        var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
+            orderToSave,
+            new TradeOrderPricingWorkflowOptions(
+                GetOrderDataCenter(orderToSave),
+                orderToSave.SourceSnapshot.World ?? string.Empty,
+                ForceRefreshMarketData: false));
+        if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
+        {
+            Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
+            return;
+        }
+
+        var saved = await SaveOrderAndNotifyAsync(pricingResult.UpdatedOrder);
         if (!saved)
         {
             Snackbar.Add("Failed to save Trade order.", Severity.Error);
@@ -1059,12 +1037,12 @@
         _newOrderCrafterId = null;
         await LoadAsync();
         if (!string.IsNullOrWhiteSpace(_loadError) ||
-            !SelectOrderAfterReload(orderToSave.Id, "Trade order was saved, but it could not be loaded."))
+            !SelectOrderAfterReload(pricingResult.UpdatedOrder.Id, "Trade order was saved, but it could not be loaded."))
         {
             return;
         }
 
-        Snackbar.Add("Trade order created", Severity.Success);
+        Snackbar.Add("Trade order created and priced", Severity.Success);
     }
 
     private IReadOnlyList<TradeOrder> GetOrdersForStatus(TradeOrderStatus status)
@@ -1126,19 +1104,18 @@
 
     private static bool HasMaterialBreakdown(TradeOrder order)
     {
-        return (order.SourceSnapshot?.Materials ?? Array.Empty<TradeOrderMaterialSnapshot>()).Count > 0;
+        return TradeOrderWorkflow.GetProcurementEvidenceState(order).HasMaterials;
     }
 
     private static bool HasProcurementEvidence(TradeOrder order)
     {
-        var materials = order.SourceSnapshot?.Materials ?? Array.Empty<TradeOrderMaterialSnapshot>();
-        return materials.Count > 0 && materials.All(material => material.UnitCost > 0 && material.TotalCost > 0);
+        return TradeOrderWorkflow.GetProcurementEvidenceState(order).IsFullyPriced;
     }
 
     private bool IsPaymentReady(TradeOrder order)
     {
         return HasProcurementEvidence(order) &&
-            TradeCommissionPaymentSummary.FromOrder(order, GetPayrollDraftForOrder(order)).TotalPayment > 0;
+            TradeOrderWorkflow.IsPaymentReady(order, GetPayrollDraftForOrder(order));
     }
 
     private static string GetPipelineStageClass(bool isComplete, bool isWarning = false)
@@ -1182,16 +1159,15 @@
 
     private static string GetProcurementEvidenceLabel(TradeOrder order)
     {
-        var materials = order.SourceSnapshot?.Materials ?? Array.Empty<TradeOrderMaterialSnapshot>();
-        if (materials.Count == 0)
+        var evidence = TradeOrderWorkflow.GetProcurementEvidenceState(order);
+        if (!evidence.HasMaterials)
         {
             return "No material breakdown";
         }
 
-        var pricedCount = materials.Count(material => material.UnitCost > 0 && material.TotalCost > 0);
-        return pricedCount == materials.Count
-            ? $"{pricedCount:N0} priced material lines"
-            : $"{pricedCount:N0} of {materials.Count:N0} material lines priced";
+        return evidence.IsFullyPriced
+            ? $"{evidence.PricedMaterialCount:N0} priced material lines"
+            : $"{evidence.PricedMaterialCount:N0} of {evidence.MaterialCount:N0} material lines priced";
     }
 
     private static string FormatLinkedCraftPlanDate(TradeOrder order)
@@ -1208,14 +1184,14 @@
             return "Saving...";
         }
 
-        return HasLinkedCraftPlan(order) ? "Replace Craft Plan" : "Create Craft Plan";
-    }
+        if (!HasLinkedCraftPlan(order))
+        {
+            return "Create Craft Plan";
+        }
 
-    private static string BuildOrderCraftPlanName(TradeOrder order)
-    {
-        return string.IsNullOrWhiteSpace(order.Title)
-            ? $"Trade Order {order.Id:N}"
-            : $"Order - {order.Title.Trim()}";
+        return order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.Unknown
+            ? "Replace Linked Plan"
+            : "Rebuild Linked Plan";
     }
 
     private static string GetLatestHistoryCue(TradeOrder order)
@@ -1239,6 +1215,7 @@
         _detailStatus = order.Status;
         _detailNotes = order.Notes;
         _manualNote = string.Empty;
+        AppState.SelectTradeOrder(order.Id);
         PersistSelectedOrderInNavigation(order.Id);
     }
 
@@ -1318,6 +1295,11 @@
         {
             _selectedOrder = null;
             _manualNote = string.Empty;
+            if (AppState.SelectedTradeOrderId == orderId)
+            {
+                AppState.SelectTradeOrder(null);
+            }
+
             Snackbar.Add(missingMessage, Severity.Warning);
             return false;
         }
@@ -1394,15 +1376,15 @@
         var previousStatus = _selectedOrder.Status;
         var previousCrafterId = _selectedOrder.AssignedCrafterId;
         var orderId = _selectedOrder.Id;
-        var orderToSave = CopyOrder(_selectedOrder);
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
         orderToSave.Title = title;
         orderToSave.AssignedCrafterId = _detailCrafterId;
         orderToSave.Status = _detailStatus;
         orderToSave.Notes = _detailNotes;
         orderToSave.UpdatedAtUtc = DateTime.UtcNow;
         AddHistoryIfAssignmentChanged(orderToSave, previousCrafterId, _detailCrafterId);
-        AddHistoryIfStatusChanged(orderToSave, previousStatus, _detailStatus, "Status changed from detail panel.");
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
+        TradeOrderWorkflow.AppendStatusHistory(orderToSave, previousStatus, _detailStatus, "Status changed from detail panel.", DateTime.UtcNow);
+        var saved = await SaveOrderAndNotifyAsync(orderToSave);
         if (!saved)
         {
             Snackbar.Add("Failed to save Trade order.", Severity.Error);
@@ -1424,12 +1406,12 @@
         }
 
         var orderId = _selectedOrder.Id;
-        var orderToSave = CopyOrder(_selectedOrder);
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
         var history = orderToSave.History.ToList();
         history.Add(TradeOrderHistoryEvent.CreateManualNote(_companyProfile.Id, orderToSave.Id, _manualNote.Trim(), DateTime.UtcNow));
         orderToSave.History = history;
         orderToSave.UpdatedAtUtc = DateTime.UtcNow;
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
+        var saved = await SaveOrderAndNotifyAsync(orderToSave);
         if (!saved)
         {
             Snackbar.Add("Failed to save Trade order.", Severity.Error);
@@ -1460,42 +1442,38 @@
             return;
         }
 
+        if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+            HasLinkedCraftPlan(_selectedOrder) ? "Rebuilding this order plan" : "Creating this order plan",
+            _selectedOrder.CraftPlanId))
+        {
+            return;
+        }
+
+        var assessment = TradeOrderWorkflow.AssessGeneratedCraftPlanReplacement(_selectedOrder);
+        if (assessment.RequiresConfirmation &&
+            !await ConfirmCraftPlanReplacementAsync(assessment))
+        {
+            return;
+        }
+
         _isSavingSelectedOrderCraftPlan = true;
         var orderId = _selectedOrder.Id;
 
         try
         {
-            var result = await TradeOrderCraftPlanBuildService.BuildFromOrderAsync(
+            var result = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
                 _selectedOrder,
-                GetOrderDataCenter(_selectedOrder),
-                _selectedOrder.SourceSnapshot.World ?? string.Empty);
-            if (!result.Built || result.Plan == null)
+                new TradeOrderPricingWorkflowOptions(
+                    GetOrderDataCenter(_selectedOrder),
+                    _selectedOrder.SourceSnapshot.World ?? string.Empty,
+                    ForceRefreshMarketData: false));
+            if (!result.HasUpdatedOrder || result.UpdatedOrder == null)
             {
-                Snackbar.Add(result.UnavailableReason ?? "Could not build the order craft plan.", Severity.Warning);
+                Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
                 return;
             }
 
-            var outputs = GetOrderRootItems(_selectedOrder)
-                .Select(item => new TradeRequestedOrderOutput(
-                    item.ItemId,
-                    item.Name,
-                    item.Quantity,
-                    item.MustBeHq,
-                    item.EstimatedSaleValue))
-                .ToArray();
-            var orderToSave = CopyOrder(_selectedOrder);
-            var savedAt = DateTime.UtcNow;
-            var linked = await SaveGeneratedCraftPlanForOrderAsync(
-                orderToSave,
-                result,
-                outputs,
-                savedAt,
-                replaceExistingPlan: true);
-            if (!linked)
-            {
-                return;
-            }
-            var saved = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
+            var saved = await SaveOrderAndNotifyAsync(result.UpdatedOrder);
             if (!saved)
             {
                 Snackbar.Add("Craft plan saved, but failed to link it to the order.", Severity.Error);
@@ -1508,11 +1486,11 @@
                 SelectOrderAfterReload(orderId, "Craft plan was saved, but the order could not be loaded.");
             }
 
-            Snackbar.Add("Linked craft plan saved", Severity.Success);
+            Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to save linked craft plan: {ex.Message}", Severity.Error);
+            Snackbar.Add($"Failed to rebuild and price linked craft plan: {ex.Message}", Severity.Error);
         }
         finally
         {
@@ -1520,49 +1498,24 @@
         }
     }
 
-    private async Task<bool> SaveGeneratedCraftPlanForOrderAsync(
-        TradeOrder order,
-        TradeOrderCraftPlanBuildResult buildResult,
-        IReadOnlyList<TradeRequestedOrderOutput> outputs,
-        DateTime savedAt,
-        bool replaceExistingPlan)
+    private async Task<bool> ConfirmCraftPlanReplacementAsync(TradeOrderCraftPlanReplacementAssessment assessment)
     {
-        if (buildResult.Plan == null)
+        if (assessment.Mode == TradeOrderCraftPlanReplacementMode.Create)
         {
-            Snackbar.Add("Could not save a linked craft plan because the build did not return a plan.", Severity.Error);
-            return false;
+            return true;
         }
 
-        var canReplaceLinkedPlan =
-            replaceExistingPlan &&
-            order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated &&
-            !string.IsNullOrWhiteSpace(order.CraftPlanId);
-        var planId = canReplaceLinkedPlan
-            ? order.CraftPlanId!
-            : Guid.NewGuid().ToString("D");
-        var planName = BuildOrderCraftPlanName(order);
-        var savedPlan = await PlanPersistence.SaveGeneratedOrderPlanAsync(
-            planId,
-            planName,
-            buildResult.Plan,
-            GetOrderRootItems(order),
-            savedAt);
-        if (!savedPlan)
+        var parameters = new DialogParameters
         {
-            Snackbar.Add("Failed to save linked Craft Architect plan.", Severity.Error);
-            return false;
-        }
-
-        order.CraftPlanId = planId;
-        order.CraftPlanName = planName;
-        order.CraftPlanSavedAtUtc = savedAt;
-        order.CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.OrderGenerated;
-        order.SourceSnapshot.Materials = TradeRequestedOrderWorkflow.BuildMaterialSnapshots(
-            buildResult.ActiveProcurementItems,
-            outputs);
-        order.SourceSnapshot.ImportedAtUtc = savedAt;
-        order.UpdatedAtUtc = savedAt;
-        return true;
+            ["Assessment"] = assessment
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = await DialogService.ShowAsync<TradeOrderReplaceCraftPlanDialog>(
+            "Rebuild Linked Craft Plan",
+            parameters,
+            options);
+        var result = await dialog.Result;
+        return result?.Data is true;
     }
 
     private async Task OpenSelectedOrderCraftPlanAsync()
@@ -1582,6 +1535,13 @@
 
         try
         {
+            if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+                "Opening this order plan",
+                _selectedOrder.CraftPlanId))
+            {
+                return;
+            }
+
             var result = await PlanPersistence.LoadPlanIntoSessionAsync(_selectedOrder.CraftPlanId!);
             if (result == null)
             {
@@ -1606,71 +1566,232 @@
         }
     }
 
-    private async Task RefreshSelectedOrderPricingEvidenceAsync()
+    private async Task OpenMarketAnalysisForProcurementRowAsync(TradeOrderProcurementRow row)
     {
-        if (_selectedOrder == null || _companyProfile == null || _isRefreshingSelectedOrderPricing)
+        if (!await LoadSelectedOrderCraftPlanForNavigationAsync())
+        {
+            return;
+        }
+
+        AppState.SelectMarketAnalysisItem(row.ItemId);
+        AppState.RequestMarketItemAutoExpand(row.ItemId);
+        NavigationManager.NavigateTo("market");
+    }
+
+    private async Task OpenAcquisitionEvaluationForProcurementRowAsync(TradeOrderProcurementRow row)
+    {
+        if (!await LoadSelectedOrderCraftPlanForNavigationAsync())
+        {
+            return;
+        }
+
+        NavigationManager.NavigateTo($"acquisition?itemId={row.ItemId}");
+    }
+
+    private async Task<bool> LoadSelectedOrderCraftPlanForNavigationAsync()
+    {
+        if (_selectedOrder == null)
+        {
+            return false;
+        }
+
+        if (!HasLinkedCraftPlan(_selectedOrder))
+        {
+            Snackbar.Add("Create a linked craft plan before opening Craft Architect details.", Severity.Warning);
+            return false;
+        }
+
+        if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+            "Opening Craft Architect details for this order",
+            _selectedOrder.CraftPlanId))
+        {
+            return false;
+        }
+
+        var result = await PlanPersistence.LoadPlanIntoSessionAsync(_selectedOrder.CraftPlanId!);
+        if (result == null)
+        {
+            Snackbar.Add("Linked Craft Architect plan could not be loaded.", Severity.Warning);
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.Warning))
+        {
+            Snackbar.Add(result.Warning, Severity.Warning);
+        }
+
+        return true;
+    }
+
+    private async Task RepriceSelectedOrderAsync()
+    {
+        if (_selectedOrder == null || _companyProfile == null || _isRepricingSelectedOrder)
         {
             return;
         }
 
         if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
         {
-            Snackbar.Add("Reopen archived orders before refreshing pricing evidence.", Severity.Warning);
+            Snackbar.Add("Reopen archived orders before repricing.", Severity.Warning);
             return;
         }
 
         if (!HasLinkedCraftPlan(_selectedOrder))
         {
-            Snackbar.Add("Create a linked craft plan before refreshing pricing evidence.", Severity.Warning);
+            Snackbar.Add("Create a linked craft plan before repricing.", Severity.Warning);
             return;
         }
 
-        _isRefreshingSelectedOrderPricing = true;
+        _isRepricingSelectedOrder = true;
         var orderId = _selectedOrder.Id;
 
         try
         {
-            var result = await TradeOrderPricingEvidenceService.RefreshAsync(_selectedOrder);
-            if (!result.Succeeded)
+            if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+                "Repricing this order",
+                _selectedOrder.CraftPlanId))
             {
-                Snackbar.Add(result.FailureReason ?? "Could not refresh pricing evidence.", Severity.Warning);
                 return;
             }
 
-            var refreshedAt = DateTime.UtcNow;
-            var orderToSave = CopyOrder(_selectedOrder);
-            orderToSave.SourceSnapshot.Materials = result.Materials;
-            orderToSave.SourceSnapshot.Warnings = result.Warnings;
-            orderToSave.SourceSnapshot.ImportedAtUtc = refreshedAt;
-            orderToSave.UpdatedAtUtc = refreshedAt;
-            AddPricingEvidenceHistory(orderToSave, result.Materials.Count, result.RefreshedEvidenceCount, refreshedAt);
+            var result = await TradeOrderPricingWorkflow.RepriceAsync(
+                _selectedOrder,
+                new TradeOrderPricingWorkflowOptions(
+                    GetOrderDataCenter(_selectedOrder),
+                    _selectedOrder.SourceSnapshot.World ?? string.Empty,
+                    ForceRefreshMarketData: true));
+            if (!result.HasUpdatedOrder || result.UpdatedOrder == null)
+            {
+                Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
+                return;
+            }
 
-            var saved = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
+            var saved = await SaveOrderAndNotifyAsync(result.UpdatedOrder);
             if (!saved)
             {
-                Snackbar.Add("Pricing evidence refreshed, but failed to save it to the order.", Severity.Error);
+                Snackbar.Add("Order pricing updated, but failed to save it to the order.", Severity.Error);
                 return;
             }
 
             await LoadAsync();
             if (string.IsNullOrWhiteSpace(_loadError))
             {
-                if (SelectOrderAfterReload(orderId, "Pricing evidence was saved, but the order could not be loaded."))
+                if (SelectOrderAfterReload(orderId, "Order pricing was saved, but the order could not be loaded."))
                 {
                     _activeOpsTab = 0;
                 }
             }
 
-            Snackbar.Add("Pricing evidence refreshed", Severity.Success);
+            Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to refresh pricing evidence: {ex.Message}", Severity.Error);
+            Snackbar.Add($"Failed to reprice order: {ex.Message}", Severity.Error);
         }
         finally
         {
-            _isRefreshingSelectedOrderPricing = false;
+            _isRepricingSelectedOrder = false;
         }
+    }
+
+    private async Task<bool> ConfirmActiveCraftPlanCanBeReplacedAsync(
+        string actionLabel,
+        string? targetPlanId)
+    {
+        if (!ShouldGuardActiveCraftPlanReplacement(targetPlanId))
+        {
+            return true;
+        }
+
+        var parameters = new DialogParameters
+        {
+            ["ActionLabel"] = actionLabel,
+            ["CurrentPlanName"] = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name,
+            ["HasNamedPlan"] = !string.IsNullOrWhiteSpace(AppState.CurrentPlanId)
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = await DialogService.ShowAsync<TradeActivePlanSaveGuardDialog>(
+            "Active Craft Plan",
+            parameters,
+            options);
+        var result = await dialog.Result;
+        if (result == null || result.Canceled)
+        {
+            return false;
+        }
+
+        return result.Data is TradeActivePlanSaveGuardChoice choice &&
+            (choice == TradeActivePlanSaveGuardChoice.ContinueWithoutSaving ||
+             await SaveActiveCraftPlanBeforeTradeActionAsync());
+    }
+
+    private bool ShouldGuardActiveCraftPlanReplacement(string? targetPlanId)
+    {
+        if (!AppState.HasPlanOrProjectItems)
+        {
+            return false;
+        }
+
+        var dirtyBuckets = AppState.GetDirtyPersistedBuckets();
+        if (string.IsNullOrWhiteSpace(AppState.CurrentPlanId))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(targetPlanId) &&
+            string.Equals(AppState.CurrentPlanId, targetPlanId, StringComparison.Ordinal) &&
+            dirtyBuckets == PersistedStateBucket.None)
+        {
+            return false;
+        }
+
+        return dirtyBuckets != PersistedStateBucket.None;
+    }
+
+    private async Task<bool> SaveActiveCraftPlanBeforeTradeActionAsync()
+    {
+        if (!AppState.HasProjectItems)
+        {
+            Snackbar.Add("There are no project items to save.", Severity.Warning);
+            return false;
+        }
+
+        var planId = AppState.CurrentPlanId;
+        var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name;
+        if (string.IsNullOrWhiteSpace(planId))
+        {
+            var dialog = await DialogService.ShowAsync<SavePlanDialog>("Save Plan");
+            var result = await dialog.Result;
+            if (result?.Data is not string newName || string.IsNullOrWhiteSpace(newName))
+            {
+                return false;
+            }
+
+            planId = Guid.NewGuid().ToString("D");
+            planName = newName.Trim();
+        }
+        else if (string.IsNullOrWhiteSpace(planName))
+        {
+            planName = "Saved Plan";
+        }
+
+        var versions = AppState.CurrentVersions;
+        var dirtyBuckets = AppState.GetDirtyPersistedBuckets();
+        var saved = await PlanPersistence.SaveCurrentPlanAsync(planId, planName);
+        if (!saved)
+        {
+            Snackbar.Add("Failed to save the active Craft plan.", Severity.Error);
+            return false;
+        }
+
+        AppState.TrackCurrentPlanIdentity(planId, planName);
+        if (dirtyBuckets != PersistedStateBucket.None)
+        {
+            AppState.MarkPersisted(dirtyBuckets, versions);
+        }
+
+        Snackbar.Add($"Saved '{planName}'", Severity.Success);
+        return true;
     }
 
     private string GetOrderDataCenter(TradeOrder order)
@@ -1702,12 +1823,11 @@
 
         var orderId = _selectedOrder.Id;
         var currentDraft = await GetOrCreatePayrollDraftForOrderAsync(_selectedOrder);
-        var draftToSave = CopyPayrollDraft(currentDraft);
-        var responsibilities = (draftToSave.Responsibilities ?? Array.Empty<TradePayrollResponsibilityLine>())
-            .Where(line => line.ItemId != material.ItemId || line.RequiresHq != material.RequiresHq)
-            .Append(new TradePayrollResponsibilityLine(material.ItemId, material.RequiresHq, responsibility))
-            .ToArray();
-        draftToSave.Responsibilities = responsibilities;
+        var draftToSave = TradeOrderWorkflow.WithMaterialResponsibility(
+            currentDraft,
+            material.ItemId,
+            material.RequiresHq,
+            responsibility);
         var savedDraft = await TradePayrollPersistence.SaveDraftAsync(draftToSave);
         if (!savedDraft)
         {
@@ -1722,11 +1842,11 @@
 
         if (!string.Equals(_selectedOrder.PayrollDraftId, draftToSave.Id, StringComparison.OrdinalIgnoreCase))
         {
-            var orderToSave = CopyOrder(_selectedOrder);
+            var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
             orderToSave.PayrollDraftId = draftToSave.Id;
             orderToSave.UpdatedAtUtc = DateTime.UtcNow;
-            AddPayrollLinkedHistory(orderToSave);
-            var savedOrder = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
+            TradeOrderWorkflow.AppendPayrollLinkedHistory(orderToSave, DateTime.UtcNow);
+            var savedOrder = await SaveOrderAndNotifyAsync(orderToSave);
             if (!savedOrder)
             {
                 Snackbar.Add("Payment responsibility saved, but failed to link it to the order.", Severity.Warning);
@@ -1805,11 +1925,11 @@
 
         var previousStatus = _selectedOrder.Status;
         var orderId = _selectedOrder.Id;
-        var orderToSave = CopyOrder(_selectedOrder);
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
         orderToSave.Status = status;
         orderToSave.UpdatedAtUtc = DateTime.UtcNow;
-        AddHistoryIfStatusChanged(orderToSave, previousStatus, status, string.IsNullOrWhiteSpace(note) ? FormatStatus(status) : note.Trim());
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
+        TradeOrderWorkflow.AppendStatusHistory(orderToSave, previousStatus, status, string.IsNullOrWhiteSpace(note) ? FormatStatus(status) : note.Trim(), DateTime.UtcNow);
+        var saved = await SaveOrderAndNotifyAsync(orderToSave);
         if (!saved)
         {
             Snackbar.Add("Failed to save Trade order.", Severity.Error);
@@ -1842,13 +1962,13 @@
 
         var previousStatus = _selectedOrder.Status;
         var orderId = _selectedOrder.Id;
-        var orderToSave = CopyOrder(_selectedOrder);
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
         orderToSave.Status = orderToSave.AssignedCrafterId.HasValue
             ? TradeOrderStatus.Assigned
             : TradeOrderStatus.ReadyToAssign;
         orderToSave.UpdatedAtUtc = DateTime.UtcNow;
-        AddReopenedHistory(orderToSave, previousStatus, orderToSave.Status);
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
+        TradeOrderWorkflow.AppendReopenedHistory(orderToSave, previousStatus, orderToSave.Status, DateTime.UtcNow);
+        var saved = await SaveOrderAndNotifyAsync(orderToSave);
         if (!saved)
         {
             Snackbar.Add("Failed to save Trade order.", Severity.Error);
@@ -1862,114 +1982,17 @@
         }
     }
 
-    private static void AddHistoryIfStatusChanged(TradeOrder order, TradeOrderStatus previousStatus, TradeOrderStatus newStatus, string note)
-    {
-        if (previousStatus == newStatus)
-        {
-            return;
-        }
-
-        var history = order.History.ToList();
-        history.Add(new TradeOrderHistoryEvent
-        {
-            Id = Guid.NewGuid(),
-            CompanyProfileId = order.CompanyProfileId,
-            OrderId = order.Id,
-            Kind = TradeOrderStatusWorkflow.IsArchived(newStatus) ? TradeOrderHistoryEventKind.Closed : TradeOrderHistoryEventKind.StatusChanged,
-            Note = note,
-            FromStatus = previousStatus,
-            ToStatus = newStatus,
-            CreatedAtUtc = DateTime.UtcNow
-        });
-        order.History = history;
-    }
-
-    private static void AddReopenedHistory(TradeOrder order, TradeOrderStatus previousStatus, TradeOrderStatus newStatus)
-    {
-        if (previousStatus == newStatus)
-        {
-            return;
-        }
-
-        var history = order.History.ToList();
-        history.Add(new TradeOrderHistoryEvent
-        {
-            Id = Guid.NewGuid(),
-            CompanyProfileId = order.CompanyProfileId,
-            OrderId = order.Id,
-            Kind = TradeOrderHistoryEventKind.Reopened,
-            Note = "Reopened order.",
-            FromStatus = previousStatus,
-            ToStatus = newStatus,
-            CreatedAtUtc = DateTime.UtcNow
-        });
-        order.History = history;
-    }
-
-    private static void AddPricingEvidenceHistory(
-        TradeOrder order,
-        int materialCount,
-        int refreshedEvidenceCount,
-        DateTime refreshedAtUtc)
-    {
-        var history = order.History.ToList();
-        var refreshedEvidenceText = refreshedEvidenceCount > 0
-            ? $" Refreshed {refreshedEvidenceCount:N0} market evidence entries."
-            : string.Empty;
-        history.Add(new TradeOrderHistoryEvent
-        {
-            Id = Guid.NewGuid(),
-            CompanyProfileId = order.CompanyProfileId,
-            OrderId = order.Id,
-            Kind = TradeOrderHistoryEventKind.PricingRefreshed,
-            Note = $"Pricing evidence refreshed for {materialCount:N0} material lines.{refreshedEvidenceText}",
-            CreatedAtUtc = refreshedAtUtc
-        });
-        order.History = history;
-    }
-
-    private static void AddPayrollLinkedHistory(TradeOrder order)
-    {
-        if (order.History.Any(history => history.Kind == TradeOrderHistoryEventKind.PayrollLinked))
-        {
-            return;
-        }
-
-        var history = order.History.ToList();
-        history.Add(new TradeOrderHistoryEvent
-        {
-            Id = Guid.NewGuid(),
-            CompanyProfileId = order.CompanyProfileId,
-            OrderId = order.Id,
-            Kind = TradeOrderHistoryEventKind.PayrollLinked,
-            Note = "Payment workflow draft linked.",
-            CreatedAtUtc = DateTime.UtcNow
-        });
-        order.History = history;
-    }
-
     private void AddHistoryIfAssignmentChanged(TradeOrder order, Guid? previousCrafterId, Guid? newCrafterId)
     {
-        if (previousCrafterId == newCrafterId)
-        {
-            return;
-        }
-
         var crafterName = newCrafterId.HasValue
             ? _crafters.FirstOrDefault(crafter => crafter.Id == newCrafterId.Value)?.DisplayName ?? "unknown crafter"
-            : "unassigned";
-        var history = order.History.ToList();
-        history.Add(new TradeOrderHistoryEvent
-        {
-            Id = Guid.NewGuid(),
-            CompanyProfileId = order.CompanyProfileId,
-            OrderId = order.Id,
-            Kind = TradeOrderHistoryEventKind.Assigned,
-            Note = newCrafterId.HasValue ? $"Assigned to {crafterName}." : "Assignment cleared.",
-            CrafterId = newCrafterId,
-            CreatedAtUtc = DateTime.UtcNow
-        });
-        order.History = history;
+            : null;
+        TradeOrderWorkflow.AppendAssignmentHistory(
+            order,
+            previousCrafterId,
+            newCrafterId,
+            crafterName,
+            DateTime.UtcNow);
     }
 
     private static string FormatStatus(TradeOrderStatus status)
@@ -1992,6 +2015,7 @@
             TradeOrderHistoryEventKind.StatusChanged => "Status",
             TradeOrderHistoryEventKind.Reopened => "Reopened",
             TradeOrderHistoryEventKind.PayrollLinked => "Payroll",
+            TradeOrderHistoryEventKind.CraftPlanLinked => "Plan",
             TradeOrderHistoryEventKind.PricingRefreshed => "Pricing",
             _ => kind.ToString()
         };
@@ -2000,6 +2024,17 @@
     private static string FormatHq(bool mustBeHq)
     {
         return mustBeHq ? "HQ" : string.Empty;
+    }
+
+    private static Severity ToSnackbarSeverity(RecipePlannerCommandMessageLevel level)
+    {
+        return level switch
+        {
+            RecipePlannerCommandMessageLevel.Success => Severity.Success,
+            RecipePlannerCommandMessageLevel.Warning => Severity.Warning,
+            RecipePlannerCommandMessageLevel.Error => Severity.Error,
+            _ => Severity.Info
+        };
     }
 
     private static string GetPaymentMaterialKey(TradeCommissionPaymentMaterial material)
@@ -2028,6 +2063,287 @@
         }
 
         return TradeCommissionPaymentSummary.FromOrder(_selectedOrder, GetPayrollDraftForOrder(_selectedOrder));
+    }
+
+    private IReadOnlyList<TradeOrderProcurementRow> GetSelectedOrderProcurementRows()
+    {
+        return _selectedOrder == null
+            ? Array.Empty<TradeOrderProcurementRow>()
+            : TradeOrderWorkflow.BuildProcurementRows(_selectedOrder, GetPayrollDraftForOrder(_selectedOrder));
+    }
+
+    private IReadOnlyList<TradeOrderProcurementRow> GetOrderedProcurementRows(IReadOnlyList<TradeOrderProcurementRow> rows)
+    {
+        if (!_procurementSortState.Column.HasValue)
+        {
+            return rows;
+        }
+
+        IOrderedEnumerable<TradeOrderProcurementRow> ordered = _procurementSortState.Column.Value switch
+        {
+            TradeOrderProcurementColumn.Item => rows.OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase),
+            TradeOrderProcurementColumn.Quantity => rows.OrderBy(row => row.Quantity),
+            TradeOrderProcurementColumn.Source => rows.OrderBy(row => row.SourceLabel, StringComparer.OrdinalIgnoreCase),
+            TradeOrderProcurementColumn.Unit => rows.OrderBy(row => row.UnitCost),
+            TradeOrderProcurementColumn.EstimatedCost => rows.OrderBy(row => row.TotalCost),
+            TradeOrderProcurementColumn.Responsibility => rows.OrderBy(row => row.Responsibility.ToString(), StringComparer.OrdinalIgnoreCase),
+            _ => rows.OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
+        };
+
+        return (_procurementSortState.Descending ? ordered.Reverse() : ordered).ToArray();
+    }
+
+    private IReadOnlyList<WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>> GetProcurementColumns()
+    {
+        return
+        [
+            new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
+            {
+                Id = TradeOrderProcurementColumn.Item,
+                Header = "Item",
+                Size = new WebTableColumnSize(150, 120),
+                Sortable = true,
+                CellCssClass = "trade-orders-procurement-item-cell",
+                CellTemplate = RenderProcurementItemCell
+            },
+            WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
+                TradeOrderProcurementColumn.Quantity,
+                "Qty",
+                row => TradeDisplayFormatter.FormatQuantity(row.Quantity),
+                widthPx: 64,
+                minWidthPx: 56,
+                alignEnd: true),
+            new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
+            {
+                Id = TradeOrderProcurementColumn.Source,
+                Header = "Source",
+                Size = new WebTableColumnSize(150, 120),
+                Sortable = true,
+                SuppressRowActivation = true,
+                CellTemplate = RenderProcurementSourceCell
+            },
+            WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
+                TradeOrderProcurementColumn.Unit,
+                "Unit",
+                row => FormatGil(row.UnitCost),
+                widthPx: 76,
+                minWidthPx: 68,
+                alignEnd: true),
+            WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
+                TradeOrderProcurementColumn.EstimatedCost,
+                "Est. Cost",
+                row => FormatGil(row.TotalCost),
+                widthPx: 112,
+                minWidthPx: 96,
+                alignEnd: true),
+            WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
+                TradeOrderProcurementColumn.Responsibility,
+                "Resp.",
+                row => FormatResponsibility(row.Responsibility),
+                widthPx: 114,
+                minWidthPx: 104)
+        ];
+    }
+
+    private RenderFragment<TradeOrderProcurementRow> RenderProcurementItemCell => row => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "button");
+        builder.AddAttribute(sequence++, "type", "button");
+        builder.AddAttribute(sequence++, "class", "trade-orders-link-button");
+        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => OpenMarketAnalysisForProcurementRowAsync(row)));
+        builder.AddContent(sequence++, row.ItemName);
+        builder.CloseElement();
+        if (row.RequiresHq)
+        {
+            builder.OpenElement(sequence++, "span");
+            builder.AddAttribute(sequence++, "class", "trade-orders-hq");
+            builder.AddContent(sequence++, "HQ");
+            builder.CloseElement();
+        }
+    };
+
+    private RenderFragment<TradeOrderProcurementRow> RenderProcurementSourceCell => row => @<div class="trade-orders-source-cell">
+        <div class="trade-orders-source-primary">
+            <button type="button"
+                    class="trade-orders-link-button"
+                    @onclick="@(() => OpenAcquisitionEvaluationForProcurementRowAsync(row))">
+                @row.SourceLabel
+            </button>
+            <MudMenu Icon="@Icons.Material.Filled.KeyboardArrowDown"
+                     Dense="true"
+                     Size="Size.Small"
+                     AnchorOrigin="Origin.BottomRight"
+                     TransformOrigin="Origin.TopRight"
+                     Class="trade-orders-source-menu">
+                @foreach (var source in GetProcurementSourceOptions())
+                {
+                    <MudMenuItem OnClick="@(() => ChangeProcurementRowSourceAsync(row, source))">
+                        @RecipePlanDisplayHelpers.GetSourceDisplayName(source)
+                    </MudMenuItem>
+                }
+            </MudMenu>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(row.EvidenceSource) &&
+            !string.Equals(row.EvidenceSource, row.SourceLabel, StringComparison.OrdinalIgnoreCase))
+        {
+            <span class="trade-orders-source-evidence" title="@row.UnitCostExplanation">@row.EvidenceSource</span>
+        }
+        @if (!string.IsNullOrWhiteSpace(row.WarningSummary))
+        {
+            <span class="trade-orders-source-warning">@row.WarningSummary</span>
+        }
+    </div>;
+
+    private Task OnProcurementSortChanged(WebTableSortState<TradeOrderProcurementColumn> sortState)
+    {
+        _procurementSortState = sortState;
+        return Task.CompletedTask;
+    }
+
+    private static IReadOnlyList<AcquisitionSource> GetProcurementSourceOptions()
+    {
+        return
+        [
+            AcquisitionSource.Craft,
+            AcquisitionSource.MarketBuyNq,
+            AcquisitionSource.MarketBuyHq,
+            AcquisitionSource.VendorBuy
+        ];
+    }
+
+    private async Task ChangeProcurementRowSourceAsync(TradeOrderProcurementRow row, AcquisitionSource source)
+    {
+        if (_selectedOrder == null)
+        {
+            return;
+        }
+
+        if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+        {
+            Snackbar.Add("Reopen archived orders before editing acquisition sources.", Severity.Warning);
+            return;
+        }
+
+        if (!await LoadSelectedOrderCraftPlanForNavigationAsync())
+        {
+            return;
+        }
+
+        var matchingNodes = FindPlanNodesByItemId(AppState.CurrentPlan, row.ItemId).ToArray();
+        if (matchingNodes.Length == 0)
+        {
+            Snackbar.Add("This material could not be found in the linked craft plan.", Severity.Warning);
+            return;
+        }
+
+        if (matchingNodes.Length > 1)
+        {
+            Snackbar.Add("This material appears multiple times in the linked plan. Open Acquisition Evaluation to change it safely.", Severity.Warning);
+            return;
+        }
+
+        var node = matchingNodes[0];
+        if (!AcquisitionPlanningService.CanUseAcquisitionSource(node, source))
+        {
+            Snackbar.Add($"{RecipePlanDisplayHelpers.GetSourceDisplayName(source)} is not available for {row.ItemName}.", Severity.Warning);
+            return;
+        }
+
+        var change = AcquisitionDecisionService.ChangeSource(node, source);
+        if (!change.Changed)
+        {
+            Snackbar.Add("Acquisition source was already set.", Severity.Info);
+            return;
+        }
+
+        var savedAt = DateTime.UtcNow;
+        var planSaved = await PlanPersistence.SaveGeneratedOrderPlanAsync(
+            _selectedOrder.CraftPlanId!,
+            _selectedOrder.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(_selectedOrder),
+            AppState.CurrentPlan!,
+            GetOrderRootItems(_selectedOrder),
+            savedAt);
+        if (!planSaved)
+        {
+            Snackbar.Add("Source changed, but failed to save the linked craft plan.", Severity.Error);
+            return;
+        }
+
+        var outputs = GetOrderRootItems(_selectedOrder)
+            .Select(item => new TradeRequestedOrderOutput(
+                item.ItemId,
+                item.Name,
+                item.Quantity,
+                item.MustBeHq,
+                item.EstimatedSaleValue))
+            .ToArray();
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
+        orderToSave.SourceSnapshot.Materials = TradeRequestedOrderWorkflow.BuildMaterialSnapshots(
+            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan),
+            outputs);
+        orderToSave.SourceSnapshot.Warnings = AppendDistinctWarning(
+            orderToSave.SourceSnapshot.Warnings,
+            "Acquisition source changed; reprice the order before using payment totals.");
+        orderToSave.SourceSnapshot.ImportedAtUtc = savedAt;
+        orderToSave.UpdatedAtUtc = savedAt;
+        var savedOrder = await SaveOrderAndNotifyAsync(orderToSave);
+        if (!savedOrder)
+        {
+            Snackbar.Add("Source changed, but failed to save Trade order evidence.", Severity.Error);
+            return;
+        }
+
+        await LoadAsync();
+        if (string.IsNullOrWhiteSpace(_loadError))
+        {
+            SelectOrderAfterReload(orderToSave.Id, "Source changed, but the order could not be loaded.");
+        }
+
+        Snackbar.Add("Acquisition source changed. Reprice the order before payment.", Severity.Success);
+    }
+
+    private static IReadOnlyList<string> AppendDistinctWarning(
+        IReadOnlyList<string>? warnings,
+        string warning)
+    {
+        return (warnings ?? Array.Empty<string>())
+            .Append(warning)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IEnumerable<PlanNode> FindPlanNodesByItemId(CraftingPlan? plan, int itemId)
+    {
+        if (plan == null)
+        {
+            yield break;
+        }
+
+        foreach (var root in plan.RootItems)
+        {
+            foreach (var node in FindPlanNodesByItemId(root, itemId))
+            {
+                yield return node;
+            }
+        }
+    }
+
+    private static IEnumerable<PlanNode> FindPlanNodesByItemId(PlanNode node, int itemId)
+    {
+        if (node.ItemId == itemId)
+        {
+            yield return node;
+        }
+
+        foreach (var child in node.Children)
+        {
+            foreach (var match in FindPlanNodesByItemId(child, itemId))
+            {
+                yield return match;
+            }
+        }
     }
 
     private TradePayrollWorkflowDraft? GetPayrollDraftForOrder(TradeOrder order)
@@ -2136,71 +2452,17 @@
         }
     }
 
-    private static TradeOrder CopyOrder(TradeOrder order)
-    {
-        return new TradeOrder
-        {
-            Id = order.Id,
-            CompanyProfileId = order.CompanyProfileId,
-            Title = order.Title,
-            Status = order.Status,
-            AssignedCrafterId = order.AssignedCrafterId,
-            CommissionedAtUtc = order.CommissionedAtUtc,
-            CreatedAtUtc = order.CreatedAtUtc,
-            UpdatedAtUtc = order.UpdatedAtUtc,
-            Notes = order.Notes,
-            SourceSnapshot = CopySourceSnapshot(order.SourceSnapshot),
-            History = order.History.ToArray(),
-            PayrollDraftId = order.PayrollDraftId,
-            CraftPlanId = order.CraftPlanId,
-            CraftPlanName = order.CraftPlanName,
-            CraftPlanSavedAtUtc = order.CraftPlanSavedAtUtc,
-            CraftPlanLinkKind = order.CraftPlanLinkKind,
-            RemoteId = order.RemoteId,
-            SyncState = order.SyncState
-        };
-    }
-
-    private static TradeOrderSourceSnapshot CopySourceSnapshot(TradeOrderSourceSnapshot source)
-    {
-        return new TradeOrderSourceSnapshot
-        {
-            SourceKind = source.SourceKind,
-            SourcePlanId = source.SourcePlanId,
-            SourcePlanName = source.SourcePlanName,
-            DataCenter = source.DataCenter,
-            World = source.World,
-            PlanSessionVersion = source.PlanSessionVersion,
-            MarketAnalysisVersion = source.MarketAnalysisVersion,
-            ImportedAtUtc = source.ImportedAtUtc,
-            RootItems = (source.RootItems ?? Array.Empty<TradeOrderRootItemSnapshot>()).ToArray(),
-            Materials = (source.Materials ?? Array.Empty<TradeOrderMaterialSnapshot>()).ToArray(),
-            Warnings = (source.Warnings ?? Array.Empty<string>()).ToArray()
-        };
-    }
-
-    private static TradePayrollWorkflowDraft CopyPayrollDraft(TradePayrollWorkflowDraft draft)
-    {
-        return new TradePayrollWorkflowDraft
-        {
-            Id = draft.Id,
-            CompanyProfileId = draft.CompanyProfileId,
-            OrderId = draft.OrderId,
-            PlanSessionVersion = draft.PlanSessionVersion,
-            MarketAnalysisVersion = draft.MarketAnalysisVersion,
-            SourcePlanName = draft.SourcePlanName,
-            AssignedCrafterId = draft.AssignedCrafterId,
-            AssignedCrafterDisplayName = draft.AssignedCrafterDisplayName,
-            CommissionPercent = draft.CommissionPercent,
-            Responsibilities = (draft.Responsibilities ?? Array.Empty<TradePayrollResponsibilityLine>()).ToArray(),
-            RemoteId = draft.RemoteId,
-            SyncState = draft.SyncState,
-            CreatedAtUtc = draft.CreatedAtUtc,
-            UpdatedAtUtc = draft.UpdatedAtUtc
-        };
-    }
-
     private sealed record OrderStatusGroup(TradeOrderStatus Status, IReadOnlyList<TradeOrder> Orders);
+
+    private enum TradeOrderProcurementColumn
+    {
+        Item,
+        Quantity,
+        Source,
+        Unit,
+        EstimatedCost,
+        Responsibility
+    }
 
     private sealed class RequestedOrderOutputEditor
     {

@@ -37,7 +37,7 @@ public class MarketAnalysisControlsPanelMarkupTests
     {
         var source = File.ReadAllText(GetMarketAnalysisControlsPanelPath());
 
-        Assert.Contains("Minimum upfront cost ranks worlds by needed-quantity coverage and estimated cost to cover the plan need.", source);
+        Assert.Contains("Minimum upfront cost ranks worlds by needed-quantity coverage and primary shelf price.", source);
         Assert.Contains("Best value / bulk acquisition favors deeper procurement-qualified stock that may still be useful.", source);
         Assert.Contains("Title=\"@LensSelectorTooltip\"", source);
         Assert.Contains("Title=\"@MinimumUpfrontCostLensTooltip\"", source);

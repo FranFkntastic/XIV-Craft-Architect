@@ -199,13 +199,7 @@ public static class MarketAnalysisGridViewService
             parts.Add($"primary shelf ~{analysis.PrimaryProcurementShelfAverageUnitPrice:N0}g");
         }
 
-        if (analysis.CostToCoverUnitPrice > 0)
-        {
-            parts.Add($"cost to cover ~{analysis.CostToCoverUnitPrice:N0}g");
-        }
-
         if (analysis.PrimaryProcurementShelfAverageUnitPrice <= 0 &&
-            analysis.CostToCoverUnitPrice <= 0 &&
             analysis.AnalysisCompetitiveAverageUnitPrice > 0)
         {
             parts.Add($"market fallback ~{analysis.AnalysisCompetitiveAverageUnitPrice:N0}g");

@@ -1,0 +1,71 @@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.subtitle1">@Title</MudText>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">
+            This will build a new Craft Architect plan from the order request and link the order to that new plan.
+        </MudText>
+        <div class="trade-order-replace-plan-summary">
+            <div>
+                <span>Current plan</span>
+                <strong>@PlanName</strong>
+            </div>
+            <div>
+                <span>Last saved</span>
+                <strong>@LastSavedLabel</strong>
+            </div>
+            <div>
+                <span>Requested outputs</span>
+                <strong>@OutputLabel</strong>
+            </div>
+            <div>
+                <span>Material evidence</span>
+                <strong>@MaterialLabel</strong>
+            </div>
+        </div>
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+            Existing pricing evidence may become stale, and material responsibility should be reviewed after the new plan is linked.
+            Order-generated plans are updated in place; legacy links are replaced with a new order-owned plan.
+        </MudAlert>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="Cancel">Back</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Warning"
+                   OnClick="Confirm">
+            Rebuild Linked Plan
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] public MudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public TradeOrderCraftPlanReplacementAssessment Assessment { get; set; } = default!;
+
+    private string Title => Assessment.Mode == TradeOrderCraftPlanReplacementMode.ReplaceLegacyLink
+        ? "Replace Legacy Craft Plan Link"
+        : "Rebuild Linked Craft Plan";
+
+    private string PlanName => string.IsNullOrWhiteSpace(Assessment.ExistingPlanName)
+        ? "Linked craft plan"
+        : Assessment.ExistingPlanName;
+
+    private string LastSavedLabel => Assessment.ExistingPlanSavedAtUtc.HasValue
+        ? Assessment.ExistingPlanSavedAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+        : "Unknown";
+
+    private string OutputLabel => $"{Assessment.OutputLineCount:N0} lines / {Assessment.OutputQuantity:N0} items";
+
+    private string MaterialLabel => Assessment.MaterialLineCount == 0
+        ? "No captured material evidence"
+        : $"{Assessment.PricedMaterialLineCount:N0} of {Assessment.MaterialLineCount:N0} lines priced";
+
+    private void Confirm()
+    {
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cancel()
+    {
+        MudDialog.Cancel();
+    }
+}

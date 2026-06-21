@@ -8,7 +8,7 @@
 
 .trade-orders-board {
   display: grid;
-  grid-template-columns: 280px minmax(620px, 1fr) clamp(420px, 30vw, 620px);
+  grid-template-columns: 280px minmax(420px, 1fr) clamp(680px, 38vw, 760px);
   gap: 12px;
   height: 100%;
   min-height: 0;
@@ -508,6 +508,105 @@
 
 .trade-orders-material-warning {
   color: #f0b45f !important;
+}
+
+.trade-orders-procurement-grid {
+  margin-top: 8px;
+  font-size: 0.76rem;
+}
+
+::deep .trade-orders-procurement-grid .web-grid-table-inner {
+  min-width: 0;
+}
+
+::deep .trade-orders-procurement-grid .web-grid-table-head,
+::deep .trade-orders-procurement-grid .web-grid-table-row {
+  align-items: start;
+}
+
+::deep .trade-orders-procurement-grid .web-grid-table-head {
+  color: #c7c7c7;
+}
+
+::deep .trade-orders-procurement-grid .web-grid-table-row {
+  border-top: 1px solid #343434;
+  padding: 7px 0;
+}
+
+::deep .trade-orders-procurement-grid .web-grid-table-cell.is-align-end {
+  text-align: right;
+  white-space: nowrap;
+}
+
+::deep .trade-orders-procurement-item-cell {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+::deep .trade-orders-link-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #9fd17e;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+::deep .trade-orders-link-button:hover,
+::deep .trade-orders-link-button:focus-visible {
+  color: #d8b13d;
+  text-decoration: underline;
+}
+
+::deep .trade-orders-source-cell {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+::deep .trade-orders-source-primary {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+::deep .trade-orders-source-primary .trade-orders-link-button {
+  min-width: 0;
+}
+
+::deep .trade-orders-source-menu {
+  flex: 0 0 auto;
+  margin-left: -2px;
+}
+
+::deep .trade-orders-source-menu .mud-icon-button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: #b8b8b8;
+}
+
+::deep .trade-orders-source-menu .mud-icon-root {
+  font-size: 1rem;
+}
+
+::deep .trade-orders-source-evidence,
+::deep .trade-orders-source-warning {
+  display: block;
+  color: #a9a9a9;
+  font-size: 0.66rem;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+::deep .trade-orders-source-warning {
+  color: #f0b45f;
 }
 
 .trade-orders-warning-list {

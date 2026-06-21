@@ -1,6 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 
-namespace FFXIV_Craft_Architect.Web.Services;
+namespace FFXIV_Craft_Architect.Core.Services;
 
 public static class TradeRequestedOrderWorkflow
 {

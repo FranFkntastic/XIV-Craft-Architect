@@ -779,6 +779,7 @@ public class MarketAnalysisGridViewServiceTests
             AnalysisScopeBaselineUnitPrice = 100,
             AnalysisScopeAverageUnitPrice = 125,
             AnalysisCompetitiveAverageUnitPrice = 110,
+            CostToCoverUnitPrice = 115,
             AnalysisScopeMedianUnitPrice = 90,
             CompetitiveThresholdUnitPrice = 150,
             SaneThresholdUnitPrice = 200
@@ -787,6 +788,7 @@ public class MarketAnalysisGridViewServiceTests
         var summary = MarketAnalysisGridViewService.FormatAnalysisScopePriceSummary(analysis);
 
         Assert.Equal("market fallback ~110g; base ~100g; avg ~125g; acceptable <= 150g; insane >= 200g", summary);
+        Assert.DoesNotContain("cost to cover", summary, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

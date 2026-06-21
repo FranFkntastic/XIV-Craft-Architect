@@ -47,20 +47,41 @@ public class TradeOrdersMarkupTests
     public void TradeOrdersPage_CreatesTradeNativeOrdersThroughCraftPlanBoundary()
     {
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
+        var pricingWorkflowSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Services", "TradeOrderPricingWorkflowService.cs"));
+        var workflowSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Core", "Services", "TradeOrderWorkflow.cs"));
 
         Assert.Contains("New Order", source);
         Assert.Contains("Add output item", source);
         Assert.Contains("SearchRequestedOrderItemsAsync", source);
-        Assert.Contains("TradeOrderCraftPlanBuildService.BuildAsync", source);
-        Assert.Contains("PlanPersistence.SaveGeneratedOrderPlanAsync", source);
+        Assert.Contains("TradeOrderPricingWorkflow.RebuildAndPriceAsync", source);
         Assert.Contains("PlanPersistence.LoadPlanIntoSessionAsync", source);
-        Assert.Contains("TradeOrderCraftPlanLinkKind.OrderGenerated", source);
+        Assert.Contains("TradeOrderReplaceCraftPlanDialog", source);
+        Assert.Contains("ConfirmCraftPlanReplacementAsync", source);
+        Assert.Contains("_craftPlanBuildService.BuildFromOrderAsync", pricingWorkflowSource);
+        Assert.Contains("SaveGeneratedOrderPlanAsync", pricingWorkflowSource);
+        Assert.Contains("TradeOrderWorkflow.ApplyGeneratedCraftPlanLink", pricingWorkflowSource);
+        Assert.Contains("TradeOrderCraftPlanLinkKind.OrderGenerated", workflowSource);
         Assert.Contains("CreateFromRequestedOutputs", source);
-        Assert.Contains("replaceExistingPlan: false", source);
-        Assert.Contains("replaceExistingPlan: true", source);
+        Assert.Contains("replaceExistingPlan: true", pricingWorkflowSource);
+        Assert.Contains("_marketAnalysisWorkflow.RunAnalysisAsync", pricingWorkflowSource);
+        Assert.Contains("_procurementWorkflow.RunAnalysisAsync", pricingWorkflowSource);
         Assert.DoesNotContain("TradeOrderCraftSnapshot", source);
         Assert.DoesNotContain("RecipePlannerCommandService", source);
         Assert.DoesNotContain("ImportProjectItemsAsync", source);
+    }
+
+    [Fact]
+    public void TradeOrdersPage_ProcurementUsesGridTableAndCraftArchitectEntryPoints()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
+
+        Assert.Contains("WebGridTable TItem=\"TradeOrderProcurementRow\"", source);
+        Assert.Contains("GetProcurementColumns", source);
+        Assert.Contains("OpenMarketAnalysisForProcurementRowAsync", source);
+        Assert.Contains("OpenAcquisitionEvaluationForProcurementRowAsync", source);
+        Assert.Contains("ChangeProcurementRowSourceAsync", source);
+        Assert.Contains("AcquisitionDecisionService.ChangeSource", source);
+        Assert.Contains("SaveGeneratedOrderPlanAsync", source);
     }
 
     private static string GetWorkspacePath(params string[] parts)

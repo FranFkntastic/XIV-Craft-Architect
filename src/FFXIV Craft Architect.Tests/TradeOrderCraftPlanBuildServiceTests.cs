@@ -36,6 +36,7 @@ public class TradeOrderCraftPlanBuildServiceTests
         Assert.Equal((100, "Order Sword", 3, true), requested);
         Assert.Equal("Aether", builder.DataCenter);
         Assert.Equal("Siren", builder.World);
+        Assert.True(builder.FetchedVendorPrices);
     }
 
     [Fact]
@@ -134,6 +135,7 @@ public class TradeOrderCraftPlanBuildServiceTests
         public List<(int itemId, string name, int quantity, bool isHqRequired)> RequestedTargets { get; private set; } = [];
         public string DataCenter { get; private set; } = string.Empty;
         public string World { get; private set; } = string.Empty;
+        public bool FetchedVendorPrices { get; private set; }
 
         public Task<CraftingPlan> BuildPlanAsync(
             List<(int itemId, string name, int quantity, bool isHqRequired)> targetItems,
@@ -164,6 +166,7 @@ public class TradeOrderCraftPlanBuildServiceTests
 
         public Task FetchVendorPricesAsync(CraftingPlan plan, CancellationToken ct = default)
         {
+            FetchedVendorPrices = true;
             return Task.CompletedTask;
         }
     }

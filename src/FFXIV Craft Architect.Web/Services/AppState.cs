@@ -172,6 +172,7 @@ public class AppState
     public bool MarketAnalysisGridSortDescending { get; private set; }
     public MarketAnalysisWorldGridSortColumn? MarketAnalysisWorldGridSortColumn { get; private set; }
     public bool MarketAnalysisWorldGridSortDescending { get; private set; }
+    public Guid? SelectedTradeOrderId { get; private set; }
     
     // Persistence state
     public bool IsAutoSaveEnabled { get; private set; } = true;
@@ -862,6 +863,22 @@ public class AppState
         MarketAnalysisWorldGridSortColumn = column;
         MarketAnalysisWorldGridSortDescending = column.HasValue && descending;
         PublishChange(AppStateChangeScope.MarketAnalysisView);
+    }
+
+    public void SelectTradeOrder(Guid? orderId)
+    {
+        if (SelectedTradeOrderId == orderId)
+        {
+            return;
+        }
+
+        SelectedTradeOrderId = orderId;
+        PublishChange(AppStateChangeScope.TradeOperationsView);
+    }
+
+    public void NotifyTradeOperationsDataChanged()
+    {
+        PublishChange(AppStateChangeScope.TradeOperationsData);
     }
 
     public void ClearMarketAnalysisState()
@@ -1870,6 +1887,8 @@ public enum AppStateChangeScope
     Settings = 1 << 6,
     Status = 1 << 7,
     MarketAnalysisView = 1 << 8,
+    TradeOperationsView = 1 << 9,
+    TradeOperationsData = 1 << 10,
     PlanCore = PlanStructure | PlanDecision | PlanPrice | Settings
 }
 

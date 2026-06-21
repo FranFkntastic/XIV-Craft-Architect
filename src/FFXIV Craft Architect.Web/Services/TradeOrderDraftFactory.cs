@@ -285,13 +285,6 @@ public sealed record TradeRequestedOrderCreateRequest(
     string? Notes,
     DateTime CreatedAtUtc);
 
-public sealed record TradeRequestedOrderOutput(
-    int ItemId,
-    string Name,
-    int Quantity,
-    bool MustBeHq,
-    decimal EstimatedSaleValue);
-
 public sealed record TradeOrderDraftCreateResult(
     bool CanCreate,
     TradeOrder? Order,

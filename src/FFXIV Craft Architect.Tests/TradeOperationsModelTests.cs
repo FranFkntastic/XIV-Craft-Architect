@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.Tests;
 
@@ -142,5 +143,281 @@ public class TradeOperationsModelTests
 
         Assert.Null(order.CraftPlanId);
         Assert.Equal(TradeOrderCraftPlanLinkKind.Unknown, order.CraftPlanLinkKind);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_CopyOrderCreatesDetachedMutableSnapshot()
+    {
+        var order = new TradeOrder
+        {
+            Id = Guid.NewGuid(),
+            CompanyProfileId = Guid.NewGuid(),
+            Title = "Original",
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                RootItems =
+                [
+                    new TradeOrderRootItemSnapshot(100, "Root", 1, MustBeHq: false, EstimatedSaleValue: 1000m)
+                ],
+                Materials =
+                [
+                    new TradeOrderMaterialSnapshot(200, "Ore", 2, RequiresHq: false, UnitCost: 50m, TotalCost: 100m)
+                ],
+                Warnings = ["old evidence"]
+            },
+            History =
+            [
+                TradeOrderHistoryEvent.CreateManualNote(Guid.NewGuid(), Guid.NewGuid(), "note", DateTime.UtcNow)
+            ]
+        };
+
+        var copy = TradeOrderWorkflow.CopyOrder(order);
+
+        Assert.NotSame(order, copy);
+        Assert.NotSame(order.SourceSnapshot, copy.SourceSnapshot);
+        Assert.NotSame(order.SourceSnapshot.Materials, copy.SourceSnapshot.Materials);
+        Assert.NotSame(order.History, copy.History);
+        copy.Title = "Changed";
+        copy.SourceSnapshot.Materials = [];
+        Assert.Equal("Original", order.Title);
+        Assert.NotEmpty(order.SourceSnapshot.Materials);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_WithMaterialResponsibilityDoesNotMutateLoadedDraft()
+    {
+        var draft = new TradePayrollWorkflowDraft
+        {
+            Responsibilities =
+            [
+                new TradePayrollResponsibilityLine(100, RequiresHq: false, CommissionMaterialResponsibility.Crafter),
+                new TradePayrollResponsibilityLine(200, RequiresHq: true, CommissionMaterialResponsibility.Provided)
+            ]
+        };
+
+        var changed = TradeOrderWorkflow.WithMaterialResponsibility(
+            draft,
+            100,
+            requiresHq: false,
+            CommissionMaterialResponsibility.Provided);
+
+        Assert.Equal(CommissionMaterialResponsibility.Crafter, draft.Responsibilities.First(line => line.ItemId == 100).Responsibility);
+        Assert.Equal(CommissionMaterialResponsibility.Provided, changed.Responsibilities.First(line => line.ItemId == 100).Responsibility);
+        Assert.Contains(changed.Responsibilities, line => line.ItemId == 200 && line.RequiresHq && line.Responsibility == CommissionMaterialResponsibility.Provided);
+        Assert.Equal(2, changed.Responsibilities.Count);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_AppendsLifecycleHistoryWithStableKinds()
+    {
+        var order = new TradeOrder
+        {
+            Id = Guid.NewGuid(),
+            CompanyProfileId = Guid.NewGuid()
+        };
+        var timestamp = new DateTime(2026, 6, 20, 17, 30, 0, DateTimeKind.Utc);
+
+        var assigned = TradeOrderWorkflow.AppendAssignmentHistory(
+            order,
+            previousCrafterId: null,
+            newCrafterId: Guid.NewGuid(),
+            newCrafterDisplayName: "Zeltrech Alba",
+            timestamp);
+        var closed = TradeOrderWorkflow.AppendStatusHistory(
+            order,
+            TradeOrderStatus.Assigned,
+            TradeOrderStatus.Completed,
+            "Done",
+            timestamp);
+        var reopened = TradeOrderWorkflow.AppendReopenedHistory(
+            order,
+            TradeOrderStatus.Completed,
+            TradeOrderStatus.Assigned,
+            timestamp);
+
+        Assert.True(assigned);
+        Assert.True(closed);
+        Assert.True(reopened);
+        Assert.Contains(order.History, history => history.Kind == TradeOrderHistoryEventKind.Assigned && history.Note == "Assigned to Zeltrech Alba.");
+        Assert.Contains(order.History, history => history.Kind == TradeOrderHistoryEventKind.Closed && history.Note == "Done");
+        Assert.Contains(order.History, history => history.Kind == TradeOrderHistoryEventKind.Reopened && history.Note == "Reopened order.");
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_ProcurementEvidenceStateSummarizesPricedMaterialLines()
+    {
+        var order = new TradeOrder
+        {
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                Materials =
+                [
+                    new TradeOrderMaterialSnapshot(100, "Priced", 1, RequiresHq: false, UnitCost: 100m, TotalCost: 100m),
+                    new TradeOrderMaterialSnapshot(101, "Missing", 1, RequiresHq: false, UnitCost: 0m, TotalCost: 0m)
+                ]
+            }
+        };
+
+        var state = TradeOrderWorkflow.GetProcurementEvidenceState(order);
+
+        Assert.True(state.HasMaterials);
+        Assert.False(state.IsFullyPriced);
+        Assert.Equal(2, state.MaterialCount);
+        Assert.Equal(1, state.PricedMaterialCount);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_GeneratedCraftPlanDraftReusesGeneratedPlansAndReplacesLegacyLinks()
+    {
+        var order = new TradeOrder
+        {
+            Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            Title = "Cobalt Commission",
+            CraftPlanId = "existing-plan",
+            CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.OrderGenerated
+        };
+
+        var replaceDraft = TradeOrderWorkflow.CreateGeneratedCraftPlanLinkDraft(order, replaceExistingPlan: true);
+        order.CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.Unknown;
+        var legacyDraft = TradeOrderWorkflow.CreateGeneratedCraftPlanLinkDraft(order, replaceExistingPlan: true);
+
+        Assert.True(replaceDraft.ReusesExistingPlan);
+        Assert.Equal("existing-plan", replaceDraft.PlanId);
+        Assert.Null(replaceDraft.PreviousPlanId);
+        Assert.Equal("Order - Cobalt Commission", replaceDraft.PlanName);
+        Assert.False(legacyDraft.ReusesExistingPlan);
+        Assert.NotEqual("existing-plan", legacyDraft.PlanId);
+        Assert.Equal("existing-plan", legacyDraft.PreviousPlanId);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_AssessesLinkedPlanReplacementForConfirmation()
+    {
+        var savedAt = new DateTime(2026, 6, 20, 18, 15, 0, DateTimeKind.Utc);
+        var order = new TradeOrder
+        {
+            CraftPlanId = "linked-plan",
+            CraftPlanName = "Order - Cobalt Commission",
+            CraftPlanSavedAtUtc = savedAt,
+            CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.OrderGenerated,
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                RootItems =
+                [
+                    new TradeOrderRootItemSnapshot(100, "Cobalt Ingot", 2, MustBeHq: false, EstimatedSaleValue: 1000m)
+                ],
+                Materials =
+                [
+                    new TradeOrderMaterialSnapshot(200, "Cobalt Ore", 6, RequiresHq: false, UnitCost: 50m, TotalCost: 300m)
+                ]
+            }
+        };
+
+        var assessment = TradeOrderWorkflow.AssessGeneratedCraftPlanReplacement(order);
+
+        Assert.Equal(TradeOrderCraftPlanReplacementMode.Rebuild, assessment.Mode);
+        Assert.True(assessment.RequiresConfirmation);
+        Assert.True(assessment.HasLinkedPlan);
+        Assert.Equal("Order - Cobalt Commission", assessment.ExistingPlanName);
+        Assert.Equal(savedAt, assessment.ExistingPlanSavedAtUtc);
+        Assert.Equal(1, assessment.OutputLineCount);
+        Assert.Equal(2, assessment.OutputQuantity);
+        Assert.Equal(1, assessment.MaterialLineCount);
+        Assert.Equal(1, assessment.PricedMaterialLineCount);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_BuildProcurementRowsProjectsPaymentEvidenceForTables()
+    {
+        var order = new TradeOrder
+        {
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                Materials =
+                [
+                    new TradeOrderMaterialSnapshot(
+                        200,
+                        "Cobalt Ore",
+                        6,
+                        RequiresHq: false,
+                        UnitCost: 50m,
+                        TotalCost: 300m,
+                        EvidenceSource: "Market recommendation",
+                        UnitCostExplanation: "Fresh evidence",
+                        Warnings: ["Review split"])
+                ]
+            }
+        };
+        var draft = new TradePayrollWorkflowDraft
+        {
+            Responsibilities =
+            [
+                new TradePayrollResponsibilityLine(200, RequiresHq: false, CommissionMaterialResponsibility.Provided)
+            ]
+        };
+
+        var row = Assert.Single(TradeOrderWorkflow.BuildProcurementRows(order, draft));
+
+        Assert.Equal("200:False", row.RowKey);
+        Assert.Equal("Cobalt Ore", row.ItemName);
+        Assert.Equal(6, row.Quantity);
+        Assert.Equal("Market", row.SourceLabel);
+        Assert.Equal(50m, row.UnitCost);
+        Assert.Equal(300m, row.TotalCost);
+        Assert.Equal(CommissionMaterialResponsibility.Provided, row.Responsibility);
+        Assert.Equal("Market recommendation", row.EvidenceSource);
+        Assert.Equal("Priced", row.EvidenceStatus);
+        Assert.Equal("Review split", row.WarningSummary);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_ApplyGeneratedCraftPlanLinkRebuildsMaterialSnapshot()
+    {
+        var order = new TradeOrder
+        {
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                Materials =
+                [
+                    new TradeOrderMaterialSnapshot(999, "Old", 1, RequiresHq: false, UnitCost: 1m, TotalCost: 1m)
+                ]
+            }
+        };
+        var savedAt = new DateTime(2026, 6, 20, 18, 0, 0, DateTimeKind.Utc);
+        var activeProcurementItems = new[]
+        {
+            new MaterialAggregate
+            {
+                ItemId = 200,
+                Name = "Cobalt Ore",
+                TotalQuantity = 3,
+                UnitPrice = 100m
+            }
+        };
+        var outputs = new[]
+        {
+            new TradeRequestedOrderOutput(100, "Cobalt Ingot", 1, MustBeHq: false, EstimatedSaleValue: 1000m)
+        };
+
+        TradeOrderWorkflow.ApplyGeneratedCraftPlanLink(
+            order,
+            "generated-plan",
+            "Order - Cobalt Ingot",
+            activeProcurementItems,
+            outputs,
+            savedAt);
+
+        Assert.Equal("generated-plan", order.CraftPlanId);
+        Assert.Equal("Order - Cobalt Ingot", order.CraftPlanName);
+        Assert.Equal(savedAt, order.CraftPlanSavedAtUtc);
+        Assert.Equal(TradeOrderCraftPlanLinkKind.OrderGenerated, order.CraftPlanLinkKind);
+        Assert.Equal(savedAt, order.SourceSnapshot.ImportedAtUtc);
+        Assert.Equal(savedAt, order.UpdatedAtUtc);
+        var material = Assert.Single(order.SourceSnapshot.Materials);
+        Assert.Equal(200, material.ItemId);
+        Assert.Equal("Cobalt Ore", material.Name);
+        Assert.Equal(3, material.Quantity);
+        Assert.Equal(100m, material.UnitCost);
+        Assert.Equal(300m, material.TotalCost);
     }
 }

@@ -98,6 +98,7 @@ public sealed class TradeOrderCraftPlanBuildService
             request.DataCenter,
             request.World,
             ct);
+        await _recipePlanBuilder.FetchVendorPricesAsync(plan, ct);
         var activeProcurementItems = _recipeLayerWorkflow.BuildActiveProcurementItems(plan);
         return TradeOrderCraftPlanBuildResult.Available(plan, activeProcurementItems);
     }

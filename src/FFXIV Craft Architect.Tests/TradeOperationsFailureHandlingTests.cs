@@ -125,10 +125,12 @@ public class TradeOperationsFailureHandlingTests
     public void OrdersPage_TableShowsCrafterNameAndAssignmentHistory()
     {
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
+        var workflowSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Core", "Services", "TradeOrderWorkflow.cs"));
 
         Assert.Contains("FormatAssignedCrafter", source);
         Assert.Contains("AddHistoryIfAssignmentChanged", source);
-        Assert.Contains("TradeOrderHistoryEventKind.Assigned", source);
+        Assert.Contains("TradeOrderWorkflow.AppendAssignmentHistory", source);
+        Assert.Contains("TradeOrderHistoryEventKind.Assigned", workflowSource);
     }
 
     [Fact]
@@ -176,14 +178,15 @@ public class TradeOperationsFailureHandlingTests
         Assert.Contains("Payment amount", source);
         Assert.Contains("Total estimated procurement", source);
         Assert.Contains("TradeCommissionPaymentSummary.FromOrder", source);
-        Assert.Contains("materials.All(material => material.UnitCost > 0 && material.TotalCost > 0)", source);
+        Assert.Contains("TradeOrderWorkflow.GetProcurementEvidenceState(order).IsFullyPriced", source);
         Assert.Contains("Create a linked craft plan, then run market analysis to populate payment evidence.", source);
         Assert.Contains("Material lines are captured, but pricing evidence is missing.", source);
         Assert.Contains("SetOrderMaterialResponsibilityAsync", source);
         Assert.Contains("CopyGilAmountAsync", source);
         Assert.Contains("Disabled=\"@(paymentSummary.TotalPayment <= 0)\"", source);
         Assert.Contains("Disabled=\"@(paymentSummary.EstimatedProcurementTotal <= 0)\"", source);
-        Assert.Contains("Refresh Pricing Evidence", source);
+        Assert.Contains("Reprice Order", source);
+        Assert.Contains("TradeOrderPricingWorkflow.RepriceAsync", source);
     }
 
     [Fact]
@@ -192,8 +195,7 @@ public class TradeOperationsFailureHandlingTests
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
         var method = GetMethodSource(source, "private async Task SetOrderMaterialResponsibilityAsync", "private async Task<TradePayrollWorkflowDraft> GetOrCreatePayrollDraftForOrderAsync");
 
-        Assert.Contains("var draftToSave = CopyPayrollDraft(currentDraft);", method);
-        Assert.Contains("draftToSave.Responsibilities = responsibilities;", method);
+        Assert.Contains("var draftToSave = TradeOrderWorkflow.WithMaterialResponsibility", method);
         Assert.Contains("TradePayrollPersistence.SaveDraftAsync(draftToSave)", method);
         Assert.True(
             method.IndexOf("if (!savedDraft)", StringComparison.Ordinal) <
@@ -214,7 +216,7 @@ public class TradeOperationsFailureHandlingTests
     public void OrdersPage_OpensOrderCraftPlanFromLinkedSavedPlan()
     {
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
-        var method = GetMethodSource(source, "private async Task OpenSelectedOrderCraftPlanAsync()", "private string GetOrderDataCenter");
+        var method = GetMethodSource(source, "private async Task OpenSelectedOrderCraftPlanAsync()", "private async Task<bool> ConfirmActiveCraftPlanCanBeReplacedAsync");
 
         Assert.Contains("Open Craft Plan", source);
         Assert.Contains("HasLinkedCraftPlan(_selectedOrder)", method);
@@ -223,23 +225,26 @@ public class TradeOperationsFailureHandlingTests
         Assert.Contains("NavigationManager.NavigateTo(\"./\")", method);
         Assert.DoesNotContain("RecipePlannerCommandService.ImportProjectItemsAsync", method);
         Assert.DoesNotContain("new ImportProjectItemsRequest", method);
-        Assert.DoesNotContain("AppState.CurrentPlan", method);
+        Assert.DoesNotContain("AppState.CurrentPlan =", method);
     }
 
     [Fact]
-    public void PricingEvidenceRefresh_ReusesCraftArchitectProcurementPipeline()
+    public void TradeOrderPricingWorkflow_ReusesCraftArchitectMarketAndProcurementPipelines()
     {
-        var serviceSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Services", "TradeOrderPricingEvidenceService.cs"));
+        var serviceSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Services", "TradeOrderPricingWorkflowService.cs"));
 
         Assert.Contains("WebPlanPersistenceService", serviceSource);
-        Assert.Contains("PlanSessionLoadService.Prepare(storedPlan)", serviceSource);
+        Assert.Contains("LoadPlanIntoSessionAsync", serviceSource);
         Assert.Contains("IRecipeLayerWorkflowService", serviceSource);
-        Assert.Contains("BuildActiveProcurementItems(loaded.Plan)", serviceSource);
-        Assert.Contains("IProcurementRouteExecutionService", serviceSource);
-        Assert.Contains("_procurementRouteExecution.AnalyzeAsync", serviceSource);
+        Assert.Contains("MarketAnalysisWorkflowService", serviceSource);
+        Assert.Contains("MarketAnalysisWorkflowRequest(forceRefreshMarketData)", serviceSource);
+        Assert.Contains("ProcurementWorkflowService", serviceSource);
+        Assert.Contains("ProcurementWorkflowRequest(() => operation.IsCurrent)", serviceSource);
+        Assert.Contains("CancellableOperationWorkflow.TradeOrderPricing", serviceSource);
         Assert.Contains("BuildMarketRecommendationLines", serviceSource);
         Assert.Contains("TradeOrderMaterialEvidenceMapper.ToMaterialSnapshots(lines)", serviceSource);
-        Assert.DoesNotContain("AppState.CurrentPlan", serviceSource);
+        Assert.Contains("ActivateRecipePlan", serviceSource);
+        Assert.Contains("SaveGeneratedOrderPlanAsync", serviceSource);
     }
 
     [Fact]
@@ -260,9 +265,15 @@ public class TradeOperationsFailureHandlingTests
     {
         var ordersSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
         var craftersSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeCrafters.razor"));
+        var appStateSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Services", "AppState.cs"));
 
         Assert.Contains("SelectOrderAfterReload", ordersSource);
         Assert.Contains("_orders.FirstOrDefault(order => order.Id == orderId)", ordersSource);
+        Assert.Contains("TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId", ordersSource);
+        Assert.Contains("AppState.SelectTradeOrder(order.Id)", ordersSource);
+        Assert.Contains("AppState.SelectTradeOrder(null)", ordersSource);
+        Assert.Contains("public Guid? SelectedTradeOrderId { get; private set; }", appStateSource);
+        Assert.Contains("public void SelectTradeOrder(Guid? orderId)", appStateSource);
         Assert.DoesNotContain("SelectOrder(_selectedOrder);", ordersSource);
         Assert.Contains("SelectCrafterAfterReload", craftersSource);
         Assert.Contains("_crafters.FirstOrDefault(crafter => crafter.Id == crafterId)", craftersSource);
@@ -275,8 +286,8 @@ public class TradeOperationsFailureHandlingTests
         var ordersSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
         var craftersSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeCrafters.razor"));
 
-        Assert.Contains("var orderToSave = CopyOrder(_selectedOrder);", ordersSource);
-        Assert.Contains("SaveOrderAsync(orderToSave)", ordersSource);
+        Assert.Contains("var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);", ordersSource);
+        Assert.Contains("SaveOrderAndNotifyAsync(orderToSave)", ordersSource);
         Assert.DoesNotContain("SaveOrderAsync(_selectedOrder)", ordersSource);
         Assert.Contains("var crafterToSave = CopyCrafter(_selectedCrafter);", craftersSource);
         Assert.Contains("SaveCrafterAsync(crafterToSave)", craftersSource);
@@ -314,12 +325,13 @@ public class TradeOperationsFailureHandlingTests
     {
         var ordersSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
         var craftersSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeCrafters.razor"));
+        var workflowSource = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Core", "Services", "TradeOrderWorkflow.cs"));
 
         Assert.Contains("orderToSave.UpdatedAtUtc = DateTime.UtcNow;", ordersSource);
         Assert.Contains("crafterToSave.UpdatedAtUtc = DateTime.UtcNow;", craftersSource);
-        Assert.Contains("AddReopenedHistory", ordersSource);
-        Assert.Contains("Kind = TradeOrderHistoryEventKind.Reopened", ordersSource);
-        Assert.Contains("Kind = TradeOrderStatusWorkflow.IsArchived(newStatus) ? TradeOrderHistoryEventKind.Closed : TradeOrderHistoryEventKind.StatusChanged", ordersSource);
+        Assert.Contains("TradeOrderWorkflow.AppendReopenedHistory", ordersSource);
+        Assert.Contains("Kind = TradeOrderHistoryEventKind.Reopened", workflowSource);
+        Assert.Contains("TradeOrderStatusWorkflow.IsArchived(newStatus)", workflowSource);
     }
 
     [Fact]
