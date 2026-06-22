@@ -244,6 +244,30 @@ public class TradeOperationsModelTests
     }
 
     [Fact]
+    public void TradeOrderWorkflow_AssignedCrafterPromotesReadyToAssignStatus()
+    {
+        var crafterId = Guid.NewGuid();
+
+        var status = TradeOrderWorkflow.ResolveStatusForAssignment(
+            TradeOrderStatus.ReadyToAssign,
+            crafterId);
+
+        Assert.Equal(TradeOrderStatus.Assigned, status);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_AssignedCrafterDoesNotDowngradeLaterActiveStatus()
+    {
+        var crafterId = Guid.NewGuid();
+
+        var status = TradeOrderWorkflow.ResolveStatusForAssignment(
+            TradeOrderStatus.InProgress,
+            crafterId);
+
+        Assert.Equal(TradeOrderStatus.InProgress, status);
+    }
+
+    [Fact]
     public void TradeOrderWorkflow_ProcurementEvidenceStateSummarizesPricedMaterialLines()
     {
         var order = new TradeOrder

@@ -260,7 +260,8 @@ public class TradeOperationsFailureHandlingTests
         Assert.Contains("Reopen archived orders before editing details.", source);
         Assert.Contains("Order title is required.", source);
         Assert.Contains("Use the close order controls for archive transitions.", source);
-        Assert.Contains("Change status to Assigned Awaiting Payment before saving this assignment.", source);
+        Assert.Contains("TradeOrderWorkflow.ResolveStatusForAssignment(_detailStatus, _detailCrafterId)", source);
+        Assert.DoesNotContain("Change status to Assigned Awaiting Payment before saving this assignment.", source);
         Assert.Contains("Change status to Ready to Assign before clearing this assignment.", source);
         Assert.Contains("Assign a crafter before using this status.", source);
     }

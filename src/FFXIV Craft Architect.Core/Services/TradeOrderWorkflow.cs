@@ -175,6 +175,15 @@ public static class TradeOrderWorkflow
         return true;
     }
 
+    public static TradeOrderStatus ResolveStatusForAssignment(
+        TradeOrderStatus requestedStatus,
+        Guid? assignedCrafterId)
+    {
+        return assignedCrafterId.HasValue && requestedStatus == TradeOrderStatus.ReadyToAssign
+            ? TradeOrderStatus.Assigned
+            : requestedStatus;
+    }
+
     public static void AppendPricingEvidenceHistory(
         TradeOrder order,
         int materialCount,

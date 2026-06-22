@@ -1357,17 +1357,13 @@
             return;
         }
 
-        if (_detailCrafterId.HasValue && _detailStatus == TradeOrderStatus.ReadyToAssign)
-        {
-            Snackbar.Add("Change status to Assigned Awaiting Payment before saving this assignment.", Severity.Warning);
-            return;
-        }
-        else if (!_detailCrafterId.HasValue && _detailStatus == TradeOrderStatus.Assigned)
+        var resolvedStatus = TradeOrderWorkflow.ResolveStatusForAssignment(_detailStatus, _detailCrafterId);
+        if (!_detailCrafterId.HasValue && resolvedStatus == TradeOrderStatus.Assigned)
         {
             Snackbar.Add("Change status to Ready to Assign before clearing this assignment.", Severity.Warning);
             return;
         }
-        else if (!_detailCrafterId.HasValue && (_detailStatus == TradeOrderStatus.InProgress || _detailStatus == TradeOrderStatus.AwaitingDelivery))
+        else if (!_detailCrafterId.HasValue && (resolvedStatus == TradeOrderStatus.InProgress || resolvedStatus == TradeOrderStatus.AwaitingDelivery))
         {
             Snackbar.Add("Assign a crafter before using this status.", Severity.Warning);
             return;
@@ -1379,11 +1375,11 @@
         var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
         orderToSave.Title = title;
         orderToSave.AssignedCrafterId = _detailCrafterId;
-        orderToSave.Status = _detailStatus;
+        orderToSave.Status = resolvedStatus;
         orderToSave.Notes = _detailNotes;
         orderToSave.UpdatedAtUtc = DateTime.UtcNow;
         AddHistoryIfAssignmentChanged(orderToSave, previousCrafterId, _detailCrafterId);
-        TradeOrderWorkflow.AppendStatusHistory(orderToSave, previousStatus, _detailStatus, "Status changed from detail panel.", DateTime.UtcNow);
+        TradeOrderWorkflow.AppendStatusHistory(orderToSave, previousStatus, resolvedStatus, "Status changed from detail panel.", DateTime.UtcNow);
         var saved = await SaveOrderAndNotifyAsync(orderToSave);
         if (!saved)
         {
