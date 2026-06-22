@@ -245,6 +245,11 @@ public class TradeOperationsFailureHandlingTests
         Assert.Contains("TradeOrderMaterialEvidenceMapper.ToMaterialSnapshots(lines)", serviceSource);
         Assert.Contains("ActivateRecipePlan", serviceSource);
         Assert.Contains("SaveGeneratedOrderPlanAsync", serviceSource);
+        Assert.Contains("_appState.TrackCurrentPlanIdentity(linkDraft.PlanId, linkDraft.PlanName)", serviceSource);
+        Assert.Contains("trackStoredPlanIdentity: true", serviceSource);
+        Assert.Contains("persistGeneratedPlan: true", serviceSource);
+        Assert.Contains("_appState.MarkPersisted", serviceSource);
+        Assert.Contains("PersistedStateBucket.PlanCore | PersistedStateBucket.MarketAnalysis", serviceSource);
     }
 
     [Fact]

@@ -77,29 +77,62 @@ public class WebPlanPersistenceServiceTests
     }
 
     [Fact]
-    public async Task SaveGeneratedOrderPlanAsync_WritesLeanSavedPlanWithoutMarketAnalysisPayloads()
+    public async Task SaveGeneratedOrderPlanAsync_PreservesCurrentSessionMarketAnalysisPayloads()
     {
         var jsRuntime = new RecordingJsRuntime();
-        var service = CreateService(jsRuntime);
+        var appState = new AppState();
+        var plan = new CraftingPlan
+        {
+            DataCenter = "Aether",
+            RootItems =
+            [
+                new PlanNode
+                {
+                    ItemId = 100,
+                    Name = "Cobalt Ingot",
+                    NodeId = "root",
+                    Quantity = 999
+                }
+            ]
+        };
+        appState.ActivateRecipePlan(
+            plan,
+            [new ProjectItem { Id = 100, Name = "Cobalt Ingot", Quantity = 999 }],
+            "Aether",
+            clearCurrentPlanId: false,
+            []);
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 200,
+                    Name = "Cobalt Ore",
+                    QuantityNeeded = 1_998
+                }
+            ],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 200,
+                    Name = "Cobalt Ore",
+                    QuantityNeeded = 1_998
+                }
+            ],
+            publishedScope: new PublishedMarketAnalysisScopeSnapshot(
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                ["Aether"],
+                MarketAcquisitionLens.MinimumUpfrontCost,
+                1,
+                new DateTime(2026, 6, 19, 11, 0, 0, DateTimeKind.Utc)));
+        var service = CreateService(jsRuntime, appState);
         var savedAt = new DateTime(2026, 6, 19, 12, 0, 0, DateTimeKind.Utc);
 
         var saved = await service.SaveGeneratedOrderPlanAsync(
             "order-plan-id",
             "Order - Cobalt Ingot Commission",
-            new CraftingPlan
-            {
-                DataCenter = "Aether",
-                RootItems =
-                [
-                    new PlanNode
-                    {
-                        ItemId = 100,
-                        Name = "Cobalt Ingot",
-                        NodeId = "root",
-                        Quantity = 999
-                    }
-                ]
-            },
+            plan,
             [
                 new TradeOrderRootItemSnapshot(
                     100,
@@ -121,11 +154,10 @@ public class WebPlanPersistenceServiceTests
         Assert.Equal("Cobalt Ingot", projectItem.Name);
         Assert.Equal(999, projectItem.Quantity);
         Assert.NotNull(jsRuntime.LastSavedPlan.PlanJson);
-        Assert.Null(jsRuntime.LastSavedPlan.MarketPlansJson);
-        Assert.Null(jsRuntime.LastSavedPlan.MarketIntelligenceJson);
-        Assert.Null(jsRuntime.LastSavedPlan.MarketItemAnalysesJson);
-        Assert.Null(jsRuntime.LastSavedPlan.MarketAnalysisRecipeBasisJson);
-        Assert.Null(jsRuntime.LastSavedPlan.MarketAnalysisScopeSnapshotJson);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketPlansJson);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketIntelligenceJson);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketItemAnalysesJson);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketAnalysisScopeSnapshotJson);
     }
 
     [Fact]

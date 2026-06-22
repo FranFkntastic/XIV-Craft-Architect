@@ -100,6 +100,16 @@ public sealed class WebPlanPersistenceService
         ArgumentNullException.ThrowIfNull(rootItems);
 
         var timestamp = savedAt ?? DateTime.UtcNow;
+        var activeSnapshot = _snapshotBuilder.BuildForCurrentPlan(
+            planId,
+            planName,
+            plan,
+            timestamp);
+        if (activeSnapshot != null)
+        {
+            return await SaveSnapshotAsync(activeSnapshot);
+        }
+
         var snapshot = new StoredPlan
         {
             Id = planId,

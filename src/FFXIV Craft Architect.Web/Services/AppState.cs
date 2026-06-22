@@ -1450,44 +1450,50 @@ public class AppState
         PlanSessionLoadResult session,
         bool trackStoredPlanIdentity = true)
     {
-        using var batch = BeginStateChangeBatch();
         var storedPlan = session.StoredPlan;
+        using (BeginStateChangeBatch())
+        {
+            SelectedDataCenter = storedPlan.DataCenter;
+            ReplaceListContents(_projectItems, session.ProjectItems.Select(CloneProjectItem));
+            CurrentPlan = session.Plan;
+            AdvancePlanSession();
+            AutoExpandItemId = null;
+            ReplaceListContents(_marketItemAnalyses, session.MarketItemAnalyses);
+            ReplaceListContents(_shoppingPlans, session.ShoppingPlans);
+            UnavailableMarketItems = session.MarketIntelligence?.UnavailableMarketItems.ToArray()
+                ?? Array.Empty<CoreMarketDataUnavailableItem>();
+            _marketIntelligenceId = session.MarketIntelligence?.MarketIntelligenceId ?? Guid.Empty;
+            _marketAnalysisRecipeBasis = CloneRecipeBasis(session.MarketAnalysisRecipeBasis);
+            _publishedMarketAnalysisScope = session.PublishedMarketAnalysisScope;
+            ClearMarketAnalysisViewState(publishChange: false);
+            RecommendationMode = session.MarketIntelligence?.RecommendationMode ?? storedPlan.SavedRecommendationMode;
+            MarketAnalysisLens = session.MarketIntelligence?.Lens ?? storedPlan.SavedMarketAnalysisLens;
+            ClearProcurementOverlay();
 
-        SelectedDataCenter = storedPlan.DataCenter;
-        ReplaceListContents(_projectItems, session.ProjectItems.Select(CloneProjectItem));
-        CurrentPlan = session.Plan;
-        AdvancePlanSession();
-        AutoExpandItemId = null;
-        ReplaceListContents(_marketItemAnalyses, session.MarketItemAnalyses);
-        ReplaceListContents(_shoppingPlans, session.ShoppingPlans);
-        UnavailableMarketItems = session.MarketIntelligence?.UnavailableMarketItems.ToArray()
-            ?? Array.Empty<CoreMarketDataUnavailableItem>();
-        _marketIntelligenceId = session.MarketIntelligence?.MarketIntelligenceId ?? Guid.Empty;
-        _marketAnalysisRecipeBasis = CloneRecipeBasis(session.MarketAnalysisRecipeBasis);
-        _publishedMarketAnalysisScope = session.PublishedMarketAnalysisScope;
-        ClearMarketAnalysisViewState(publishChange: false);
-        RecommendationMode = session.MarketIntelligence?.RecommendationMode ?? storedPlan.SavedRecommendationMode;
-        MarketAnalysisLens = session.MarketIntelligence?.Lens ?? storedPlan.SavedMarketAnalysisLens;
-        ClearProcurementOverlay();
-        
-        // Track the loaded plan ID for save-overwrite behavior
+            // Track the loaded plan ID for save-overwrite behavior
+            if (trackStoredPlanIdentity)
+            {
+                CurrentPlanId = storedPlan.Id;
+                CurrentPlanName = storedPlan.Name;
+            }
+            else
+            {
+                CurrentPlanId = storedPlan.SourcePlanId;
+                CurrentPlanName = storedPlan.SourcePlanName;
+            }
+
+            _shoppingItems.Clear();
+            SyncProjectToShopping();
+
+            NotifySettingsChanged();
+            NotifyPlanChanged();
+            NotifyShoppingListChanged();
+        }
+
         if (trackStoredPlanIdentity)
         {
-            CurrentPlanId = storedPlan.Id;
-            CurrentPlanName = storedPlan.Name;
+            MarkPersisted(PersistedStateBucket.PlanCore | PersistedStateBucket.MarketAnalysis, CurrentVersions);
         }
-        else
-        {
-            CurrentPlanId = storedPlan.SourcePlanId;
-            CurrentPlanName = storedPlan.SourcePlanName;
-        }
-
-        _shoppingItems.Clear();
-        SyncProjectToShopping();
-
-        NotifySettingsChanged();
-        NotifyPlanChanged();
-        NotifyShoppingListChanged();
     }
 
     public IDisposable BeginStateChangeBatch()

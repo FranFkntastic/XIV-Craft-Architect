@@ -121,6 +121,7 @@ public sealed class TradeOrderPricingWorkflowService
             var rootItems = GetOrderRootItems(orderToSave);
             var linkDraft = TradeOrderWorkflow.CreateGeneratedCraftPlanLinkDraft(orderToSave, replaceExistingPlan: true);
             ActivatePlan(buildResult.Plan, rootItems, options.DataCenter, buildResult.ActiveProcurementItems);
+            _appState.TrackCurrentPlanIdentity(linkDraft.PlanId, linkDraft.PlanName);
             operation.ReportStatus("Saving linked order plan...", progress: 25);
 
             var savedPlan = await _planPersistence.SaveGeneratedOrderPlanAsync(
@@ -202,7 +203,7 @@ public sealed class TradeOrderPricingWorkflowService
         {
             var result = await _planPersistence.LoadPlanIntoSessionAsync(
                 order.CraftPlanId,
-                trackStoredPlanIdentity: false);
+                trackStoredPlanIdentity: true);
             if (!operation.IsCurrent)
             {
                 return CanceledResult();
@@ -227,7 +228,7 @@ public sealed class TradeOrderPricingWorkflowService
                 options.ForceRefreshMarketData,
                 operation,
                 DateTime.UtcNow,
-                persistGeneratedPlan: false,
+                persistGeneratedPlan: true,
                 additionalWarnings: warnings);
             operation.Complete(priced.Message);
             return priced;
@@ -364,6 +365,7 @@ public sealed class TradeOrderPricingWorkflowService
 
         if (persistGeneratedPlan && !string.IsNullOrWhiteSpace(order.CraftPlanId) && _appState.CurrentPlan != null)
         {
+            var persistedVersions = _appState.CurrentVersions;
             var savedPlan = await _planPersistence.SaveGeneratedOrderPlanAsync(
                 order.CraftPlanId,
                 order.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(order),
@@ -377,6 +379,13 @@ public sealed class TradeOrderPricingWorkflowService
                     "Order pricing updated, but failed to save the linked Craft Architect plan.",
                     RecipePlannerCommandMessageLevel.Error);
             }
+
+            _appState.TrackCurrentPlanIdentity(
+                order.CraftPlanId,
+                order.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(order));
+            _appState.MarkPersisted(
+                PersistedStateBucket.PlanCore | PersistedStateBucket.MarketAnalysis,
+                persistedVersions);
         }
 
         var complete = pricedCount == activeItemList.Length && marketResult.Published;
