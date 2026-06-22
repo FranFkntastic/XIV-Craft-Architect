@@ -136,7 +136,7 @@ jobs:
             tail -n +6 |
             cut -d' ' -f2- |
             sudo xargs -r rm -rf
-REMOTE
+          REMOTE
 
       - name: Verify deployed site
         run: |
