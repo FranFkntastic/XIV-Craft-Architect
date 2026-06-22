@@ -1100,6 +1100,13 @@ Implemented first automation scaffold:
   - `VPS_USER`
   - `VPS_SSH_PRIVATE_KEY`
 - Rollback remains a symlink operation: repoint `/srv/craftarchitect/web/<slot>/current` to an earlier directory under `/srv/craftarchitect/web/<slot>/releases/`.
+- First GitHub Actions VPS deployment proof:
+  - `main` push deployment succeeded on run `27990725568` attempt `3`.
+  - `local-dev` manual dispatch deployment succeeded on run `27991063085` attempt `1`.
+  - `https://xivcraftarchitect.com/appsettings.json` returned `https://xivcraftarchitect.com/api/`.
+  - `https://dev.xivcraftarchitect.com/appsettings.json` returned `https://dev.xivcraftarchitect.com/api/`.
+  - `/srv/craftarchitect/web/main/current` points at release `27990725568-3-7063bc9`.
+  - `/srv/craftarchitect/web/local-dev/current` points at release `27991063085-1-7063bc9`.
 
 Verification:
 
