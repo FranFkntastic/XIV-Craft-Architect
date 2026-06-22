@@ -1,0 +1,74 @@
+using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
+using FFXIV_Craft_Architect.LodestoneLookup.Services;
+
+const string CorsPolicyName = "CraftArchitectWeb";
+const string PrivateNetworkAccessRequestHeader = "Access-Control-Request-Private-Network";
+const string PrivateNetworkAccessResponseHeader = "Access-Control-Allow-Private-Network";
+
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(CorsPolicyName, policy =>
+    {
+        policy
+            .WithOrigins(
+                "http://localhost:5000",
+                "http://localhost:5001",
+                "https://localhost:5001",
+                "https://franfkntastic.github.io")
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
+builder.Services.AddSingleton<ILodestoneCrafterLookupService, NetStoneLodestoneCrafterLookupService>();
+
+var app = builder.Build();
+
+app.Use(async (context, next) =>
+{
+    if (context.Request.Headers.ContainsKey("Origin") ||
+        context.Request.Headers.ContainsKey(PrivateNetworkAccessRequestHeader))
+    {
+        context.Response.Headers[PrivateNetworkAccessResponseHeader] = "true";
+    }
+
+    await next();
+});
+
+app.UseCors(CorsPolicyName);
+
+app.MapGet("/", () => Results.Ok(new
+{
+    service = "FFXIV Craft Architect Lodestone Lookup",
+    status = "ready"
+}));
+
+app.MapGet(
+    "/lodestone/crafters/search",
+    async (
+        string name,
+        string? world,
+        string? dataCenter,
+        string? region,
+        ILodestoneCrafterLookupService lookup,
+        CancellationToken cancellationToken) =>
+    {
+        var result = await lookup.SearchAsync(
+            new LodestoneCrafterSearchRequest(name, world, dataCenter, region),
+            cancellationToken);
+        return Results.Ok(result);
+    });
+
+app.MapGet(
+    "/lodestone/crafters/{characterId}/preview",
+    async (
+        string characterId,
+        ILodestoneCrafterLookupService lookup,
+        CancellationToken cancellationToken) =>
+    {
+        var result = await lookup.GetImportPreviewAsync(characterId, cancellationToken);
+        return Results.Ok(result);
+    });
+
+app.Run();
