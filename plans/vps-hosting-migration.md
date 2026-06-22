@@ -1107,6 +1107,12 @@ Implemented first automation scaffold:
   - `https://dev.xivcraftarchitect.com/appsettings.json` returned `https://dev.xivcraftarchitect.com/api/`.
   - `/srv/craftarchitect/web/main/current` points at release `27990725568-3-7063bc9`.
   - `/srv/craftarchitect/web/local-dev/current` points at release `27991063085-1-7063bc9`.
+- Cleanup/hardening follow-up:
+  - `.github/workflows/deploy-web.yml` is now manual rollback only for GitHub Pages.
+  - `.github/workflows/deploy-vps-web.yml` is the canonical automatic web deployment path.
+  - `.github/workflows/deploy-vps-lodestone.yml` deploys the Lodestone helper manually as a self-contained Linux service release.
+  - Helper releases are installed under `/srv/craftarchitect/services/lodestone/releases/<run>`.
+  - Helper rollback remains a symlink operation: repoint `/srv/craftarchitect/services/lodestone/current`, then restart `craftarchitect-lodestone`.
 
 Verification:
 
@@ -1146,6 +1152,13 @@ Work:
 
 4. Update documentation/runbook to identify the VPS as the canonical deployment target.
 5. Decide whether to leave GitHub Pages configured as an emergency static fallback.
+
+Implemented cleanup:
+
+- GitHub Pages is retained as an emergency static rollback target, but it is no longer automatic.
+- The Pages workflow is manually dispatched only and still publishes both `main` and `local-dev` into the old Pages shape.
+- The VPS web workflow remains automatic for `main`/`local-dev` web changes.
+- The Lodestone helper workflow is manually dispatched so backend service restarts are deliberate.
 
 Verification:
 
