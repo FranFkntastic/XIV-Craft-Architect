@@ -40,41 +40,26 @@
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
                                       Immediate="true" />
-                        <div class="trade-crafters-native-field">
-                            <MudTooltip Text="Choose how widely Lodestone should search. Entire region checks every data center in your selected region; specific world is only needed when you already know the home world.">
-                                <label for="lodestone-search-scope">Search scope</label>
-                            </MudTooltip>
-                            <select id="lodestone-search-scope"
-                                    class="trade-crafters-native-select"
-                                    value="@_lodestoneSearchScope"
-                                    @onchange="OnLodestoneSearchScopeChanged">
-                                <option value="@LodestoneSearchScope.EntireRegion">Entire region</option>
-                                <option value="@LodestoneSearchScope.SelectedDataCenter">Selected data center</option>
-                                <option value="@LodestoneSearchScope.SpecificWorld">Specific world</option>
-                            </select>
-                        </div>
+                        <CompactSelectField Id="lodestone-search-scope"
+                                            Label="Search scope"
+                                            Value="@_lodestoneSearchScope.ToString()"
+                                            ValueChanged="SetLodestoneSearchScope"
+                                            Options="LodestoneSearchScopeOptions"
+                                            Tooltip="Choose how widely Lodestone should search. Entire region checks every data center in your selected region; specific world is only needed when you already know the home world." />
                         @if (_lodestoneSearchScope == LodestoneSearchScope.SpecificWorld)
                         {
-                            <div class="trade-crafters-native-field" @key="_lodestoneSearchScope">
-                                <label for="lodestone-search-world">World</label>
-                                <select id="lodestone-search-world"
-                                        class="trade-crafters-native-select"
-                                        value="@_lodestoneSearchWorld"
-                                        @onchange="OnLodestoneSearchWorldChanged">
-                                    <option value="@string.Empty">Choose world</option>
-                                    @foreach (var world in GetLodestoneSearchWorlds())
-                                    {
-                                        <option value="@world">@world</option>
-                                    }
-                                </select>
-                            </div>
+                            <CompactSelectField @key="_lodestoneSearchScope"
+                                                Id="lodestone-search-world"
+                                                Label="World"
+                                                Value="@_lodestoneSearchWorld"
+                                                ValueChanged="SetLodestoneSearchWorld"
+                                                Options="GetLodestoneSearchWorldOptions()" />
                         }
                         else
                         {
-                            <div class="trade-crafters-native-field" @key="_lodestoneSearchScope">
-                                <label>Location</label>
-                                <div class="trade-crafters-native-value">@GetLodestoneSearchScopeSummary()</div>
-                            </div>
+                            <CompactValueField @key="_lodestoneSearchScope"
+                                               Label="Location"
+                                               Value="@GetLodestoneSearchScopeSummary()" />
                         }
                         <MudButton Variant="Variant.Filled"
                                    Color="Color.Primary"
@@ -146,43 +131,21 @@
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
                                       Immediate="true" />
-                        <div class="trade-crafters-native-field">
-                            <label for="new-crafter-region">Region</label>
-                            <select id="new-crafter-region"
-                                    class="trade-crafters-native-select"
-                                    value="@_newCrafterRegion"
-                                    @onchange="OnNewCrafterRegionChanged">
-                                @foreach (var region in TradeRegions)
-                                {
-                                    <option value="@region">@region</option>
-                                }
-                            </select>
-                        </div>
-                        <div class="trade-crafters-native-field">
-                            <label for="new-crafter-data-center">Data center</label>
-                            <select id="new-crafter-data-center"
-                                    class="trade-crafters-native-select"
-                                    value="@_newCrafterDataCenter"
-                                    @onchange="OnNewCrafterDataCenterChanged">
-                                @foreach (var dataCenter in GetDataCentersForRegion(_newCrafterRegion))
-                                {
-                                    <option value="@dataCenter">@dataCenter</option>
-                                }
-                            </select>
-                        </div>
-                        <div class="trade-crafters-native-field">
-                            <label for="new-crafter-world">World</label>
-                            <select id="new-crafter-world"
-                                    class="trade-crafters-native-select"
-                                    value="@_newCrafterWorld"
-                                    @onchange="OnNewCrafterWorldChanged">
-                                <option value="@string.Empty">No world selected</option>
-                                @foreach (var world in GetWorldsForDataCenter(_newCrafterDataCenter))
-                                {
-                                    <option value="@world">@world</option>
-                                }
-                            </select>
-                        </div>
+                        <CompactSelectField Id="new-crafter-region"
+                                            Label="Region"
+                                            Value="@_newCrafterRegion"
+                                            ValueChanged="SetNewCrafterRegion"
+                                            Options="RegionOptions" />
+                        <CompactSelectField Id="new-crafter-data-center"
+                                            Label="Data center"
+                                            Value="@_newCrafterDataCenter"
+                                            ValueChanged="SetNewCrafterDataCenter"
+                                            Options="GetDataCenterOptions(_newCrafterRegion)" />
+                        <CompactSelectField Id="new-crafter-world"
+                                            Label="World"
+                                            Value="@_newCrafterWorld"
+                                            ValueChanged="SetNewCrafterWorld"
+                                            Options="GetWorldOptions(_newCrafterDataCenter)" />
                         <MudButton Variant="Variant.Filled"
                                    Color="Color.Primary"
                                    OnClick="CreateCrafterAsync">
@@ -241,43 +204,21 @@
                                       Label="Social/profile URL"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense" />
-                        <div class="trade-crafters-native-field">
-                            <label for="detail-region">Region</label>
-                            <select id="detail-region"
-                                    class="trade-crafters-native-select"
-                                    value="@_detailRegion"
-                                    @onchange="OnDetailRegionChanged">
-                                @foreach (var region in TradeRegions)
-                                {
-                                    <option value="@region">@region</option>
-                                }
-                            </select>
-                        </div>
-                        <div class="trade-crafters-native-field">
-                            <label for="detail-data-center">Data center</label>
-                            <select id="detail-data-center"
-                                    class="trade-crafters-native-select"
-                                    value="@_detailDataCenter"
-                                    @onchange="OnDetailDataCenterChanged">
-                                @foreach (var dataCenter in GetDataCentersForRegion(_detailRegion))
-                                {
-                                    <option value="@dataCenter">@dataCenter</option>
-                                }
-                            </select>
-                        </div>
-                        <div class="trade-crafters-native-field">
-                            <label for="detail-world">World</label>
-                            <select id="detail-world"
-                                    class="trade-crafters-native-select"
-                                    value="@_detailWorld"
-                                    @onchange="OnDetailWorldChanged">
-                                <option value="@string.Empty">No world selected</option>
-                                @foreach (var world in GetWorldsForDataCenter(_detailDataCenter))
-                                {
-                                    <option value="@world">@world</option>
-                                }
-                            </select>
-                        </div>
+                        <CompactSelectField Id="detail-region"
+                                            Label="Region"
+                                            Value="@_detailRegion"
+                                            ValueChanged="SetDetailRegion"
+                                            Options="RegionOptions" />
+                        <CompactSelectField Id="detail-data-center"
+                                            Label="Data center"
+                                            Value="@_detailDataCenter"
+                                            ValueChanged="SetDetailDataCenter"
+                                            Options="GetDataCenterOptions(_detailRegion)" />
+                        <CompactSelectField Id="detail-world"
+                                            Label="World"
+                                            Value="@_detailWorld"
+                                            ValueChanged="SetDetailWorld"
+                                            Options="GetWorldOptions(_detailDataCenter)" />
                         @if (HasLodestoneFlair(_selectedCrafter))
                         {
                             <div class="trade-crafter-lodestone-flair">
@@ -409,6 +350,14 @@
     private IReadOnlyList<LodestoneCrafterSearchCandidate> _lodestoneCandidates = [];
     private LodestoneCrafterImportPreview? _lodestonePreview;
     private static readonly IReadOnlyList<string> TradeRegions = ["North America", "Europe", "Japan", "Oceania"];
+    private static readonly IReadOnlyList<CompactSelectOption> LodestoneSearchScopeOptions =
+    [
+        new(LodestoneSearchScope.EntireRegion.ToString(), "Entire region"),
+        new(LodestoneSearchScope.SelectedDataCenter.ToString(), "Selected data center"),
+        new(LodestoneSearchScope.SpecificWorld.ToString(), "Specific world")
+    ];
+    private static readonly IReadOnlyList<CompactSelectOption> RegionOptions =
+        TradeRegions.Select(ToOption).ToArray();
 
     private IReadOnlyList<TradeCrafterProfile> SortedCrafters => _crafters
         .OrderBy(crafter => crafter.DisplayName, StringComparer.OrdinalIgnoreCase)
@@ -765,9 +714,9 @@
         }
     }
 
-    private void OnLodestoneSearchScopeChanged(ChangeEventArgs args)
+    private void SetLodestoneSearchScope(string value)
     {
-        if (!Enum.TryParse<LodestoneSearchScope>(args.Value?.ToString(), out var scope))
+        if (!Enum.TryParse<LodestoneSearchScope>(value, out var scope))
         {
             return;
         }
@@ -779,14 +728,9 @@
         }
     }
 
-    private void OnLodestoneSearchWorldChanged(ChangeEventArgs args)
+    private void SetLodestoneSearchWorld(string value)
     {
-        _lodestoneSearchWorld = args.Value?.ToString() ?? string.Empty;
-    }
-
-    private void OnNewCrafterRegionChanged(ChangeEventArgs args)
-    {
-        SetNewCrafterRegion(args.Value?.ToString() ?? string.Empty);
+        _lodestoneSearchWorld = value ?? string.Empty;
     }
 
     private void SetNewCrafterDataCenter(string dataCenter)
@@ -799,19 +743,9 @@
         }
     }
 
-    private void OnNewCrafterDataCenterChanged(ChangeEventArgs args)
-    {
-        SetNewCrafterDataCenter(args.Value?.ToString() ?? string.Empty);
-    }
-
     private void SetNewCrafterWorld(string world)
     {
         _newCrafterWorld = world ?? string.Empty;
-    }
-
-    private void OnNewCrafterWorldChanged(ChangeEventArgs args)
-    {
-        SetNewCrafterWorld(args.Value?.ToString() ?? string.Empty);
     }
 
     private void SetDetailRegion(string region)
@@ -829,11 +763,6 @@
         }
     }
 
-    private void OnDetailRegionChanged(ChangeEventArgs args)
-    {
-        SetDetailRegion(args.Value?.ToString() ?? string.Empty);
-    }
-
     private void SetDetailDataCenter(string dataCenter)
     {
         _detailDataCenter = string.IsNullOrWhiteSpace(dataCenter) ? GetDefaultDataCenter() : dataCenter;
@@ -844,19 +773,9 @@
         }
     }
 
-    private void OnDetailDataCenterChanged(ChangeEventArgs args)
-    {
-        SetDetailDataCenter(args.Value?.ToString() ?? string.Empty);
-    }
-
     private void SetDetailWorld(string world)
     {
         _detailWorld = world ?? string.Empty;
-    }
-
-    private void OnDetailWorldChanged(ChangeEventArgs args)
-    {
-        SetDetailWorld(args.Value?.ToString() ?? string.Empty);
     }
 
     private void SetJobLevel(TradeCraftingJob job, int level)
@@ -1049,12 +968,33 @@
             : [];
     }
 
+    private IReadOnlyList<CompactSelectOption> GetDataCenterOptions(string region)
+    {
+        return GetDataCentersForRegion(region)
+            .Select(ToOption)
+            .ToArray();
+    }
+
+    private IReadOnlyList<CompactSelectOption> GetWorldOptions(string dataCenter)
+    {
+        return new[] { new CompactSelectOption(string.Empty, "No world selected") }
+            .Concat(GetWorldsForDataCenter(dataCenter).Select(ToOption))
+            .ToArray();
+    }
+
     private IReadOnlyList<string> GetLodestoneSearchWorlds()
     {
         return GetDataCentersForRegion(GetDefaultRegion())
             .SelectMany(GetWorldsForDataCenter)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private IReadOnlyList<CompactSelectOption> GetLodestoneSearchWorldOptions()
+    {
+        return new[] { new CompactSelectOption(string.Empty, "Choose world") }
+            .Concat(GetLodestoneSearchWorlds().Select(ToOption))
             .ToArray();
     }
 
@@ -1116,6 +1056,11 @@
     private static string? NormalizeOptionalText(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static CompactSelectOption ToOption(string value)
+    {
+        return new CompactSelectOption(value, value);
     }
 
     private static TradeCrafterProfile CopyCrafter(TradeCrafterProfile crafter)

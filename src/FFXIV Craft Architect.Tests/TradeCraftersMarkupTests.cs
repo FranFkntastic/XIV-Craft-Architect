@@ -19,10 +19,10 @@ public class TradeCraftersMarkupTests
         Assert.Contains("Entire region", source);
         Assert.Contains("Selected data center", source);
         Assert.Contains("Specific world", source);
-        Assert.Contains("MudTooltip", source);
+        Assert.Contains("Tooltip=", source);
         Assert.Contains("LodestoneSearchScope", source);
         Assert.Contains("GetLodestoneSearchWorlds", source);
-        Assert.Contains("trade-crafters-native-select", source);
+        Assert.Contains("CompactSelectField", source);
         Assert.DoesNotContain("MudSelect", source);
         Assert.Contains("PreviewLodestoneCandidateAsync", source);
         Assert.Contains("CreateCrafterFromLodestoneAsync", source);

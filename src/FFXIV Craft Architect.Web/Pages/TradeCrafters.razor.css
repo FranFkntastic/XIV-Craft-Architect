@@ -38,53 +38,6 @@
   align-items: end;
 }
 
-.trade-crafters-native-field {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.trade-crafters-native-field label {
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.trade-crafters-native-select,
-.trade-crafters-native-value {
-  width: 100%;
-  min-height: 34px;
-  border: 1px solid #595959;
-  border-radius: 5px;
-  background: #252525;
-  color: #f3f3f3;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.trade-crafters-native-select {
-  padding: 0 34px 0 10px;
-  cursor: pointer;
-}
-
-.trade-crafters-native-value {
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-}
-
-.trade-crafters-native-select:focus-visible {
-  border-color: #92c663;
-  outline: 1px solid #92c663;
-  outline-offset: 1px;
-}
-
-.trade-crafters-native-select:disabled,
-.trade-crafters-native-value {
-  opacity: 0.78;
-}
-
 .trade-crafters-panel {
   background: #252525;
   border: 1px solid #343434;
