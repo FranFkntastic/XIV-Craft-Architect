@@ -40,43 +40,41 @@
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
                                       Immediate="true" />
-                        <MudTooltip Text="Choose how widely Lodestone should search. Entire region checks every data center in your selected region; specific world is only needed when you already know the home world.">
-                            <div class="trade-crafters-field-shell">
-                                <MudSelect T="LodestoneSearchScope"
-                                           @bind-Value="_lodestoneSearchScope"
-                                           Label="Search scope"
-                                           Variant="Variant.Outlined"
-                                           Margin="Margin.Normal">
-                                    <MudSelectItem Value="@LodestoneSearchScope.EntireRegion">Entire region</MudSelectItem>
-                                    <MudSelectItem Value="@LodestoneSearchScope.SelectedDataCenter">Selected data center</MudSelectItem>
-                                    <MudSelectItem Value="@LodestoneSearchScope.SpecificWorld">Specific world</MudSelectItem>
-                                </MudSelect>
-                            </div>
-                        </MudTooltip>
+                        <div class="trade-crafters-native-field">
+                            <MudTooltip Text="Choose how widely Lodestone should search. Entire region checks every data center in your selected region; specific world is only needed when you already know the home world.">
+                                <label for="lodestone-search-scope">Search scope</label>
+                            </MudTooltip>
+                            <select id="lodestone-search-scope"
+                                    class="trade-crafters-native-select"
+                                    value="@_lodestoneSearchScope"
+                                    @onchange="OnLodestoneSearchScopeChanged">
+                                <option value="@LodestoneSearchScope.EntireRegion">Entire region</option>
+                                <option value="@LodestoneSearchScope.SelectedDataCenter">Selected data center</option>
+                                <option value="@LodestoneSearchScope.SpecificWorld">Specific world</option>
+                            </select>
+                        </div>
                         @if (_lodestoneSearchScope == LodestoneSearchScope.SpecificWorld)
                         {
-                            <MudSelect T="string"
-                                       @key="_lodestoneSearchScope"
-                                       @bind-Value="_lodestoneSearchWorld"
-                                       Label="World"
-                                       Variant="Variant.Outlined"
-                                       Margin="Margin.Normal">
-                                <MudSelectItem Value="@string.Empty">Choose world</MudSelectItem>
-                                @foreach (var world in GetLodestoneSearchWorlds())
-                                {
-                                    <MudSelectItem Value="@world">@world</MudSelectItem>
-                                }
-                            </MudSelect>
+                            <div class="trade-crafters-native-field" @key="_lodestoneSearchScope">
+                                <label for="lodestone-search-world">World</label>
+                                <select id="lodestone-search-world"
+                                        class="trade-crafters-native-select"
+                                        value="@_lodestoneSearchWorld"
+                                        @onchange="OnLodestoneSearchWorldChanged">
+                                    <option value="@string.Empty">Choose world</option>
+                                    @foreach (var world in GetLodestoneSearchWorlds())
+                                    {
+                                        <option value="@world">@world</option>
+                                    }
+                                </select>
+                            </div>
                         }
                         else
                         {
-                            <MudTextField T="string"
-                                          @key="_lodestoneSearchScope"
-                                          Value="@GetLodestoneSearchScopeSummary()"
-                                          Label="Location"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Normal"
-                                          ReadOnly="true" />
+                            <div class="trade-crafters-native-field" @key="_lodestoneSearchScope">
+                                <label>Location</label>
+                                <div class="trade-crafters-native-value">@GetLodestoneSearchScopeSummary()</div>
+                            </div>
                         }
                         <MudButton Variant="Variant.Filled"
                                    Color="Color.Primary"
@@ -148,40 +146,43 @@
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
                                       Immediate="true" />
-                        <MudSelect T="string"
-                                   Value="@_newCrafterRegion"
-                                   ValueChanged="SetNewCrafterRegion"
-                                   Label="Region"
-                                   Variant="Variant.Outlined"
-                                   Margin="Margin.Normal">
-                            @foreach (var region in TradeRegions)
-                            {
-                                <MudSelectItem Value="@region">@region</MudSelectItem>
-                            }
-                        </MudSelect>
-                        <MudSelect T="string"
-                                   Value="@_newCrafterDataCenter"
-                                   ValueChanged="SetNewCrafterDataCenter"
-                                   Label="Data center"
-                                   Variant="Variant.Outlined"
-                                   Margin="Margin.Normal">
-                            @foreach (var dataCenter in GetDataCentersForRegion(_newCrafterRegion))
-                            {
-                                <MudSelectItem Value="@dataCenter">@dataCenter</MudSelectItem>
-                            }
-                        </MudSelect>
-                        <MudSelect T="string"
-                                   Value="@_newCrafterWorld"
-                                   ValueChanged="SetNewCrafterWorld"
-                                   Label="World"
-                                   Variant="Variant.Outlined"
-                                   Margin="Margin.Normal">
-                            <MudSelectItem Value="@string.Empty">No world selected</MudSelectItem>
-                            @foreach (var world in GetWorldsForDataCenter(_newCrafterDataCenter))
-                            {
-                                <MudSelectItem Value="@world">@world</MudSelectItem>
-                            }
-                        </MudSelect>
+                        <div class="trade-crafters-native-field">
+                            <label for="new-crafter-region">Region</label>
+                            <select id="new-crafter-region"
+                                    class="trade-crafters-native-select"
+                                    value="@_newCrafterRegion"
+                                    @onchange="OnNewCrafterRegionChanged">
+                                @foreach (var region in TradeRegions)
+                                {
+                                    <option value="@region">@region</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="trade-crafters-native-field">
+                            <label for="new-crafter-data-center">Data center</label>
+                            <select id="new-crafter-data-center"
+                                    class="trade-crafters-native-select"
+                                    value="@_newCrafterDataCenter"
+                                    @onchange="OnNewCrafterDataCenterChanged">
+                                @foreach (var dataCenter in GetDataCentersForRegion(_newCrafterRegion))
+                                {
+                                    <option value="@dataCenter">@dataCenter</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="trade-crafters-native-field">
+                            <label for="new-crafter-world">World</label>
+                            <select id="new-crafter-world"
+                                    class="trade-crafters-native-select"
+                                    value="@_newCrafterWorld"
+                                    @onchange="OnNewCrafterWorldChanged">
+                                <option value="@string.Empty">No world selected</option>
+                                @foreach (var world in GetWorldsForDataCenter(_newCrafterDataCenter))
+                                {
+                                    <option value="@world">@world</option>
+                                }
+                            </select>
+                        </div>
                         <MudButton Variant="Variant.Filled"
                                    Color="Color.Primary"
                                    OnClick="CreateCrafterAsync">
@@ -240,40 +241,43 @@
                                       Label="Social/profile URL"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense" />
-                        <MudSelect T="string"
-                                   Value="@_detailRegion"
-                                   ValueChanged="SetDetailRegion"
-                                   Label="Region"
-                                   Variant="Variant.Outlined"
-                                   Margin="Margin.Normal">
-                            @foreach (var region in TradeRegions)
-                            {
-                                <MudSelectItem Value="@region">@region</MudSelectItem>
-                            }
-                        </MudSelect>
-                        <MudSelect T="string"
-                                   Value="@_detailDataCenter"
-                                   ValueChanged="SetDetailDataCenter"
-                                   Label="Data center"
-                                   Variant="Variant.Outlined"
-                                   Margin="Margin.Normal">
-                            @foreach (var dataCenter in GetDataCentersForRegion(_detailRegion))
-                            {
-                                <MudSelectItem Value="@dataCenter">@dataCenter</MudSelectItem>
-                            }
-                        </MudSelect>
-                        <MudSelect T="string"
-                                   Value="@_detailWorld"
-                                   ValueChanged="SetDetailWorld"
-                                   Label="World"
-                                   Variant="Variant.Outlined"
-                                   Margin="Margin.Normal">
-                            <MudSelectItem Value="@string.Empty">No world selected</MudSelectItem>
-                            @foreach (var world in GetWorldsForDataCenter(_detailDataCenter))
-                            {
-                                <MudSelectItem Value="@world">@world</MudSelectItem>
-                            }
-                        </MudSelect>
+                        <div class="trade-crafters-native-field">
+                            <label for="detail-region">Region</label>
+                            <select id="detail-region"
+                                    class="trade-crafters-native-select"
+                                    value="@_detailRegion"
+                                    @onchange="OnDetailRegionChanged">
+                                @foreach (var region in TradeRegions)
+                                {
+                                    <option value="@region">@region</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="trade-crafters-native-field">
+                            <label for="detail-data-center">Data center</label>
+                            <select id="detail-data-center"
+                                    class="trade-crafters-native-select"
+                                    value="@_detailDataCenter"
+                                    @onchange="OnDetailDataCenterChanged">
+                                @foreach (var dataCenter in GetDataCentersForRegion(_detailRegion))
+                                {
+                                    <option value="@dataCenter">@dataCenter</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="trade-crafters-native-field">
+                            <label for="detail-world">World</label>
+                            <select id="detail-world"
+                                    class="trade-crafters-native-select"
+                                    value="@_detailWorld"
+                                    @onchange="OnDetailWorldChanged">
+                                <option value="@string.Empty">No world selected</option>
+                                @foreach (var world in GetWorldsForDataCenter(_detailDataCenter))
+                                {
+                                    <option value="@world">@world</option>
+                                }
+                            </select>
+                        </div>
                         @if (HasLodestoneFlair(_selectedCrafter))
                         {
                             <div class="trade-crafter-lodestone-flair">
@@ -761,6 +765,30 @@
         }
     }
 
+    private void OnLodestoneSearchScopeChanged(ChangeEventArgs args)
+    {
+        if (!Enum.TryParse<LodestoneSearchScope>(args.Value?.ToString(), out var scope))
+        {
+            return;
+        }
+
+        _lodestoneSearchScope = scope;
+        if (_lodestoneSearchScope != LodestoneSearchScope.SpecificWorld)
+        {
+            _lodestoneSearchWorld = string.Empty;
+        }
+    }
+
+    private void OnLodestoneSearchWorldChanged(ChangeEventArgs args)
+    {
+        _lodestoneSearchWorld = args.Value?.ToString() ?? string.Empty;
+    }
+
+    private void OnNewCrafterRegionChanged(ChangeEventArgs args)
+    {
+        SetNewCrafterRegion(args.Value?.ToString() ?? string.Empty);
+    }
+
     private void SetNewCrafterDataCenter(string dataCenter)
     {
         _newCrafterDataCenter = string.IsNullOrWhiteSpace(dataCenter) ? GetDefaultDataCenter() : dataCenter;
@@ -771,9 +799,19 @@
         }
     }
 
+    private void OnNewCrafterDataCenterChanged(ChangeEventArgs args)
+    {
+        SetNewCrafterDataCenter(args.Value?.ToString() ?? string.Empty);
+    }
+
     private void SetNewCrafterWorld(string world)
     {
         _newCrafterWorld = world ?? string.Empty;
+    }
+
+    private void OnNewCrafterWorldChanged(ChangeEventArgs args)
+    {
+        SetNewCrafterWorld(args.Value?.ToString() ?? string.Empty);
     }
 
     private void SetDetailRegion(string region)
@@ -791,6 +829,11 @@
         }
     }
 
+    private void OnDetailRegionChanged(ChangeEventArgs args)
+    {
+        SetDetailRegion(args.Value?.ToString() ?? string.Empty);
+    }
+
     private void SetDetailDataCenter(string dataCenter)
     {
         _detailDataCenter = string.IsNullOrWhiteSpace(dataCenter) ? GetDefaultDataCenter() : dataCenter;
@@ -801,9 +844,19 @@
         }
     }
 
+    private void OnDetailDataCenterChanged(ChangeEventArgs args)
+    {
+        SetDetailDataCenter(args.Value?.ToString() ?? string.Empty);
+    }
+
     private void SetDetailWorld(string world)
     {
         _detailWorld = world ?? string.Empty;
+    }
+
+    private void OnDetailWorldChanged(ChangeEventArgs args)
+    {
+        SetDetailWorld(args.Value?.ToString() ?? string.Empty);
     }
 
     private void SetJobLevel(TradeCraftingJob job, int level)

@@ -22,6 +22,8 @@ public class TradeCraftersMarkupTests
         Assert.Contains("MudTooltip", source);
         Assert.Contains("LodestoneSearchScope", source);
         Assert.Contains("GetLodestoneSearchWorlds", source);
+        Assert.Contains("trade-crafters-native-select", source);
+        Assert.DoesNotContain("MudSelect", source);
         Assert.Contains("PreviewLodestoneCandidateAsync", source);
         Assert.Contains("CreateCrafterFromLodestoneAsync", source);
         Assert.Contains("Alias", source);
