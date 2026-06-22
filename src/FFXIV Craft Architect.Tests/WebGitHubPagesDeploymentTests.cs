@@ -3,19 +3,19 @@ namespace FFXIV_Craft_Architect.Tests;
 public class WebGitHubPagesDeploymentTests
 {
     [Fact]
-    public void DeployWorkflow_PublishesMainAndLocalDevArtifacts()
+    public void DeployWorkflow_IsManualRollbackOnly()
     {
         var workflow = ReadRepoFile(".github", "workflows", "deploy-web.yml");
 
-        Assert.Contains("branches: [ main, master, local-dev ]", workflow);
+        Assert.Contains("name: Manual GitHub Pages Rollback Deploy", workflow);
+        Assert.Contains("workflow_dispatch:", workflow);
+        Assert.DoesNotContain("push:", workflow);
         Assert.Contains("ref: main", workflow);
         Assert.Contains("ref: local-dev", workflow);
         Assert.Contains("dist/pages/local-dev", workflow);
         Assert.Contains("dist/web/local-dev/wwwroot/404.html dist/pages/404.html", workflow);
         Assert.Contains("path: dist/pages", workflow);
-        Assert.Contains("if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'", workflow);
-        Assert.Contains("deploy-local-dev:", workflow);
-        Assert.Contains("if: github.ref == 'refs/heads/local-dev'", workflow);
+        Assert.Contains("uses: actions/deploy-pages@v4", workflow);
     }
 
     [Fact]
