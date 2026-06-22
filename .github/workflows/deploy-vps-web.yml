@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: vps-web-${{ github.event_name == 'workflow_dispatch' && inputs.slot || github.ref_name }}
+  group: vps-web-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -32,7 +32,7 @@ jobs:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
-      VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT || '22' }}
+      VPS_SSH_PORT: 22
     steps:
       - name: Resolve deploy slot
         id: deploy-slot

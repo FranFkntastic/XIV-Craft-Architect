@@ -1090,7 +1090,7 @@ Implemented first automation scaffold:
   - `VPS_HOST`
   - `VPS_USER`
   - `VPS_SSH_PRIVATE_KEY`
-  - optional `VPS_SSH_PORT`, defaults to `22`
+  - SSH port is fixed at `22` in the first workflow.
 - GitHub Actions deploy key:
   - Local private key path: `C:\Users\gianf\.ssh\xivcraftarchitect_github_actions`
   - Public key is installed in `/home/ubuntu/.ssh/authorized_keys` on the VPS.
@@ -1098,7 +1098,6 @@ Implemented first automation scaffold:
 - Repository secrets were added to `FranFkntastic/XIV-Craft-Architect` on 2026-06-22:
   - `VPS_HOST`
   - `VPS_USER`
-  - `VPS_SSH_PORT`
   - `VPS_SSH_PRIVATE_KEY`
 - Rollback remains a symlink operation: repoint `/srv/craftarchitect/web/<slot>/current` to an earlier directory under `/srv/craftarchitect/web/<slot>/releases/`.
 
