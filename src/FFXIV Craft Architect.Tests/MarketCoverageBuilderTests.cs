@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.Tests;
 
@@ -54,5 +55,81 @@ public class MarketCoverageBuilderTests
         Assert.Equal(1_200, option.CashOutCost);
         Assert.Equal(2, option.ExcessQuantity);
         Assert.True(option.IsDefaultEligible);
+    }
+
+    [Fact]
+    public void Build_SelectsCheapestSingleWorldUsingExactNeededCost()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Darksteel Ingot",
+            QuantityNeeded = 10,
+            WorldOptions =
+            [
+                World("Aether", "Adamantoise", 10, 500),
+                World("Aether", "Siren", 12, 100)
+            ]
+        };
+
+        var coverage = MarketCoverageBuilder.Build(plan);
+
+        Assert.NotNull(coverage.SingleWorld);
+        Assert.Equal(MarketCoverageTier.SingleWorld, coverage.SingleWorld.Tier);
+        Assert.Equal("Siren", Assert.Single(coverage.SingleWorld.Worlds).WorldName);
+        Assert.Equal(1_000, coverage.SingleWorld.ExactNeededCost);
+        Assert.Equal(1_200, coverage.SingleWorld.CashOutCost);
+        Assert.True(coverage.SingleWorld.IsDefaultEligible);
+    }
+
+    [Fact]
+    public void Build_NqCandidateDoesNotExceedHqCandidateForSameListings()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Mixed Quality Material",
+            QuantityNeeded = 10,
+            WorldOptions =
+            [
+                new WorldShoppingSummary
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Siren",
+                    Listings =
+                    [
+                        new ShoppingListingEntry { Quantity = 10, PricePerUnit = 500, IsHq = false },
+                        new ShoppingListingEntry { Quantity = 10, PricePerUnit = 100, IsHq = true }
+                    ]
+                }
+            ]
+        };
+
+        var coverage = MarketCoverageBuilder.Build(plan);
+        var nq = Assert.Single(coverage.AllCandidates, c =>
+            c.Tier == MarketCoverageTier.SingleWorld &&
+            c.QualityPolicy == MarketCoverageQualityPolicy.NqOrHq);
+        var hq = Assert.Single(coverage.AllCandidates, c =>
+            c.Tier == MarketCoverageTier.SingleWorld &&
+            c.QualityPolicy == MarketCoverageQualityPolicy.HqOnly);
+
+        Assert.True(nq.ExactNeededCost <= hq.ExactNeededCost);
+    }
+
+    private static WorldShoppingSummary World(string dataCenter, string worldName, int quantity, long pricePerUnit)
+    {
+        return new WorldShoppingSummary
+        {
+            DataCenter = dataCenter,
+            WorldName = worldName,
+            Listings =
+            [
+                new ShoppingListingEntry
+                {
+                    Quantity = quantity,
+                    PricePerUnit = pricePerUnit
+                }
+            ]
+        };
     }
 }
