@@ -25,16 +25,18 @@ public sealed class WebVpsDeploymentTests
     }
 
     [Fact]
-    public void VpsDeployWorkflow_RunsFullTestSuiteBeforePublishing()
+    public void VpsDeployWorkflow_RunsFullTestSuiteBeforeDeployJob()
     {
         var workflow = ReadRepoFile(".github", "workflows", "deploy-vps-web.yml");
 
+        Assert.Contains("test:", workflow);
+        Assert.Contains("runs-on: windows-latest", workflow);
         Assert.Contains("name: Run full test suite", workflow);
         Assert.Contains("dotnet test \"src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj\"", workflow);
-        Assert.Contains("-p:EnableWindowsTargeting=true", workflow);
+        Assert.Contains("needs: test", workflow);
         Assert.True(
-            workflow.IndexOf("name: Run full test suite", StringComparison.Ordinal) <
-            workflow.IndexOf("name: Publish web app", StringComparison.Ordinal));
+            workflow.IndexOf("test:", StringComparison.Ordinal) <
+            workflow.IndexOf("deploy:", StringComparison.Ordinal));
     }
 
     [Fact]
