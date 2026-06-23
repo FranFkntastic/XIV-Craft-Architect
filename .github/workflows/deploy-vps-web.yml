@@ -6,6 +6,8 @@ on:
     paths:
       - 'src/FFXIV Craft Architect.Web/**'
       - 'src/FFXIV Craft Architect.Core/**'
+      - 'src/FFXIV Craft Architect.Tests/**'
+      - 'scripts/Assert-DeployTestSurface.ps1'
       - '.github/workflows/deploy-vps-web.yml'
   workflow_dispatch:
     inputs:
@@ -40,10 +42,18 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Validate web deploy test slice
+        shell: pwsh
+        run: >
+          ./scripts/Assert-DeployTestSurface.ps1
+          -Surface DeployWeb
+
       - name: Run web deploy test slice
         run: >
           dotnet test "src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj"
           --configuration Release
+          --no-restore
+          --no-build
           --filter "Surface=DeployWeb"
           --blame-hang
           --blame-hang-timeout 2m

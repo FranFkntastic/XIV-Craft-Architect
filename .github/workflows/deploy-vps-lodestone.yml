@@ -1,6 +1,17 @@
 name: Deploy Lodestone Helper to VPS
 
 on:
+  push:
+    branches: [ main, master, local-dev ]
+    paths:
+      - 'src/FFXIV Craft Architect.LodestoneLookup/**'
+      - 'src/FFXIV Craft Architect.Core/**'
+      - 'src/FFXIV Craft Architect.Web/Services/HttpLodestoneCrafterLookupService.cs'
+      - 'src/FFXIV Craft Architect.Web/Program.cs'
+      - 'src/FFXIV Craft Architect.Web/wwwroot/appsettings.json'
+      - 'src/FFXIV Craft Architect.Tests/**'
+      - 'scripts/Assert-DeployTestSurface.ps1'
+      - '.github/workflows/deploy-vps-lodestone.yml'
   workflow_dispatch:
 
 permissions:
@@ -23,10 +34,18 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Validate Lodestone deploy test slice
+        shell: pwsh
+        run: >
+          ./scripts/Assert-DeployTestSurface.ps1
+          -Surface DeployLodestone
+
       - name: Run Lodestone deploy test slice
         run: >
           dotnet test "src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj"
           --configuration Release
+          --no-restore
+          --no-build
           --filter "Surface=DeployLodestone"
           --blame-hang
           --blame-hang-timeout 2m
