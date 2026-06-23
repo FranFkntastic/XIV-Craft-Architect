@@ -15,9 +15,19 @@ public class PurchaseSummaryService : IPurchaseSummaryService
         decimal averagePricePerUnit;
         var excessQuantity = 0;
 
-        var recommendedSplit = plan.RecommendedSplit;
-        if (PurchaseRecommendationCost.UsesSplitRecommendation(plan) && recommendedSplit != null)
+        var coverage = PurchaseRecommendationCost.GetDefaultCoverageOption(plan);
+        if (coverage != null)
         {
+            quantityToPurchase = coverage.QuantityToPurchase;
+            totalCost = PurchaseRecommendationCost.GetRecommendedCashOutCost(plan);
+            averagePricePerUnit = coverage.QuantityCovered > 0
+                ? coverage.CashOutCost / coverage.QuantityCovered
+                : 0;
+            excessQuantity = coverage.ExcessQuantity;
+        }
+        else if (PurchaseRecommendationCost.UsesSplitRecommendation(plan) && plan.RecommendedSplit != null)
+        {
+            var recommendedSplit = plan.RecommendedSplit;
             quantityToPurchase = recommendedSplit.Sum(s => s.QuantityToBuy);
             totalCost = plan.SplitTotalCost ?? 0;
             averagePricePerUnit = quantityToPurchase > 0 
@@ -37,7 +47,7 @@ public class PurchaseSummaryService : IPurchaseSummaryService
             averagePricePerUnit = 0;
         }
 
-        excessQuantity = Math.Max(0, quantityToPurchase - plan.QuantityNeeded);
+        excessQuantity = Math.Max(excessQuantity, quantityToPurchase - plan.QuantityNeeded);
 
         return new PurchaseSummary
         {

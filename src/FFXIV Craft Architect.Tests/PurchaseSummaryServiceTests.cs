@@ -40,4 +40,94 @@ public class PurchaseSummaryServiceTests
         Assert.Equal(3_000, summary.TotalCost);
         Assert.Equal(600, summary.AveragePricePerUnit);
     }
+
+    [Fact]
+    public void CreateSummary_UsesCoverageCashOutForExecutionCost()
+    {
+        var service = new PurchaseSummaryService();
+        var coverageOption = CreateCoverageOption(
+            exactNeededCost: 1_000,
+            cashOutCost: 1_200,
+            quantityCovered: 10,
+            quantityToPurchase: 12);
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Execution Material",
+            QuantityNeeded = 10,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                DataCenter = "Aether",
+                WorldName = "Adamantoise",
+                TotalCost = 5_000,
+                TotalQuantityPurchased = 10
+            },
+            CoverageSet = new MarketCoverageSet(
+                100,
+                "Execution Material",
+                10,
+                SingleWorld: coverageOption,
+                CompactSplit: null,
+                WideSplit: null,
+                CheapestObserved: null,
+                AllCandidates: [coverageOption])
+        };
+
+        var summary = service.CreateSummary(plan);
+
+        Assert.Equal(12, summary.QuantityToPurchase);
+        Assert.Equal(2, summary.ExcessQuantity);
+        Assert.Equal(1_200, summary.TotalCost);
+        Assert.Equal(120, summary.AveragePricePerUnit);
+    }
+
+    private static MarketCoverageOption CreateCoverageOption(
+        decimal exactNeededCost,
+        decimal cashOutCost,
+        int quantityCovered,
+        int quantityToPurchase)
+    {
+        return new MarketCoverageOption(
+            CandidateId: "100-10-singleworld-nqorhq-siren",
+            Tier: MarketCoverageTier.SingleWorld,
+            Kind: MarketCoverageKind.SupportedListings,
+            QualityPolicy: MarketCoverageQualityPolicy.NqOrHq,
+            QuantityCovered: quantityCovered,
+            QuantityToPurchase: quantityToPurchase,
+            ExcessQuantity: quantityToPurchase - quantityCovered,
+            ExactNeededCost: exactNeededCost,
+            CashOutCost: cashOutCost,
+            AverageUnitCost: exactNeededCost / quantityCovered,
+            PriceBand: MarketCoveragePriceBand.Competitive,
+            Worlds:
+            [
+                new MarketCoverageWorld(
+                    DataCenter: "Aether",
+                    WorldName: "Siren",
+                    QuantityCovered: quantityCovered,
+                    QuantityToPurchase: quantityToPurchase,
+                    ExactNeededCost: exactNeededCost,
+                    CashOutCost: cashOutCost)
+            ],
+            Listings:
+            [
+                new MarketCoverageListing(
+                    DataCenter: "Aether",
+                    WorldName: "Siren",
+                    QuantityAvailable: quantityToPurchase,
+                    QuantityUsed: quantityCovered,
+                    QuantityPurchased: quantityToPurchase,
+                    PricePerUnit: exactNeededCost / quantityCovered,
+                    IsHq: false)
+            ],
+            Friction: new MarketCoverageFriction(
+                WorldCount: 1,
+                DataCenterCount: 1,
+                SmallestContribution: quantityCovered,
+                LargestContribution: quantityCovered,
+                ExcessQuantity: quantityToPurchase - quantityCovered),
+            Savings: MarketCoverageSavings.None,
+            IsDefaultEligible: true,
+            DegradedReason: null);
+    }
 }

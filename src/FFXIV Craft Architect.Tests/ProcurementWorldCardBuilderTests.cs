@@ -175,6 +175,44 @@ public class ProcurementWorldCardBuilderTests
         Assert.True(Assert.Single(card.Items).IsSplitPurchase);
     }
 
+    [Fact]
+    public void BuildWorldCards_UsesCoverageCashOutForExecutionCost()
+    {
+        var coverageOption = CreateCoverageOption(
+            exactNeededCost: 1_000,
+            cashOutCost: 1_200,
+            quantityCovered: 10,
+            quantityToPurchase: 12);
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 128,
+            Name = "Coverage Item",
+            QuantityNeeded = 10,
+            RecommendedWorld = World("Aether", "Adamantoise"),
+            WorldOptions = { World("Aether", "Siren") },
+            CoverageSet = new MarketCoverageSet(
+                128,
+                "Coverage Item",
+                10,
+                SingleWorld: coverageOption,
+                CompactSplit: null,
+                WideSplit: null,
+                CheapestObserved: null,
+                AllCandidates: [coverageOption])
+        };
+
+        var cards = ProcurementWorldCardBuilder.BuildWorldCards([plan], "Aether");
+
+        var card = Assert.Single(cards);
+        var item = Assert.Single(card.Items);
+        Assert.Equal("Siren", card.WorldName);
+        Assert.Equal(1_200, card.TotalCost);
+        Assert.Equal(10, item.QuantityOnThisWorld);
+        Assert.Equal(1_200, item.TotalCost);
+        Assert.True(item.PriceIsEffectiveCost);
+        Assert.Equal(120, item.PricePerUnit);
+    }
+
     private static WorldShoppingSummary World(string dataCenter, string worldName, bool isCongested = false)
     {
         return new WorldShoppingSummary
@@ -196,5 +234,45 @@ public class ProcurementWorldCardBuilderTests
             PricePerUnit = totalCost / (decimal)quantity,
             EffectivePricePerNeededUnit = totalCost / (decimal)quantity
         };
+    }
+
+    private static MarketCoverageOption CreateCoverageOption(
+        decimal exactNeededCost,
+        decimal cashOutCost,
+        int quantityCovered,
+        int quantityToPurchase)
+    {
+        return new MarketCoverageOption(
+            CandidateId: "128-10-singleworld-nqorhq-siren",
+            Tier: MarketCoverageTier.SingleWorld,
+            Kind: MarketCoverageKind.SupportedListings,
+            QualityPolicy: MarketCoverageQualityPolicy.NqOrHq,
+            QuantityCovered: quantityCovered,
+            QuantityToPurchase: quantityToPurchase,
+            ExcessQuantity: quantityToPurchase - quantityCovered,
+            ExactNeededCost: exactNeededCost,
+            CashOutCost: cashOutCost,
+            AverageUnitCost: exactNeededCost / quantityCovered,
+            PriceBand: MarketCoveragePriceBand.Competitive,
+            Worlds:
+            [
+                new MarketCoverageWorld(
+                    DataCenter: "Aether",
+                    WorldName: "Siren",
+                    QuantityCovered: quantityCovered,
+                    QuantityToPurchase: quantityToPurchase,
+                    ExactNeededCost: exactNeededCost,
+                    CashOutCost: cashOutCost)
+            ],
+            Listings: [],
+            Friction: new MarketCoverageFriction(
+                WorldCount: 1,
+                DataCenterCount: 1,
+                SmallestContribution: quantityCovered,
+                LargestContribution: quantityCovered,
+                ExcessQuantity: quantityToPurchase - quantityCovered),
+            Savings: MarketCoverageSavings.None,
+            IsDefaultEligible: true,
+            DegradedReason: null);
     }
 }

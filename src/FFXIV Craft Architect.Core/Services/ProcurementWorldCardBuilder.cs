@@ -12,7 +12,12 @@ public static class ProcurementWorldCardBuilder
 
         foreach (var plan in shoppingPlans.Where(p => string.IsNullOrEmpty(p.Error)))
         {
-            if (ShouldUseSplitRecommendation(plan))
+            var coverage = PurchaseRecommendationCost.GetDefaultCoverageOption(plan);
+            if (coverage != null)
+            {
+                AddCoverageCandidateItems(worldCards, coverage, plan, fallbackDataCenter);
+            }
+            else if (ShouldUseSplitRecommendation(plan))
             {
                 foreach (var split in plan.RecommendedSplit ?? Enumerable.Empty<SplitWorldPurchase>())
                 {
@@ -71,6 +76,44 @@ public static class ProcurementWorldCardBuilder
             .ThenBy(w => w.DataCenter)
             .ThenByDescending(w => w.TotalCost)
             .ToList();
+    }
+
+    private static void AddCoverageCandidateItems(
+        Dictionary<string, WorldProcurementCardModel> worldCards,
+        MarketCoverageOption coverage,
+        DetailedShoppingPlan plan,
+        string fallbackDataCenter)
+    {
+        for (var index = 0; index < coverage.Worlds.Count; index++)
+        {
+            var coverageWorld = coverage.Worlds[index];
+            var worldIdentity = GetWorldIdentity(
+                coverageWorld.WorldName,
+                coverageWorld.DataCenter,
+                fallbackDataCenter);
+            var card = GetOrCreateCard(worldCards, worldIdentity, plan);
+            var priceIsEffectiveCost = coverageWorld.CashOutCost != coverageWorld.ExactNeededCost;
+            var pricePerUnit = coverageWorld.QuantityCovered > 0
+                ? coverageWorld.CashOutCost / coverageWorld.QuantityCovered
+                : 0;
+
+            card.Items.Add(new WorldItemPurchase
+            {
+                ItemId = plan.ItemId,
+                ItemName = plan.Name,
+                IconId = plan.IconId,
+                QuantityOnThisWorld = coverageWorld.QuantityCovered,
+                TotalQuantityNeeded = plan.QuantityNeeded,
+                PricePerUnit = pricePerUnit,
+                PriceIsEffectiveCost = priceIsEffectiveCost,
+                TotalCost = ToLongSaturating(coverageWorld.CashOutCost),
+                IsSplitPurchase = coverage.Worlds.Count > 1,
+                SourcePlan = plan,
+                TravelContext = index == 0
+                    ? TravelContextConstants.Primary
+                    : TravelContextConstants.Supplemental
+            });
+        }
     }
 
     public static string GetWorldKey(WorldProcurementCardModel world)
@@ -143,6 +186,18 @@ public static class ProcurementWorldCardBuilder
     private static bool ShouldUseSplitRecommendation(DetailedShoppingPlan plan)
     {
         return PurchaseRecommendationCost.UsesSplitRecommendation(plan);
+    }
+
+    private static long ToLongSaturating(decimal value)
+    {
+        if (value <= 0)
+        {
+            return 0;
+        }
+
+        return value >= long.MaxValue
+            ? long.MaxValue
+            : (long)Math.Ceiling(value);
     }
 
     private readonly record struct WorldIdentity(string WorldName, string DataCenter);
