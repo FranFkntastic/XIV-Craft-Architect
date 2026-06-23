@@ -73,6 +73,12 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Run full test suite
+        run: >
+          dotnet test "src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj"
+          --configuration Release
+          --logger "console;verbosity=normal"
+
       - name: Publish web app
         run: >
           dotnet publish "src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"

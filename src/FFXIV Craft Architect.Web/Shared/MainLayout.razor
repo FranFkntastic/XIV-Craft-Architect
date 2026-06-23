@@ -33,33 +33,26 @@
 <MudLayout Style="height: 100vh; display: flex; flex-direction: column;">
     <!-- Title Bar with Menu - Fixed at top -->
     <MudAppBar Elevation="0" Style="@GetAppBarStyle()">
-        @if (AppState.SecretDebugToolsEnabled)
-        {
-            <MudMenu Dense="true"
-                     AnchorOrigin="Origin.BottomLeft"
-                     TransformOrigin="Origin.TopLeft"
-                     Color="Color.Secondary">
-                <ActivatorContent>
-                    <MudButton Style="@GetWorkspaceButtonStyle()"
-                               Size="Size.Medium"
-                               EndIcon="@Icons.Material.Filled.KeyboardArrowDown">
-                        @GetWorkspaceTitle()
-                    </MudButton>
-                </ActivatorContent>
-                <ChildContent>
-                    <MudMenuItem OnClick="@(() => NavigateTo(""))" Icon="@Icons.Material.Filled.Build">
-                        FFXIV Craft Architect
-                    </MudMenuItem>
-                    <MudMenuItem OnClick="@(() => NavigateTo("trade/orders"))" Icon="@Icons.Material.Filled.Payments">
-                        FFXIV Trade Architect
-                    </MudMenuItem>
-                </ChildContent>
-            </MudMenu>
-        }
-        else
-        {
-            <MudText Style="color: #d4a73a; font-weight: 600; margin-right: 24px;">FFXIV Craft Architect</MudText>
-        }
+        <MudMenu Dense="true"
+                 AnchorOrigin="Origin.BottomLeft"
+                 TransformOrigin="Origin.TopLeft"
+                 Color="Color.Secondary">
+            <ActivatorContent>
+                <MudButton Style="@GetWorkspaceButtonStyle()"
+                           Size="Size.Medium"
+                           EndIcon="@Icons.Material.Filled.KeyboardArrowDown">
+                    @GetWorkspaceTitle()
+                </MudButton>
+            </ActivatorContent>
+            <ChildContent>
+                <MudMenuItem OnClick="@(() => NavigateTo(""))" Icon="@Icons.Material.Filled.Build">
+                    FFXIV Craft Architect
+                </MudMenuItem>
+                <MudMenuItem OnClick="@(() => NavigateTo("trade/orders"))" Icon="@Icons.Material.Filled.Payments">
+                    FFXIV Trade Architect
+                </MudMenuItem>
+            </ChildContent>
+        </MudMenu>
         
         <!-- Navigation Tabs -->
         <MudButtonGroup Size="Size.Small" Style="margin-right: 24px;">
@@ -304,11 +297,6 @@
     {
         if (change.HasScope(AppStateChangeScope.Settings))
         {
-            if (!AppState.SecretDebugToolsEnabled && IsTradeMode)
-            {
-                NavigateTo("");
-            }
-
             _ = InvokeAsync(StateHasChanged);
         }
     }

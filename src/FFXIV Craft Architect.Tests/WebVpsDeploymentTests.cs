@@ -25,6 +25,18 @@ public sealed class WebVpsDeploymentTests
     }
 
     [Fact]
+    public void VpsDeployWorkflow_RunsFullTestSuiteBeforePublishing()
+    {
+        var workflow = ReadRepoFile(".github", "workflows", "deploy-vps-web.yml");
+
+        Assert.Contains("name: Run full test suite", workflow);
+        Assert.Contains("dotnet test \"src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj\"", workflow);
+        Assert.True(
+            workflow.IndexOf("name: Run full test suite", StringComparison.Ordinal) <
+            workflow.IndexOf("name: Publish web app", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void VpsDeployWorkflow_ActivatesReleaseBySymlink()
     {
         var workflow = ReadRepoFile(".github", "workflows", "deploy-vps-web.yml");

@@ -37,11 +37,11 @@ public class MainLayoutMarkupTests
     }
 
     [Fact]
-    public void MainLayout_TradeWorkspaceSwitcher_IsDeveloperModeGated()
+    public void MainLayout_TradeWorkspaceSwitcher_IsAvailableOutsideDeveloperMode()
     {
         var source = File.ReadAllText(GetMainLayoutPath());
 
-        Assert.Contains("@if (AppState.SecretDebugToolsEnabled)", source);
+        Assert.DoesNotContain("<MudText Style=\"color: #d4a73a; font-weight: 600; margin-right: 24px;\">FFXIV Craft Architect</MudText>", source);
         Assert.Contains("FFXIV Trade Architect", source);
         Assert.Contains("NavigateTo(\"trade/orders\")", source);
         Assert.Contains("IsTradeMode", source);
@@ -53,12 +53,11 @@ public class MainLayoutMarkupTests
     }
 
     [Fact]
-    public void MainLayout_TradeRoute_DisablesBackToCraftWhenDeveloperModeTurnsOff()
+    public void MainLayout_TradeRoute_RemainsActiveWhenDeveloperModeTurnsOff()
     {
         var source = File.ReadAllText(GetMainLayoutPath());
 
-        Assert.Contains("!AppState.SecretDebugToolsEnabled && IsTradeMode", source);
-        Assert.Contains("NavigateTo(\"\")", source);
+        Assert.DoesNotContain("!AppState.SecretDebugToolsEnabled && IsTradeMode", source);
         Assert.Contains("relativePath.StartsWith(\"trade\"", source);
     }
 

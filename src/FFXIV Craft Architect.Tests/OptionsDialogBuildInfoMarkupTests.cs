@@ -37,12 +37,12 @@ public class OptionsDialogBuildInfoMarkupTests
     }
 
     [Fact]
-    public void DeployWorkflow_PassesBranchNameForEachPublishedCheckout()
+    public void VpsDeployWorkflow_PassesResolvedBranchNameToPublishedCheckout()
     {
-        var workflow = File.ReadAllText(GetRepositoryPath(".github", "workflows", "deploy-web.yml"));
+        var workflow = File.ReadAllText(GetRepositoryPath(".github", "workflows", "deploy-vps-web.yml"));
 
-        Assert.Contains("-p:BuildInfoBranchName=main", workflow);
-        Assert.Contains("-p:BuildInfoBranchName=local-dev", workflow);
+        Assert.Contains("ref: ${{ steps.deploy-slot.outputs.ref }}", workflow);
+        Assert.Contains("-p:BuildInfoBranchName=${{ steps.deploy-slot.outputs.ref }}", workflow);
     }
 
     private static string GetWebPath(params string[] segments)

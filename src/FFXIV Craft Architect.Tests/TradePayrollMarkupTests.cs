@@ -3,13 +3,15 @@ namespace FFXIV_Craft_Architect.Tests;
 public class TradePayrollMarkupTests
 {
     [Fact]
-    public void TradePayrollPage_IsDeveloperModeGuardedAndPayrollFocused()
+    public void TradePayrollPage_IsPublicAndPayrollFocused()
     {
         var source = File.ReadAllText(GetTradePayrollPath());
 
         Assert.Contains("@page \"/trade\"", source);
         Assert.Contains("@page \"/trade/payroll\"", source);
-        Assert.Contains("AppState.SecretDebugToolsEnabled", source);
+        Assert.DoesNotContain("Returning to Craft Architect", source);
+        Assert.DoesNotContain("!AppState.SecretDebugToolsEnabled", source);
+        Assert.Contains("EnsureLoadedAsync", source);
         Assert.Contains("NavigationManager.NavigateTo(\"./\")", source);
         Assert.Contains("NavigationManager.NavigateTo(\"trade/orders\", replace: true)", source);
         Assert.Contains("Payroll Calculator", source);

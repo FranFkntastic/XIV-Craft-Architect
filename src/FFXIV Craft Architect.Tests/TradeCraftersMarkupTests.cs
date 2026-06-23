@@ -8,6 +8,9 @@ public class TradeCraftersMarkupTests
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeCrafters.razor"));
 
         Assert.Contains("@page \"/trade/crafters\"", source);
+        Assert.DoesNotContain("Returning to Craft Architect", source);
+        Assert.DoesNotContain("!AppState.SecretDebugToolsEnabled", source);
+        Assert.Contains("EnsureLoadedAsync", source);
         Assert.Contains("Display name", source);
         Assert.Contains("Create Crafter", source);
         Assert.Contains("TradeCraftingJob", source);
@@ -33,6 +36,17 @@ public class TradeCraftersMarkupTests
         Assert.DoesNotContain("Miner", source);
         Assert.DoesNotContain("Botanist", source);
         Assert.DoesNotContain("Fisher", source);
+    }
+
+    [Fact]
+    public void TradeOrdersPage_IsPublicOperationsSurface()
+    {
+        var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeOrders.razor"));
+
+        Assert.Contains("@page \"/trade/orders\"", source);
+        Assert.DoesNotContain("Returning to Craft Architect", source);
+        Assert.DoesNotContain("!AppState.SecretDebugToolsEnabled", source);
+        Assert.Contains("await LoadAsync();", source);
     }
 
     [Fact]

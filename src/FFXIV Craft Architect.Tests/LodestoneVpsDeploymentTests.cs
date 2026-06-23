@@ -24,6 +24,18 @@ public sealed class LodestoneVpsDeploymentTests
     }
 
     [Fact]
+    public void LodestoneDeployWorkflow_RunsFullTestSuiteBeforePublishing()
+    {
+        var workflow = ReadRepoFile(".github", "workflows", "deploy-vps-lodestone.yml");
+
+        Assert.Contains("name: Run full test suite", workflow);
+        Assert.Contains("dotnet test \"src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj\"", workflow);
+        Assert.True(
+            workflow.IndexOf("name: Run full test suite", StringComparison.Ordinal) <
+            workflow.IndexOf("name: Publish Lodestone helper", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void LodestoneDeployWorkflow_ActivatesSystemdRelease()
     {
         var workflow = ReadRepoFile(".github", "workflows", "deploy-vps-lodestone.yml");

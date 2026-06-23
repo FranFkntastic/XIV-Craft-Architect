@@ -9,28 +9,22 @@
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-crafters-page">
-    @if (!AppState.SecretDebugToolsEnabled)
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        <MudAlert Severity="Severity.Info" Class="ma-4">Returning to Craft Architect...</MudAlert>
+        <MudAlert Severity="Severity.Error" Class="ma-4">
+            <MudText Typo="Typo.subtitle2">Trade operations storage is unavailable.</MudText>
+            <MudText Typo="Typo.body2">@_loadError</MudText>
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Secondary"
+                       Class="mt-2"
+                       OnClick="LoadAsync">
+                Retry
+            </MudButton>
+        </MudAlert>
     }
     else
     {
-        @if (!string.IsNullOrWhiteSpace(_loadError))
-        {
-            <MudAlert Severity="Severity.Error" Class="ma-4">
-                <MudText Typo="Typo.subtitle2">Trade operations storage is unavailable.</MudText>
-                <MudText Typo="Typo.body2">@_loadError</MudText>
-                <MudButton Variant="Variant.Outlined"
-                           Color="Color.Secondary"
-                           Class="mt-2"
-                           OnClick="LoadAsync">
-                    Retry
-                </MudButton>
-            </MudAlert>
-        }
-        else
-        {
-            <div class="trade-crafters-layout">
+        <div class="trade-crafters-layout">
             <section class="trade-crafters-main">
                 <section class="trade-crafters-panel trade-crafters-lodestone-import">
                     <MudText Typo="Typo.subtitle1">Import from Lodestone</MudText>
@@ -315,8 +309,7 @@
                     </section>
                 }
             </aside>
-            </div>
-        }
+        </div>
     }
 </MudContainer>
 
@@ -409,7 +402,7 @@
     protected override async Task OnInitializedAsync()
     {
         AppState.OnStateChanged += OnAppStateChanged;
-        await EnsureLoadedForDeveloperModeAsync();
+        await EnsureLoadedAsync();
     }
 
     private void OnAppStateChanged(AppStateChange change)
@@ -419,12 +412,12 @@
             return;
         }
 
-        _ = InvokeAsync(EnsureLoadedForDeveloperModeAsync);
+        _ = InvokeAsync(EnsureLoadedAsync);
     }
 
-    private async Task EnsureLoadedForDeveloperModeAsync()
+    private async Task EnsureLoadedAsync()
     {
-        if (!AppState.SecretDebugToolsEnabled || _hasLoaded)
+        if (_hasLoaded)
         {
             await InvokeAsync(StateHasChanged);
             return;
