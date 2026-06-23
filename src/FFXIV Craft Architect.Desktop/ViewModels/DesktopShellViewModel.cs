@@ -1463,7 +1463,7 @@ public sealed partial class DesktopShellViewModel : ObservableObject, IDisposabl
                     plan.QuantityNeeded.ToString("N0"),
                     GetSourceText(plan.ItemId),
                     GetShoppingPlanTrust(plan),
-                    FormatGil(plan.RecommendedWorld?.TotalCost ?? EstimateCost(plan.ItemId, plan.QuantityNeeded))));
+                    FormatGil(GetShoppingPlanCostOrEstimate(plan))));
             }
 
             return;
@@ -1524,7 +1524,7 @@ public sealed partial class DesktopShellViewModel : ObservableObject, IDisposabl
                 .Where(item => item.TotalQuantity > 0)
                 .ToList();
         var pricedIds = marketEvidence.ShoppingPlans?
-            .Where(plan => plan.RecommendedWorld?.TotalCost > 0)
+            .Where(plan => PurchaseRecommendationCost.GetRecommendedCost(plan) > 0)
             .Select(plan => plan.ItemId)
             .ToHashSet()
             ?? new HashSet<int>();
@@ -1673,8 +1673,11 @@ public sealed partial class DesktopShellViewModel : ObservableObject, IDisposabl
             .FirstOrDefault(plan => plan.ItemId == itemId);
         var marketAnalysis = marketEvidence.ItemAnalyses
             .FirstOrDefault(analysis => analysis.ItemId == itemId);
-        InspectorEstimatedCostText = shoppingPlan?.RecommendedWorld?.TotalCost is > 0
-            ? FormatGil(shoppingPlan.RecommendedWorld.TotalCost)
+        var shoppingPlanCost = shoppingPlan != null
+            ? PurchaseRecommendationCost.GetRecommendedCost(shoppingPlan)
+            : 0;
+        InspectorEstimatedCostText = shoppingPlanCost > 0
+            ? FormatGil(shoppingPlanCost)
             : marketAnalysis != null
                 ? GetMarketAnalysisCostText(marketAnalysis)
             : EstimateCostText(itemId, quantity);
@@ -1714,6 +1717,14 @@ public sealed partial class DesktopShellViewModel : ObservableObject, IDisposabl
         }
 
         return shoppingPlan == null ? "Review" : GetShoppingPlanTrust(shoppingPlan);
+    }
+
+    private long GetShoppingPlanCostOrEstimate(DetailedShoppingPlan plan)
+    {
+        var recommendedCost = PurchaseRecommendationCost.GetRecommendedCost(plan);
+        return recommendedCost > 0
+            ? recommendedCost
+            : EstimateCost(plan.ItemId, plan.QuantityNeeded);
     }
 
     private static string FormatGil(long value) =>

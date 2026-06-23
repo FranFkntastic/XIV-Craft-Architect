@@ -697,7 +697,7 @@ public partial class MarketAnalysisViewModel : ViewModelBase
             {
                 WorldName = g.Key,
                 Items = new ObservableCollection<ShoppingPlanViewModel>(g),
-                TotalCost = g.Sum(i => i.RecommendedWorld?.TotalCost ?? 0),
+                TotalCost = g.Sum(i => i.RecommendedCost),
                 IsHomeWorld = g.First().RecommendedWorld?.IsHomeWorld ?? false
             })
             .ToList();
@@ -745,6 +745,7 @@ public partial class ShoppingPlanViewModel : ObservableObject
     public int QuantityNeeded => _plan.QuantityNeeded;
     public decimal DCAveragePrice => _plan.DCAveragePrice;
     public WorldShoppingSummary? RecommendedWorld => _plan.RecommendedWorld;
+    public long RecommendedCost => ProcurementPlanCost.GetRecommendedCost(_plan);
     public List<WorldShoppingSummary> WorldOptions => _plan.WorldOptions;
     public bool HasOptions => _plan.HasOptions;
     public bool HasHqData => _plan.HasHqData;

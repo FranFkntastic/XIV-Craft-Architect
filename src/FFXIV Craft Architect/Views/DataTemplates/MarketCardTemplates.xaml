@@ -498,14 +498,14 @@
                     </Grid>
 
                     <StackPanel Grid.Column="3" HorizontalAlignment="Right">
-                        <TextBlock Text="{Binding Plan.SplitTotalCost, StringFormat='{}{0:N0}g'}"
+                        <TextBlock Text="{Binding Summary.TotalCost, StringFormat='{}{0:N0}g'}"
                                    FontSize="10"
                                    FontWeight="SemiBold"
                                    Foreground="{StaticResource WarningOrangeBrush}"
                                    HorizontalAlignment="Right"
                                    Visibility="{Binding RequiresSplitPurchase, Converter={StaticResource BoolToVisibilityConverter}}"/>
 
-                        <TextBlock Text="{Binding RecommendedWorld.TotalCost, StringFormat='{}{0:N0}g'}"
+                        <TextBlock Text="{Binding Summary.TotalCost, StringFormat='{}{0:N0}g'}"
                                    FontSize="10"
                                    FontWeight="SemiBold"
                                    Foreground="{StaticResource AccentGoldBrush}"
@@ -522,7 +522,7 @@
                             </TextBlock.Style>
                         </TextBlock>
 
-                        <TextBlock Text="{Binding RecommendedWorld.AveragePricePerUnit, StringFormat='{}{0:N0}g/ea'}"
+                        <TextBlock Text="{Binding Summary.AveragePricePerUnit, StringFormat='{}{0:N0}g/ea'}"
                                    FontSize="9"
                                    Foreground="{StaticResource Brush.Text.Muted}"
                                    HorizontalAlignment="Right"
