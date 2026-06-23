@@ -873,6 +873,30 @@ public class MarketAnalysisGridViewServiceTests
     }
 
     [Fact]
+    public void GetTotalCostTooltip_CoverageCandidate_ExplainsExactNeededAndCashOut()
+    {
+        var plan = CreatePlanWithCoverage(exactNeededCost: 1_000, cashOutCost: 1_200);
+
+        var tooltip = MarketAnalysisGridViewService.GetTotalCostTooltip(plan);
+
+        Assert.Equal(1_000, MarketAnalysisGridViewService.GetTotalCost(plan));
+        Assert.Contains("Exact needed: 1,000g", tooltip);
+        Assert.Contains("Cash out: 1,200g", tooltip);
+    }
+
+    [Fact]
+    public void GetTotalCostClass_CheapestObservedDiagnostic_IsProjectedUnsupported()
+    {
+        var plan = CreatePlanWithCheapestObservedOnly(exactNeededCost: 900);
+
+        Assert.True(MarketAnalysisGridViewService.IsUnsupportedProjectedCost(plan));
+        Assert.Equal(
+            "ma-total-value is-projected-unsupported",
+            MarketAnalysisGridViewService.GetTotalCostClass(plan));
+        Assert.Equal(900, MarketAnalysisGridViewService.GetTotalCost(plan));
+    }
+
+    [Fact]
     public void ResolveSelectedPlan_UsesItemIdAcrossNewPlanInstancesAndFallsBackWhenMissing()
     {
         var oldSelection = Plan(100, "Old Instance", 100);
@@ -1215,5 +1239,93 @@ public class MarketAnalysisGridViewServiceTests
         return quantity >= Math.Max(quantityNeeded / 4, 1)
             ? PriceBandDepth.Usable
             : PriceBandDepth.Thin;
+    }
+
+    private static DetailedShoppingPlan CreatePlanWithCoverage(decimal exactNeededCost, decimal cashOutCost)
+    {
+        var coverage = CreateCoverageOption(
+            MarketCoverageTier.SingleWorld,
+            exactNeededCost,
+            cashOutCost,
+            isDefaultEligible: true);
+        return new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Coverage Item",
+            QuantityNeeded = 10,
+            CoverageSet = new MarketCoverageSet(
+                100,
+                "Coverage Item",
+                10,
+                SingleWorld: coverage,
+                CompactSplit: null,
+                WideSplit: null,
+                CheapestObserved: null,
+                AllCandidates: [coverage])
+        };
+    }
+
+    private static DetailedShoppingPlan CreatePlanWithCheapestObservedOnly(decimal exactNeededCost)
+    {
+        var coverage = CreateCoverageOption(
+            MarketCoverageTier.CheapestObserved,
+            exactNeededCost,
+            exactNeededCost,
+            isDefaultEligible: false);
+        return new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Diagnostic Item",
+            QuantityNeeded = 10,
+            CoverageSet = new MarketCoverageSet(
+                100,
+                "Diagnostic Item",
+                10,
+                SingleWorld: null,
+                CompactSplit: null,
+                WideSplit: null,
+                CheapestObserved: coverage,
+                AllCandidates: [coverage])
+        };
+    }
+
+    private static MarketCoverageOption CreateCoverageOption(
+        MarketCoverageTier tier,
+        decimal exactNeededCost,
+        decimal cashOutCost,
+        bool isDefaultEligible)
+    {
+        return new MarketCoverageOption(
+            CandidateId: $"100-10-{tier.ToString().ToLowerInvariant()}-nqorhq-siren",
+            Tier: tier,
+            Kind: MarketCoverageKind.SupportedListings,
+            QualityPolicy: MarketCoverageQualityPolicy.NqOrHq,
+            QuantityCovered: 10,
+            QuantityToPurchase: 12,
+            ExcessQuantity: 2,
+            ExactNeededCost: exactNeededCost,
+            CashOutCost: cashOutCost,
+            AverageUnitCost: exactNeededCost / 10,
+            PriceBand: MarketCoveragePriceBand.Competitive,
+            Worlds:
+            [
+                new MarketCoverageWorld(
+                    DataCenter: "Aether",
+                    WorldName: "Siren",
+                    QuantityCovered: 10,
+                    QuantityToPurchase: 12,
+                    ExactNeededCost: exactNeededCost,
+                    CashOutCost: cashOutCost)
+            ],
+            Listings: [],
+            Friction: new MarketCoverageFriction(
+                WorldCount: 1,
+                DataCenterCount: 1,
+                SmallestContribution: 10,
+                LargestContribution: 10,
+                ExcessQuantity: 2),
+            Savings: MarketCoverageSavings.None,
+            IsDefaultEligible: isDefaultEligible,
+            DegradedReason: null);
     }
 }
