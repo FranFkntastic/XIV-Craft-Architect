@@ -11,7 +11,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run full test suite
+        run: >
+          dotnet test "src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj"
+          --configuration Release
+          --logger "console;verbosity=normal"
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     env:
       VPS_HOST: ${{ secrets.VPS_HOST }}

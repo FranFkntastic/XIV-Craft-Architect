@@ -72,8 +72,10 @@ builder.Services.AddScoped<TradeOrderDraftFactory>();
 builder.Services.AddScoped<TradeOrderCraftPlanBuildService>();
 builder.Services.AddScoped<TradeOrderPricingWorkflowService>();
 builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
-builder.Services.AddScoped(_ => new LodestoneLookupClientOptions(new Uri(
-    builder.Configuration["LodestoneLookup:BaseAddress"] ?? "http://localhost:5128/")));
+builder.Services.AddScoped<TradeOperationsPersistenceService>();
+builder.Services.AddScoped(_ => new LodestoneLookupClientOptions(ResolveLodestoneLookupBaseAddress(
+    builder.Configuration["LodestoneLookup:BaseAddress"],
+    builder.HostEnvironment.BaseAddress)));
 builder.Services.AddScoped<ILodestoneCrafterLookupService>(sp =>
 {
     var options = sp.GetRequiredService<LodestoneLookupClientOptions>();
@@ -84,20 +86,6 @@ builder.Services.AddScoped<ILodestoneCrafterLookupService>(sp =>
             BaseAddress = options.BaseAddress,
             Timeout = TimeSpan.FromSeconds(30)
         },
-        options,
-        logger);
-});
-builder.Services.AddScoped<TradeOperationsPersistenceService>();
-builder.Services.AddScoped(_ => new LodestoneLookupClientOptions(ResolveLodestoneLookupBaseAddress(
-    builder.Configuration["LodestoneLookup:BaseAddress"],
-    builder.HostEnvironment.BaseAddress)));
-builder.Services.AddScoped<ILodestoneCrafterLookupService>(sp =>
-{
-    var httpClient = sp.GetRequiredService<HttpClient>();
-    var options = sp.GetRequiredService<LodestoneLookupClientOptions>();
-    var logger = sp.GetRequiredService<ILogger<HttpLodestoneCrafterLookupService>>();
-    return new HttpLodestoneCrafterLookupService(
-        httpClient,
         options,
         logger);
 });

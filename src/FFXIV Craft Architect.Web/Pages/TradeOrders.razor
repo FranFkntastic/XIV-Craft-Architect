@@ -16,28 +16,22 @@
 @inject NavigationManager NavigationManager
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-orders-page">
-    @if (!AppState.SecretDebugToolsEnabled)
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        <MudAlert Severity="Severity.Info" Class="ma-4">Returning to Craft Architect...</MudAlert>
+        <MudAlert Severity="Severity.Error" Class="ma-4">
+            <MudText Typo="Typo.subtitle2">Trade operations storage is unavailable.</MudText>
+            <MudText Typo="Typo.body2">@_loadError</MudText>
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Secondary"
+                       Class="mt-2"
+                       OnClick="LoadAsync">
+                Retry
+            </MudButton>
+        </MudAlert>
     }
     else
     {
-        @if (!string.IsNullOrWhiteSpace(_loadError))
-        {
-            <MudAlert Severity="Severity.Error" Class="ma-4">
-                <MudText Typo="Typo.subtitle2">Trade operations storage is unavailable.</MudText>
-                <MudText Typo="Typo.body2">@_loadError</MudText>
-                <MudButton Variant="Variant.Outlined"
-                           Color="Color.Secondary"
-                           Class="mt-2"
-                           OnClick="LoadAsync">
-                    Retry
-                </MudButton>
-            </MudAlert>
-        }
-        else
-        {
-            <div class="trade-orders-board">
+        <div class="trade-orders-board">
                 <aside class="trade-orders-rail">
                     <div class="trade-orders-rail-header">
                         <MudText Typo="Typo.subtitle1">Orders</MudText>
@@ -653,8 +647,7 @@
                         </MudTabs>
                     }
                 </aside>
-            </div>
-        }
+        </div>
     }
 </MudContainer>
 
@@ -721,11 +714,6 @@
 
     protected override async Task OnInitializedAsync()
     {
-        if (!AppState.SecretDebugToolsEnabled)
-        {
-            return;
-        }
-
         _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
         await LoadAsync();
     }

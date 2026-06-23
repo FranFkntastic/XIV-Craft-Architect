@@ -2,7 +2,7 @@
 
 Date: 2026-06-20
 Branch: vps-hosting-migration
-Status: VPS migration active; GitHub Pages retained as manual rollback
+Status: VPS migration active; GitHub Pages retired as an app host
 
 ## Goal
 
@@ -23,15 +23,22 @@ Current deployment shape as of 2026-06-22:
 - `https://dev.xivcraftarchitect.com` is the canonical `local-dev` host on the VPS.
 - `.github/workflows/deploy-vps-web.yml` is the automatic web deployment path for VPS-hosted web builds.
 - `.github/workflows/deploy-vps-lodestone.yml` is the manual deployment path for the hosted Lodestone helper.
-- `.github/workflows/deploy-web.yml` is manual rollback only for GitHub Pages.
+- `.github/workflows/deploy-web.yml` is a manual GitHub Pages moved-notice deploy for old Pages visitors.
 
-Legacy GitHub Pages workflow shape:
+Legacy GitHub Pages app workflow shape:
 
 - Builds `src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj`.
 - Publishes `main` and `local-dev`.
 - Copies `main` `wwwroot` to the Pages root.
 - Copies `local-dev` `wwwroot` to `/local-dev/`.
 - Uses GitHub Pages deployment actions.
+
+Current GitHub Pages notice workflow:
+
+- Does not build or publish the Blazor app.
+- Publishes a static moved notice at the old Pages root.
+- Publishes a cryptic local-dev notice at the old `/local-dev/` route without advertising the dev URL.
+- Uses `404.html` to show the same notice for old deep links.
 
 Current web app shape:
 
@@ -914,7 +921,7 @@ Status: Proposed; wait for approval before making code/workflow changes.
 
 ### Guiding Principles
 
-- Keep GitHub Pages available as rollback until the VPS-hosted app and helper are verified.
+- Keep GitHub Pages available only as a moved-notice surface once the VPS-hosted app and helper are verified.
 - Prove the hosted Lodestone helper manually before building GitHub Actions automation around it.
 - Prefer same-origin API paths on the VPS to avoid unnecessary CORS complexity.
 - Preserve `main` and `local-dev` as separate public environments:
@@ -1023,9 +1030,9 @@ Candidate files:
 Work:
 
 1. Simplify base href logic if the app is no longer hosted under `/XIV-Craft-Architect/`.
-2. Decide whether GitHub Pages compatibility must remain temporarily.
-3. If GitHub Pages remains as rollback, keep compatibility but avoid it interfering with `xivcraftarchitect.com`.
-4. If GitHub Pages is retired, remove Pages-specific base-path and sessionStorage redirect logic.
+2. Decide whether any GitHub Pages compatibility must remain temporarily in the app bundle.
+3. If Pages-specific runtime logic remains, keep it from interfering with `xivcraftarchitect.com`.
+4. Once the moved-notice workflow is trusted, remove Pages-specific base-path and sessionStorage redirect logic from the app bundle when safe.
 5. Keep route fallback behavior in Caddy via:
 
    ```caddyfile
@@ -1036,11 +1043,11 @@ Verification:
 
 - Refresh direct app routes on both domains.
 - Old `/market` compatibility redirect still behaves as intended if it remains required.
-- GitHub Pages rollback still works if not retired yet.
+- The GitHub Pages moved notice still loads for old root, local-dev, and deep-link URLs.
 
 Go/no-go:
 
-- Do not delete the GitHub Pages workflow until either rollback is no longer desired or a tagged/manual fallback is documented.
+- Do not delete the GitHub Pages workflow while old Pages URLs still need a friendly moved notice.
 
 ### Phase 4: VPS Deployment Automation
 
@@ -1093,7 +1100,7 @@ Implemented first automation scaffold:
 - Pushes to `local-dev` deploy the `local-dev` slot at `https://dev.xivcraftarchitect.com`.
 - Manual dispatch can deploy either `main` or `local-dev`.
 - The workflow publishes the Blazor WebAssembly app, rewrites `wwwroot/appsettings.json` to the target domain's hosted API base address, packages `wwwroot`, uploads it over SSH, extracts to `/srv/craftarchitect/web/<slot>/releases/<run>`, and updates `/srv/craftarchitect/web/<slot>/current`.
-- The existing GitHub Pages workflow remains present for rollback until the VPS workflow has been proven from GitHub Actions.
+- The existing GitHub Pages workflow remains present only as a moved notice after the VPS workflow has been proven from GitHub Actions.
 - Required GitHub repository secrets:
   - `VPS_HOST`
   - `VPS_USER`
@@ -1116,7 +1123,7 @@ Implemented first automation scaffold:
   - `/srv/craftarchitect/web/main/current` points at release `27990725568-3-7063bc9`.
   - `/srv/craftarchitect/web/local-dev/current` points at release `27991063085-1-7063bc9`.
 - Cleanup/hardening follow-up:
-  - `.github/workflows/deploy-web.yml` is now manual rollback only for GitHub Pages.
+  - `.github/workflows/deploy-web.yml` is now a manual GitHub Pages moved-notice deploy.
   - `.github/workflows/deploy-vps-web.yml` is the canonical automatic web deployment path.
   - `.github/workflows/deploy-vps-lodestone.yml` deploys the Lodestone helper manually as a self-contained Linux service release.
   - Helper releases are installed under `/srv/craftarchitect/services/lodestone/releases/<run>`.
@@ -1139,13 +1146,13 @@ Verification:
 
 Go/no-go:
 
-- Keep old GitHub Pages workflow disabled-but-present or manually dispatchable until the VPS workflow has deployed successfully at least once.
+- Keep the old GitHub Pages URL useful as a manually dispatched moved notice after the VPS workflow has deployed successfully at least once.
 
-### Phase 5: Retire GitHub Pages Deployment
+### Phase 5: Retire GitHub Pages App Deployment
 
 Goal:
 
-Stop publishing to GitHub Pages once the VPS path is trusted.
+Stop publishing the app to GitHub Pages once the VPS path is trusted.
 
 Work:
 
@@ -1167,12 +1174,12 @@ Work:
    ```
 
 4. Update documentation/runbook to identify the VPS as the canonical deployment target.
-5. Decide whether to leave GitHub Pages configured as an emergency static fallback.
+5. Decide whether to leave GitHub Pages configured as a moved notice for old links.
 
 Implemented cleanup:
 
-- GitHub Pages is retained as an emergency static rollback target, but it is no longer automatic.
-- The Pages workflow is manually dispatched only and still publishes both `main` and `local-dev` into the old Pages shape.
+- GitHub Pages is retained as an old-link notice target, but it is no longer an app host or rollback target.
+- The Pages workflow is manually dispatched only and publishes static moved notices instead of `main` and `local-dev` app builds.
 - The VPS web workflow remains automatic for `main`/`local-dev` web changes.
 - The Lodestone helper workflow is manually dispatched so backend service restarts are deliberate.
 
@@ -1208,12 +1215,12 @@ Work:
 
 Completed hardening:
 
-- GitHub Pages automatic deployment is disabled; Pages is manual rollback only.
+- GitHub Pages automatic deployment is disabled; Pages is manual moved notice only.
 - VPS web deployment is automatic for the hosted web slots.
 - Lodestone helper deployment is manual and release-based.
 - Web releases and helper releases keep only the newest five releases per slot/service.
 - Helper deployment performs a localhost readiness check before verifying the public route.
-- Focused workflow/config tests cover the VPS web workflow, helper workflow, and manual Pages rollback workflow.
+- Focused workflow/config tests cover the VPS web workflow, helper workflow, and manual Pages moved-notice workflow.
 
 ### Known Risks / Watch Items
 
