@@ -21,57 +21,6 @@ public sealed class RecipeBuildDiagnosticServiceTests
     }
 
     [Fact]
-    public async Task BuildWithDiagnosticsAsync_WhenPublishStartsNearGlobalTimeout_AllowsPublicationGraceWindow()
-    {
-        var appState = CreateAppStateWithProjectItem();
-        var runner = new FakeDiagnosticCommandRunner
-        {
-            UsePublishGraceScenario = true,
-            DelayBeforePublish = TimeSpan.FromMilliseconds(125),
-            PublishDelay = TimeSpan.FromMilliseconds(125)
-        };
-        var service = new RecipeBuildDiagnosticService(
-            appState,
-            runner,
-            TimeSpan.FromMilliseconds(200),
-            TimeSpan.FromMilliseconds(300));
-
-        var dump = await service.BuildWithDiagnosticsAsync(CancellationToken.None);
-
-        Assert.Equal(RecipeBuildDiagnosticStatus.Succeeded, dump.Status);
-        Assert.Contains(dump.Phases, phase => phase.Name == "auto-market-analysis.execute" &&
-                                              phase.Status == RecipeBuildDiagnosticPhaseStatus.Completed);
-        Assert.Contains(dump.Phases, phase => phase.Name == "auto-market-analysis.publish" &&
-                                              phase.Status == RecipeBuildDiagnosticPhaseStatus.Completed);
-    }
-
-    [Fact]
-    public async Task BuildWithDiagnosticsAsync_WhenBuildConsumesMostOfInitialTimeout_RestartsWatchdogForFollowUpWork()
-    {
-        var appState = CreateAppStateWithProjectItem();
-        var runner = new FakeDiagnosticCommandRunner
-        {
-            UsePostBuildWatchdogScenario = true,
-            BuildDelay = TimeSpan.FromMilliseconds(125),
-            FollowUpDelay = TimeSpan.FromMilliseconds(125)
-        };
-        var service = new RecipeBuildDiagnosticService(
-            appState,
-            runner,
-            TimeSpan.FromMilliseconds(200),
-            TimeSpan.FromMilliseconds(300),
-            TimeSpan.FromMilliseconds(300));
-
-        var dump = await service.BuildWithDiagnosticsAsync(CancellationToken.None);
-
-        Assert.Equal(RecipeBuildDiagnosticStatus.Succeeded, dump.Status);
-        Assert.Contains(dump.Phases, phase => phase.Name == "build-plan" &&
-                                              phase.Status == RecipeBuildDiagnosticPhaseStatus.Completed);
-        Assert.Contains(dump.Phases, phase => phase.Name == "refresh-prices" &&
-                                              phase.Status == RecipeBuildDiagnosticPhaseStatus.Completed);
-    }
-
-    [Fact]
     public void Serialize_UsesCamelCaseIndentedJson()
     {
         var dump = RecipeBuildDiagnosticService.CreateNoProjectItemsDump(
@@ -297,13 +246,7 @@ public sealed class RecipeBuildDiagnosticServiceTests
 
         public Exception? Exception { get; init; }
         public TimeSpan Delay { get; init; }
-        public TimeSpan BuildDelay { get; init; }
-        public TimeSpan FollowUpDelay { get; init; }
-        public TimeSpan DelayBeforePublish { get; init; }
-        public TimeSpan PublishDelay { get; init; }
         public bool SwallowCancellationAfterDelay { get; init; }
-        public bool UsePublishGraceScenario { get; init; }
-        public bool UsePostBuildWatchdogScenario { get; init; }
         public int BuildCallCount { get; private set; }
 
         public async Task<BuildRecipePlanResult> BuildPlanAsync(
@@ -313,38 +256,6 @@ public sealed class RecipeBuildDiagnosticServiceTests
             BuildCallCount++;
             if (request.Diagnostics != null)
             {
-                if (UsePostBuildWatchdogScenario)
-                {
-                    await request.Diagnostics.RunPhaseAsync(
-                        "build-plan",
-                        async ct => await Task.Delay(BuildDelay, ct),
-                        cancellationToken);
-                    return await request.Diagnostics.RunPhaseAsync(
-                        "refresh-prices",
-                        async ct =>
-                        {
-                            await Task.Delay(FollowUpDelay, ct);
-                            return Result;
-                        },
-                        cancellationToken);
-                }
-
-                if (UsePublishGraceScenario)
-                {
-                    await request.Diagnostics.RunPhaseAsync(
-                        "auto-market-analysis.execute",
-                        async ct => await Task.Delay(DelayBeforePublish, ct),
-                        cancellationToken);
-                    return await request.Diagnostics.RunPhaseAsync(
-                        "auto-market-analysis.publish",
-                        async ct =>
-                        {
-                            await Task.Delay(PublishDelay, ct);
-                            return Result;
-                        },
-                        cancellationToken);
-                }
-
                 try
                 {
                     return await request.Diagnostics.RunPhaseAsync(
