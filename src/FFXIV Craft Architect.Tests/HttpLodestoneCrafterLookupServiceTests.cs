@@ -67,6 +67,32 @@ public sealed class HttpLodestoneCrafterLookupServiceTests
     }
 
     [Fact]
+    public async Task SearchAsync_UsesConfiguredLookupBaseAddressWhenHttpClientHasDifferentBaseAddress()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var response = LodestoneCrafterLookupResult<IReadOnlyList<LodestoneCrafterSearchCandidate>>.Success([]);
+        var service = CreateService(
+            request =>
+            {
+                capturedRequest = request;
+                return JsonResponse(response);
+            },
+            new Uri("https://xivcraftarchitect.com/"),
+            new Uri("https://xivcraftarchitect.com/api/"));
+
+        var result = await service.SearchAsync(new LodestoneCrafterSearchRequest(
+            "Level Checker",
+            "Behemoth",
+            null));
+
+        Assert.True(result.Succeeded);
+        Assert.NotNull(capturedRequest?.RequestUri);
+        Assert.Equal(
+            "https://xivcraftarchitect.com/api/lodestone/crafters/search?name=Level%20Checker&world=Behemoth",
+            capturedRequest!.RequestUri!.AbsoluteUri);
+    }
+
+    [Fact]
     public async Task GetImportPreviewAsync_WhenHelperUnavailable_ReturnsNetworkFailure()
     {
         var service = CreateService(_ => throw new HttpRequestException("No connection could be made."));
@@ -79,16 +105,37 @@ public sealed class HttpLodestoneCrafterLookupServiceTests
         Assert.Contains("Tried http://localhost:5128/lodestone/crafters/16331040/preview", result.ErrorMessage);
     }
 
+    [Fact]
+    public async Task SearchAsync_WhenHelperReturnsHtml_ReturnsParseFailure()
+    {
+        var service = CreateService(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("<!doctype html>", Encoding.UTF8, "text/html")
+        });
+
+        var result = await service.SearchAsync(new LodestoneCrafterSearchRequest(
+            "Level Checker",
+            "Behemoth",
+            null));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(LodestoneCrafterLookupFailureKind.ParseFailed, result.FailureKind);
+        Assert.Contains("non-JSON response", result.ErrorMessage);
+        Assert.Contains("http://localhost:5128/lodestone/crafters/search", result.ErrorMessage);
+    }
+
     private static HttpLodestoneCrafterLookupService CreateService(
-        Func<HttpRequestMessage, HttpResponseMessage> handler)
+        Func<HttpRequestMessage, HttpResponseMessage> handler,
+        Uri? httpClientBaseAddress = null,
+        Uri? lookupBaseAddress = null)
     {
         var httpClient = new HttpClient(new StubHttpMessageHandler(handler))
         {
-            BaseAddress = new Uri("http://localhost:5128/")
+            BaseAddress = httpClientBaseAddress ?? new Uri("http://localhost:5128/")
         };
         return new HttpLodestoneCrafterLookupService(
             httpClient,
-            new LodestoneLookupClientOptions(new Uri("http://localhost:5128/")),
+            new LodestoneLookupClientOptions(lookupBaseAddress ?? new Uri("http://localhost:5128/")),
             NullLogger<HttpLodestoneCrafterLookupService>.Instance);
     }
 

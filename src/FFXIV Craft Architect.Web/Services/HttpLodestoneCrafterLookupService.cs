@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
@@ -9,6 +10,7 @@ public sealed record LodestoneLookupClientOptions(Uri BaseAddress);
 public sealed class HttpLodestoneCrafterLookupService : ILodestoneCrafterLookupService
 {
     private readonly HttpClient _httpClient;
+    private readonly Uri _baseAddress;
     private readonly ILogger<HttpLodestoneCrafterLookupService> _logger;
 
     public HttpLodestoneCrafterLookupService(
@@ -17,12 +19,8 @@ public sealed class HttpLodestoneCrafterLookupService : ILodestoneCrafterLookupS
         ILogger<HttpLodestoneCrafterLookupService> logger)
     {
         _httpClient = httpClient;
+        _baseAddress = options.BaseAddress;
         _logger = logger;
-
-        if (_httpClient.BaseAddress == null)
-        {
-            _httpClient.BaseAddress = options.BaseAddress;
-        }
     }
 
     public async Task<LodestoneCrafterLookupResult<IReadOnlyList<LodestoneCrafterSearchCandidate>>> SearchAsync(
@@ -67,9 +65,10 @@ public sealed class HttpLodestoneCrafterLookupService : ILodestoneCrafterLookupS
         string relativeUri,
         CancellationToken cancellationToken)
     {
+        var requestUri = new Uri(_baseAddress, relativeUri);
         try
         {
-            var response = await _httpClient.GetAsync(relativeUri, cancellationToken);
+            var response = await _httpClient.GetAsync(requestUri, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 return LodestoneCrafterLookupResult<T>.Failure(
@@ -84,16 +83,21 @@ public sealed class HttpLodestoneCrafterLookupService : ILodestoneCrafterLookupS
                 LodestoneCrafterLookupFailureKind.ParseFailed,
                 "Lodestone lookup helper returned an empty response.");
         }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Lodestone lookup helper returned a non-JSON response for {RequestUri}", requestUri);
+            return LodestoneCrafterLookupResult<T>.Failure(
+                LodestoneCrafterLookupFailureKind.ParseFailed,
+                "Lodestone lookup helper returned a non-JSON response. " +
+                $"Tried {requestUri}. " +
+                "Check the configured Lodestone lookup base address and reverse proxy route.");
+        }
         catch (OperationCanceledException)
         {
             throw;
         }
         catch (HttpRequestException ex)
         {
-            var requestUri = _httpClient.BaseAddress == null
-                ? relativeUri
-                : new Uri(_httpClient.BaseAddress, relativeUri).ToString();
-
             _logger.LogWarning(ex, "Lodestone lookup helper request failed for {RequestUri}", requestUri);
             return LodestoneCrafterLookupResult<T>.Failure(
                 LodestoneCrafterLookupFailureKind.NetworkUnavailable,
