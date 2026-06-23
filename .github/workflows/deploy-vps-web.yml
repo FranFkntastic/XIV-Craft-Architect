@@ -78,10 +78,12 @@ jobs:
           fi
 
           release="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA::7}"
-          echo "slot=$slot" >> "$GITHUB_OUTPUT"
-          echo "domain=$domain" >> "$GITHUB_OUTPUT"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-          echo "release=$release" >> "$GITHUB_OUTPUT"
+          {
+            echo "slot=$slot"
+            echo "domain=$domain"
+            echo "ref=$ref"
+            echo "release=$release"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Checkout source
         uses: actions/checkout@v4
