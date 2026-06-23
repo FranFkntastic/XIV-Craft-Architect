@@ -36,6 +36,7 @@ public static class StoredMarketIntelligenceRestorer
         var marketIntelligence = DeserializeMarketIntelligence(
             input.MarketIntelligenceJson,
             out var hasMarketIntelligenceRecipeBasisPayload,
+            out var hasLegacyCoverageCostSemantics,
             out var marketIntelligenceWarning);
         warning = AppendWarning(warning, marketIntelligenceWarning);
 
@@ -94,6 +95,9 @@ public static class StoredMarketIntelligenceRestorer
                               RestoredShoppingPlansMatchMarketAnalysis(restoredRecommendations, marketAnalyses)
             ? restoredRecommendations
             : new List<DetailedShoppingPlan>();
+        EnsureCoverageState(
+            recommendations,
+            legacyCoverage: marketIntelligence == null || hasLegacyCoverageCostSemantics);
 
         if (marketAnalyses.Count == 0 && marketIntelligence?.HasUnavailableMarketItems != true)
         {
@@ -141,6 +145,61 @@ public static class StoredMarketIntelligenceRestorer
             marketIntelligence,
             recipeBasis,
             warning);
+    }
+
+    private static void EnsureCoverageState(IReadOnlyList<DetailedShoppingPlan> plans, bool legacyCoverage)
+    {
+        foreach (var plan in plans)
+        {
+            if (plan.CoverageSet != null)
+            {
+                continue;
+            }
+
+            plan.CoverageSet = legacyCoverage
+                ? CreateLegacyDegradedCoverage(plan)
+                : MarketCoverageBuilder.Build(plan);
+        }
+    }
+
+    private static MarketCoverageSet CreateLegacyDegradedCoverage(DetailedShoppingPlan plan)
+    {
+        var projectedCost = plan.RecommendedWorld?.TotalCost ??
+                            plan.SplitTotalCost ??
+                            0;
+        var option = new MarketCoverageOption(
+            $"legacy-degraded-{plan.ItemId}-{plan.QuantityNeeded}",
+            MarketCoverageTier.CheapestObserved,
+            MarketCoverageKind.ProjectedAverage,
+            MarketCoverageQualityPolicy.NqOrHq,
+            plan.QuantityNeeded,
+            plan.QuantityNeeded,
+            ExcessQuantity: 0,
+            projectedCost,
+            projectedCost,
+            plan.QuantityNeeded > 0 ? projectedCost / (decimal)plan.QuantityNeeded : 0,
+            MarketCoveragePriceBand.Unknown,
+            Array.Empty<MarketCoverageWorld>(),
+            Array.Empty<MarketCoverageListing>(),
+            new MarketCoverageFriction(
+                WorldCount: 0,
+                DataCenterCount: 0,
+                SmallestContribution: 0,
+                LargestContribution: 0,
+                ExcessQuantity: 0),
+            MarketCoverageSavings.None,
+            IsDefaultEligible: false,
+            DegradedReason: "Legacy market intelligence did not include coverage candidates.");
+
+        return new MarketCoverageSet(
+            plan.ItemId,
+            plan.Name,
+            plan.QuantityNeeded,
+            SingleWorld: null,
+            CompactSplit: null,
+            WideSplit: null,
+            CheapestObserved: option,
+            AllCandidates: [option]);
     }
 
     private static MarketIntelligencePublicationContext RepairMissingPublicationContext(
@@ -192,9 +251,11 @@ public static class StoredMarketIntelligenceRestorer
     private static MarketIntelligence? DeserializeMarketIntelligence(
         string? json,
         out bool hasRecipeBasisPayload,
+        out bool hasLegacyCoverageCostSemantics,
         out string? warning)
     {
         hasRecipeBasisPayload = false;
+        hasLegacyCoverageCostSemantics = false;
         warning = null;
 
         if (string.IsNullOrWhiteSpace(json))
@@ -220,6 +281,8 @@ public static class StoredMarketIntelligenceRestorer
             }
 
             hasRecipeBasisPayload = stored.RecipeBasis != null;
+            hasLegacyCoverageCostSemantics =
+                stored.CoverageCostSemanticsVersion < StoredMarketIntelligence.CurrentCoverageCostSemanticsVersion;
             var recipeBasis = StoredRecipeBasisMapper.TryNormalize(stored.RecipeBasis, out var recipeBasisWarning);
             warning = AppendWarning(warning, recipeBasisWarning);
 

@@ -75,6 +75,18 @@ public class RecommendationCsvRecord
     /// </summary>
     public int ExcessQuantity { get; set; }
 
+    public string CoverageTier { get; set; } = string.Empty;
+
+    public string CoverageQualityPolicy { get; set; } = string.Empty;
+
+    public decimal CoverageExactNeededCost { get; set; }
+
+    public decimal CoverageCashOutCost { get; set; }
+
+    public int CoverageWorldCount { get; set; }
+
+    public string CoverageDegradedReason { get; set; } = string.Empty;
+
     /// <summary>
     /// Timestamp when this recommendation was generated.
     /// </summary>
@@ -199,6 +211,7 @@ public class RecommendationCsvRecord
         var records = new List<RecommendationCsvRecord>();
         var worldsToSave = plan.WorldOptions.Any() ? plan.WorldOptions : 
                           (plan.RecommendedWorld != null ? new List<WorldShoppingSummary> { plan.RecommendedWorld } : new List<WorldShoppingSummary>());
+        var coverage = GetDefaultCoverageOption(plan);
 
         foreach (var world in worldsToSave)
         {
@@ -218,7 +231,13 @@ public class RecommendationCsvRecord
                 ListingsUsed = world.ListingsUsed,
                 IsFullyUnderAverage = world.IsFullyUnderAverage,
                 TotalQuantityPurchased = world.TotalQuantityPurchased,
-                ExcessQuantity = world.ExcessQuantity
+                ExcessQuantity = world.ExcessQuantity,
+                CoverageTier = coverage?.Tier.ToString() ?? string.Empty,
+                CoverageQualityPolicy = coverage?.QualityPolicy.ToString() ?? string.Empty,
+                CoverageExactNeededCost = coverage?.ExactNeededCost ?? 0,
+                CoverageCashOutCost = coverage?.CashOutCost ?? 0,
+                CoverageWorldCount = coverage?.Friction.WorldCount ?? 0,
+                CoverageDegradedReason = coverage?.DegradedReason ?? string.Empty
             };
 
             // Extract up to 3 listings
@@ -255,6 +274,32 @@ public class RecommendationCsvRecord
         }
 
         return records;
+    }
+
+    private static MarketCoverageOption? GetDefaultCoverageOption(DetailedShoppingPlan plan)
+    {
+        if (plan.CoverageSet == null)
+        {
+            return null;
+        }
+
+        return plan.CoverageSet.AllCandidates
+            .Concat([
+                plan.CoverageSet.SingleWorld,
+                plan.CoverageSet.CompactSplit,
+                plan.CoverageSet.WideSplit,
+                plan.CoverageSet.CheapestObserved
+            ])
+            .Where(candidate => candidate != null)
+            .Cast<MarketCoverageOption>()
+            .GroupBy(candidate => candidate.CandidateId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .Where(candidate => candidate.Kind == MarketCoverageKind.SupportedListings)
+            .Where(candidate => candidate.IsDefaultEligible)
+            .OrderBy(candidate => candidate.ExactNeededCost)
+            .ThenBy(candidate => candidate.Friction.WorldCount)
+            .ThenBy(candidate => candidate.CashOutCost)
+            .FirstOrDefault();
     }
 
     /// <summary>
@@ -294,6 +339,12 @@ public sealed class RecommendationCsvMap : ClassMap<RecommendationCsvRecord>
         Map(m => m.IsFullyUnderAverage).Name("isFullyUnderAverage");
         Map(m => m.TotalQuantityPurchased).Name("totalQuantityPurchased");
         Map(m => m.ExcessQuantity).Name("excessQuantity");
+        Map(m => m.CoverageTier).Name("coverageTier").Optional();
+        Map(m => m.CoverageQualityPolicy).Name("coverageQualityPolicy").Optional();
+        Map(m => m.CoverageExactNeededCost).Name("coverageExactNeededCost").Optional();
+        Map(m => m.CoverageCashOutCost).Name("coverageCashOutCost").Optional();
+        Map(m => m.CoverageWorldCount).Name("coverageWorldCount").Optional();
+        Map(m => m.CoverageDegradedReason).Name("coverageDegradedReason").Optional();
         Map(m => m.GeneratedAt).Name("generatedAt");
         
         Map(m => m.RetainerName1).Name("retainerName1").Optional();

@@ -180,8 +180,11 @@ public sealed record MarketIntelligence(
 public sealed class StoredMarketIntelligence
 {
     public const int CurrentSchemaVersion = 3;
+    public const int CurrentCoverageCostSemanticsVersion = 1;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
+
+    public int CoverageCostSemanticsVersion { get; set; } = CurrentCoverageCostSemanticsVersion;
 
     public Guid MarketIntelligenceId { get; set; }
 

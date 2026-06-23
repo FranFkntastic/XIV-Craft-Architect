@@ -56,6 +56,48 @@ public class StoredMarketIntelligenceRestorerTests
     }
 
     [Fact]
+    public void Restore_CoverageSchemaRoundTripsCoverageSet()
+    {
+        var stored = StoredMarketIntelligence.FromMarketIntelligence(new MarketIntelligence(
+            Guid.NewGuid(),
+            [CreateAnalysis(quantityNeeded: 1)],
+            [CreateShoppingPlanWithCoverage()],
+            [],
+            MarketIntelligencePublicationContext.UnknownLegacy(
+                RecommendationMode.MinimizeTotalCost,
+                MarketAcquisitionLens.MinimumUpfrontCost),
+            RecipeBasis: null));
+
+        var result = RestoreCanonical(stored);
+
+        var plan = Assert.Single(result.Recommendations);
+        Assert.NotNull(plan.CoverageSet);
+        Assert.Equal(1_000, plan.CoverageSet.SingleWorld!.ExactNeededCost);
+    }
+
+    [Fact]
+    public void Restore_LegacyRecommendationsWithoutCoverageMarksDegradedEvidence()
+    {
+        var stored = StoredMarketIntelligence.FromMarketIntelligence(new MarketIntelligence(
+            Guid.NewGuid(),
+            [CreateAnalysis(quantityNeeded: 1)],
+            [CreateShoppingPlan(quantityNeeded: 1)],
+            [],
+            MarketIntelligencePublicationContext.UnknownLegacy(
+                RecommendationMode.MinimizeTotalCost,
+                MarketAcquisitionLens.MinimumUpfrontCost),
+            RecipeBasis: null));
+        stored.CoverageCostSemanticsVersion = 0;
+
+        var result = RestoreCanonical(stored);
+
+        var plan = Assert.Single(result.Recommendations);
+        Assert.NotNull(plan.CoverageSet);
+        Assert.Contains(plan.CoverageSet.AllCandidates, candidate =>
+            candidate.DegradedReason == "Legacy market intelligence did not include coverage candidates.");
+    }
+
+    [Fact]
     public void Restore_CanonicalPayloadWithObsoleteSchema_ClearsMarketEvidenceAndWarns()
     {
         var stored = CreateStoredIntelligence();
@@ -301,6 +343,62 @@ public class StoredMarketIntelligenceRestorerTests
             Name = name,
             QuantityNeeded = quantityNeeded
         };
+    }
+
+    private static DetailedShoppingPlan CreateShoppingPlanWithCoverage()
+    {
+        var coverageOption = CreateCoverageOption();
+        return new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Item",
+            QuantityNeeded = 1,
+            CoverageSet = new MarketCoverageSet(
+                100,
+                "Item",
+                1,
+                SingleWorld: coverageOption,
+                CompactSplit: null,
+                WideSplit: null,
+                CheapestObserved: null,
+                AllCandidates: [coverageOption])
+        };
+    }
+
+    private static MarketCoverageOption CreateCoverageOption()
+    {
+        return new MarketCoverageOption(
+            CandidateId: "100-1-singleworld-nqorhq-siren",
+            Tier: MarketCoverageTier.SingleWorld,
+            Kind: MarketCoverageKind.SupportedListings,
+            QualityPolicy: MarketCoverageQualityPolicy.NqOrHq,
+            QuantityCovered: 1,
+            QuantityToPurchase: 1,
+            ExcessQuantity: 0,
+            ExactNeededCost: 1_000,
+            CashOutCost: 1_000,
+            AverageUnitCost: 1_000,
+            PriceBand: MarketCoveragePriceBand.Competitive,
+            Worlds:
+            [
+                new MarketCoverageWorld(
+                    DataCenter: "Aether",
+                    WorldName: "Siren",
+                    QuantityCovered: 1,
+                    QuantityToPurchase: 1,
+                    ExactNeededCost: 1_000,
+                    CashOutCost: 1_000)
+            ],
+            Listings: [],
+            Friction: new MarketCoverageFriction(
+                WorldCount: 1,
+                DataCenterCount: 1,
+                SmallestContribution: 1,
+                LargestContribution: 1,
+                ExcessQuantity: 0),
+            Savings: MarketCoverageSavings.None,
+            IsDefaultEligible: true,
+            DegradedReason: null);
     }
 
     private static StoredRecipeOperationSnapshot CreateStoredRecipeBasis(
