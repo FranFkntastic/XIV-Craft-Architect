@@ -116,6 +116,52 @@ public class MarketCoverageBuilderTests
         Assert.True(nq.ExactNeededCost <= hq.ExactNeededCost);
     }
 
+    [Fact]
+    public void Build_CompactSplitUsesAtMostTwoWorldsByDefault()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Split Material",
+            QuantityNeeded = 100,
+            WorldOptions =
+            [
+                World("Aether", "Adamantoise", 60, 100),
+                World("Aether", "Siren", 40, 100),
+                World("Aether", "Cactuar", 40, 99)
+            ]
+        };
+
+        var coverage = MarketCoverageBuilder.Build(plan);
+
+        Assert.NotNull(coverage.CompactSplit);
+        Assert.Equal(MarketCoverageTier.CompactSplit, coverage.CompactSplit.Tier);
+        Assert.True(coverage.CompactSplit.Friction.WorldCount <= 2);
+        Assert.True(coverage.CompactSplit.IsDefaultEligible);
+    }
+
+    [Fact]
+    public void Build_CompactSplitRejectsTinySupplementalContribution()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Tiny Crumb Material",
+            QuantityNeeded = 100,
+            WorldOptions =
+            [
+                World("Aether", "Adamantoise", 95, 100),
+                World("Aether", "Siren", 5, 1)
+            ]
+        };
+
+        var coverage = MarketCoverageBuilder.Build(plan);
+
+        Assert.Null(coverage.CompactSplit);
+        Assert.NotNull(coverage.CheapestObserved);
+        Assert.False(coverage.CheapestObserved.IsDefaultEligible);
+    }
+
     private static WorldShoppingSummary World(string dataCenter, string worldName, int quantity, long pricePerUnit)
     {
         return new WorldShoppingSummary
