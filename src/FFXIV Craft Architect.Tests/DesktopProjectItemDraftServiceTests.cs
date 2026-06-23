@@ -3,6 +3,7 @@ using FFXIV_Craft_Architect.Desktop.Services;
 
 namespace FFXIV_Craft_Architect.Tests;
 
+[Collection(DesktopTestCollection.Name)]
 public class DesktopProjectItemDraftServiceTests
 {
     [Fact]
