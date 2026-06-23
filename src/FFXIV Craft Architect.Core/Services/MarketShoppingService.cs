@@ -559,6 +559,7 @@ public class MarketShoppingService
             plan.RecommendedWorld = bestWorld;
         }
 
+        plan.CoverageSet = MarketCoverageBuilder.Build(plan);
         return plan;
     }
 
@@ -1567,6 +1568,7 @@ public class MarketShoppingService
             DCAveragePrice = plan.DCAveragePrice,
             WorldOptions = plan.WorldOptions.ToList(),
             RecommendedWorld = plan.RecommendedWorld,
+            CoverageSet = plan.CoverageSet,
             RecommendedSplit = plan.RecommendedSplit?.ToList(),
             Error = plan.Error,
             MarketDataWarning = plan.MarketDataWarning,

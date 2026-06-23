@@ -162,6 +162,28 @@ public class MarketCoverageBuilderTests
         Assert.False(coverage.CheapestObserved.IsDefaultEligible);
     }
 
+    [Fact]
+    public void CoverageSet_AssignedToShoppingPlan_PreservesLegacyRecommendationProjection()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Projected Material",
+            QuantityNeeded = 10,
+            WorldOptions =
+            [
+                World("Aether", "Siren", 10, 100)
+            ]
+        };
+
+        plan.CoverageSet = MarketCoverageBuilder.Build(plan);
+        var world = Assert.Single(plan.CoverageSet.SingleWorld!.Worlds);
+        plan.RecommendedWorld = plan.WorldOptions.Single(option => option.WorldName == world.WorldName);
+
+        Assert.NotNull(plan.CoverageSet);
+        Assert.Equal("Siren", plan.RecommendedWorld.WorldName);
+    }
+
     private static WorldShoppingSummary World(string dataCenter, string worldName, int quantity, long pricePerUnit)
     {
         return new WorldShoppingSummary
