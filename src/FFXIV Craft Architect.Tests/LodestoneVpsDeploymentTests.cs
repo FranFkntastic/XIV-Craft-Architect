@@ -33,6 +33,7 @@ public sealed class LodestoneVpsDeploymentTests
         Assert.Contains("sudo ln -sfn \"$release_dir\" \"$root/current\"", workflow);
         Assert.Contains("sudo systemctl restart craftarchitect-lodestone", workflow);
         Assert.Contains("systemctl is-active craftarchitect-lodestone", workflow);
+        Assert.Contains("for attempt in {1..30}", workflow);
         Assert.Contains("https://dev.xivcraftarchitect.com/api/lodestone/crafters/search", workflow);
     }
 

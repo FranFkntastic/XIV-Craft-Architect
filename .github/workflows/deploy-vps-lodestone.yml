@@ -73,7 +73,18 @@ jobs:
           sudo ln -sfn "$release_dir" "$root/current"
           sudo systemctl restart craftarchitect-lodestone
           systemctl is-active craftarchitect-lodestone
-          curl --fail --silent --show-error http://127.0.0.1:5128/ > /dev/null
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:5128/ > /dev/null; then
+              break
+            fi
+
+            if [[ "$attempt" == "30" ]]; then
+              journalctl -u craftarchitect-lodestone --no-pager -n 80
+              exit 1
+            fi
+
+            sleep 1
+          done
 
           rm -f "$archive" /tmp/deploy-lodestone-remote.sh
 
