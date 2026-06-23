@@ -10,6 +10,8 @@ public class TradeOperationsPersistenceContractTests
         Assert.Contains("const STORE_TRADE_COMPANY_PROFILES = 'tradeCompanyProfiles';", source);
         Assert.Contains("const STORE_TRADE_CRAFTERS = 'tradeCrafters';", source);
         Assert.Contains("const STORE_TRADE_ORDERS = 'tradeOrders';", source);
+        Assert.Contains("const STORE_TRADE_ORDER_CRAFT_SNAPSHOTS = 'tradeOrderCraftSnapshots';", source);
+        Assert.Contains("const STORE_TRADE_PAYROLL_DRAFTS = 'tradePayrollDrafts';", source);
         Assert.Contains("saveTradeCompanyProfile", source);
         Assert.Contains("loadTradeCompanyProfiles", source);
         Assert.Contains("saveTradeCrafter", source);
@@ -17,6 +19,15 @@ public class TradeOperationsPersistenceContractTests
         Assert.Contains("saveTradeOrder", source);
         Assert.Contains("loadTradeOrders", source);
         Assert.Contains("deleteTradeOrder", source);
+        Assert.Contains("saveTradeOrderCraftSnapshot", source);
+        Assert.Contains("loadTradeOrderCraftSnapshot", source);
+        Assert.Contains("loadTradeOrderCraftSnapshotsForCompany", source);
+        Assert.Contains("deleteTradeOrderCraftSnapshot", source);
+        Assert.Contains("saveTradePayrollDraft", source);
+        Assert.Contains("loadTradePayrollDrafts", source);
+        Assert.Contains("deleteTradePayrollDraft", source);
+        Assert.Contains("hasOrderCraftSnapshotsStore", source);
+        Assert.Contains("hasPayrollDraftsStore", source);
     }
 
     [Fact]
@@ -31,6 +42,15 @@ public class TradeOperationsPersistenceContractTests
         Assert.Contains("SaveTradeOrderAsync", source);
         Assert.Contains("LoadTradeOrdersAsync", source);
         Assert.Contains("DeleteTradeOrderAsync", source);
+        Assert.DoesNotContain("SaveTradeOrderCraftSnapshotAsync", source);
+        Assert.DoesNotContain("LoadTradeOrderCraftSnapshotAsync", source);
+        Assert.DoesNotContain("LoadTradeOrderCraftSnapshotsForCompanyAsync", source);
+        Assert.DoesNotContain("DeleteTradeOrderCraftSnapshotAsync", source);
+        Assert.Contains("SaveTradePayrollDraftAsync", source);
+        Assert.Contains("LoadTradePayrollDraftsAsync", source);
+        Assert.Contains("DeleteTradePayrollDraftAsync", source);
+        Assert.DoesNotContain("HasOrderCraftSnapshotsStore", source);
+        Assert.Contains("HasPayrollDraftsStore", source);
     }
 
     [Fact]

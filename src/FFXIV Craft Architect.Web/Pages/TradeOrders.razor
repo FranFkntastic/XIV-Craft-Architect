@@ -1,10 +1,19 @@
 @page "/trade/orders"
-@using FFXIV_Craft_Architect.Web.Shared.TablePrimitives
+@using System.Text
+@using FFXIV_Craft_Architect.Core.Helpers
 @inject AppState AppState
+@inject GarlandService GarlandService
 @inject TradeOrderDraftFactory TradeOrderDraftFactory
+@inject TradeOrderPricingWorkflowService TradeOrderPricingWorkflow
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject TradePayrollPersistenceService TradePayrollPersistence
+@inject WebPlanPersistenceService PlanPersistence
+@inject AcquisitionDecisionService AcquisitionDecisionService
+@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject IJSRuntime JSRuntime
+@inject NavigationManager NavigationManager
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-orders-page">
     @if (!AppState.SecretDebugToolsEnabled)
@@ -28,204 +37,622 @@
         }
         else
         {
-            <div class="trade-orders-layout">
-            <section class="trade-orders-main">
-                <div class="trade-orders-header">
-                    <div>
-                        <MudText Typo="Typo.h5">Orders</MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">@_companyProfile?.Name</MudText>
-                    </div>
-                    <MudButton Variant="Variant.Filled"
-                               Color="Color.Primary"
-                               StartIcon="@Icons.Material.Filled.Assignment"
-                               OnClick="PrepareOrderImport">
-                        Create Order from Active Craft Plan
-                    </MudButton>
-                </div>
-
-                @if (_pendingImport != null)
-                {
-                    <section class="trade-orders-panel">
-                        <MudText Typo="Typo.subtitle1">Suggested title</MudText>
-                        <div class="trade-orders-import-grid">
-                            <MudTextField @bind-Value="_newOrderTitle"
-                                          Label="Order title"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          Immediate="true" />
-                            <MudSelect T="Guid?"
-                                       @bind-Value="_newOrderCrafterId"
-                                       Label="Assigned crafter"
-                                       Variant="Variant.Outlined"
-                                       Margin="Margin.Dense"
-                                       Clearable="true">
-                                @foreach (var crafter in _crafters)
-                                {
-                                    <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
-                                }
-                            </MudSelect>
-                            <MudButton Variant="Variant.Filled"
+            <div class="trade-orders-board">
+                <aside class="trade-orders-rail">
+                    <div class="trade-orders-rail-header">
+                        <MudText Typo="Typo.subtitle1">Orders</MudText>
+                        <MudIconButton Icon="@Icons.Material.Filled.Add"
                                        Color="Color.Primary"
-                                       OnClick="CreatePendingOrderAsync"
-                                       Disabled="@string.IsNullOrWhiteSpace(_newOrderTitle)">
-                                Confirm Order
-                            </MudButton>
-                        </div>
-                    </section>
-                }
-
-                @foreach (var status in TradeOrderStatusWorkflow.ActiveStatuses.Where(status => status != TradeOrderStatus.Draft))
-                {
-                    var group = GetOrdersForStatus(status);
-                    <section class="trade-orders-group">
-                        <div class="trade-orders-group-title">
-                            <MudText Typo="Typo.subtitle1">@FormatStatus(status)</MudText>
-                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@group.Count.ToString("N0")</MudChip>
-                        </div>
-                        <WebDataTable TItem="TradeOrder"
-                                      TColumnId="TradeOrderColumn"
-                                      Items="group"
-                                      Columns="Columns"
-                                      GetRowKey="GetOrderKey"
-                                      CssClass="trade-orders-table">
-                            <EmptyContent>
-                                <span>No orders in @FormatStatus(status).</span>
-                            </EmptyContent>
-                        </WebDataTable>
-                    </section>
-                }
-
-                <section class="trade-orders-group">
-                    <div class="trade-orders-group-title">
-                        <MudText Typo="Typo.subtitle1">Archive</MudText>
-                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@ArchivedOrders.Count.ToString("N0")</MudChip>
+                                       Size="Size.Small"
+                                       OnClick="StartNewOrderWorkspace"
+                                       aria-label="New order" />
                     </div>
-                    <WebDataTable TItem="TradeOrder"
-                                  TColumnId="TradeOrderColumn"
-                                  Items="ArchivedOrders"
-                                  Columns="Columns"
-                                  GetRowKey="GetOrderKey"
-                                  CssClass="trade-orders-table">
-                        <EmptyContent>
-                            <span>No completed or canceled orders.</span>
-                        </EmptyContent>
-                    </WebDataTable>
-                </section>
-            </section>
+                    <MudTextField @bind-Value="_orderSearchText"
+                                  Placeholder="Search orders"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Search" />
+                    <div class="trade-orders-rail-scroll">
+                        @if (ActiveOrderGroups.Count == 0 && ArchivedOrders.Count == 0)
+                        {
+                            <div class="trade-orders-rail-empty">No orders yet.</div>
+                        }
+                        else if (FilteredActiveOrderGroups.Count == 0 && FilteredArchivedOrders.Count == 0)
+                        {
+                            <div class="trade-orders-rail-empty">No matching orders.</div>
+                        }
+                        @foreach (var group in FilteredActiveOrderGroups)
+                        {
+                            <section class="trade-orders-rail-group">
+                                <button type="button"
+                                        class="trade-orders-rail-group-title"
+                                        @onclick="@(() => ToggleStatusGroup(group.Status))"
+                                        aria-expanded="@(!IsStatusGroupCollapsed(group.Status))">
+                                    <span>
+                                        <MudIcon Icon="@(IsStatusGroupCollapsed(group.Status) ? Icons.Material.Filled.ChevronRight : Icons.Material.Filled.ExpandMore)" Size="Size.Small" />
+                                        @FormatStatus(group.Status)
+                                    </span>
+                                    <span class="trade-orders-count-chip">@group.Orders.Count.ToString("N0")</span>
+                                </button>
+                                @if (!IsStatusGroupCollapsed(group.Status))
+                                {
+                                    <div class="trade-orders-rail-list">
+                                        @foreach (var order in group.Orders)
+                                        {
+                                            <button type="button"
+                                                    class="@GetRailOrderClass(order)"
+                                                    @onclick="() => SelectOrder(order)">
+                                                <span class="trade-orders-rail-title">@order.Title</span>
+                                                <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
+                                                <span class="trade-orders-status-chip">@FormatRailStatusChip(order)</span>
+                                            </button>
+                                        }
+                                    </div>
+                                }
+                            </section>
+                        }
+                        @if (FilteredArchivedOrders.Count > 0)
+                        {
+                            <section class="trade-orders-rail-group">
+                                <button type="button"
+                                        class="trade-orders-rail-group-title"
+                                        @onclick="ToggleArchiveGroup"
+                                        aria-expanded="@(!_isArchiveCollapsed)">
+                                    <span>
+                                        <MudIcon Icon="@(_isArchiveCollapsed ? Icons.Material.Filled.ChevronRight : Icons.Material.Filled.ExpandMore)" Size="Size.Small" />
+                                        Archive
+                                    </span>
+                                    <span class="trade-orders-count-chip">@FilteredArchivedOrders.Count.ToString("N0")</span>
+                                </button>
+                                @if (!_isArchiveCollapsed)
+                                {
+                                    <div class="trade-orders-rail-list">
+                                        @foreach (var order in FilteredArchivedOrders)
+                                        {
+                                            <button type="button"
+                                                    class="@GetRailOrderClass(order)"
+                                                    @onclick="() => SelectOrder(order)">
+                                                <span class="trade-orders-rail-title">@order.Title</span>
+                                                <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
+                                                <span class="trade-orders-status-chip">@FormatRailStatusChip(order)</span>
+                                            </button>
+                                        }
+                                    </div>
+                                }
+                            </section>
+                        }
+                    </div>
+                </aside>
 
-            <aside class="trade-orders-detail">
-                @if (_selectedOrder == null)
-                {
-                    <section class="trade-orders-panel">
-                        <MudText Typo="Typo.subtitle1">Order Details</MudText>
-                        <MudText Typo="Typo.body2" Color="Color.Secondary">Select an order to inspect status, assignment, breakdown, and history.</MudText>
-                    </section>
-                }
-                else
-                {
-                    <section class="trade-orders-panel">
-                        <MudText Typo="Typo.subtitle1">Order Details</MudText>
-                        <MudTextField @bind-Value="_detailTitle"
-                                      Label="Title"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      Immediate="true" />
-                        <MudSelect T="Guid?"
-                                   @bind-Value="_detailCrafterId"
-                                   Label="Assigned crafter"
-                                   Variant="Variant.Outlined"
-                                   Margin="Margin.Dense"
-                                   Clearable="true">
-                            @foreach (var crafter in _crafters)
-                            {
-                                <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
-                            }
-                        </MudSelect>
-                        <MudSelect T="TradeOrderStatus"
-                                   @bind-Value="_detailStatus"
-                                   Label="Change status"
-                                   Variant="Variant.Outlined"
-                                   Margin="Margin.Dense">
-                            @foreach (var status in TradeOrderStatusWorkflow.ActiveStatuses.Where(status => status != TradeOrderStatus.Draft))
-                            {
-                                <MudSelectItem Value="@status">@FormatStatus(status)</MudSelectItem>
-                            }
-                        </MudSelect>
-                        <MudTextField @bind-Value="_detailNotes"
-                                      Label="Notes"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      Lines="3" />
-                        <MudButton Variant="Variant.Filled"
-                                   Color="Color.Primary"
-                                   FullWidth="true"
-                                   OnClick="SaveSelectedOrderAsync">
-                            Save Details
-                        </MudButton>
-                    </section>
+                <main class="trade-orders-workspace">
+                    @if (_pendingImport != null)
+                    {
+                        <section class="trade-orders-workspace-card is-import">
+                            <div class="trade-orders-workspace-header">
+                                <div>
+                                    <MudText Typo="Typo.overline">Active Craft Plan</MudText>
+                                    <MudText Typo="Typo.h6">Create Order</MudText>
+                                </div>
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           OnClick="CreatePendingOrderAsync"
+                                           Disabled="@string.IsNullOrWhiteSpace(_newOrderTitle)">
+                                    Save Order
+                                </MudButton>
+                            </div>
+                            <div class="trade-orders-editor-grid">
+                                <MudTextField @bind-Value="_newOrderTitle"
+                                              Label="Order title"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Immediate="true" />
+                                <MudSelect T="Guid?"
+                                           @bind-Value="_newOrderCrafterId"
+                                           Label="Assigned crafter"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense"
+                                           Clearable="true">
+                                    @foreach (var crafter in _crafters)
+                                    {
+                                        <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </div>
+                            <section class="trade-orders-work-section">
+                                <MudText Typo="Typo.subtitle2">Requested Outputs</MudText>
+                                <div class="trade-orders-breakdown-table">
+                                    <div class="trade-orders-breakdown-header">
+                                        <span>Item</span>
+                                        <span>Qty</span>
+                                        <span>HQ</span>
+                                    </div>
+                                    @foreach (var item in GetOrderRootItems(_pendingImport))
+                                    {
+                                        <div class="trade-orders-breakdown-row">
+                                            <span>@item.Name</span>
+                                            <span>@TradeDisplayFormatter.FormatQuantity(item.Quantity)</span>
+                                            <span>@FormatHq(item.MustBeHq)</span>
+                                        </div>
+                                    }
+                                </div>
+                            </section>
+                        </section>
+                    }
+                    else if (_showNewOrderPanel || _selectedOrder == null)
+                    {
+                        <section class="trade-orders-workspace-card is-new">
+                            <div class="trade-orders-workspace-header">
+                                <div>
+                                    <MudText Typo="Typo.overline">New Order</MudText>
+                                    <MudText Typo="Typo.h6">Requested Outputs</MudText>
+                                </div>
+                                <div class="trade-orders-workspace-actions">
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Secondary"
+                                               StartIcon="@Icons.Material.Filled.Clear"
+                                               OnClick="ResetNewOrderDraft">
+                                        Clear
+                                    </MudButton>
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Secondary"
+                                               StartIcon="@Icons.Material.Filled.Assignment"
+                                               OnClick="PrepareOrderImport">
+                                        Create From Active Plan
+                                    </MudButton>
+                                    <MudButton Variant="Variant.Filled"
+                                               Color="Color.Primary"
+                                               OnClick="CreateRequestedOrderAsync"
+                                               Disabled="@(!CanCreateRequestedOrder || _isCreatingRequestedOrder)">
+                                        @(_isCreatingRequestedOrder ? "Creating..." : "Save Order")
+                                    </MudButton>
+                                </div>
+                            </div>
+                            <div class="trade-orders-editor-grid">
+                                <MudTextField T="string"
+                                              Value="@_newRequestedOrderTitle"
+                                              ValueChanged="value => OnRequestedOrderTitleChanged(value)"
+                                              Label="Order title"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Immediate="true" />
+                                <MudSelect T="Guid?"
+                                           @bind-Value="_newRequestedOrderCrafterId"
+                                           Label="Assigned crafter"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense"
+                                           Clearable="true">
+                                    @foreach (var crafter in _crafters)
+                                    {
+                                        <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
+                                    }
+                                </MudSelect>
+                                <MudTextField @bind-Value="_newRequestedOrderNotes"
+                                              Label="Notes"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Lines="1" />
+                            </div>
+                            <section class="trade-orders-work-section">
+                                <div class="trade-orders-search-row">
+                                    <MudTextField @bind-Value="_requestedOrderSearchQuery"
+                                                  Label="Add output item"
+                                                  Variant="Variant.Outlined"
+                                                  Margin="Margin.Dense"
+                                                  Immediate="true"
+                                                  OnKeyUp="OnRequestedOrderSearchKeyUp" />
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Secondary"
+                                               OnClick="SearchRequestedOrderItemsAsync"
+                                               Disabled="@(_isSearchingRequestedOrderItems || string.IsNullOrWhiteSpace(_requestedOrderSearchQuery))">
+                                        @(_isSearchingRequestedOrderItems ? "Searching..." : "Search")
+                                    </MudButton>
+                                </div>
+                                @if (_requestedOrderSearchResults.Count > 0)
+                                {
+                                    <div class="trade-orders-search-results">
+                                        @foreach (var result in _requestedOrderSearchResults)
+                                        {
+                                            <button type="button"
+                                                    class="trade-orders-search-result"
+                                                    @onclick="() => AddRequestedOrderOutput(result)">
+                                                <span>@result.Object.Name</span>
+                                                <span>ID @result.Id</span>
+                                            </button>
+                                        }
+                                    </div>
+                                }
+                                <div class="trade-orders-output-table">
+                                    <div class="trade-orders-output-header">
+                                        <span>Item</span>
+                                        <span>Qty</span>
+                                        <span>HQ</span>
+                                        <span></span>
+                                    </div>
+                                    @if (_requestedOrderOutputs.Count == 0)
+                                    {
+                                        <div class="trade-orders-output-empty">Add at least one requested output.</div>
+                                    }
+                                    else
+                                    {
+                                        @foreach (var output in _requestedOrderOutputs)
+                                        {
+                                            <div class="trade-orders-output-row">
+                                                <span>@output.Name</span>
+                                                <MudNumericField T="int"
+                                                                 Value="@output.Quantity"
+                                                                 ValueChanged="quantity => UpdateRequestedOrderOutputQuantity(output, quantity)"
+                                                                 Min="1"
+                                                                 Max="9999"
+                                                                 Variant="Variant.Outlined"
+                                                                 Margin="Margin.Dense" />
+                                                <MudCheckBox T="bool"
+                                                             Value="@output.MustBeHq"
+                                                             ValueChanged="mustBeHq => UpdateRequestedOrderOutputHq(output, mustBeHq)"
+                                                             Color="Color.Primary" />
+                                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                               Color="Color.Error"
+                                                               Size="Size.Small"
+                                                               OnClick="() => RemoveRequestedOrderOutput(output)" />
+                                            </div>
+                                        }
+                                    }
+                                </div>
+                            </section>
+                        </section>
+                    }
+                    else
+                    {
+                        <section class="trade-orders-workspace-card">
+                            <div class="trade-orders-workspace-header">
+                                <div>
+                                    <MudText Typo="Typo.overline">Selected Order</MudText>
+                                    <MudText Typo="Typo.h6">@_selectedOrder.Title</MudText>
+                                </div>
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           OnClick="SaveSelectedOrderAsync"
+                                           Disabled="@(IsSelectedOrderArchived || string.IsNullOrWhiteSpace(_detailTitle))">
+                                    Save Order
+                                </MudButton>
+                            </div>
+                            <div class="trade-orders-editor-grid">
+                                <MudTextField @bind-Value="_detailTitle"
+                                              Label="Order title"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Immediate="true"
+                                              Disabled="@IsSelectedOrderArchived" />
+                                <MudSelect T="Guid?"
+                                           @bind-Value="_detailCrafterId"
+                                           Label="Assigned crafter"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense"
+                                           Clearable="true"
+                                           Disabled="@IsSelectedOrderArchived">
+                                    @foreach (var crafter in _crafters)
+                                    {
+                                        <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
+                                    }
+                                </MudSelect>
+                                <MudTextField @bind-Value="_detailNotes"
+                                              Label="Notes"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Lines="1"
+                                              Disabled="@IsSelectedOrderArchived" />
+                            </div>
+                            <section class="trade-orders-work-section">
+                                <MudText Typo="Typo.subtitle2">Requested Outputs</MudText>
+                                <div class="trade-orders-breakdown-table">
+                                    <div class="trade-orders-breakdown-header">
+                                        <span>Item</span>
+                                        <span>Qty</span>
+                                        <span>HQ</span>
+                                    </div>
+                                    @foreach (var item in GetOrderRootItems(_selectedOrder))
+                                    {
+                                        <div class="trade-orders-breakdown-row">
+                                            <span>@item.Name</span>
+                                            <span>@TradeDisplayFormatter.FormatQuantity(item.Quantity)</span>
+                                            <span>@FormatHq(item.MustBeHq)</span>
+                                        </div>
+                                    }
+                                </div>
+                            </section>
+                            <section class="trade-orders-work-section">
+                                <div class="trade-orders-section-heading">
+                                    <MudText Typo="Typo.subtitle2">Craft Architect Pipeline</MudText>
+                                </div>
+                                <div class="trade-orders-pipeline">
+                                    <div class="@GetPipelineStageClass(GetOrderRootItems(_selectedOrder).Count > 0)">
+                                        <span>1 - Order request</span>
+                                        <strong>@(GetOrderRootItems(_selectedOrder).Count > 0 ? "Outputs captured" : "Add requested outputs")</strong>
+                                    </div>
+                                    <div class="@GetPipelineStageClass(HasLinkedCraftPlan(_selectedOrder), !HasLinkedCraftPlan(_selectedOrder))">
+                                        <span>2 - Craft plan</span>
+                                        <strong>@(HasLinkedCraftPlan(_selectedOrder) ? "Linked plan saved" : "Craft plan missing")</strong>
+                                    </div>
+                                    <div class="@GetPipelineStageClass(HasProcurementEvidence(_selectedOrder), HasMaterialBreakdown(_selectedOrder) && !HasProcurementEvidence(_selectedOrder))">
+                                        <span>3 - Procurement evidence</span>
+                                        <strong>@(HasProcurementEvidence(_selectedOrder) ? "Priced evidence available" : "Pricing evidence missing")</strong>
+                                    </div>
+                                    <div class="@GetPipelineStageClass(IsPaymentReady(_selectedOrder))">
+                                        <span>4 - Settlement</span>
+                                        <strong>@GetSettlementStageLabel(_selectedOrder)</strong>
+                                    </div>
+                                </div>
+                            </section>
+                            <section class="trade-orders-work-section">
+                                <div class="trade-orders-section-heading">
+                                    <MudText Typo="Typo.subtitle2">Linked Craft Plan</MudText>
+                                    <div class="trade-orders-section-actions">
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.Build"
+                                                   OnClick="CreateOrReplaceSelectedOrderCraftPlanAsync"
+                                                   Disabled="@(_isSavingSelectedOrderCraftPlan || _isRepricingSelectedOrder || IsSelectedOrderArchived || GetOrderRootItems(_selectedOrder).Count == 0)">
+                                            @GetCraftPlanBuildButtonText(_selectedOrder)
+                                        </MudButton>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.PriceCheck"
+                                                   OnClick="RepriceSelectedOrderAsync"
+                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || !HasLinkedCraftPlan(_selectedOrder))">
+                                            @(_isRepricingSelectedOrder ? "Repricing..." : "Reprice Order")
+                                        </MudButton>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.OpenInNew"
+                                                   OnClick="OpenSelectedOrderCraftPlanAsync"
+                                                   Disabled="@(_isOpeningSelectedOrderCraftPlan || !HasLinkedCraftPlan(_selectedOrder))">
+                                            @(_isOpeningSelectedOrderCraftPlan ? "Opening..." : "Open Craft Plan")
+                                        </MudButton>
+                                    </div>
+                                </div>
+                                <div class="trade-orders-linked-plan-grid">
+                                    <div>
+                                        <span>Plan</span>
+                                        <strong>@GetLinkedCraftPlanName(_selectedOrder)</strong>
+                                    </div>
+                                    <div>
+                                        <span>Procurement evidence</span>
+                                        <strong>@GetProcurementEvidenceLabel(_selectedOrder)</strong>
+                                    </div>
+                                    <div>
+                                        <span>Last saved</span>
+                                        <strong>@FormatLinkedCraftPlanDate(_selectedOrder)</strong>
+                                    </div>
+                                </div>
+                            </section>
+                        </section>
+                    }
+                </main>
 
-                    <section class="trade-orders-panel">
-                        <MudText Typo="Typo.subtitle1">Breakdown</MudText>
-                        <ul class="trade-orders-list">
-                            @foreach (var item in _selectedOrder.SourceSnapshot.RootItems)
-                            {
-                                <li>@item.Name x@item.Quantity @FormatHq(item.MustBeHq)</li>
-                            }
-                        </ul>
-                    </section>
-
-                    <section class="trade-orders-panel">
-                        <MudText Typo="Typo.subtitle1">History</MudText>
-                        <div class="trade-orders-note-row">
-                            <MudTextField @bind-Value="_manualNote"
-                                          Label="Add Note"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          Lines="2" />
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Secondary"
-                                       OnClick="AddManualNoteAsync"
-                                       Disabled="@string.IsNullOrWhiteSpace(_manualNote)">
-                                Add Note
-                            </MudButton>
+                <aside class="trade-orders-ops">
+                    @if (_selectedOrder == null)
+                    {
+                        <section class="trade-orders-panel">
+                            <MudText Typo="Typo.subtitle1">Operations</MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">Select an order to view payment, procurement, and history.</MudText>
+                        </section>
+                    }
+                    else
+                    {
+                        var paymentSummary = GetSelectedOrderPaymentSummary();
+                        <div class="trade-orders-ops-header">
+                            <div>
+                                <MudText Typo="Typo.subtitle1">@_selectedOrder.Title</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@GetLatestHistoryCue(_selectedOrder)</MudText>
+                            </div>
                         </div>
-                        <ul class="trade-orders-history">
-                            @foreach (var item in _selectedOrder.History.OrderByDescending(item => item.CreatedAtUtc))
-                            {
-                                <li><strong>@FormatHistoryKind(item.Kind)</strong> @item.Note</li>
-                            }
-                        </ul>
-                    </section>
-
-                    <section class="trade-orders-panel">
-                        <MudText Typo="Typo.subtitle1">Close Order</MudText>
-                        @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
-                        {
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Secondary"
-                                       FullWidth="true"
-                                       OnClick="ReopenSelectedOrderAsync">
-                                Reopen Order
-                            </MudButton>
-                        }
-                        else
-                        {
-                            <MudButton Variant="Variant.Filled"
-                                       Color="Color.Success"
-                                       FullWidth="true"
-                                       OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Completed))">
-                                Complete Order
-                            </MudButton>
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Error"
-                                       FullWidth="true"
-                                       OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled))">
-                                Cancel Order
-                            </MudButton>
-                        }
-                    </section>
-                }
-            </aside>
+                        <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="trade-orders-tab-panel" @bind-ActivePanelIndex="_activeOpsTab">
+                            <MudTabPanel Text="Payment">
+                                <div class="trade-orders-payment-metrics">
+                                    <div class="trade-orders-payment-metric">
+                                        <span>Payment amount</span>
+                                        <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
+                                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       Disabled="@(paymentSummary.TotalPayment <= 0)"
+                                                       OnClick='@(() => CopyGilAmountAsync(paymentSummary.TotalPayment, "Payment amount copied"))'
+                                                       aria-label="Copy payment amount" />
+                                    </div>
+                                    <div class="trade-orders-payment-metric">
+                                        <span>Total estimated procurement</span>
+                                        <strong>@FormatGil(paymentSummary.EstimatedProcurementTotal)</strong>
+                                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       Disabled="@(paymentSummary.EstimatedProcurementTotal <= 0)"
+                                                       OnClick='@(() => CopyGilAmountAsync(paymentSummary.EstimatedProcurementTotal, "Procurement estimate copied"))'
+                                                       aria-label="Copy procurement amount" />
+                                    </div>
+                                </div>
+                                @if (paymentSummary.Materials.Count > 0 && paymentSummary.EstimatedProcurementTotal <= 0)
+                                {
+                                    <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">Material lines are captured, but pricing evidence is missing. Run market analysis from the linked craft plan before using payment totals.</MudAlert>
+                                }
+                                @if (paymentSummary.Materials.Count > 0)
+                                {
+                                    <div class="trade-orders-payment-subtotals">
+                                        <div>
+                                            <span>Crafter procures</span>
+                                            <strong>@FormatGil(paymentSummary.MaterialReimbursementTotal)</strong>
+                                        </div>
+                                        <div>
+                                            <span>Provided by company</span>
+                                            <strong>@FormatGil(paymentSummary.ProvidedMaterialTotal)</strong>
+                                        </div>
+                                        <div>
+                                            <span>Commission (@paymentSummary.CommissionPercent.ToString("N0")%)</span>
+                                            <strong>@FormatGil(paymentSummary.CommissionAmount)</strong>
+                                        </div>
+                                    </div>
+                                    <div class="trade-orders-payment-heading">
+                                        <MudText Typo="Typo.subtitle2">Material Responsibility</MudText>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.ContentCopy"
+                                                   OnClick="CopyOrderPaymentSummaryAsync">
+                                            Copy Summary
+                                        </MudButton>
+                                    </div>
+                                    <div class="trade-orders-material-table is-compact">
+                                        <div class="trade-orders-material-header">
+                                            <span>Item</span>
+                                            <span>Qty</span>
+                                            <span>Resp.</span>
+                                        </div>
+                                        @foreach (var material in paymentSummary.Materials)
+                                        {
+                                            <div class="trade-orders-material-row" @key="GetPaymentMaterialKey(material)">
+                                                <span class="trade-orders-material-cell">
+                                                    <strong>@material.Name</strong>
+                                                    @if (material.RequiresHq)
+                                                    {
+                                                        <span class="trade-orders-hq">HQ</span>
+                                                    }
+                                                </span>
+                                                <span>@TradeDisplayFormatter.FormatQuantity(material.Quantity)</span>
+                                                <MudSelect T="CommissionMaterialResponsibility"
+                                                           Value="material.Responsibility"
+                                                           ValueChanged="value => SetOrderMaterialResponsibilityAsync(material, value)"
+                                                           Dense="true"
+                                                           Margin="Margin.Dense"
+                                                           Variant="Variant.Outlined"
+                                                           Disabled="@IsSelectedOrderArchived"
+                                                           aria-label="@($"{material.Name} material responsibility")">
+                                                    <MudSelectItem Value="@CommissionMaterialResponsibility.Crafter">Crafter</MudSelectItem>
+                                                    <MudSelectItem Value="@CommissionMaterialResponsibility.Provided">Provided</MudSelectItem>
+                                                </MudSelect>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else
+                                {
+                                    <MudAlert Severity="Severity.Info" Dense="true">Create a linked craft plan, then run market analysis to populate payment evidence.</MudAlert>
+                                }
+                                <section class="trade-orders-status-panel">
+                                    <MudText Typo="Typo.subtitle2">Status</MudText>
+                                    @if (IsSelectedOrderArchived)
+                                    {
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary">Archived as @FormatStatus(_selectedOrder.Status).</MudText>
+                                    }
+                                    else
+                                    {
+                                        <MudSelect T="TradeOrderStatus"
+                                                   @bind-Value="_detailStatus"
+                                                   Label="Order status"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense">
+                                            @foreach (var status in TradeOrderStatusWorkflow.ActiveStatuses.Where(status => status != TradeOrderStatus.Draft))
+                                            {
+                                                <MudSelectItem Value="@status">@FormatStatus(status)</MudSelectItem>
+                                            }
+                                        </MudSelect>
+                                        <MudButton Variant="Variant.Filled"
+                                                   Color="Color.Primary"
+                                                   FullWidth="true"
+                                                   OnClick="SaveSelectedOrderAsync"
+                                                   Disabled="@(string.IsNullOrWhiteSpace(_detailTitle))">
+                                            Save Status
+                                        </MudButton>
+                                    }
+                                </section>
+                                <section class="trade-orders-close-panel">
+                                    <MudText Typo="Typo.subtitle2">Close Order</MudText>
+                                    @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+                                    {
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   FullWidth="true"
+                                                   OnClick="ReopenSelectedOrderAsync">
+                                            Reopen Order
+                                        </MudButton>
+                                    }
+                                    else
+                                    {
+                                        <MudButton Variant="Variant.Filled"
+                                                   Color="Color.Success"
+                                                   FullWidth="true"
+                                                   OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Completed))">
+                                            Complete Order
+                                        </MudButton>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Error"
+                                                   FullWidth="true"
+                                                   OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled))">
+                                            Cancel Order
+                                        </MudButton>
+                                    }
+                                </section>
+                            </MudTabPanel>
+                            <MudTabPanel Text="Procurement">
+                                <MudText Typo="Typo.subtitle2">Procurement Evidence</MudText>
+                                @{
+                                    var procurementRows = GetSelectedOrderProcurementRows();
+                                }
+                                @if (procurementRows.Count == 0)
+                                {
+                                    <MudAlert Severity="Severity.Info" Dense="true">No material evidence has been captured for this order yet.</MudAlert>
+                                }
+                                else
+                                {
+                                    <WebGridTable TItem="TradeOrderProcurementRow"
+                                                  TColumnId="TradeOrderProcurementColumn"
+                                                  CssClass="trade-orders-procurement-grid"
+                                                  Items="@GetOrderedProcurementRows(procurementRows)"
+                                                  Columns="@GetProcurementColumns()"
+                                                  GetRowKey="row => row.RowKey"
+                                                  SortState="@_procurementSortState"
+                                                  SortChanged="OnProcurementSortChanged"
+                                                  ColumnGapPx="4"
+                                                  HorizontalPaddingPx="8" />
+                                    @if (paymentSummary.Warnings.Count > 0)
+                                    {
+                                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">
+                                            <ul class="trade-orders-warning-list">
+                                                @foreach (var warning in paymentSummary.Warnings)
+                                                {
+                                                    <li>@warning</li>
+                                                }
+                                            </ul>
+                                        </MudAlert>
+                                    }
+                                }
+                            </MudTabPanel>
+                            <MudTabPanel Text="History">
+                                <div class="trade-orders-note-row">
+                                    <MudTextField @bind-Value="_manualNote"
+                                                  Label="Add Note"
+                                                  Variant="Variant.Outlined"
+                                                  Margin="Margin.Dense"
+                                                  Lines="2" />
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Secondary"
+                                               OnClick="AddManualNoteAsync"
+                                               Disabled="@string.IsNullOrWhiteSpace(_manualNote)">
+                                        Add Note
+                                    </MudButton>
+                                </div>
+                                <ul class="trade-orders-history">
+                                    @foreach (var item in _selectedOrder.History.OrderByDescending(item => item.CreatedAtUtc))
+                                    {
+                                        <li><strong>@FormatHistoryKind(item.Kind)</strong> @item.Note</li>
+                                    }
+                                </ul>
+                            </MudTabPanel>
+                        </MudTabs>
+                    }
+                </aside>
             </div>
         }
     }
@@ -235,50 +662,62 @@
     private TradeCompanyProfile? _companyProfile;
     private List<TradeCrafterProfile> _crafters = [];
     private List<TradeOrder> _orders = [];
+    private List<TradePayrollWorkflowDraft> _payrollDrafts = [];
     private TradeOrder? _pendingImport;
     private TradeOrder? _selectedOrder;
+    private bool _showNewOrderPanel;
     private string _newOrderTitle = string.Empty;
     private Guid? _newOrderCrafterId;
+    private string _newRequestedOrderTitle = string.Empty;
+    private bool _usingSuggestedRequestedOrderTitle;
+    private Guid? _newRequestedOrderCrafterId;
+    private string? _newRequestedOrderNotes;
+    private string _requestedOrderSearchQuery = string.Empty;
+    private string _orderSearchText = string.Empty;
+    private bool _isSearchingRequestedOrderItems;
+    private bool _isCreatingRequestedOrder;
+    private bool _isOpeningSelectedOrderCraftPlan;
+    private bool _isRepricingSelectedOrder;
+    private bool _isSavingSelectedOrderCraftPlan;
+    private int _activeOpsTab;
+    private WebTableSortState<TradeOrderProcurementColumn> _procurementSortState =
+        WebTableSortState<TradeOrderProcurementColumn>.Unsorted;
+    private List<GarlandSearchResult> _requestedOrderSearchResults = [];
+    private List<RequestedOrderOutputEditor> _requestedOrderOutputs = [];
     private string _detailTitle = string.Empty;
     private Guid? _detailCrafterId;
     private TradeOrderStatus _detailStatus;
     private string? _detailNotes;
     private string _manualNote = string.Empty;
     private string? _loadError;
+    private Guid? _pendingNavigationOrderId;
+    private bool _isArchiveCollapsed = true;
+    private HashSet<TradeOrderStatus> _collapsedStatuses = [];
 
-    private IReadOnlyList<WebTableColumn<TradeOrder, TradeOrderColumn>> Columns => CreateColumns();
+    private bool CanCreateRequestedOrder =>
+        !string.IsNullOrWhiteSpace(_newRequestedOrderTitle) &&
+        _requestedOrderOutputs.Any(output => output.Quantity > 0);
+
+    private IReadOnlyList<OrderStatusGroup> ActiveOrderGroups => TradeOrderStatusWorkflow.ActiveStatuses
+        .Where(status => status != TradeOrderStatus.Draft)
+        .Select(status => new OrderStatusGroup(status, GetOrdersForStatus(status)))
+        .Where(group => group.Orders.Count > 0)
+        .ToArray();
 
     private IReadOnlyList<TradeOrder> ArchivedOrders => _orders
         .Where(order => TradeOrderStatusWorkflow.IsArchived(order.Status))
         .OrderByDescending(order => order.CommissionedAtUtc)
         .ToArray();
 
-    private IReadOnlyList<WebTableColumn<TradeOrder, TradeOrderColumn>> CreateColumns()
-    {
-        return
-        [
-            WebTableColumn<TradeOrder, TradeOrderColumn>.Text(TradeOrderColumn.Title, "Order", order => order.Title, widthPx: 260),
-            WebTableColumn<TradeOrder, TradeOrderColumn>.Text(TradeOrderColumn.Commissioned, "Commissioned", order => order.CommissionedAtUtc.ToLocalTime().ToString("g"), widthPx: 160),
-            WebTableColumn<TradeOrder, TradeOrderColumn>.Text(TradeOrderColumn.Crafter, "Crafter", FormatAssignedCrafter, widthPx: 140),
-            WebTableColumn<TradeOrder, TradeOrderColumn>.Text(TradeOrderColumn.Items, "Items", order => order.SourceSnapshot.RootItems.Count.ToString("N0"), widthPx: 80),
-            new WebTableColumn<TradeOrder, TradeOrderColumn>
-            {
-                Id = TradeOrderColumn.Action,
-                Header = "Details",
-                Size = new WebTableColumnSize(110, 90),
-                Sortable = false,
-                CellTemplate = order => builder =>
-                {
-                    builder.OpenComponent<MudButton>(0);
-                    builder.AddAttribute(1, "Size", Size.Small);
-                    builder.AddAttribute(2, "Variant", Variant.Text);
-                    builder.AddAttribute(3, "OnClick", EventCallback.Factory.Create(this, () => SelectOrder(order)));
-                    builder.AddContent(4, "Open");
-                    builder.CloseComponent();
-                }
-            }
-        ];
-    }
+    private IReadOnlyList<OrderStatusGroup> FilteredActiveOrderGroups => TradeOrderStatusWorkflow.ActiveStatuses
+        .Where(status => status != TradeOrderStatus.Draft)
+        .Select(status => new OrderStatusGroup(status, GetOrdersForStatus(status).Where(OrderMatchesSearch).ToArray()))
+        .Where(group => group.Orders.Count > 0)
+        .ToArray();
+
+    private IReadOnlyList<TradeOrder> FilteredArchivedOrders => ArchivedOrders
+        .Where(OrderMatchesSearch)
+        .ToArray();
 
     protected override async Task OnInitializedAsync()
     {
@@ -287,6 +726,7 @@
             return;
         }
 
+        _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
         await LoadAsync();
     }
 
@@ -298,16 +738,30 @@
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
+            _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(_companyProfile.Id)).ToList();
+            SelectPendingNavigationOrder();
         }
         catch (Exception ex)
         {
             _companyProfile = null;
             _crafters = [];
             _orders = [];
+            _payrollDrafts = [];
             _selectedOrder = null;
             _loadError = ex.Message;
             Snackbar.Add("Trade operations storage is unavailable.", Severity.Error);
         }
+    }
+
+    private async Task<bool> SaveOrderAndNotifyAsync(TradeOrder order)
+    {
+        var saved = await TradeOperationsPersistence.SaveOrderAsync(order);
+        if (saved)
+        {
+            AppState.NotifyTradeOperationsDataChanged();
+        }
+
+        return saved;
     }
 
     private void PrepareOrderImport()
@@ -331,6 +785,208 @@
 
         _pendingImport = result.Order;
         _newOrderTitle = result.Order.Title;
+        _selectedOrder = null;
+        _showNewOrderPanel = false;
+        AppState.SelectTradeOrder(null);
+        ClearSelectedOrderNavigation();
+    }
+
+    private void ToggleNewOrderPanel()
+    {
+        StartNewOrderWorkspace();
+    }
+
+    private void StartNewOrderWorkspace()
+    {
+        _pendingImport = null;
+        _selectedOrder = null;
+        _showNewOrderPanel = true;
+        _activeOpsTab = 0;
+        AppState.SelectTradeOrder(null);
+        ClearSelectedOrderNavigation();
+        if (string.IsNullOrWhiteSpace(_newRequestedOrderTitle))
+        {
+            RefreshRequestedOrderSuggestedTitle(force: true);
+        }
+    }
+
+    private void ResetNewOrderDraft()
+    {
+        _newRequestedOrderTitle = string.Empty;
+        _usingSuggestedRequestedOrderTitle = false;
+        _newRequestedOrderCrafterId = null;
+        _newRequestedOrderNotes = null;
+        _requestedOrderSearchQuery = string.Empty;
+        _requestedOrderSearchResults = [];
+        _requestedOrderOutputs = [];
+    }
+
+    private async Task SearchRequestedOrderItemsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_requestedOrderSearchQuery) || _isSearchingRequestedOrderItems)
+        {
+            return;
+        }
+
+        _isSearchingRequestedOrderItems = true;
+        _requestedOrderSearchResults = [];
+
+        try
+        {
+            _requestedOrderSearchResults = (await GarlandService.SearchAsync(_requestedOrderSearchQuery))
+                .Where(result => result.Id > 0 && !string.IsNullOrWhiteSpace(result.Object.Name))
+                .Take(8)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Item search failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSearchingRequestedOrderItems = false;
+        }
+    }
+
+    private Task OnRequestedOrderSearchKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            return SearchRequestedOrderItemsAsync();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void AddRequestedOrderOutput(GarlandSearchResult result)
+    {
+        var existing = _requestedOrderOutputs.FirstOrDefault(output => output.ItemId == result.Id);
+        if (existing != null)
+        {
+            existing.Quantity = Math.Min(9999, existing.Quantity + 1);
+        }
+        else
+        {
+            _requestedOrderOutputs.Add(new RequestedOrderOutputEditor
+            {
+                ItemId = result.Id,
+                Name = result.Object.Name,
+                Quantity = 1
+            });
+        }
+
+        _requestedOrderSearchQuery = string.Empty;
+        _requestedOrderSearchResults = [];
+        RefreshRequestedOrderSuggestedTitle(force: _usingSuggestedRequestedOrderTitle);
+    }
+
+    private Task OnRequestedOrderTitleChanged(string value)
+    {
+        _newRequestedOrderTitle = value;
+        _usingSuggestedRequestedOrderTitle = false;
+        return Task.CompletedTask;
+    }
+
+    private void UpdateRequestedOrderOutputQuantity(RequestedOrderOutputEditor output, int quantity)
+    {
+        output.Quantity = Math.Clamp(quantity, 1, 9999);
+        RefreshRequestedOrderSuggestedTitle(force: _usingSuggestedRequestedOrderTitle);
+    }
+
+    private void UpdateRequestedOrderOutputHq(RequestedOrderOutputEditor output, bool mustBeHq)
+    {
+        output.MustBeHq = mustBeHq;
+    }
+
+    private void RemoveRequestedOrderOutput(RequestedOrderOutputEditor output)
+    {
+        _requestedOrderOutputs.Remove(output);
+        RefreshRequestedOrderSuggestedTitle(force: _usingSuggestedRequestedOrderTitle);
+    }
+
+    private void RefreshRequestedOrderSuggestedTitle(bool force = false)
+    {
+        if ((!force && !string.IsNullOrWhiteSpace(_newRequestedOrderTitle)) || _requestedOrderOutputs.Count == 0)
+        {
+            return;
+        }
+
+        _newRequestedOrderTitle = TradeRequestedOrderWorkflow.CreateSuggestedTitle(ToRequestedOrderOutputs());
+        _usingSuggestedRequestedOrderTitle = true;
+    }
+
+    private async Task CreateRequestedOrderAsync()
+    {
+        if (_companyProfile == null || !CanCreateRequestedOrder || _isCreatingRequestedOrder)
+        {
+            return;
+        }
+
+        _isCreatingRequestedOrder = true;
+
+        try
+        {
+            if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+                "Creating this Trade order",
+                targetPlanId: null))
+            {
+                return;
+            }
+
+            var outputs = ToRequestedOrderOutputs();
+            var draftResult = TradeOrderDraftFactory.CreateFromRequestedOutputs(new TradeRequestedOrderCreateRequest(
+                _companyProfile.Id,
+                _newRequestedOrderCrafterId,
+                _newRequestedOrderTitle,
+                outputs,
+                AppState.SelectedDataCenter,
+                World: null,
+                _newRequestedOrderNotes,
+                DateTime.UtcNow));
+            if (!draftResult.CanCreate || draftResult.Order == null)
+            {
+                Snackbar.Add(draftResult.UnavailableReason ?? "Could not create Trade order.", Severity.Warning);
+                return;
+            }
+
+            var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
+                draftResult.Order,
+                new TradeOrderPricingWorkflowOptions(
+                    AppState.SelectedDataCenter,
+                    draftResult.Order.SourceSnapshot.World ?? string.Empty,
+                    ForceRefreshMarketData: false));
+            if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
+            {
+                Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
+                return;
+            }
+
+            var saved = await SaveOrderAndNotifyAsync(pricingResult.UpdatedOrder);
+            if (!saved)
+            {
+                Snackbar.Add("Failed to save Trade order.", Severity.Error);
+                return;
+            }
+
+            ResetNewOrderDraft();
+            _showNewOrderPanel = false;
+            await LoadAsync();
+            if (!string.IsNullOrWhiteSpace(_loadError) ||
+                !SelectOrderAfterReload(pricingResult.UpdatedOrder.Id, "Trade order was saved, but it could not be loaded."))
+            {
+                return;
+            }
+
+            Snackbar.Add("Trade order created and priced", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to create Trade order: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isCreatingRequestedOrder = false;
+        }
     }
 
     private async Task CreatePendingOrderAsync()
@@ -340,19 +996,36 @@
             return;
         }
 
-        var result = TradeOrderDraftFactory.CreateFromCurrentPlan(new TradeOrderCreateRequest(
-            AppState,
-            _companyProfile.Id,
-            _newOrderCrafterId,
-            _newOrderTitle,
-            DateTime.UtcNow));
-        if (!result.CanCreate || result.Order == null)
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_pendingImport);
+        var previousCrafterId = orderToSave.AssignedCrafterId;
+        orderToSave.Title = _newOrderTitle.Trim();
+        orderToSave.AssignedCrafterId = _newOrderCrafterId;
+        orderToSave.Status = _newOrderCrafterId.HasValue
+            ? TradeOrderStatus.Assigned
+            : TradeOrderStatus.ReadyToAssign;
+        orderToSave.UpdatedAtUtc = DateTime.UtcNow;
+        AddHistoryIfAssignmentChanged(orderToSave, previousCrafterId, _newOrderCrafterId);
+
+        if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+            "Creating this Trade order",
+            targetPlanId: orderToSave.CraftPlanId))
         {
-            Snackbar.Add(result.UnavailableReason ?? "Could not create order from the active plan.", Severity.Warning);
             return;
         }
 
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(result.Order);
+        var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
+            orderToSave,
+            new TradeOrderPricingWorkflowOptions(
+                GetOrderDataCenter(orderToSave),
+                orderToSave.SourceSnapshot.World ?? string.Empty,
+                ForceRefreshMarketData: false));
+        if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
+        {
+            Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
+            return;
+        }
+
+        var saved = await SaveOrderAndNotifyAsync(pricingResult.UpdatedOrder);
         if (!saved)
         {
             Snackbar.Add("Failed to save Trade order.", Severity.Error);
@@ -363,8 +1036,13 @@
         _newOrderTitle = string.Empty;
         _newOrderCrafterId = null;
         await LoadAsync();
-        SelectOrder(result.Order);
-        Snackbar.Add("Trade order created", Severity.Success);
+        if (!string.IsNullOrWhiteSpace(_loadError) ||
+            !SelectOrderAfterReload(pricingResult.UpdatedOrder.Id, "Trade order was saved, but it could not be loaded."))
+        {
+            return;
+        }
+
+        Snackbar.Add("Trade order created and priced", Severity.Success);
     }
 
     private IReadOnlyList<TradeOrder> GetOrdersForStatus(TradeOrderStatus status)
@@ -375,19 +1053,282 @@
             .ToArray();
     }
 
-    private static string GetOrderKey(TradeOrder order)
+    private bool OrderMatchesSearch(TradeOrder order)
     {
-        return order.Id.ToString("N");
+        if (string.IsNullOrWhiteSpace(_orderSearchText))
+        {
+            return true;
+        }
+
+        var query = _orderSearchText.Trim();
+        return order.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+            FormatAssignedCrafter(order).Contains(query, StringComparison.OrdinalIgnoreCase) ||
+            FormatStatus(order.Status).Contains(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string GetRailOrderClass(TradeOrder order)
+    {
+        return _selectedOrder?.Id == order.Id
+            ? "trade-orders-rail-order is-selected"
+            : "trade-orders-rail-order";
+    }
+
+    private string FormatOrderRailMeta(TradeOrder order)
+    {
+        return $"{FormatAssignedCrafter(order)} - {order.CommissionedAtUtc.ToLocalTime():yyyy-MM-dd}";
+    }
+
+    private static string FormatRailStatusChip(TradeOrder order)
+    {
+        return order.Status switch
+        {
+            TradeOrderStatus.ReadyToAssign => "New",
+            TradeOrderStatus.Assigned => "Pay",
+            TradeOrderStatus.InProgress => "Work",
+            TradeOrderStatus.AwaitingDelivery => "Deliver",
+            TradeOrderStatus.Completed => "Done",
+            TradeOrderStatus.Canceled => "Canceled",
+            _ => order.Status.ToString()
+        };
+    }
+
+    private static bool CanOpenCraftPlan(TradeOrder order)
+    {
+        return GetOrderRootItems(order).Any(item => item.Quantity > 0);
+    }
+
+    private static bool HasLinkedCraftPlan(TradeOrder order)
+    {
+        return !string.IsNullOrWhiteSpace(order.CraftPlanId);
+    }
+
+    private static bool HasMaterialBreakdown(TradeOrder order)
+    {
+        return TradeOrderWorkflow.GetProcurementEvidenceState(order).HasMaterials;
+    }
+
+    private static bool HasProcurementEvidence(TradeOrder order)
+    {
+        return TradeOrderWorkflow.GetProcurementEvidenceState(order).IsFullyPriced;
+    }
+
+    private bool IsPaymentReady(TradeOrder order)
+    {
+        return HasProcurementEvidence(order) &&
+            TradeOrderWorkflow.IsPaymentReady(order, GetPayrollDraftForOrder(order));
+    }
+
+    private static string GetPipelineStageClass(bool isComplete, bool isWarning = false)
+    {
+        return isComplete
+            ? "trade-orders-pipeline-stage is-complete"
+            : isWarning
+                ? "trade-orders-pipeline-stage is-warning"
+                : "trade-orders-pipeline-stage";
+    }
+
+    private string GetSettlementStageLabel(TradeOrder order)
+    {
+        if (TradeOrderStatusWorkflow.IsArchived(order.Status))
+        {
+            return FormatStatus(order.Status);
+        }
+
+        if (order.Status == TradeOrderStatus.AwaitingDelivery)
+        {
+            return "Awaiting delivery";
+        }
+
+        if (order.Status == TradeOrderStatus.InProgress)
+        {
+            return "In progress";
+        }
+
+        return IsPaymentReady(order) ? "Payment ready" : "Awaiting payment";
+    }
+
+    private static string GetLinkedCraftPlanName(TradeOrder order)
+    {
+        if (!string.IsNullOrWhiteSpace(order.CraftPlanName))
+        {
+            return order.CraftPlanName;
+        }
+
+        return HasLinkedCraftPlan(order) ? "Saved craft plan" : "No linked plan";
+    }
+
+    private static string GetProcurementEvidenceLabel(TradeOrder order)
+    {
+        var evidence = TradeOrderWorkflow.GetProcurementEvidenceState(order);
+        if (!evidence.HasMaterials)
+        {
+            return "No material breakdown";
+        }
+
+        return evidence.IsFullyPriced
+            ? $"{evidence.PricedMaterialCount:N0} priced material lines"
+            : $"{evidence.PricedMaterialCount:N0} of {evidence.MaterialCount:N0} material lines priced";
+    }
+
+    private static string FormatLinkedCraftPlanDate(TradeOrder order)
+    {
+        return order.CraftPlanSavedAtUtc.HasValue
+            ? order.CraftPlanSavedAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            : "Not saved yet";
+    }
+
+    private string GetCraftPlanBuildButtonText(TradeOrder order)
+    {
+        if (_isSavingSelectedOrderCraftPlan)
+        {
+            return "Saving...";
+        }
+
+        if (!HasLinkedCraftPlan(order))
+        {
+            return "Create Craft Plan";
+        }
+
+        return order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.Unknown
+            ? "Replace Linked Plan"
+            : "Rebuild Linked Plan";
+    }
+
+    private static string GetLatestHistoryCue(TradeOrder order)
+    {
+        var latest = order.History
+            .OrderByDescending(item => item.CreatedAtUtc)
+            .FirstOrDefault();
+        return latest == null
+            ? "No history yet"
+            : $"{latest.CreatedAtUtc.ToLocalTime():yyyy-MM-dd HH:mm} - {latest.Note}";
     }
 
     private void SelectOrder(TradeOrder order)
     {
         _selectedOrder = order;
+        _pendingImport = null;
+        _showNewOrderPanel = false;
+        _activeOpsTab = 0;
         _detailTitle = order.Title;
         _detailCrafterId = order.AssignedCrafterId;
         _detailStatus = order.Status;
         _detailNotes = order.Notes;
         _manualNote = string.Empty;
+        AppState.SelectTradeOrder(order.Id);
+        PersistSelectedOrderInNavigation(order.Id);
+    }
+
+    private bool IsSelectedOrderArchived => _selectedOrder != null && TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status);
+
+    private Guid? TryGetOrderIdFromNavigation()
+    {
+        var uri = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
+        var query = uri.Query;
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return null;
+        }
+
+        foreach (var pair in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = pair.Split('=', 2);
+            if (parts.Length != 2 ||
+                !string.Equals(Uri.UnescapeDataString(parts[0]), "orderId", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return Guid.TryParse(Uri.UnescapeDataString(parts[1]), out var orderId)
+                ? orderId
+                : null;
+        }
+
+        return null;
+    }
+
+    private void SelectPendingNavigationOrder()
+    {
+        if (!_pendingNavigationOrderId.HasValue)
+        {
+            return;
+        }
+
+        var orderId = _pendingNavigationOrderId.Value;
+        _pendingNavigationOrderId = null;
+        SelectOrderAfterReload(orderId, "Linked Trade order could not be loaded.");
+    }
+
+    private bool IsStatusGroupCollapsed(TradeOrderStatus status)
+    {
+        return _collapsedStatuses.Contains(status);
+    }
+
+    private void ToggleStatusGroup(TradeOrderStatus status)
+    {
+        if (!_collapsedStatuses.Add(status))
+        {
+            _collapsedStatuses.Remove(status);
+        }
+    }
+
+    private void ToggleArchiveGroup()
+    {
+        _isArchiveCollapsed = !_isArchiveCollapsed;
+    }
+
+    private void ExpandGroupForOrder(TradeOrder order)
+    {
+        if (TradeOrderStatusWorkflow.IsArchived(order.Status))
+        {
+            _isArchiveCollapsed = false;
+            return;
+        }
+
+        _collapsedStatuses.Remove(order.Status);
+    }
+
+    private bool SelectOrderAfterReload(Guid orderId, string missingMessage)
+    {
+        var reloadedOrder = _orders.FirstOrDefault(order => order.Id == orderId);
+        if (reloadedOrder == null)
+        {
+            _selectedOrder = null;
+            _manualNote = string.Empty;
+            if (AppState.SelectedTradeOrderId == orderId)
+            {
+                AppState.SelectTradeOrder(null);
+            }
+
+            Snackbar.Add(missingMessage, Severity.Warning);
+            return false;
+        }
+
+        SelectOrder(reloadedOrder);
+        ExpandGroupForOrder(reloadedOrder);
+        return true;
+    }
+
+    private void PersistSelectedOrderInNavigation(Guid orderId)
+    {
+        var current = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
+        var target = new UriBuilder(current)
+        {
+            Query = $"orderId={Uri.EscapeDataString(orderId.ToString("D"))}"
+        }.Uri;
+        if (!string.Equals(current.PathAndQuery, target.PathAndQuery, StringComparison.Ordinal))
+        {
+            NavigationManager.NavigateTo(target.PathAndQuery, replace: true);
+        }
+    }
+
+    private void ClearSelectedOrderNavigation()
+    {
+        var current = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
+        if (!string.IsNullOrWhiteSpace(current.Query))
+        {
+            NavigationManager.NavigateTo(current.AbsolutePath, replace: true);
+        }
     }
 
     private async Task SaveSelectedOrderAsync()
@@ -397,15 +1338,49 @@
             return;
         }
 
+        if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+        {
+            Snackbar.Add("Reopen archived orders before editing details.", Severity.Warning);
+            return;
+        }
+
+        var title = _detailTitle.Trim();
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            Snackbar.Add("Order title is required.", Severity.Warning);
+            return;
+        }
+
+        if (TradeOrderStatusWorkflow.IsArchived(_detailStatus) || _detailStatus == TradeOrderStatus.Draft)
+        {
+            Snackbar.Add("Use the close order controls for archive transitions.", Severity.Warning);
+            return;
+        }
+
+        var resolvedStatus = TradeOrderWorkflow.ResolveStatusForAssignment(_detailStatus, _detailCrafterId);
+        if (!_detailCrafterId.HasValue && resolvedStatus == TradeOrderStatus.Assigned)
+        {
+            Snackbar.Add("Change status to Ready to Assign before clearing this assignment.", Severity.Warning);
+            return;
+        }
+        else if (!_detailCrafterId.HasValue && (resolvedStatus == TradeOrderStatus.InProgress || resolvedStatus == TradeOrderStatus.AwaitingDelivery))
+        {
+            Snackbar.Add("Assign a crafter before using this status.", Severity.Warning);
+            return;
+        }
+
         var previousStatus = _selectedOrder.Status;
         var previousCrafterId = _selectedOrder.AssignedCrafterId;
-        _selectedOrder.Title = _detailTitle.Trim();
-        _selectedOrder.AssignedCrafterId = _detailCrafterId;
-        _selectedOrder.Status = _detailStatus;
-        _selectedOrder.Notes = _detailNotes;
-        AddHistoryIfAssignmentChanged(_selectedOrder, previousCrafterId, _detailCrafterId);
-        AddHistoryIfStatusChanged(_selectedOrder, previousStatus, _detailStatus, "Status changed from detail panel.");
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(_selectedOrder);
+        var orderId = _selectedOrder.Id;
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
+        orderToSave.Title = title;
+        orderToSave.AssignedCrafterId = _detailCrafterId;
+        orderToSave.Status = resolvedStatus;
+        orderToSave.Notes = _detailNotes;
+        orderToSave.UpdatedAtUtc = DateTime.UtcNow;
+        AddHistoryIfAssignmentChanged(orderToSave, previousCrafterId, _detailCrafterId);
+        TradeOrderWorkflow.AppendStatusHistory(orderToSave, previousStatus, resolvedStatus, "Status changed from detail panel.", DateTime.UtcNow);
+        var saved = await SaveOrderAndNotifyAsync(orderToSave);
         if (!saved)
         {
             Snackbar.Add("Failed to save Trade order.", Severity.Error);
@@ -413,7 +1388,10 @@
         }
 
         await LoadAsync();
-        SelectOrder(_selectedOrder);
+        if (string.IsNullOrWhiteSpace(_loadError))
+        {
+            SelectOrderAfterReload(orderId, "Trade order was saved, but it could not be loaded.");
+        }
     }
 
     private async Task AddManualNoteAsync()
@@ -423,19 +1401,493 @@
             return;
         }
 
-        var history = _selectedOrder.History.ToList();
-        history.Add(TradeOrderHistoryEvent.CreateManualNote(_companyProfile.Id, _selectedOrder.Id, _manualNote.Trim(), DateTime.UtcNow));
-        _selectedOrder.History = history;
-        _manualNote = string.Empty;
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(_selectedOrder);
+        var orderId = _selectedOrder.Id;
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
+        var history = orderToSave.History.ToList();
+        history.Add(TradeOrderHistoryEvent.CreateManualNote(_companyProfile.Id, orderToSave.Id, _manualNote.Trim(), DateTime.UtcNow));
+        orderToSave.History = history;
+        orderToSave.UpdatedAtUtc = DateTime.UtcNow;
+        var saved = await SaveOrderAndNotifyAsync(orderToSave);
         if (!saved)
         {
             Snackbar.Add("Failed to save Trade order.", Severity.Error);
             return;
         }
 
+        _manualNote = string.Empty;
         await LoadAsync();
-        SelectOrder(_selectedOrder);
+        if (string.IsNullOrWhiteSpace(_loadError))
+        {
+            if (SelectOrderAfterReload(orderId, "Trade order note was saved, but the order could not be loaded."))
+            {
+                _activeOpsTab = 2;
+            }
+        }
+    }
+
+    private async Task CreateOrReplaceSelectedOrderCraftPlanAsync()
+    {
+        if (_selectedOrder == null || _companyProfile == null || _isSavingSelectedOrderCraftPlan)
+        {
+            return;
+        }
+
+        if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+        {
+            Snackbar.Add("Reopen archived orders before replacing the linked craft plan.", Severity.Warning);
+            return;
+        }
+
+        if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+            HasLinkedCraftPlan(_selectedOrder) ? "Rebuilding this order plan" : "Creating this order plan",
+            _selectedOrder.CraftPlanId))
+        {
+            return;
+        }
+
+        var assessment = TradeOrderWorkflow.AssessGeneratedCraftPlanReplacement(_selectedOrder);
+        if (assessment.RequiresConfirmation &&
+            !await ConfirmCraftPlanReplacementAsync(assessment))
+        {
+            return;
+        }
+
+        _isSavingSelectedOrderCraftPlan = true;
+        var orderId = _selectedOrder.Id;
+
+        try
+        {
+            var result = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
+                _selectedOrder,
+                new TradeOrderPricingWorkflowOptions(
+                    GetOrderDataCenter(_selectedOrder),
+                    _selectedOrder.SourceSnapshot.World ?? string.Empty,
+                    ForceRefreshMarketData: false));
+            if (!result.HasUpdatedOrder || result.UpdatedOrder == null)
+            {
+                Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
+                return;
+            }
+
+            var saved = await SaveOrderAndNotifyAsync(result.UpdatedOrder);
+            if (!saved)
+            {
+                Snackbar.Add("Craft plan saved, but failed to link it to the order.", Severity.Error);
+                return;
+            }
+
+            await LoadAsync();
+            if (string.IsNullOrWhiteSpace(_loadError))
+            {
+                SelectOrderAfterReload(orderId, "Craft plan was saved, but the order could not be loaded.");
+            }
+
+            Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to rebuild and price linked craft plan: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSavingSelectedOrderCraftPlan = false;
+        }
+    }
+
+    private async Task<bool> ConfirmCraftPlanReplacementAsync(TradeOrderCraftPlanReplacementAssessment assessment)
+    {
+        if (assessment.Mode == TradeOrderCraftPlanReplacementMode.Create)
+        {
+            return true;
+        }
+
+        var parameters = new DialogParameters
+        {
+            ["Assessment"] = assessment
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = await DialogService.ShowAsync<TradeOrderReplaceCraftPlanDialog>(
+            "Rebuild Linked Craft Plan",
+            parameters,
+            options);
+        var result = await dialog.Result;
+        return result?.Data is true;
+    }
+
+    private async Task OpenSelectedOrderCraftPlanAsync()
+    {
+        if (_selectedOrder == null || _isOpeningSelectedOrderCraftPlan)
+        {
+            return;
+        }
+
+        if (!HasLinkedCraftPlan(_selectedOrder))
+        {
+            Snackbar.Add("Create a linked craft plan before opening it.", Severity.Warning);
+            return;
+        }
+
+        _isOpeningSelectedOrderCraftPlan = true;
+
+        try
+        {
+            if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+                "Opening this order plan",
+                _selectedOrder.CraftPlanId))
+            {
+                return;
+            }
+
+            var result = await PlanPersistence.LoadPlanIntoSessionAsync(_selectedOrder.CraftPlanId!);
+            if (result == null)
+            {
+                Snackbar.Add("Linked Craft Architect plan could not be loaded.", Severity.Warning);
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(result.Warning))
+            {
+                Snackbar.Add(result.Warning, Severity.Warning);
+            }
+            else
+            {
+                Snackbar.Add("Linked craft plan loaded", Severity.Success);
+            }
+
+            NavigationManager.NavigateTo("./");
+        }
+        finally
+        {
+            _isOpeningSelectedOrderCraftPlan = false;
+        }
+    }
+
+    private async Task OpenMarketAnalysisForProcurementRowAsync(TradeOrderProcurementRow row)
+    {
+        if (!await LoadSelectedOrderCraftPlanForNavigationAsync())
+        {
+            return;
+        }
+
+        AppState.SelectMarketAnalysisItem(row.ItemId);
+        AppState.RequestMarketItemAutoExpand(row.ItemId);
+        NavigationManager.NavigateTo("market");
+    }
+
+    private async Task OpenAcquisitionEvaluationForProcurementRowAsync(TradeOrderProcurementRow row)
+    {
+        if (!await LoadSelectedOrderCraftPlanForNavigationAsync())
+        {
+            return;
+        }
+
+        NavigationManager.NavigateTo($"acquisition?itemId={row.ItemId}");
+    }
+
+    private async Task<bool> LoadSelectedOrderCraftPlanForNavigationAsync()
+    {
+        if (_selectedOrder == null)
+        {
+            return false;
+        }
+
+        if (!HasLinkedCraftPlan(_selectedOrder))
+        {
+            Snackbar.Add("Create a linked craft plan before opening Craft Architect details.", Severity.Warning);
+            return false;
+        }
+
+        if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+            "Opening Craft Architect details for this order",
+            _selectedOrder.CraftPlanId))
+        {
+            return false;
+        }
+
+        var result = await PlanPersistence.LoadPlanIntoSessionAsync(_selectedOrder.CraftPlanId!);
+        if (result == null)
+        {
+            Snackbar.Add("Linked Craft Architect plan could not be loaded.", Severity.Warning);
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.Warning))
+        {
+            Snackbar.Add(result.Warning, Severity.Warning);
+        }
+
+        return true;
+    }
+
+    private async Task RepriceSelectedOrderAsync()
+    {
+        if (_selectedOrder == null || _companyProfile == null || _isRepricingSelectedOrder)
+        {
+            return;
+        }
+
+        if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+        {
+            Snackbar.Add("Reopen archived orders before repricing.", Severity.Warning);
+            return;
+        }
+
+        if (!HasLinkedCraftPlan(_selectedOrder))
+        {
+            Snackbar.Add("Create a linked craft plan before repricing.", Severity.Warning);
+            return;
+        }
+
+        _isRepricingSelectedOrder = true;
+        var orderId = _selectedOrder.Id;
+
+        try
+        {
+            if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+                "Repricing this order",
+                _selectedOrder.CraftPlanId))
+            {
+                return;
+            }
+
+            var result = await TradeOrderPricingWorkflow.RepriceAsync(
+                _selectedOrder,
+                new TradeOrderPricingWorkflowOptions(
+                    GetOrderDataCenter(_selectedOrder),
+                    _selectedOrder.SourceSnapshot.World ?? string.Empty,
+                    ForceRefreshMarketData: true));
+            if (!result.HasUpdatedOrder || result.UpdatedOrder == null)
+            {
+                Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
+                return;
+            }
+
+            var saved = await SaveOrderAndNotifyAsync(result.UpdatedOrder);
+            if (!saved)
+            {
+                Snackbar.Add("Order pricing updated, but failed to save it to the order.", Severity.Error);
+                return;
+            }
+
+            await LoadAsync();
+            if (string.IsNullOrWhiteSpace(_loadError))
+            {
+                if (SelectOrderAfterReload(orderId, "Order pricing was saved, but the order could not be loaded."))
+                {
+                    _activeOpsTab = 0;
+                }
+            }
+
+            Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to reprice order: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isRepricingSelectedOrder = false;
+        }
+    }
+
+    private async Task<bool> ConfirmActiveCraftPlanCanBeReplacedAsync(
+        string actionLabel,
+        string? targetPlanId)
+    {
+        if (!ShouldGuardActiveCraftPlanReplacement(targetPlanId))
+        {
+            return true;
+        }
+
+        var parameters = new DialogParameters
+        {
+            ["ActionLabel"] = actionLabel,
+            ["CurrentPlanName"] = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name,
+            ["HasNamedPlan"] = !string.IsNullOrWhiteSpace(AppState.CurrentPlanId)
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = await DialogService.ShowAsync<TradeActivePlanSaveGuardDialog>(
+            "Active Craft Plan",
+            parameters,
+            options);
+        var result = await dialog.Result;
+        if (result == null || result.Canceled)
+        {
+            return false;
+        }
+
+        return result.Data is TradeActivePlanSaveGuardChoice choice &&
+            (choice == TradeActivePlanSaveGuardChoice.ContinueWithoutSaving ||
+             await SaveActiveCraftPlanBeforeTradeActionAsync());
+    }
+
+    private bool ShouldGuardActiveCraftPlanReplacement(string? targetPlanId)
+    {
+        if (!AppState.HasPlanOrProjectItems)
+        {
+            return false;
+        }
+
+        var dirtyBuckets = AppState.GetDirtyPersistedBuckets();
+        if (string.IsNullOrWhiteSpace(AppState.CurrentPlanId))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(targetPlanId) &&
+            string.Equals(AppState.CurrentPlanId, targetPlanId, StringComparison.Ordinal) &&
+            dirtyBuckets == PersistedStateBucket.None)
+        {
+            return false;
+        }
+
+        return dirtyBuckets != PersistedStateBucket.None;
+    }
+
+    private async Task<bool> SaveActiveCraftPlanBeforeTradeActionAsync()
+    {
+        if (!AppState.HasProjectItems)
+        {
+            Snackbar.Add("There are no project items to save.", Severity.Warning);
+            return false;
+        }
+
+        var planId = AppState.CurrentPlanId;
+        var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name;
+        if (string.IsNullOrWhiteSpace(planId))
+        {
+            var dialog = await DialogService.ShowAsync<SavePlanDialog>("Save Plan");
+            var result = await dialog.Result;
+            if (result?.Data is not string newName || string.IsNullOrWhiteSpace(newName))
+            {
+                return false;
+            }
+
+            planId = Guid.NewGuid().ToString("D");
+            planName = newName.Trim();
+        }
+        else if (string.IsNullOrWhiteSpace(planName))
+        {
+            planName = "Saved Plan";
+        }
+
+        var versions = AppState.CurrentVersions;
+        var dirtyBuckets = AppState.GetDirtyPersistedBuckets();
+        var saved = await PlanPersistence.SaveCurrentPlanAsync(planId, planName);
+        if (!saved)
+        {
+            Snackbar.Add("Failed to save the active Craft plan.", Severity.Error);
+            return false;
+        }
+
+        AppState.TrackCurrentPlanIdentity(planId, planName);
+        if (dirtyBuckets != PersistedStateBucket.None)
+        {
+            AppState.MarkPersisted(dirtyBuckets, versions);
+        }
+
+        Snackbar.Add($"Saved '{planName}'", Severity.Success);
+        return true;
+    }
+
+    private string GetOrderDataCenter(TradeOrder order)
+    {
+        return string.IsNullOrWhiteSpace(order.SourceSnapshot.DataCenter)
+            ? AppState.SelectedDataCenter
+            : order.SourceSnapshot.DataCenter;
+    }
+
+    private static IReadOnlyList<TradeOrderRootItemSnapshot> GetOrderRootItems(TradeOrder order)
+    {
+        return order.SourceSnapshot?.RootItems ?? Array.Empty<TradeOrderRootItemSnapshot>();
+    }
+
+    private async Task SetOrderMaterialResponsibilityAsync(
+        TradeCommissionPaymentMaterial material,
+        CommissionMaterialResponsibility responsibility)
+    {
+        if (_selectedOrder == null || _companyProfile == null)
+        {
+            return;
+        }
+
+        if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+        {
+            Snackbar.Add("Reopen archived orders before editing payment responsibility.", Severity.Warning);
+            return;
+        }
+
+        var orderId = _selectedOrder.Id;
+        var currentDraft = await GetOrCreatePayrollDraftForOrderAsync(_selectedOrder);
+        var draftToSave = TradeOrderWorkflow.WithMaterialResponsibility(
+            currentDraft,
+            material.ItemId,
+            material.RequiresHq,
+            responsibility);
+        var savedDraft = await TradePayrollPersistence.SaveDraftAsync(draftToSave);
+        if (!savedDraft)
+        {
+            Snackbar.Add("Failed to save payment responsibility.", Severity.Error);
+            return;
+        }
+
+        _payrollDrafts = _payrollDrafts
+            .Where(existingDraft => existingDraft.Id != draftToSave.Id)
+            .Append(draftToSave)
+            .ToList();
+
+        if (!string.Equals(_selectedOrder.PayrollDraftId, draftToSave.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
+            orderToSave.PayrollDraftId = draftToSave.Id;
+            orderToSave.UpdatedAtUtc = DateTime.UtcNow;
+            TradeOrderWorkflow.AppendPayrollLinkedHistory(orderToSave, DateTime.UtcNow);
+            var savedOrder = await SaveOrderAndNotifyAsync(orderToSave);
+            if (!savedOrder)
+            {
+                Snackbar.Add("Payment responsibility saved, but failed to link it to the order.", Severity.Warning);
+            }
+        }
+
+        await LoadAsync();
+        if (string.IsNullOrWhiteSpace(_loadError))
+        {
+            SelectOrderAfterReload(orderId, "Payment responsibility was saved, but the order could not be loaded.");
+        }
+    }
+
+    private async Task<TradePayrollWorkflowDraft> GetOrCreatePayrollDraftForOrderAsync(TradeOrder order)
+    {
+        var existing = GetPayrollDraftForOrder(order);
+        if (existing != null)
+        {
+            return existing;
+        }
+
+        var draft = await TradePayrollPersistence.GetOrCreateDraftAsync(
+            order.CompanyProfileId,
+            order.Id,
+            order.SourceSnapshot.PlanSessionVersion,
+            order.SourceSnapshot.MarketAnalysisVersion,
+            order.SourceSnapshot.SourcePlanName,
+            order.AssignedCrafterId,
+            order.AssignedCrafterId.HasValue ? FormatAssignedCrafter(order) : null);
+        return draft;
+    }
+
+    private async Task CopyGilAmountAsync(decimal value, string successMessage)
+    {
+        await CopyTextToClipboardAsync(Math.Round(value, 0).ToString("0"), successMessage);
+    }
+
+    private async Task CopyOrderPaymentSummaryAsync()
+    {
+        if (_selectedOrder == null)
+        {
+            return;
+        }
+
+        await CopyTextToClipboardAsync(BuildOrderPaymentSummary(_selectedOrder), "Payment summary copied");
     }
 
     private async Task OpenCloseOrderDialogAsync(TradeOrderStatus status)
@@ -468,9 +1920,12 @@
         }
 
         var previousStatus = _selectedOrder.Status;
-        _selectedOrder.Status = status;
-        AddHistoryIfStatusChanged(_selectedOrder, previousStatus, status, string.IsNullOrWhiteSpace(note) ? FormatStatus(status) : note.Trim());
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(_selectedOrder);
+        var orderId = _selectedOrder.Id;
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
+        orderToSave.Status = status;
+        orderToSave.UpdatedAtUtc = DateTime.UtcNow;
+        TradeOrderWorkflow.AppendStatusHistory(orderToSave, previousStatus, status, string.IsNullOrWhiteSpace(note) ? FormatStatus(status) : note.Trim(), DateTime.UtcNow);
+        var saved = await SaveOrderAndNotifyAsync(orderToSave);
         if (!saved)
         {
             Snackbar.Add("Failed to save Trade order.", Severity.Error);
@@ -478,7 +1933,10 @@
         }
 
         await LoadAsync();
-        SelectOrder(_selectedOrder);
+        if (string.IsNullOrWhiteSpace(_loadError))
+        {
+            SelectOrderAfterReload(orderId, "Trade order was closed, but it could not be loaded.");
+        }
     }
 
     private string FormatAssignedCrafter(TradeOrder order)
@@ -499,11 +1957,14 @@
         }
 
         var previousStatus = _selectedOrder.Status;
-        _selectedOrder.Status = _selectedOrder.AssignedCrafterId.HasValue
+        var orderId = _selectedOrder.Id;
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
+        orderToSave.Status = orderToSave.AssignedCrafterId.HasValue
             ? TradeOrderStatus.Assigned
             : TradeOrderStatus.ReadyToAssign;
-        AddHistoryIfStatusChanged(_selectedOrder, previousStatus, _selectedOrder.Status, "Reopen Order");
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(_selectedOrder);
+        orderToSave.UpdatedAtUtc = DateTime.UtcNow;
+        TradeOrderWorkflow.AppendReopenedHistory(orderToSave, previousStatus, orderToSave.Status, DateTime.UtcNow);
+        var saved = await SaveOrderAndNotifyAsync(orderToSave);
         if (!saved)
         {
             Snackbar.Add("Failed to save Trade order.", Severity.Error);
@@ -511,53 +1972,23 @@
         }
 
         await LoadAsync();
-        SelectOrder(_selectedOrder);
-    }
-
-    private static void AddHistoryIfStatusChanged(TradeOrder order, TradeOrderStatus previousStatus, TradeOrderStatus newStatus, string note)
-    {
-        if (previousStatus == newStatus)
+        if (string.IsNullOrWhiteSpace(_loadError))
         {
-            return;
+            SelectOrderAfterReload(orderId, "Trade order was reopened, but it could not be loaded.");
         }
-
-        var history = order.History.ToList();
-        history.Add(new TradeOrderHistoryEvent
-        {
-            Id = Guid.NewGuid(),
-            CompanyProfileId = order.CompanyProfileId,
-            OrderId = order.Id,
-            Kind = TradeOrderStatusWorkflow.IsArchived(newStatus) ? TradeOrderHistoryEventKind.Closed : TradeOrderHistoryEventKind.StatusChanged,
-            Note = note,
-            FromStatus = previousStatus,
-            ToStatus = newStatus,
-            CreatedAtUtc = DateTime.UtcNow
-        });
-        order.History = history;
     }
 
     private void AddHistoryIfAssignmentChanged(TradeOrder order, Guid? previousCrafterId, Guid? newCrafterId)
     {
-        if (previousCrafterId == newCrafterId)
-        {
-            return;
-        }
-
         var crafterName = newCrafterId.HasValue
             ? _crafters.FirstOrDefault(crafter => crafter.Id == newCrafterId.Value)?.DisplayName ?? "unknown crafter"
-            : "unassigned";
-        var history = order.History.ToList();
-        history.Add(new TradeOrderHistoryEvent
-        {
-            Id = Guid.NewGuid(),
-            CompanyProfileId = order.CompanyProfileId,
-            OrderId = order.Id,
-            Kind = TradeOrderHistoryEventKind.Assigned,
-            Note = newCrafterId.HasValue ? $"Assigned to {crafterName}." : "Assignment cleared.",
-            CrafterId = newCrafterId,
-            CreatedAtUtc = DateTime.UtcNow
-        });
-        order.History = history;
+            : null;
+        TradeOrderWorkflow.AppendAssignmentHistory(
+            order,
+            previousCrafterId,
+            newCrafterId,
+            crafterName,
+            DateTime.UtcNow);
     }
 
     private static string FormatStatus(TradeOrderStatus status)
@@ -565,6 +1996,7 @@
         return status switch
         {
             TradeOrderStatus.ReadyToAssign => "Ready to Assign",
+            TradeOrderStatus.Assigned => "Assigned Awaiting Payment",
             TradeOrderStatus.InProgress => "In Progress",
             TradeOrderStatus.AwaitingDelivery => "Awaiting Delivery",
             _ => status.ToString()
@@ -577,7 +2009,10 @@
         {
             TradeOrderHistoryEventKind.ManualNote => "Note",
             TradeOrderHistoryEventKind.StatusChanged => "Status",
+            TradeOrderHistoryEventKind.Reopened => "Reopened",
             TradeOrderHistoryEventKind.PayrollLinked => "Payroll",
+            TradeOrderHistoryEventKind.CraftPlanLinked => "Plan",
+            TradeOrderHistoryEventKind.PricingRefreshed => "Pricing",
             _ => kind.ToString()
         };
     }
@@ -587,12 +2022,449 @@
         return mustBeHq ? "HQ" : string.Empty;
     }
 
-    private enum TradeOrderColumn
+    private static Severity ToSnackbarSeverity(RecipePlannerCommandMessageLevel level)
     {
-        Title,
-        Commissioned,
-        Crafter,
-        Items,
-        Action
+        return level switch
+        {
+            RecipePlannerCommandMessageLevel.Success => Severity.Success,
+            RecipePlannerCommandMessageLevel.Warning => Severity.Warning,
+            RecipePlannerCommandMessageLevel.Error => Severity.Error,
+            _ => Severity.Info
+        };
+    }
+
+    private static string GetPaymentMaterialKey(TradeCommissionPaymentMaterial material)
+    {
+        return $"{material.ItemId}:{material.RequiresHq}";
+    }
+
+    private TradeRequestedOrderOutput[] ToRequestedOrderOutputs()
+    {
+        return _requestedOrderOutputs
+            .Where(output => output.Quantity > 0)
+            .Select(output => new TradeRequestedOrderOutput(
+                output.ItemId,
+                output.Name,
+                output.Quantity,
+                output.MustBeHq,
+                EstimatedSaleValue: 0m))
+            .ToArray();
+    }
+
+    private TradeCommissionPaymentSummary GetSelectedOrderPaymentSummary()
+    {
+        if (_selectedOrder == null)
+        {
+            return TradeCommissionPaymentSummary.FromOrder(new TradeOrder(), draft: null);
+        }
+
+        return TradeCommissionPaymentSummary.FromOrder(_selectedOrder, GetPayrollDraftForOrder(_selectedOrder));
+    }
+
+    private IReadOnlyList<TradeOrderProcurementRow> GetSelectedOrderProcurementRows()
+    {
+        return _selectedOrder == null
+            ? Array.Empty<TradeOrderProcurementRow>()
+            : TradeOrderWorkflow.BuildProcurementRows(_selectedOrder, GetPayrollDraftForOrder(_selectedOrder));
+    }
+
+    private IReadOnlyList<TradeOrderProcurementRow> GetOrderedProcurementRows(IReadOnlyList<TradeOrderProcurementRow> rows)
+    {
+        if (!_procurementSortState.Column.HasValue)
+        {
+            return rows;
+        }
+
+        IOrderedEnumerable<TradeOrderProcurementRow> ordered = _procurementSortState.Column.Value switch
+        {
+            TradeOrderProcurementColumn.Item => rows.OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase),
+            TradeOrderProcurementColumn.Quantity => rows.OrderBy(row => row.Quantity),
+            TradeOrderProcurementColumn.Source => rows.OrderBy(row => row.SourceLabel, StringComparer.OrdinalIgnoreCase),
+            TradeOrderProcurementColumn.Unit => rows.OrderBy(row => row.UnitCost),
+            TradeOrderProcurementColumn.EstimatedCost => rows.OrderBy(row => row.TotalCost),
+            TradeOrderProcurementColumn.Responsibility => rows.OrderBy(row => row.Responsibility.ToString(), StringComparer.OrdinalIgnoreCase),
+            _ => rows.OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
+        };
+
+        return (_procurementSortState.Descending ? ordered.Reverse() : ordered).ToArray();
+    }
+
+    private IReadOnlyList<WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>> GetProcurementColumns()
+    {
+        return
+        [
+            new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
+            {
+                Id = TradeOrderProcurementColumn.Item,
+                Header = "Item",
+                Size = new WebTableColumnSize(150, 120),
+                Sortable = true,
+                CellCssClass = "trade-orders-procurement-item-cell",
+                CellTemplate = RenderProcurementItemCell
+            },
+            WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
+                TradeOrderProcurementColumn.Quantity,
+                "Qty",
+                row => TradeDisplayFormatter.FormatQuantity(row.Quantity),
+                widthPx: 64,
+                minWidthPx: 56,
+                alignEnd: true),
+            new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
+            {
+                Id = TradeOrderProcurementColumn.Source,
+                Header = "Source",
+                Size = new WebTableColumnSize(150, 120),
+                Sortable = true,
+                SuppressRowActivation = true,
+                CellTemplate = RenderProcurementSourceCell
+            },
+            WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
+                TradeOrderProcurementColumn.Unit,
+                "Unit",
+                row => FormatGil(row.UnitCost),
+                widthPx: 76,
+                minWidthPx: 68,
+                alignEnd: true),
+            WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
+                TradeOrderProcurementColumn.EstimatedCost,
+                "Est. Cost",
+                row => FormatGil(row.TotalCost),
+                widthPx: 112,
+                minWidthPx: 96,
+                alignEnd: true),
+            WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
+                TradeOrderProcurementColumn.Responsibility,
+                "Resp.",
+                row => FormatResponsibility(row.Responsibility),
+                widthPx: 114,
+                minWidthPx: 104)
+        ];
+    }
+
+    private RenderFragment<TradeOrderProcurementRow> RenderProcurementItemCell => row => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "button");
+        builder.AddAttribute(sequence++, "type", "button");
+        builder.AddAttribute(sequence++, "class", "trade-orders-link-button");
+        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => OpenMarketAnalysisForProcurementRowAsync(row)));
+        builder.AddContent(sequence++, row.ItemName);
+        builder.CloseElement();
+        if (row.RequiresHq)
+        {
+            builder.OpenElement(sequence++, "span");
+            builder.AddAttribute(sequence++, "class", "trade-orders-hq");
+            builder.AddContent(sequence++, "HQ");
+            builder.CloseElement();
+        }
+    };
+
+    private RenderFragment<TradeOrderProcurementRow> RenderProcurementSourceCell => row => @<div class="trade-orders-source-cell">
+        <div class="trade-orders-source-primary">
+            <button type="button"
+                    class="trade-orders-link-button"
+                    @onclick="@(() => OpenAcquisitionEvaluationForProcurementRowAsync(row))">
+                @row.SourceLabel
+            </button>
+            <MudMenu Icon="@Icons.Material.Filled.KeyboardArrowDown"
+                     Dense="true"
+                     Size="Size.Small"
+                     AnchorOrigin="Origin.BottomRight"
+                     TransformOrigin="Origin.TopRight"
+                     Class="trade-orders-source-menu">
+                @foreach (var source in GetProcurementSourceOptions())
+                {
+                    <MudMenuItem OnClick="@(() => ChangeProcurementRowSourceAsync(row, source))">
+                        @RecipePlanDisplayHelpers.GetSourceDisplayName(source)
+                    </MudMenuItem>
+                }
+            </MudMenu>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(row.EvidenceSource) &&
+            !string.Equals(row.EvidenceSource, row.SourceLabel, StringComparison.OrdinalIgnoreCase))
+        {
+            <span class="trade-orders-source-evidence" title="@row.UnitCostExplanation">@row.EvidenceSource</span>
+        }
+        @if (!string.IsNullOrWhiteSpace(row.WarningSummary))
+        {
+            <span class="trade-orders-source-warning">@row.WarningSummary</span>
+        }
+    </div>;
+
+    private Task OnProcurementSortChanged(WebTableSortState<TradeOrderProcurementColumn> sortState)
+    {
+        _procurementSortState = sortState;
+        return Task.CompletedTask;
+    }
+
+    private static IReadOnlyList<AcquisitionSource> GetProcurementSourceOptions()
+    {
+        return
+        [
+            AcquisitionSource.Craft,
+            AcquisitionSource.MarketBuyNq,
+            AcquisitionSource.MarketBuyHq,
+            AcquisitionSource.VendorBuy
+        ];
+    }
+
+    private async Task ChangeProcurementRowSourceAsync(TradeOrderProcurementRow row, AcquisitionSource source)
+    {
+        if (_selectedOrder == null)
+        {
+            return;
+        }
+
+        if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+        {
+            Snackbar.Add("Reopen archived orders before editing acquisition sources.", Severity.Warning);
+            return;
+        }
+
+        if (!await LoadSelectedOrderCraftPlanForNavigationAsync())
+        {
+            return;
+        }
+
+        var matchingNodes = FindPlanNodesByItemId(AppState.CurrentPlan, row.ItemId).ToArray();
+        if (matchingNodes.Length == 0)
+        {
+            Snackbar.Add("This material could not be found in the linked craft plan.", Severity.Warning);
+            return;
+        }
+
+        if (matchingNodes.Length > 1)
+        {
+            Snackbar.Add("This material appears multiple times in the linked plan. Open Acquisition Evaluation to change it safely.", Severity.Warning);
+            return;
+        }
+
+        var node = matchingNodes[0];
+        if (!AcquisitionPlanningService.CanUseAcquisitionSource(node, source))
+        {
+            Snackbar.Add($"{RecipePlanDisplayHelpers.GetSourceDisplayName(source)} is not available for {row.ItemName}.", Severity.Warning);
+            return;
+        }
+
+        var change = AcquisitionDecisionService.ChangeSource(node, source);
+        if (!change.Changed)
+        {
+            Snackbar.Add("Acquisition source was already set.", Severity.Info);
+            return;
+        }
+
+        var savedAt = DateTime.UtcNow;
+        var planSaved = await PlanPersistence.SaveGeneratedOrderPlanAsync(
+            _selectedOrder.CraftPlanId!,
+            _selectedOrder.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(_selectedOrder),
+            AppState.CurrentPlan!,
+            GetOrderRootItems(_selectedOrder),
+            savedAt);
+        if (!planSaved)
+        {
+            Snackbar.Add("Source changed, but failed to save the linked craft plan.", Severity.Error);
+            return;
+        }
+
+        var outputs = GetOrderRootItems(_selectedOrder)
+            .Select(item => new TradeRequestedOrderOutput(
+                item.ItemId,
+                item.Name,
+                item.Quantity,
+                item.MustBeHq,
+                item.EstimatedSaleValue))
+            .ToArray();
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
+        orderToSave.SourceSnapshot.Materials = TradeRequestedOrderWorkflow.BuildMaterialSnapshots(
+            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan),
+            outputs);
+        orderToSave.SourceSnapshot.Warnings = AppendDistinctWarning(
+            orderToSave.SourceSnapshot.Warnings,
+            "Acquisition source changed; reprice the order before using payment totals.");
+        orderToSave.SourceSnapshot.ImportedAtUtc = savedAt;
+        orderToSave.UpdatedAtUtc = savedAt;
+        var savedOrder = await SaveOrderAndNotifyAsync(orderToSave);
+        if (!savedOrder)
+        {
+            Snackbar.Add("Source changed, but failed to save Trade order evidence.", Severity.Error);
+            return;
+        }
+
+        await LoadAsync();
+        if (string.IsNullOrWhiteSpace(_loadError))
+        {
+            SelectOrderAfterReload(orderToSave.Id, "Source changed, but the order could not be loaded.");
+        }
+
+        Snackbar.Add("Acquisition source changed. Reprice the order before payment.", Severity.Success);
+    }
+
+    private static IReadOnlyList<string> AppendDistinctWarning(
+        IReadOnlyList<string>? warnings,
+        string warning)
+    {
+        return (warnings ?? Array.Empty<string>())
+            .Append(warning)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IEnumerable<PlanNode> FindPlanNodesByItemId(CraftingPlan? plan, int itemId)
+    {
+        if (plan == null)
+        {
+            yield break;
+        }
+
+        foreach (var root in plan.RootItems)
+        {
+            foreach (var node in FindPlanNodesByItemId(root, itemId))
+            {
+                yield return node;
+            }
+        }
+    }
+
+    private static IEnumerable<PlanNode> FindPlanNodesByItemId(PlanNode node, int itemId)
+    {
+        if (node.ItemId == itemId)
+        {
+            yield return node;
+        }
+
+        foreach (var child in node.Children)
+        {
+            foreach (var match in FindPlanNodesByItemId(child, itemId))
+            {
+                yield return match;
+            }
+        }
+    }
+
+    private TradePayrollWorkflowDraft? GetPayrollDraftForOrder(TradeOrder order)
+    {
+        return _payrollDrafts.FirstOrDefault(draft =>
+                !string.IsNullOrWhiteSpace(order.PayrollDraftId) &&
+                string.Equals(draft.Id, order.PayrollDraftId, StringComparison.OrdinalIgnoreCase))
+            ?? _payrollDrafts.FirstOrDefault(draft => draft.OrderId == order.Id);
+    }
+
+    private static string FormatMaterialCost(TradeCommissionPaymentMaterial material)
+    {
+        if (material.UnitCost <= 0 || material.TotalCost <= 0)
+        {
+            return "Not priced";
+        }
+
+        return $"{FormatGil(material.TotalCost)} total";
+    }
+
+    private static string FormatMaterialUnitCost(TradeCommissionPaymentMaterial material)
+    {
+        return material.UnitCost > 0 ? FormatGil(material.UnitCost) : "Not priced";
+    }
+
+    private static string FormatResponsibility(CommissionMaterialResponsibility responsibility)
+    {
+        return responsibility == CommissionMaterialResponsibility.Provided
+            ? "Provided"
+            : "Crafter procures";
+    }
+
+    private static string FormatGil(decimal value)
+    {
+        return value > 0 ? $"{value:N0} gil" : "Not priced";
+    }
+
+    private string BuildOrderPaymentSummary(TradeOrder order)
+    {
+        var summary = TradeCommissionPaymentSummary.FromOrder(order, GetPayrollDraftForOrder(order));
+        var builder = new StringBuilder();
+        builder.AppendLine("FFXIV Trade Architect Payment");
+        builder.AppendLine($"Order: {order.Title}");
+        builder.AppendLine($"Assigned crafter: {FormatAssignedCrafter(order)}");
+        builder.AppendLine();
+        builder.AppendLine("Outputs:");
+        foreach (var item in GetOrderRootItems(order).OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var hqSuffix = item.MustBeHq ? " HQ" : string.Empty;
+            builder.AppendLine($"- {item.Name}{hqSuffix} x{item.Quantity:N0}");
+        }
+
+        builder.AppendLine();
+        AppendPaymentMaterialSection(builder, "Crafter procures", summary.Materials.Where(material => material.Responsibility == CommissionMaterialResponsibility.Crafter));
+        builder.AppendLine();
+        AppendPaymentMaterialSection(builder, "Provided by commissioner", summary.Materials.Where(material => material.Responsibility == CommissionMaterialResponsibility.Provided));
+        builder.AppendLine();
+        builder.AppendLine($"Payment amount: {FormatGil(summary.TotalPayment)}");
+        builder.AppendLine($"Crafter-procured reimbursement: {FormatGil(summary.MaterialReimbursementTotal)}");
+        builder.AppendLine($"Provided material value: {FormatGil(summary.ProvidedMaterialTotal)}");
+        builder.AppendLine($"Commission ({summary.CommissionPercent:N0}%): {FormatGil(summary.CommissionAmount)}");
+        builder.AppendLine($"Total estimated procurement: {FormatGil(summary.EstimatedProcurementTotal)}");
+        if (summary.Warnings.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Evidence warnings:");
+            foreach (var warning in summary.Warnings)
+            {
+                builder.AppendLine($"- {warning}");
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static void AppendPaymentMaterialSection(
+        StringBuilder builder,
+        string heading,
+        IEnumerable<TradeCommissionPaymentMaterial> materials)
+    {
+        builder.AppendLine($"{heading}:");
+        var lines = materials.OrderBy(material => material.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (lines.Length == 0)
+        {
+            builder.AppendLine("- None");
+            return;
+        }
+
+        foreach (var material in lines)
+        {
+            var hqSuffix = material.RequiresHq ? " HQ" : string.Empty;
+            builder.AppendLine($"- {material.Name}{hqSuffix} x{material.Quantity:N0}: {FormatGil(material.TotalCost)}");
+        }
+    }
+
+    private async Task CopyTextToClipboardAsync(string text, string successMessage)
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Snackbar.Add(successMessage, Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("Failed to copy to clipboard.", Severity.Error);
+        }
+    }
+
+    private sealed record OrderStatusGroup(TradeOrderStatus Status, IReadOnlyList<TradeOrder> Orders);
+
+    private enum TradeOrderProcurementColumn
+    {
+        Item,
+        Quantity,
+        Source,
+        Unit,
+        EstimatedCost,
+        Responsibility
+    }
+
+    private sealed class RequestedOrderOutputEditor
+    {
+        public int ItemId { get; init; }
+        public string Name { get; init; } = string.Empty;
+        public int Quantity { get; set; } = 1;
+        public bool MustBeHq { get; set; }
     }
 }

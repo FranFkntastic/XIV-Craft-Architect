@@ -12,7 +12,7 @@ public class TradeOrderDraftFactoryTests
         var appState = CreateAppStateWithPlan();
         var companyProfileId = Guid.NewGuid();
         var now = new DateTime(2026, 6, 17, 14, 0, 0, DateTimeKind.Utc);
-        var factory = new TradeOrderDraftFactory(new LightweightRecipeLayerWorkflowForTradeOrderTests());
+        var factory = CreateFactory();
 
         var result = factory.CreateFromCurrentPlan(new TradeOrderCreateRequest(
             appState,
@@ -23,7 +23,12 @@ public class TradeOrderDraftFactoryTests
 
         Assert.True(result.CanCreate);
         Assert.Equal("Fancy Robe Commission", result.Order!.Title);
+        Assert.Equal(TradeOrderSourceKind.ActiveCraftPlan, result.Order.SourceSnapshot.SourceKind);
+        Assert.Equal("Aether", result.Order.SourceSnapshot.DataCenter);
         Assert.Equal(12_000m, result.Order.SourceSnapshot.RootItems.Single(item => item.Name == "Fancy Robe").EstimatedSaleValue);
+        Assert.Null(result.Order.CraftPlanId);
+        Assert.Null(result.Order.CraftPlanName);
+        Assert.Null(result.Order.CraftPlanSavedAtUtc);
     }
 
     [Fact]
@@ -33,7 +38,7 @@ public class TradeOrderDraftFactoryTests
         var companyProfileId = Guid.NewGuid();
         var crafterId = Guid.NewGuid();
         var now = new DateTime(2026, 6, 17, 14, 0, 0, DateTimeKind.Utc);
-        var factory = new TradeOrderDraftFactory(new LightweightRecipeLayerWorkflowForTradeOrderTests());
+        var factory = CreateFactory();
 
         var result = factory.CreateFromCurrentPlan(new TradeOrderCreateRequest(
             appState,
@@ -55,7 +60,7 @@ public class TradeOrderDraftFactoryTests
         var appState = CreateAppStateWithPlan();
         var companyProfileId = Guid.NewGuid();
         var now = new DateTime(2026, 6, 17, 14, 0, 0, DateTimeKind.Utc);
-        var factory = new TradeOrderDraftFactory(new LightweightRecipeLayerWorkflowForTradeOrderTests());
+        var factory = CreateFactory();
 
         var result = factory.CreateFromCurrentPlan(new TradeOrderCreateRequest(
             appState,
@@ -74,6 +79,72 @@ public class TradeOrderDraftFactoryTests
         Assert.Equal(6, material.Quantity);
         Assert.Equal(100m, material.UnitCost);
         Assert.Equal(600m, material.TotalCost);
+    }
+
+    [Fact]
+    public void CreateFromRequestedOutputs_CreatesTradeNativeOrderWithoutActivePlan()
+    {
+        var companyProfileId = Guid.NewGuid();
+        var crafterId = Guid.NewGuid();
+        var now = new DateTime(2026, 6, 18, 18, 0, 0, DateTimeKind.Utc);
+        var factory = CreateFactory();
+
+        var result = factory.CreateFromRequestedOutputs(new TradeRequestedOrderCreateRequest(
+            companyProfileId,
+            crafterId,
+            Title: null,
+            Outputs:
+            [
+                new TradeRequestedOrderOutput(
+                    700,
+                    "Cobalt Ingot",
+                    999,
+                    MustBeHq: false,
+                    EstimatedSaleValue: 1_500_000m),
+                new TradeRequestedOrderOutput(
+                    800,
+                    "Rose Gold Nugget",
+                    999,
+                    MustBeHq: true,
+                    EstimatedSaleValue: 2_000_000m)
+            ],
+            DataCenter: "Aether",
+            World: "Siren",
+            Notes: "Mail materials after payment.",
+            now));
+
+        Assert.True(result.CanCreate);
+        Assert.Equal("Rose Gold Nugget Commission", result.Order!.Title);
+        Assert.Equal(TradeOrderSourceKind.TradeRequestedOutputs, result.Order.SourceSnapshot.SourceKind);
+        Assert.Equal("Trade requested outputs", result.Order.SourceSnapshot.SourcePlanName);
+        Assert.Equal("Aether", result.Order.SourceSnapshot.DataCenter);
+        Assert.Equal("Siren", result.Order.SourceSnapshot.World);
+        Assert.Equal(crafterId, result.Order.AssignedCrafterId);
+        Assert.Equal(TradeOrderStatus.Assigned, result.Order.Status);
+        Assert.Equal("Mail materials after payment.", result.Order.Notes);
+        Assert.Empty(result.Order.SourceSnapshot.Materials);
+        Assert.Contains(result.Order.SourceSnapshot.RootItems, item => item.Name == "Rose Gold Nugget" && item.MustBeHq);
+        Assert.Contains(result.Order.History, history => history.Kind == TradeOrderHistoryEventKind.Created && history.Note == "Created from requested outputs.");
+        Assert.Contains(result.Order.History, history => history.Kind == TradeOrderHistoryEventKind.Assigned && history.CrafterId == crafterId);
+    }
+
+    [Fact]
+    public void CreateFromRequestedOutputs_WithoutOutputsReturnsUnavailable()
+    {
+        var factory = CreateFactory();
+
+        var result = factory.CreateFromRequestedOutputs(new TradeRequestedOrderCreateRequest(
+            Guid.NewGuid(),
+            AssignedCrafterId: null,
+            Title: "Empty Order",
+            Outputs: [],
+            DataCenter: "Aether",
+            World: null,
+            Notes: null,
+            DateTime.UtcNow));
+
+        Assert.False(result.CanCreate);
+        Assert.Null(result.Order);
     }
 
     private static AppState CreateAppStateWithPlan()
@@ -119,6 +190,13 @@ public class TradeOrderDraftFactoryTests
             });
 
         return appState;
+    }
+
+    private static TradeOrderDraftFactory CreateFactory()
+    {
+        return new TradeOrderDraftFactory(
+            new LightweightRecipeLayerWorkflowForTradeOrderTests(),
+            new CommissionCostBasisResolver());
     }
 
     private sealed class LightweightRecipeLayerWorkflowForTradeOrderTests : IRecipeLayerWorkflowService

@@ -2,7 +2,7 @@
 // Uses Unix timestamps (seconds since epoch) for serialization safety
 
 const DB_NAME = 'FFXIVCraftArchitect';
-const DB_VERSION = 6;  // Bumped to repair partial Trade operations migrations
+const DB_VERSION = 8;  // Adds durable Trade order craft snapshots
 const STORE_PLANS = 'plans';
 const STORE_PLAN_SUMMARIES = 'planSummaries';
 const STORE_SETTINGS = 'settings';
@@ -10,6 +10,8 @@ const STORE_MARKET_CACHE = 'marketCache';
 const STORE_TRADE_COMPANY_PROFILES = 'tradeCompanyProfiles';
 const STORE_TRADE_CRAFTERS = 'tradeCrafters';
 const STORE_TRADE_ORDERS = 'tradeOrders';
+const STORE_TRADE_ORDER_CRAFT_SNAPSHOTS = 'tradeOrderCraftSnapshots';
+const STORE_TRADE_PAYROLL_DRAFTS = 'tradePayrollDrafts';
 
 let db = null;
 
@@ -65,7 +67,7 @@ async function initDB() {
         request.onsuccess = () => {
             const database = attachDatabaseConnection(
                 request.result,
-                '[IndexedDB] Database opened successfully (v6 - Trade operations repair)');
+                '[IndexedDB] Database opened successfully (v8 - Trade order craft snapshots)');
             ensureTradeStores(database).then(resolve).catch(reject);
         };
         
@@ -125,6 +127,23 @@ async function initDB() {
                 console.log('[IndexedDB] Created Trade order store');
             }
 
+            if (!database.objectStoreNames.contains(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS)) {
+                const snapshotStore = database.createObjectStore(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS, { keyPath: 'id' });
+                snapshotStore.createIndex('companyProfileId', 'companyProfileId', { unique: false });
+                snapshotStore.createIndex('orderId', 'orderId', { unique: false });
+                snapshotStore.createIndex('updatedAtUtc', 'updatedAtUtc', { unique: false });
+                console.log('[IndexedDB] Created Trade order craft snapshot store');
+            }
+
+            if (!database.objectStoreNames.contains(STORE_TRADE_PAYROLL_DRAFTS)) {
+                const payrollStore = database.createObjectStore(STORE_TRADE_PAYROLL_DRAFTS, { keyPath: 'id' });
+                payrollStore.createIndex('companyProfileId', 'companyProfileId', { unique: false });
+                payrollStore.createIndex('orderId', 'orderId', { unique: false });
+                payrollStore.createIndex('planSessionVersion', 'planSessionVersion', { unique: false });
+                payrollStore.createIndex('updatedAtUtc', 'updatedAtUtc', { unique: false });
+                console.log('[IndexedDB] Created Trade payroll draft store');
+            }
+
         };
     });
 }
@@ -151,6 +170,8 @@ function createTradeStoreDiagnostics(database, errorMessage = null) {
         hasCompanyProfilesStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_COMPANY_PROFILES)),
         hasCraftersStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_CRAFTERS)),
         hasOrdersStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_ORDERS)),
+        hasOrderCraftSnapshotsStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS)),
+        hasPayrollDraftsStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_PAYROLL_DRAFTS)),
         errorMessage
     };
 }
@@ -158,7 +179,9 @@ function createTradeStoreDiagnostics(database, errorMessage = null) {
 function hasRequiredTradeStores(database) {
     return database.objectStoreNames.contains(STORE_TRADE_COMPANY_PROFILES) &&
         database.objectStoreNames.contains(STORE_TRADE_CRAFTERS) &&
-        database.objectStoreNames.contains(STORE_TRADE_ORDERS);
+        database.objectStoreNames.contains(STORE_TRADE_ORDERS) &&
+        database.objectStoreNames.contains(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS) &&
+        database.objectStoreNames.contains(STORE_TRADE_PAYROLL_DRAFTS);
 }
 
 async function ensureTradeStores(database) {
@@ -207,6 +230,23 @@ function openTradeStoreRepairUpgrade(repairVersion) {
                 orderStore.createIndex('status', 'status', { unique: false });
                 orderStore.createIndex('commissionedAtUtc', 'commissionedAtUtc', { unique: false });
                 console.log('[IndexedDB] Repaired missing Trade order store');
+            }
+
+            if (!database.objectStoreNames.contains(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS)) {
+                const snapshotStore = database.createObjectStore(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS, { keyPath: 'id' });
+                snapshotStore.createIndex('companyProfileId', 'companyProfileId', { unique: false });
+                snapshotStore.createIndex('orderId', 'orderId', { unique: false });
+                snapshotStore.createIndex('updatedAtUtc', 'updatedAtUtc', { unique: false });
+                console.log('[IndexedDB] Repaired missing Trade order craft snapshot store');
+            }
+
+            if (!database.objectStoreNames.contains(STORE_TRADE_PAYROLL_DRAFTS)) {
+                const payrollStore = database.createObjectStore(STORE_TRADE_PAYROLL_DRAFTS, { keyPath: 'id' });
+                payrollStore.createIndex('companyProfileId', 'companyProfileId', { unique: false });
+                payrollStore.createIndex('orderId', 'orderId', { unique: false });
+                payrollStore.createIndex('planSessionVersion', 'planSessionVersion', { unique: false });
+                payrollStore.createIndex('updatedAtUtc', 'updatedAtUtc', { unique: false });
+                console.log('[IndexedDB] Repaired missing Trade payroll draft store');
             }
         };
         request.onsuccess = () => {
@@ -423,6 +463,21 @@ async function loadStoreRecords(storeName) {
     });
 }
 
+async function loadStoreRecord(storeName, id) {
+    let database = await initDB();
+    database = await ensureTradeStores(database);
+    requireTradeStore(database, storeName);
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([storeName], 'readonly');
+        const store = transaction.objectStore(storeName);
+        const request = store.get(id);
+
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error);
+    });
+}
+
 async function deleteStoreRecord(storeName, id) {
     let database = await initDB();
     database = await ensureTradeStores(database);
@@ -472,6 +527,40 @@ async function loadTradeOrders(companyProfileId) {
 
 async function deleteTradeOrder(orderId) {
     return await deleteStoreRecord(STORE_TRADE_ORDERS, orderId);
+}
+
+async function saveTradeOrderCraftSnapshot(snapshot) {
+    return await saveStoreRecord(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS, snapshot);
+}
+
+async function loadTradeOrderCraftSnapshot(snapshotId) {
+    return await loadStoreRecord(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS, snapshotId);
+}
+
+async function loadTradeOrderCraftSnapshotsForCompany(companyProfileId) {
+    const snapshots = await loadStoreRecords(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS);
+    return snapshots
+        .filter(snapshot => snapshot.companyProfileId === companyProfileId)
+        .sort((a, b) => String(b.updatedAtUtc || '').localeCompare(String(a.updatedAtUtc || '')));
+}
+
+async function deleteTradeOrderCraftSnapshot(snapshotId) {
+    return await deleteStoreRecord(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS, snapshotId);
+}
+
+async function saveTradePayrollDraft(draft) {
+    return await saveStoreRecord(STORE_TRADE_PAYROLL_DRAFTS, draft);
+}
+
+async function loadTradePayrollDrafts(companyProfileId) {
+    const drafts = await loadStoreRecords(STORE_TRADE_PAYROLL_DRAFTS);
+    return drafts
+        .filter(draft => draft.companyProfileId === companyProfileId)
+        .sort((a, b) => String(b.updatedAtUtc || '').localeCompare(String(a.updatedAtUtc || '')));
+}
+
+async function deleteTradePayrollDraft(draftId) {
+    return await deleteStoreRecord(STORE_TRADE_PAYROLL_DRAFTS, draftId);
 }
 
 async function readPlanSummaries(database) {
@@ -1006,7 +1095,14 @@ window.IndexedDB = {
     saveTradeOrder,
     loadTradeOrders,
     deleteTradeOrder,
+    saveTradeOrderCraftSnapshot,
+    loadTradeOrderCraftSnapshot,
+    loadTradeOrderCraftSnapshotsForCompany,
+    deleteTradeOrderCraftSnapshot,
+    saveTradePayrollDraft,
+    loadTradePayrollDrafts,
+    deleteTradePayrollDraft,
     getTradeStoreDiagnostics
 };
 
-console.log('[IndexedDB] Module loaded (v6 with Trade operations repair)');
+console.log('[IndexedDB] Module loaded (v8 with Trade order craft snapshots)');

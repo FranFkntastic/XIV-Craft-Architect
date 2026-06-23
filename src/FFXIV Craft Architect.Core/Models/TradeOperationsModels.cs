@@ -54,9 +54,21 @@ public sealed class TradeCrafterProfile
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid CompanyProfileId { get; set; }
     public string DisplayName { get; set; } = string.Empty;
+    public string? Alias { get; set; }
     public string? ContactHandle { get; set; }
+    public string? DiscordHandle { get; set; }
+    public string? SocialProfileUrl { get; set; }
     public string? WorldName { get; set; }
     public string? DataCenter { get; set; }
+    public string? LodestoneCharacterId { get; set; }
+    public string? LodestoneProfileUrl { get; set; }
+    public DateTime? LodestoneLastSyncedAtUtc { get; set; }
+    public string? LodestoneAvatarUrl { get; set; }
+    public string? LodestonePortraitUrl { get; set; }
+    public string? LodestoneFreeCompanyName { get; set; }
+    public string? LodestoneRace { get; set; }
+    public string? LodestoneClan { get; set; }
+    public string? LodestoneGender { get; set; }
     public string? AvailabilityNotes { get; set; }
     public string? PaymentNotes { get; set; }
     public string? OperatorNotes { get; set; }
@@ -101,6 +113,19 @@ public static class TradeOrderStatusWorkflow
     }
 }
 
+public enum TradeOrderSourceKind
+{
+    ActiveCraftPlan,
+    TradeRequestedOutputs,
+    ImportedExternal
+}
+
+public enum TradeOrderCraftPlanLinkKind
+{
+    Unknown,
+    OrderGenerated
+}
+
 public sealed class TradeOrder
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -115,21 +140,37 @@ public sealed class TradeOrder
     public TradeOrderSourceSnapshot SourceSnapshot { get; set; } = new();
     public IReadOnlyList<TradeOrderHistoryEvent> History { get; set; } = Array.Empty<TradeOrderHistoryEvent>();
     public string? PayrollDraftId { get; set; }
+    public string? CraftPlanId { get; set; }
+    public string? CraftPlanName { get; set; }
+    public DateTime? CraftPlanSavedAtUtc { get; set; }
+    public TradeOrderCraftPlanLinkKind CraftPlanLinkKind { get; set; } = TradeOrderCraftPlanLinkKind.Unknown;
     public string? RemoteId { get; set; }
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;
 }
 
 public sealed class TradeOrderSourceSnapshot
 {
+    public TradeOrderSourceKind SourceKind { get; set; } = TradeOrderSourceKind.ActiveCraftPlan;
+    public string? SourcePlanId { get; set; }
     public string SourcePlanName { get; set; } = "Active craft plan";
+    public string? DataCenter { get; set; }
+    public string? World { get; set; }
     public long PlanSessionVersion { get; set; }
     public long MarketAnalysisVersion { get; set; }
     public DateTime ImportedAtUtc { get; set; } = DateTime.UtcNow;
     public IReadOnlyList<TradeOrderRootItemSnapshot> RootItems { get; set; } = Array.Empty<TradeOrderRootItemSnapshot>();
     public IReadOnlyList<TradeOrderMaterialSnapshot> Materials { get; set; } = Array.Empty<TradeOrderMaterialSnapshot>();
+    public IReadOnlyList<string> Warnings { get; set; } = Array.Empty<string>();
 }
 
 public sealed record TradeOrderRootItemSnapshot(
+    int ItemId,
+    string Name,
+    int Quantity,
+    bool MustBeHq,
+    decimal EstimatedSaleValue);
+
+public sealed record TradeRequestedOrderOutput(
     int ItemId,
     string Name,
     int Quantity,
@@ -142,7 +183,11 @@ public sealed record TradeOrderMaterialSnapshot(
     int Quantity,
     bool RequiresHq,
     decimal UnitCost,
-    decimal TotalCost);
+    decimal TotalCost,
+    string EvidenceSource = "",
+    string UnitCostExplanation = "",
+    DateTime? EvidenceTimestampUtc = null,
+    IReadOnlyList<string>? Warnings = null);
 
 public enum TradeOrderHistoryEventKind
 {
@@ -152,7 +197,9 @@ public enum TradeOrderHistoryEventKind
     ManualNote,
     Closed,
     Reopened,
-    PayrollLinked
+    PayrollLinked,
+    CraftPlanLinked,
+    PricingRefreshed
 }
 
 public sealed class TradeOrderHistoryEvent

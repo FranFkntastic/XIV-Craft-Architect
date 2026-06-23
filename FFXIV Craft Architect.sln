@@ -13,6 +13,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFXIV Craft Architect.Tests
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFXIV Craft Architect.Desktop", "src\FFXIV Craft Architect.Desktop\FFXIV Craft Architect.Desktop.csproj", "{2161B14D-5460-4562-9C2B-FAB8B38E9627}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFXIV Craft Architect.LodestoneLookup", "src\FFXIV Craft Architect.LodestoneLookup\FFXIV Craft Architect.LodestoneLookup.csproj", "{3EF2D27B-B71D-4D47-A511-2943190CB97D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FFXIV Craft Architect.LocalLauncher", "src\FFXIV Craft Architect.LocalLauncher\FFXIV Craft Architect.LocalLauncher.csproj", "{2C31C29D-4D94-4BB4-A368-9294EC4B125F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -71,6 +75,30 @@ Global
 		{2161B14D-5460-4562-9C2B-FAB8B38E9627}.Release|x64.Build.0 = Release|Any CPU
 		{2161B14D-5460-4562-9C2B-FAB8B38E9627}.Release|x86.ActiveCfg = Release|Any CPU
 		{2161B14D-5460-4562-9C2B-FAB8B38E9627}.Release|x86.Build.0 = Release|Any CPU
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D}.Debug|x64.Build.0 = Debug|Any CPU
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D}.Debug|x86.Build.0 = Debug|Any CPU
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D}.Release|x64.ActiveCfg = Release|Any CPU
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D}.Release|x64.Build.0 = Release|Any CPU
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D}.Release|x86.ActiveCfg = Release|Any CPU
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D}.Release|x86.Build.0 = Release|Any CPU
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F}.Debug|x64.Build.0 = Debug|Any CPU
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F}.Debug|x86.Build.0 = Debug|Any CPU
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F}.Release|x64.ActiveCfg = Release|Any CPU
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F}.Release|x64.Build.0 = Release|Any CPU
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F}.Release|x86.ActiveCfg = Release|Any CPU
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -78,6 +106,8 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{ED89D000-A3F1-4D9F-B197-77A6254C007D} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{2161B14D-5460-4562-9C2B-FAB8B38E9627} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{3EF2D27B-B71D-4D47-A511-2943190CB97D} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{2C31C29D-4D94-4BB4-A368-9294EC4B125F} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {D4BD84F2-024E-4FE8-9ECE-444D652AB95C}

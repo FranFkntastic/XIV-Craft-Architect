@@ -82,7 +82,7 @@ public class CancellableOperationServiceTests
     }
 
     [Fact]
-    public void CancelPlanDependentOperations_CancelsAnalysisAndRefreshWorkflowsButKeepsBuildActive()
+    public void CancelPlanDependentOperations_CancelsAnalysisRefreshAndTradePricingWorkflowsButKeepsBuildActive()
     {
         var appState = new AppState();
         using var service = new CancellableOperationService(appState);
@@ -106,6 +106,10 @@ public class CancellableOperationServiceTests
             CancellableOperationWorkflow.ItemMarketRefresh,
             "Item Refresh",
             "Refreshing item");
+        using var tradePricing = service.Start(
+            CancellableOperationWorkflow.TradeOrderPricing,
+            "Trade Order Pricing",
+            "Pricing order");
 
         service.CancelPlanDependentOperations();
 
@@ -115,6 +119,8 @@ public class CancellableOperationServiceTests
         Assert.True(market.Token.IsCancellationRequested);
         Assert.True(procurement.Token.IsCancellationRequested);
         Assert.True(itemRefresh.Token.IsCancellationRequested);
+        Assert.True(tradePricing.Token.IsCancellationRequested);
+        Assert.False(tradePricing.IsCurrent);
     }
 
     [Fact]

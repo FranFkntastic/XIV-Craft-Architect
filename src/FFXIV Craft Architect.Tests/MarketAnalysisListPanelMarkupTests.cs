@@ -146,7 +146,7 @@ public class MarketAnalysisListPanelMarkupTests
         Assert.Contains("72", priceBandTable.TextContent);
         Assert.Contains("3", priceBandTable.TextContent);
         Assert.Contains("2", priceBandTable.TextContent);
-        Assert.Contains("Competitive", priceBandTable.TextContent);
+        Assert.Contains("Acceptable", priceBandTable.TextContent);
         Assert.Contains("deep", priceBandTable.TextContent);
         Assert.Empty(component.FindAll(".ma-price-band-listing-grid"));
         Assert.DoesNotContain("Band Retainer", component.Markup);

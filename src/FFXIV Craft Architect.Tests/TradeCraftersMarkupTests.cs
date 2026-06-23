@@ -13,33 +13,51 @@ public class TradeCraftersMarkupTests
         Assert.Contains("TradeCraftingJob", source);
         Assert.Contains("Carpenter", source);
         Assert.Contains("Culinarian", source);
+        Assert.Contains("ILodestoneCrafterLookupService", source);
+        Assert.Contains("Import from Lodestone", source);
+        Assert.Contains("Search Lodestone", source);
+        Assert.Contains("Entire region", source);
+        Assert.Contains("Selected data center", source);
+        Assert.Contains("Specific world", source);
+        Assert.Contains("Tooltip=", source);
+        Assert.Contains("LodestoneSearchScope", source);
+        Assert.Contains("GetLodestoneSearchWorlds", source);
+        Assert.Contains("CompactSelectField", source);
+        Assert.DoesNotContain("MudSelect", source);
+        Assert.Contains("PreviewLodestoneCandidateAsync", source);
+        Assert.Contains("CreateCrafterFromLodestoneAsync", source);
+        Assert.Contains("Alias", source);
+        Assert.Contains("Discord", source);
+        Assert.Contains("Social/profile URL", source);
+        Assert.Contains("trade-crafter-lodestone-flair", source);
         Assert.DoesNotContain("Miner", source);
         Assert.DoesNotContain("Botanist", source);
         Assert.DoesNotContain("Fisher", source);
     }
 
     [Fact]
-    public void TradeCraftersPage_ShowsAssignmentsOnlyInDetailPanel()
+    public void TradeCraftersPage_ShowsAssignmentsInRosterAndDetailPanel()
     {
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Pages", "TradeCrafters.razor"));
 
         Assert.Contains("Crafter Details", source);
         Assert.Contains("Current Assignments", source);
+        Assert.Contains("TradeCrafterColumn.Assignments", source);
+        Assert.Contains("OpenOrderAssignment", source);
+        Assert.Contains("trade/orders?orderId=", source);
         Assert.Contains("_selectedCrafter", source);
-        Assert.DoesNotContain("current-assignment-column", source);
     }
 
     [Fact]
-    public void MainLayout_TradeModeShowsOrdersCraftersAndPayrollTabs()
+    public void MainLayout_TradeModeShowsOrdersAndCraftersTabs()
     {
         var source = File.ReadAllText(GetWorkspacePath("src", "FFXIV Craft Architect.Web", "Shared", "MainLayout.razor"));
 
         Assert.Contains("NavigateTo(\"trade/orders\")", source);
         Assert.Contains("NavigateTo(\"trade/crafters\")", source);
-        Assert.Contains("NavigateTo(\"trade\")", source);
         Assert.Contains("Orders", source);
         Assert.Contains("Crafters", source);
-        Assert.Contains("Payroll", source);
+        Assert.DoesNotContain(">Payroll", source);
     }
 
     private static string GetWorkspacePath(params string[] parts)

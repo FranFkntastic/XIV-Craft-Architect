@@ -50,21 +50,11 @@
                     <MudMenuItem OnClick="@(() => NavigateTo(""))" Icon="@Icons.Material.Filled.Build">
                         FFXIV Craft Architect
                     </MudMenuItem>
-                    <MudMenuItem OnClick="@(() => NavigateTo("trade"))" Icon="@Icons.Material.Filled.Payments">
+                    <MudMenuItem OnClick="@(() => NavigateTo("trade/orders"))" Icon="@Icons.Material.Filled.Payments">
                         FFXIV Trade Architect
                     </MudMenuItem>
                 </ChildContent>
             </MudMenu>
-            @if (IsTradeMode)
-            {
-                <MudChip T="string"
-                         Size="Size.Small"
-                         Color="Color.Warning"
-                         Variant="Variant.Outlined"
-                         Style="margin-right: 16px;">
-                    Experimental
-                </MudChip>
-            }
         }
         else
         {
@@ -77,18 +67,15 @@
             {
                 <MudButton OnClick="@(() => NavigateTo("trade/orders"))"
                            Color="@GetTabColor("orders")"
-                           Variant="@GetTabVariant("orders")">
+                           Variant="@GetTabVariant("orders")"
+                           Style="@GetTabStyle("orders")">
                     Orders
                 </MudButton>
                 <MudButton OnClick="@(() => NavigateTo("trade/crafters"))"
                            Color="@GetTabColor("crafters")"
-                           Variant="@GetTabVariant("crafters")">
+                           Variant="@GetTabVariant("crafters")"
+                           Style="@GetTabStyle("crafters")">
                     Crafters
-                </MudButton>
-                <MudButton OnClick="@(() => NavigateTo("trade"))"
-                           Color="@GetTabColor("payroll")"
-                           Variant="@GetTabVariant("payroll")">
-                    Payroll
                 </MudButton>
             }
             else
@@ -451,7 +438,7 @@
         else if (IsTradeRoute(uri) && uriLower.Contains("/trade/crafters"))
             _activeTab = "crafters";
         else if (IsTradeRoute(uri))
-            _activeTab = "payroll";
+            _activeTab = "orders";
         else if (uriLower.Contains("/procurement"))
             _activeTab = "procurement";
         else if (uriLower.Contains("/acquisition"))
@@ -480,6 +467,17 @@
     private Variant GetTabVariant(string tab)
     {
         return IsActiveTab(tab) ? Variant.Filled : Variant.Text;
+    }
+
+    private string? GetTabStyle(string tab)
+    {
+        if (!IsActiveTab(tab))
+        {
+            return "text-transform: none;";
+        }
+
+        var accent = IsTradeMode ? "#8fbf7f" : "#d4a73a";
+        return $"background-color: {accent}; color: #111; font-weight: 700; text-transform: none;";
     }
 
     private void NavigateTo(string page)

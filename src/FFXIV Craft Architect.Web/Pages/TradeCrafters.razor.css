@@ -16,10 +16,26 @@
 
 .trade-crafters-header,
 .trade-crafters-create-row {
+  gap: 12px;
+}
+
+.trade-crafters-header {
   display: flex;
   align-items: end;
   justify-content: space-between;
+}
+
+.trade-crafters-create-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(160px, 210px)) auto;
+  align-items: end;
+}
+
+.trade-crafters-lodestone-search-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 230px) minmax(180px, 230px) auto;
   gap: 12px;
+  align-items: end;
 }
 
 .trade-crafters-panel {
@@ -65,6 +81,30 @@
   margin-bottom: 12px;
 }
 
+.trade-crafter-lodestone-flair {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  margin: 8px 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.trade-crafter-lodestone-flair img {
+  width: 72px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.trade-crafter-lodestone-flair div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .trade-crafters-detail {
   position: sticky;
   top: 16px;
@@ -72,8 +112,98 @@
 }
 
 .trade-crafter-assignments {
-  margin: 8px 0 0;
-  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.trade-crafter-assignment-cell {
+  min-width: 0;
+}
+
+.trade-crafter-assignment-empty {
+  color: #9f9f9f;
+}
+
+.trade-crafter-assignment-chip,
+.trade-crafter-assignment-link {
+  border: 1px solid #4b5f3c;
+  border-radius: 6px;
+  background: #20281d;
+  color: #d7f1c3;
+  cursor: pointer;
+  text-align: left;
+}
+
+.trade-crafter-assignment-chip {
+  max-width: 100%;
+  padding: 4px 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-crafter-assignment-link {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+}
+
+.trade-crafter-assignment-link span,
+.trade-crafter-assignment-link small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-crafter-assignment-link small {
+  color: #b8c9ad;
+}
+
+.trade-crafters-lodestone-results,
+.trade-crafters-lodestone-preview {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  min-width: 0;
+}
+
+.trade-crafters-lodestone-result {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.trade-crafters-lodestone-result:hover {
+  border-color: rgba(146, 198, 99, 0.55);
+}
+
+.trade-crafters-lodestone-result span,
+.trade-crafters-lodestone-result small,
+.trade-crafters-lodestone-preview span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.trade-crafters-lodestone-result small,
+.trade-crafters-lodestone-preview span {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.trade-crafters-lodestone-preview-heading,
+.trade-crafters-lodestone-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 @media (max-width: 1100px) {
@@ -87,6 +217,10 @@
 
   .trade-crafters-create-row {
     display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .trade-crafters-lodestone-search-row {
     grid-template-columns: 1fr;
   }
 }

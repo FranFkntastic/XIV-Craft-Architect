@@ -172,6 +172,7 @@ public class AppState
     public bool MarketAnalysisGridSortDescending { get; private set; }
     public MarketAnalysisWorldGridSortColumn? MarketAnalysisWorldGridSortColumn { get; private set; }
     public bool MarketAnalysisWorldGridSortDescending { get; private set; }
+    public Guid? SelectedTradeOrderId { get; private set; }
     
     // Persistence state
     public bool IsAutoSaveEnabled { get; private set; } = true;
@@ -864,6 +865,22 @@ public class AppState
         PublishChange(AppStateChangeScope.MarketAnalysisView);
     }
 
+    public void SelectTradeOrder(Guid? orderId)
+    {
+        if (SelectedTradeOrderId == orderId)
+        {
+            return;
+        }
+
+        SelectedTradeOrderId = orderId;
+        PublishChange(AppStateChangeScope.TradeOperationsView);
+    }
+
+    public void NotifyTradeOperationsDataChanged()
+    {
+        PublishChange(AppStateChangeScope.TradeOperationsData);
+    }
+
     public void ClearMarketAnalysisState()
     {
         _shoppingPlans.Clear();
@@ -1433,44 +1450,50 @@ public class AppState
         PlanSessionLoadResult session,
         bool trackStoredPlanIdentity = true)
     {
-        using var batch = BeginStateChangeBatch();
         var storedPlan = session.StoredPlan;
+        using (BeginStateChangeBatch())
+        {
+            SelectedDataCenter = storedPlan.DataCenter;
+            ReplaceListContents(_projectItems, session.ProjectItems.Select(CloneProjectItem));
+            CurrentPlan = session.Plan;
+            AdvancePlanSession();
+            AutoExpandItemId = null;
+            ReplaceListContents(_marketItemAnalyses, session.MarketItemAnalyses);
+            ReplaceListContents(_shoppingPlans, session.ShoppingPlans);
+            UnavailableMarketItems = session.MarketIntelligence?.UnavailableMarketItems.ToArray()
+                ?? Array.Empty<CoreMarketDataUnavailableItem>();
+            _marketIntelligenceId = session.MarketIntelligence?.MarketIntelligenceId ?? Guid.Empty;
+            _marketAnalysisRecipeBasis = CloneRecipeBasis(session.MarketAnalysisRecipeBasis);
+            _publishedMarketAnalysisScope = session.PublishedMarketAnalysisScope;
+            ClearMarketAnalysisViewState(publishChange: false);
+            RecommendationMode = session.MarketIntelligence?.RecommendationMode ?? storedPlan.SavedRecommendationMode;
+            MarketAnalysisLens = session.MarketIntelligence?.Lens ?? storedPlan.SavedMarketAnalysisLens;
+            ClearProcurementOverlay();
 
-        SelectedDataCenter = storedPlan.DataCenter;
-        ReplaceListContents(_projectItems, session.ProjectItems.Select(CloneProjectItem));
-        CurrentPlan = session.Plan;
-        AdvancePlanSession();
-        AutoExpandItemId = null;
-        ReplaceListContents(_marketItemAnalyses, session.MarketItemAnalyses);
-        ReplaceListContents(_shoppingPlans, session.ShoppingPlans);
-        UnavailableMarketItems = session.MarketIntelligence?.UnavailableMarketItems.ToArray()
-            ?? Array.Empty<CoreMarketDataUnavailableItem>();
-        _marketIntelligenceId = session.MarketIntelligence?.MarketIntelligenceId ?? Guid.Empty;
-        _marketAnalysisRecipeBasis = CloneRecipeBasis(session.MarketAnalysisRecipeBasis);
-        _publishedMarketAnalysisScope = session.PublishedMarketAnalysisScope;
-        ClearMarketAnalysisViewState(publishChange: false);
-        RecommendationMode = session.MarketIntelligence?.RecommendationMode ?? storedPlan.SavedRecommendationMode;
-        MarketAnalysisLens = session.MarketIntelligence?.Lens ?? storedPlan.SavedMarketAnalysisLens;
-        ClearProcurementOverlay();
-        
-        // Track the loaded plan ID for save-overwrite behavior
+            // Track the loaded plan ID for save-overwrite behavior
+            if (trackStoredPlanIdentity)
+            {
+                CurrentPlanId = storedPlan.Id;
+                CurrentPlanName = storedPlan.Name;
+            }
+            else
+            {
+                CurrentPlanId = storedPlan.SourcePlanId;
+                CurrentPlanName = storedPlan.SourcePlanName;
+            }
+
+            _shoppingItems.Clear();
+            SyncProjectToShopping();
+
+            NotifySettingsChanged();
+            NotifyPlanChanged();
+            NotifyShoppingListChanged();
+        }
+
         if (trackStoredPlanIdentity)
         {
-            CurrentPlanId = storedPlan.Id;
-            CurrentPlanName = storedPlan.Name;
+            MarkPersisted(PersistedStateBucket.PlanCore | PersistedStateBucket.MarketAnalysis, CurrentVersions);
         }
-        else
-        {
-            CurrentPlanId = storedPlan.SourcePlanId;
-            CurrentPlanName = storedPlan.SourcePlanName;
-        }
-
-        _shoppingItems.Clear();
-        SyncProjectToShopping();
-
-        NotifySettingsChanged();
-        NotifyPlanChanged();
-        NotifyShoppingListChanged();
     }
 
     public IDisposable BeginStateChangeBatch()
@@ -1870,6 +1893,8 @@ public enum AppStateChangeScope
     Settings = 1 << 6,
     Status = 1 << 7,
     MarketAnalysisView = 1 << 8,
+    TradeOperationsView = 1 << 9,
+    TradeOperationsData = 1 << 10,
     PlanCore = PlanStructure | PlanDecision | PlanPrice | Settings
 }
 

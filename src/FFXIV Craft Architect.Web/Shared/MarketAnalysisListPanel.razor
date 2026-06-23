@@ -648,9 +648,9 @@
     {
         return competitiveness switch
         {
-            PriceBandCompetitiveness.LowOutlier => "Low outlier",
-            PriceBandCompetitiveness.Competitive => "Competitive",
-            PriceBandCompetitiveness.Uncompetitive => "Uncompetitive",
+            PriceBandCompetitiveness.LowOutlier => "Deal",
+            PriceBandCompetitiveness.Competitive => "Acceptable",
+            PriceBandCompetitiveness.Uncompetitive => "Pricy",
             PriceBandCompetitiveness.Insane => "Insane",
             _ => "Unclassified"
         };
@@ -754,7 +754,7 @@
 
         if (listing.Competitiveness is MarketListingCompetitiveness.Fair or MarketListingCompetitiveness.Uncompetitive)
         {
-            return "uncompetitive";
+            return "pricy";
         }
 
         return string.Empty;

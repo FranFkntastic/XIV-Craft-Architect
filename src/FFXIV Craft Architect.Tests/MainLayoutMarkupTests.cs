@@ -43,10 +43,13 @@ public class MainLayoutMarkupTests
 
         Assert.Contains("@if (AppState.SecretDebugToolsEnabled)", source);
         Assert.Contains("FFXIV Trade Architect", source);
-        Assert.Contains("NavigateTo(\"trade\")", source);
+        Assert.Contains("NavigateTo(\"trade/orders\")", source);
         Assert.Contains("IsTradeMode", source);
         Assert.Contains("font-size: 1rem", source);
         Assert.Contains("margin-right: 24px", source);
+        Assert.DoesNotContain(">Payroll", source);
+        Assert.DoesNotContain("Experimental", source);
+        Assert.DoesNotContain("Color.Warning", source);
     }
 
     [Fact]

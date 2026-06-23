@@ -38,13 +38,28 @@ public sealed class CommissionCostBasisResolver
         DateTime? evidenceTimestampUtc = null;
         var unitCost = item.UnitPrice;
 
-        if (analysesByItemId.TryGetValue(item.ItemId, out var analysis))
+        analysesByItemId.TryGetValue(item.ItemId, out var analysis);
+        plansByItemId.TryGetValue(item.ItemId, out var shoppingPlan);
+
+        var selectedCost = shoppingPlan != null
+            ? SelectAcquisitionUnitCost(item, shoppingPlan)
+            : null;
+
+        if (selectedCost == null && analysis != null)
         {
-            var selectedCost = SelectUnitCost(analysis);
+            selectedCost = SelectUnitCost(analysis);
+        }
+
+        if (selectedCost != null)
+        {
             unitCost = selectedCost.UnitCost;
-            evidenceTimestampUtc = analysis.LoadedAtUtc;
+            evidenceTimestampUtc = selectedCost.EvidenceTimestampUtc ?? analysis?.LoadedAtUtc;
             evidenceSource = selectedCost.SourceLabel;
             unitCostExplanation = $"{item.Name} unit cost uses {selectedCost.SourceDescription}: {unitCost:N0}g.";
+        }
+
+        if (analysis != null)
+        {
 
             if (unitCost <= 0)
             {
@@ -56,29 +71,29 @@ public sealed class CommissionCostBasisResolver
                 warnings.Add($"Market evidence for {item.Name} is missing at least one requested data center.");
             }
 
-            if (plansByItemId.TryGetValue(item.ItemId, out var shoppingPlan))
-            {
-                var contexts = GetRecommendationDataAgeContexts(shoppingPlan).ToArray();
-                var staleContexts = contexts
-                    .Where(context => context.Bucket is MarketDataQualityBucket.VeryOld or MarketDataQualityBucket.Ancient)
-                    .ToArray();
-                warnings.AddRange(staleContexts.Select(context => FormatRecommendationWarning(item.Name, context)));
-
-                var tooltipContext = staleContexts.FirstOrDefault();
-                if (tooltipContext != null)
-                {
-                    unitCostExplanation += $" {FormatRecommendationTooltip(tooltipContext)}";
-                }
-            }
-
             if (!string.IsNullOrWhiteSpace(analysis.Warning))
             {
                 warnings.Add($"{item.Name}: {analysis.Warning}");
             }
         }
-        else
+        else if (selectedCost == null)
         {
             warnings.Add($"No market-analysis evidence was available for {item.Name}.");
+        }
+
+        if (shoppingPlan != null)
+        {
+            var contexts = GetRecommendationDataAgeContexts(shoppingPlan).ToArray();
+            var staleContexts = contexts
+                .Where(context => context.Bucket is MarketDataQualityBucket.VeryOld or MarketDataQualityBucket.Ancient)
+                .ToArray();
+            warnings.AddRange(staleContexts.Select(context => FormatRecommendationWarning(item.Name, context)));
+
+            var tooltipContext = staleContexts.FirstOrDefault();
+            if (tooltipContext != null)
+            {
+                unitCostExplanation += $" {FormatRecommendationTooltip(tooltipContext)}";
+            }
         }
 
         if (unitCost <= 0)
@@ -183,14 +198,78 @@ public sealed class CommissionCostBasisResolver
         return string.Equals(left?.Trim(), right?.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
+    private static SelectedUnitCost? SelectAcquisitionUnitCost(
+        MaterialAggregate item,
+        DetailedShoppingPlan shoppingPlan)
+    {
+        var acquisition = MarketPurchaseCostProjectionService.Estimate(
+            shoppingPlan,
+            item.TotalQuantity,
+            item.RequiresHq,
+            includeVendor: true);
+        if (!acquisition.IsDefaultEligible || !acquisition.HasCost || item.TotalQuantity <= 0)
+        {
+            return null;
+        }
+
+        var unitCost = Math.Ceiling(acquisition.Cost / item.TotalQuantity);
+        var source = FormatAcquisitionSource(shoppingPlan, acquisition);
+        return new SelectedUnitCost(
+            unitCost,
+            source.Label,
+            source.Description,
+            acquisition.World?.MarketUploadedAtUtc);
+    }
+
+    private static (string Label, string Description) FormatAcquisitionSource(
+        DetailedShoppingPlan shoppingPlan,
+        MarketPurchaseCostEstimate acquisition)
+    {
+        if (string.Equals(
+                shoppingPlan.RecommendedWorld?.WorldName,
+                MarketShoppingConstants.VendorWorldName,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return ("Vendor price", "loaded gil vendor pricing");
+        }
+
+        if (shoppingPlan.RecommendedSplit is { Count: > 0 } && acquisition.World == null)
+        {
+            return ("Split procurement route", "the recommended split procurement route");
+        }
+
+        if (acquisition.World != null)
+        {
+            return ("Procurement route", $"the recommended procurement route from {acquisition.World.WorldName}");
+        }
+
+        return ("Procurement route", "the recommended procurement route");
+    }
+
     private static SelectedUnitCost SelectUnitCost(MarketItemAnalysis analysis)
     {
+        if (analysis.CostToCoverUnitPrice > 0)
+        {
+            return new SelectedUnitCost(
+                analysis.CostToCoverUnitPrice,
+                "Primary procurement shelf",
+                "the primary procurement shelf cost to cover the requested quantity");
+        }
+
+        if (analysis.PrimaryProcurementShelfAverageUnitPrice > 0)
+        {
+            return new SelectedUnitCost(
+                analysis.PrimaryProcurementShelfAverageUnitPrice,
+                "Primary procurement shelf",
+                "the primary procurement shelf average");
+        }
+
         if (analysis.AnalysisCompetitiveAverageUnitPrice > 0)
         {
             return new SelectedUnitCost(
                 analysis.AnalysisCompetitiveAverageUnitPrice,
-                "Market competitive average",
-                "the market-analysis competitive average");
+                "Market evidence fallback",
+                "the broad market evidence fallback");
         }
 
         if (analysis.AnalysisScopeAverageUnitPrice > 0)
@@ -218,7 +297,8 @@ public sealed class CommissionCostBasisResolver
     private sealed record SelectedUnitCost(
         decimal UnitCost,
         string SourceLabel,
-        string SourceDescription);
+        string SourceDescription,
+        DateTime? EvidenceTimestampUtc = null);
 
     private sealed record RecommendationDataAgeContext(
         string DataCenter,

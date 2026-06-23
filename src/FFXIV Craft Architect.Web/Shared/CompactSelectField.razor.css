@@ -1,0 +1,36 @@
+.compact-select-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.compact-select-field-label {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.compact-select-field-select {
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid #595959;
+  border-radius: 5px;
+  background-color: #1f1f1f;
+  color: #f3f3f3;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 8px;
+}
+
+.compact-select-field-select:focus-visible {
+  border-color: #92c663;
+  outline: 1px solid #92c663;
+  outline-offset: 1px;
+}
+
+.compact-select-field-select:disabled {
+  opacity: 0.65;
+  cursor: default;
+}

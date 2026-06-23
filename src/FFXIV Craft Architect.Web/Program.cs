@@ -66,10 +66,56 @@ builder.Services.AddScoped<MarketAnalysisDiagnosticDumpService>();
 builder.Services.AddScoped<ProcurementWorkflowService>();
 builder.Services.AddScoped<AcquisitionEvaluationWorkflowService>();
 builder.Services.AddScoped<TradePayrollDraftFactory>();
+builder.Services.AddScoped<ITradePayrollDraftStore, IndexedDbTradePayrollDraftStore>();
+builder.Services.AddScoped<TradePayrollPersistenceService>();
 builder.Services.AddScoped<TradeOrderDraftFactory>();
+builder.Services.AddScoped<TradeOrderCraftPlanBuildService>();
+builder.Services.AddScoped<TradeOrderPricingWorkflowService>();
+builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
+builder.Services.AddScoped(_ => new LodestoneLookupClientOptions(new Uri(
+    builder.Configuration["LodestoneLookup:BaseAddress"] ?? "http://localhost:5128/")));
+builder.Services.AddScoped<ILodestoneCrafterLookupService>(sp =>
+{
+    var options = sp.GetRequiredService<LodestoneLookupClientOptions>();
+    var logger = sp.GetRequiredService<ILogger<HttpLodestoneCrafterLookupService>>();
+    return new HttpLodestoneCrafterLookupService(
+        new HttpClient
+        {
+            BaseAddress = options.BaseAddress,
+            Timeout = TimeSpan.FromSeconds(30)
+        },
+        options,
+        logger);
+});
 builder.Services.AddScoped<TradeOperationsPersistenceService>();
+builder.Services.AddScoped(_ => new LodestoneLookupClientOptions(ResolveLodestoneLookupBaseAddress(
+    builder.Configuration["LodestoneLookup:BaseAddress"],
+    builder.HostEnvironment.BaseAddress)));
+builder.Services.AddScoped<ILodestoneCrafterLookupService>(sp =>
+{
+    var httpClient = sp.GetRequiredService<HttpClient>();
+    var options = sp.GetRequiredService<LodestoneLookupClientOptions>();
+    var logger = sp.GetRequiredService<ILogger<HttpLodestoneCrafterLookupService>>();
+    return new HttpLodestoneCrafterLookupService(
+        httpClient,
+        options,
+        logger);
+});
 
 // Register IndexedDB service for browser persistence
 builder.Services.AddScoped<IndexedDbService>();
 
 await builder.Build().RunAsync();
+
+static Uri ResolveLodestoneLookupBaseAddress(string? configuredBaseAddress, string hostBaseAddress)
+{
+    if (string.IsNullOrWhiteSpace(configuredBaseAddress))
+    {
+        return new Uri("http://localhost:5128/");
+    }
+
+    var trimmed = configuredBaseAddress.Trim();
+    return Uri.TryCreate(trimmed, UriKind.Absolute, out var absoluteUri)
+        ? absoluteUri
+        : new Uri(new Uri(hostBaseAddress), trimmed);
+}

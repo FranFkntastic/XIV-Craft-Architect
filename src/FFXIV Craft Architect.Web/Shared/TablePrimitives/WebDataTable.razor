@@ -40,7 +40,7 @@
             @foreach (var item in Items)
             {
                 var key = GetRowKey?.Invoke(item);
-                <tr class="@GetBodyRowClass(item)" @key="key">
+                <tr class="@GetBodyRowClass(item)" @key="key" @onclick="@(() => OnRowClickedAsync(item))">
                     @foreach (var column in Columns)
                     {
                         <td class="@column.GetCellCssClass(item)" title="@column.CellTitleSelector?.Invoke(item)">
@@ -67,6 +67,7 @@
     [Parameter, EditorRequired] public IReadOnlyList<WebTableColumn<TItem, TColumnId>> Columns { get; set; } = [];
     [Parameter] public Func<TItem, string>? GetRowKey { get; set; }
     [Parameter] public Func<TItem, string>? GetRowClass { get; set; }
+    [Parameter] public EventCallback<TItem> RowClicked { get; set; }
     [Parameter] public Func<TItem, bool>? IsRowExpanded { get; set; }
     [Parameter] public RenderFragment<TItem>? ExpandedContent { get; set; }
     [Parameter] public RenderFragment? EmptyContent { get; set; }
@@ -98,6 +99,17 @@
 
     private string GetBodyRowClass(TItem item)
     {
-        return WebTableColumn<TItem, TColumnId>.CombineClasses("web-data-table-row", GetRowClass?.Invoke(item));
+        return WebTableColumn<TItem, TColumnId>.CombineClasses(
+            "web-data-table-row",
+            RowClicked.HasDelegate ? "is-clickable" : null,
+            GetRowClass?.Invoke(item));
+    }
+
+    private async Task OnRowClickedAsync(TItem item)
+    {
+        if (RowClicked.HasDelegate)
+        {
+            await RowClicked.InvokeAsync(item);
+        }
     }
 }

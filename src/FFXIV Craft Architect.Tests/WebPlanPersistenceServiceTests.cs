@@ -77,6 +77,90 @@ public class WebPlanPersistenceServiceTests
     }
 
     [Fact]
+    public async Task SaveGeneratedOrderPlanAsync_PreservesCurrentSessionMarketAnalysisPayloads()
+    {
+        var jsRuntime = new RecordingJsRuntime();
+        var appState = new AppState();
+        var plan = new CraftingPlan
+        {
+            DataCenter = "Aether",
+            RootItems =
+            [
+                new PlanNode
+                {
+                    ItemId = 100,
+                    Name = "Cobalt Ingot",
+                    NodeId = "root",
+                    Quantity = 999
+                }
+            ]
+        };
+        appState.ActivateRecipePlan(
+            plan,
+            [new ProjectItem { Id = 100, Name = "Cobalt Ingot", Quantity = 999 }],
+            "Aether",
+            clearCurrentPlanId: false,
+            []);
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 200,
+                    Name = "Cobalt Ore",
+                    QuantityNeeded = 1_998
+                }
+            ],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 200,
+                    Name = "Cobalt Ore",
+                    QuantityNeeded = 1_998
+                }
+            ],
+            publishedScope: new PublishedMarketAnalysisScopeSnapshot(
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                ["Aether"],
+                MarketAcquisitionLens.MinimumUpfrontCost,
+                1,
+                new DateTime(2026, 6, 19, 11, 0, 0, DateTimeKind.Utc)));
+        var service = CreateService(jsRuntime, appState);
+        var savedAt = new DateTime(2026, 6, 19, 12, 0, 0, DateTimeKind.Utc);
+
+        var saved = await service.SaveGeneratedOrderPlanAsync(
+            "order-plan-id",
+            "Order - Cobalt Ingot Commission",
+            plan,
+            [
+                new TradeOrderRootItemSnapshot(
+                    100,
+                    "Cobalt Ingot",
+                    999,
+                    MustBeHq: false,
+                    EstimatedSaleValue: 1_000_000m)
+            ],
+            savedAt);
+
+        Assert.True(saved);
+        Assert.NotNull(jsRuntime.LastSavedPlan);
+        Assert.Equal("order-plan-id", jsRuntime.LastSavedPlan.Id);
+        Assert.Equal("Order - Cobalt Ingot Commission", jsRuntime.LastSavedPlan.Name);
+        Assert.Equal("Aether", jsRuntime.LastSavedPlan.DataCenter);
+        Assert.Equal(savedAt, jsRuntime.LastSavedPlan.SavedAt);
+        var projectItem = Assert.Single(jsRuntime.LastSavedPlan.ProjectItems);
+        Assert.Equal(100, projectItem.Id);
+        Assert.Equal("Cobalt Ingot", projectItem.Name);
+        Assert.Equal(999, projectItem.Quantity);
+        Assert.NotNull(jsRuntime.LastSavedPlan.PlanJson);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketPlansJson);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketIntelligenceJson);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketItemAnalysesJson);
+        Assert.NotNull(jsRuntime.LastSavedPlan.MarketAnalysisScopeSnapshotJson);
+    }
+
+    [Fact]
     public void PlanSessionLoadService_Prepare_InvalidPlanJsonReturnsWarning()
     {
         var storedPlan = new StoredPlan

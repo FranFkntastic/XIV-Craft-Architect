@@ -28,6 +28,29 @@ public sealed class StoredPlanSnapshotBuilder
             includeLegacyMarketAnalysisFields);
     }
 
+    public StoredPlan? BuildForCurrentPlan(
+        string planId,
+        string planName,
+        CraftingPlan expectedPlan,
+        DateTime? savedAt = null,
+        bool includeSourcePlanIdentity = false,
+        bool includeLegacyMarketAnalysisFields = true)
+    {
+        ArgumentNullException.ThrowIfNull(expectedPlan);
+
+        if (!ReferenceEquals(_appState.CurrentPlan, expectedPlan))
+        {
+            return null;
+        }
+
+        return Build(
+            planId,
+            planName,
+            savedAt,
+            includeSourcePlanIdentity,
+            includeLegacyMarketAnalysisFields);
+    }
+
     public static StoredPlan Build(
         AppState appState,
         string planId,

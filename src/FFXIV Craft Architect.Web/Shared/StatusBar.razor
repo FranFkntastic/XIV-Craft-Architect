@@ -1,5 +1,7 @@
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
+@inject NavigationManager NavigationManager
+@inject TradeOperationsPersistenceService TradeOperationsPersistence
 @implements IDisposable
 
 <div class="status-bar">
@@ -19,6 +21,13 @@
     </div>
     
     <div class="status-center">
+        @if (IsTradeRoute && !string.IsNullOrWhiteSpace(_tradeCompanyName))
+        {
+            <span class="status-badge trade-company-badge">
+                <MudIcon Icon="@Icons.Material.Filled.Business" Size="Size.Small" />
+                @_tradeCompanyName
+            </span>
+        }
         @if (!string.IsNullOrEmpty(AppState.SelectedRegion))
         {
             <span class="status-badge region-badge">
@@ -131,6 +140,11 @@
         background: #2d4a3e;
         color: #90EE90;
     }
+
+    .status-badge.trade-company-badge {
+        background: #2e3f2a;
+        color: #b6d7a8;
+    }
     
     .status-right {
         display: flex;
@@ -153,16 +167,56 @@
 </style>
 
 @code {
+    private string? _tradeCompanyName;
+    private bool IsTradeRoute => NavigationManager
+        .ToBaseRelativePath(NavigationManager.Uri)
+        .TrimStart('/')
+        .StartsWith("trade", StringComparison.OrdinalIgnoreCase);
+
     protected override void OnInitialized()
     {
         AppState.OnStatusChanged += OnStatusChanged;
         AppState.OnShoppingListChanged += OnStatusChanged;
         AppState.OnPlanChanged += OnStatusChanged;
+        NavigationManager.LocationChanged += OnLocationChanged;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTradeCompanyNameAsync();
     }
     
     private void OnStatusChanged()
     {
         InvokeAsync(StateHasChanged);
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await LoadTradeCompanyNameAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task LoadTradeCompanyNameAsync()
+    {
+        if (!IsTradeRoute)
+        {
+            _tradeCompanyName = null;
+            return;
+        }
+
+        try
+        {
+            var profile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            _tradeCompanyName = profile.Name;
+        }
+        catch
+        {
+            _tradeCompanyName = null;
+        }
     }
     
     public void Dispose()
@@ -170,5 +224,6 @@
         AppState.OnStatusChanged -= OnStatusChanged;
         AppState.OnShoppingListChanged -= OnStatusChanged;
         AppState.OnPlanChanged -= OnStatusChanged;
+        NavigationManager.LocationChanged -= OnLocationChanged;
     }
 }

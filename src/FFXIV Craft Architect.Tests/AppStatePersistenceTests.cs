@@ -1095,6 +1095,41 @@ public class AppStatePersistenceTests
         Assert.Equal("Named Plan", appState.CurrentPlanName);
     }
 
+    [Fact]
+    public void LoadStoredPlan_TrackedStoredPlanStartsCleanForPersistenceGuard()
+    {
+        var appState = new AppState();
+        var storedPlan = new StoredPlan
+        {
+            Id = "order-plan-id",
+            Name = "Order - Cobalt Ingot Commission",
+            DataCenter = "Aether",
+            ProjectItems =
+            [
+                new StoredProjectItem
+                {
+                    Id = 123,
+                    Name = "Cobalt Ingot",
+                    Quantity = 999
+                }
+            ],
+            MarketItemAnalysesJson = System.Text.Json.JsonSerializer.Serialize(new List<MarketItemAnalysis>
+            {
+                new() { ItemId = 456, Name = "Cobalt Ore", QuantityNeeded = 1_998 }
+            }),
+            MarketPlansJson = System.Text.Json.JsonSerializer.Serialize(new List<DetailedShoppingPlan>
+            {
+                new() { ItemId = 456, Name = "Cobalt Ore", QuantityNeeded = 1_998 }
+            })
+        };
+
+        appState.LoadStoredPlan(storedPlan, deserializedPlan: null, trackStoredPlanIdentity: true);
+
+        Assert.Equal("order-plan-id", appState.CurrentPlanId);
+        Assert.Equal("Order - Cobalt Ingot Commission", appState.CurrentPlanName);
+        Assert.Equal(PersistedStateBucket.None, appState.GetDirtyPersistedBuckets());
+    }
+
     private static StoredRecipeOperationSnapshot CreateStoredRecipeBasis()
     {
         var stored = new StoredRecipeOperationSnapshot

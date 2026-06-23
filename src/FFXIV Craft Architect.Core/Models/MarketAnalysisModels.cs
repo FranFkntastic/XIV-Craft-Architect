@@ -130,6 +130,11 @@ public sealed class MarketItemAnalysis
     public decimal AnalysisScopeBaselineUnitPrice { get; init; }
     public decimal AnalysisScopeAverageUnitPrice { get; init; }
     public decimal AnalysisCompetitiveAverageUnitPrice { get; init; }
+    public int ProcurementSignalQuantity { get; init; }
+    public decimal PrimaryProcurementShelfAverageUnitPrice { get; init; }
+    public long CostToCoverTotalGil { get; init; }
+    public decimal CostToCoverUnitPrice { get; init; }
+    public long CostToCoverMaxUnitPrice { get; init; }
     public decimal AnalysisScopeMedianUnitPrice { get; init; }
     public decimal CompetitiveThresholdUnitPrice { get; init; }
     public decimal SaneThresholdUnitPrice { get; init; }
@@ -241,6 +246,9 @@ public sealed class WorldMarketAnalysis
     public int ScopeInsaneQuantity { get; init; }
     public int TotalSaneQuantity { get; init; }
     public int TotalListingQuantity { get; init; }
+    public long CostToCoverTotalGil { get; init; }
+    public decimal CostToCoverUnitPrice { get; init; }
+    public long CostToCoverMaxUnitPrice { get; init; }
     public decimal PrimaryUsableCoverageRatio { get; init; }
     public decimal PriceSignalCoverageRatio { get; init; }
     public decimal ScopeSaneCoverageRatio { get; init; }

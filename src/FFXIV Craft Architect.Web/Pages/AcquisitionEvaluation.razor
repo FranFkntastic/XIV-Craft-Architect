@@ -117,6 +117,9 @@
     [SupplyParameterFromQuery(Name = "nodeId")]
     public string? RequestedNodeId { get; set; }
 
+    [SupplyParameterFromQuery(Name = "itemId")]
+    public int? RequestedItemId { get; set; }
+
     private PlanNode? _selectedNode;
     private AcquisitionFilter _filter = AcquisitionFilter.All;
     private readonly AcquisitionEvaluationLedgerCache _ledgerCache = new();
@@ -132,6 +135,7 @@
     private CancellationTokenSource? _refreshCts;
     private long _refreshRequestId;
     private string? _appliedRequestedNodeId;
+    private int? _appliedRequestedItemId;
 
     protected override async Task OnInitializedAsync()
     {
@@ -144,6 +148,11 @@
         if (!string.Equals(RequestedNodeId, _appliedRequestedNodeId, StringComparison.Ordinal))
         {
             SelectRequestedNodeFromSnapshot();
+        }
+
+        if (RequestedItemId != _appliedRequestedItemId)
+        {
+            SelectRequestedItemFromSnapshot();
         }
     }
 
@@ -600,6 +609,11 @@
             return;
         }
 
+        if (SelectRequestedItemFromSnapshot())
+        {
+            return;
+        }
+
         if (_selectedNode == null || !_snapshot.Rows.Any(row => row.Node.NodeId == _selectedNode.NodeId))
         {
             _selectedNode = _snapshot.Rows.FirstOrDefault()?.Node;
@@ -622,6 +636,29 @@
 
         _selectedNode = row.Node;
         _appliedRequestedNodeId = RequestedNodeId;
+        return true;
+    }
+
+    private bool SelectRequestedItemFromSnapshot()
+    {
+        if (!RequestedItemId.HasValue ||
+            RequestedItemId == _appliedRequestedItemId)
+        {
+            return false;
+        }
+
+        var row = _snapshot.Rows
+            .Where(row => row.ItemId == RequestedItemId.Value)
+            .OrderByDescending(row => row.IsActiveProcurement)
+            .ThenBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        if (row == null)
+        {
+            return false;
+        }
+
+        _selectedNode = row.Node;
+        _appliedRequestedItemId = RequestedItemId;
         return true;
     }
 

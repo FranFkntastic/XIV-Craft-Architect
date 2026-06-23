@@ -641,7 +641,7 @@ public class MarketAnalysisGridViewServiceTests
     }
 
     [Fact]
-    public void GetOrderedWorlds_ValueSort_UsesCompetitiveDiscountAgainstGoodAverage()
+    public void GetOrderedWorlds_ValueSort_UsesProcurementSignalDiscountAgainstMarketFallback()
     {
         var analysis = new MarketItemAnalysis
         {
@@ -668,7 +668,7 @@ public class MarketAnalysisGridViewServiceTests
     [InlineData(80, "-20%")]
     [InlineData(100, "0%")]
     [InlineData(110, "+10%")]
-    public void FormatCompetitiveValue_DescribesDistanceFromGoodAverage(decimal worldAverage, string expected)
+    public void FormatCompetitiveValue_DescribesDistanceFromMarketFallback(decimal worldAverage, string expected)
     {
         var world = ScopeWorld("Siren", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, goodAverage: 100, worldCompetitiveAverage: worldAverage);
 
@@ -684,23 +684,23 @@ public class MarketAnalysisGridViewServiceTests
     }
 
     [Fact]
-    public void FormatCompetitiveValueTooltip_ExplainsSignedDifferenceFromGoodAverage()
+    public void FormatCompetitiveValueTooltip_ExplainsSignedDifferenceFromMarketFallback()
     {
         var world = ScopeWorld("Siren", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, goodAverage: 1_100, worldCompetitiveAverage: 1_055);
 
         var tooltip = MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world);
 
-        Assert.Equal("Siren's competitive price signal is 4% less than the regional good average: 1,055g vs 1,100g.", tooltip);
+        Assert.Equal("Siren's procurement signal is 4% less than the regional market evidence fallback: 1,055g vs 1,100g.", tooltip);
     }
 
     [Fact]
-    public void FormatCompetitiveValueTooltip_ExplainsSignedDifferenceAboveGoodAverage()
+    public void FormatCompetitiveValueTooltip_ExplainsSignedDifferenceAboveMarketFallback()
     {
         var world = ScopeWorld("Siren", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 100, goodAverage: 1_100, worldCompetitiveAverage: 1_210);
 
         var tooltip = MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world);
 
-        Assert.Equal("Siren's competitive price signal is 10% greater than the regional good average: 1,210g vs 1,100g.", tooltip);
+        Assert.Equal("Siren's procurement signal is 10% greater than the regional market evidence fallback: 1,210g vs 1,100g.", tooltip);
     }
 
     [Fact]
@@ -750,7 +750,7 @@ public class MarketAnalysisGridViewServiceTests
         var third = MarketAnalysisGridViewService.GetListingDividersBefore(world, world.Listings[2]);
 
         Assert.Empty(first);
-        Assert.Equal(["Price band +100%", "Above good avg"], second.Select(divider => divider.Label));
+        Assert.Equal(["Price band +100%", "Above market fallback"], second.Select(divider => divider.Label));
         Assert.Equal(["Above avg"], third.Select(divider => divider.Label));
     }
 
@@ -772,13 +772,14 @@ public class MarketAnalysisGridViewServiceTests
     }
 
     [Fact]
-    public void FormatAnalysisScopePriceSummary_ShowsCompetitiveAverageAndThresholds()
+    public void FormatAnalysisScopePriceSummary_ShowsMarketFallbackAndThresholds()
     {
         var analysis = new MarketItemAnalysis
         {
             AnalysisScopeBaselineUnitPrice = 100,
             AnalysisScopeAverageUnitPrice = 125,
             AnalysisCompetitiveAverageUnitPrice = 110,
+            CostToCoverUnitPrice = 115,
             AnalysisScopeMedianUnitPrice = 90,
             CompetitiveThresholdUnitPrice = 150,
             SaneThresholdUnitPrice = 200
@@ -786,7 +787,8 @@ public class MarketAnalysisGridViewServiceTests
 
         var summary = MarketAnalysisGridViewService.FormatAnalysisScopePriceSummary(analysis);
 
-        Assert.Equal("good avg ~110g; base ~100g; avg ~125g; competitive <= 150g; insane >= 200g", summary);
+        Assert.Equal("market fallback ~110g; base ~100g; avg ~125g; acceptable <= 150g; insane >= 200g", summary);
+        Assert.DoesNotContain("cost to cover", summary, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -816,7 +818,7 @@ public class MarketAnalysisGridViewServiceTests
 
         var summary = MarketAnalysisGridViewService.FormatAnalysisScopePriceSummary(analysis);
 
-        Assert.Equal("good avg ~100g; avg ~125g; competitive <= 150g; insane >= 200g", summary);
+        Assert.Equal("market fallback ~100g; avg ~125g; acceptable <= 150g; insane >= 200g", summary);
     }
 
     [Fact]
@@ -926,7 +928,7 @@ public class MarketAnalysisGridViewServiceTests
             MarketAnalysisEvidenceOverlay.PriceBandOverlay);
 
         Assert.Equal(string.Empty, competitivenessTooltip);
-        Assert.Contains("Thin price band", bandTooltip);
+        Assert.Contains("Thin deal price band", bandTooltip);
         Assert.Contains("does not drive procurement pricing", bandTooltip);
     }
 

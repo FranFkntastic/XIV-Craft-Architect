@@ -1,0 +1,48 @@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.subtitle1">Save Active Craft Plan?</MudText>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">
+            @ActionLabel will load an order craft plan into Craft Architect. The current active plan is @PlanStateLabel and will no longer be the active session.
+        </MudText>
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+            Save the current plan first if you want to keep its latest recipe, pricing, and market-analysis evidence.
+        </MudAlert>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="Back">Back</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Warning" OnClick="ContinueWithoutSaving">
+            Continue Without Saving
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAndContinue">
+            @SaveButtonText
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] public MudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string ActionLabel { get; set; } = "This action";
+    [Parameter] public string? CurrentPlanName { get; set; }
+    [Parameter] public bool HasNamedPlan { get; set; }
+
+    private string PlanStateLabel => string.IsNullOrWhiteSpace(CurrentPlanName)
+        ? HasNamedPlan ? "saved with unsaved changes" : "not saved as a named plan"
+        : HasNamedPlan ? $"'{CurrentPlanName}' with unsaved changes" : $"'{CurrentPlanName}' and has not been saved as a named plan";
+
+    private string SaveButtonText => HasNamedPlan ? "Save and Continue" : "Save As and Continue";
+
+    private void Back()
+    {
+        MudDialog.Cancel();
+    }
+
+    private void ContinueWithoutSaving()
+    {
+        MudDialog.Close(DialogResult.Ok(TradeActivePlanSaveGuardChoice.ContinueWithoutSaving));
+    }
+
+    private void SaveAndContinue()
+    {
+        MudDialog.Close(DialogResult.Ok(TradeActivePlanSaveGuardChoice.SaveAndContinue));
+    }
+}

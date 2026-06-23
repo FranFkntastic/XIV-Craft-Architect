@@ -7,12 +7,48 @@
 .web-data-table th,
 .web-data-table td {
     min-width: 0;
+    padding: 7px 10px;
+    text-align: left;
+    vertical-align: middle;
+}
+
+.web-data-table th {
+    color: #bdbdbd;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.web-data-table td {
+    color: #e0e0e0;
+    border-top: 1px solid #343434;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.web-data-table-row.is-clickable {
+    cursor: pointer;
+}
+
+.web-data-table-row.is-clickable:hover {
+    background: rgba(212, 167, 58, 0.08);
+}
+
+.web-data-table-row.is-selected {
+    background: rgba(212, 167, 58, 0.14);
+}
+
+.web-data-table .is-align-end {
+    text-align: right;
 }
 
 .web-data-table-expanded-cell {
     width: 100%;
+    white-space: normal;
 }
 
 .web-data-table-empty-cell {
     width: 100%;
+    color: #9f9f9f;
+    white-space: normal;
 }
