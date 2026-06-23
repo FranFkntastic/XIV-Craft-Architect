@@ -330,14 +330,6 @@ public class CraftSessionStateTests
     }
 
     [Fact]
-    public void WpfDispatcherAdapter_ImplementsCoreDispatcherContract()
-    {
-        Assert.Contains(
-            typeof(ICraftSessionDispatcher),
-            typeof(FFXIV_Craft_Architect.Services.WpfCraftSessionDispatcher).GetInterfaces());
-    }
-
-    [Fact]
     public async Task TryPublishFrom_BlocksConcurrentSessionChangeUntilPublicationFinishes()
     {
         var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());

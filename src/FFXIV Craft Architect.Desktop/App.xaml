@@ -1,0 +1,41 @@
+<Application
+    x:Class="FFXIV_Craft_Architect.Desktop.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    RequestedTheme="Dark">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <Color x:Key="DesktopBackgroundColor">#191917</Color>
+            <Color x:Key="DesktopPanelColor">#22211E</Color>
+            <Color x:Key="DesktopPanelRaisedColor">#2B2923</Color>
+            <Color x:Key="DesktopPanelSoftColor">#343027</Color>
+            <Color x:Key="DesktopLineColor">#4A4029</Color>
+            <Color x:Key="DesktopLineSoftColor">#5B4A24</Color>
+            <Color x:Key="DesktopTextColor">#F5F0E4</Color>
+            <Color x:Key="DesktopTextMutedColor">#D3C7AA</Color>
+            <Color x:Key="DesktopTextDimColor">#A99F87</Color>
+            <Color x:Key="DesktopGoldColor">#E0B449</Color>
+            <Color x:Key="DesktopGreenColor">#65C466</Color>
+            <Color x:Key="DesktopBlueColor">#73B8E8</Color>
+            <Color x:Key="DesktopAmberDarkColor">#3B321D</Color>
+
+            <SolidColorBrush x:Key="DesktopBackgroundBrush" Color="{StaticResource DesktopBackgroundColor}" />
+            <SolidColorBrush x:Key="DesktopPanelBrush" Color="{StaticResource DesktopPanelColor}" />
+            <SolidColorBrush x:Key="DesktopPanelRaisedBrush" Color="{StaticResource DesktopPanelRaisedColor}" />
+            <SolidColorBrush x:Key="DesktopPanelSoftBrush" Color="{StaticResource DesktopPanelSoftColor}" />
+            <SolidColorBrush x:Key="DesktopLineBrush" Color="{StaticResource DesktopLineColor}" />
+            <SolidColorBrush x:Key="DesktopLineSoftBrush" Color="{StaticResource DesktopLineSoftColor}" />
+            <SolidColorBrush x:Key="DesktopTextBrush" Color="{StaticResource DesktopTextColor}" />
+            <SolidColorBrush x:Key="DesktopTextMutedBrush" Color="{StaticResource DesktopTextMutedColor}" />
+            <SolidColorBrush x:Key="DesktopTextDimBrush" Color="{StaticResource DesktopTextDimColor}" />
+            <SolidColorBrush x:Key="DesktopGoldBrush" Color="{StaticResource DesktopGoldColor}" />
+            <SolidColorBrush x:Key="DesktopGreenBrush" Color="{StaticResource DesktopGreenColor}" />
+            <SolidColorBrush x:Key="DesktopBlueBrush" Color="{StaticResource DesktopBlueColor}" />
+            <SolidColorBrush x:Key="DesktopAmberDarkBrush" Color="{StaticResource DesktopAmberDarkColor}" />
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

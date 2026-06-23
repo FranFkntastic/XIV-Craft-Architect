@@ -11,8 +11,10 @@ dist/
 *.suo
 *.userprefs
 
-# Rider
-.idea/
+# JetBrains
+.idea/*
+!.idea/runConfigurations/
+!.idea/runConfigurations/*.xml
 *.sln.iml
 
 # VS Code
