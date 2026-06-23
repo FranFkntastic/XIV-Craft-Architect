@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 namespace FFXIV_Craft_Architect.Tests;
 
 [Collection(DesktopTestCollection.Name)]
+[Trait(TestTraits.Surface, TestTraits.Desktop)]
 public sealed class DesktopLogStoreTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"craft-architect-diagnostic-log-{Guid.NewGuid():N}");

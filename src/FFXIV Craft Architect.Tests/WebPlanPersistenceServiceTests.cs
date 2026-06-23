@@ -5,6 +5,7 @@ using Microsoft.JSInterop;
 
 namespace FFXIV_Craft_Architect.Tests;
 
+[Trait(TestTraits.Surface, TestTraits.DeployWeb)]
 public class WebPlanPersistenceServiceTests
 {
     [Fact]

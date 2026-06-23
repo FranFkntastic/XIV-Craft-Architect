@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FFXIV_Craft_Architect.Tests;
 
+[Trait(TestTraits.Surface, TestTraits.DeployLodestone)]
 public sealed class HttpLodestoneCrafterLookupServiceTests
 {
     [Fact]

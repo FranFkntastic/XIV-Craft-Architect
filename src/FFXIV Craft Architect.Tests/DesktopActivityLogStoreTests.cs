@@ -3,6 +3,7 @@ using FFXIV_Craft_Architect.Desktop.Services;
 namespace FFXIV_Craft_Architect.Tests;
 
 [Collection(DesktopTestCollection.Name)]
+[Trait(TestTraits.Surface, TestTraits.Desktop)]
 public sealed class DesktopActivityLogStoreTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"craft-architect-activity-log-{Guid.NewGuid():N}");

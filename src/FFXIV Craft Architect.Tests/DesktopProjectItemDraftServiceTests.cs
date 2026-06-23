@@ -4,6 +4,7 @@ using FFXIV_Craft_Architect.Desktop.Services;
 namespace FFXIV_Craft_Architect.Tests;
 
 [Collection(DesktopTestCollection.Name)]
+[Trait(TestTraits.Surface, TestTraits.Desktop)]
 public class DesktopProjectItemDraftServiceTests
 {
     [Fact]

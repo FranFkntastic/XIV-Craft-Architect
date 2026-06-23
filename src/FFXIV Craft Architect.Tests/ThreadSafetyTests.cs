@@ -11,6 +11,7 @@ namespace FFXIV_Craft_Architect.Tests;
 /// Unit tests for thread-safety fixes in P1.2.
 /// Validates ConcurrentDictionary usage, async semaphore patterns, and caching strategies.
 /// </summary>
+[Trait(TestTraits.Surface, TestTraits.Timing)]
 public class ThreadSafetyTests
 {
     #region PriceCheckService - Concurrency Tests

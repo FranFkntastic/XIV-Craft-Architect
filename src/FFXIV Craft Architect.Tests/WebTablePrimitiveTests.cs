@@ -2,6 +2,7 @@ using FFXIV_Craft_Architect.Web.Shared.TablePrimitives;
 
 namespace FFXIV_Craft_Architect.Tests;
 
+[Trait(TestTraits.Surface, TestTraits.DeployWeb)]
 public class WebTablePrimitiveTests
 {
     [Fact]

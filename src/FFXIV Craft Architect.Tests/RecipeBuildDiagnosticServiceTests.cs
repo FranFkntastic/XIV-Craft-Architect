@@ -4,6 +4,7 @@ using FFXIV_Craft_Architect.Web.Services;
 
 namespace FFXIV_Craft_Architect.Tests;
 
+[Trait(TestTraits.Surface, TestTraits.Timing)]
 public sealed class RecipeBuildDiagnosticServiceTests
 {
     [Fact]

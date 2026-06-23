@@ -4,6 +4,7 @@ using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Tests;
 
+[Trait(TestTraits.Surface, TestTraits.Timing)]
 public class RecipeOperationSnapshotLifecycleServiceTests
 {
     [Fact]
