@@ -8,10 +8,6 @@ public sealed record LodestoneLookupClientOptions(Uri BaseAddress);
 
 public sealed class HttpLodestoneCrafterLookupService : ILodestoneCrafterLookupService
 {
-    private const string HelperUnavailableMessage =
-        "Lodestone lookup helper is unavailable or blocked by browser local-device permissions. " +
-        "Start the helper, then allow Apps on device or Local Network Access for this site if your browser asks.";
-
     private readonly HttpClient _httpClient;
     private readonly ILogger<HttpLodestoneCrafterLookupService> _logger;
 
@@ -94,10 +90,17 @@ public sealed class HttpLodestoneCrafterLookupService : ILodestoneCrafterLookupS
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogWarning(ex, "Lodestone lookup helper request failed");
+            var requestUri = _httpClient.BaseAddress == null
+                ? relativeUri
+                : new Uri(_httpClient.BaseAddress, relativeUri).ToString();
+
+            _logger.LogWarning(ex, "Lodestone lookup helper request failed for {RequestUri}", requestUri);
             return LodestoneCrafterLookupResult<T>.Failure(
                 LodestoneCrafterLookupFailureKind.NetworkUnavailable,
-                HelperUnavailableMessage);
+                "Lodestone lookup helper request failed. " +
+                $"Tried {requestUri}. " +
+                "If this points at localhost, the browser is still using local-helper configuration. " +
+                "If it points at this site, check the browser console/network details for the blocked request.");
         }
     }
 

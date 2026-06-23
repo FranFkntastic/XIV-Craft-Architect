@@ -75,8 +75,8 @@ public sealed class HttpLodestoneCrafterLookupServiceTests
 
         Assert.False(result.Succeeded);
         Assert.Equal(LodestoneCrafterLookupFailureKind.NetworkUnavailable, result.FailureKind);
-        Assert.Contains("Lodestone lookup helper is unavailable", result.ErrorMessage);
-        Assert.Contains("Apps on device", result.ErrorMessage);
+        Assert.Contains("Lodestone lookup helper request failed", result.ErrorMessage);
+        Assert.Contains("Tried http://localhost:5128/lodestone/crafters/16331040/preview", result.ErrorMessage);
     }
 
     private static HttpLodestoneCrafterLookupService CreateService(

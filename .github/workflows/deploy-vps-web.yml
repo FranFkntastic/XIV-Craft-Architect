@@ -1,0 +1,144 @@
+name: Deploy Web App to VPS
+
+on:
+  push:
+    branches: [ main, master, local-dev ]
+    paths:
+      - 'src/FFXIV Craft Architect.Web/**'
+      - 'src/FFXIV Craft Architect.Core/**'
+      - '.github/workflows/deploy-vps-web.yml'
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: 'Web slot to deploy'
+        required: true
+        default: local-dev
+        type: choice
+        options:
+          - main
+          - local-dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vps-web-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+      VPS_SSH_PORT: 22
+    steps:
+      - name: Resolve deploy slot
+        id: deploy-slot
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            slot="${{ inputs.slot }}"
+          elif [[ "${{ github.ref_name }}" == "local-dev" ]]; then
+            slot="local-dev"
+          else
+            slot="main"
+          fi
+
+          if [[ "$slot" == "local-dev" ]]; then
+            domain="dev.xivcraftarchitect.com"
+            ref="local-dev"
+          elif [[ "$slot" == "main" ]]; then
+            domain="xivcraftarchitect.com"
+            ref="main"
+          else
+            echo "Unsupported deploy slot: $slot" >&2
+            exit 1
+          fi
+
+          release="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA::7}"
+          echo "slot=$slot" >> "$GITHUB_OUTPUT"
+          echo "domain=$domain" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.deploy-slot.outputs.ref }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish web app
+        run: >
+          dotnet publish "src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"
+          -c Release
+          -o dist/web
+          -p:BuildInfoBranchName=${{ steps.deploy-slot.outputs.ref }}
+
+      - name: Write hosted API configuration
+        shell: bash
+        run: |
+          cat > dist/web/wwwroot/appsettings.json <<JSON
+          {
+            "LodestoneLookup": {
+              "BaseAddress": "https://${{ steps.deploy-slot.outputs.domain }}/api/"
+            }
+          }
+          JSON
+
+      - name: Package web files
+        run: tar -czf "craftarchitect-web-${{ steps.deploy-slot.outputs.slot }}-${{ steps.deploy-slot.outputs.release }}.tar.gz" -C dist/web/wwwroot .
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_SSH_PRIVATE_KEY"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/craftarchitect_vps
+          chmod 600 ~/.ssh/craftarchitect_vps
+          ssh-keyscan -p "$VPS_SSH_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Upload web archive
+        run: >
+          scp -P "$VPS_SSH_PORT"
+          -i ~/.ssh/craftarchitect_vps
+          "craftarchitect-web-${{ steps.deploy-slot.outputs.slot }}-${{ steps.deploy-slot.outputs.release }}.tar.gz"
+          "$VPS_USER@$VPS_HOST:/tmp/craftarchitect-web-${{ steps.deploy-slot.outputs.slot }}-${{ steps.deploy-slot.outputs.release }}.tar.gz"
+
+      - name: Activate web release
+        shell: bash
+        run: |
+          ssh -p "$VPS_SSH_PORT" -i ~/.ssh/craftarchitect_vps "$VPS_USER@$VPS_HOST" <<'REMOTE'
+          set -euo pipefail
+          slot="${{ steps.deploy-slot.outputs.slot }}"
+          release="${{ steps.deploy-slot.outputs.release }}"
+          archive="/tmp/craftarchitect-web-$slot-$release.tar.gz"
+          root="/srv/craftarchitect/web/$slot"
+          release_dir="$root/releases/$release"
+
+          sudo mkdir -p "$release_dir"
+          sudo tar -xzf "$archive" -C "$release_dir"
+          sudo chown -R "$USER:$USER" "$release_dir"
+          sudo ln -sfn "$release_dir" "$root/current"
+          rm -f "$archive"
+
+          # Keep the last five releases for quick symlink rollback.
+          sudo find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' |
+            sort -rn |
+            tail -n +6 |
+            cut -d' ' -f2- |
+            sudo xargs -r rm -rf
+          REMOTE
+
+      - name: Verify deployed site
+        run: |
+          curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/appsettings.json"
+          curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/" > /dev/null
