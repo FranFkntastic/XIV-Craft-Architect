@@ -411,6 +411,7 @@ public class DetailedShoppingPlan
     public decimal DCAveragePrice { get; set; }
     public List<WorldShoppingSummary> WorldOptions { get; set; } = new();
     public WorldShoppingSummary? RecommendedWorld { get; set; }
+    public MarketCoverageSet? CoverageSet { get; set; }
     public string? Error { get; set; }
     public string? MarketDataWarning { get; set; }
     
