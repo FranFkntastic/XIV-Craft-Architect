@@ -117,6 +117,70 @@ public class MarketPurchaseCostProjectionServiceTests
     }
 
     [Fact]
+    public void Estimate_NqUnsupportedMarketScope_IncludesHqListings()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Mixed Quality Material",
+            QuantityNeeded = 10,
+            WorldOptions =
+            [
+                new WorldShoppingSummary
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Siren",
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 10,
+                            PricePerUnit = 500,
+                            IsHq = false
+                        },
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 10,
+                            PricePerUnit = 100,
+                            IsHq = true
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var nqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: false);
+        var hqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: true);
+
+        Assert.Equal(MarketPurchaseCostEstimateKind.UnsupportedProjection, nqEstimate.Kind);
+        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, hqEstimate.Kind);
+        Assert.Equal(1_000, nqEstimate.Cost);
+        Assert.Equal(1_000, hqEstimate.Cost);
+        Assert.True(nqEstimate.Cost <= hqEstimate.Cost);
+    }
+
+    [Fact]
+    public void Estimate_NqUnsupportedAverageProjection_DoesNotExceedHqAverage()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Average Only Material",
+            QuantityNeeded = 10,
+            DCAveragePrice = 500,
+            HQAveragePrice = 100
+        };
+
+        var nqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: false);
+        var hqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: true);
+
+        Assert.Equal(MarketPurchaseCostEstimateKind.UnsupportedProjection, nqEstimate.Kind);
+        Assert.Equal(MarketPurchaseCostEstimateKind.UnsupportedProjection, hqEstimate.Kind);
+        Assert.Equal(1_000, nqEstimate.Cost);
+        Assert.Equal(1_000, hqEstimate.Cost);
+    }
+
+    [Fact]
     public void Estimate_BlockedPlan_DoesNotUseFallbackProjection()
     {
         var plan = new DetailedShoppingPlan

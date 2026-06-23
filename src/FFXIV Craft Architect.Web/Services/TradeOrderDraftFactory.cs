@@ -35,8 +35,12 @@ public sealed class TradeOrderDraftFactory
             return TradeOrderDraftCreateResult.Unavailable("The active craft plan does not contain root items to commission.");
         }
 
-        var activeProcurementItems = _recipeLayerWorkflow.BuildActiveProcurementItems(plan)
+        var demandProjection = _recipeLayerWorkflow.BuildDemandProjection(plan);
+        var activeProcurementItems = demandProjection.ToActiveProcurementMaterialAggregates()
             .Where(item => item.TotalQuantity > 0)
+            .ToArray();
+        var activeDemandRows = demandProjection.ActiveProcurementDemand
+            .Where(row => row.Quantity > 0)
             .ToArray();
         var warnings = new List<string>();
         if (appState.MarketItemAnalyses.Count == 0)
@@ -48,8 +52,8 @@ public sealed class TradeOrderDraftFactory
             warnings.Add(appState.MarketAnalysisScopeWarning);
         }
 
-        var lines = _costBasisResolver.BuildMarketRecommendationLines(
-            activeProcurementItems,
+        var lines = _costBasisResolver.BuildSelectedSourceLines(
+            activeDemandRows,
             appState.MarketItemAnalyses.ToArray(),
             appState.ShoppingPlans.ToArray());
         warnings.AddRange(lines.SelectMany(line => line.Warnings));

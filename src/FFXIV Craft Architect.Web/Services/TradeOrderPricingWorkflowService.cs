@@ -311,7 +311,7 @@ public sealed class TradeOrderPricingWorkflowService
         }
 
         operation.ReportStatus("Updating order payment evidence...", progress: 90);
-        var activeItems = await _recipeLayerWorkflow.BuildCurrentActiveProcurementItemsAsync(
+        var demandProjection = await _recipeLayerWorkflow.BuildCurrentDemandProjectionAsync(
             _appState.CurrentPlan,
             operation.Token);
         if (!operation.IsCurrent)
@@ -324,14 +324,17 @@ public sealed class TradeOrderPricingWorkflowService
             return CanceledResult("Trade order pricing was canceled because the active craft plan changed.");
         }
 
-        var activeItemList = (activeItems ?? Array.Empty<MaterialAggregate>())
+        var activeDemandRows = (demandProjection?.ActiveProcurementDemand ?? Array.Empty<RecipeDemandRow>())
+            .Where(row => row.Quantity > 0)
+            .ToArray();
+        var activeItemList = (demandProjection?.ToActiveProcurementMaterialAggregates() ?? Array.Empty<MaterialAggregate>())
             .Where(item => item.TotalQuantity > 0)
             .ToArray();
         var routePlans = _appState.ProcurementShoppingPlans.Any()
             ? _appState.ProcurementShoppingPlans
             : _appState.ShoppingPlans;
-        var lines = _costBasisResolver.BuildMarketRecommendationLines(
-            activeItemList,
+        var lines = _costBasisResolver.BuildSelectedSourceLines(
+            activeDemandRows,
             _appState.MarketItemAnalyses,
             routePlans);
         warnings.AddRange(lines.SelectMany(line => line.Warnings));

@@ -28,8 +28,9 @@ public sealed class TradePayrollDraftFactory
             return TradePayrollDraftCreateResult.Unavailable("Create or load a craft plan before starting payroll.");
         }
 
-        var demand = _recipeLayerWorkflow.BuildActiveProcurementItems(appState.CurrentPlan)
-            .Select(CloneMaterial)
+        var demand = _recipeLayerWorkflow.BuildDemandProjection(appState.CurrentPlan)
+            .ActiveProcurementDemand
+            .Where(row => row.Quantity > 0)
             .ToArray();
         if (demand.Length == 0)
         {
@@ -46,7 +47,7 @@ public sealed class TradePayrollDraftFactory
             warnings.Add(appState.MarketAnalysisScopeWarning);
         }
 
-        var lines = _costBasisResolver.BuildMarketRecommendationLines(
+        var lines = _costBasisResolver.BuildSelectedSourceLines(
             demand,
             appState.MarketItemAnalyses.ToArray(),
             appState.ShoppingPlans.ToArray());
@@ -68,19 +69,6 @@ public sealed class TradePayrollDraftFactory
 
         var payroll = _payrollService.Calculate(lines, CommissionPayoutPolicy.Default);
         return TradePayrollDraftCreateResult.Available(new TradePayrollDraft(snapshot, payroll));
-    }
-
-    private static MaterialAggregate CloneMaterial(MaterialAggregate material)
-    {
-        return new MaterialAggregate
-        {
-            ItemId = material.ItemId,
-            Name = material.Name,
-            IconId = material.IconId,
-            TotalQuantity = material.TotalQuantity,
-            UnitPrice = material.UnitPrice,
-            RequiresHq = material.RequiresHq
-        };
     }
 }
 

@@ -6,6 +6,54 @@ namespace FFXIV_Craft_Architect.Tests;
 public class CommissionCostBasisResolverTests
 {
     [Fact]
+    public void BuildSelectedSourceLines_UsesSelectedHqMarketSourceForNqEligibleMaterial()
+    {
+        var resolver = new CommissionCostBasisResolver();
+
+        var line = Assert.Single(resolver.BuildSelectedSourceLines(
+            [
+                DemandRow(
+                    itemId: 70,
+                    name: "Cobalt Ingot",
+                    quantity: 5,
+                    source: AcquisitionSource.MarketBuyHq,
+                    canBeHq: true,
+                    unitPrice: 999m,
+                    hqUnitPrice: 888m)
+            ],
+            [Analysis(70, "Cobalt Ingot", competitiveAverage: 1_166m)],
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 70,
+                    Name = "Cobalt Ingot",
+                    QuantityNeeded = 5,
+                    RecommendedWorld = new WorldShoppingSummary
+                    {
+                        DataCenter = "Aether",
+                        WorldName = "Siren",
+                        TotalCost = 10_000,
+                        TotalQuantityPurchased = 5,
+                        Listings =
+                        [
+                            new ShoppingListingEntry
+                            {
+                                Quantity = 5,
+                                PricePerUnit = 100,
+                                IsHq = true
+                            }
+                        ]
+                    }
+                }
+            ]));
+
+        Assert.Equal(100m, line.UnitCost);
+        Assert.True(line.RequiresHq);
+        Assert.Equal("Procurement route", line.EvidenceSource);
+        Assert.DoesNotContain("market evidence fallback", line.UnitCostExplanation, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void BuildMarketRecommendationLines_UsesPrimaryProcurementShelfBeforeMarketFallback()
     {
         var resolver = new CommissionCostBasisResolver();
@@ -356,6 +404,47 @@ public class CommissionCostBasisResolverTests
             TotalQuantity = quantity,
             UnitPrice = unitPrice
         };
+    }
+
+    private static RecipeDemandRow DemandRow(
+        int itemId,
+        string name,
+        int quantity,
+        AcquisitionSource source,
+        bool canBeHq = false,
+        bool mustBeHq = false,
+        decimal unitPrice = 50m,
+        decimal hqUnitPrice = 0m,
+        decimal vendorUnitPrice = 0m)
+    {
+        return new RecipeDemandRow(
+            viewKind: RecipeDemandViewKind.ActiveProcurement,
+            nodeId: $"node-{itemId}",
+            itemId: itemId,
+            itemName: name,
+            iconId: 0,
+            quantity: quantity,
+            quantityBasis: RecipeDemandQuantityBasis.PlanNodeQuantity,
+            mustBeHq: mustBeHq,
+            source: source,
+            sourceReason: AcquisitionSourceReason.UserSelected,
+            hasChildren: false,
+            canBuyFromMarket: true,
+            canBuyFromVendor: vendorUnitPrice > 0,
+            unitPrice: unitPrice,
+            parentNodeId: null,
+            parentItemName: "Parent",
+            parentOperationNodeId: null,
+            parentRecipeId: null,
+            operationNodeId: null,
+            recipeId: null,
+            suppressedByNodeId: null,
+            suppressedByItemId: null,
+            suppressedByItemName: null,
+            canCraft: false,
+            canBeHq: canBeHq,
+            hqUnitPrice: hqUnitPrice,
+            vendorUnitPrice: vendorUnitPrice);
     }
 
     private static MarketItemAnalysis Analysis(int itemId, string name, decimal competitiveAverage)

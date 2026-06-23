@@ -202,27 +202,53 @@
         _selectedNode = node;
     }
 
-    private void OnNodeSourceChanged(AcquisitionSourceChangeRequest request)
+    private async Task OnNodeSourceChanged(AcquisitionSourceChangeRequest request)
     {
-        ApplyNodeSourceChange(request.Node, request.Source);
+        await ApplyNodeSourceChangeAsync(request.Node, request.Source);
     }
 
-    private void OnNodeSourceSelected(PlanNode node, ChangeEventArgs args)
+    private async Task OnNodeSourceSelected(PlanNode node, ChangeEventArgs args)
     {
         if (args.Value is string value && Enum.TryParse<AcquisitionSource>(value, out var source))
         {
-            ApplyNodeSourceChange(node, source);
+            await ApplyNodeSourceChangeAsync(node, source);
         }
     }
 
-    private void ApplyNodeSourceChange(PlanNode node, AcquisitionSource source)
+    private async Task ApplyNodeSourceChangeAsync(PlanNode node, AcquisitionSource source)
     {
-        AcquisitionDecisionService.ChangeSource(node, source);
-        _ = InvokeAsync(async () =>
+        var change = AcquisitionDecisionService.ChangeSource(node, source);
+        if (change.Changed)
+        {
+            await PersistCurrentPlanDecisionAsync();
+        }
+
+        await InvokeAsync(async () =>
         {
             await RefreshLedgerSnapshotAsync();
             StateHasChanged();
         });
+    }
+
+    private async Task PersistCurrentPlanDecisionAsync()
+    {
+        if (AppState.CurrentPlan == null || string.IsNullOrWhiteSpace(AppState.CurrentPlanId))
+        {
+            return;
+        }
+
+        var planId = AppState.CurrentPlanId;
+        var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan.Name ?? "Craft plan";
+        var versions = AppState.CurrentVersions;
+        var saved = await PlanPersistence.SaveCurrentPlanAsync(planId, planName, DateTime.UtcNow);
+        if (!saved)
+        {
+            Snackbar.Add("Source changed, but failed to save the linked craft plan.", Severity.Error);
+            return;
+        }
+
+        AppState.TrackCurrentPlanIdentity(planId, planName);
+        AppState.MarkPersisted(PersistedStateBucket.PlanCore, versions);
     }
 
     private void PopulateShoppingListFromPlan()

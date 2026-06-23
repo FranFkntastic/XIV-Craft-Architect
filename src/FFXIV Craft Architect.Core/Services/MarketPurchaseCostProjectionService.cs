@@ -86,6 +86,12 @@ public static class MarketPurchaseCostProjectionService
         out decimal cost)
     {
         cost = 0;
+        if (TryGetProjectedListingsCost(shoppingPlan, quantity, hqOnly, out var listingsCost))
+        {
+            cost = listingsCost;
+            return true;
+        }
+
         var projectedUnitPrice = GetUnsupportedProjectedUnitPrice(shoppingPlan, hqOnly);
         if (projectedUnitPrice <= 0)
         {
@@ -98,9 +104,7 @@ public static class MarketPurchaseCostProjectionService
 
     private static decimal GetUnsupportedProjectedUnitPrice(DetailedShoppingPlan shoppingPlan, bool hqOnly)
     {
-        var averagePrice = hqOnly
-            ? shoppingPlan.HQAveragePrice.GetValueOrDefault()
-            : shoppingPlan.DCAveragePrice;
+        var averagePrice = GetProjectedAverageUnitPrice(shoppingPlan, hqOnly);
         if (averagePrice > 0)
         {
             return averagePrice;
@@ -114,6 +118,46 @@ public static class MarketPurchaseCostProjectionService
         }
 
         return 0;
+    }
+
+    private static decimal GetProjectedAverageUnitPrice(DetailedShoppingPlan shoppingPlan, bool hqOnly)
+    {
+        var hqAveragePrice = shoppingPlan.HQAveragePrice.GetValueOrDefault();
+        if (hqOnly)
+        {
+            return hqAveragePrice;
+        }
+
+        return shoppingPlan.DCAveragePrice switch
+        {
+            > 0 when hqAveragePrice > 0 => Math.Min(shoppingPlan.DCAveragePrice, hqAveragePrice),
+            > 0 => shoppingPlan.DCAveragePrice,
+            _ => hqAveragePrice
+        };
+    }
+
+    private static bool TryGetProjectedListingsCost(
+        DetailedShoppingPlan shoppingPlan,
+        int quantity,
+        bool hqOnly,
+        out decimal cost)
+    {
+        cost = 0;
+        var remaining = quantity;
+        foreach (var listing in GetProjectionListings(shoppingPlan, hqOnly)
+            .OrderBy(listing => listing.PricePerUnit))
+        {
+            var quantityToBuy = Math.Min(remaining, listing.Quantity);
+            cost += quantityToBuy * listing.PricePerUnit;
+            remaining -= quantityToBuy;
+            if (remaining <= 0)
+            {
+                return cost > 0;
+            }
+        }
+
+        cost = 0;
+        return false;
     }
 
     private static IEnumerable<ShoppingListingEntry> GetProjectionListings(
@@ -155,7 +199,7 @@ public static class MarketPurchaseCostProjectionService
     {
         return listings
             .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
-            .Where(listing => hqOnly ? listing.IsHq : !listing.IsHq);
+            .Where(listing => !hqOnly || listing.IsHq);
     }
 
     private static decimal ScaleCost(long totalCost, int quantity, int quantityNeeded)
