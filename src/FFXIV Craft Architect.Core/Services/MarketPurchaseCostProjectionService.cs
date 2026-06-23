@@ -25,6 +25,11 @@ public static class MarketPurchaseCostProjectionService
             return new MarketPurchaseCostEstimate(vendorCost, MarketPurchaseCostEstimateKind.SupportedEvidence);
         }
 
+        if (TryGetCoverageEstimate(shoppingPlan, hqOnly, out var coverageEstimate))
+        {
+            return coverageEstimate;
+        }
+
         if (AcquisitionPlanningService.TryGetMarketBoardPurchase(
             shoppingPlan,
             quantity,
@@ -46,6 +51,67 @@ public static class MarketPurchaseCostProjectionService
         }
 
         return MarketPurchaseCostEstimate.Unavailable;
+    }
+
+    private static bool TryGetCoverageEstimate(
+        DetailedShoppingPlan shoppingPlan,
+        bool hqOnly,
+        out MarketPurchaseCostEstimate estimate)
+    {
+        estimate = MarketPurchaseCostEstimate.Unavailable;
+        if (shoppingPlan.CoverageSet == null)
+        {
+            return false;
+        }
+
+        var qualityPolicy = hqOnly
+            ? MarketCoverageQualityPolicy.HqOnly
+            : MarketCoverageQualityPolicy.NqOrHq;
+        var candidate = GetCoverageCandidates(shoppingPlan.CoverageSet)
+            .Where(candidate => candidate.Kind == MarketCoverageKind.SupportedListings)
+            .Where(candidate => candidate.QualityPolicy == qualityPolicy)
+            .Where(candidate => candidate.IsDefaultEligible)
+            .OrderBy(candidate => candidate.ExactNeededCost)
+            .ThenBy(candidate => candidate.Friction.WorldCount)
+            .ThenBy(candidate => candidate.CashOutCost)
+            .FirstOrDefault();
+
+        if (candidate == null || candidate.ExactNeededCost <= 0)
+        {
+            return false;
+        }
+
+        var world = candidate.Worlds.Count == 1
+            ? new WorldShoppingSummary
+            {
+                DataCenter = candidate.Worlds[0].DataCenter,
+                WorldName = candidate.Worlds[0].WorldName,
+                TotalCost = ToLongSaturating(candidate.CashOutCost),
+                TotalQuantityPurchased = candidate.Worlds[0].QuantityToPurchase,
+                AveragePricePerUnit = candidate.AverageUnitCost
+            }
+            : null;
+
+        estimate = new MarketPurchaseCostEstimate(
+            candidate.ExactNeededCost,
+            MarketPurchaseCostEstimateKind.SupportedEvidence,
+            world);
+        return true;
+    }
+
+    private static IEnumerable<MarketCoverageOption> GetCoverageCandidates(MarketCoverageSet coverageSet)
+    {
+        return coverageSet.AllCandidates
+            .Concat([
+                coverageSet.SingleWorld,
+                coverageSet.CompactSplit,
+                coverageSet.WideSplit,
+                coverageSet.CheapestObserved
+            ])
+            .Where(candidate => candidate != null)
+            .Cast<MarketCoverageOption>()
+            .GroupBy(candidate => candidate.CandidateId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First());
     }
 
     public static bool IsUnsupportedProjectedCost(
@@ -207,6 +273,18 @@ public static class MarketPurchaseCostProjectionService
         return quantity == quantityNeeded
             ? totalCost
             : totalCost * quantity / quantityNeeded;
+    }
+
+    private static long ToLongSaturating(decimal value)
+    {
+        if (value <= 0)
+        {
+            return 0;
+        }
+
+        return value >= long.MaxValue
+            ? long.MaxValue
+            : (long)Math.Ceiling(value);
     }
 
     private static bool IsVendorWorld(WorldShoppingSummary world)

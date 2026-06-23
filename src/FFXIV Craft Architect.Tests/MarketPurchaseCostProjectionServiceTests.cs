@@ -105,6 +105,44 @@ public class MarketPurchaseCostProjectionServiceTests
     }
 
     [Fact]
+    public void Estimate_UsesDefaultEligibleCoverageExactNeededCost()
+    {
+        var coverageOption = CreateCoverageOption(
+            "Siren",
+            exactNeededCost: 1_000,
+            cashOutCost: 1_200,
+            isDefaultEligible: true);
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Coverage Material",
+            QuantityNeeded = 10,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                DataCenter = "Aether",
+                WorldName = "Adamantoise",
+                TotalCost = 5_000,
+                TotalQuantityPurchased = 10
+            },
+            CoverageSet = new MarketCoverageSet(
+                100,
+                "Coverage Material",
+                10,
+                SingleWorld: coverageOption,
+                CompactSplit: null,
+                WideSplit: null,
+                CheapestObserved: null,
+                AllCandidates: [coverageOption])
+        };
+
+        var estimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: false);
+
+        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, estimate.Kind);
+        Assert.Equal(1_000, estimate.Cost);
+        Assert.Equal("Siren", estimate.World?.WorldName);
+    }
+
+    [Fact]
     public void Estimate_VendorRecommendation_ReturnsSupportedCost()
     {
         var plan = new DetailedShoppingPlan
@@ -357,5 +395,56 @@ public class MarketPurchaseCostProjectionServiceTests
         Assert.Equal(MarketPurchaseCostEstimateKind.Unavailable, estimate.Kind);
         Assert.False(estimate.HasCost);
         Assert.False(MarketPurchaseCostProjectionService.IsUnsupportedProjectedCost(plan));
+    }
+
+    private static MarketCoverageOption CreateCoverageOption(
+        string worldName,
+        decimal exactNeededCost,
+        decimal cashOutCost,
+        bool isDefaultEligible,
+        MarketCoverageQualityPolicy qualityPolicy = MarketCoverageQualityPolicy.NqOrHq)
+    {
+        return new MarketCoverageOption(
+            CandidateId: $"100-10-singleworld-{qualityPolicy.ToString().ToLowerInvariant()}-{worldName.ToLowerInvariant()}",
+            Tier: MarketCoverageTier.SingleWorld,
+            Kind: MarketCoverageKind.SupportedListings,
+            QualityPolicy: qualityPolicy,
+            QuantityCovered: 10,
+            QuantityToPurchase: 12,
+            ExcessQuantity: 2,
+            ExactNeededCost: exactNeededCost,
+            CashOutCost: cashOutCost,
+            AverageUnitCost: exactNeededCost / 10,
+            PriceBand: MarketCoveragePriceBand.Competitive,
+            Worlds:
+            [
+                new MarketCoverageWorld(
+                    DataCenter: "Aether",
+                    WorldName: worldName,
+                    QuantityCovered: 10,
+                    QuantityToPurchase: 12,
+                    ExactNeededCost: exactNeededCost,
+                    CashOutCost: cashOutCost)
+            ],
+            Listings:
+            [
+                new MarketCoverageListing(
+                    DataCenter: "Aether",
+                    WorldName: worldName,
+                    QuantityAvailable: 12,
+                    QuantityUsed: 10,
+                    QuantityPurchased: 12,
+                    PricePerUnit: exactNeededCost / 10,
+                    IsHq: qualityPolicy == MarketCoverageQualityPolicy.HqOnly)
+            ],
+            Friction: new MarketCoverageFriction(
+                WorldCount: 1,
+                DataCenterCount: 1,
+                SmallestContribution: 10,
+                LargestContribution: 10,
+                ExcessQuantity: 2),
+            Savings: MarketCoverageSavings.None,
+            IsDefaultEligible: isDefaultEligible,
+            DegradedReason: null);
     }
 }

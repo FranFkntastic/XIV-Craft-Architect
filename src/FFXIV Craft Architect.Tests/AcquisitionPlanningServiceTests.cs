@@ -906,6 +906,66 @@ public class AcquisitionPlanningServiceTests
     }
 
     [Fact]
+    public void ApplyCheapestAcquisitionDefaults_UsesCoverageExactNeededCost()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Coverage Root Buy",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            MarketPrice = 10_000,
+            Yield = 1
+        };
+        root.Children.Add(new PlanNode
+        {
+            ItemId = 200,
+            Name = "Expensive Child",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 500,
+            Parent = root
+        });
+        var coverageOption = CreateCoverageOption(
+            worldName: "Siren",
+            exactNeededCost: 100,
+            cashOutCost: 120);
+        var plan = new CraftingPlan { RootItems = [root] };
+        var marketPlans = new List<DetailedShoppingPlan>
+        {
+            new()
+            {
+                ItemId = 100,
+                Name = "Coverage Root Buy",
+                QuantityNeeded = 1,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    WorldName = "Adamantoise",
+                    TotalCost = 5_000,
+                    TotalQuantityPurchased = 1
+                },
+                CoverageSet = new MarketCoverageSet(
+                    100,
+                    "Coverage Root Buy",
+                    1,
+                    SingleWorld: coverageOption,
+                    CompactSplit: null,
+                    WideSplit: null,
+                    CheapestObserved: null,
+                    AllCandidates: [coverageOption])
+            }
+        };
+
+        var changed = AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(plan, marketPlans);
+
+        Assert.Equal(1, changed);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, root.Source);
+    }
+
+    [Fact]
     public void ApplyCheapestAcquisitionDefaults_VendorBeatsMarketAndCraft_SelectsVendor()
     {
         var root = new PlanNode
@@ -1838,6 +1898,56 @@ public class AcquisitionPlanningServiceTests
                 }
             ]
         };
+    }
+
+    private static MarketCoverageOption CreateCoverageOption(
+        string worldName,
+        decimal exactNeededCost,
+        decimal cashOutCost,
+        MarketCoverageQualityPolicy qualityPolicy = MarketCoverageQualityPolicy.NqOrHq)
+    {
+        return new MarketCoverageOption(
+            CandidateId: $"100-1-singleworld-{qualityPolicy.ToString().ToLowerInvariant()}-{worldName.ToLowerInvariant()}",
+            Tier: MarketCoverageTier.SingleWorld,
+            Kind: MarketCoverageKind.SupportedListings,
+            QualityPolicy: qualityPolicy,
+            QuantityCovered: 1,
+            QuantityToPurchase: 1,
+            ExcessQuantity: 0,
+            ExactNeededCost: exactNeededCost,
+            CashOutCost: cashOutCost,
+            AverageUnitCost: exactNeededCost,
+            PriceBand: MarketCoveragePriceBand.Competitive,
+            Worlds:
+            [
+                new MarketCoverageWorld(
+                    DataCenter: "Aether",
+                    WorldName: worldName,
+                    QuantityCovered: 1,
+                    QuantityToPurchase: 1,
+                    ExactNeededCost: exactNeededCost,
+                    CashOutCost: cashOutCost)
+            ],
+            Listings:
+            [
+                new MarketCoverageListing(
+                    DataCenter: "Aether",
+                    WorldName: worldName,
+                    QuantityAvailable: 1,
+                    QuantityUsed: 1,
+                    QuantityPurchased: 1,
+                    PricePerUnit: exactNeededCost,
+                    IsHq: qualityPolicy == MarketCoverageQualityPolicy.HqOnly)
+            ],
+            Friction: new MarketCoverageFriction(
+                WorldCount: 1,
+                DataCenterCount: 1,
+                SmallestContribution: 1,
+                LargestContribution: 1,
+                ExcessQuantity: 0),
+            Savings: MarketCoverageSavings.None,
+            IsDefaultEligible: true,
+            DegradedReason: null);
     }
 
     private sealed class StubVendorCacheService : IVendorCacheService
