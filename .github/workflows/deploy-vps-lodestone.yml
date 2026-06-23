@@ -13,6 +13,7 @@ concurrency:
 jobs:
   test:
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -26,6 +27,9 @@ jobs:
         run: >
           dotnet test "src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj"
           --configuration Release
+          --blame-hang
+          --blame-hang-timeout 5m
+          --blame-hang-dump-type mini
           --logger "console;verbosity=normal"
 
   deploy:
