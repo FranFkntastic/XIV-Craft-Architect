@@ -240,12 +240,14 @@ public class AsyncExtensionsTests
         // Simulates the real usage pattern from the documentation
         var workCompleted = false;
         Exception? loggedException = null;
+        var workCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var tcs = new TaskCompletionSource<bool>();
 
         async Task DoWorkAsync()
         {
             await Task.Delay(10);
             workCompleted = true;
+            workCompletion.SetResult(true);
         }
 
         async Task DoFailingWorkAsync()
@@ -256,7 +258,7 @@ public class AsyncExtensionsTests
 
         // Act - Simulate successful work
         DoWorkAsync().SafeFireAndForget();
-        await Task.Delay(50);
+        await workCompletion.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(workCompleted);
 
         // Act - Simulate failing work with logging
