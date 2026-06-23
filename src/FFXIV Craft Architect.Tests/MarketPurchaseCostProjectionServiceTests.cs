@@ -59,6 +59,52 @@ public class MarketPurchaseCostProjectionServiceTests
     }
 
     [Fact]
+    public void Estimate_NqSupportedEvidence_UsesExactNeededListingCost()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Darksteel Ingot",
+            QuantityNeeded = 999,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                DataCenter = "Crystal",
+                WorldName = "Diabolos",
+                TotalCost = 6_129_830,
+                TotalQuantityPurchased = 1_063,
+                Listings =
+                [
+                    new ShoppingListingEntry { Quantity = 1, PricePerUnit = 5_598 },
+                    new ShoppingListingEntry { Quantity = 46, PricePerUnit = 5_599 },
+                    new ShoppingListingEntry { Quantity = 2, PricePerUnit = 5_600 },
+                    new ShoppingListingEntry { Quantity = 2, PricePerUnit = 5_600 },
+                    new ShoppingListingEntry { Quantity = 22, PricePerUnit = 5_774, IsHq = true },
+                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
+                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
+                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
+                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
+                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
+                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
+                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
+                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
+                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
+                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true }
+                ]
+            }
+        };
+
+        var estimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 999, hqOnly: false);
+        var hqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 999, hqOnly: true);
+
+        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, estimate.Kind);
+        Assert.Equal(5_760_230, estimate.Cost);
+        Assert.Equal("Diabolos", estimate.World?.WorldName);
+        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, hqEstimate.Kind);
+        Assert.Equal(5_769_203, hqEstimate.Cost);
+        Assert.True(estimate.Cost <= hqEstimate.Cost);
+    }
+
+    [Fact]
     public void Estimate_VendorRecommendation_ReturnsSupportedCost()
     {
         var plan = new DetailedShoppingPlan
@@ -117,7 +163,7 @@ public class MarketPurchaseCostProjectionServiceTests
     }
 
     [Fact]
-    public void Estimate_NqUnsupportedMarketScope_IncludesHqListings()
+    public void Estimate_NqListingEvidence_IncludesHqListings()
     {
         var plan = new DetailedShoppingPlan
         {
@@ -152,11 +198,109 @@ public class MarketPurchaseCostProjectionServiceTests
         var nqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: false);
         var hqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: true);
 
-        Assert.Equal(MarketPurchaseCostEstimateKind.UnsupportedProjection, nqEstimate.Kind);
+        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, nqEstimate.Kind);
         Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, hqEstimate.Kind);
         Assert.Equal(1_000, nqEstimate.Cost);
         Assert.Equal(1_000, hqEstimate.Cost);
         Assert.True(nqEstimate.Cost <= hqEstimate.Cost);
+    }
+
+    [Fact]
+    public void Estimate_NqEvidence_ChoosesCheapestExplicitWorldOption()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Mixed Recommendation Material",
+            QuantityNeeded = 10,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                DataCenter = "Aether",
+                WorldName = "Adamantoise",
+                Listings =
+                [
+                    new ShoppingListingEntry
+                    {
+                        Quantity = 10,
+                        PricePerUnit = 500
+                    }
+                ]
+            },
+            WorldOptions =
+            [
+                new WorldShoppingSummary
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Siren",
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 10,
+                            PricePerUnit = 100,
+                            IsHq = true
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var nqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: false);
+        var hqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: true);
+
+        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, nqEstimate.Kind);
+        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, hqEstimate.Kind);
+        Assert.Equal("Siren", nqEstimate.World?.WorldName);
+        Assert.Equal("Siren", hqEstimate.World?.WorldName);
+        Assert.Equal(1_000, nqEstimate.Cost);
+        Assert.Equal(1_000, hqEstimate.Cost);
+        Assert.True(nqEstimate.Cost <= hqEstimate.Cost);
+    }
+
+    [Fact]
+    public void Estimate_AggregateWorldListingsWithoutExplicitRoute_RemainsUnsupportedProjection()
+    {
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Split Needed Material",
+            QuantityNeeded = 10,
+            WorldOptions =
+            [
+                new WorldShoppingSummary
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Adamantoise",
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 5,
+                            PricePerUnit = 100
+                        }
+                    ]
+                },
+                new WorldShoppingSummary
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Siren",
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 5,
+                            PricePerUnit = 100
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var estimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: false);
+
+        Assert.Equal(MarketPurchaseCostEstimateKind.UnsupportedProjection, estimate.Kind);
+        Assert.Equal(1_000, estimate.Cost);
+        Assert.Null(estimate.World);
     }
 
     [Fact]
