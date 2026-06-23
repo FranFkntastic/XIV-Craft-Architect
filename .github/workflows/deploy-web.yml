@@ -1,4 +1,4 @@
-name: Manual GitHub Pages Rollback Deploy
+name: Manual GitHub Pages Moved Notice Deploy
 
 on:
   workflow_dispatch:
@@ -9,48 +9,259 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages-rollback
+  group: pages-moved-notice
   cancel-in-progress: false
 
 jobs:
-  build:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          path: main-source
-
-      - name: Checkout local-dev
-        uses: actions/checkout@v4
-        with:
-          ref: local-dev
-          path: local-dev-source
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Restore main dependencies
-        run: dotnet restore "main-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"
-
-      - name: Publish main
-        run: dotnet publish "main-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj" -c Release -o dist/web/main -p:BuildInfoBranchName=main
-
-      - name: Restore local-dev dependencies
-        run: dotnet restore "local-dev-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"
-
-      - name: Publish local-dev
-        run: dotnet publish "local-dev-source/src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj" -c Release -o dist/web/local-dev -p:BuildInfoBranchName=local-dev
-
-      - name: Assemble Pages artifact
+      - name: Assemble moved notice
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist/pages/local-dev
-          cp -R dist/web/main/wwwroot/. dist/pages/
-          cp -R dist/web/local-dev/wwwroot/. dist/pages/local-dev/
-          cp dist/web/local-dev/wwwroot/404.html dist/pages/404.html
+
+          cat > dist/pages/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>FFXIV Craft Architect has moved</title>
+            <style>
+              :root {
+                color-scheme: dark;
+                --bg: #111318;
+                --panel: #1b2029;
+                --text: #eef2f7;
+                --muted: #a9b4c3;
+                --accent: #8fd3ff;
+                --line: #313946;
+              }
+
+              * {
+                box-sizing: border-box;
+              }
+
+              body {
+                margin: 0;
+                min-height: 100vh;
+                display: grid;
+                place-items: center;
+                padding: 24px;
+                background: var(--bg);
+                color: var(--text);
+                font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+              }
+
+              main {
+                width: min(100%, 620px);
+                padding: 28px;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                background: var(--panel);
+              }
+
+              h1 {
+                margin: 0 0 12px;
+                font-size: clamp(2rem, 7vw, 3.25rem);
+                line-height: 1;
+              }
+
+              p {
+                margin: 0 0 18px;
+                color: var(--muted);
+                font-size: 1.05rem;
+                line-height: 1.5;
+              }
+
+              a {
+                display: inline-flex;
+                align-items: center;
+                min-height: 44px;
+                padding: 0 16px;
+                border: 1px solid var(--accent);
+                border-radius: 6px;
+                color: var(--text);
+                text-decoration: none;
+                font-weight: 650;
+              }
+            </style>
+          </head>
+          <body>
+            <main>
+              <h1>FFXIV Craft Architect has moved</h1>
+              <p>The GitHub Pages version is retired. The current public build now lives at its new home.</p>
+              <a href="https://xivcraftarchitect.com/">Open xivcraftarchitect.com</a>
+            </main>
+          </body>
+          </html>
+          HTML
+
+          cat > dist/pages/local-dev/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>FFXIV Craft Architect dev route moved</title>
+            <style>
+              :root {
+                color-scheme: dark;
+                --bg: #111318;
+                --panel: #1b2029;
+                --text: #eef2f7;
+                --muted: #a9b4c3;
+                --accent: #8fd3ff;
+                --line: #313946;
+              }
+
+              * {
+                box-sizing: border-box;
+              }
+
+              body {
+                margin: 0;
+                min-height: 100vh;
+                display: grid;
+                place-items: center;
+                padding: 24px;
+                background: var(--bg);
+                color: var(--text);
+                font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+              }
+
+              main {
+                width: min(100%, 620px);
+                padding: 28px;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                background: var(--panel);
+              }
+
+              h1 {
+                margin: 0 0 12px;
+                font-size: clamp(2rem, 7vw, 3.25rem);
+                line-height: 1;
+              }
+
+              p {
+                margin: 0 0 18px;
+                color: var(--muted);
+                font-size: 1.05rem;
+                line-height: 1.5;
+              }
+
+              a {
+                display: inline-flex;
+                align-items: center;
+                min-height: 44px;
+                padding: 0 16px;
+                border: 1px solid var(--accent);
+                border-radius: 6px;
+                color: var(--text);
+                text-decoration: none;
+                font-weight: 650;
+              }
+            </style>
+          </head>
+          <body>
+            <main>
+              <h1>This route has moved</h1>
+              <p>If you're here, you know where to find the dev build.</p>
+              <a href="https://xivcraftarchitect.com/">Open the public build</a>
+            </main>
+          </body>
+          </html>
+          HTML
+
+          cat > dist/pages/404.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>FFXIV Craft Architect has moved</title>
+            <style>
+              :root {
+                color-scheme: dark;
+                --bg: #111318;
+                --panel: #1b2029;
+                --text: #eef2f7;
+                --muted: #a9b4c3;
+                --accent: #8fd3ff;
+                --line: #313946;
+              }
+
+              * {
+                box-sizing: border-box;
+              }
+
+              body {
+                margin: 0;
+                min-height: 100vh;
+                display: grid;
+                place-items: center;
+                padding: 24px;
+                background: var(--bg);
+                color: var(--text);
+                font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+              }
+
+              main {
+                width: min(100%, 620px);
+                padding: 28px;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                background: var(--panel);
+              }
+
+              h1 {
+                margin: 0 0 12px;
+                font-size: clamp(2rem, 7vw, 3.25rem);
+                line-height: 1;
+              }
+
+              p {
+                margin: 0 0 18px;
+                color: var(--muted);
+                font-size: 1.05rem;
+                line-height: 1.5;
+              }
+
+              a {
+                display: inline-flex;
+                align-items: center;
+                min-height: 44px;
+                padding: 0 16px;
+                border: 1px solid var(--accent);
+                border-radius: 6px;
+                color: var(--text);
+                text-decoration: none;
+                font-weight: 650;
+              }
+            </style>
+          </head>
+          <body>
+            <main>
+              <h1 id="title">FFXIV Craft Architect has moved</h1>
+              <p id="message">The GitHub Pages version is retired. The current public build now lives at its new home.</p>
+              <a href="https://xivcraftarchitect.com/">Open xivcraftarchitect.com</a>
+            </main>
+            <script>
+              if (window.location.pathname.includes('/local-dev')) {
+                document.getElementById('title').textContent = 'This route has moved';
+                document.getElementById('message').textContent = "If you're here, you know where to find the dev build.";
+              }
+            </script>
+          </body>
+          </html>
+          HTML
+
           touch dist/pages/.nojekyll
 
       - name: Setup Pages
@@ -61,13 +272,6 @@ jobs:
         with:
           path: dist/pages
 
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

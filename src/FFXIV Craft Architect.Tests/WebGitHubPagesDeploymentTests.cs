@@ -3,17 +3,21 @@ namespace FFXIV_Craft_Architect.Tests;
 public class WebGitHubPagesDeploymentTests
 {
     [Fact]
-    public void DeployWorkflow_IsManualRollbackOnly()
+    public void DeployWorkflow_PublishesManualMovedNoticeOnly()
     {
         var workflow = ReadRepoFile(".github", "workflows", "deploy-web.yml");
 
-        Assert.Contains("name: Manual GitHub Pages Rollback Deploy", workflow);
+        Assert.Contains("name: Manual GitHub Pages Moved Notice Deploy", workflow);
         Assert.Contains("workflow_dispatch:", workflow);
         Assert.DoesNotContain("push:", workflow);
-        Assert.Contains("ref: main", workflow);
-        Assert.Contains("ref: local-dev", workflow);
+        Assert.DoesNotContain("actions/setup-dotnet", workflow);
+        Assert.DoesNotContain("dotnet publish", workflow);
+        Assert.DoesNotContain("dist/web", workflow);
         Assert.Contains("dist/pages/local-dev", workflow);
-        Assert.Contains("dist/web/local-dev/wwwroot/404.html dist/pages/404.html", workflow);
+        Assert.Contains("FFXIV Craft Architect has moved", workflow);
+        Assert.Contains("https://xivcraftarchitect.com", workflow);
+        Assert.Contains("If you're here, you know where to find the dev build.", workflow);
+        Assert.DoesNotContain("dev.xivcraftarchitect.com", workflow);
         Assert.Contains("path: dist/pages", workflow);
         Assert.Contains("uses: actions/deploy-pages@v4", workflow);
     }
