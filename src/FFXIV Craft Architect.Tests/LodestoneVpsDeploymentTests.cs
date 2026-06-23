@@ -30,6 +30,7 @@ public sealed class LodestoneVpsDeploymentTests
 
         Assert.Contains("name: Run full test suite", workflow);
         Assert.Contains("dotnet test \"src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj\"", workflow);
+        Assert.Contains("-p:EnableWindowsTargeting=true", workflow);
         Assert.True(
             workflow.IndexOf("name: Run full test suite", StringComparison.Ordinal) <
             workflow.IndexOf("name: Publish Lodestone helper", StringComparison.Ordinal));

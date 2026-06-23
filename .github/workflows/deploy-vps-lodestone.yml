@@ -31,6 +31,7 @@ jobs:
         run: >
           dotnet test "src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj"
           --configuration Release
+          -p:EnableWindowsTargeting=true
           --logger "console;verbosity=normal"
 
       - name: Publish Lodestone helper
