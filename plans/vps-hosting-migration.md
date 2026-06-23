@@ -2,7 +2,7 @@
 
 Date: 2026-06-20
 Branch: vps-hosting-migration
-Status: Draft
+Status: VPS migration active; GitHub Pages retained as manual rollback
 
 ## Goal
 
@@ -17,7 +17,15 @@ This is not only about getting a custom domain. The important unblocker is the L
 
 ## Current Deployment Shape
 
-Current GitHub Pages workflow:
+Current deployment shape as of 2026-06-22:
+
+- `https://xivcraftarchitect.com` is the canonical `main` host on the VPS.
+- `https://dev.xivcraftarchitect.com` is the canonical `local-dev` host on the VPS.
+- `.github/workflows/deploy-vps-web.yml` is the automatic web deployment path for VPS-hosted web builds.
+- `.github/workflows/deploy-vps-lodestone.yml` is the manual deployment path for the hosted Lodestone helper.
+- `.github/workflows/deploy-web.yml` is manual rollback only for GitHub Pages.
+
+Legacy GitHub Pages workflow shape:
 
 - Builds `src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj`.
 - Publishes `main` and `local-dev`.
@@ -1113,6 +1121,14 @@ Implemented first automation scaffold:
   - `.github/workflows/deploy-vps-lodestone.yml` deploys the Lodestone helper manually as a self-contained Linux service release.
   - Helper releases are installed under `/srv/craftarchitect/services/lodestone/releases/<run>`.
   - Helper rollback remains a symlink operation: repoint `/srv/craftarchitect/services/lodestone/current`, then restart `craftarchitect-lodestone`.
+  - The first helper workflow run, `27992340708`, successfully installed release `27992340708-1-0950606` but reported failure because the readiness check raced the systemd startup.
+  - The helper deploy workflow now waits up to 30 seconds for `http://127.0.0.1:5128/` before declaring failure.
+  - The fixed helper workflow run, `27992419520`, succeeded and installed release `27992419520-1-c28bc0b`.
+  - Live service verification after run `27992419520`:
+    - `systemctl is-active craftarchitect-lodestone` returned `active`.
+    - `/srv/craftarchitect/services/lodestone/current` pointed to `/srv/craftarchitect/services/lodestone/releases/27992419520-1-c28bc0b`.
+    - `http://127.0.0.1:5128/` returned the helper ready payload.
+    - `https://dev.xivcraftarchitect.com/api/lodestone/crafters/search?name=Level%20Checker&world=Behemoth` returned character id `16331040`.
 
 Verification:
 
@@ -1174,7 +1190,7 @@ Make the new host safer and easier to maintain.
 
 Work:
 
-1. Confirm SSH key login works reliably.
+1. Confirm SSH key login works reliably. Done locally through the `craftarchitect-vps` SSH alias.
 2. Consider disabling password SSH login after backup access is confirmed.
 3. Add basic log commands to the runbook:
 
@@ -1189,6 +1205,15 @@ Work:
    - `https://xivcraftarchitect.com`
    - `https://dev.xivcraftarchitect.com`
    - `https://xivcraftarchitect.com/api/lodestone/...`
+
+Completed hardening:
+
+- GitHub Pages automatic deployment is disabled; Pages is manual rollback only.
+- VPS web deployment is automatic for the hosted web slots.
+- Lodestone helper deployment is manual and release-based.
+- Web releases and helper releases keep only the newest five releases per slot/service.
+- Helper deployment performs a localhost readiness check before verifying the public route.
+- Focused workflow/config tests cover the VPS web workflow, helper workflow, and manual Pages rollback workflow.
 
 ### Known Risks / Watch Items
 
