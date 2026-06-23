@@ -1,0 +1,50 @@
+name: Regression Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tools/**'
+      - '.github/workflows/test-regression.yml'
+  push:
+    branches: [ main, master, local-dev ]
+    paths:
+      - 'src/**'
+      - 'tools/**'
+      - '.github/workflows/test-regression.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run regression suite
+        run: >
+          dotnet test "src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj"
+          --configuration Release
+          --blame-hang
+          --blame-hang-timeout 5m
+          --blame-hang-dump-type mini
+          --logger "trx;LogFileName=regression.trx"
+          --logger "console;verbosity=normal"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-test-results
+          path: |
+            src/FFXIV Craft Architect.Tests/TestResults/**
+            src/FFXIV Craft Architect.Tests/**/regression.trx
