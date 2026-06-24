@@ -73,6 +73,9 @@ public class StoredMarketIntelligenceRestorerTests
         var plan = Assert.Single(result.Recommendations);
         Assert.NotNull(plan.CoverageSet);
         Assert.Equal(1_000, plan.CoverageSet.SingleWorld!.ExactNeededCost);
+        Assert.Equal(
+            plan.CoverageSet.SingleWorld.CandidateId,
+            PurchaseRecommendationCost.GetDefaultCoverageOption(plan)?.CandidateId);
     }
 
     [Fact]
