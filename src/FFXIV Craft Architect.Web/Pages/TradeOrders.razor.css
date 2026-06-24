@@ -533,6 +533,19 @@
   padding: 7px 0;
 }
 
+::deep .trade-orders-procurement-grid .web-grid-table-row.is-suppressed,
+::deep .trade-orders-procurement-grid .web-grid-table-row.is-reference {
+  opacity: 0.72;
+}
+
+::deep .trade-orders-procurement-grid .web-grid-table-row.is-suppressed {
+  background: rgba(240, 180, 95, 0.04);
+}
+
+::deep .trade-orders-procurement-grid .web-grid-table-row.is-partial {
+  background: rgba(159, 209, 126, 0.035);
+}
+
 ::deep .trade-orders-procurement-grid .web-grid-table-cell.is-align-end {
   text-align: right;
   white-space: nowrap;
@@ -594,6 +607,26 @@
 
 ::deep .trade-orders-source-menu .mud-icon-root {
   font-size: 1rem;
+}
+
+::deep .trade-orders-source-locked,
+::deep .trade-orders-procurement-reference {
+  color: #8f8f8f;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+::deep .trade-orders-procurement-quantity,
+::deep .trade-orders-procurement-cost {
+  color: #d0d0d0;
+}
+
+::deep .web-grid-table-row.is-suppressed .trade-orders-procurement-quantity,
+::deep .web-grid-table-row.is-suppressed .trade-orders-procurement-cost,
+::deep .web-grid-table-row.is-reference .trade-orders-procurement-quantity,
+::deep .web-grid-table-row.is-reference .trade-orders-procurement-cost {
+  color: #a6a6a6;
 }
 
 ::deep .trade-orders-source-evidence,
