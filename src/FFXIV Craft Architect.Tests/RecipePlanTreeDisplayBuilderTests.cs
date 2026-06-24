@@ -131,4 +131,49 @@ public class RecipePlanTreeDisplayBuilderTests
         Assert.Equal("Lv.50 Goldsmith", state.RecipeInfo);
         Assert.Equal(string.Empty, state.PriceText);
     }
+
+    [Fact]
+    public void BuildWithoutCost_UsesPlayerFacingRecipeLevelForMasterRecipeInfo()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 12913,
+            NodeId = "garlond-steel",
+            Name = "Garlond Steel",
+            Quantity = 999,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Job = "Blacksmith",
+            RecipeLevel = 125,
+            RecipeDisplayLevel = 52,
+            RecipeUnlockItemId = 7779
+        };
+
+        var state = RecipePlanTreeDisplayBuilder.BuildWithoutCost(node);
+
+        Assert.Equal("Lv.52 Blacksmith (Master)", state.RecipeInfo);
+    }
+
+    [Fact]
+    public void BuildWithoutCost_AppendsRecipeStarsWhenPresent()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 9359,
+            NodeId = "platinum-nugget",
+            Name = "Platinum Nugget",
+            Quantity = 999,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Job = "Goldsmith",
+            RecipeLevel = 90,
+            RecipeDisplayLevel = 50,
+            RecipeStars = 3,
+            RecipeUnlockItemId = 7781
+        };
+
+        var state = RecipePlanTreeDisplayBuilder.BuildWithoutCost(node);
+
+        Assert.Equal("Lv.50\u2605\u2605\u2605 Goldsmith (Master)", state.RecipeInfo);
+    }
 }

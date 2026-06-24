@@ -69,6 +69,9 @@ public class PlanFileNode
 
     public bool IsUncraftable { get; set; }
     public int RecipeLevel { get; set; }
+    public int RecipeDisplayLevel { get; set; }
+    public int RecipeStars { get; set; }
+    public int RecipeUnlockItemId { get; set; }
     public string? Job { get; set; }
     public int Yield { get; set; } = 1;
     public decimal MarketPrice { get; set; }

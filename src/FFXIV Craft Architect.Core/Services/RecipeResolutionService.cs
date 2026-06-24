@@ -12,6 +12,9 @@ public sealed record RecipeResolutionResult(
     int? JobId,
     string JobName,
     int RecipeLevel,
+    int RecipeDisplayLevel,
+    int RecipeStars,
+    int RecipeUnlockItemId,
     int Yield,
     int CraftCount,
     GarlandCraft? StandardRecipe,
@@ -33,6 +36,9 @@ public sealed record RecipeResolutionResult(
             null,
             node.Job,
             node.RecipeLevel,
+            node.RecipeDisplayLevel,
+            node.RecipeStars,
+            node.RecipeUnlockItemId,
             Math.Max(1, node.Yield),
             node.CraftCount,
             null,
@@ -200,6 +206,9 @@ public sealed class RecipeResolutionService : IRecipeResolutionService
             null,
             "Company Workshop",
             node.RecipeLevel,
+            node.RecipeDisplayLevel,
+            node.RecipeStars,
+            node.RecipeUnlockItemId,
             Math.Max(1, node.Yield),
             node.Quantity,
             null,
@@ -224,6 +233,9 @@ public sealed class RecipeResolutionService : IRecipeResolutionService
             recipe.JobId,
             JobHelper.GetJobName(recipe.JobId),
             recipe.RecipeLevel,
+            GetRecipeDisplayLevel(recipe),
+            Math.Max(0, recipe.Stars),
+            recipe.UnlockItemId,
             yield,
             craftCount,
             recipe,
@@ -234,6 +246,11 @@ public sealed class RecipeResolutionService : IRecipeResolutionService
     private static bool TryParseRecipeId(GarlandCraft recipe, out uint recipeId)
     {
         return uint.TryParse(recipe.Id, out recipeId);
+    }
+
+    private static int GetRecipeDisplayLevel(GarlandCraft recipe)
+    {
+        return recipe.DisplayLevel > 0 ? recipe.DisplayLevel : recipe.RecipeLevel;
     }
 
     private static RecipeOperationDiagnostic CreateDiagnostic(

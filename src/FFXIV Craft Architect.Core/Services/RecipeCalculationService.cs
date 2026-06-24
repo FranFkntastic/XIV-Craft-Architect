@@ -987,6 +987,9 @@ public class RecipeCalculationService
             CanBuyFromVendor = node.CanBuyFromVendor,
             CanCraft = node.CanCraft,
             RecipeLevel = node.RecipeLevel,
+            RecipeDisplayLevel = node.RecipeDisplayLevel,
+            RecipeStars = node.RecipeStars,
+            RecipeUnlockItemId = node.RecipeUnlockItemId,
             Job = node.Job,
             Yield = node.Yield,
             VendorPrice = node.VendorPrice,
@@ -1028,6 +1031,9 @@ public class RecipeCalculationService
                     IconId = sNode.IconId,
                     Quantity = sNode.Quantity,
                     RecipeLevel = sNode.RecipeLevel,
+                    RecipeDisplayLevel = sNode.RecipeDisplayLevel,
+                    RecipeStars = sNode.RecipeStars,
+                    RecipeUnlockItemId = sNode.RecipeUnlockItemId,
                     Job = sNode.Job,
                     Yield = sNode.Yield,
                     MarketPrice = sNode.MarketPrice,
@@ -1581,6 +1587,9 @@ public class RecipeCalculationService
                 CanBuyFromVendor = cachedNode.CanBuyFromVendor,
                 CanCraft = cachedNode.CanCraft,
                 RecipeLevel = cachedNode.RecipeLevel,
+                RecipeDisplayLevel = cachedNode.RecipeDisplayLevel,
+                RecipeStars = cachedNode.RecipeStars,
+                RecipeUnlockItemId = cachedNode.RecipeUnlockItemId,
                 Job = cachedNode.Job,
                 Yield = cachedNode.Yield,
                 VendorPrice = cachedNode.VendorPrice,
@@ -1737,6 +1746,9 @@ public class RecipeCalculationService
     {
         node.Job = "Company Workshop";
         node.RecipeLevel = 1;
+        node.RecipeDisplayLevel = 1;
+        node.RecipeStars = 0;
+        node.RecipeUnlockItemId = 0;
         node.Yield = 1;
 
         foreach (var phase in companyCraft.Phases)
@@ -1764,8 +1776,22 @@ public class RecipeCalculationService
         GarlandCraft recipe)
     {
         node.RecipeLevel = resolution.StandardRecipe == null ? recipe.RecipeLevel : resolution.RecipeLevel;
+        node.RecipeDisplayLevel = resolution.StandardRecipe == null
+            ? GetRecipeDisplayLevel(recipe)
+            : resolution.RecipeDisplayLevel;
+        node.RecipeStars = resolution.StandardRecipe == null
+            ? Math.Max(0, recipe.Stars)
+            : resolution.RecipeStars;
+        node.RecipeUnlockItemId = resolution.StandardRecipe == null
+            ? recipe.UnlockItemId
+            : resolution.RecipeUnlockItemId;
         node.Job = resolution.StandardRecipe == null ? JobHelper.GetJobName(recipe.JobId) : resolution.JobName;
         node.Yield = resolution.StandardRecipe == null ? Math.Max(1, recipe.Yield) : resolution.Yield;
+    }
+
+    private static int GetRecipeDisplayLevel(GarlandCraft recipe)
+    {
+        return recipe.DisplayLevel > 0 ? recipe.DisplayLevel : recipe.RecipeLevel;
     }
 
     #endregion
