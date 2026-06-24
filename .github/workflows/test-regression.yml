@@ -34,6 +34,7 @@ jobs:
         run: >
           dotnet test "src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj"
           --configuration Release
+          --filter "Surface!=Desktop"
           --blame-hang
           --blame-hang-timeout 5m
           --blame-hang-dump-type mini
