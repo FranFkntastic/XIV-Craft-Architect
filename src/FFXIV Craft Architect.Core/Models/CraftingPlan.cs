@@ -383,9 +383,24 @@ public class PlanNode
     public bool IsBuy => Source == AcquisitionSource.MarketBuyNq || Source == AcquisitionSource.MarketBuyHq || Source == AcquisitionSource.VendorBuy;
     
     /// <summary>
-    /// Recipe level required to craft this item
+    /// Internal recipe level table value from game data.
     /// </summary>
     public int RecipeLevel { get; set; }
+
+    /// <summary>
+    /// Player-facing crafter recipe level shown in recipe lists.
+    /// </summary>
+    public int RecipeDisplayLevel { get; set; }
+
+    /// <summary>
+    /// Player-facing recipe star count.
+    /// </summary>
+    public int RecipeStars { get; set; }
+
+    /// <summary>
+    /// Unlock item ID for master-book recipes, if Garland provides one.
+    /// </summary>
+    public int RecipeUnlockItemId { get; set; }
     
     /// <summary>
     /// Job required to craft (e.g., "Blacksmith", "Weaver")
@@ -608,6 +623,9 @@ public class PlanNode
             CanBuyFromMarket = CanBuyFromMarket,
             HqMarketPrice = HqMarketPrice,
             RecipeLevel = RecipeLevel,
+            RecipeDisplayLevel = RecipeDisplayLevel,
+            RecipeStars = RecipeStars,
+            RecipeUnlockItemId = RecipeUnlockItemId,
             Job = Job,
             Yield = Yield,
             MarketPrice = MarketPrice,
@@ -738,6 +756,9 @@ public class SerializablePlanNode
     
     public bool IsUncraftable { get; set; }
     public int RecipeLevel { get; set; }
+    public int RecipeDisplayLevel { get; set; }
+    public int RecipeStars { get; set; }
+    public int RecipeUnlockItemId { get; set; }
     public string Job { get; set; } = string.Empty;
     public int Yield { get; set; } = 1;
     public decimal MarketPrice { get; set; }

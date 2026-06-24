@@ -8,25 +8,19 @@ using Microsoft.Extensions.Logging;
 namespace FFXIV_Craft_Architect.Core.Services;
 
 /// <summary>
-/// Service for saving and loading crafting plans to/from disk.
-/// Uses a three-tier architecture:
-/// 1. plan.json - Minimal recipe tree
-/// 2. plan.recommendations.csv - Plan-specific shopping strategy
-/// 3. market_cache.json - Global raw market data (shared across plans)
+/// Legacy disk service for saving and loading crafting plans to/from JSON.
+/// Market analysis evidence is persisted by the current session/storage pipeline,
+/// not by companion recommendation CSV files.
 /// </summary>
 public class PlanPersistenceService : IPlanPersistenceService
 {
     private readonly ILogger<PlanPersistenceService> _logger;
-    private readonly RecommendationCsvService _recommendationService;
     private readonly string _plansDirectory;
     private readonly JsonSerializerOptions _jsonOptions;
 
-    public PlanPersistenceService(
-        ILogger<PlanPersistenceService> logger,
-        RecommendationCsvService recommendationService)
+    public PlanPersistenceService(ILogger<PlanPersistenceService> logger)
     {
         _logger = logger;
-        _recommendationService = recommendationService;
         _plansDirectory = Path.Combine(AppContext.BaseDirectory, "Plans");
         
         _jsonOptions = new JsonSerializerOptions
@@ -111,18 +105,11 @@ public class PlanPersistenceService : IPlanPersistenceService
                 DataCenter = plan.DataCenter,
                 World = plan.World,
                 RootItems = plan.RootItems.Select(ConvertToFileNode).ToList()
-                // Note: MarketPlans no longer stored in JSON
             };
 
             var json = JsonSerializer.Serialize(data, _jsonOptions);
             await File.WriteAllTextAsync(filePath, json);
-            
-            // Save recommendations to CSV companion file
-            if (plan.SavedMarketPlans?.Count > 0)
-            {
-                await _recommendationService.SaveRecommendationsAsync(fileName, plan.SavedMarketPlans);
-            }
-            
+
             _logger.LogInformation("[PlanPersistence] Saved plan '{PlanName}' ({FileName})", data.Name, fileName);
             return true;
         }
@@ -164,8 +151,8 @@ public class PlanPersistenceService : IPlanPersistenceService
                 ModifiedAt = data.ModifiedAt,
                 DataCenter = data.DataCenter,
                 World = data.World,
-                RootItems = data.RootItems?.Select(ConvertFromFileNode).ToList() ?? new List<PlanNode>()
-                // Note: SavedMarketPlans loaded from CSV below
+                RootItems = data.RootItems?.Select(ConvertFromFileNode).ToList() ?? new List<PlanNode>(),
+                SavedMarketPlans = new List<DetailedShoppingPlan>()
             };
 
             // Re-link parent references
@@ -174,12 +161,10 @@ public class PlanPersistenceService : IPlanPersistenceService
                 LinkParents(root, null);
             }
 
-            // Load recommendations from CSV companion file (if exists)
-            var fileName = Path.GetFileName(filePath);
-            plan.SavedMarketPlans = await _recommendationService.LoadRecommendationsAsync(fileName);
-
-            _logger.LogInformation("[PlanPersistence] Loaded plan '{PlanName}' from {Path} ({MarketPlans} recommendations)", 
-                plan.Name, filePath, plan.SavedMarketPlans.Count);
+            _logger.LogInformation(
+                "[PlanPersistence] Loaded legacy JSON plan '{PlanName}' from {Path}; market evidence is restored by the session/storage pipeline",
+                plan.Name,
+                filePath);
             return plan;
         }
         catch (Exception ex)
@@ -277,7 +262,6 @@ public class PlanPersistenceService : IPlanPersistenceService
 
     /// <summary>
     /// Export a plan to a specific location (for sharing).
-    /// Includes both JSON and CSV files.
     /// </summary>
     public async Task<bool> ExportPlanAsync(CraftingPlan plan, string filePath)
     {
@@ -298,14 +282,7 @@ public class PlanPersistenceService : IPlanPersistenceService
 
             var json = JsonSerializer.Serialize(data, _jsonOptions);
             await File.WriteAllTextAsync(filePath, json);
-            
-            // Save recommendations CSV alongside
-            if (plan.SavedMarketPlans?.Count > 0)
-            {
-                var csvPath = Path.ChangeExtension(filePath, ".recommendations.csv");
-                await _recommendationService.SaveRecommendationsAsync(Path.GetFileName(filePath), plan.SavedMarketPlans);
-            }
-            
+
             _logger.LogInformation("[PlanPersistence] Exported plan '{PlanName}' to {Path}", plan.Name, filePath);
             return true;
         }
@@ -362,6 +339,9 @@ public class PlanPersistenceService : IPlanPersistenceService
             CanBuyFromMarket = node.CanBuyFromMarket,
             CanCraft = node.CanCraft,
             RecipeLevel = node.RecipeLevel,
+            RecipeDisplayLevel = node.RecipeDisplayLevel,
+            RecipeStars = node.RecipeStars,
+            RecipeUnlockItemId = node.RecipeUnlockItemId,
             Job = node.Job,
             Yield = node.Yield,
             MarketPrice = node.MarketPrice,
@@ -392,6 +372,9 @@ public class PlanPersistenceService : IPlanPersistenceService
             IconId = fileNode.IconId,
             Quantity = fileNode.Quantity,
             RecipeLevel = fileNode.RecipeLevel,
+            RecipeDisplayLevel = fileNode.RecipeDisplayLevel,
+            RecipeStars = fileNode.RecipeStars,
+            RecipeUnlockItemId = fileNode.RecipeUnlockItemId,
             Job = fileNode.Job ?? string.Empty,
             Yield = fileNode.Yield,
             MarketPrice = fileNode.MarketPrice,

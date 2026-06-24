@@ -67,7 +67,7 @@ public static class MarketPurchaseCostProjectionService
         var qualityPolicy = hqOnly
             ? MarketCoverageQualityPolicy.HqOnly
             : MarketCoverageQualityPolicy.NqOrHq;
-        var candidate = GetCoverageCandidates(shoppingPlan.CoverageSet)
+        var candidate = MarketCoverageSelection.GetCandidates(shoppingPlan.CoverageSet)
             .Where(candidate => candidate.Kind == MarketCoverageKind.SupportedListings)
             .Where(candidate => candidate.QualityPolicy == qualityPolicy)
             .Where(candidate => candidate.IsDefaultEligible)
@@ -97,21 +97,6 @@ public static class MarketPurchaseCostProjectionService
             MarketPurchaseCostEstimateKind.SupportedEvidence,
             world);
         return true;
-    }
-
-    private static IEnumerable<MarketCoverageOption> GetCoverageCandidates(MarketCoverageSet coverageSet)
-    {
-        return coverageSet.AllCandidates
-            .Concat([
-                coverageSet.SingleWorld,
-                coverageSet.CompactSplit,
-                coverageSet.WideSplit,
-                coverageSet.CheapestObserved
-            ])
-            .Where(candidate => candidate != null)
-            .Cast<MarketCoverageOption>()
-            .GroupBy(candidate => candidate.CandidateId, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First());
     }
 
     public static bool IsUnsupportedProjectedCost(

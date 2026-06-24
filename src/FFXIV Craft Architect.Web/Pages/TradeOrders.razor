@@ -9,6 +9,7 @@
 @inject TradePayrollPersistenceService TradePayrollPersistence
 @inject WebPlanPersistenceService PlanPersistence
 @inject AcquisitionDecisionService AcquisitionDecisionService
+@inject AcquisitionEvaluationWorkflowService AcquisitionEvaluationWorkflow
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -606,6 +607,7 @@
                                                   Items="@GetOrderedProcurementRows(procurementRows)"
                                                   Columns="@GetProcurementColumns()"
                                                   GetRowKey="row => row.RowKey"
+                                                  GetRowClass="GetProcurementRowClass"
                                                   SortState="@_procurementSortState"
                                                   SortChanged="OnProcurementSortChanged"
                                                   ColumnGapPx="4"
@@ -672,6 +674,7 @@
     private bool _isOpeningSelectedOrderCraftPlan;
     private bool _isRepricingSelectedOrder;
     private bool _isSavingSelectedOrderCraftPlan;
+    private bool _isRefreshingLiveProcurement;
     private int _activeOpsTab;
     private WebTableSortState<TradeOrderProcurementColumn> _procurementSortState =
         WebTableSortState<TradeOrderProcurementColumn>.Unsorted;
@@ -686,6 +689,9 @@
     private Guid? _pendingNavigationOrderId;
     private bool _isArchiveCollapsed = true;
     private HashSet<TradeOrderStatus> _collapsedStatuses = [];
+    private AcquisitionEvaluationSnapshot? _liveProcurementSnapshot;
+    private LiveProcurementKey? _liveProcurementKey;
+    private int _liveProcurementRefreshRequestId;
 
     private bool CanCreateRequestedOrder =>
         !string.IsNullOrWhiteSpace(_newRequestedOrderTitle) &&
@@ -716,6 +722,11 @@
     {
         _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
         await LoadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await EnsureLiveProcurementSnapshotAsync();
     }
 
     private async Task LoadAsync()
@@ -2051,9 +2062,110 @@
 
     private IReadOnlyList<TradeOrderProcurementRow> GetSelectedOrderProcurementRows()
     {
-        return _selectedOrder == null
-            ? Array.Empty<TradeOrderProcurementRow>()
-            : TradeOrderWorkflow.BuildProcurementRows(_selectedOrder, GetPayrollDraftForOrder(_selectedOrder));
+        if (_selectedOrder == null)
+        {
+            return Array.Empty<TradeOrderProcurementRow>();
+        }
+
+        return TradeProcurementRowBuilder.BuildRows(
+            _selectedOrder,
+            GetPayrollDraftForOrder(_selectedOrder),
+            AppState.CurrentPlanId,
+            GetCurrentLiveProcurementSnapshot());
+    }
+
+    private bool IsSelectedOrderLinkedPlanActive()
+    {
+        return _selectedOrder != null &&
+            AppState.CurrentPlan != null &&
+            !string.IsNullOrWhiteSpace(_selectedOrder.CraftPlanId) &&
+            string.Equals(_selectedOrder.CraftPlanId, AppState.CurrentPlanId, StringComparison.Ordinal);
+    }
+
+    private AcquisitionEvaluationSnapshot? GetCurrentLiveProcurementSnapshot()
+    {
+        var key = CreateLiveProcurementKey();
+        return key.HasValue && key.Value.Equals(_liveProcurementKey)
+            ? _liveProcurementSnapshot
+            : null;
+    }
+
+    private async Task EnsureLiveProcurementSnapshotAsync()
+    {
+        var key = CreateLiveProcurementKey();
+        if (!key.HasValue)
+        {
+            ClearLiveProcurementSnapshot();
+            return;
+        }
+
+        if (key.Value.Equals(_liveProcurementKey) ||
+            _isRefreshingLiveProcurement)
+        {
+            return;
+        }
+
+        var requestId = Interlocked.Increment(ref _liveProcurementRefreshRequestId);
+        var plan = AppState.CurrentPlan;
+        var planSessionVersion = AppState.PlanSessionVersion;
+        _isRefreshingLiveProcurement = true;
+        try
+        {
+            var snapshot = await AcquisitionEvaluationWorkflow.BuildCurrentSnapshotAsync(
+                plan,
+                AppState.ShoppingPlans,
+                AppState.UnavailableMarketItems,
+                AcquisitionFilter.All);
+            if (requestId != _liveProcurementRefreshRequestId ||
+                !AppState.IsCurrentPlanSession(plan, planSessionVersion))
+            {
+                return;
+            }
+
+            var currentKey = CreateLiveProcurementKey();
+            if (!currentKey.HasValue || !currentKey.Value.Equals(key.Value))
+            {
+                return;
+            }
+
+            _liveProcurementSnapshot = snapshot;
+            _liveProcurementKey = key.Value;
+        }
+        finally
+        {
+            _isRefreshingLiveProcurement = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void ClearLiveProcurementSnapshot()
+    {
+        if (_liveProcurementSnapshot == null &&
+            !_liveProcurementKey.HasValue)
+        {
+            return;
+        }
+
+        _liveProcurementSnapshot = null;
+        _liveProcurementKey = null;
+    }
+
+    private LiveProcurementKey? CreateLiveProcurementKey()
+    {
+        if (!IsSelectedOrderLinkedPlanActive() || _selectedOrder == null)
+        {
+            return null;
+        }
+
+        var versions = AppState.CurrentVersions;
+        return new LiveProcurementKey(
+            _selectedOrder.Id,
+            AppState.CurrentPlanId ?? string.Empty,
+            AppState.PlanSessionVersion,
+            versions.PlanStructureVersion,
+            versions.PlanDecisionVersion,
+            versions.PlanPriceVersion,
+            versions.MarketAnalysisVersion);
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetOrderedProcurementRows(IReadOnlyList<TradeOrderProcurementRow> rows)
@@ -2066,7 +2178,7 @@
         IOrderedEnumerable<TradeOrderProcurementRow> ordered = _procurementSortState.Column.Value switch
         {
             TradeOrderProcurementColumn.Item => rows.OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase),
-            TradeOrderProcurementColumn.Quantity => rows.OrderBy(row => row.Quantity),
+            TradeOrderProcurementColumn.Quantity => rows.OrderBy(GetProcurementSortQuantity),
             TradeOrderProcurementColumn.Source => rows.OrderBy(row => row.SourceLabel, StringComparer.OrdinalIgnoreCase),
             TradeOrderProcurementColumn.Unit => rows.OrderBy(row => row.UnitCost),
             TradeOrderProcurementColumn.EstimatedCost => rows.OrderBy(row => row.TotalCost),
@@ -2093,10 +2205,12 @@
             WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
                 TradeOrderProcurementColumn.Quantity,
                 "Qty",
-                row => TradeDisplayFormatter.FormatQuantity(row.Quantity),
-                widthPx: 64,
-                minWidthPx: 56,
-                alignEnd: true),
+                FormatProcurementQuantity,
+                widthPx: 82,
+                minWidthPx: 72,
+                alignEnd: true,
+                cellCssClass: "trade-orders-procurement-quantity",
+                headerTooltip: "Active procurement quantity for live linked plans; total quantity for saved snapshots."),
             new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
             {
                 Id = TradeOrderProcurementColumn.Source,
@@ -2112,20 +2226,24 @@
                 row => FormatGil(row.UnitCost),
                 widthPx: 76,
                 minWidthPx: 68,
-                alignEnd: true),
+                alignEnd: true,
+                cellCssClass: "trade-orders-procurement-cost"),
             WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
                 TradeOrderProcurementColumn.EstimatedCost,
                 "Est. Cost",
                 row => FormatGil(row.TotalCost),
                 widthPx: 112,
                 minWidthPx: 96,
-                alignEnd: true),
-            WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
-                TradeOrderProcurementColumn.Responsibility,
-                "Resp.",
-                row => FormatResponsibility(row.Responsibility),
-                widthPx: 114,
-                minWidthPx: 104)
+                alignEnd: true,
+                cellCssClass: "trade-orders-procurement-cost"),
+            new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
+            {
+                Id = TradeOrderProcurementColumn.Responsibility,
+                Header = "Resp.",
+                Size = new WebTableColumnSize(114, 104),
+                Sortable = true,
+                CellTemplate = RenderProcurementResponsibilityCell
+            }
         ];
     }
 
@@ -2135,7 +2253,7 @@
         builder.OpenElement(sequence++, "button");
         builder.AddAttribute(sequence++, "type", "button");
         builder.AddAttribute(sequence++, "class", "trade-orders-link-button");
-        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => OpenMarketAnalysisForProcurementRowAsync(row)));
+        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => OpenProcurementRowDetailsAsync(row)));
         builder.AddContent(sequence++, row.ItemName);
         builder.CloseElement();
         if (row.RequiresHq)
@@ -2154,19 +2272,26 @@
                     @onclick="@(() => OpenAcquisitionEvaluationForProcurementRowAsync(row))">
                 @row.SourceLabel
             </button>
-            <MudMenu Icon="@Icons.Material.Filled.KeyboardArrowDown"
-                     Dense="true"
-                     Size="Size.Small"
-                     AnchorOrigin="Origin.BottomRight"
-                     TransformOrigin="Origin.TopRight"
-                     Class="trade-orders-source-menu">
-                @foreach (var source in GetProcurementSourceOptions())
-                {
-                    <MudMenuItem OnClick="@(() => ChangeProcurementRowSourceAsync(row, source))">
-                        @RecipePlanDisplayHelpers.GetSourceDisplayName(source)
-                    </MudMenuItem>
-                }
-            </MudMenu>
+            @if (CanEditProcurementSource(row))
+            {
+                <MudMenu Icon="@Icons.Material.Filled.KeyboardArrowDown"
+                         Dense="true"
+                         Size="Size.Small"
+                         AnchorOrigin="Origin.BottomRight"
+                         TransformOrigin="Origin.TopRight"
+                         Class="trade-orders-source-menu">
+                    @foreach (var source in GetProcurementSourceOptions())
+                    {
+                        <MudMenuItem OnClick="@(() => ChangeProcurementRowSourceAsync(row, source))">
+                            @RecipePlanDisplayHelpers.GetSourceDisplayName(source)
+                        </MudMenuItem>
+                    }
+                </MudMenu>
+            }
+            else if (row.IsLiveAcquisitionRow)
+            {
+                <span class="trade-orders-source-locked">locked</span>
+            }
         </div>
         @if (!string.IsNullOrWhiteSpace(row.EvidenceSource) &&
             !string.Equals(row.EvidenceSource, row.SourceLabel, StringComparison.OrdinalIgnoreCase))
@@ -2178,6 +2303,73 @@
             <span class="trade-orders-source-warning">@row.WarningSummary</span>
         }
     </div>;
+
+    private RenderFragment<TradeOrderProcurementRow> RenderProcurementResponsibilityCell => row => builder =>
+    {
+        var sequence = 0;
+        if (row.IsLiveAcquisitionRow && !row.IsActiveProcurement)
+        {
+            builder.OpenElement(sequence++, "span");
+            builder.AddAttribute(sequence++, "class", "trade-orders-procurement-reference");
+            builder.AddContent(sequence++, row.IsFullySuppressed ? "Suppressed" : "Reference");
+            builder.CloseElement();
+            return;
+        }
+
+        builder.AddContent(sequence++, FormatResponsibility(row.Responsibility));
+    };
+
+    private static string GetProcurementRowClass(TradeOrderProcurementRow row)
+    {
+        if (!row.IsLiveAcquisitionRow)
+        {
+            return string.Empty;
+        }
+
+        if (row.IsFullySuppressed)
+        {
+            return "trade-orders-procurement-row is-suppressed";
+        }
+
+        if (!row.IsActiveProcurement)
+        {
+            return "trade-orders-procurement-row is-reference";
+        }
+
+        return row.HasSuppressedOccurrences
+            ? "trade-orders-procurement-row is-partial"
+            : "trade-orders-procurement-row";
+    }
+
+    private static string FormatProcurementQuantity(TradeOrderProcurementRow row)
+    {
+        if (row.IsLiveAcquisitionRow && row.ActiveQuantity != row.Quantity)
+        {
+            return $"{TradeDisplayFormatter.FormatQuantity(row.ActiveQuantity)} / {TradeDisplayFormatter.FormatQuantity(row.Quantity)}";
+        }
+
+        return TradeDisplayFormatter.FormatQuantity(row.Quantity);
+    }
+
+    private static int GetProcurementSortQuantity(TradeOrderProcurementRow row)
+    {
+        return row.IsLiveAcquisitionRow
+            ? row.ActiveQuantity
+            : row.Quantity;
+    }
+
+    private static bool CanEditProcurementSource(TradeOrderProcurementRow row)
+    {
+        return !row.IsLiveAcquisitionRow || row.HasEditableOccurrences;
+    }
+
+    private Task OpenProcurementRowDetailsAsync(TradeOrderProcurementRow row)
+    {
+        return row.IsLiveAcquisitionRow &&
+            (!row.IsActiveProcurement || row.Source == AcquisitionSource.Craft)
+                ? OpenAcquisitionEvaluationForProcurementRowAsync(row)
+                : OpenMarketAnalysisForProcurementRowAsync(row);
+    }
 
     private Task OnProcurementSortChanged(WebTableSortState<TradeOrderProcurementColumn> sortState)
     {
@@ -2206,6 +2398,12 @@
         if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
         {
             Snackbar.Add("Reopen archived orders before editing acquisition sources.", Severity.Warning);
+            return;
+        }
+
+        if (row.IsLiveAcquisitionRow && !row.HasEditableOccurrences)
+        {
+            Snackbar.Add("Open Acquisition Evaluation to change suppressed or reference rows.", Severity.Warning);
             return;
         }
 
@@ -2437,6 +2635,15 @@
     }
 
     private sealed record OrderStatusGroup(TradeOrderStatus Status, IReadOnlyList<TradeOrder> Orders);
+
+    private readonly record struct LiveProcurementKey(
+        Guid OrderId,
+        string PlanId,
+        long PlanSessionVersion,
+        long PlanStructureVersion,
+        long PlanDecisionVersion,
+        long PlanPriceVersion,
+        long MarketAnalysisVersion);
 
     private enum TradeOrderProcurementColumn
     {

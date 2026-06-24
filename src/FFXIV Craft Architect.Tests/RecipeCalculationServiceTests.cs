@@ -47,6 +47,24 @@ public class RecipeCalculationServiceTests
     }
 
     [Fact]
+    public async Task BuildPlanAsync_StandardCraft_PreservesRecipeDisplayMetadata()
+    {
+        var service = CreateService();
+
+        var plan = await service.BuildPlanAsync(
+            [(400, "Garlond Steel", 999, false)],
+            "Aether",
+            string.Empty);
+
+        var root = Assert.Single(plan.RootItems);
+        Assert.Equal(125, root.RecipeLevel);
+        Assert.Equal(52, root.RecipeDisplayLevel);
+        Assert.Equal(0, root.RecipeStars);
+        Assert.Equal(7779, root.RecipeUnlockItemId);
+        Assert.Equal("Blacksmith", root.Job);
+    }
+
+    [Fact]
     public async Task BuildPlanAsync_WithDiagnostics_RecordsRecipeBuildSubphases()
     {
         var service = CreateService();
@@ -93,6 +111,7 @@ public class RecipeCalculationServiceTests
                           {
                             "id": "1000",
                             "rlvl": 90,
+                            "job": 8,
                             "yield": 1,
                             "ingredients": [
                               { "id": 200, "amount": 2, "name": "Child Material" }
@@ -120,7 +139,7 @@ public class RecipeCalculationServiceTests
                           {
                             "id": "3000",
                             "rlvl": 30,
-                            "job": 2,
+                            "job": 9,
                             "yield": 1,
                             "ingredients": [
                               { "id": 302, "amount": 5, "name": "Wrong Child" }
@@ -129,11 +148,30 @@ public class RecipeCalculationServiceTests
                           {
                             "id": "3001",
                             "rlvl": 20,
-                            "job": 3,
+                            "job": 10,
                             "yield": 2,
                             "ingredients": [
                               { "id": 301, "amount": 2, "name": "Selected Child" }
                             ]
+                          }
+                        ]
+                      }
+                    }
+                    """,
+                "400" => """
+                    {
+                      "item": {
+                        "id": 400,
+                        "name": "Garlond Steel",
+                        "craft": [
+                          {
+                            "id": "31021",
+                            "rlvl": 125,
+                            "lvl": 52,
+                            "job": 9,
+                            "unlockId": 7779,
+                            "yield": 1,
+                            "ingredients": []
                           }
                         ]
                       }

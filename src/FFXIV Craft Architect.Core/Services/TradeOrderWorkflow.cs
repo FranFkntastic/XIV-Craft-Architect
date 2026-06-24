@@ -447,7 +447,19 @@ public sealed record TradeOrderProcurementRow(
     string EvidenceStatus,
     string UnitCostExplanation,
     string WarningSummary,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    bool IsLiveAcquisitionRow = false,
+    bool IsActiveProcurement = true,
+    bool HasSuppressedOccurrences = false,
+    bool IsFullySuppressed = false,
+    IReadOnlyList<string>? SuppressedBy = null,
+    int ActiveQuantity = 0,
+    string UsedIn = "",
+    bool HasEditableOccurrences = true,
+    AcquisitionSource Source = AcquisitionSource.UnknownSource)
+{
+    public IReadOnlyList<string> SuppressedBy { get; init; } = SuppressedBy ?? Array.Empty<string>();
+}
 
 public enum TradeOrderCraftPlanReplacementMode
 {

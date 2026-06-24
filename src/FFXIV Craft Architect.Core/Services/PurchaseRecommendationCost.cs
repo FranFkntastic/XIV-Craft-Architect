@@ -33,28 +33,7 @@ public static class PurchaseRecommendationCost
 
     public static MarketCoverageOption? GetDefaultCoverageOption(DetailedShoppingPlan plan)
     {
-        if (plan.CoverageSet == null)
-        {
-            return null;
-        }
-
-        return plan.CoverageSet.AllCandidates
-            .Concat([
-                plan.CoverageSet.SingleWorld,
-                plan.CoverageSet.CompactSplit,
-                plan.CoverageSet.WideSplit,
-                plan.CoverageSet.CheapestObserved
-            ])
-            .Where(candidate => candidate != null)
-            .Cast<MarketCoverageOption>()
-            .GroupBy(candidate => candidate.CandidateId, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())
-            .Where(candidate => candidate.Kind == MarketCoverageKind.SupportedListings)
-            .Where(candidate => candidate.IsDefaultEligible)
-            .OrderBy(candidate => candidate.ExactNeededCost)
-            .ThenBy(candidate => candidate.Friction.WorldCount)
-            .ThenBy(candidate => candidate.CashOutCost)
-            .FirstOrDefault();
+        return MarketCoverageSelection.GetDefaultOption(plan.CoverageSet);
     }
 
     public static bool HasRecommendation(DetailedShoppingPlan plan)

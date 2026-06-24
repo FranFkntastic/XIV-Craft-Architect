@@ -139,6 +139,7 @@ public class MarketPurchaseCostProjectionServiceTests
 
         Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, estimate.Kind);
         Assert.Equal(1_000, estimate.Cost);
+        Assert.Equal(1_200, PurchaseRecommendationCost.GetRecommendedCashOutCost(plan));
         Assert.Equal("Siren", estimate.World?.WorldName);
     }
 

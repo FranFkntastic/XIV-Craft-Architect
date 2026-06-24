@@ -52,7 +52,7 @@ public static class RecipePlanTreeDisplayBuilder
     private static RecipeNodeDisplayState CreateState(PlanNode node, string priceText)
     {
         var recipeInfo = !string.IsNullOrEmpty(node.Job) && node.Job != "Company Workshop"
-            ? $"Lv.{node.RecipeLevel} {node.Job}"
+            ? FormatRecipeInfo(node)
             : null;
 
         return new RecipeNodeDisplayState(
@@ -61,6 +61,14 @@ public static class RecipePlanTreeDisplayBuilder
             priceText,
             node.MustBeHq ? "\u2605 " : string.Empty,
             recipeInfo);
+    }
+
+    private static string FormatRecipeInfo(PlanNode node)
+    {
+        var displayLevel = node.RecipeDisplayLevel > 0 ? node.RecipeDisplayLevel : node.RecipeLevel;
+        var stars = node.RecipeStars > 0 ? new string('\u2605', node.RecipeStars) : string.Empty;
+        var master = node.RecipeUnlockItemId > 0 ? " (Master)" : string.Empty;
+        return $"Lv.{displayLevel}{stars} {node.Job}{master}";
     }
 
     private static string GetPriceText(PlanNode node, AcquisitionCostContext context)

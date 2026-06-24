@@ -11,8 +11,8 @@ public class RecipeResolutionServiceTests
         var service = new RecipeResolutionService();
         var node = CraftNode(job: "Blacksmith", recipeLevel: 43, yield: 1, quantity: 8);
         var item = ItemWithCrafts(
-            Craft("153", recipeLevel: 43, jobId: 2, yield: 1),
-            Craft("273", recipeLevel: 43, jobId: 3, yield: 1));
+            Craft("153", recipeLevel: 43, jobId: 9, yield: 1),
+            Craft("273", recipeLevel: 43, jobId: 10, yield: 1));
 
         var result = service.Resolve(node, item);
 
@@ -20,7 +20,7 @@ public class RecipeResolutionServiceTests
         Assert.Equal(RecipeResolutionConfidence.Exact, result.Confidence);
         Assert.Equal(RecipeDataSourceKind.GarlandStandardCraft, result.DataSource);
         Assert.Equal(153u, result.RecipeId);
-        Assert.Equal(2, result.JobId);
+        Assert.Equal(9, result.JobId);
         Assert.Equal("Blacksmith", result.JobName);
         Assert.Equal(8, result.CraftCount);
         Assert.Empty(result.Diagnostics);
@@ -32,8 +32,8 @@ public class RecipeResolutionServiceTests
         var service = new RecipeResolutionService();
         var node = CraftNode(job: "Blacksmith", recipeLevel: 43, yield: 1, quantity: 3);
         var item = ItemWithCrafts(
-            Craft("200", recipeLevel: 43, jobId: 2, yield: 1),
-            Craft("100", recipeLevel: 43, jobId: 2, yield: 1));
+            Craft("200", recipeLevel: 43, jobId: 9, yield: 1),
+            Craft("100", recipeLevel: 43, jobId: 9, yield: 1));
 
         var result = service.Resolve(node, item);
 
@@ -51,8 +51,8 @@ public class RecipeResolutionServiceTests
         var service = new RecipeResolutionService();
         var node = CraftNode(job: "Blacksmith", recipeLevel: 99, yield: 9, quantity: 4);
         var item = ItemWithCrafts(
-            Craft("153", recipeLevel: 43, jobId: 2, yield: 1),
-            Craft("273", recipeLevel: 43, jobId: 3, yield: 1));
+            Craft("153", recipeLevel: 43, jobId: 9, yield: 1),
+            Craft("273", recipeLevel: 43, jobId: 10, yield: 1));
 
         var result = service.Resolve(node, item);
 
@@ -67,8 +67,8 @@ public class RecipeResolutionServiceTests
         var service = new RecipeResolutionService();
         var node = CraftNode(job: "Weaver", recipeLevel: 43, yield: 1, quantity: 4);
         var item = ItemWithCrafts(
-            Craft("153", recipeLevel: 43, jobId: 2, yield: 1),
-            Craft("999", recipeLevel: 50, jobId: 7, yield: 1));
+            Craft("153", recipeLevel: 43, jobId: 9, yield: 1),
+            Craft("999", recipeLevel: 50, jobId: 14, yield: 1));
 
         var result = service.Resolve(node, item);
 
@@ -83,8 +83,8 @@ public class RecipeResolutionServiceTests
         var service = new RecipeResolutionService();
         var node = CraftNode(job: "Weaver", recipeLevel: 99, yield: 9, quantity: 4);
         var item = ItemWithCrafts(
-            Craft("300", recipeLevel: 50, jobId: 3, yield: 1),
-            Craft("100", recipeLevel: 40, jobId: 2, yield: 2));
+            Craft("300", recipeLevel: 50, jobId: 10, yield: 1),
+            Craft("100", recipeLevel: 40, jobId: 9, yield: 2));
 
         var result = service.Resolve(node, item);
 
@@ -98,7 +98,7 @@ public class RecipeResolutionServiceTests
     {
         var service = new RecipeResolutionService();
         var node = CraftNode(job: "Blacksmith", recipeLevel: 43, yield: 1, quantity: 4);
-        var item = ItemWithCrafts(Craft("not_numeric", recipeLevel: 43, jobId: 2, yield: 1));
+        var item = ItemWithCrafts(Craft("not_numeric", recipeLevel: 43, jobId: 9, yield: 1));
 
         var result = service.Resolve(node, item);
 
@@ -163,7 +163,7 @@ public class RecipeResolutionServiceTests
         {
             Id = 400,
             Name = "Workshop Part",
-            Crafts = [Craft("1234", recipeLevel: 50, jobId: 2, yield: 1)],
+            Crafts = [Craft("1234", recipeLevel: 50, jobId: 9, yield: 1)],
             CompanyCrafts =
             [
                 new GarlandCompanyCraft

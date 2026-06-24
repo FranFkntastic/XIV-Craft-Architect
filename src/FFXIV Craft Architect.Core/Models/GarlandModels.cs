@@ -365,6 +365,15 @@ public class GarlandCraft
     
     [JsonPropertyName("rlvl")]
     public int RecipeLevel { get; set; }
+
+    [JsonPropertyName("lvl")]
+    public int DisplayLevel { get; set; }
+
+    [JsonPropertyName("stars")]
+    public int Stars { get; set; }
+
+    [JsonPropertyName("unlockId")]
+    public int UnlockItemId { get; set; }
     
     [JsonPropertyName("yield")]
     public int Yield { get; set; } = 1;
