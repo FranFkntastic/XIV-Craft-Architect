@@ -538,29 +538,29 @@ public class RecipeOperationSnapshotServiceTests
 
             var json = itemId switch
             {
-                "100" => ItemJson(100, "Root Craft", [(1000, 90, 1, 2, new[] { (900, 3, "Ingredient") })]),
-                "200" => ItemJson(200, "Crafted Child", [(2000, 80, 2, 2, Array.Empty<(int, int, string)>())]),
-                "300" => ItemJson(300, "Bought Child", [(3000, 70, 3, 1, Array.Empty<(int, int, string)>())]),
+                "100" => ItemJson(100, "Root Craft", [(1000, 90, 8, 2, new[] { (900, 3, "Ingredient") })]),
+                "200" => ItemJson(200, "Crafted Child", [(2000, 80, 9, 2, Array.Empty<(int, int, string)>())]),
+                "300" => ItemJson(300, "Bought Child", [(3000, 70, 10, 1, Array.Empty<(int, int, string)>())]),
                 "400" => ItemJson(
                     400,
                     "Ambiguous Craft",
                     [
-                        (4200, 50, 2, 1, Array.Empty<(int, int, string)>()),
-                        (4100, 50, 2, 1, Array.Empty<(int, int, string)>())
+                        (4200, 50, 9, 1, Array.Empty<(int, int, string)>()),
+                        (4100, 50, 9, 1, Array.Empty<(int, int, string)>())
                     ]),
                 "5059" => ItemJson(
                     5059,
                     "Cobalt Ingot",
                     [
-                        (153, 43, 2, 1, Array.Empty<(int, int, string)>()),
-                        (273, 43, 3, 1, Array.Empty<(int, int, string)>())
+                        (153, 43, 9, 1, Array.Empty<(int, int, string)>()),
+                        (273, 43, 10, 1, Array.Empty<(int, int, string)>())
                     ]),
                 "900" => ItemJson(900, "Ingredient", []),
                 "901" => ItemJson(901, "Extra Ingredient", []),
                 "1000" => ItemJson(
                     1000,
                     "Duplicate Ingredient Craft",
-                    [(9000, 90, 1, 1, new[] { (900, 1, "Ingredient"), (900, 2, "Ingredient") })]),
+                    [(9000, 90, 8, 1, new[] { (900, 1, "Ingredient"), (900, 2, "Ingredient") })]),
                 _ => """{"item":{"id":0,"name":"Unknown","craft":[]}}"""
             };
 

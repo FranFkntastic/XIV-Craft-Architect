@@ -93,6 +93,7 @@ public class RecipeCalculationServiceTests
                           {
                             "id": "1000",
                             "rlvl": 90,
+                            "job": 8,
                             "yield": 1,
                             "ingredients": [
                               { "id": 200, "amount": 2, "name": "Child Material" }
@@ -120,7 +121,7 @@ public class RecipeCalculationServiceTests
                           {
                             "id": "3000",
                             "rlvl": 30,
-                            "job": 2,
+                            "job": 9,
                             "yield": 1,
                             "ingredients": [
                               { "id": 302, "amount": 5, "name": "Wrong Child" }
@@ -129,7 +130,7 @@ public class RecipeCalculationServiceTests
                           {
                             "id": "3001",
                             "rlvl": 20,
-                            "job": 3,
+                            "job": 10,
                             "yield": 2,
                             "ingredients": [
                               { "id": 301, "amount": 2, "name": "Selected Child" }

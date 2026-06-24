@@ -389,13 +389,13 @@ public class ArtisanServiceTests
             var itemId = request.RequestUri?.Segments.LastOrDefault()?.Replace(".json", string.Empty, StringComparison.Ordinal) ?? string.Empty;
             var json = itemId switch
             {
-                "100" => ItemJson(100, "Root Craft", 1000, 90, 1, jobId: 1),
-                "200" => ItemJson(200, "Crafted Precraft", 2000, 80, 1, jobId: 1),
-                "300" => ItemJson(300, "Purchased Precraft", 3000, 70, 1, jobId: 1),
+                "100" => ItemJson(100, "Root Craft", 1000, 90, 1, jobId: 8),
+                "200" => ItemJson(200, "Crafted Precraft", 2000, 80, 1, jobId: 8),
+                "300" => ItemJson(300, "Purchased Precraft", 3000, 70, 1, jobId: 8),
                 "400" => CompanyCraftItemJson(400, "Workshop Part", 4000),
                 "5059" => CobaltIngotJson(),
-                "600" => ItemJson(600, "Roundtrip Root", 6000, 90, 2, [(700, 3, "Roundtrip Precraft")], jobId: 1),
-                "700" => ItemJson(700, "Roundtrip Precraft", 7000, 80, 1, [(800, 1, "Roundtrip Material")], jobId: 1),
+                "600" => ItemJson(600, "Roundtrip Root", 6000, 90, 2, [(700, 3, "Roundtrip Precraft")], jobId: 8),
+                "700" => ItemJson(700, "Roundtrip Precraft", 7000, 80, 1, [(800, 1, "Roundtrip Material")], jobId: 8),
                 "800" => ItemJson(800, "Roundtrip Material", []),
                 _ => """{"item":{"id":0,"name":"Unknown","craft":[]}}"""
             };
@@ -413,7 +413,7 @@ public class ArtisanServiceTests
             int recipeLevel,
             int yield,
             IReadOnlyList<(int ItemId, int Amount, string Name)>? ingredients = null,
-            int jobId = 1)
+            int jobId = 8)
         {
             var ingredientJson = string.Join(
                 ",",
@@ -466,14 +466,14 @@ public class ArtisanServiceTests
                       {
                         "id": "153",
                         "rlvl": 43,
-                        "job": 2,
+                        "job": 9,
                         "yield": 1,
                         "ingredients": []
                       },
                       {
                         "id": "273",
                         "rlvl": 43,
-                        "job": 3,
+                        "job": 10,
                         "yield": 1,
                         "ingredients": []
                       }

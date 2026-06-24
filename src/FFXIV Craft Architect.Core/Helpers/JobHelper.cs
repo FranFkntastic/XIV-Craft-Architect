@@ -6,18 +6,18 @@ namespace FFXIV_Craft_Architect.Core.Helpers;
 public static class JobHelper
 {
     /// <summary>
-    /// Gets the job name from a job ID.
+    /// Gets the crafter name from a Garland recipe job ID.
     /// </summary>
     public static string GetJobName(int jobId) => jobId switch
     {
-        1 => "Carpenter",
-        2 => "Blacksmith",
-        3 => "Armorer",
-        4 => "Goldsmith",
-        5 => "Leatherworker",
-        6 => "Weaver",
-        7 => "Alchemist",
-        8 => "Culinarian",
+        8 => "Carpenter",
+        9 => "Blacksmith",
+        10 => "Armorer",
+        11 => "Goldsmith",
+        12 => "Leatherworker",
+        13 => "Weaver",
+        14 => "Alchemist",
+        15 => "Culinarian",
         _ => "Unknown"
     };
 }
