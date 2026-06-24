@@ -16,7 +16,6 @@ using CoreIGarlandService = FFXIV_Craft_Architect.Core.Services.Interfaces.IGarl
 using CoreIUniversalisService = FFXIV_Craft_Architect.Core.Services.Interfaces.IUniversalisService;
 using CoreIPlanPersistenceService = FFXIV_Craft_Architect.Core.Services.Interfaces.IPlanPersistenceService;
 using CoreItemCacheService = FFXIV_Craft_Architect.Core.Services.ItemCacheService;
-using CoreRecommendationCsvService = FFXIV_Craft_Architect.Core.Services.RecommendationCsvService;
 using CorePlanPersistenceService = FFXIV_Craft_Architect.Core.Services.PlanPersistenceService;
 using CoreWorldBlacklistService = FFXIV_Craft_Architect.Core.Services.WorldBlacklistService;
 using CoreIPriceRefreshCoordinator = FFXIV_Craft_Architect.Core.Coordinators.IPriceRefreshCoordinator;
@@ -151,7 +150,6 @@ public partial class App : Application
         services.AddSingleton<CoreIUniversalisService>(sp => sp.GetRequiredService<UniversalisService>());
         services.AddSingleton<CoreItemCacheService>();
         services.AddSingleton<IMarketCacheService, SqliteMarketCacheService>();
-        services.AddSingleton<CoreRecommendationCsvService>();
         services.AddSingleton<RecipeCalculationService>();
         services.AddSingleton<ICoreRecipePlanBuilder, CoreRecipeCalculationPlanBuilder>();
         services.AddSingleton<CorePlanPersistenceService>();

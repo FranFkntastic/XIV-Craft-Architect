@@ -17,10 +17,10 @@ public class PlanFileData
     public List<PlanFileNode> RootItems { get; set; } = new();
 
     /// <summary>
-    /// DEPRECATED: Market plans are now stored in separate .recommendations.csv files.
-    /// Kept for backward compatibility with Version 1 files.
+    /// DEPRECATED: Kept for backward compatibility with Version 1 files.
+    /// Market plans are no longer persisted by this legacy plan file model.
     /// </summary>
-    [Obsolete("Market plans are now stored in .recommendations.csv companion files")]
+    [Obsolete("Market plans are no longer persisted by this legacy plan file model.")]
     public List<MarketShoppingPlanData>? MarketPlans { get; set; }
 }
 
