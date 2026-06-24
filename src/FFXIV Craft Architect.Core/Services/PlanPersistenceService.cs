@@ -161,8 +161,10 @@ public class PlanPersistenceService : IPlanPersistenceService
                 LinkParents(root, null);
             }
 
-            _logger.LogInformation("[PlanPersistence] Loaded plan '{PlanName}' from {Path} ({MarketPlans} recommendations)", 
-                plan.Name, filePath, plan.SavedMarketPlans.Count);
+            _logger.LogInformation(
+                "[PlanPersistence] Loaded legacy JSON plan '{PlanName}' from {Path}; market evidence is restored by the session/storage pipeline",
+                plan.Name,
+                filePath);
             return plan;
         }
         catch (Exception ex)
