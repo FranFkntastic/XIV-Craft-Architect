@@ -10,6 +10,7 @@
   <ItemGroup>
     <PackageReference Include="bunit" Version="2.7.2" />
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.6" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -23,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj" />
     <ProjectReference Include="..\FFXIV Craft Architect.Desktop\FFXIV Craft Architect.Desktop.csproj" />
+    <ProjectReference Include="..\FFXIV Craft Architect.LodestoneLookup\FFXIV Craft Architect.LodestoneLookup.csproj" />
     <ProjectReference Include="..\FFXIV Craft Architect.Web\FFXIV Craft Architect.Web.csproj" />
     <ProjectReference Include="..\..\tools\MarketAnalysisProbe\MarketAnalysisProbe.csproj" />
   </ItemGroup>
