@@ -32,7 +32,6 @@ public sealed class GarlandXivItemDataProvider : IXivItemDataProvider
             {
                 ItemId = (uint)result.Id,
                 Name = result.Object.Name.Trim(),
-                IconId = result.Object.IconId == 0 ? null : result.Object.IconId,
                 Source = SourceName,
                 SourceUpdatedAtUtc = fetchedAtUtc,
             })

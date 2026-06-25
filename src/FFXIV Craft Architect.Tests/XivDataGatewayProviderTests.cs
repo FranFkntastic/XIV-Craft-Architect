@@ -32,7 +32,7 @@ public sealed class XivDataGatewayProviderTests
         var item = Assert.Single(results);
         Assert.Equal(5057u, item.ItemId);
         Assert.Equal("Darksteel Nugget", item.Name);
-        Assert.Equal(21203, item.IconId);
+        Assert.Null(item.IconId);
         Assert.Equal("garland", item.Source);
     }
 
