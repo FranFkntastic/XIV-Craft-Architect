@@ -1,3 +1,5 @@
+using FFXIV_Craft_Architect.Core.Services;
+
 namespace FFXIV_Craft_Architect.Core.Models;
 
 public sealed class TradePayrollWorkflowDraft
@@ -11,6 +13,8 @@ public sealed class TradePayrollWorkflowDraft
     public Guid? AssignedCrafterId { get; set; }
     public string? AssignedCrafterDisplayName { get; set; }
     public decimal CommissionPercent { get; set; } = CommissionPayoutPolicy.Default.CommissionPercent;
+    public TradePaymentContractMode ActivePaymentContract { get; set; } = TradePaymentContractMode.LegacyCommission;
+    public TradeLaborStandard? LaborStandard { get; set; }
     public IReadOnlyList<TradePayrollResponsibilityLine> Responsibilities { get; set; } = Array.Empty<TradePayrollResponsibilityLine>();
     public string? RemoteId { get; set; }
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;
@@ -44,7 +48,10 @@ public sealed record TradeCommissionPaymentSummary(
     decimal CommissionPercent,
     decimal CommissionAmount,
     decimal TotalPayment,
-    IReadOnlyList<string> Warnings)
+    IReadOnlyList<string> Warnings,
+    TradePaymentContractBreakdown Legacy,
+    TradePaymentContractBreakdown LaborStandard,
+    TradePaymentContractBreakdown Active)
 {
     public static TradeCommissionPaymentSummary FromOrder(
         TradeOrder order,
@@ -76,29 +83,50 @@ public sealed record TradeCommissionPaymentSummary(
                     material.Warnings ?? Array.Empty<string>());
             })
             .ToArray();
-        var estimatedProcurementTotal = materials.Sum(material => material.TotalCost);
-        var materialReimbursementTotal = materials
-            .Where(material => material.Responsibility == CommissionMaterialResponsibility.Crafter)
-            .Sum(material => material.TotalCost);
-        var providedMaterialTotal = estimatedProcurementTotal - materialReimbursementTotal;
-        var commissionPercent = draft?.CommissionPercent > 0
-            ? draft.CommissionPercent
-            : CommissionPayoutPolicy.Default.CommissionPercent;
-        var commissionAmount = estimatedProcurementTotal * (commissionPercent / 100m);
-        var warnings = (sourceSnapshot.Warnings ?? Array.Empty<string>())
-            .Concat(materials.SelectMany(material => material.Warnings))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
+        // LaborStandard is intentionally nullable until the Cobalt Rivets benchmark is calibrated.
+        var policy = new TradePaymentPolicy(
+            draft?.ActivePaymentContract ?? TradePaymentContractMode.LegacyCommission,
+            draft?.CommissionPercent > 0 ? draft.CommissionPercent : CommissionPayoutPolicy.Default.CommissionPercent,
+            draft?.LaborStandard);
+        var paymentMaterials = materials
+            .Select(material => new TradePaymentMaterialInput(
+                material.ItemId,
+                material.Name,
+                material.Quantity,
+                material.RequiresHq,
+                material.UnitCost,
+                material.Responsibility,
+                material.EvidenceSource,
+                material.UnitCostExplanation,
+                material.EvidenceTimestampUtc,
+                material.Warnings))
             .ToArray();
+        var laborInputs = (sourceSnapshot.CraftLabor ?? Array.Empty<TradeOrderCraftLaborSnapshot>())
+            .Select(labor => new TradeCraftLaborInput(
+                labor.NodeId,
+                labor.ItemId,
+                labor.Name,
+                labor.RequestedQuantity,
+                labor.CraftCount,
+                labor.Warnings ?? Array.Empty<string>()))
+            .ToArray();
+        var comparison = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
+            paymentMaterials,
+            laborInputs,
+            policy,
+            sourceSnapshot.Warnings ?? Array.Empty<string>()));
 
         return new TradeCommissionPaymentSummary(
             materials,
-            estimatedProcurementTotal,
-            materialReimbursementTotal,
-            providedMaterialTotal,
-            commissionPercent,
-            commissionAmount,
-            materialReimbursementTotal + commissionAmount,
-            warnings);
+            comparison.EstimatedProcurementTotal,
+            comparison.MaterialReimbursementTotal,
+            comparison.ProvidedMaterialTotal,
+            comparison.Legacy.CommissionPercent,
+            comparison.Legacy.CommissionAmount,
+            comparison.TotalPayment,
+            comparison.Warnings,
+            comparison.Legacy,
+            comparison.LaborStandard,
+            comparison.Active);
     }
 }

@@ -104,6 +104,38 @@ public class TradePayrollPersistenceServiceTests
     }
 
     [Fact]
+    public async Task GetOrCreateDraftAsync_AppliesPaymentPolicyToNewDraft()
+    {
+        var companyProfileId = Guid.NewGuid();
+        var policy = new TradePaymentPolicy(
+            TradePaymentContractMode.LaborStandard,
+            18m,
+            new TradeLaborStandard(
+                "Cobalt Rivets benchmark",
+                5099,
+                "Cobalt Rivets",
+                999,
+                true,
+                150_000m,
+                200,
+                new DateTime(2026, 6, 25, 18, 0, 0, DateTimeKind.Utc)));
+        var service = new TradePayrollPersistenceService(new FakeTradePayrollDraftStore([]));
+
+        var draft = await service.GetOrCreateDraftAsync(
+            companyProfileId,
+            orderId: Guid.NewGuid(),
+            planSessionVersion: 101,
+            marketAnalysisVersion: 202,
+            sourcePlanName: "Commission Plan",
+            assignedCrafterId: null,
+            assignedCrafterDisplayName: null,
+            paymentPolicy: policy);
+
+        Assert.Equal(TradePaymentContractMode.LaborStandard, draft.ActivePaymentContract);
+        Assert.Equal(policy.LaborStandard, draft.LaborStandard);
+    }
+
+    [Fact]
     public void ApplyResponsibilities_MergesSavedResponsibilityByItemAndHqFlag()
     {
         var service = new TradePayrollPersistenceService(new FakeTradePayrollDraftStore([]));

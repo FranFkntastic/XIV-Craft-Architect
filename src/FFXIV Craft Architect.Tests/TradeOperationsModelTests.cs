@@ -19,6 +19,7 @@ public class TradeOperationsModelTests
         Assert.Equal(createdAt, profile.UpdatedAtUtc);
         Assert.Null(profile.RemoteId);
         Assert.Equal(TradeSyncState.LocalOnly, profile.SyncState);
+        Assert.Equal(TradePaymentPolicy.LegacyDefault, profile.PaymentPolicy);
     }
 
     [Fact]
@@ -163,6 +164,10 @@ public class TradeOperationsModelTests
                 [
                     new TradeOrderMaterialSnapshot(200, "Ore", 2, RequiresHq: false, UnitCost: 50m, TotalCost: 100m)
                 ],
+                CraftLabor =
+                [
+                    new TradeOrderCraftLaborSnapshot("root", 300, "Root", 1, CraftCount: 4)
+                ],
                 Warnings = ["old evidence"]
             },
             History =
@@ -176,18 +181,32 @@ public class TradeOperationsModelTests
         Assert.NotSame(order, copy);
         Assert.NotSame(order.SourceSnapshot, copy.SourceSnapshot);
         Assert.NotSame(order.SourceSnapshot.Materials, copy.SourceSnapshot.Materials);
+        Assert.NotSame(order.SourceSnapshot.CraftLabor, copy.SourceSnapshot.CraftLabor);
         Assert.NotSame(order.History, copy.History);
         copy.Title = "Changed";
         copy.SourceSnapshot.Materials = [];
+        copy.SourceSnapshot.CraftLabor = [];
         Assert.Equal("Original", order.Title);
         Assert.NotEmpty(order.SourceSnapshot.Materials);
+        Assert.NotEmpty(order.SourceSnapshot.CraftLabor);
     }
 
     [Fact]
     public void TradeOrderWorkflow_WithMaterialResponsibilityDoesNotMutateLoadedDraft()
     {
+        var laborStandard = new TradeLaborStandard(
+            "Cobalt Rivets benchmark",
+            5099,
+            "Cobalt Rivets",
+            999,
+            true,
+            120_000m,
+            200,
+            DateTime.UtcNow);
         var draft = new TradePayrollWorkflowDraft
         {
+            ActivePaymentContract = TradePaymentContractMode.LaborStandard,
+            LaborStandard = laborStandard,
             Responsibilities =
             [
                 new TradePayrollResponsibilityLine(100, RequiresHq: false, CommissionMaterialResponsibility.Crafter),
@@ -202,6 +221,8 @@ public class TradeOperationsModelTests
             CommissionMaterialResponsibility.Provided);
 
         Assert.Equal(CommissionMaterialResponsibility.Crafter, draft.Responsibilities.First(line => line.ItemId == 100).Responsibility);
+        Assert.Equal(TradePaymentContractMode.LaborStandard, changed.ActivePaymentContract);
+        Assert.Equal(laborStandard, changed.LaborStandard);
         Assert.Equal(CommissionMaterialResponsibility.Provided, changed.Responsibilities.First(line => line.ItemId == 100).Responsibility);
         Assert.Contains(changed.Responsibilities, line => line.ItemId == 200 && line.RequiresHq && line.Responsibility == CommissionMaterialResponsibility.Provided);
         Assert.Equal(2, changed.Responsibilities.Count);

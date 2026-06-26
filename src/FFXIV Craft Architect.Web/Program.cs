@@ -72,6 +72,7 @@ builder.Services.AddScoped<TradeOrderDraftFactory>();
 builder.Services.AddScoped<TradeOrderCraftPlanBuildService>();
 builder.Services.AddScoped<TradeOrderPricingWorkflowService>();
 builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
+builder.Services.AddScoped<TradeCompanyProfilePackageService>();
 builder.Services.AddScoped<TradeOperationsPersistenceService>();
 builder.Services.AddScoped(_ => new LodestoneLookupClientOptions(ResolveLodestoneLookupBaseAddress(
     builder.Configuration["LodestoneLookup:BaseAddress"],
