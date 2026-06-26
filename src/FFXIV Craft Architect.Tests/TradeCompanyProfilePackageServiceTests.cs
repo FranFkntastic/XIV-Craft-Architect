@@ -171,6 +171,7 @@ public class TradeCompanyProfilePackageServiceTests
         Assert.NotNull(imported.Profile.PaymentPolicy.LaborStandard);
         Assert.Equal(TradeLaborBenchmarkMode.CobaltRivets, imported.Profile.PaymentPolicy.LaborStandard.BenchmarkMode);
         Assert.True(imported.Profile.PaymentPolicy.LaborStandard.IsManagedCobaltRivets);
+        Assert.False(imported.Profile.PaymentPolicy.LaborStandard.BenchmarkRequiresHq);
     }
 
     private static TradePaymentPolicy CreateLaborPolicy(DateTime effectiveFromUtc)
@@ -183,7 +184,7 @@ public class TradeCompanyProfilePackageServiceTests
                 5099,
                 "Cobalt Rivets",
                 999,
-                true,
+                false,
                 120_000m,
                 200,
                 effectiveFromUtc));

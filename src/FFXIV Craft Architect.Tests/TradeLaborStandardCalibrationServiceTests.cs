@@ -17,7 +17,7 @@ public class TradeLaborStandardCalibrationServiceTests
         Assert.Equal(5099, standard.BenchmarkItemId);
         Assert.Equal("Cobalt Rivets", standard.BenchmarkItemName);
         Assert.Equal(999, standard.BenchmarkQuantity);
-        Assert.True(standard.BenchmarkRequiresHq);
+        Assert.False(standard.BenchmarkRequiresHq);
         Assert.Equal(123_000m, standard.BenchmarkLaborPayout);
         Assert.Equal(206, standard.BenchmarkSynthCount);
         Assert.Equal(123_000m / 206m, standard.GilPerSynth);
@@ -59,6 +59,27 @@ public class TradeLaborStandardCalibrationServiceTests
         Assert.Equal("Reused fresh Cobalt Rivets evidence.", standard.CalibrationEvidence);
         Assert.True(standard.IsManagedCobaltRivets);
         Assert.False(standard.IsCustomBenchmark);
+    }
+
+    [Fact]
+    public void NormalizeManagedCobaltRivetsBenchmark_CorrectsLegacyHqFlag()
+    {
+        var legacyManaged = new TradeLaborStandard(
+            "Cobalt Rivets benchmark",
+            5099,
+            "Cobalt Rivets",
+            999,
+            true,
+            120_000m,
+            200,
+            new DateTime(2026, 6, 25, 0, 0, 0, DateTimeKind.Utc));
+
+        var normalized = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(legacyManaged);
+
+        Assert.True(normalized.IsManagedCobaltRivets);
+        Assert.False(normalized.BenchmarkRequiresHq);
+        Assert.Equal(TradeLaborStandardCalibrationService.CobaltRivetsItemId, normalized.BenchmarkItemId);
+        Assert.Equal(TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkQuantity, normalized.BenchmarkQuantity);
     }
 
     [Fact]

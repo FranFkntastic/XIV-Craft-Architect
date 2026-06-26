@@ -7,7 +7,29 @@ public sealed class TradeLaborStandardCalibrationService
     public const int CobaltRivetsItemId = 5099;
     public const string CobaltRivetsItemName = "Cobalt Rivets";
     public const int CobaltRivetsBenchmarkQuantity = 999;
-    public const bool CobaltRivetsBenchmarkRequiresHq = true;
+    public const bool CobaltRivetsBenchmarkRequiresHq = false;
+
+    public static TradePaymentPolicy NormalizeManagedCobaltRivetsBenchmark(TradePaymentPolicy policy)
+    {
+        return policy.LaborStandard == null
+            ? policy
+            : policy with { LaborStandard = NormalizeManagedCobaltRivetsBenchmark(policy.LaborStandard) };
+    }
+
+    public static TradeLaborStandard NormalizeManagedCobaltRivetsBenchmark(TradeLaborStandard standard)
+    {
+        return standard.IsManagedCobaltRivets
+            ? standard with
+            {
+                Name = "Cobalt Rivets benchmark",
+                BenchmarkItemId = CobaltRivetsItemId,
+                BenchmarkItemName = CobaltRivetsItemName,
+                BenchmarkQuantity = CobaltRivetsBenchmarkQuantity,
+                BenchmarkRequiresHq = CobaltRivetsBenchmarkRequiresHq,
+                BenchmarkMode = TradeLaborBenchmarkMode.CobaltRivets
+            }
+            : standard;
+    }
 
     public TradeLaborStandard CreateFromLegacyBenchmark(
         decimal legacyCommissionAmount,

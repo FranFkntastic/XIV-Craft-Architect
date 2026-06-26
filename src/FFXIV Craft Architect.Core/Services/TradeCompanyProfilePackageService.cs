@@ -35,7 +35,7 @@ public sealed class TradeCompanyProfilePackageService
         var sourceProfile = package.Profile;
         var importedProfile = TradeCompanyProfile.CreateLocal(sourceProfile.Name, importedAtUtc);
         importedProfile.Description = sourceProfile.Description;
-        importedProfile.PaymentPolicy = sourceProfile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault;
+        importedProfile.PaymentPolicy = NormalizePaymentPolicy(sourceProfile.PaymentPolicy);
 
         var importedCrafters = package.Crafters
             .Select(crafter => ImportCrafter(crafter, importedProfile.Id, importedAtUtc))
@@ -78,10 +78,16 @@ public sealed class TradeCompanyProfilePackageService
             Description = profile.Description,
             RemoteId = profile.RemoteId,
             SyncState = profile.SyncState,
-            PaymentPolicy = profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault,
+            PaymentPolicy = NormalizePaymentPolicy(profile.PaymentPolicy),
             CreatedAtUtc = profile.CreatedAtUtc,
             UpdatedAtUtc = profile.UpdatedAtUtc
         };
+    }
+
+    private static TradePaymentPolicy NormalizePaymentPolicy(TradePaymentPolicy? policy)
+    {
+        return TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(
+            policy ?? TradePaymentPolicy.LegacyDefault);
     }
 
     private static TradeCrafterProfile CopyCrafter(TradeCrafterProfile crafter)

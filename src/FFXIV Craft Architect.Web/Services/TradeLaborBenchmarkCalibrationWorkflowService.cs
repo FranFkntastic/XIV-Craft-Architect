@@ -108,7 +108,7 @@ public sealed class TradeLaborBenchmarkCalibrationWorkflowService
 
         if (!purchaseEstimate.IsDefaultEligible || purchaseEstimate.Cost <= 0)
         {
-            return MissingEvidence("Cobalt Rivets benchmark recalculation needs supported HQ market evidence.");
+            return MissingEvidence("Cobalt Rivets benchmark recalculation needs supported market evidence.");
         }
 
         var legacyCommissionAmount = purchaseEstimate.Cost * request.LegacyCommissionPercent / 100m;
@@ -123,7 +123,7 @@ public sealed class TradeLaborBenchmarkCalibrationWorkflowService
         var evidenceAction = status == TradeLaborBenchmarkCalibrationStatus.RefreshedEvidence
             ? "refreshed"
             : "reused";
-        var evidenceText = $"Cobalt Rivets HQ market evidence {evidenceAction} from {request.SelectedDataCenter}.";
+        var evidenceText = $"Cobalt Rivets market evidence {evidenceAction} from {request.SelectedDataCenter}.";
         var calibratedAtUtc = request.CalibratedAtUtc ?? DateTime.UtcNow;
         var standard = _laborCalibration.CreateManagedCobaltRivetsBenchmark(
             legacyCommissionAmount,

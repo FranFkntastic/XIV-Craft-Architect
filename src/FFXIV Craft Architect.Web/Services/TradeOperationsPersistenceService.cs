@@ -26,7 +26,7 @@ public sealed class TradeOperationsPersistenceService
             .FirstOrDefault();
         if (profile != null)
         {
-            profile.PaymentPolicy ??= TradePaymentPolicy.LegacyDefault;
+            NormalizePaymentPolicy(profile);
             return profile;
         }
 
@@ -47,7 +47,7 @@ public sealed class TradeOperationsPersistenceService
         var profiles = await _indexedDb.LoadTradeCompanyProfilesAsync();
         foreach (var profile in profiles)
         {
-            profile.PaymentPolicy ??= TradePaymentPolicy.LegacyDefault;
+            NormalizePaymentPolicy(profile);
         }
 
         return profiles;
@@ -55,7 +55,7 @@ public sealed class TradeOperationsPersistenceService
 
     public async Task<bool> SaveCompanyProfileAsync(TradeCompanyProfile profile)
     {
-        profile.PaymentPolicy ??= TradePaymentPolicy.LegacyDefault;
+        NormalizePaymentPolicy(profile);
         profile.UpdatedAtUtc = DateTime.UtcNow;
         return await _indexedDb.SaveTradeCompanyProfileAsync(profile);
     }
@@ -111,5 +111,11 @@ public sealed class TradeOperationsPersistenceService
     {
         order.UpdatedAtUtc = DateTime.UtcNow;
         return await _indexedDb.SaveTradeOrderAsync(order);
+    }
+
+    private static void NormalizePaymentPolicy(TradeCompanyProfile profile)
+    {
+        profile.PaymentPolicy = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(
+            profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
     }
 }

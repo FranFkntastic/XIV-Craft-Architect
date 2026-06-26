@@ -18,6 +18,7 @@ public class TradeLaborBenchmarkCalibrationWorkflowServiceTests
         Assert.Equal(TradeLaborBenchmarkCalibrationStatus.ReusedFreshEvidence, result.Status);
         Assert.NotNull(result.LaborStandard);
         Assert.True(result.LaborStandard.IsManagedCobaltRivets);
+        Assert.False(result.LaborStandard.BenchmarkRequiresHq);
         Assert.Equal(100_000m, result.LaborStandard.BenchmarkLaborPayout);
         Assert.Contains("reused", result.Message, StringComparison.OrdinalIgnoreCase);
         cache.Verify(c => c.RefreshRequestedAsync(
@@ -142,7 +143,7 @@ public class TradeLaborBenchmarkCalibrationWorkflowServiceTests
                         {
                             Quantity = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkQuantity,
                             PricePerUnit = 500,
-                            IsHq = true,
+                            IsHq = false,
                             RetainerName = "Bench"
                         }
                     ]
