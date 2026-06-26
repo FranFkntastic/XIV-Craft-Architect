@@ -28,6 +28,37 @@ public class GarlandModelsTests
     }
 
     [Fact]
+    public void GarlandItemResponse_CraftDraftUnlockId_DeserializesWithZeroUnlockItemId()
+    {
+        var json = @"{
+            ""item"": {
+                ""id"": 24361,
+                ""name"": ""Modified Coelacanth-class Bridge"",
+                ""craft"": [
+                    {
+                        ""id"": ""fc563"",
+                        ""job"": 0,
+                        ""rlvl"": 1,
+                        ""lvl"": 1,
+                        ""unlockId"": ""draft30"",
+                        ""ingredients"": [
+                            { ""id"": 26521, ""amount"": 1, ""phase"": 1 }
+                        ]
+                    }
+                ]
+            }
+        }";
+
+        var response = JsonSerializer.Deserialize<GarlandItemResponse>(json);
+
+        Assert.NotNull(response);
+        var craft = Assert.Single(response.Item.Crafts!);
+        Assert.Equal("fc563", craft.Id);
+        Assert.Equal(0, craft.UnlockItemId);
+        Assert.Equal(26521, Assert.Single(craft.Ingredients).Id);
+    }
+
+    [Fact]
     public void GarlandPartial_Id_FromNumber_IsParsed()
     {
         var partial = JsonSerializer.Deserialize<GarlandPartial>("{\"type\":\"npc\",\"id\":123}");

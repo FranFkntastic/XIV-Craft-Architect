@@ -373,6 +373,7 @@ public class GarlandCraft
     public int Stars { get; set; }
 
     [JsonPropertyName("unlockId")]
+    [JsonConverter(typeof(FlexibleIntConverter))]
     public int UnlockItemId { get; set; }
     
     [JsonPropertyName("yield")]
@@ -677,6 +678,38 @@ public class FlexibleStringConverter : JsonConverter<string>
     public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
     {
         writer.WriteStringValue(value);
+    }
+}
+
+/// <summary>
+/// Handles Garland API integer fields that can be numeric strings or draft tokens.
+/// </summary>
+public class FlexibleIntConverter : JsonConverter<int>
+{
+    public override int Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Number)
+        {
+            return reader.TryGetInt32(out var value) ? value : 0;
+        }
+
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            var value = reader.GetString();
+            return int.TryParse(value, out var parsed) ? parsed : 0;
+        }
+
+        if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+        {
+            reader.Skip();
+        }
+
+        return 0;
+    }
+
+    public override void Write(Utf8JsonWriter writer, int value, JsonSerializerOptions options)
+    {
+        writer.WriteNumberValue(value);
     }
 }
 
