@@ -101,7 +101,76 @@ public class TradeCompanyProfilePackageServiceTests
         Assert.Equal(TradeCompanyProfilePackage.PackageKindValue, roundTripped.PackageKind);
         Assert.Equal("Aether Works", roundTripped.Profile.Name);
         Assert.Equal(sourceProfile.PaymentPolicy, roundTripped.Profile.PaymentPolicy);
+        Assert.NotNull(roundTripped.Profile.PaymentPolicy.LaborStandard);
+        Assert.Equal(TradeLaborBenchmarkMode.CobaltRivets, roundTripped.Profile.PaymentPolicy.LaborStandard.BenchmarkMode);
         Assert.Single(roundTripped.Crafters);
+    }
+
+    [Fact]
+    public void ExportPackage_CustomLaborBenchmarkRoundTripsThroughJson()
+    {
+        var service = new TradeCompanyProfilePackageService();
+        var timestamp = new DateTime(2026, 6, 25, 19, 45, 0, DateTimeKind.Utc);
+        var sourceProfile = TradeCompanyProfile.CreateLocal("Custom Works", timestamp.AddDays(-1));
+        sourceProfile.PaymentPolicy = CreateCustomLaborPolicy(timestamp);
+        var package = service.CreateExportPackage(sourceProfile, [], timestamp);
+
+        var json = JsonSerializer.Serialize(package, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var roundTripped = JsonSerializer.Deserialize<TradeCompanyProfilePackage>(
+            json,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true });
+
+        Assert.NotNull(roundTripped);
+        Assert.NotNull(roundTripped.Profile.PaymentPolicy.LaborStandard);
+        Assert.Equal(TradeLaborBenchmarkMode.Custom, roundTripped.Profile.PaymentPolicy.LaborStandard.BenchmarkMode);
+        Assert.True(roundTripped.Profile.PaymentPolicy.LaborStandard.IsCustomBenchmark);
+        Assert.Equal("Custom policy", roundTripped.Profile.PaymentPolicy.LaborStandard.CalibrationEvidence);
+    }
+
+    [Fact]
+    public void ImportAsNewProfile_LegacyPackageWithoutBenchmarkModeImportsAsManagedCobaltRivets()
+    {
+        var service = new TradeCompanyProfilePackageService();
+        var importedAt = new DateTime(2026, 6, 25, 20, 0, 0, DateTimeKind.Utc);
+        const string json = """
+        {
+          "formatVersion": 1,
+          "packageKind": "ffxiv-craft-architect.trade-company-profile",
+          "exportedAtUtc": "2026-06-25T19:30:00Z",
+          "profile": {
+            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "schemaVersion": 1,
+            "name": "Legacy Works",
+            "syncState": 0,
+            "paymentPolicy": {
+              "activeContract": 1,
+              "legacyCommissionPercent": 20,
+              "laborStandard": {
+                "name": "Cobalt Rivets benchmark",
+                "benchmarkItemId": 5099,
+                "benchmarkItemName": "Cobalt Rivets",
+                "benchmarkQuantity": 999,
+                "benchmarkRequiresHq": true,
+                "benchmarkLaborPayout": 120000,
+                "benchmarkSynthCount": 200,
+                "effectiveFromUtc": "2026-06-25T18:00:00Z"
+              }
+            },
+            "createdAtUtc": "2026-06-24T18:00:00Z",
+            "updatedAtUtc": "2026-06-24T18:00:00Z"
+          },
+          "crafters": []
+        }
+        """;
+        var package = JsonSerializer.Deserialize<TradeCompanyProfilePackage>(
+            json,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true })!;
+
+        var imported = service.ImportAsNewProfile(package, importedAt);
+
+        Assert.NotNull(imported.Profile.PaymentPolicy.LaborStandard);
+        Assert.Equal(TradeLaborBenchmarkMode.CobaltRivets, imported.Profile.PaymentPolicy.LaborStandard.BenchmarkMode);
+        Assert.True(imported.Profile.PaymentPolicy.LaborStandard.IsManagedCobaltRivets);
     }
 
     private static TradePaymentPolicy CreateLaborPolicy(DateTime effectiveFromUtc)
@@ -118,6 +187,25 @@ public class TradeCompanyProfilePackageServiceTests
                 120_000m,
                 200,
                 effectiveFromUtc));
+    }
+
+    private static TradePaymentPolicy CreateCustomLaborPolicy(DateTime effectiveFromUtc)
+    {
+        return new TradePaymentPolicy(
+            TradePaymentContractMode.LaborStandard,
+            20m,
+            new TradeLaborStandard(
+                "Custom benchmark",
+                42,
+                "Custom Item",
+                12,
+                false,
+                60_000m,
+                10,
+                effectiveFromUtc,
+                TradeLaborBenchmarkMode.Custom,
+                effectiveFromUtc,
+                "Custom policy"));
     }
 
     private static TradeCrafterProfile CreateCrafter(

@@ -6,6 +6,7 @@
 @inject ISettingsService Settings
 @inject IndexedDbService IndexedDb
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject TradeLaborBenchmarkCalibrationWorkflowService LaborBenchmarkCalibrationWorkflow
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
@@ -148,10 +149,40 @@
                                      Class="my-2" />
 
                     <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Labor Standard</MudText>
+                    <MudSwitch T="bool"
+                               Value="_useCustomLaborBenchmark"
+                               ValueChanged="OnCustomLaborBenchmarkChanged"
+                               Label="Use custom benchmark"
+                               Color="Color.Primary"
+                               Class="my-2" />
+                    @if (!_useCustomLaborBenchmark)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
+                            Managed Cobalt Rivets benchmark. Recalculate uses fresh market evidence when available and refreshes only when needed.
+                        </MudText>
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Secondary"
+                                   StartIcon="@Icons.Material.Filled.Calculate"
+                                   OnClick="RecalculateLaborBenchmarkAsync"
+                                   Disabled="_companyIsBusy || _laborBenchmarkIsRecalculating">
+                            @if (_laborBenchmarkIsRecalculating)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                            }
+                            Recalculate Benchmark
+                        </MudButton>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_laborBenchmarkStatus))
+                    {
+                        <MudText Typo="Typo.caption" Color="@_laborBenchmarkStatusColor" Class="mt-2 mb-2 d-block">
+                            @_laborBenchmarkStatus
+                        </MudText>
+                    }
                     <MudTextField @bind-Value="_laborStandardName"
                                   Label="Benchmark name"
                                   Variant="Variant.Outlined"
                                   Margin="Margin.Dense"
+                                  ReadOnly="@(!_useCustomLaborBenchmark)"
                                   Class="my-2" />
                     <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
                         <MudNumericField T="int"
@@ -159,29 +190,34 @@
                                          Label="Benchmark item ID"
                                          Variant="Variant.Outlined"
                                          Margin="Margin.Dense"
-                                         Min="1" />
+                                         Min="1"
+                                         ReadOnly="@(!_useCustomLaborBenchmark)" />
                         <MudTextField @bind-Value="_laborBenchmarkItemName"
                                       Label="Benchmark item"
                                       Variant="Variant.Outlined"
-                                      Margin="Margin.Dense" />
+                                      Margin="Margin.Dense"
+                                      ReadOnly="@(!_useCustomLaborBenchmark)" />
                         <MudNumericField T="int"
                                          @bind-Value="_laborBenchmarkQuantity"
                                          Label="Benchmark quantity"
                                          Variant="Variant.Outlined"
                                          Margin="Margin.Dense"
-                                         Min="1" />
+                                         Min="1"
+                                         ReadOnly="@(!_useCustomLaborBenchmark)" />
                         <MudNumericField T="int"
                                          @bind-Value="_laborBenchmarkSynthCount"
                                          Label="Benchmark synths"
                                          Variant="Variant.Outlined"
                                          Margin="Margin.Dense"
-                                         Min="1" />
+                                         Min="1"
+                                         ReadOnly="@(!_useCustomLaborBenchmark)" />
                         <MudNumericField T="decimal"
                                          @bind-Value="_laborBenchmarkPayout"
                                          Label="Benchmark payout"
                                          Variant="Variant.Outlined"
                                          Margin="Margin.Dense"
-                                         Min="0m" />
+                                         Min="0m"
+                                         ReadOnly="@(!_useCustomLaborBenchmark)" />
                         <MudTextField Value="@FormatGilPerSynth()"
                                       Label="Derived rate"
                                       Variant="Variant.Outlined"
@@ -191,6 +227,7 @@
                     <MudSwitch @bind-Value="_laborBenchmarkRequiresHq"
                                Label="Benchmark requires HQ"
                                Color="Color.Primary"
+                               Disabled="@(!_useCustomLaborBenchmark)"
                                Class="my-2" />
 
                     <MudDivider Class="my-4" />
@@ -327,6 +364,12 @@
     private bool _laborBenchmarkRequiresHq = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkRequiresHq;
     private decimal _laborBenchmarkPayout = 120_000m;
     private int _laborBenchmarkSynthCount = 200;
+    private bool _useCustomLaborBenchmark;
+    private bool _laborBenchmarkIsRecalculating;
+    private string? _laborBenchmarkStatus;
+    private Color _laborBenchmarkStatusColor = Color.Secondary;
+    private DateTime? _laborBenchmarkCalibratedAtUtc;
+    private string? _laborBenchmarkCalibrationEvidence;
 
     private static readonly JsonSerializerOptions CompanyPackageJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -409,6 +452,16 @@
             _laborBenchmarkRequiresHq = policy.LaborStandard.BenchmarkRequiresHq;
             _laborBenchmarkPayout = policy.LaborStandard.BenchmarkLaborPayout;
             _laborBenchmarkSynthCount = policy.LaborStandard.BenchmarkSynthCount;
+            _useCustomLaborBenchmark = policy.LaborStandard.IsCustomBenchmark;
+            _laborBenchmarkCalibratedAtUtc = policy.LaborStandard.CalibratedAtUtc;
+            _laborBenchmarkCalibrationEvidence = policy.LaborStandard.CalibrationEvidence;
+        }
+        else
+        {
+            RestoreManagedLaborBenchmarkFields(keepCurrentRate: true);
+            _laborBenchmarkCalibratedAtUtc = null;
+            _laborBenchmarkCalibrationEvidence = null;
+            _useCustomLaborBenchmark = false;
         }
     }
 
@@ -453,7 +506,12 @@
             _laborBenchmarkRequiresHq,
             _laborBenchmarkPayout,
             _laborBenchmarkSynthCount,
-            DateTime.UtcNow);
+            _laborBenchmarkCalibratedAtUtc ?? DateTime.UtcNow,
+            _useCustomLaborBenchmark
+                ? TradeLaborBenchmarkMode.Custom
+                : TradeLaborBenchmarkMode.CobaltRivets,
+            _laborBenchmarkCalibratedAtUtc,
+            _laborBenchmarkCalibrationEvidence);
     }
 
     private string FormatGilPerSynth()
@@ -461,6 +519,117 @@
         return _laborBenchmarkSynthCount <= 0
             ? "Unavailable"
             : $"{_laborBenchmarkPayout / _laborBenchmarkSynthCount:N2} gil/synth";
+    }
+
+    private void OnCustomLaborBenchmarkChanged(bool useCustomBenchmark)
+    {
+        _useCustomLaborBenchmark = useCustomBenchmark;
+        _laborBenchmarkStatus = null;
+        if (!useCustomBenchmark)
+        {
+            RestoreManagedLaborBenchmarkFields(keepCurrentRate: true);
+        }
+        else
+        {
+            _laborBenchmarkCalibratedAtUtc = DateTime.UtcNow;
+            _laborBenchmarkCalibrationEvidence = "Custom company benchmark.";
+        }
+    }
+
+    private void RestoreManagedLaborBenchmarkFields(bool keepCurrentRate)
+    {
+        _laborStandardName = "Cobalt Rivets benchmark";
+        _laborBenchmarkItemId = TradeLaborStandardCalibrationService.CobaltRivetsItemId;
+        _laborBenchmarkItemName = TradeLaborStandardCalibrationService.CobaltRivetsItemName;
+        _laborBenchmarkQuantity = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkQuantity;
+        _laborBenchmarkRequiresHq = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkRequiresHq;
+        if (!keepCurrentRate)
+        {
+            _laborBenchmarkPayout = 120_000m;
+            _laborBenchmarkSynthCount = 200;
+        }
+
+        _laborBenchmarkCalibrationEvidence ??= "Managed Cobalt Rivets benchmark.";
+    }
+
+    private async Task RecalculateLaborBenchmarkAsync()
+    {
+        if (_companyProfile == null)
+        {
+            return;
+        }
+
+        if (_laborBenchmarkSynthCount <= 0)
+        {
+            Snackbar.Add("Benchmark synth count must be greater than zero.", Severity.Error);
+            return;
+        }
+
+        _companyIsBusy = true;
+        _laborBenchmarkIsRecalculating = true;
+        _laborBenchmarkStatus = "Recalculating Cobalt Rivets benchmark...";
+        _laborBenchmarkStatusColor = Color.Secondary;
+        try
+        {
+            var result = await LaborBenchmarkCalibrationWorkflow.RecalculateManagedCobaltRivetsAsync(
+                new TradeLaborBenchmarkCalibrationRequest(
+                    _defaultDataCenter,
+                    _selectedRegion,
+                    _companyLegacyCommissionPercent,
+                    _laborBenchmarkSynthCount));
+
+            if (result.LaborStandard == null)
+            {
+                _laborBenchmarkStatus = result.Message;
+                _laborBenchmarkStatusColor = Color.Error;
+                Snackbar.Add(result.Message, Severity.Error);
+                return;
+            }
+
+            ApplyLaborStandardFields(result.LaborStandard);
+            _useCustomLaborBenchmark = false;
+            _companyProfile.PaymentPolicy = new TradePaymentPolicy(
+                _companyPaymentContract,
+                _companyLegacyCommissionPercent,
+                result.LaborStandard);
+
+            var saved = await TradeOperationsPersistence.SaveCompanyProfileAsync(_companyProfile);
+            if (!saved)
+            {
+                _laborBenchmarkStatus = "Benchmark recalculated but company profile save failed.";
+                _laborBenchmarkStatusColor = Color.Error;
+                Snackbar.Add(_laborBenchmarkStatus, Severity.Error);
+                return;
+            }
+
+            _laborBenchmarkStatus = result.Message;
+            _laborBenchmarkStatusColor = Color.Success;
+            Snackbar.Add(result.Message, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            _laborBenchmarkStatus = $"Benchmark recalculation failed: {ex.Message}";
+            _laborBenchmarkStatusColor = Color.Error;
+            Snackbar.Add(_laborBenchmarkStatus, Severity.Error);
+        }
+        finally
+        {
+            _laborBenchmarkIsRecalculating = false;
+            _companyIsBusy = false;
+        }
+    }
+
+    private void ApplyLaborStandardFields(TradeLaborStandard laborStandard)
+    {
+        _laborStandardName = laborStandard.Name;
+        _laborBenchmarkItemId = laborStandard.BenchmarkItemId;
+        _laborBenchmarkItemName = laborStandard.BenchmarkItemName;
+        _laborBenchmarkQuantity = laborStandard.BenchmarkQuantity;
+        _laborBenchmarkRequiresHq = laborStandard.BenchmarkRequiresHq;
+        _laborBenchmarkPayout = laborStandard.BenchmarkLaborPayout;
+        _laborBenchmarkSynthCount = laborStandard.BenchmarkSynthCount;
+        _laborBenchmarkCalibratedAtUtc = laborStandard.CalibratedAtUtc;
+        _laborBenchmarkCalibrationEvidence = laborStandard.CalibrationEvidence;
     }
 
     private async Task ExportCompanyProfileAsync()

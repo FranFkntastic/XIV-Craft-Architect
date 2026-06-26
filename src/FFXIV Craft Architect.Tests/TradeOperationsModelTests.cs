@@ -23,6 +23,43 @@ public class TradeOperationsModelTests
     }
 
     [Fact]
+    public void TradeLaborStandard_DefaultsToManagedCobaltRivetsBenchmark()
+    {
+        var standard = new TradeLaborStandard(
+            "Cobalt Rivets benchmark",
+            5099,
+            "Cobalt Rivets",
+            999,
+            true,
+            120_000m,
+            200,
+            new DateTime(2026, 6, 25, 18, 0, 0, DateTimeKind.Utc));
+
+        Assert.Equal(TradeLaborBenchmarkMode.CobaltRivets, standard.BenchmarkMode);
+        Assert.True(standard.IsManagedCobaltRivets);
+        Assert.False(standard.IsCustomBenchmark);
+    }
+
+    [Fact]
+    public void TradeLaborStandard_CanRepresentCustomBenchmark()
+    {
+        var standard = new TradeLaborStandard(
+            "Custom trial",
+            123,
+            "Custom Item",
+            10,
+            false,
+            50_000m,
+            12,
+            new DateTime(2026, 6, 25, 18, 0, 0, DateTimeKind.Utc),
+            TradeLaborBenchmarkMode.Custom);
+
+        Assert.Equal(TradeLaborBenchmarkMode.Custom, standard.BenchmarkMode);
+        Assert.False(standard.IsManagedCobaltRivets);
+        Assert.True(standard.IsCustomBenchmark);
+    }
+
+    [Fact]
     public void CrafterProfile_StoresCraftingJobLevelsOnly()
     {
         var crafter = new TradeCrafterProfile

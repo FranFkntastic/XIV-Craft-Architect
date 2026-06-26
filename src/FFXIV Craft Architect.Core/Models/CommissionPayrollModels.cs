@@ -58,6 +58,12 @@ public enum TradePaymentContractMode
     LaborStandard
 }
 
+public enum TradeLaborBenchmarkMode
+{
+    CobaltRivets,
+    Custom
+}
+
 public sealed record TradeLaborStandard(
     string Name,
     int BenchmarkItemId,
@@ -66,11 +72,18 @@ public sealed record TradeLaborStandard(
     bool BenchmarkRequiresHq,
     decimal BenchmarkLaborPayout,
     int BenchmarkSynthCount,
-    DateTime EffectiveFromUtc)
+    DateTime EffectiveFromUtc,
+    TradeLaborBenchmarkMode BenchmarkMode = TradeLaborBenchmarkMode.CobaltRivets,
+    DateTime? CalibratedAtUtc = null,
+    string? CalibrationEvidence = null)
 {
     public decimal GilPerSynth => BenchmarkSynthCount > 0
         ? BenchmarkLaborPayout / BenchmarkSynthCount
         : 0m;
+
+    public bool IsManagedCobaltRivets => BenchmarkMode == TradeLaborBenchmarkMode.CobaltRivets;
+
+    public bool IsCustomBenchmark => BenchmarkMode == TradeLaborBenchmarkMode.Custom;
 }
 
 public sealed record TradePaymentPolicy(

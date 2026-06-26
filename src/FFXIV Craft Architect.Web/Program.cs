@@ -44,6 +44,7 @@ builder.Services.AddScoped<IProcurementRouteExecutionService, ProcurementRouteEx
 builder.Services.AddScoped<IndexedDbMarketCacheService>();
 builder.Services.AddScoped<CommissionCostBasisResolver>();
 builder.Services.AddScoped<CommissionPayrollService>();
+builder.Services.AddScoped<TradeLaborStandardCalibrationService>();
 
 // Register Settings Service (Web implementation)
 builder.Services.AddScoped<ISettingsService, WebSettingsService>();
@@ -74,6 +75,7 @@ builder.Services.AddScoped<TradeOrderPricingWorkflowService>();
 builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
 builder.Services.AddScoped<TradeCompanyProfilePackageService>();
 builder.Services.AddScoped<TradeOperationsPersistenceService>();
+builder.Services.AddScoped<TradeLaborBenchmarkCalibrationWorkflowService>();
 builder.Services.AddScoped(_ => new LodestoneLookupClientOptions(ResolveLodestoneLookupBaseAddress(
     builder.Configuration["LodestoneLookup:BaseAddress"],
     builder.HostEnvironment.BaseAddress)));
