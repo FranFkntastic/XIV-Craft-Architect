@@ -165,7 +165,10 @@ jobs:
           "bash /tmp/deploy-lodestone-remote.sh '${{ steps.package.outputs.release }}'"
 
       - name: Verify public helper route
-        run: >
-          curl --fail --silent --show-error
-          "https://dev.xivcraftarchitect.com/api/lodestone/crafters/search?name=Level%20Checker&world=Behemoth"
-          > /dev/null
+        run: |
+          curl --fail --silent --show-error \
+            "https://dev.xivcraftarchitect.com/api/lodestone/crafters/search?name=Level%20Checker&world=Behemoth" \
+            > /dev/null
+          curl --fail --silent --show-error \
+            "https://dev.xivcraftarchitect.com/api/xivdata/items/search?q=Varn&limit=12" \
+            > /dev/null

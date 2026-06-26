@@ -1,6 +1,8 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.LodestoneLookup.Services;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.XivData;
 
 const string CorsPolicyName = "CraftArchitectWeb";
 const string PrivateNetworkAccessRequestHeader = "Access-Control-Request-Private-Network";
@@ -22,6 +24,8 @@ builder.Services.AddCors(options =>
     });
 });
 builder.Services.AddSingleton<ILodestoneCrafterLookupService, NetStoneLodestoneCrafterLookupService>();
+builder.Services.AddHttpClient<IGarlandService, GarlandService>();
+builder.Services.AddSingleton<IXivItemDataProvider, GarlandXivItemDataProvider>();
 
 var app = builder.Build();
 
@@ -69,6 +73,70 @@ app.MapGet(
     {
         var result = await lookup.GetImportPreviewAsync(characterId, cancellationToken);
         return Results.Ok(result);
+    });
+
+app.MapGet(
+    "/xivdata/items/search",
+    async (
+        string? q,
+        int? limit,
+        IXivItemDataProvider itemData,
+        CancellationToken cancellationToken) =>
+    {
+        var query = q?.Trim() ?? string.Empty;
+        if (query.Length == 0 || (query.Length == 1 && !char.IsDigit(query[0])))
+        {
+            return Results.BadRequest(new XivDataErrorResponse(
+                "invalid_query",
+                "Query must contain at least two characters unless it is an item ID."));
+        }
+
+        var clampedLimit = Math.Clamp(limit ?? 20, 1, 50);
+        try
+        {
+            var items = await itemData.SearchAsync(query, clampedLimit, cancellationToken);
+            return Results.Ok(new XivItemSearchResponse(items));
+        }
+        catch (HttpRequestException)
+        {
+            return Results.Json(
+                new XivDataErrorResponse("upstream_unavailable", "The Garland item data source is unavailable."),
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (Exception)
+        {
+            return Results.Json(
+                new XivDataErrorResponse("upstream_invalid_response", "The Garland item data source returned an unexpected response."),
+                statusCode: StatusCodes.Status502BadGateway);
+        }
+    });
+
+app.MapGet(
+    "/xivdata/items/{itemId:int}",
+    async (
+        int itemId,
+        IXivItemDataProvider itemData,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var item = await itemData.GetItemAsync(itemId, cancellationToken);
+            return item == null
+                ? Results.NotFound(new XivDataErrorResponse("item_not_found", "Item was not found."))
+                : Results.Ok(item);
+        }
+        catch (HttpRequestException)
+        {
+            return Results.Json(
+                new XivDataErrorResponse("upstream_unavailable", "The Garland item data source is unavailable."),
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (Exception)
+        {
+            return Results.Json(
+                new XivDataErrorResponse("upstream_invalid_response", "The Garland item data source returned an unexpected response."),
+                statusCode: StatusCodes.Status502BadGateway);
+        }
     });
 
 app.Run();
