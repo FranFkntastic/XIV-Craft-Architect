@@ -18,6 +18,7 @@ public sealed class TradeCompanyProfile
     public string? Description { get; set; }
     public string? RemoteId { get; set; }
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;
+    public TradePaymentPolicy PaymentPolicy { get; set; } = TradePaymentPolicy.LegacyDefault;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 
@@ -30,10 +31,27 @@ public sealed class TradeCompanyProfile
             Name = name,
             CreatedAtUtc = createdAtUtc,
             UpdatedAtUtc = createdAtUtc,
-            SyncState = TradeSyncState.LocalOnly
+            SyncState = TradeSyncState.LocalOnly,
+            PaymentPolicy = TradePaymentPolicy.LegacyDefault
         };
     }
 }
+
+public sealed class TradeCompanyProfilePackage
+{
+    public const int CurrentFormatVersion = 1;
+    public const string PackageKindValue = "ffxiv-craft-architect.trade-company-profile";
+
+    public int FormatVersion { get; set; } = CurrentFormatVersion;
+    public string PackageKind { get; set; } = PackageKindValue;
+    public DateTime ExportedAtUtc { get; set; } = DateTime.UtcNow;
+    public TradeCompanyProfile Profile { get; set; } = new();
+    public IReadOnlyList<TradeCrafterProfile> Crafters { get; set; } = Array.Empty<TradeCrafterProfile>();
+}
+
+public sealed record TradeCompanyProfileImportResult(
+    TradeCompanyProfile Profile,
+    IReadOnlyList<TradeCrafterProfile> Crafters);
 
 public enum TradeCraftingJob
 {
@@ -160,6 +178,7 @@ public sealed class TradeOrderSourceSnapshot
     public DateTime ImportedAtUtc { get; set; } = DateTime.UtcNow;
     public IReadOnlyList<TradeOrderRootItemSnapshot> RootItems { get; set; } = Array.Empty<TradeOrderRootItemSnapshot>();
     public IReadOnlyList<TradeOrderMaterialSnapshot> Materials { get; set; } = Array.Empty<TradeOrderMaterialSnapshot>();
+    public IReadOnlyList<TradeOrderCraftLaborSnapshot> CraftLabor { get; set; } = Array.Empty<TradeOrderCraftLaborSnapshot>();
     public IReadOnlyList<string> Warnings { get; set; } = Array.Empty<string>();
 }
 
@@ -187,6 +206,16 @@ public sealed record TradeOrderMaterialSnapshot(
     string EvidenceSource = "",
     string UnitCostExplanation = "",
     DateTime? EvidenceTimestampUtc = null,
+    IReadOnlyList<string>? Warnings = null);
+
+public sealed record TradeOrderCraftLaborSnapshot(
+    string NodeId,
+    int ItemId,
+    string Name,
+    int RequestedQuantity,
+    int CraftCount,
+    string JobName = "",
+    int RecipeLevel = 0,
     IReadOnlyList<string>? Warnings = null);
 
 public enum TradeOrderHistoryEventKind

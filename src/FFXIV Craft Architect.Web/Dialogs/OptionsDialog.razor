@@ -1,9 +1,12 @@
 @using FFXIV_Craft_Architect.Web.Services
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services.Interfaces
+@using System.Text.Json
 @inject AppState AppState
 @inject ISettingsService Settings
 @inject IndexedDbService IndexedDb
+@inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
 <MudDialog>
@@ -88,6 +91,146 @@
                 </MudText>
             </MudTabPanel>
             
+            <MudTabPanel Text="Company">
+                @if (!string.IsNullOrWhiteSpace(_companyLoadError))
+                {
+                    <MudAlert Severity="Severity.Error" Dense="true" Class="mb-4">
+                        @_companyLoadError
+                    </MudAlert>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Secondary"
+                               OnClick="LoadCompanyProfileAsync"
+                               Disabled="_companyIsBusy">
+                        Retry
+                    </MudButton>
+                }
+                else if (_companyProfile == null)
+                {
+                    <MudProgressLinear Indeterminate="true" Class="my-4" />
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
+                        Configure the active local Trade company profile and its default payment policy.
+                    </MudText>
+
+                    <MudTextField @bind-Value="_companyName"
+                                  Label="Company name"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  Class="my-2" />
+                    <MudTextField @bind-Value="_companyDescription"
+                                  Label="Description"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Lines="2"
+                                  Class="my-2" />
+
+                    <MudDivider Class="my-4" />
+
+                    <MudSelect T="TradePaymentContractMode"
+                               @bind-Value="_companyPaymentContract"
+                               Label="Default payment contract"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Class="my-2">
+                        <MudSelectItem Value="@TradePaymentContractMode.LegacyCommission">Legacy commission</MudSelectItem>
+                        <MudSelectItem Value="@TradePaymentContractMode.LaborStandard">Labor standard</MudSelectItem>
+                    </MudSelect>
+                    <MudNumericField T="decimal"
+                                     @bind-Value="_companyLegacyCommissionPercent"
+                                     Label="Legacy commission percent"
+                                     Variant="Variant.Outlined"
+                                     Margin="Margin.Dense"
+                                     Min="0m"
+                                     Max="100m"
+                                     Class="my-2" />
+
+                    <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Labor Standard</MudText>
+                    <MudTextField @bind-Value="_laborStandardName"
+                                  Label="Benchmark name"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Class="my-2" />
+                    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
+                        <MudNumericField T="int"
+                                         @bind-Value="_laborBenchmarkItemId"
+                                         Label="Benchmark item ID"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Min="1" />
+                        <MudTextField @bind-Value="_laborBenchmarkItemName"
+                                      Label="Benchmark item"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" />
+                        <MudNumericField T="int"
+                                         @bind-Value="_laborBenchmarkQuantity"
+                                         Label="Benchmark quantity"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Min="1" />
+                        <MudNumericField T="int"
+                                         @bind-Value="_laborBenchmarkSynthCount"
+                                         Label="Benchmark synths"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Min="1" />
+                        <MudNumericField T="decimal"
+                                         @bind-Value="_laborBenchmarkPayout"
+                                         Label="Benchmark payout"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Min="0m" />
+                        <MudTextField Value="@FormatGilPerSynth()"
+                                      Label="Derived rate"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      ReadOnly="true" />
+                    </div>
+                    <MudSwitch @bind-Value="_laborBenchmarkRequiresHq"
+                               Label="Benchmark requires HQ"
+                               Color="Color.Primary"
+                               Class="my-2" />
+
+                    <MudDivider Class="my-4" />
+
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">Profile Transfer</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
+                        Exports the active company profile, payment policy, and crafter roster. Orders and payroll drafts are not included.
+                    </MudText>
+                    <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Secondary"
+                                   StartIcon="@Icons.Material.Filled.Download"
+                                   OnClick="ExportCompanyProfileAsync"
+                                   Disabled="_companyIsBusy">
+                            Export Profile
+                        </MudButton>
+                        <InputFile id="tradeCompanyPackageInput"
+                                   OnChange="ImportCompanyProfileAsync"
+                                   accept=".tradeprofile,.json"
+                                   style="display: none;" />
+                        <label for="tradeCompanyPackageInput" style="display: inline-block; cursor: pointer;">
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Secondary"
+                                       StartIcon="@Icons.Material.Filled.UploadFile"
+                                       Disabled="_companyIsBusy"
+                                       Style="pointer-events: none;">
+                                Import Profile
+                            </MudButton>
+                        </label>
+                    </div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
+                        Active roster: @_companyCrafterCount.ToString("N0") crafters
+                    </MudText>
+                    @if (_companyIsBusy)
+                    {
+                        <MudProgressLinear Indeterminate="true" Class="mt-4" />
+                    }
+                }
+            </MudTabPanel>
+
             <MudTabPanel Text="Storage">
                 <MudText Typo="Typo.body2" Class="mb-4">
                     Manage your saved plans and application data.
@@ -169,6 +312,27 @@
     private string _selectedRegion = "North America";
     private MarketFetchScope _defaultMarketFetchScope = MarketFetchScope.EntireRegion;
     private bool _isClearing = false;
+    private TradeCompanyProfile? _companyProfile;
+    private string _companyName = string.Empty;
+    private string? _companyDescription;
+    private int _companyCrafterCount;
+    private string? _companyLoadError;
+    private bool _companyIsBusy;
+    private TradePaymentContractMode _companyPaymentContract = TradePaymentContractMode.LegacyCommission;
+    private decimal _companyLegacyCommissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
+    private string _laborStandardName = "Cobalt Rivets benchmark";
+    private int _laborBenchmarkItemId = TradeLaborStandardCalibrationService.CobaltRivetsItemId;
+    private string _laborBenchmarkItemName = TradeLaborStandardCalibrationService.CobaltRivetsItemName;
+    private int _laborBenchmarkQuantity = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkQuantity;
+    private bool _laborBenchmarkRequiresHq = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkRequiresHq;
+    private decimal _laborBenchmarkPayout = 120_000m;
+    private int _laborBenchmarkSynthCount = 200;
+
+    private static readonly JsonSerializerOptions CompanyPackageJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true
+    };
     
     // Region to Data Centers mapping
     private static readonly Dictionary<string, List<string>> RegionToDataCenters = new()
@@ -187,6 +351,7 @@
         _defaultMarketFetchScope = ParseMarketFetchScope(
             await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
 
+        await LoadCompanyProfileAsync();
     }
     
     private List<string> GetAvailableDataCenters()
@@ -202,6 +367,168 @@
                 return region;
         }
         return "North America";
+    }
+
+    private async Task LoadCompanyProfileAsync()
+    {
+        _companyIsBusy = true;
+        _companyLoadError = null;
+        try
+        {
+            _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            var crafters = await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id);
+            _companyCrafterCount = crafters.Count;
+            ApplyCompanyProfileFields(_companyProfile);
+        }
+        catch (Exception ex)
+        {
+            _companyProfile = null;
+            _companyCrafterCount = 0;
+            _companyLoadError = ex.Message;
+        }
+        finally
+        {
+            _companyIsBusy = false;
+        }
+    }
+
+    private void ApplyCompanyProfileFields(TradeCompanyProfile profile)
+    {
+        _companyName = profile.Name;
+        _companyDescription = profile.Description;
+        var policy = profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault;
+        _companyPaymentContract = policy.ActiveContract;
+        _companyLegacyCommissionPercent = policy.LegacyCommissionPercent;
+
+        if (policy.LaborStandard != null)
+        {
+            _laborStandardName = policy.LaborStandard.Name;
+            _laborBenchmarkItemId = policy.LaborStandard.BenchmarkItemId;
+            _laborBenchmarkItemName = policy.LaborStandard.BenchmarkItemName;
+            _laborBenchmarkQuantity = policy.LaborStandard.BenchmarkQuantity;
+            _laborBenchmarkRequiresHq = policy.LaborStandard.BenchmarkRequiresHq;
+            _laborBenchmarkPayout = policy.LaborStandard.BenchmarkLaborPayout;
+            _laborBenchmarkSynthCount = policy.LaborStandard.BenchmarkSynthCount;
+        }
+    }
+
+    private TradePaymentPolicy? BuildCompanyPaymentPolicy()
+    {
+        if (_companyLegacyCommissionPercent < 0 || _companyLegacyCommissionPercent > 100)
+        {
+            Snackbar.Add("Legacy commission percent must be between 0 and 100.", Severity.Error);
+            return null;
+        }
+
+        var laborStandard = BuildLaborStandard();
+        if (_companyPaymentContract == TradePaymentContractMode.LaborStandard && laborStandard == null)
+        {
+            Snackbar.Add("Labor standard requires a benchmark name, item, payout, and synth count.", Severity.Error);
+            return null;
+        }
+
+        return new TradePaymentPolicy(
+            _companyPaymentContract,
+            _companyLegacyCommissionPercent,
+            laborStandard);
+    }
+
+    private TradeLaborStandard? BuildLaborStandard()
+    {
+        if (string.IsNullOrWhiteSpace(_laborStandardName) ||
+            string.IsNullOrWhiteSpace(_laborBenchmarkItemName) ||
+            _laborBenchmarkItemId <= 0 ||
+            _laborBenchmarkQuantity <= 0 ||
+            _laborBenchmarkPayout <= 0 ||
+            _laborBenchmarkSynthCount <= 0)
+        {
+            return null;
+        }
+
+        return new TradeLaborStandard(
+            _laborStandardName.Trim(),
+            _laborBenchmarkItemId,
+            _laborBenchmarkItemName.Trim(),
+            _laborBenchmarkQuantity,
+            _laborBenchmarkRequiresHq,
+            _laborBenchmarkPayout,
+            _laborBenchmarkSynthCount,
+            DateTime.UtcNow);
+    }
+
+    private string FormatGilPerSynth()
+    {
+        return _laborBenchmarkSynthCount <= 0
+            ? "Unavailable"
+            : $"{_laborBenchmarkPayout / _laborBenchmarkSynthCount:N2} gil/synth";
+    }
+
+    private async Task ExportCompanyProfileAsync()
+    {
+        _companyIsBusy = true;
+        try
+        {
+            var package = await TradeOperationsPersistence.ExportActiveCompanyProfilePackageAsync(DateTime.UtcNow);
+            var json = JsonSerializer.Serialize(package, CompanyPackageJsonOptions);
+            var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+            var stream = new MemoryStream(bytes);
+            using var streamRef = new DotNetStreamReference(stream);
+            var fileName = CreateCompanyProfileExportFileName(package.Profile.Name, package.ExportedAtUtc);
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
+            Snackbar.Add($"Exported {package.Crafters.Count:N0} crafters to {fileName}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Company profile export failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _companyIsBusy = false;
+        }
+    }
+
+    private async Task ImportCompanyProfileAsync(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file == null)
+        {
+            return;
+        }
+
+        _companyIsBusy = true;
+        try
+        {
+            using var stream = file.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024);
+            using var reader = new StreamReader(stream);
+            var json = await reader.ReadToEndAsync();
+            var package = JsonSerializer.Deserialize<TradeCompanyProfilePackage>(json, CompanyPackageJsonOptions)
+                ?? throw new InvalidOperationException("The selected company profile file was empty.");
+            var imported = await TradeOperationsPersistence.ImportCompanyProfilePackageAsync(package, DateTime.UtcNow);
+            _companyProfile = imported.Profile;
+            _companyCrafterCount = imported.Crafters.Count;
+            ApplyCompanyProfileFields(imported.Profile);
+            Snackbar.Add($"Imported company profile '{imported.Profile.Name}' with {imported.Crafters.Count:N0} crafters", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Company profile import failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _companyIsBusy = false;
+        }
+    }
+
+    private static string CreateCompanyProfileExportFileName(string profileName, DateTime exportedAtUtc)
+    {
+        var safeName = string.Join("_", (string.IsNullOrWhiteSpace(profileName) ? "trade-company-profile" : profileName)
+            .Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries));
+        if (safeName.Length > 60)
+        {
+            safeName = safeName[..60];
+        }
+
+        return $"trade-company-{safeName}-{exportedAtUtc:yyyyMMdd-HHmmss}.tradeprofile";
     }
     
     private async Task ClearAllPlans()
@@ -230,6 +557,31 @@
     
     private async Task Save()
     {
+        if (_companyProfile != null)
+        {
+            if (string.IsNullOrWhiteSpace(_companyName))
+            {
+                Snackbar.Add("Company name is required.", Severity.Error);
+                return;
+            }
+
+            var paymentPolicy = BuildCompanyPaymentPolicy();
+            if (paymentPolicy == null)
+            {
+                return;
+            }
+
+            _companyProfile.Name = _companyName.Trim();
+            _companyProfile.Description = NormalizeOptionalText(_companyDescription);
+            _companyProfile.PaymentPolicy = paymentPolicy;
+            var companySaved = await TradeOperationsPersistence.SaveCompanyProfileAsync(_companyProfile);
+            if (!companySaved)
+            {
+                Snackbar.Add("Failed to save company profile.", Severity.Error);
+                return;
+            }
+        }
+
         AppState.SetAutoSaveEnabled(_autoSaveEnabled);
         AppState.SetMarketEvidenceSettings(
             _defaultDataCenter,
@@ -265,5 +617,10 @@
         return Enum.TryParse<MarketFetchScope>(value, ignoreCase: true, out var scope)
             ? scope
             : MarketFetchScope.EntireRegion;
+    }
+
+    private static string? NormalizeOptionalText(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 }

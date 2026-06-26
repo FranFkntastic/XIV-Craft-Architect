@@ -57,6 +57,7 @@ public sealed class TradeOrderDraftFactory
             appState.MarketItemAnalyses.ToArray(),
             appState.ShoppingPlans.ToArray());
         warnings.AddRange(lines.SelectMany(line => line.Warnings));
+        warnings.Add("Labor-standard evidence is unavailable until this order is repriced from its linked craft plan.");
         var materials = TradeOrderMaterialEvidenceMapper.ToMaterialSnapshots(lines);
         var title = string.IsNullOrWhiteSpace(request.Title)
             ? CreateSuggestedTitle(rootItems)

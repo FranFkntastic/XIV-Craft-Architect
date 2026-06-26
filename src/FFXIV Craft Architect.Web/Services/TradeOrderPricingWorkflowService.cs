@@ -1,5 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -51,6 +52,7 @@ public sealed class TradeOrderPricingWorkflowService
     private readonly MarketAnalysisWorkflowService _marketAnalysisWorkflow;
     private readonly ProcurementWorkflowService _procurementWorkflow;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
+    private readonly IRecipeOperationSnapshotService _recipeOperationSnapshotService;
     private readonly CommissionCostBasisResolver _costBasisResolver;
     private readonly CancellableOperationService _cancellableOperations;
 
@@ -61,6 +63,7 @@ public sealed class TradeOrderPricingWorkflowService
         MarketAnalysisWorkflowService marketAnalysisWorkflow,
         ProcurementWorkflowService procurementWorkflow,
         IRecipeLayerWorkflowService recipeLayerWorkflow,
+        IRecipeOperationSnapshotService recipeOperationSnapshotService,
         CommissionCostBasisResolver costBasisResolver,
         CancellableOperationService cancellableOperations)
     {
@@ -70,6 +73,7 @@ public sealed class TradeOrderPricingWorkflowService
         _marketAnalysisWorkflow = marketAnalysisWorkflow ?? throw new ArgumentNullException(nameof(marketAnalysisWorkflow));
         _procurementWorkflow = procurementWorkflow ?? throw new ArgumentNullException(nameof(procurementWorkflow));
         _recipeLayerWorkflow = recipeLayerWorkflow ?? throw new ArgumentNullException(nameof(recipeLayerWorkflow));
+        _recipeOperationSnapshotService = recipeOperationSnapshotService ?? throw new ArgumentNullException(nameof(recipeOperationSnapshotService));
         _costBasisResolver = costBasisResolver ?? throw new ArgumentNullException(nameof(costBasisResolver));
         _cancellableOperations = cancellableOperations ?? throw new ArgumentNullException(nameof(cancellableOperations));
     }
@@ -350,6 +354,37 @@ public sealed class TradeOrderPricingWorkflowService
             warnings.Add($"Order pricing is incomplete: {pricedCount:N0} of {activeItemList.Length:N0} active procurement items are priced.");
         }
 
+        var laborSnapshot = await _recipeOperationSnapshotService.BuildAsync(_appState.CurrentPlan, operation.Token);
+        if (!operation.IsCurrent)
+        {
+            return CanceledResult();
+        }
+
+        var craftLabor = laborSnapshot.GetRequiredCrafts()
+            .Where(craft => craft.CraftCount > 0)
+            .Select(craft => new TradeOrderCraftLaborSnapshot(
+                craft.NodeId,
+                craft.ResultItemId,
+                craft.ResultItemName,
+                craft.RequestedQuantity,
+                craft.CraftCount,
+                craft.JobName,
+                craft.RecipeLevel,
+                craft.HasStructuralDiagnostics
+                    ? [$"Recipe-operation diagnostics exist for {craft.ResultItemName}."]
+                    : []))
+            .ToArray();
+        var unresolvedCrafts = laborSnapshot.GetUnresolvedRequiredCrafts().ToArray();
+        if (unresolvedCrafts.Length > 0)
+        {
+            warnings.Add($"Labor-standard evidence is incomplete: {unresolvedCrafts.Length:N0} active crafts could not be resolved.");
+        }
+
+        if (craftLabor.Length == 0)
+        {
+            warnings.Add("Labor-standard evidence is unavailable. No active craft synths were resolved for this order.");
+        }
+
         var versions = _appState.CurrentVersions;
         order.SourceSnapshot.SourcePlanId = order.CraftPlanId;
         order.SourceSnapshot.SourcePlanName = order.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(order);
@@ -357,6 +392,7 @@ public sealed class TradeOrderPricingWorkflowService
         order.SourceSnapshot.PlanSessionVersion = planSessionVersion;
         order.SourceSnapshot.MarketAnalysisVersion = versions.MarketAnalysisVersion;
         order.SourceSnapshot.Materials = materials;
+        order.SourceSnapshot.CraftLabor = craftLabor;
         order.SourceSnapshot.Warnings = warnings
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
             .Distinct(StringComparer.OrdinalIgnoreCase)

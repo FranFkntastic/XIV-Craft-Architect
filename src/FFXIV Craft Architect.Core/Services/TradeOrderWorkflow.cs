@@ -47,6 +47,7 @@ public static class TradeOrderWorkflow
             ImportedAtUtc = source.ImportedAtUtc,
             RootItems = (source.RootItems ?? Array.Empty<TradeOrderRootItemSnapshot>()).ToArray(),
             Materials = (source.Materials ?? Array.Empty<TradeOrderMaterialSnapshot>()).ToArray(),
+            CraftLabor = (source.CraftLabor ?? Array.Empty<TradeOrderCraftLaborSnapshot>()).ToArray(),
             Warnings = (source.Warnings ?? Array.Empty<string>()).ToArray()
         };
     }
@@ -66,6 +67,8 @@ public static class TradeOrderWorkflow
             AssignedCrafterId = draft.AssignedCrafterId,
             AssignedCrafterDisplayName = draft.AssignedCrafterDisplayName,
             CommissionPercent = draft.CommissionPercent,
+            ActivePaymentContract = draft.ActivePaymentContract,
+            LaborStandard = draft.LaborStandard,
             Responsibilities = (draft.Responsibilities ?? Array.Empty<TradePayrollResponsibilityLine>()).ToArray(),
             RemoteId = draft.RemoteId,
             SyncState = draft.SyncState,

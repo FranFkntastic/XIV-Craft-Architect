@@ -175,6 +175,12 @@
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="trade-payroll-note">
                         Commission is @_commissionPercent.ToString("N0")% of full estimated material cost. Crafter-responsible materials are also reimbursed.
                     </MudText>
+                    @if (GetLinkedOrderPaymentComparison() is { } comparison)
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+                            Labor-standard comparison: @FormatPaymentBreakdown(comparison.LaborStandard)
+                        </MudAlert>
+                    }
                     <MudButton FullWidth="true"
                                Variant="Variant.Filled"
                                Color="Color.Primary"
@@ -314,7 +320,8 @@
             _source.MarketAnalysisVersion,
             _source.SourcePlanName,
             orderCrafterId,
-            orderCrafterName);
+            orderCrafterName,
+            _companyProfile.PaymentPolicy);
 
         _assignedCrafterId = _workflowDraft.AssignedCrafterId;
         await LinkPayrollDraftToOrderAsync();
@@ -607,6 +614,25 @@
         return _payroll?.Lines
             .Where(line => line.Responsibility == CommissionMaterialResponsibility.Provided)
             .Sum(line => line.EstimatedMaterialCost) ?? 0m;
+    }
+
+    private TradeCommissionPaymentSummary? GetLinkedOrderPaymentComparison()
+    {
+        return _linkedOrder == null
+            ? null
+            : TradeCommissionPaymentSummary.FromOrder(_linkedOrder, _workflowDraft);
+    }
+
+    private static string FormatPaymentBreakdown(TradePaymentContractBreakdown breakdown)
+    {
+        if (breakdown.IsAvailable)
+        {
+            return FormatGil(breakdown.Total);
+        }
+
+        return breakdown.Warnings.Any(warning => warning.Contains("policy", StringComparison.OrdinalIgnoreCase))
+            ? "Needs labor standard"
+            : "Needs reprice";
     }
 
     private string FormatAssignedCrafterName()

@@ -55,7 +55,8 @@ public sealed class TradePayrollPersistenceService
         long marketAnalysisVersion,
         string sourcePlanName,
         Guid? assignedCrafterId,
-        string? assignedCrafterDisplayName)
+        string? assignedCrafterDisplayName,
+        TradePaymentPolicy? paymentPolicy = null)
     {
         var drafts = await _store.LoadDraftsAsync(companyProfileId);
         var existing = orderId.HasValue
@@ -76,6 +77,8 @@ public sealed class TradePayrollPersistenceService
             SourcePlanName = string.IsNullOrWhiteSpace(sourcePlanName) ? "Active craft plan" : sourcePlanName,
             AssignedCrafterId = assignedCrafterId,
             AssignedCrafterDisplayName = assignedCrafterDisplayName,
+            ActivePaymentContract = paymentPolicy?.ActiveContract ?? TradePaymentContractMode.LegacyCommission,
+            LaborStandard = paymentPolicy?.LaborStandard,
             CreatedAtUtc = now,
             UpdatedAtUtc = now
         };
