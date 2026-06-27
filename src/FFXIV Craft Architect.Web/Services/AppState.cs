@@ -404,9 +404,9 @@ public class AppState
         using (BeginStateChangeBatch())
         {
             ReplaceMarketAnalysis(analyses, shoppingPlans, recipeBasis, publishedScope);
+            ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
             if (acquisitionDecisionsChanged)
             {
-                ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
                 NotifyPlanDecisionChanged();
             }
         }

@@ -160,7 +160,7 @@ public class AppStatePerformanceStateTests
     }
 
     [Fact]
-    public void ApplyMarketAnalysisPublication_WithoutDecisionChanges_DoesNotDirtyPlanCore()
+    public void ApplyMarketAnalysisPublication_WithoutDecisionChanges_RefreshesShoppingItemsWithoutDirtyingPlanCore()
     {
         var appState = new AppState();
         appState.NotifyPlanChanged();
@@ -176,12 +176,13 @@ public class AppStatePerformanceStateTests
 
         var change = Assert.Single(changes);
         Assert.True(change.HasScope(AppStateChangeScope.MarketAnalysis));
+        Assert.True(change.HasScope(AppStateChangeScope.ShoppingItems));
         Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
         Assert.False(change.HasScope(AppStateChangeScope.PlanStructure));
         Assert.False(change.HasScope(AppStateChangeScope.PlanDecision));
         Assert.True(appState.IsPersistedBucketDirty(PersistedStateBucket.MarketAnalysis));
         Assert.False(appState.IsPersistedBucketDirty(PersistedStateBucket.PlanCore));
-        Assert.Empty(appState.ShoppingItems);
+        Assert.Equal(300, Assert.Single(appState.ShoppingItems).Id);
     }
 
     [Fact]
