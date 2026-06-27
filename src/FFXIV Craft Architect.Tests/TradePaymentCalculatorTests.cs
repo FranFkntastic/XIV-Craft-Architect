@@ -54,7 +54,8 @@ public class TradePaymentCalculatorTests
         Assert.Equal(1_200m, summary.Legacy.Total);
         Assert.True(summary.LaborStandard.IsAvailable);
         Assert.Equal(1_800m, summary.LaborStandard.CraftLaborTotal);
-        Assert.Equal(2_800m, summary.LaborStandard.Total);
+        Assert.Equal(100m, summary.LaborStandard.CommissionAmount);
+        Assert.Equal(2_900m, summary.LaborStandard.Total);
         Assert.Equal(1_000m, summary.MaterialReimbursementTotal);
         Assert.Equal(600m, summary.LaborStandard.GilPerSynth);
         Assert.Equal(1_200m, summary.Active.Total);
@@ -96,5 +97,55 @@ public class TradePaymentCalculatorTests
         Assert.False(summary.LaborStandard.IsAvailable);
         Assert.Equal(0m, summary.TotalPayment);
         Assert.Contains(summary.Warnings, warning => warning.Contains("Labor-standard evidence is unavailable", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Calculate_LaborStandardUsesTenPercentMaterialCommission()
+    {
+        var calculator = new TradePaymentCalculator();
+        var standard = new TradeLaborStandard(
+            "Cobalt Rivets benchmark",
+            5099,
+            "Cobalt Rivets",
+            999,
+            false,
+            120_000m,
+            200,
+            new DateTime(2026, 6, 25, 0, 0, 0, DateTimeKind.Utc));
+
+        var summary = calculator.Calculate(new TradePaymentCalculationRequest(
+            Materials:
+            [
+                new TradePaymentMaterialInput(
+                    1,
+                    "Crafter Ore",
+                    10,
+                    false,
+                    100m,
+                    CommissionMaterialResponsibility.Crafter,
+                    "Market",
+                    "Selected listing.",
+                    null,
+                    [])
+            ],
+            CraftLabor:
+            [
+                new TradeCraftLaborInput(
+                    "root",
+                    2,
+                    "Finished Item",
+                    1,
+                    3,
+                    [])
+            ],
+            Policy: new TradePaymentPolicy(TradePaymentContractMode.LaborStandard, 20m, standard),
+            Warnings: []));
+
+        Assert.Equal(20m, summary.Legacy.CommissionPercent);
+        Assert.Equal(200m, summary.Legacy.CommissionAmount);
+        Assert.Equal(10m, summary.LaborStandard.CommissionPercent);
+        Assert.Equal(100m, summary.LaborStandard.CommissionAmount);
+        Assert.Equal(2_900m, summary.LaborStandard.Total);
+        Assert.Equal(summary.LaborStandard.Total, summary.TotalPayment);
     }
 }

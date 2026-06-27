@@ -4,6 +4,8 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 public sealed class TradePaymentCalculator
 {
+    public const decimal LaborStandardMaterialCommissionPercent = 10m;
+
     public TradePaymentComparisonSummary Calculate(TradePaymentCalculationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -22,7 +24,8 @@ public sealed class TradePaymentCalculator
         var labor = BuildLaborStandard(
             request.Policy,
             request.CraftLabor ?? [],
-            materialReimbursementTotal);
+            materialReimbursementTotal,
+            estimatedProcurementTotal);
         var active = request.Policy.ActiveContract == TradePaymentContractMode.LaborStandard
             ? labor
             : legacy;
@@ -76,7 +79,8 @@ public sealed class TradePaymentCalculator
     private static TradePaymentContractBreakdown BuildLaborStandard(
         TradePaymentPolicy policy,
         IReadOnlyList<TradeCraftLaborInput> laborInputs,
-        decimal materialReimbursementTotal)
+        decimal materialReimbursementTotal,
+        decimal estimatedProcurementTotal)
     {
         if (policy.LaborStandard == null || policy.LaborStandard.BenchmarkSynthCount <= 0)
         {
@@ -107,6 +111,7 @@ public sealed class TradePaymentCalculator
             .ToArray();
         var craftLaborTotal = RoundGil(lines.Sum(line => line.LaborTotal));
         var synthCount = lines.Sum(line => line.CraftCount);
+        var commission = RoundGil(estimatedProcurementTotal * LaborStandardMaterialCommissionPercent / 100m);
         var warnings = lines
             .SelectMany(line => line.Warnings)
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
@@ -118,12 +123,12 @@ public sealed class TradePaymentCalculator
             TradePaymentContractMode.LaborStandard,
             IsAvailable: true,
             materialReimbursementTotal,
-            CommissionPercent: 0m,
-            CommissionAmount: 0m,
+            LaborStandardMaterialCommissionPercent,
+            commission,
             craftLaborTotal,
             synthCount,
             gilPerSynth,
-            materialReimbursementTotal + craftLaborTotal,
+            materialReimbursementTotal + commission + craftLaborTotal,
             lines,
             warnings);
     }

@@ -95,8 +95,9 @@ public class TradeCommissionPaymentSummaryTests
 
         Assert.Equal(240m, summary.Legacy.Total);
         Assert.True(summary.LaborStandard.IsAvailable);
+        Assert.Equal(20m, summary.LaborStandard.CommissionAmount);
         Assert.Equal(1_800m, summary.LaborStandard.CraftLaborTotal);
-        Assert.Equal(2_000m, summary.LaborStandard.Total);
+        Assert.Equal(2_020m, summary.LaborStandard.Total);
         Assert.Equal(240m, summary.TotalPayment);
     }
 }

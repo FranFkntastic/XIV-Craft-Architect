@@ -499,13 +499,22 @@
                                     </div>
                                     <div class="trade-orders-payment-heading">
                                         <MudText Typo="Typo.subtitle2">Material Responsibility</MudText>
-                                        <MudButton Variant="Variant.Outlined"
-                                                   Color="Color.Secondary"
-                                                   Size="Size.Small"
-                                                   StartIcon="@Icons.Material.Filled.ContentCopy"
-                                                   OnClick="CopyOrderPaymentSummaryAsync">
-                                            Copy Summary
-                                        </MudButton>
+                                        <div class="trade-orders-payment-copy-actions">
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Secondary"
+                                                       Size="Size.Small"
+                                                       StartIcon="@Icons.Material.Filled.ReceiptLong"
+                                                       OnClick="CopyOrderPaymentReceiptAsync">
+                                                Copy Receipt
+                                            </MudButton>
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Secondary"
+                                                       Size="Size.Small"
+                                                       StartIcon="@Icons.Material.Filled.ContentCopy"
+                                                       OnClick="CopyOrderPaymentSummaryAsync">
+                                                Copy Summary
+                                            </MudButton>
+                                        </div>
                                     </div>
                                     <div class="trade-orders-material-table is-compact">
                                         <div class="trade-orders-material-header">
@@ -1888,6 +1897,18 @@
         await CopyTextToClipboardAsync(Math.Round(value, 0).ToString("0"), successMessage);
     }
 
+    private async Task CopyOrderPaymentReceiptAsync()
+    {
+        if (_selectedOrder == null)
+        {
+            return;
+        }
+
+        await CopyTextToClipboardAsync(
+            TradeOrderPaymentCopyFormatter.BuildReceipt(CreateOrderPaymentCopyContext(_selectedOrder)),
+            "Payment receipt copied");
+    }
+
     private async Task CopyOrderPaymentSummaryAsync()
     {
         if (_selectedOrder == null)
@@ -1895,7 +1916,9 @@
             return;
         }
 
-        await CopyTextToClipboardAsync(BuildOrderPaymentSummary(_selectedOrder), "Payment summary copied");
+        await CopyTextToClipboardAsync(
+            TradeOrderPaymentCopyFormatter.BuildSummary(CreateOrderPaymentCopyContext(_selectedOrder)),
+            "Payment summary copied");
     }
 
     private async Task OpenCloseOrderDialogAsync(TradeOrderStatus status)
@@ -2562,41 +2585,19 @@
 
     private static string FormatPaymentContract(TradePaymentContractMode mode)
     {
-        return mode == TradePaymentContractMode.LaborStandard
-            ? "labor standard"
-            : "legacy";
+        return TradeOrderPaymentCopyFormatter.FormatPaymentContract(mode);
     }
 
     private static string FormatPaymentBreakdown(TradePaymentContractBreakdown breakdown)
     {
-        if (breakdown.IsAvailable)
-        {
-            return FormatGil(breakdown.Total);
-        }
-
-        return breakdown.Warnings.Any(warning => warning.Contains("policy", StringComparison.OrdinalIgnoreCase))
-            ? "Needs labor standard"
-            : "Needs reprice";
+        return TradeOrderPaymentCopyFormatter.FormatPaymentBreakdown(breakdown);
     }
 
     private static string FormatPaymentDifference(
         TradePaymentContractBreakdown laborStandard,
         TradePaymentContractBreakdown legacy)
     {
-        if (!laborStandard.IsAvailable)
-        {
-            return "Needs reprice";
-        }
-
-        var value = laborStandard.Total - legacy.Total;
-        if (value == 0)
-        {
-            return "0 gil";
-        }
-
-        return value > 0
-            ? $"+{value:N0} gil"
-            : $"{value:N0} gil";
+        return TradeOrderPaymentCopyFormatter.FormatPaymentDifference(laborStandard, legacy);
     }
 
     private static string FormatResponsibility(CommissionMaterialResponsibility responsibility)
@@ -2611,69 +2612,16 @@
         return value > 0 ? $"{value:N0} gil" : "Not priced";
     }
 
-    private string BuildOrderPaymentSummary(TradeOrder order)
+    private TradeOrderPaymentCopyContext CreateOrderPaymentCopyContext(TradeOrder order)
     {
         var summary = TradeCommissionPaymentSummary.FromOrder(order, GetPayrollDraftForOrder(order));
-        var builder = new StringBuilder();
-        builder.AppendLine("FFXIV Trade Architect Payment");
-        builder.AppendLine($"Order: {order.Title}");
-        builder.AppendLine($"Assigned crafter: {FormatAssignedCrafter(order)}");
-        builder.AppendLine();
-        builder.AppendLine("Outputs:");
-        foreach (var item in GetOrderRootItems(order).OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
-        {
-            var hqSuffix = item.MustBeHq ? " HQ" : string.Empty;
-            builder.AppendLine($"- {item.Name}{hqSuffix} x{item.Quantity:N0}");
-        }
-
-        builder.AppendLine();
-        AppendPaymentMaterialSection(builder, "Crafter procures", summary.Materials.Where(material => material.Responsibility == CommissionMaterialResponsibility.Crafter));
-        builder.AppendLine();
-        AppendPaymentMaterialSection(builder, "Provided by commissioner", summary.Materials.Where(material => material.Responsibility == CommissionMaterialResponsibility.Provided));
-        builder.AppendLine();
-        builder.AppendLine($"Payment amount: {FormatGil(summary.TotalPayment)}");
-        builder.AppendLine($"Crafter-procured reimbursement: {FormatGil(summary.MaterialReimbursementTotal)}");
-        builder.AppendLine($"Provided material value: {FormatGil(summary.ProvidedMaterialTotal)}");
-        builder.AppendLine($"Commission ({summary.CommissionPercent:N0}%): {FormatGil(summary.CommissionAmount)}");
-        builder.AppendLine($"Labor-standard comparison: {FormatPaymentBreakdown(summary.LaborStandard)}");
-        if (summary.LaborStandard.IsAvailable)
-        {
-            builder.AppendLine($"Craft labor: {summary.LaborStandard.CraftSynthCount:N0} synths x {summary.LaborStandard.GilPerSynth:N2} gil = {FormatGil(summary.LaborStandard.CraftLaborTotal)}");
-            builder.AppendLine($"Difference vs legacy: {FormatPaymentDifference(summary.LaborStandard, summary.Legacy)}");
-        }
-
-        builder.AppendLine($"Total estimated procurement: {FormatGil(summary.EstimatedProcurementTotal)}");
-        if (summary.Warnings.Count > 0)
-        {
-            builder.AppendLine();
-            builder.AppendLine("Evidence warnings:");
-            foreach (var warning in summary.Warnings)
-            {
-                builder.AppendLine($"- {warning}");
-            }
-        }
-
-        return builder.ToString();
-    }
-
-    private static void AppendPaymentMaterialSection(
-        StringBuilder builder,
-        string heading,
-        IEnumerable<TradeCommissionPaymentMaterial> materials)
-    {
-        builder.AppendLine($"{heading}:");
-        var lines = materials.OrderBy(material => material.Name, StringComparer.OrdinalIgnoreCase).ToArray();
-        if (lines.Length == 0)
-        {
-            builder.AppendLine("- None");
-            return;
-        }
-
-        foreach (var material in lines)
-        {
-            var hqSuffix = material.RequiresHq ? " HQ" : string.Empty;
-            builder.AppendLine($"- {material.Name}{hqSuffix} x{material.Quantity:N0}: {FormatGil(material.TotalCost)}");
-        }
+        return new TradeOrderPaymentCopyContext(
+            order.Title,
+            FormatAssignedCrafter(order),
+            GetOrderRootItems(order)
+                .Select(item => new TradeOrderPaymentOutput(item.Name, item.Quantity, item.MustBeHq))
+                .ToArray(),
+            summary);
     }
 
     private async Task CopyTextToClipboardAsync(string text, string successMessage)

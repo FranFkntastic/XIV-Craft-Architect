@@ -471,6 +471,13 @@
   margin-top: 12px;
 }
 
+.trade-orders-payment-copy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .trade-orders-material-header,
 .trade-orders-material-row {
   grid-template-columns: minmax(150px, 1fr) 64px 86px 96px minmax(104px, 132px);
