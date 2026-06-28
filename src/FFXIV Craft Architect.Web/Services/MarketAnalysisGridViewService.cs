@@ -92,16 +92,14 @@ public static class MarketAnalysisGridViewService
             return (long)estimate.Cost;
         }
 
-        var diagnostic = GetDiagnosticCoverageOption(plan);
-        return diagnostic != null ? (long)diagnostic.ExactNeededCost : 0;
+        return 0;
     }
 
     public static bool IsUnsupportedProjectedCost(DetailedShoppingPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
-        return MarketPurchaseCostProjectionService.IsUnsupportedProjectedCost(plan) ||
-            GetDiagnosticCoverageOption(plan) != null;
+        return MarketPurchaseCostProjectionService.IsUnsupportedProjectedCost(plan);
     }
 
     public static string GetTotalCostClass(DetailedShoppingPlan plan)
@@ -145,29 +143,6 @@ public static class MarketAnalysisGridViewService
         }
 
         return "Calculated Total is the computed gil cost for the needed quantity. Run Market Analysis again if this row lacks current recommendation evidence.";
-    }
-
-    private static MarketCoverageOption? GetDiagnosticCoverageOption(DetailedShoppingPlan plan)
-    {
-        if (plan.CoverageSet == null)
-        {
-            return null;
-        }
-
-        return plan.CoverageSet.AllCandidates
-            .Concat([
-                plan.CoverageSet.CheapestObserved,
-                plan.CoverageSet.WideSplit
-            ])
-            .Where(candidate => candidate != null)
-            .Cast<MarketCoverageOption>()
-            .GroupBy(candidate => candidate.CandidateId, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())
-            .Where(candidate => candidate.ExactNeededCost > 0)
-            .Where(candidate => !candidate.IsDefaultEligible)
-            .Where(candidate => candidate.Tier == MarketCoverageTier.CheapestObserved)
-            .OrderBy(candidate => candidate.ExactNeededCost)
-            .FirstOrDefault();
     }
 
     public static string GetWorldPriceBandScoreClass(WorldMarketAnalysis world)

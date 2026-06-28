@@ -1008,6 +1008,30 @@ public class MarketPriceLadderAnalysisServiceTests
     }
 
     [Fact]
+    public async Task ProjectToShoppingPlan_AttachesCoverageSetForFreshAnalysis()
+    {
+        var service = CreateService();
+        var analysis = Assert.Single(await service.AnalyzeAsync(CreateRequest(
+            itemId: 5059,
+            quantityNeeded: 3_996,
+            worlds:
+            [
+                World("Coeurl", [Listing(quantity: 3_996, price: 889, retainer: "Single World")]),
+                World("Seraph", [Listing(quantity: 3_804, price: 749, retainer: "Split A")]),
+                World("Siren", [Listing(quantity: 192, price: 926, retainer: "Split B")])
+            ])));
+
+        var plan = service.ProjectToShoppingPlan(analysis, MarketAcquisitionLens.BulkValue);
+
+        Assert.NotNull(plan.CoverageSet);
+        Assert.Equal(5059, plan.CoverageSet!.ItemId);
+        Assert.Equal("Test Item", plan.CoverageSet.ItemName);
+        Assert.Equal(3_996, plan.CoverageSet.QuantityNeeded);
+        Assert.NotNull(plan.CoverageSet.SingleWorld);
+        Assert.NotNull(plan.CoverageSet.CheapestObserved);
+    }
+
+    [Fact]
     public async Task ProjectToShoppingPlan_DifferentTimestampMetadata_DoesNotChangePurchaseFeasibilityOrCosts()
     {
         var service = CreateService();

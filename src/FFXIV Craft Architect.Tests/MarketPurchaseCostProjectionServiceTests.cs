@@ -144,6 +144,51 @@ public class MarketPurchaseCostProjectionServiceTests
     }
 
     [Fact]
+    public void Estimate_RecommendedWorldAndCheaperCompactCoverage_UsesDefaultEligibleCoverage()
+    {
+        var singleWorld = CreateCoverageOption(
+            "Siren",
+            exactNeededCost: 10_000,
+            cashOutCost: 10_500,
+            isDefaultEligible: true);
+        var compactSplit = CreateCoverageOption(
+            "Faerie",
+            exactNeededCost: 8_000,
+            cashOutCost: 8_500,
+            isDefaultEligible: true,
+            tier: MarketCoverageTier.CompactSplit,
+            worldCount: 2);
+        var plan = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = "Coverage Material",
+            QuantityNeeded = 10,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                DataCenter = "Aether",
+                WorldName = "Siren",
+                TotalCost = 10_000,
+                TotalQuantityPurchased = 10
+            },
+            CoverageSet = new MarketCoverageSet(
+                100,
+                "Coverage Material",
+                10,
+                SingleWorld: singleWorld,
+                CompactSplit: compactSplit,
+                WideSplit: null,
+                CheapestObserved: null,
+                AllCandidates: [singleWorld, compactSplit])
+        };
+
+        var estimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: false);
+
+        Assert.True(estimate.HasCost);
+        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, estimate.Kind);
+        Assert.Equal(8_000, estimate.Cost);
+    }
+
+    [Fact]
     public void Estimate_VendorRecommendation_ReturnsSupportedCost()
     {
         var plan = new DetailedShoppingPlan
@@ -403,11 +448,33 @@ public class MarketPurchaseCostProjectionServiceTests
         decimal exactNeededCost,
         decimal cashOutCost,
         bool isDefaultEligible,
-        MarketCoverageQualityPolicy qualityPolicy = MarketCoverageQualityPolicy.NqOrHq)
+        MarketCoverageQualityPolicy qualityPolicy = MarketCoverageQualityPolicy.NqOrHq,
+        MarketCoverageTier tier = MarketCoverageTier.SingleWorld,
+        int worldCount = 1)
     {
+        var worlds = Enumerable.Range(0, worldCount)
+            .Select(index => new MarketCoverageWorld(
+                DataCenter: "Aether",
+                WorldName: index == 0 ? worldName : $"{worldName}-{index + 1}",
+                QuantityCovered: 10 / worldCount,
+                QuantityToPurchase: 12 / worldCount,
+                ExactNeededCost: exactNeededCost / worldCount,
+                CashOutCost: cashOutCost / worldCount))
+            .ToArray();
+        var listings = worlds
+            .Select(world => new MarketCoverageListing(
+                DataCenter: world.DataCenter,
+                WorldName: world.WorldName,
+                QuantityAvailable: world.QuantityToPurchase,
+                QuantityUsed: world.QuantityCovered,
+                QuantityPurchased: world.QuantityToPurchase,
+                PricePerUnit: exactNeededCost / 10,
+                IsHq: qualityPolicy == MarketCoverageQualityPolicy.HqOnly))
+            .ToArray();
+
         return new MarketCoverageOption(
-            CandidateId: $"100-10-singleworld-{qualityPolicy.ToString().ToLowerInvariant()}-{worldName.ToLowerInvariant()}",
-            Tier: MarketCoverageTier.SingleWorld,
+            CandidateId: $"100-10-{tier.ToString().ToLowerInvariant()}-{qualityPolicy.ToString().ToLowerInvariant()}-{worldName.ToLowerInvariant()}",
+            Tier: tier,
             Kind: MarketCoverageKind.SupportedListings,
             QualityPolicy: qualityPolicy,
             QuantityCovered: 10,
@@ -417,30 +484,11 @@ public class MarketPurchaseCostProjectionServiceTests
             CashOutCost: cashOutCost,
             AverageUnitCost: exactNeededCost / 10,
             PriceBand: MarketCoveragePriceBand.Competitive,
-            Worlds:
-            [
-                new MarketCoverageWorld(
-                    DataCenter: "Aether",
-                    WorldName: worldName,
-                    QuantityCovered: 10,
-                    QuantityToPurchase: 12,
-                    ExactNeededCost: exactNeededCost,
-                    CashOutCost: cashOutCost)
-            ],
-            Listings:
-            [
-                new MarketCoverageListing(
-                    DataCenter: "Aether",
-                    WorldName: worldName,
-                    QuantityAvailable: 12,
-                    QuantityUsed: 10,
-                    QuantityPurchased: 12,
-                    PricePerUnit: exactNeededCost / 10,
-                    IsHq: qualityPolicy == MarketCoverageQualityPolicy.HqOnly)
-            ],
+            Worlds: worlds,
+            Listings: listings,
             Friction: new MarketCoverageFriction(
-                WorldCount: 1,
-                DataCenterCount: 1,
+                WorldCount: worldCount,
+                DataCenterCount: worldCount,
                 SmallestContribution: 10,
                 LargestContribution: 10,
                 ExcessQuantity: 2),

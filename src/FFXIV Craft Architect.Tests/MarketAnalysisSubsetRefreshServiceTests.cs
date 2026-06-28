@@ -78,6 +78,32 @@ public sealed class MarketAnalysisSubsetRefreshServiceTests
     }
 
     [Fact]
+    public async Task RefreshMarketDataAsync_RefreshedPlanWithCoverage_PreservesCoverageSet()
+    {
+        var appState = CreateAppStateWithMarketAnalysis();
+        var refreshedPlan = ShoppingPlan(101, "Fresh Item 101");
+        refreshedPlan.CoverageSet = MarketCoverageSet.Empty(101, "Fresh Item 101", refreshedPlan.QuantityNeeded);
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(service => service.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(new MarketAnalysisExecutionResult(
+                CreateEvidenceSet(101),
+                [new MarketItemAnalysis { ItemId = 101, Name = "Fresh Item 101" }],
+                [refreshedPlan]));
+        var service = CreateService(appState, execution.Object);
+
+        var result = await service.RefreshMarketDataAsync(
+            new MarketAnalysisSubsetRefreshWorkflowRequest([101], IsCurrentOperation: () => true));
+
+        Assert.Equal(MarketAnalysisSubsetRefreshStatus.Refreshed, result.Status);
+        var plan = Assert.Single(appState.ShoppingPlans, plan => plan.ItemId == 101);
+        Assert.Same(refreshedPlan.CoverageSet, plan.CoverageSet);
+    }
+
+    [Fact]
     public async Task RefreshMarketDataAsync_WhenExecutionReturnsNoData_DoesNotReplaceExistingAnalysis()
     {
         var appState = CreateAppStateWithMarketAnalysis();

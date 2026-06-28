@@ -885,15 +885,30 @@ public class MarketAnalysisGridViewServiceTests
     }
 
     [Fact]
-    public void GetTotalCostClass_CheapestObservedDiagnostic_IsProjectedUnsupported()
+    public void GetTotalCostClass_CheapestObservedDiagnostic_DoesNotMarkSupportedRecommendationUnsupported()
+    {
+        var plan = CreatePlanWithSupportedSingleWorldAndCheapestObservedDiagnostic();
+
+        Assert.False(MarketAnalysisGridViewService.IsUnsupportedProjectedCost(plan));
+        Assert.Equal("ma-total-value", MarketAnalysisGridViewService.GetTotalCostClass(plan));
+    }
+
+    [Fact]
+    public void GetTotalCost_SupportedCoverageUsesDefaultEligibleEstimate()
+    {
+        var plan = CreatePlanWithSupportedSingleWorldAndCheapestObservedDiagnostic();
+
+        Assert.Equal(3_529_250, MarketAnalysisGridViewService.GetTotalCost(plan));
+    }
+
+    [Fact]
+    public void GetTotalCost_CheapestObservedDiagnosticOnly_IsNotPrimaryTotalFallback()
     {
         var plan = CreatePlanWithCheapestObservedOnly(exactNeededCost: 900);
 
-        Assert.True(MarketAnalysisGridViewService.IsUnsupportedProjectedCost(plan));
-        Assert.Equal(
-            "ma-total-value is-projected-unsupported",
-            MarketAnalysisGridViewService.GetTotalCostClass(plan));
-        Assert.Equal(900, MarketAnalysisGridViewService.GetTotalCost(plan));
+        Assert.False(MarketAnalysisGridViewService.IsUnsupportedProjectedCost(plan));
+        Assert.Equal("ma-total-value", MarketAnalysisGridViewService.GetTotalCostClass(plan));
+        Assert.Equal(0, MarketAnalysisGridViewService.GetTotalCost(plan));
     }
 
     [Fact]
@@ -1286,6 +1301,44 @@ public class MarketAnalysisGridViewServiceTests
                 WideSplit: null,
                 CheapestObserved: coverage,
                 AllCandidates: [coverage])
+            };
+    }
+
+    private static DetailedShoppingPlan CreatePlanWithSupportedSingleWorldAndCheapestObservedDiagnostic()
+    {
+        var singleWorld = CreateCoverageOption(
+            MarketCoverageTier.SingleWorld,
+            exactNeededCost: 3_529_250,
+            cashOutCost: 3_551_750,
+            isDefaultEligible: true);
+        var cheapestObserved = CreateCoverageOption(
+            MarketCoverageTier.CheapestObserved,
+            exactNeededCost: 3_004_308,
+            cashOutCost: 3_009_102,
+            isDefaultEligible: false);
+
+        return new DetailedShoppingPlan
+        {
+            ItemId = 5059,
+            Name = "Cobalt Ingot",
+            QuantityNeeded = 3_996,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                DataCenter = "Crystal",
+                WorldName = "Coeurl",
+                TotalCost = 3_551_750,
+                TotalQuantityPurchased = 4_021,
+                HasSufficientStock = true
+            },
+            CoverageSet = new MarketCoverageSet(
+                5059,
+                "Cobalt Ingot",
+                3_996,
+                SingleWorld: singleWorld,
+                CompactSplit: null,
+                WideSplit: null,
+                CheapestObserved: cheapestObserved,
+                AllCandidates: [singleWorld, cheapestObserved])
         };
     }
 

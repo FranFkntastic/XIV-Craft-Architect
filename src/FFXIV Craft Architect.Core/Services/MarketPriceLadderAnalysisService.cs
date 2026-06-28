@@ -164,6 +164,8 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             plan.Error = analysis.Warning;
         }
 
+        plan.CoverageSet = MarketCoverageBuilder.Build(plan);
+
         return plan;
     }
 
