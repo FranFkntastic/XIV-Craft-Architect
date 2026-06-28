@@ -229,6 +229,86 @@ public class TradeOperationsModelTests
     }
 
     [Fact]
+    public void TradeOrderWorkflow_CopyOrderCopiesPaymentPolicyOverride()
+    {
+        var overridePolicy = CreateLaborPolicy();
+        var order = new TradeOrder
+        {
+            Title = "Original",
+            PaymentPolicyOverride = overridePolicy
+        };
+
+        var copy = TradeOrderWorkflow.CopyOrder(order);
+
+        Assert.Equal(overridePolicy, copy.PaymentPolicyOverride);
+        copy.PaymentPolicyOverride = TradePaymentPolicy.LegacyDefault;
+        Assert.Equal(overridePolicy, order.PaymentPolicyOverride);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_WithPaymentPolicyOverrideDoesNotMutateLoadedOrder()
+    {
+        var order = new TradeOrder { Title = "Original" };
+        var policy = CreateLaborPolicy();
+
+        var changed = TradeOrderWorkflow.WithPaymentPolicyOverride(order, policy);
+
+        Assert.Null(order.PaymentPolicyOverride);
+        Assert.Equal(TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(policy), changed.PaymentPolicyOverride);
+        Assert.Equal("Original", changed.Title);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_WithoutPaymentPolicyOverrideClearsOverride()
+    {
+        var order = new TradeOrder
+        {
+            Title = "Original",
+            PaymentPolicyOverride = CreateLaborPolicy()
+        };
+
+        var changed = TradeOrderWorkflow.WithoutPaymentPolicyOverride(order);
+
+        Assert.NotNull(order.PaymentPolicyOverride);
+        Assert.Null(changed.PaymentPolicyOverride);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_ResolvePaymentPolicyPrefersOrderOverride()
+    {
+        var companyPolicy = TradePaymentPolicy.LegacyDefault;
+        var overridePolicy = CreateLaborPolicy();
+        var order = new TradeOrder
+        {
+            PaymentPolicyOverride = overridePolicy
+        };
+
+        var resolved = TradeOrderWorkflow.ResolvePaymentPolicy(order, companyPolicy);
+        var normalizedOverride = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(overridePolicy);
+
+        Assert.Equal(TradePaymentContractMode.LaborStandard, resolved.ActiveContract);
+        Assert.Equal(normalizedOverride.LaborStandard, resolved.LaborStandard);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_IsPaymentReadyUsesEffectiveLaborPolicyWithoutDraft()
+    {
+        var order = new TradeOrder
+        {
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                CraftLabor =
+                [
+                    new TradeOrderCraftLaborSnapshot("root", 200, "Finished Item", 1, 3)
+                ]
+            }
+        };
+
+        Assert.False(TradeOrderWorkflow.IsPaymentReady(order, draft: null));
+        Assert.True(TradeOrderWorkflow.IsPaymentReady(order, draft: null, effectivePolicy: CreateLaborPolicy()));
+    }
+
+    [Fact]
     public void TradeOrderWorkflow_WithMaterialResponsibilityDoesNotMutateLoadedDraft()
     {
         var laborStandard = new TradeLaborStandard(
@@ -501,5 +581,21 @@ public class TradeOperationsModelTests
         Assert.Equal(3, material.Quantity);
         Assert.Equal(100m, material.UnitCost);
         Assert.Equal(300m, material.TotalCost);
+    }
+
+    private static TradePaymentPolicy CreateLaborPolicy()
+    {
+        return new TradePaymentPolicy(
+            TradePaymentContractMode.LaborStandard,
+            18m,
+            new TradeLaborStandard(
+                "Cobalt Rivets benchmark",
+                5099,
+                "Cobalt Rivets",
+                999,
+                true,
+                150_000m,
+                200,
+                new DateTime(2026, 6, 25, 18, 0, 0, 0, DateTimeKind.Utc)));
     }
 }

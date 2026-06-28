@@ -20,6 +20,7 @@ public static class TradeOrderWorkflow
             UpdatedAtUtc = order.UpdatedAtUtc,
             Notes = order.Notes,
             SourceSnapshot = CopySourceSnapshot(order.SourceSnapshot),
+            PaymentPolicyOverride = order.PaymentPolicyOverride,
             History = (order.History ?? Array.Empty<TradeOrderHistoryEvent>()).ToArray(),
             PayrollDraftId = order.PayrollDraftId,
             CraftPlanId = order.CraftPlanId,
@@ -29,6 +30,35 @@ public static class TradeOrderWorkflow
             RemoteId = order.RemoteId,
             SyncState = order.SyncState
         };
+    }
+
+    public static TradeOrder WithPaymentPolicyOverride(TradeOrder order, TradePaymentPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        ArgumentNullException.ThrowIfNull(policy);
+
+        var copy = CopyOrder(order);
+        copy.PaymentPolicyOverride = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(policy);
+        copy.UpdatedAtUtc = DateTime.UtcNow;
+        return copy;
+    }
+
+    public static TradeOrder WithoutPaymentPolicyOverride(TradeOrder order)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+
+        var copy = CopyOrder(order);
+        copy.PaymentPolicyOverride = null;
+        copy.UpdatedAtUtc = DateTime.UtcNow;
+        return copy;
+    }
+
+    public static TradePaymentPolicy ResolvePaymentPolicy(TradeOrder order, TradePaymentPolicy? companyPolicy)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+
+        var policy = order.PaymentPolicyOverride ?? companyPolicy ?? TradePaymentPolicy.LegacyDefault;
+        return TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(policy);
     }
 
     public static TradeOrderSourceSnapshot CopySourceSnapshot(TradeOrderSourceSnapshot? source)
@@ -242,18 +272,34 @@ public static class TradeOrderWorkflow
 
     public static bool IsPaymentReady(TradeOrder order, TradePayrollWorkflowDraft? draft)
     {
+        return IsPaymentReady(order, draft, effectivePolicy: null);
+    }
+
+    public static bool IsPaymentReady(
+        TradeOrder order,
+        TradePayrollWorkflowDraft? draft,
+        TradePaymentPolicy? effectivePolicy)
+    {
         ArgumentNullException.ThrowIfNull(order);
 
-        return TradeCommissionPaymentSummary.FromOrder(order, draft).TotalPayment > 0;
+        return TradeCommissionPaymentSummary.FromOrder(order, draft, effectivePolicy).TotalPayment > 0;
     }
 
     public static IReadOnlyList<TradeOrderProcurementRow> BuildProcurementRows(
         TradeOrder order,
         TradePayrollWorkflowDraft? draft)
     {
+        return BuildProcurementRows(order, draft, effectivePolicy: null);
+    }
+
+    public static IReadOnlyList<TradeOrderProcurementRow> BuildProcurementRows(
+        TradeOrder order,
+        TradePayrollWorkflowDraft? draft,
+        TradePaymentPolicy? effectivePolicy)
+    {
         ArgumentNullException.ThrowIfNull(order);
 
-        return TradeCommissionPaymentSummary.FromOrder(order, draft)
+        return TradeCommissionPaymentSummary.FromOrder(order, draft, effectivePolicy)
             .Materials
             .Select(material =>
             {

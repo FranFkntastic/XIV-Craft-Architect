@@ -321,7 +321,7 @@
             _source.SourcePlanName,
             orderCrafterId,
             orderCrafterName,
-            _companyProfile.PaymentPolicy);
+            GetLinkedOrderEffectivePaymentPolicy());
 
         _assignedCrafterId = _workflowDraft.AssignedCrafterId;
         await LinkPayrollDraftToOrderAsync();
@@ -620,7 +620,22 @@
     {
         return _linkedOrder == null
             ? null
-            : TradeCommissionPaymentSummary.FromOrder(_linkedOrder, _workflowDraft);
+            : TradeCommissionPaymentSummary.FromOrder(_linkedOrder, _workflowDraft, GetLinkedOrderEffectivePaymentPolicy());
+    }
+
+    private TradePaymentPolicy? GetLinkedOrderEffectivePaymentPolicy()
+    {
+        if (_linkedOrder == null)
+        {
+            return _workflowDraft == null
+                ? _companyProfile?.PaymentPolicy
+                : new TradePaymentPolicy(
+                    _workflowDraft.ActivePaymentContract,
+                    _workflowDraft.CommissionPercent > 0 ? _workflowDraft.CommissionPercent : CommissionPayoutPolicy.Default.CommissionPercent,
+                    _workflowDraft.LaborStandard);
+        }
+
+        return TradeOrderWorkflow.ResolvePaymentPolicy(_linkedOrder, _companyProfile?.PaymentPolicy);
     }
 
     private static string FormatPaymentBreakdown(TradePaymentContractBreakdown breakdown)

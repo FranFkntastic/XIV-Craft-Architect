@@ -156,6 +156,7 @@ public sealed class TradeOrder
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
     public string? Notes { get; set; }
     public TradeOrderSourceSnapshot SourceSnapshot { get; set; } = new();
+    public TradePaymentPolicy? PaymentPolicyOverride { get; set; }
     public IReadOnlyList<TradeOrderHistoryEvent> History { get; set; } = Array.Empty<TradeOrderHistoryEvent>();
     public string? PayrollDraftId { get; set; }
     public string? CraftPlanId { get; set; }

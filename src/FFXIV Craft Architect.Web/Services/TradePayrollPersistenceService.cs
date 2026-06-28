@@ -78,6 +78,9 @@ public sealed class TradePayrollPersistenceService
             AssignedCrafterId = assignedCrafterId,
             AssignedCrafterDisplayName = assignedCrafterDisplayName,
             ActivePaymentContract = paymentPolicy?.ActiveContract ?? TradePaymentContractMode.LegacyCommission,
+            CommissionPercent = paymentPolicy?.LegacyCommissionPercent > 0
+                ? paymentPolicy.LegacyCommissionPercent
+                : CommissionPayoutPolicy.Default.CommissionPercent,
             LaborStandard = paymentPolicy?.LaborStandard,
             CreatedAtUtc = now,
             UpdatedAtUtc = now

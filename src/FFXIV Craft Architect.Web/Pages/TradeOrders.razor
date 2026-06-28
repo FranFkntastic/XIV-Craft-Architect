@@ -474,6 +474,26 @@
                                 {
                                     <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">Material lines are captured, but pricing evidence is missing. Run market analysis from the linked craft plan before using payment totals.</MudAlert>
                                 }
+                                <div class="trade-orders-payment-policy">
+                                    <div>
+                                        <span>Payment policy</span>
+                                        <strong>@GetSelectedOrderPaymentPolicyLabel()</strong>
+                                    </div>
+                                    <MudSwitch T="bool"
+                                               Value="@SelectedOrderUsesCompanyPaymentPolicy"
+                                               ValueChanged="SetSelectedOrderUseCompanyPolicyAsync"
+                                               Color="Color.Primary"
+                                               Label="Use company default" />
+                                    <MudSelect T="TradePaymentContractMode"
+                                               Value="@SelectedOrderPaymentContract"
+                                               ValueChanged="SetSelectedOrderPaymentContractAsync"
+                                               Variant="Variant.Outlined"
+                                               Margin="Margin.Dense"
+                                               Disabled="@SelectedOrderUsesCompanyPaymentPolicy">
+                                        <MudSelectItem Value="@TradePaymentContractMode.LegacyCommission">Legacy commission</MudSelectItem>
+                                        <MudSelectItem Value="@TradePaymentContractMode.LaborStandard">Labor standard</MudSelectItem>
+                                    </MudSelect>
+                                </div>
                                 @if (paymentSummary.Materials.Count > 0)
                                 {
                                     <div class="trade-orders-payment-subtotals">
@@ -483,7 +503,7 @@
                                         </div>
                                         <div>
                                             <span>Provided by company</span>
-                                            <strong>@FormatGil(paymentSummary.ProvidedMaterialTotal)</strong>
+                                            <strong>@FormatGilAllowZero(paymentSummary.ProvidedMaterialTotal)</strong>
                                         </div>
                                         <div>
                                             <span>Commission (@paymentSummary.CommissionPercent.ToString("N0")%)</span>
@@ -1132,7 +1152,10 @@
     private bool IsPaymentReady(TradeOrder order)
     {
         return HasProcurementEvidence(order) &&
-            TradeOrderWorkflow.IsPaymentReady(order, GetPayrollDraftForOrder(order));
+            TradeOrderWorkflow.IsPaymentReady(
+                order,
+                GetPayrollDraftForOrder(order),
+                GetOrderEffectivePaymentPolicy(order));
     }
 
     private static string GetPipelineStageClass(bool isComplete, bool isWarning = false)
@@ -1889,8 +1912,95 @@
             order.SourceSnapshot.SourcePlanName,
             order.AssignedCrafterId,
             order.AssignedCrafterId.HasValue ? FormatAssignedCrafter(order) : null,
-            _companyProfile?.PaymentPolicy);
+            GetOrderEffectivePaymentPolicy(order));
         return draft;
+    }
+
+    private TradePaymentPolicy? GetOrderEffectivePaymentPolicy(TradeOrder order)
+    {
+        return TradeOrderWorkflow.ResolvePaymentPolicy(order, _companyProfile?.PaymentPolicy);
+    }
+
+    private TradePaymentPolicy? GetSelectedOrderEffectivePaymentPolicy()
+    {
+        return _selectedOrder == null
+            ? _companyProfile?.PaymentPolicy
+            : GetOrderEffectivePaymentPolicy(_selectedOrder);
+    }
+
+    private bool SelectedOrderUsesCompanyPaymentPolicy =>
+        _selectedOrder?.PaymentPolicyOverride == null;
+
+    private TradePaymentContractMode SelectedOrderPaymentContract =>
+        GetSelectedOrderEffectivePaymentPolicy()?.ActiveContract ?? TradePaymentContractMode.LegacyCommission;
+
+    private string GetSelectedOrderPaymentPolicyLabel()
+    {
+        if (_selectedOrder == null)
+        {
+            return "Company default";
+        }
+
+        var policy = GetSelectedOrderEffectivePaymentPolicy() ?? TradePaymentPolicy.LegacyDefault;
+        var source = SelectedOrderUsesCompanyPaymentPolicy ? "Company default" : "Order override";
+        return $"{source}: {FormatPaymentContract(policy.ActiveContract)}";
+    }
+
+    private async Task SetSelectedOrderUseCompanyPolicyAsync(bool useCompanyPolicy)
+    {
+        if (_selectedOrder == null)
+        {
+            return;
+        }
+
+        var orderToSave = useCompanyPolicy
+            ? TradeOrderWorkflow.WithoutPaymentPolicyOverride(_selectedOrder)
+            : TradeOrderWorkflow.WithPaymentPolicyOverride(
+                _selectedOrder,
+                TradeOrderWorkflow.ResolvePaymentPolicy(_selectedOrder, _companyProfile?.PaymentPolicy));
+
+        await SaveSelectedPaymentPolicyOrderAsync(orderToSave);
+    }
+
+    private async Task SetSelectedOrderPaymentContractAsync(TradePaymentContractMode contract)
+    {
+        if (_selectedOrder == null)
+        {
+            return;
+        }
+
+        var current = TradeOrderWorkflow.ResolvePaymentPolicy(_selectedOrder, _companyProfile?.PaymentPolicy);
+        var orderToSave = TradeOrderWorkflow.WithPaymentPolicyOverride(
+            _selectedOrder,
+            current with { ActiveContract = contract });
+
+        await SaveSelectedPaymentPolicyOrderAsync(orderToSave);
+    }
+
+    private async Task SaveSelectedPaymentPolicyOrderAsync(TradeOrder orderToSave)
+    {
+        if (TradeOrderStatusWorkflow.IsArchived(orderToSave.Status))
+        {
+            Snackbar.Add("Reopen archived orders before editing payment policy.", Severity.Warning);
+            return;
+        }
+
+        var orderId = orderToSave.Id;
+        var saved = await SaveOrderAndNotifyAsync(orderToSave);
+        if (!saved)
+        {
+            Snackbar.Add("Failed to save payment policy.", Severity.Error);
+            return;
+        }
+
+        await LoadAsync();
+        if (string.IsNullOrWhiteSpace(_loadError))
+        {
+            if (SelectOrderAfterReload(orderId, "Payment policy was saved, but the order could not be loaded."))
+            {
+                _activeOpsTab = 0;
+            }
+        }
     }
 
     private async Task CopyGilAmountAsync(decimal value, string successMessage)
@@ -2087,10 +2197,16 @@
     {
         if (_selectedOrder == null)
         {
-            return TradeCommissionPaymentSummary.FromOrder(new TradeOrder(), draft: null);
+            return TradeCommissionPaymentSummary.FromOrder(
+                new TradeOrder(),
+                draft: null,
+                effectivePolicy: _companyProfile?.PaymentPolicy);
         }
 
-        return TradeCommissionPaymentSummary.FromOrder(_selectedOrder, GetPayrollDraftForOrder(_selectedOrder));
+        return TradeCommissionPaymentSummary.FromOrder(
+            _selectedOrder,
+            GetPayrollDraftForOrder(_selectedOrder),
+            GetSelectedOrderEffectivePaymentPolicy());
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetSelectedOrderProcurementRows()
@@ -2643,9 +2759,17 @@
         return value > 0 ? $"{value:N0} gil" : "Not priced";
     }
 
+    private static string FormatGilAllowZero(decimal value)
+    {
+        return value >= 0 ? $"{value:N0} gil" : "Not priced";
+    }
+
     private TradeOrderPaymentCopyContext CreateOrderPaymentCopyContext(TradeOrder order)
     {
-        var summary = TradeCommissionPaymentSummary.FromOrder(order, GetPayrollDraftForOrder(order));
+        var summary = TradeCommissionPaymentSummary.FromOrder(
+            order,
+            GetPayrollDraftForOrder(order),
+            GetOrderEffectivePaymentPolicy(order));
         return new TradeOrderPaymentCopyContext(
             order.Title,
             FormatAssignedCrafter(order),

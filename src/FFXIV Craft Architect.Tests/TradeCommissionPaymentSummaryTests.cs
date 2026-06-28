@@ -100,4 +100,68 @@ public class TradeCommissionPaymentSummaryTests
         Assert.Equal(2_020m, summary.LaborStandard.Total);
         Assert.Equal(240m, summary.TotalPayment);
     }
+
+    [Fact]
+    public void FromOrder_UsesProvidedEffectivePolicyWhenNoDraftExists()
+    {
+        var order = CreatePricedLaborOrder();
+        var policy = CreateLaborPolicy(legacyCommissionPercent: 18m);
+
+        var summary = TradeCommissionPaymentSummary.FromOrder(order, draft: null, effectivePolicy: policy);
+
+        Assert.Equal(TradePaymentContractMode.LaborStandard, summary.Active.Contract);
+        Assert.Equal(10m, summary.CommissionPercent);
+        Assert.Equal(summary.LaborStandard.Total, summary.TotalPayment);
+    }
+
+    [Fact]
+    public void FromOrder_UsesEffectivePolicyOverDraftPolicy()
+    {
+        var order = CreatePricedLaborOrder();
+        var draft = new TradePayrollWorkflowDraft
+        {
+            ActivePaymentContract = TradePaymentContractMode.LegacyCommission,
+            CommissionPercent = 20m
+        };
+        var policy = CreateLaborPolicy(legacyCommissionPercent: 18m);
+
+        var summary = TradeCommissionPaymentSummary.FromOrder(order, draft, effectivePolicy: policy);
+
+        Assert.Equal(TradePaymentContractMode.LaborStandard, summary.Active.Contract);
+        Assert.Equal(summary.LaborStandard.Total, summary.TotalPayment);
+    }
+
+    private static TradeOrder CreatePricedLaborOrder()
+    {
+        return new TradeOrder
+        {
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                Materials =
+                [
+                    new TradeOrderMaterialSnapshot(100, "Crafter Ore", 2, RequiresHq: false, UnitCost: 100m, TotalCost: 200m)
+                ],
+                CraftLabor =
+                [
+                    new TradeOrderCraftLaborSnapshot("root", 200, "Finished Item", 1, 3)
+                ]
+            }
+        };
+    }
+
+    private static TradePaymentPolicy CreateLaborPolicy(decimal legacyCommissionPercent)
+    {
+        return new TradePaymentPolicy(
+            TradePaymentContractMode.LaborStandard,
+            legacyCommissionPercent,
+            new TradeLaborStandard(
+                "Cobalt Rivets benchmark",
+                5099,
+                "Cobalt Rivets",
+                999,
+                true,
+                120_000m,
+                200,
+                new DateTime(2026, 6, 25, 0, 0, 0, DateTimeKind.Utc)));
+    }
 }

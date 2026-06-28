@@ -132,6 +132,7 @@ public class TradePayrollPersistenceServiceTests
             paymentPolicy: policy);
 
         Assert.Equal(TradePaymentContractMode.LaborStandard, draft.ActivePaymentContract);
+        Assert.Equal(18m, draft.CommissionPercent);
         Assert.Equal(policy.LaborStandard, draft.LaborStandard);
     }
 

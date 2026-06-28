@@ -55,7 +55,8 @@ public sealed record TradeCommissionPaymentSummary(
 {
     public static TradeCommissionPaymentSummary FromOrder(
         TradeOrder order,
-        TradePayrollWorkflowDraft? draft)
+        TradePayrollWorkflowDraft? draft,
+        TradePaymentPolicy? effectivePolicy = null)
     {
         ArgumentNullException.ThrowIfNull(order);
 
@@ -83,11 +84,12 @@ public sealed record TradeCommissionPaymentSummary(
                     material.Warnings ?? Array.Empty<string>());
             })
             .ToArray();
-        // LaborStandard is intentionally nullable until the Cobalt Rivets benchmark is calibrated.
-        var policy = new TradePaymentPolicy(
-            draft?.ActivePaymentContract ?? TradePaymentContractMode.LegacyCommission,
-            draft?.CommissionPercent > 0 ? draft.CommissionPercent : CommissionPayoutPolicy.Default.CommissionPercent,
-            draft?.LaborStandard);
+        var policy = effectivePolicy != null
+            ? TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(effectivePolicy)
+            : new TradePaymentPolicy(
+                draft?.ActivePaymentContract ?? TradePaymentContractMode.LegacyCommission,
+                draft?.CommissionPercent > 0 ? draft.CommissionPercent : CommissionPayoutPolicy.Default.CommissionPercent,
+                draft?.LaborStandard);
         var paymentMaterials = materials
             .Select(material => new TradePaymentMaterialInput(
                 material.ItemId,
