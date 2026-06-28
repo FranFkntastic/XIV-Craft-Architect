@@ -50,6 +50,7 @@ public sealed class TradeOrderPricingWorkflowService
     private readonly TradeOrderCraftPlanBuildService _craftPlanBuildService;
     private readonly WebPlanPersistenceService _planPersistence;
     private readonly MarketAnalysisWorkflowService _marketAnalysisWorkflow;
+    private readonly MarketAnalysisSubsetRefreshService _marketAnalysisSubsetRefresh;
     private readonly ProcurementWorkflowService _procurementWorkflow;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
     private readonly IRecipeOperationSnapshotService _recipeOperationSnapshotService;
@@ -61,6 +62,7 @@ public sealed class TradeOrderPricingWorkflowService
         TradeOrderCraftPlanBuildService craftPlanBuildService,
         WebPlanPersistenceService planPersistence,
         MarketAnalysisWorkflowService marketAnalysisWorkflow,
+        MarketAnalysisSubsetRefreshService marketAnalysisSubsetRefresh,
         ProcurementWorkflowService procurementWorkflow,
         IRecipeLayerWorkflowService recipeLayerWorkflow,
         IRecipeOperationSnapshotService recipeOperationSnapshotService,
@@ -71,6 +73,7 @@ public sealed class TradeOrderPricingWorkflowService
         _craftPlanBuildService = craftPlanBuildService ?? throw new ArgumentNullException(nameof(craftPlanBuildService));
         _planPersistence = planPersistence ?? throw new ArgumentNullException(nameof(planPersistence));
         _marketAnalysisWorkflow = marketAnalysisWorkflow ?? throw new ArgumentNullException(nameof(marketAnalysisWorkflow));
+        _marketAnalysisSubsetRefresh = marketAnalysisSubsetRefresh ?? throw new ArgumentNullException(nameof(marketAnalysisSubsetRefresh));
         _procurementWorkflow = procurementWorkflow ?? throw new ArgumentNullException(nameof(procurementWorkflow));
         _recipeLayerWorkflow = recipeLayerWorkflow ?? throw new ArgumentNullException(nameof(recipeLayerWorkflow));
         _recipeOperationSnapshotService = recipeOperationSnapshotService ?? throw new ArgumentNullException(nameof(recipeOperationSnapshotService));
@@ -251,9 +254,72 @@ public sealed class TradeOrderPricingWorkflowService
         }
     }
 
+    public async Task<TradeOrderPricingWorkflowResult> RepriceActivePlanAsync(
+        TradeOrder order,
+        IReadOnlyCollection<int> marketItemIdsToRefresh,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        ArgumentNullException.ThrowIfNull(marketItemIdsToRefresh);
+
+        if (TradeOrderStatusWorkflow.IsArchived(order.Status))
+        {
+            return TradeOrderPricingWorkflowResult.Noop(
+                TradeOrderPricingWorkflowStatus.ArchivedOrder,
+                "Reopen archived orders before repricing.");
+        }
+
+        using var operation = _cancellableOperations.Start(
+            CancellableOperationWorkflow.TradeOrderPricing,
+            "Trade Order Pricing",
+            "Repricing changed acquisition source...",
+            ct);
+
+        try
+        {
+            var priced = await PriceActiveOrderPlanAsync(
+                TradeOrderWorkflow.CopyOrder(order),
+                new MarketEvidenceRefreshRequest(marketItemIdsToRefresh),
+                operation,
+                DateTime.UtcNow,
+                persistGeneratedPlan: true);
+            operation.Complete(priced.Message);
+            return priced;
+        }
+        catch (Exception ex) when (operation.ShouldReportError(ex))
+        {
+            operation.Complete("Trade order pricing failed.");
+            return TradeOrderPricingWorkflowResult.Noop(
+                TradeOrderPricingWorkflowStatus.Failed,
+                $"Trade order pricing failed: {ex.Message}",
+                RecipePlannerCommandMessageLevel.Error);
+        }
+        catch (OperationCanceledException) when (!operation.IsCurrent || operation.Token.IsCancellationRequested)
+        {
+            return CanceledResult();
+        }
+    }
+
     private async Task<TradeOrderPricingWorkflowResult> PriceActiveOrderPlanAsync(
         TradeOrder order,
         bool forceRefreshMarketData,
+        CancellableOperationLease operation,
+        DateTime refreshedAt,
+        bool persistGeneratedPlan,
+        IReadOnlyList<string>? additionalWarnings = null)
+    {
+        return await PriceActiveOrderPlanAsync(
+            order,
+            new MarketEvidenceRefreshRequest(forceRefreshMarketData),
+            operation,
+            refreshedAt,
+            persistGeneratedPlan,
+            additionalWarnings);
+    }
+
+    private async Task<TradeOrderPricingWorkflowResult> PriceActiveOrderPlanAsync(
+        TradeOrder order,
+        MarketEvidenceRefreshRequest marketRefresh,
         CancellableOperationLease operation,
         DateTime refreshedAt,
         bool persistGeneratedPlan,
@@ -269,10 +335,11 @@ public sealed class TradeOrderPricingWorkflowService
         }
 
         operation.ReportStatus("Analyzing market prices...", progress: 45);
-        var marketResult = await _marketAnalysisWorkflow.RunAnalysisAsync(
-            new MarketAnalysisWorkflowRequest(forceRefreshMarketData),
-            new Progress<string>(message => operation.ReportStatus(message, progress: 50)),
-            operation.Token);
+        var marketResult = await RefreshMarketEvidenceAsync(
+            marketRefresh,
+            operation,
+            plan,
+            planSessionVersion);
         if (!operation.IsCurrent)
         {
             return CanceledResult();
@@ -288,6 +355,7 @@ public sealed class TradeOrderPricingWorkflowService
         {
             warnings.AddRange(additionalWarnings.Where(warning => !string.IsNullOrWhiteSpace(warning)));
         }
+        warnings.AddRange(marketResult.Warnings);
 
         if (!marketResult.Published)
         {
@@ -456,6 +524,65 @@ public sealed class TradeOrderPricingWorkflowService
             activeProcurementItems);
     }
 
+    private async Task<MarketEvidenceRefreshSummary> RefreshMarketEvidenceAsync(
+        MarketEvidenceRefreshRequest request,
+        CancellableOperationLease operation,
+        CraftingPlan plan,
+        long planSessionVersion)
+    {
+        if (request.IsSubset)
+        {
+            var itemIds = request.MarketItemIdsToRefresh
+                .Where(itemId => itemId > 0)
+                .Distinct()
+                .OrderBy(itemId => itemId)
+                .ToArray();
+            if (itemIds.Length == 0)
+            {
+                operation.ReportStatus("No market evidence refresh needed for this source change.", progress: 55);
+                return new MarketEvidenceRefreshSummary(Published: true, AnalyzedCount: 0, FetchedCount: 0, Warnings: []);
+            }
+
+            var subsetResult = await _marketAnalysisSubsetRefresh.RefreshMarketDataAsync(
+                new MarketAnalysisSubsetRefreshWorkflowRequest(
+                    itemIds,
+                    IsCurrentOperation: () => operation.IsCurrent),
+                new Progress<string>(message => operation.ReportStatus(message, progress: 50)),
+                operation.Token);
+            var warnings = new List<string>();
+            if (subsetResult.MissingCandidateItemIds.Count > 0)
+            {
+                warnings.Add($"Market refresh skipped {subsetResult.MissingCandidateItemIds.Count:N0} requested item(s) that are no longer market-analysis candidates.");
+            }
+
+            if (subsetResult.NoDataItemIds.Count > 0)
+            {
+                warnings.Add($"Market refresh found no data for {subsetResult.NoDataItemIds.Count:N0} requested item(s).");
+            }
+
+            if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+            {
+                return new MarketEvidenceRefreshSummary(Published: false, AnalyzedCount: 0, FetchedCount: 0, Warnings: warnings);
+            }
+
+            return new MarketEvidenceRefreshSummary(
+                subsetResult.Published,
+                subsetResult.AnalyzedCount,
+                subsetResult.FetchedCount,
+                warnings);
+        }
+
+        var marketResult = await _marketAnalysisWorkflow.RunAnalysisAsync(
+            new MarketAnalysisWorkflowRequest(request.ForceRefreshMarketData),
+            new Progress<string>(message => operation.ReportStatus(message, progress: 50)),
+            operation.Token);
+        return new MarketEvidenceRefreshSummary(
+            marketResult.Published,
+            marketResult.AnalyzedCount,
+            marketResult.FetchedCount,
+            Warnings: []);
+    }
+
     private static ProjectItem ToProjectItem(TradeOrderRootItemSnapshot item)
     {
         return new ProjectItem
@@ -491,4 +618,33 @@ public sealed class TradeOrderPricingWorkflowService
             message ?? "Trade order pricing was canceled.",
             RecipePlannerCommandMessageLevel.Info);
     }
+
+    private sealed record MarketEvidenceRefreshRequest
+    {
+        public MarketEvidenceRefreshRequest(bool forceRefreshMarketData)
+        {
+            ForceRefreshMarketData = forceRefreshMarketData;
+            MarketItemIdsToRefresh = [];
+            IsSubset = false;
+        }
+
+        public MarketEvidenceRefreshRequest(IReadOnlyCollection<int> marketItemIdsToRefresh)
+        {
+            ForceRefreshMarketData = true;
+            MarketItemIdsToRefresh = marketItemIdsToRefresh;
+            IsSubset = true;
+        }
+
+        public bool ForceRefreshMarketData { get; }
+
+        public IReadOnlyCollection<int> MarketItemIdsToRefresh { get; }
+
+        public bool IsSubset { get; }
+    }
+
+    private sealed record MarketEvidenceRefreshSummary(
+        bool Published,
+        int AnalyzedCount,
+        int FetchedCount,
+        IReadOnlyList<string> Warnings);
 }

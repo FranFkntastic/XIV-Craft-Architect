@@ -7,14 +7,12 @@ using Moq;
 
 namespace FFXIV_Craft_Architect.Tests;
 
-public class MarketAnalysisItemRefreshServiceTests
+public sealed class MarketAnalysisSubsetRefreshServiceTests
 {
     [Fact]
-    public async Task RefreshItemMarketDataAsync_ReplacesOnlyRequestedItemAndForcesRefresh()
+    public async Task RefreshMarketDataAsync_ReplacesOnlyRequestedItemsAndForcesRefresh()
     {
         var appState = CreateAppStateWithMarketAnalysis();
-        appState.ReplaceProcurementOverlay([ShoppingPlan(101, "Old Route")]);
-        appState.SelectMarketAnalysisItem(101);
         MarketAnalysisExecutionRequest? capturedRequest = null;
         var execution = new Mock<IMarketAnalysisExecutionService>();
         execution.Setup(service => service.ExecuteAsync(
@@ -25,27 +23,62 @@ public class MarketAnalysisItemRefreshServiceTests
             .Callback<MarketAnalysisExecutionRequest, IProgress<string>?, CancellationToken, MarketAnalysisExecutionOptions?>(
                 (request, _, _, _) => capturedRequest = request)
             .ReturnsAsync(new MarketAnalysisExecutionResult(
-                CreateEvidenceSet(101),
-                [new MarketItemAnalysis { ItemId = 101, Name = "Fresh Item 101" }],
-                [ShoppingPlan(101, "Fresh Item 101")]));
+                CreateEvidenceSet(101, 303),
+                [
+                    new MarketItemAnalysis { ItemId = 101, Name = "Fresh Item 101" },
+                    new MarketItemAnalysis { ItemId = 303, Name = "Fresh Item 303" }
+                ],
+                [
+                    ShoppingPlan(101, "Fresh Item 101"),
+                    ShoppingPlan(303, "Fresh Item 303")
+                ]));
         var service = CreateService(appState, execution.Object);
 
-        var result = await service.RefreshItemMarketDataAsync(
-            new MarketAnalysisItemRefreshWorkflowRequest(101, IsCurrentOperation: () => true));
+        var result = await service.RefreshMarketDataAsync(
+            new MarketAnalysisSubsetRefreshWorkflowRequest([101, 303], IsCurrentOperation: () => true));
 
-        Assert.Equal(MarketAnalysisItemRefreshStatus.Refreshed, result.Status);
+        Assert.Equal(MarketAnalysisSubsetRefreshStatus.Refreshed, result.Status);
+        Assert.True(result.Published);
+        Assert.Equal([101, 303], result.RefreshedItemIds);
         Assert.NotNull(capturedRequest);
         Assert.True(capturedRequest.ForceRefreshData);
         Assert.Null(capturedRequest.MaxAge);
-        Assert.Collection(capturedRequest.Items, item => Assert.Equal(101, item.ItemId));
+        Assert.Equal([101, 303], capturedRequest.Items.Select(item => item.ItemId).Order());
         Assert.Contains(appState.MarketItemAnalyses, analysis => analysis.ItemId == 101 && analysis.Name == "Fresh Item 101");
         Assert.Contains(appState.MarketItemAnalyses, analysis => analysis.ItemId == 202 && analysis.Name == "Old Item 202");
-        Assert.Equal(101, appState.SelectedMarketAnalysisItemId);
+        Assert.Contains(appState.MarketItemAnalyses, analysis => analysis.ItemId == 303 && analysis.Name == "Fresh Item 303");
         Assert.Empty(appState.ProcurementShoppingPlans);
     }
 
     [Fact]
-    public async Task RefreshItemMarketDataAsync_WhenExecutionReturnsNoData_DoesNotReplaceExistingAnalysis()
+    public async Task RefreshMarketDataAsync_WhenOneItemReturnsNoData_PublishesAvailableItems()
+    {
+        var appState = CreateAppStateWithMarketAnalysis();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(service => service.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(new MarketAnalysisExecutionResult(
+                CreateEvidenceSet(101, 303),
+                [new MarketItemAnalysis { ItemId = 101, Name = "Fresh Item 101" }],
+                [ShoppingPlan(101, "Fresh Item 101")]));
+        var service = CreateService(appState, execution.Object);
+
+        var result = await service.RefreshMarketDataAsync(
+            new MarketAnalysisSubsetRefreshWorkflowRequest([101, 303], IsCurrentOperation: () => true));
+
+        Assert.Equal(MarketAnalysisSubsetRefreshStatus.Refreshed, result.Status);
+        Assert.True(result.Published);
+        Assert.Equal([101], result.RefreshedItemIds);
+        Assert.Equal([303], result.NoDataItemIds);
+        Assert.Contains(appState.MarketItemAnalyses, analysis => analysis.ItemId == 101 && analysis.Name == "Fresh Item 101");
+        Assert.DoesNotContain(appState.MarketItemAnalyses, analysis => analysis.ItemId == 303 && analysis.Name == "Fresh Item 303");
+    }
+
+    [Fact]
+    public async Task RefreshMarketDataAsync_WhenExecutionReturnsNoData_DoesNotReplaceExistingAnalysis()
     {
         var appState = CreateAppStateWithMarketAnalysis();
         var execution = new Mock<IMarketAnalysisExecutionService>();
@@ -60,16 +93,18 @@ public class MarketAnalysisItemRefreshServiceTests
                 []));
         var service = CreateService(appState, execution.Object);
 
-        var result = await service.RefreshItemMarketDataAsync(
-            new MarketAnalysisItemRefreshWorkflowRequest(101, IsCurrentOperation: () => true));
+        var result = await service.RefreshMarketDataAsync(
+            new MarketAnalysisSubsetRefreshWorkflowRequest([101], IsCurrentOperation: () => true));
 
-        Assert.Equal(MarketAnalysisItemRefreshStatus.NoData, result.Status);
+        Assert.Equal(MarketAnalysisSubsetRefreshStatus.NoData, result.Status);
+        Assert.False(result.Published);
+        Assert.Equal([101], result.NoDataItemIds);
         Assert.Contains(appState.MarketItemAnalyses, analysis => analysis.ItemId == 101 && analysis.Name == "Old Item 101");
         Assert.Contains(appState.ShoppingPlans, plan => plan.ItemId == 101 && plan.Name == "Old Item 101");
     }
 
     [Fact]
-    public async Task RefreshItemMarketDataAsync_WhenMarketAnalysisChangesDuringFetch_DoesNotPublishOrSave()
+    public async Task RefreshMarketDataAsync_WhenMarketAnalysisChangesDuringFetch_DoesNotPublishOrSave()
     {
         var appState = CreateAppStateWithMarketAnalysis();
         appState.TrackCurrentPlanIdentity("plan-1", null);
@@ -81,24 +116,25 @@ public class MarketAnalysisItemRefreshServiceTests
                 It.IsAny<CancellationToken>(),
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
             .Callback(() => appState.ReplaceMarketAnalysis(
-                [new MarketItemAnalysis { ItemId = 303, Name = "Newer Analysis" }],
-                [ShoppingPlan(303, "Newer Plan")]))
+                [new MarketItemAnalysis { ItemId = 404, Name = "Newer Analysis" }],
+                [ShoppingPlan(404, "Newer Plan")]))
             .ReturnsAsync(new MarketAnalysisExecutionResult(
                 CreateEvidenceSet(101),
                 [new MarketItemAnalysis { ItemId = 101, Name = "Fresh Item 101" }],
                 [ShoppingPlan(101, "Fresh Item 101")]));
         var service = CreateService(appState, execution.Object, jsRuntime);
 
-        var result = await service.RefreshItemMarketDataAsync(
-            new MarketAnalysisItemRefreshWorkflowRequest(101, IsCurrentOperation: () => true));
+        var result = await service.RefreshMarketDataAsync(
+            new MarketAnalysisSubsetRefreshWorkflowRequest([101], IsCurrentOperation: () => true));
 
-        Assert.Equal(MarketAnalysisItemRefreshStatus.StaleConfiguration, result.Status);
+        Assert.Equal(MarketAnalysisSubsetRefreshStatus.StaleConfiguration, result.Status);
+        Assert.False(result.Published);
         Assert.DoesNotContain(appState.MarketItemAnalyses, analysis => analysis.ItemId == 101 && analysis.Name == "Fresh Item 101");
-        Assert.Contains(appState.MarketItemAnalyses, analysis => analysis.ItemId == 303);
+        Assert.Contains(appState.MarketItemAnalyses, analysis => analysis.ItemId == 404);
         Assert.Empty(jsRuntime.PatchedPlanIds);
     }
 
-    private static MarketAnalysisItemRefreshService CreateService(
+    private static MarketAnalysisSubsetRefreshService CreateService(
         AppState appState,
         IMarketAnalysisExecutionService execution,
         RecordingJsRuntime? jsRuntime = null,
@@ -111,15 +147,13 @@ public class MarketAnalysisItemRefreshServiceTests
             new StoredPlanSnapshotBuilder(appState),
             new PlanSessionLoadService(appState));
 
-        var subsetRefreshService = new MarketAnalysisSubsetRefreshService(
+        return new MarketAnalysisSubsetRefreshService(
             appState,
             execution,
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
             persistence,
             indexedDb,
             recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService());
-
-        return new MarketAnalysisItemRefreshService(subsetRefreshService);
     }
 
     private static AppState CreateAppStateWithMarketAnalysis()
@@ -130,7 +164,7 @@ public class MarketAnalysisItemRefreshServiceTests
             "North America",
             MarketFetchScope.SelectedDataCenter,
             searchEntireRegion: false);
-        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan(101, 202));
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan(101, 202, 303));
         appState.ReplaceMarketAnalysis(
             [
                 new MarketItemAnalysis { ItemId = 101, Name = "Old Item 101" },
@@ -178,17 +212,17 @@ public class MarketAnalysisItemRefreshServiceTests
         };
     }
 
-    private static MarketEvidenceSet CreateEvidenceSet(int itemId)
+    private static MarketEvidenceSet CreateEvidenceSet(params int[] itemIds)
     {
         return new MarketEvidenceSet(
             new Dictionary<(int itemId, string dataCenter), CachedMarketData>(),
-            [(itemId, "Aether")],
+            itemIds.Select(itemId => (itemId, "Aether")).ToList(),
             MarketFetchScope.SelectedDataCenter,
             ["Aether"],
             "Aether",
             "North America",
             maxAge: null,
-            fetchedCount: 1,
+            fetchedCount: itemIds.Length,
             loadedAtUtc: DateTime.UtcNow);
     }
 
@@ -217,6 +251,12 @@ public class MarketAnalysisItemRefreshServiceTests
                 {
                     ItemId = 202,
                     Name = "Item 202",
+                    TotalQuantity = 5
+                },
+                new StoredMarketAnalysisDemandItem
+                {
+                    ItemId = 303,
+                    Name = "Item 303",
                     TotalQuantity = 5
                 }
             ]

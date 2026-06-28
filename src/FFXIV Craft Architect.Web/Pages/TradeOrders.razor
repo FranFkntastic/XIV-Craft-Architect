@@ -10,6 +10,7 @@
 @inject WebPlanPersistenceService PlanPersistence
 @inject AcquisitionDecisionService AcquisitionDecisionService
 @inject AcquisitionEvaluationWorkflowService AcquisitionEvaluationWorkflow
+@inject AcquisitionSourceChangeImpactService AcquisitionSourceChangeImpactService
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -2444,6 +2445,14 @@
             return;
         }
 
+        var plan = AppState.CurrentPlan;
+        if (plan == null)
+        {
+            Snackbar.Add("Linked craft plan could not be loaded.", Severity.Warning);
+            return;
+        }
+
+        var beforeProjection = RecipeLayerWorkflowService.BuildDemandProjection(plan);
         var matchingNodes = FindPlanNodesByItemId(AppState.CurrentPlan, row.ItemId).ToArray();
         if (matchingNodes.Length == 0)
         {
@@ -2452,6 +2461,7 @@
         }
 
         var node = matchingNodes[0];
+        var previousSource = node.Source;
         if (!AcquisitionPlanningService.CanUseAcquisitionSource(node, source))
         {
             Snackbar.Add($"{RecipePlanDisplayHelpers.GetSourceDisplayName(source)} is not available for {row.ItemName}.", Severity.Warning);
@@ -2465,11 +2475,18 @@
             return;
         }
 
+        var afterProjection = RecipeLayerWorkflowService.BuildDemandProjection(plan);
+        var marketItemIdsToRefresh = AcquisitionSourceChangeImpactService.GetMarketRefreshItemIds(
+            beforeProjection,
+            afterProjection,
+            row.ItemId,
+            previousSource,
+            source);
         var savedAt = DateTime.UtcNow;
         var planSaved = await PlanPersistence.SaveGeneratedOrderPlanAsync(
             _selectedOrder.CraftPlanId!,
             _selectedOrder.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(_selectedOrder),
-            AppState.CurrentPlan!,
+            plan,
             GetOrderRootItems(_selectedOrder),
             savedAt);
         if (!planSaved)
@@ -2478,23 +2495,10 @@
             return;
         }
 
-        var outputs = GetOrderRootItems(_selectedOrder)
-            .Select(item => new TradeRequestedOrderOutput(
-                item.ItemId,
-                item.Name,
-                item.Quantity,
-                item.MustBeHq,
-                item.EstimatedSaleValue))
-            .ToArray();
-        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
-        orderToSave.SourceSnapshot.Materials = TradeRequestedOrderWorkflow.BuildMaterialSnapshots(
-            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan),
-            outputs);
-        orderToSave.SourceSnapshot.Warnings = AppendDistinctWarning(
-            orderToSave.SourceSnapshot.Warnings,
-            "Acquisition source changed; reprice the order before using payment totals.");
-        orderToSave.SourceSnapshot.ImportedAtUtc = savedAt;
-        orderToSave.UpdatedAtUtc = savedAt;
+        var pricingResult = await TradeOrderPricingWorkflow.RepriceActivePlanAsync(
+            _selectedOrder,
+            marketItemIdsToRefresh);
+        var orderToSave = pricingResult.UpdatedOrder ?? BuildFallbackOrderAfterSourceChange(_selectedOrder, savedAt);
         var savedOrder = await SaveOrderAndNotifyAsync(orderToSave);
         if (!savedOrder)
         {
@@ -2508,7 +2512,40 @@
             SelectOrderAfterReload(orderToSave.Id, "Source changed, but the order could not be loaded.");
         }
 
-        Snackbar.Add("Acquisition source changed. Reprice the order before payment.", Severity.Success);
+        Snackbar.Add(pricingResult.Message, ToSeverity(pricingResult.MessageLevel));
+    }
+
+    private TradeOrder BuildFallbackOrderAfterSourceChange(TradeOrder order, DateTime savedAt)
+    {
+        var outputs = GetOrderRootItems(order)
+            .Select(item => new TradeRequestedOrderOutput(
+                item.ItemId,
+                item.Name,
+                item.Quantity,
+                item.MustBeHq,
+                item.EstimatedSaleValue))
+            .ToArray();
+        var orderToSave = TradeOrderWorkflow.CopyOrder(order);
+        orderToSave.SourceSnapshot.Materials = TradeRequestedOrderWorkflow.BuildMaterialSnapshots(
+            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan),
+            outputs);
+        orderToSave.SourceSnapshot.Warnings = AppendDistinctWarning(
+            orderToSave.SourceSnapshot.Warnings,
+            "Acquisition source changed, but automatic repricing did not complete. Reprice the order before using payment totals.");
+        orderToSave.SourceSnapshot.ImportedAtUtc = savedAt;
+        orderToSave.UpdatedAtUtc = savedAt;
+        return orderToSave;
+    }
+
+    private static Severity ToSeverity(RecipePlannerCommandMessageLevel level)
+    {
+        return level switch
+        {
+            RecipePlannerCommandMessageLevel.Success => Severity.Success,
+            RecipePlannerCommandMessageLevel.Info => Severity.Info,
+            RecipePlannerCommandMessageLevel.Error => Severity.Error,
+            _ => Severity.Warning
+        };
     }
 
     private static IReadOnlyList<string> AppendDistinctWarning(

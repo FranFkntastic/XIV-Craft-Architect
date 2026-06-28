@@ -557,13 +557,14 @@ public class ProcurementWorkflowServiceTests
             indexedDb,
             new StoredPlanSnapshotBuilder(appState),
             new PlanSessionLoadService(appState));
-        var itemRefreshService = new MarketAnalysisItemRefreshService(
+        var subsetRefreshService = new MarketAnalysisSubsetRefreshService(
             appState,
             marketExecution ?? Mock.Of<IMarketAnalysisExecutionService>(),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
             persistence,
             indexedDb,
             recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService());
+        var itemRefreshService = new MarketAnalysisItemRefreshService(subsetRefreshService);
 
         return new ProcurementWorkflowService(
             appState,

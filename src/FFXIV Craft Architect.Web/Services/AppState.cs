@@ -471,6 +471,47 @@ public class AppState
         }
     }
 
+    public void ReplaceMarketAnalysisItems(
+        IEnumerable<MarketItemAnalysis> analyses,
+        IEnumerable<DetailedShoppingPlan> shoppingPlans)
+    {
+        ArgumentNullException.ThrowIfNull(analyses);
+        ArgumentNullException.ThrowIfNull(shoppingPlans);
+
+        var updatedAnalyses = _marketItemAnalyses;
+        foreach (var analysis in analyses)
+        {
+            updatedAnalyses = ReplaceAnalysisByItemId(updatedAnalyses, analysis).ToList();
+        }
+
+        var updatedShoppingPlans = _shoppingPlans;
+        foreach (var shoppingPlan in shoppingPlans)
+        {
+            updatedShoppingPlans = ReplaceShoppingPlanByItemId(updatedShoppingPlans, shoppingPlan).ToList();
+        }
+
+        ReplaceListContents(_marketItemAnalyses, updatedAnalyses);
+        ReplaceListContents(_shoppingPlans, updatedShoppingPlans);
+        if (_marketIntelligenceId == Guid.Empty)
+        {
+            _marketIntelligenceId = Guid.NewGuid();
+        }
+
+        _publishedMarketAnalysisScope ??= CreateCurrentMarketAnalysisScopeSnapshot();
+        _procurementShoppingPlans.Clear();
+        var viewChanged = PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses, publishChange: false);
+        var navigationChanged = ApplyPendingMarketItemAutoExpand(publishChange: false);
+        using (BeginStateChangeBatch())
+        {
+            NotifyShoppingListChanged();
+            NotifyProcurementOverlayChanged();
+            if (viewChanged || navigationChanged)
+            {
+                PublishChange(AppStateChangeScope.MarketAnalysisView);
+            }
+        }
+    }
+
     public void ClearProcurementOverlay()
     {
         _procurementShoppingPlans.Clear();
