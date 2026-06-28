@@ -450,7 +450,7 @@
                             <MudTabPanel Text="Payment">
                                 <div class="trade-orders-payment-metrics">
                                     <div class="trade-orders-payment-metric">
-                                        <span>Payment amount (@FormatPaymentContract(paymentSummary.Active.Contract))</span>
+                                        <span>Payment amount</span>
                                         <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
                                         <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
                                                        Color="Color.Primary"
@@ -479,43 +479,88 @@
                                         <span>Payment policy</span>
                                         <strong>@GetSelectedOrderPaymentPolicyLabel()</strong>
                                     </div>
-                                    <MudSwitch T="bool"
-                                               Value="@SelectedOrderUsesCompanyPaymentPolicy"
-                                               ValueChanged="SetSelectedOrderUseCompanyPolicyAsync"
-                                               Color="Color.Primary"
-                                               Label="Use company default" />
-                                    <MudSelect T="TradePaymentContractMode"
-                                               Value="@SelectedOrderPaymentContract"
-                                               ValueChanged="SetSelectedOrderPaymentContractAsync"
-                                               Variant="Variant.Outlined"
-                                               Margin="Margin.Dense"
-                                               Disabled="@SelectedOrderUsesCompanyPaymentPolicy">
-                                        <MudSelectItem Value="@TradePaymentContractMode.LegacyCommission">Legacy commission</MudSelectItem>
-                                        <MudSelectItem Value="@TradePaymentContractMode.LaborStandard">Labor standard</MudSelectItem>
-                                    </MudSelect>
+                                    <div class="trade-orders-payment-policy-controls">
+                                        <MudSwitch T="bool"
+                                                   Value="@SelectedOrderUsesCompanyPaymentPolicy"
+                                                   ValueChanged="SetSelectedOrderUseCompanyPolicyAsync"
+                                                   Color="Color.Primary"
+                                                   Dense="true"
+                                                   Label="Use company default" />
+                                        <MudSelect T="TradePaymentContractMode"
+                                                   Value="@SelectedOrderPaymentContract"
+                                                   ValueChanged="SetSelectedOrderPaymentContractAsync"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   Dense="true"
+                                                   Disabled="@SelectedOrderUsesCompanyPaymentPolicy">
+                                            <MudSelectItem Value="@TradePaymentContractMode.LegacyCommission">Legacy commission</MudSelectItem>
+                                            <MudSelectItem Value="@TradePaymentContractMode.LaborStandard">Labor standard</MudSelectItem>
+                                        </MudSelect>
+                                    </div>
                                 </div>
                                 @if (paymentSummary.Materials.Count > 0)
                                 {
-                                    <div class="trade-orders-payment-subtotals">
-                                        <div>
-                                            <span>Crafter procures</span>
+                                    <div class="trade-orders-payment-table">
+                                        <div class="trade-orders-payment-table-title">
+                                            <span>Payment Breakdown</span>
+                                            <span>Current route</span>
+                                        </div>
+                                        <div class="trade-orders-payment-breakdown-header">
+                                            <span>Line</span>
+                                            <span>Basis</span>
+                                            <span>Amount</span>
+                                        </div>
+                                        <div class="trade-orders-payment-breakdown-row">
+                                            <span>Crafter-procured materials</span>
+                                            <span>Payable materials</span>
                                             <strong>@FormatGil(paymentSummary.MaterialReimbursementTotal)</strong>
                                         </div>
-                                        <div>
-                                            <span>Provided by company</span>
+                                        <div class="trade-orders-payment-breakdown-row">
+                                            <span>Company-provided materials</span>
+                                            <span>Estimate only</span>
                                             <strong>@FormatGilAllowZero(paymentSummary.ProvidedMaterialTotal)</strong>
                                         </div>
-                                        <div>
-                                            <span>Commission (@paymentSummary.CommissionPercent.ToString("N0")%)</span>
+                                        <div class="trade-orders-payment-breakdown-row">
+                                            <span>Material commission</span>
+                                            <span>@paymentSummary.CommissionPercent.ToString("N0")% of procurement</span>
                                             <strong>@FormatGil(paymentSummary.CommissionAmount)</strong>
                                         </div>
-                                        <div>
-                                            <span>Labor-standard comparison</span>
-                                            <strong>@FormatPaymentBreakdown(paymentSummary.LaborStandard)</strong>
+                                        @if (paymentSummary.Active.Contract == TradePaymentContractMode.LaborStandard)
+                                        {
+                                            <div class="trade-orders-payment-breakdown-row">
+                                                <span>Craft labor</span>
+                                                <span>@FormatCraftLaborBasis(paymentSummary.LaborStandard)</span>
+                                                <strong>@FormatGilAllowZero(paymentSummary.LaborStandard.CraftLaborTotal)</strong>
+                                            </div>
+                                        }
+                                        <div class="trade-orders-payment-breakdown-row is-total">
+                                            <span>Total payment</span>
+                                            <span>@FormatPaymentContract(paymentSummary.Active.Contract)</span>
+                                            <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
                                         </div>
-                                        <div>
-                                            <span>Difference vs legacy</span>
-                                            <strong>@FormatPaymentDifference(paymentSummary.LaborStandard, paymentSummary.Legacy)</strong>
+                                    </div>
+                                    <div class="trade-orders-payment-table">
+                                        <div class="trade-orders-payment-table-title">
+                                            <span>Policy Comparison</span>
+                                            <span>Same current route</span>
+                                        </div>
+                                        <div class="trade-orders-policy-comparison-header">
+                                            <span>Contract</span>
+                                            <span>Includes</span>
+                                            <span>Payment</span>
+                                            <span>Delta</span>
+                                        </div>
+                                        <div class="trade-orders-policy-comparison-row">
+                                            <span>Legacy commission</span>
+                                            <span>Materials + @paymentSummary.Legacy.CommissionPercent.ToString("N0")%</span>
+                                            <strong>@FormatPaymentBreakdown(paymentSummary.Legacy)</strong>
+                                            <span>Baseline</span>
+                                        </div>
+                                        <div class="trade-orders-policy-comparison-row">
+                                            <span>Labor standard</span>
+                                            <span>Materials + @paymentSummary.LaborStandard.CommissionPercent.ToString("N0")% + labor</span>
+                                            <strong>@FormatPaymentBreakdown(paymentSummary.LaborStandard)</strong>
+                                            <span>@FormatPaymentDifference(paymentSummary.LaborStandard, paymentSummary.Legacy)</span>
                                         </div>
                                     </div>
                                     <div class="trade-orders-payment-heading">
@@ -541,7 +586,10 @@
                                         <div class="trade-orders-material-header">
                                             <span>Item</span>
                                             <span>Qty</span>
+                                            <span>Unit cost</span>
+                                            <span>Total cost</span>
                                             <span>Resp.</span>
+                                            <span>Payment impact</span>
                                         </div>
                                         @foreach (var material in paymentSummary.Materials)
                                         {
@@ -554,6 +602,8 @@
                                                     }
                                                 </span>
                                                 <span>@TradeDisplayFormatter.FormatQuantity(material.Quantity)</span>
+                                                <span>@FormatMaterialUnitCost(material)</span>
+                                                <span>@FormatMaterialCost(material)</span>
                                                 <MudSelect T="CommissionMaterialResponsibility"
                                                            Value="material.Responsibility"
                                                            ValueChanged="value => SetOrderMaterialResponsibilityAsync(material, value)"
@@ -565,6 +615,7 @@
                                                     <MudSelectItem Value="@CommissionMaterialResponsibility.Crafter">Crafter</MudSelectItem>
                                                     <MudSelectItem Value="@CommissionMaterialResponsibility.Provided">Provided</MudSelectItem>
                                                 </MudSelect>
+                                                <span>@FormatMaterialPaymentImpact(material)</span>
                                             </div>
                                         }
                                     </div>
@@ -2722,7 +2773,7 @@
             return "Not priced";
         }
 
-        return $"{FormatGil(material.TotalCost)} total";
+        return FormatGil(material.TotalCost);
     }
 
     private static string FormatMaterialUnitCost(TradeCommissionPaymentMaterial material)
@@ -2745,6 +2796,16 @@
         TradePaymentContractBreakdown legacy)
     {
         return TradeOrderPaymentCopyFormatter.FormatPaymentDifference(laborStandard, legacy);
+    }
+
+    private static string FormatCraftLaborBasis(TradePaymentContractBreakdown breakdown)
+    {
+        return TradeOrderPaymentDisplayFormatter.FormatCraftLaborBasis(breakdown);
+    }
+
+    private static string FormatMaterialPaymentImpact(TradeCommissionPaymentMaterial material)
+    {
+        return TradeOrderPaymentDisplayFormatter.FormatMaterialPaymentImpact(material);
     }
 
     private static string FormatResponsibility(CommissionMaterialResponsibility responsibility)
