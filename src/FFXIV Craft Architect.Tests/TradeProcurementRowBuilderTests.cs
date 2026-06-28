@@ -166,6 +166,43 @@ public class TradeProcurementRowBuilderTests
         Assert.DoesNotContain(payment.Materials, material => material.ItemId == 300);
     }
 
+    [Fact]
+    public void SourceMutationPolicy_AllowsEditableLiveRowsWithSuppressedDuplicateOccurrences()
+    {
+        var plan = CreatePlanWithSuppressedDuplicateIngredient();
+        var snapshot = BuildSnapshot(plan);
+        var order = new TradeOrder { CraftPlanId = "linked-plan" };
+        var rows = TradeProcurementRowBuilder.BuildRows(
+            order,
+            draft: null,
+            activePlanId: "linked-plan",
+            snapshot);
+
+        var active = Assert.Single(rows, row => row.ItemId == 200);
+
+        Assert.True(active.HasSuppressedOccurrences);
+        Assert.True(active.HasEditableOccurrences);
+        Assert.True(TradeProcurementSourceMutationPolicy.CanChangeSource(active));
+    }
+
+    [Fact]
+    public void SourceMutationPolicy_BlocksFullySuppressedLiveRows()
+    {
+        var plan = CreatePlanWithSuppressedVendorChild();
+        var snapshot = BuildSnapshot(plan);
+        var order = new TradeOrder { CraftPlanId = "linked-plan" };
+        var rows = TradeProcurementRowBuilder.BuildRows(
+            order,
+            draft: null,
+            activePlanId: "linked-plan",
+            snapshot);
+
+        var suppressed = Assert.Single(rows, row => row.ItemId == 300);
+
+        Assert.True(suppressed.IsFullySuppressed);
+        Assert.False(TradeProcurementSourceMutationPolicy.CanChangeSource(suppressed));
+    }
+
     private static CraftingPlan CreatePlanWithSuppressedVendorChild()
     {
         var root = new PlanNode
@@ -210,6 +247,67 @@ public class TradeProcurementRowBuilderTests
 
         intermediate.Children.Add(suppressed);
         root.Children.Add(intermediate);
+        return new CraftingPlan { RootItems = [root] };
+    }
+
+    private static CraftingPlan CreatePlanWithSuppressedDuplicateIngredient()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            NodeId = "root",
+            Name = "Finished Commission",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanCraft = true,
+            Yield = 1
+        };
+        var active = new PlanNode
+        {
+            ItemId = 200,
+            NodeId = "active-ingredient",
+            Name = "Shared Ingredient",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.UserSelected,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            MarketPrice = 100m,
+            Parent = root,
+            Yield = 1
+        };
+        var parent = new PlanNode
+        {
+            ItemId = 300,
+            NodeId = "bought-parent",
+            Name = "Bought Parent",
+            Quantity = 1,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.UserSelected,
+            CanBuyFromMarket = true,
+            MarketPrice = 1000m,
+            Parent = root,
+            Yield = 1
+        };
+        var suppressed = new PlanNode
+        {
+            ItemId = 200,
+            NodeId = "suppressed-ingredient",
+            Name = "Shared Ingredient",
+            Quantity = 3,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.UserSelected,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            MarketPrice = 100m,
+            Parent = parent,
+            Yield = 1
+        };
+
+        parent.Children.Add(suppressed);
+        root.Children.Add(active);
+        root.Children.Add(parent);
         return new CraftingPlan { RootItems = [root] };
     }
 

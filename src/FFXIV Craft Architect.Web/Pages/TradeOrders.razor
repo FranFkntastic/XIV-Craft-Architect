@@ -2392,7 +2392,7 @@
 
     private static bool CanEditProcurementSource(TradeOrderProcurementRow row)
     {
-        return !row.IsLiveAcquisitionRow || row.HasEditableOccurrences;
+        return TradeProcurementSourceMutationPolicy.CanChangeSource(row);
     }
 
     private Task OpenProcurementRowDetailsAsync(TradeOrderProcurementRow row)
@@ -2433,7 +2433,7 @@
             return;
         }
 
-        if (row.IsLiveAcquisitionRow && !row.HasEditableOccurrences)
+        if (!TradeProcurementSourceMutationPolicy.CanChangeSource(row))
         {
             Snackbar.Add("Open Acquisition Evaluation to change suppressed or reference rows.", Severity.Warning);
             return;
@@ -2448,12 +2448,6 @@
         if (matchingNodes.Length == 0)
         {
             Snackbar.Add("This material could not be found in the linked craft plan.", Severity.Warning);
-            return;
-        }
-
-        if (matchingNodes.Length > 1)
-        {
-            Snackbar.Add("This material appears multiple times in the linked plan. Open Acquisition Evaluation to change it safely.", Severity.Warning);
             return;
         }
 
