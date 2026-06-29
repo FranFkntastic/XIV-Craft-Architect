@@ -45,6 +45,7 @@ builder.Services.AddScoped<IndexedDbMarketCacheService>();
 builder.Services.AddScoped<CommissionCostBasisResolver>();
 builder.Services.AddScoped<CommissionPayrollService>();
 builder.Services.AddScoped<TradeLaborStandardCalibrationService>();
+builder.Services.AddScoped<ITradeLaborBenchmarkPlanBuilder, TradeLaborBenchmarkPlanBuilder>();
 
 // Register Settings Service (Web implementation)
 builder.Services.AddScoped<ISettingsService, WebSettingsService>();

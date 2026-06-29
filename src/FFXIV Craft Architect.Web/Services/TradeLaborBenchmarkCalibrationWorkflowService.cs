@@ -24,6 +24,40 @@ public enum TradeLaborBenchmarkCalibrationStatus
     RefreshFailed
 }
 
+public interface ITradeLaborBenchmarkPlanBuilder
+{
+    Task<CraftingPlan> BuildManagedCobaltRivetsPlanAsync(
+        string dataCenter,
+        CancellationToken ct = default);
+}
+
+public sealed class TradeLaborBenchmarkPlanBuilder : ITradeLaborBenchmarkPlanBuilder
+{
+    private readonly RecipeCalculationService _recipeCalculationService;
+
+    public TradeLaborBenchmarkPlanBuilder(RecipeCalculationService recipeCalculationService)
+    {
+        _recipeCalculationService = recipeCalculationService;
+    }
+
+    public Task<CraftingPlan> BuildManagedCobaltRivetsPlanAsync(
+        string dataCenter,
+        CancellationToken ct = default)
+    {
+        return _recipeCalculationService.BuildPlanAsync(
+            [
+                (
+                    TradeLaborStandardCalibrationService.CobaltRivetsItemId,
+                    TradeLaborStandardCalibrationService.CobaltRivetsItemName,
+                    TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkQuantity,
+                    TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkRequiresHq)
+            ],
+            dataCenter,
+            dataCenter,
+            ct);
+    }
+}
+
 public sealed class TradeLaborBenchmarkCalibrationWorkflowService
 {
     private static readonly TimeSpan DefaultFreshnessWindow = TimeSpan.FromHours(1);
@@ -31,15 +65,18 @@ public sealed class TradeLaborBenchmarkCalibrationWorkflowService
     private readonly IMarketCacheService _marketCache;
     private readonly MarketShoppingService _marketShoppingService;
     private readonly TradeLaborStandardCalibrationService _laborCalibration;
+    private readonly ITradeLaborBenchmarkPlanBuilder _benchmarkPlanBuilder;
 
     public TradeLaborBenchmarkCalibrationWorkflowService(
         IMarketCacheService marketCache,
         MarketShoppingService marketShoppingService,
-        TradeLaborStandardCalibrationService laborCalibration)
+        TradeLaborStandardCalibrationService laborCalibration,
+        ITradeLaborBenchmarkPlanBuilder benchmarkPlanBuilder)
     {
         _marketCache = marketCache;
         _marketShoppingService = marketShoppingService;
         _laborCalibration = laborCalibration;
+        _benchmarkPlanBuilder = benchmarkPlanBuilder;
     }
 
     public async Task<TradeLaborBenchmarkCalibrationResult> RecalculateManagedCobaltRivetsAsync(
@@ -53,12 +90,46 @@ public sealed class TradeLaborBenchmarkCalibrationWorkflowService
         }
 
         var freshnessWindow = request.FreshnessWindow ?? DefaultFreshnessWindow;
+        CraftingPlan benchmarkPlan;
+        try
+        {
+            benchmarkPlan = await _benchmarkPlanBuilder.BuildManagedCobaltRivetsPlanAsync(
+                request.SelectedDataCenter,
+                ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new TradeLaborBenchmarkCalibrationResult(
+                TradeLaborBenchmarkCalibrationStatus.RefreshFailed,
+                null,
+                $"Could not build Cobalt Rivets craft benchmark: {ex.Message}");
+        }
+
+        var benchmarkRoot = benchmarkPlan.RootItems.FirstOrDefault(item =>
+            item.ItemId == TradeLaborStandardCalibrationService.CobaltRivetsItemId);
+        if (benchmarkRoot == null || !benchmarkRoot.CanCraft || !benchmarkRoot.Children.Any())
+        {
+            return MissingEvidence("Cobalt Rivets benchmark recalculation needs a craftable Cobalt Rivets recipe.");
+        }
+
+        AcquisitionPlanningService.SetAcquisitionSource(
+            benchmarkRoot,
+            AcquisitionSource.Craft,
+            AcquisitionSourceReason.SystemDefault);
+        var activeItems = AcquisitionPlanningService.GetActiveProcurementItems(benchmarkPlan)
+            .Where(item => item.TotalQuantity > 0)
+            .ToArray();
+        if (activeItems.Length == 0)
+        {
+            return MissingEvidence("Cobalt Rivets benchmark recalculation needs craft ingredient demand.");
+        }
+
         MarketEvidenceSet evidence;
         try
         {
             evidence = await MarketEvidenceLoader.LoadAsync(
                 _marketCache,
-                [TradeLaborStandardCalibrationService.CobaltRivetsItemId],
+                activeItems.Select(item => item.ItemId).Distinct().ToArray(),
                 MarketFetchScope.SelectedDataCenter,
                 request.SelectedDataCenter,
                 request.SelectedRegion,
@@ -75,18 +146,10 @@ public sealed class TradeLaborBenchmarkCalibrationWorkflowService
                 $"Could not refresh Cobalt Rivets market evidence: {ex.Message}");
         }
 
-        var item = new MaterialAggregate
-        {
-            ItemId = TradeLaborStandardCalibrationService.CobaltRivetsItemId,
-            Name = TradeLaborStandardCalibrationService.CobaltRivetsItemName,
-            TotalQuantity = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkQuantity,
-            RequiresHq = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkRequiresHq
-        };
-
         var plans = await _marketShoppingService.CalculateDetailedShoppingPlansAsync(
             new MarketAnalysisRequest
             {
-                Items = [item],
+                Items = activeItems,
                 Evidence = evidence,
                 RecommendationMode = RecommendationMode.MinimizeTotalCost,
                 AnalysisConfig = new MarketAnalysisConfig
@@ -99,19 +162,19 @@ public sealed class TradeLaborBenchmarkCalibrationWorkflowService
             ct,
             MarketAnalysisExecutionOptions.Synchronous);
 
-        var shoppingPlan = plans.SingleOrDefault();
-        var purchaseEstimate = MarketPurchaseCostProjectionService.Estimate(
-            shoppingPlan,
-            TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkQuantity,
-            hqOnly: TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkRequiresHq,
-            includeVendor: false);
+        AcquisitionPlanningService.ApplyCheapestAcquisitionDefaults(benchmarkPlan, plans);
+        AcquisitionPlanningService.SetAcquisitionSource(
+            benchmarkRoot,
+            AcquisitionSource.Craft,
+            AcquisitionSourceReason.SystemDefault);
+        var benchmarkCost = AcquisitionPlanningService.CalculateCraftCost(benchmarkRoot, plans);
 
-        if (!purchaseEstimate.IsDefaultEligible || purchaseEstimate.Cost <= 0)
+        if (benchmarkCost <= 0)
         {
-            return MissingEvidence("Cobalt Rivets benchmark recalculation needs supported market evidence.");
+            return MissingEvidence("Cobalt Rivets benchmark recalculation needs supported craft ingredient market evidence.");
         }
 
-        var legacyCommissionAmount = purchaseEstimate.Cost * request.LegacyCommissionPercent / 100m;
+        var legacyCommissionAmount = benchmarkCost * request.LegacyCommissionPercent / 100m;
         if (legacyCommissionAmount <= 0)
         {
             return MissingEvidence("Cobalt Rivets benchmark recalculation needs a positive legacy commission amount.");
