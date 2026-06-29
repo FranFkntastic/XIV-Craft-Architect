@@ -27,7 +27,7 @@ public class TradeOperationsModelTests
     {
         var standard = new TradeLaborStandard(
             "Cobalt Rivets benchmark",
-            5099,
+            5094,
             "Cobalt Rivets",
             999,
             true,
@@ -313,7 +313,7 @@ public class TradeOperationsModelTests
     {
         var laborStandard = new TradeLaborStandard(
             "Cobalt Rivets benchmark",
-            5099,
+            5094,
             "Cobalt Rivets",
             999,
             true,
@@ -590,7 +590,7 @@ public class TradeOperationsModelTests
             18m,
             new TradeLaborStandard(
                 "Cobalt Rivets benchmark",
-                5099,
+                5094,
                 "Cobalt Rivets",
                 999,
                 true,

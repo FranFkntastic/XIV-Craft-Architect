@@ -16,6 +16,18 @@ public sealed record TradeLaborBenchmarkCalibrationResult(
     TradeLaborStandard? LaborStandard,
     string Message);
 
+public sealed record TradeLaborBenchmarkPlanPreview(
+    string Title,
+    string DataCenter,
+    IReadOnlyList<TradeLaborBenchmarkPlanPreviewItem> Items);
+
+public sealed record TradeLaborBenchmarkPlanPreviewItem(
+    string Name,
+    int Quantity,
+    int Depth,
+    AcquisitionSource Source,
+    bool IsActiveProcurement);
+
 public enum TradeLaborBenchmarkCalibrationStatus
 {
     ReusedFreshEvidence,
@@ -77,6 +89,40 @@ public sealed class TradeLaborBenchmarkCalibrationWorkflowService
         _marketShoppingService = marketShoppingService;
         _laborCalibration = laborCalibration;
         _benchmarkPlanBuilder = benchmarkPlanBuilder;
+    }
+
+    public async Task<TradeLaborBenchmarkPlanPreview> BuildManagedCobaltRivetsPlanPreviewAsync(
+        string dataCenter,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(dataCenter))
+        {
+            throw new ArgumentException("A selected data center is required to build the benchmark plan preview.", nameof(dataCenter));
+        }
+
+        var benchmarkPlan = await _benchmarkPlanBuilder.BuildManagedCobaltRivetsPlanAsync(dataCenter, ct);
+        var benchmarkRoot = benchmarkPlan.RootItems.FirstOrDefault(item =>
+            item.ItemId == TradeLaborStandardCalibrationService.CobaltRivetsItemId);
+        if (benchmarkRoot != null)
+        {
+            AcquisitionPlanningService.SetAcquisitionSource(
+                benchmarkRoot,
+                AcquisitionSource.Craft,
+                AcquisitionSourceReason.SystemDefault);
+        }
+
+        var activeProcurementItemIds = AcquisitionPlanningService.GetActiveProcurementItems(benchmarkPlan)
+            .Where(item => item.TotalQuantity > 0)
+            .Select(item => item.ItemId)
+            .ToHashSet();
+        var items = benchmarkPlan.RootItems
+            .SelectMany(root => FlattenPreviewItems(root, 0, activeProcurementItemIds))
+            .ToArray();
+
+        return new TradeLaborBenchmarkPlanPreview(
+            "Cobalt Rivets benchmark craft plan",
+            dataCenter,
+            items);
     }
 
     public async Task<TradeLaborBenchmarkCalibrationResult> RecalculateManagedCobaltRivetsAsync(
@@ -206,5 +252,26 @@ public sealed class TradeLaborBenchmarkCalibrationWorkflowService
             TradeLaborBenchmarkCalibrationStatus.MissingEvidence,
             null,
             message);
+    }
+
+    private static IEnumerable<TradeLaborBenchmarkPlanPreviewItem> FlattenPreviewItems(
+        PlanNode node,
+        int depth,
+        IReadOnlySet<int> activeProcurementItemIds)
+    {
+        yield return new TradeLaborBenchmarkPlanPreviewItem(
+            node.Name,
+            node.Quantity,
+            depth,
+            node.Source,
+            activeProcurementItemIds.Contains(node.ItemId));
+
+        foreach (var child in node.Children)
+        {
+            foreach (var item in FlattenPreviewItems(child, depth + 1, activeProcurementItemIds))
+            {
+                yield return item;
+            }
+        }
     }
 }

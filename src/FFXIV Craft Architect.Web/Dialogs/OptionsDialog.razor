@@ -1,10 +1,13 @@
 @using FFXIV_Craft_Architect.Web.Services
+@using FFXIV_Craft_Architect.Core.Helpers
 @using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using System.Text.Json
 @inject AppState AppState
 @inject ISettingsService Settings
 @inject IndexedDbService IndexedDb
+@inject GarlandService GarlandService
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradeLaborBenchmarkCalibrationWorkflowService LaborBenchmarkCalibrationWorkflow
 @inject IJSRuntime JSRuntime
@@ -179,6 +182,18 @@
                             }
                             Recalculate Benchmark
                         </MudButton>
+                        <MudButton Variant="Variant.Text"
+                                   Color="Color.Secondary"
+                                   StartIcon="@Icons.Material.Filled.AccountTree"
+                                   OnClick="ToggleLaborBenchmarkPlanPreviewAsync"
+                                   Disabled="_companyIsBusy || _laborBenchmarkPlanPreviewIsLoading"
+                                   Class="ml-2">
+                            @if (_laborBenchmarkPlanPreviewIsLoading)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                            }
+                            @(_showLaborBenchmarkPlanPreview ? "Hide Plan" : "View Plan")
+                        </MudButton>
                     }
                     @if (!string.IsNullOrWhiteSpace(_laborBenchmarkStatus))
                     {
@@ -186,57 +201,140 @@
                             @_laborBenchmarkStatus
                         </MudText>
                     }
-                    <MudTextField @bind-Value="_laborStandardName"
-                                  Label="Benchmark name"
-                                  Variant="Variant.Outlined"
-                                  Margin="Margin.Dense"
-                                  ReadOnly="@(!_useCustomLaborBenchmark)"
-                                  Class="my-2" />
-                    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
-                        <MudNumericField T="int"
-                                         @bind-Value="_laborBenchmarkItemId"
-                                         Label="Benchmark item ID"
-                                         Variant="Variant.Outlined"
-                                         Margin="Margin.Dense"
-                                         Min="1"
-                                         ReadOnly="@(!_useCustomLaborBenchmark)" />
-                        <MudTextField @bind-Value="_laborBenchmarkItemName"
-                                      Label="Benchmark item"
+                    @if (_useCustomLaborBenchmark)
+                    {
+                        <MudTextField @bind-Value="_laborStandardName"
+                                      Label="Benchmark name"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
-                                      ReadOnly="@(!_useCustomLaborBenchmark)" />
-                        <MudNumericField T="int"
-                                         @bind-Value="_laborBenchmarkQuantity"
-                                         Label="Benchmark quantity"
-                                         Variant="Variant.Outlined"
-                                         Margin="Margin.Dense"
-                                         Min="1"
-                                         ReadOnly="@(!_useCustomLaborBenchmark)" />
-                        <MudNumericField T="int"
-                                         @bind-Value="_laborBenchmarkSynthCount"
-                                         Label="Benchmark synths"
-                                         Variant="Variant.Outlined"
-                                         Margin="Margin.Dense"
-                                         Min="1"
-                                         ReadOnly="@(!_useCustomLaborBenchmark)" />
-                        <MudNumericField T="decimal"
-                                         @bind-Value="_laborBenchmarkPayout"
-                                         Label="Benchmark payout"
-                                         Variant="Variant.Outlined"
-                                         Margin="Margin.Dense"
-                                         Min="0m"
-                                         ReadOnly="@(!_useCustomLaborBenchmark)" />
-                        <MudTextField Value="@FormatGilPerSynth()"
-                                      Label="Derived rate"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      ReadOnly="true" />
-                    </div>
-                    <MudSwitch @bind-Value="_laborBenchmarkRequiresHq"
-                               Label="Benchmark requires HQ"
-                               Color="Color.Primary"
-                               Disabled="@(!_useCustomLaborBenchmark)"
-                               Class="my-2" />
+                                      Class="my-2" />
+                        <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end;">
+                            <MudTextField @bind-Value="_laborBenchmarkItemSearchQuery"
+                                          Label="Find benchmark item"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense" />
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Secondary"
+                                       StartIcon="@Icons.Material.Filled.Search"
+                                       OnClick="SearchLaborBenchmarkItemsAsync"
+                                       Disabled="_laborBenchmarkItemSearchIsSearching">
+                                @if (_laborBenchmarkItemSearchIsSearching)
+                                {
+                                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                }
+                                Search
+                            </MudButton>
+                        </div>
+                        @if (_laborBenchmarkItemSearchResults.Count > 0)
+                        {
+                            <MudSimpleTable Dense="true" Hover="true" Class="mb-2">
+                                <thead>
+                                    <tr>
+                                        <th>Item</th>
+                                        <th class="text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var result in _laborBenchmarkItemSearchResults)
+                                    {
+                                        <tr>
+                                            <td>@result.Object.Name</td>
+                                            <td class="text-right">
+                                                <MudButton Variant="Variant.Text"
+                                                           Color="Color.Secondary"
+                                                           Size="Size.Small"
+                                                           OnClick="() => SelectLaborBenchmarkItem(result)">
+                                                    Select
+                                                </MudButton>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        }
+                        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
+                            <MudTextField @bind-Value="_laborBenchmarkItemName"
+                                          Label="Selected benchmark item"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          ReadOnly="true" />
+                            <MudNumericField T="int"
+                                             @bind-Value="_laborBenchmarkQuantity"
+                                             Label="Benchmark quantity"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Min="1" />
+                            <MudNumericField T="int"
+                                             @bind-Value="_laborBenchmarkSynthCount"
+                                             Label="Benchmark synths"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Min="1" />
+                            <MudNumericField T="decimal"
+                                             @bind-Value="_laborBenchmarkPayout"
+                                             Label="Benchmark payout"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Min="0m" />
+                            <MudTextField Value="@FormatGilPerSynth()"
+                                          Label="Derived rate"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          ReadOnly="true" />
+                        </div>
+                        <MudSwitch @bind-Value="_laborBenchmarkRequiresHq"
+                                   Label="Benchmark requires HQ"
+                                   Color="Color.Primary"
+                                   Class="my-2" />
+                    }
+                    else
+                    {
+                        <div class="d-flex flex-wrap gap-2 my-2">
+                            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined">@_laborBenchmarkItemName</MudChip>
+                            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined">x@_laborBenchmarkQuantity.ToString("N0")</MudChip>
+                            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined">@_laborBenchmarkSynthCount.ToString("N0") synths</MudChip>
+                            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined">@FormatGilPerSynth()</MudChip>
+                        </div>
+                    }
+                    @if (_showLaborBenchmarkPlanPreview)
+                    {
+                        <MudPaper Variant="Variant.Outlined" Class="pa-3 my-3">
+                            @if (_laborBenchmarkPlanPreview == null)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @_laborBenchmarkPlanPreviewStatus
+                                </MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.subtitle2">@_laborBenchmarkPlanPreview.Title</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
+                                    Data center: @_laborBenchmarkPlanPreview.DataCenter
+                                </MudText>
+                                <MudSimpleTable Dense="true" Hover="true">
+                                    <thead>
+                                        <tr>
+                                            <th>Item</th>
+                                            <th class="text-right">Qty</th>
+                                            <th>Source</th>
+                                            <th>Role</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var item in _laborBenchmarkPlanPreview.Items)
+                                        {
+                                            <tr>
+                                                <td style="@($"padding-left: {item.Depth * 18}px;")">@item.Name</td>
+                                                <td class="text-right">@item.Quantity.ToString("N0")</td>
+                                                <td>@RecipePlanDisplayHelpers.GetSourceDisplayName(item.Source)</td>
+                                                <td>@(item.IsActiveProcurement ? "Procure" : "Craft tree")</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </MudSimpleTable>
+                            }
+                        </MudPaper>
+                    }
 
                     <MudDivider Class="my-4" />
 
@@ -375,10 +473,17 @@
     private int _laborBenchmarkSynthCount = 200;
     private bool _useCustomLaborBenchmark;
     private bool _laborBenchmarkIsRecalculating;
+    private bool _showLaborBenchmarkPlanPreview;
+    private bool _laborBenchmarkPlanPreviewIsLoading;
     private string? _laborBenchmarkStatus;
     private Color _laborBenchmarkStatusColor = Color.Secondary;
     private DateTime? _laborBenchmarkCalibratedAtUtc;
     private string? _laborBenchmarkCalibrationEvidence;
+    private TradeLaborBenchmarkPlanPreview? _laborBenchmarkPlanPreview;
+    private string? _laborBenchmarkPlanPreviewStatus;
+    private string _laborBenchmarkItemSearchQuery = string.Empty;
+    private bool _laborBenchmarkItemSearchIsSearching;
+    private readonly List<GarlandSearchResult> _laborBenchmarkItemSearchResults = [];
 
     private static readonly JsonSerializerOptions CompanyPackageJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -545,6 +650,10 @@
     {
         _useCustomLaborBenchmark = useCustomBenchmark;
         _laborBenchmarkStatus = null;
+        _showLaborBenchmarkPlanPreview = false;
+        _laborBenchmarkPlanPreview = null;
+        _laborBenchmarkPlanPreviewStatus = null;
+        _laborBenchmarkItemSearchResults.Clear();
         if (!useCustomBenchmark)
         {
             RestoreManagedLaborBenchmarkFields(keepCurrentRate: true);
@@ -553,6 +662,7 @@
         {
             _laborBenchmarkCalibratedAtUtc = DateTime.UtcNow;
             _laborBenchmarkCalibrationEvidence = "Custom company benchmark.";
+            _laborBenchmarkItemSearchQuery = _laborBenchmarkItemName;
         }
     }
 
@@ -570,6 +680,84 @@
         }
 
         _laborBenchmarkCalibrationEvidence ??= "Managed Cobalt Rivets benchmark.";
+    }
+
+    private async Task ToggleLaborBenchmarkPlanPreviewAsync()
+    {
+        if (_showLaborBenchmarkPlanPreview)
+        {
+            _showLaborBenchmarkPlanPreview = false;
+            return;
+        }
+
+        _showLaborBenchmarkPlanPreview = true;
+        if (_laborBenchmarkPlanPreview != null)
+        {
+            return;
+        }
+
+        _laborBenchmarkPlanPreviewIsLoading = true;
+        _laborBenchmarkPlanPreviewStatus = "Loading Cobalt Rivets benchmark craft plan...";
+        try
+        {
+            _laborBenchmarkPlanPreview = await LaborBenchmarkCalibrationWorkflow.BuildManagedCobaltRivetsPlanPreviewAsync(_defaultDataCenter);
+            _laborBenchmarkPlanPreviewStatus = null;
+        }
+        catch (Exception ex)
+        {
+            _laborBenchmarkPlanPreview = null;
+            _laborBenchmarkPlanPreviewStatus = $"Could not load benchmark plan: {ex.Message}";
+            Snackbar.Add(_laborBenchmarkPlanPreviewStatus, Severity.Error);
+        }
+        finally
+        {
+            _laborBenchmarkPlanPreviewIsLoading = false;
+        }
+    }
+
+    private async Task SearchLaborBenchmarkItemsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_laborBenchmarkItemSearchQuery))
+        {
+            Snackbar.Add("Enter an item name to search.", Severity.Warning);
+            return;
+        }
+
+        _laborBenchmarkItemSearchIsSearching = true;
+        _laborBenchmarkItemSearchResults.Clear();
+        try
+        {
+            var results = await GarlandService.SearchAsync(_laborBenchmarkItemSearchQuery);
+            _laborBenchmarkItemSearchResults.AddRange(results.Take(25));
+            if (_laborBenchmarkItemSearchResults.Count == 0)
+            {
+                Snackbar.Add("No matching items found.", Severity.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Benchmark item search failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _laborBenchmarkItemSearchIsSearching = false;
+        }
+    }
+
+    private void SelectLaborBenchmarkItem(GarlandSearchResult result)
+    {
+        if (result.Id <= 0 || string.IsNullOrWhiteSpace(result.Object.Name))
+        {
+            Snackbar.Add("Selected benchmark item did not include a usable item identity.", Severity.Error);
+            return;
+        }
+
+        _laborBenchmarkItemId = result.Id;
+        _laborBenchmarkItemName = result.Object.Name;
+        _laborBenchmarkItemSearchQuery = result.Object.Name;
+        _laborBenchmarkItemSearchResults.Clear();
+        _laborBenchmarkCalibratedAtUtc = DateTime.UtcNow;
+        _laborBenchmarkCalibrationEvidence = "Custom company benchmark.";
     }
 
     private async Task RecalculateLaborBenchmarkAsync()

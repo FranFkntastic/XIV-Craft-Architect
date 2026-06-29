@@ -117,6 +117,36 @@ public class TradeLaborBenchmarkCalibrationWorkflowServiceTests
             Times.Once);
     }
 
+    [Fact]
+    public async Task BuildManagedCobaltRivetsPlanPreviewAsync_ReturnsCraftTreeAndActiveProcurementLeaves()
+    {
+        var service = CreateService(Mock.Of<IMarketCacheService>(), CreateBenchmarkPlan());
+
+        var preview = await service.BuildManagedCobaltRivetsPlanPreviewAsync("Aether");
+
+        Assert.Equal("Cobalt Rivets benchmark craft plan", preview.Title);
+        Assert.Equal("Aether", preview.DataCenter);
+        Assert.Equal(2, preview.Items.Count);
+        Assert.Collection(
+            preview.Items,
+            root =>
+            {
+                Assert.Equal("Cobalt Rivets", root.Name);
+                Assert.Equal(999, root.Quantity);
+                Assert.Equal(0, root.Depth);
+                Assert.Equal(AcquisitionSource.Craft, root.Source);
+                Assert.False(root.IsActiveProcurement);
+            },
+            ingredient =>
+            {
+                Assert.Equal("Benchmark Ingredient", ingredient.Name);
+                Assert.Equal(200, ingredient.Quantity);
+                Assert.Equal(1, ingredient.Depth);
+                Assert.Equal(AcquisitionSource.MarketBuyNq, ingredient.Source);
+                Assert.True(ingredient.IsActiveProcurement);
+            });
+    }
+
     private static TradeLaborBenchmarkCalibrationWorkflowService CreateService(
         IMarketCacheService cache,
         CraftingPlan benchmarkPlan)

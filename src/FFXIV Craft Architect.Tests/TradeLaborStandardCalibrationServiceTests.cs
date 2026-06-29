@@ -6,6 +6,12 @@ namespace FFXIV_Craft_Architect.Tests;
 public class TradeLaborStandardCalibrationServiceTests
 {
     [Fact]
+    public void ManagedCobaltRivetsBenchmark_UsesGarlandCobaltRivetsItemId()
+    {
+        Assert.Equal(5094, TradeLaborStandardCalibrationService.CobaltRivetsItemId);
+    }
+
+    [Fact]
     public void CreateFromLegacyBenchmark_UsesLegacyCommissionAsBenchmarkPayout()
     {
         var service = new TradeLaborStandardCalibrationService();
@@ -14,7 +20,7 @@ public class TradeLaborStandardCalibrationServiceTests
             benchmarkSynthCount: 206,
             effectiveFromUtc: new DateTime(2026, 6, 25, 0, 0, 0, DateTimeKind.Utc));
 
-        Assert.Equal(5099, standard.BenchmarkItemId);
+        Assert.Equal(5094, standard.BenchmarkItemId);
         Assert.Equal("Cobalt Rivets", standard.BenchmarkItemName);
         Assert.Equal(999, standard.BenchmarkQuantity);
         Assert.False(standard.BenchmarkRequiresHq);
@@ -66,7 +72,7 @@ public class TradeLaborStandardCalibrationServiceTests
     {
         var legacyManaged = new TradeLaborStandard(
             "Cobalt Rivets benchmark",
-            5099,
+            5094,
             "Cobalt Rivets",
             999,
             true,

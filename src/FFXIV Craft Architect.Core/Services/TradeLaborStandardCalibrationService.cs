@@ -4,7 +4,7 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 public sealed class TradeLaborStandardCalibrationService
 {
-    public const int CobaltRivetsItemId = 5099;
+    public const int CobaltRivetsItemId = 5094;
     public const string CobaltRivetsItemName = "Cobalt Rivets";
     public const int CobaltRivetsBenchmarkQuantity = 999;
     public const bool CobaltRivetsBenchmarkRequiresHq = false;

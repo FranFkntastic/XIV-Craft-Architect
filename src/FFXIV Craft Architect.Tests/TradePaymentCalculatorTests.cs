@@ -11,7 +11,7 @@ public class TradePaymentCalculatorTests
         var calculator = new TradePaymentCalculator();
         var standard = new TradeLaborStandard(
             Name: "Cobalt Rivets benchmark",
-            BenchmarkItemId: 5099,
+            BenchmarkItemId: 5094,
             BenchmarkItemName: "Cobalt Rivets",
             BenchmarkQuantity: 999,
             BenchmarkRequiresHq: true,
@@ -67,7 +67,7 @@ public class TradePaymentCalculatorTests
         var calculator = new TradePaymentCalculator();
         var standard = new TradeLaborStandard(
             "Cobalt Rivets benchmark",
-            5099,
+            5094,
             "Cobalt Rivets",
             999,
             true,
@@ -105,7 +105,7 @@ public class TradePaymentCalculatorTests
         var calculator = new TradePaymentCalculator();
         var standard = new TradeLaborStandard(
             "Cobalt Rivets benchmark",
-            5099,
+            5094,
             "Cobalt Rivets",
             999,
             false,
@@ -155,7 +155,7 @@ public class TradePaymentCalculatorTests
         var calculator = new TradePaymentCalculator();
         var standard = new TradeLaborStandard(
             "Cobalt Rivets benchmark",
-            5099,
+            5094,
             "Cobalt Rivets",
             999,
             false,

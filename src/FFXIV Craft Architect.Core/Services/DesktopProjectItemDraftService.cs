@@ -9,7 +9,7 @@ public sealed class DesktopProjectItemDraftService
     [
         new(5107, "Cobalt Plate", 1998, true),
         new(5395, "Ancient Lumber", 999, true),
-        new(5099, "Cobalt Rivets", 1998, true),
+        new(5094, "Cobalt Rivets", 1998, true),
         new(6141, "Darksteel Nugget", 1498, true)
     ];
 

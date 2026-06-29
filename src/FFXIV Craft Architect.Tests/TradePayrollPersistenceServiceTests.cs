@@ -112,7 +112,7 @@ public class TradePayrollPersistenceServiceTests
             18m,
             new TradeLaborStandard(
                 "Cobalt Rivets benchmark",
-                5099,
+                5094,
                 "Cobalt Rivets",
                 999,
                 true,

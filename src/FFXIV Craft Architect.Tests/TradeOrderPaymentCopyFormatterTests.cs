@@ -73,7 +73,7 @@ public class TradeOrderPaymentCopyFormatterTests
     {
         var standard = new TradeLaborStandard(
             "Cobalt Rivets benchmark",
-            5099,
+            5094,
             "Cobalt Rivets",
             999,
             false,

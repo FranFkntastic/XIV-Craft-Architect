@@ -75,7 +75,7 @@ public class DesktopProjectItemDraftServiceTests
         var results = drafts.SearchKnownItems("cobalt");
 
         Assert.Contains(results, result => result is { ItemId: 5107, Name: "Cobalt Plate" });
-        Assert.Contains(results, result => result is { ItemId: 5099, Name: "Cobalt Rivets" });
+        Assert.Contains(results, result => result is { ItemId: 5094, Name: "Cobalt Rivets" });
     }
 
     [Fact]

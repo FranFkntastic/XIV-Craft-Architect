@@ -147,7 +147,7 @@ public class TradeCompanyProfilePackageServiceTests
               "legacyCommissionPercent": 20,
               "laborStandard": {
                 "name": "Cobalt Rivets benchmark",
-                "benchmarkItemId": 5099,
+                "benchmarkItemId": 5094,
                 "benchmarkItemName": "Cobalt Rivets",
                 "benchmarkQuantity": 999,
                 "benchmarkRequiresHq": true,
@@ -181,7 +181,7 @@ public class TradeCompanyProfilePackageServiceTests
             20m,
             new TradeLaborStandard(
                 "Cobalt Rivets benchmark",
-                5099,
+                5094,
                 "Cobalt Rivets",
                 999,
                 false,

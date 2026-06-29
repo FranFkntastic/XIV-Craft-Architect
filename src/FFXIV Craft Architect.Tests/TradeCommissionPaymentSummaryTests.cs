@@ -83,7 +83,7 @@ public class TradeCommissionPaymentSummaryTests
             LaborStandardMaterialBonusPercent = 15m,
             LaborStandard = new TradeLaborStandard(
                 "Cobalt Rivets benchmark",
-                5099,
+                5094,
                 "Cobalt Rivets",
                 999,
                 true,
@@ -157,7 +157,7 @@ public class TradeCommissionPaymentSummaryTests
             legacyCommissionPercent,
             new TradeLaborStandard(
                 "Cobalt Rivets benchmark",
-                5099,
+                5094,
                 "Cobalt Rivets",
                 999,
                 true,
