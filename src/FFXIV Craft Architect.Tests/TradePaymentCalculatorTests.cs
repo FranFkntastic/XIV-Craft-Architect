@@ -100,7 +100,7 @@ public class TradePaymentCalculatorTests
     }
 
     [Fact]
-    public void Calculate_LaborStandardUsesTenPercentMaterialCommission()
+    public void Calculate_LaborStandardUsesDefaultTenPercentMaterialBonus()
     {
         var calculator = new TradePaymentCalculator();
         var standard = new TradeLaborStandard(
@@ -147,5 +147,57 @@ public class TradePaymentCalculatorTests
         Assert.Equal(100m, summary.LaborStandard.CommissionAmount);
         Assert.Equal(2_900m, summary.LaborStandard.Total);
         Assert.Equal(summary.LaborStandard.Total, summary.TotalPayment);
+    }
+
+    [Fact]
+    public void Calculate_SeparatesLegacyCommissionPercentFromLaborStandardMaterialBonusPercent()
+    {
+        var calculator = new TradePaymentCalculator();
+        var standard = new TradeLaborStandard(
+            "Cobalt Rivets benchmark",
+            5099,
+            "Cobalt Rivets",
+            999,
+            false,
+            120_000m,
+            200,
+            new DateTime(2026, 6, 25, 0, 0, 0, DateTimeKind.Utc));
+
+        var summary = calculator.Calculate(new TradePaymentCalculationRequest(
+            Materials:
+            [
+                new TradePaymentMaterialInput(
+                    1,
+                    "Crafter Ore",
+                    10,
+                    false,
+                    100m,
+                    CommissionMaterialResponsibility.Crafter,
+                    "Market",
+                    "Selected listing.",
+                    null,
+                    [])
+            ],
+            CraftLabor:
+            [
+                new TradeCraftLaborInput(
+                    "root",
+                    2,
+                    "Finished Item",
+                    1,
+                    3,
+                    [])
+            ],
+            Policy: new TradePaymentPolicy(TradePaymentContractMode.LaborStandard, 25m, standard)
+            {
+                LaborStandardMaterialBonusPercent = 15m
+            },
+            Warnings: []));
+
+        Assert.Equal(25m, summary.Legacy.CommissionPercent);
+        Assert.Equal(250m, summary.Legacy.CommissionAmount);
+        Assert.Equal(15m, summary.LaborStandard.CommissionPercent);
+        Assert.Equal(150m, summary.LaborStandard.CommissionAmount);
+        Assert.Equal(2_950m, summary.LaborStandard.Total);
     }
 }

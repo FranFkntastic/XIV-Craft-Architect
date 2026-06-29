@@ -4,8 +4,6 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 public sealed class TradePaymentCalculator
 {
-    public const decimal LaborStandardMaterialCommissionPercent = 10m;
-
     public TradePaymentComparisonSummary Calculate(TradePaymentCalculationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -111,7 +109,10 @@ public sealed class TradePaymentCalculator
             .ToArray();
         var craftLaborTotal = RoundGil(lines.Sum(line => line.LaborTotal));
         var synthCount = lines.Sum(line => line.CraftCount);
-        var commission = RoundGil(estimatedProcurementTotal * LaborStandardMaterialCommissionPercent / 100m);
+        var percent = policy.LaborStandardMaterialBonusPercent >= 0
+            ? policy.LaborStandardMaterialBonusPercent
+            : TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent;
+        var commission = RoundGil(estimatedProcurementTotal * percent / 100m);
         var warnings = lines
             .SelectMany(line => line.Warnings)
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
@@ -123,7 +124,7 @@ public sealed class TradePaymentCalculator
             TradePaymentContractMode.LaborStandard,
             IsAvailable: true,
             materialReimbursementTotal,
-            LaborStandardMaterialCommissionPercent,
+            percent,
             commission,
             craftLaborTotal,
             synthCount,

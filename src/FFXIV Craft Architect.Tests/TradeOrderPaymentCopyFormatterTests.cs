@@ -14,7 +14,7 @@ public class TradeOrderPaymentCopyFormatterTests
 
         Assert.Contains("Payment receipt", receipt);
         Assert.Contains("Active basis: labor standard", receipt);
-        Assert.Contains("Material commission (10%): 100 gil", receipt);
+        Assert.Contains("Labor material bonus (10%): 100 gil", receipt);
         Assert.Contains("Craft labor: 3 synths x 600.00 gil = 1,800 gil", receipt);
         Assert.DoesNotContain("Legacy comparison", receipt);
         Assert.DoesNotContain("Difference vs legacy", receipt);
@@ -31,6 +31,7 @@ public class TradeOrderPaymentCopyFormatterTests
         Assert.Contains("Active basis: labor standard", text);
         Assert.Contains("Legacy comparison: 1,200 gil", text);
         Assert.Contains("Labor-standard comparison: 2,900 gil", text);
+        Assert.Contains("Labor material bonus (10%): 100 gil", text);
         Assert.Contains("Difference vs legacy: +1,700 gil", text);
     }
 

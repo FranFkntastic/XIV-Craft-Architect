@@ -521,7 +521,7 @@
                                             <strong>@FormatGilAllowZero(paymentSummary.ProvidedMaterialTotal)</strong>
                                         </div>
                                         <div class="trade-orders-payment-breakdown-row">
-                                            <span>Material commission</span>
+                                            <span>@FormatActiveMaterialAdjustmentLabel(paymentSummary.Active.Contract)</span>
                                             <span>@paymentSummary.CommissionPercent.ToString("N0")% of procurement</span>
                                             <strong>@FormatGil(paymentSummary.CommissionAmount)</strong>
                                         </div>
@@ -552,13 +552,13 @@
                                         </div>
                                         <div class="trade-orders-policy-comparison-row">
                                             <span>Legacy commission</span>
-                                            <span>Materials + @paymentSummary.Legacy.CommissionPercent.ToString("N0")%</span>
+                                            <span>Materials + @paymentSummary.Legacy.CommissionPercent.ToString("N0")% legacy commission</span>
                                             <strong>@FormatPaymentBreakdown(paymentSummary.Legacy)</strong>
                                             <span>Baseline</span>
                                         </div>
                                         <div class="trade-orders-policy-comparison-row">
                                             <span>Labor standard</span>
-                                            <span>Materials + @paymentSummary.LaborStandard.CommissionPercent.ToString("N0")% + labor</span>
+                                            <span>Materials + @paymentSummary.LaborStandard.CommissionPercent.ToString("N0")% bonus + labor</span>
                                             <strong>@FormatPaymentBreakdown(paymentSummary.LaborStandard)</strong>
                                             <span>@FormatPaymentDifference(paymentSummary.LaborStandard, paymentSummary.Legacy)</span>
                                         </div>
@@ -2789,6 +2789,13 @@
     private static string FormatPaymentBreakdown(TradePaymentContractBreakdown breakdown)
     {
         return TradeOrderPaymentCopyFormatter.FormatPaymentBreakdown(breakdown);
+    }
+
+    private static string FormatActiveMaterialAdjustmentLabel(TradePaymentContractMode contract)
+    {
+        return contract == TradePaymentContractMode.LaborStandard
+            ? "Labor material value bonus"
+            : "Legacy material commission";
     }
 
     private static string FormatPaymentDifference(

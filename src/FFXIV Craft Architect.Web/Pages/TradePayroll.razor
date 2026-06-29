@@ -632,7 +632,12 @@
                 : new TradePaymentPolicy(
                     _workflowDraft.ActivePaymentContract,
                     _workflowDraft.CommissionPercent > 0 ? _workflowDraft.CommissionPercent : CommissionPayoutPolicy.Default.CommissionPercent,
-                    _workflowDraft.LaborStandard);
+                    _workflowDraft.LaborStandard)
+                {
+                    LaborStandardMaterialBonusPercent = _workflowDraft.LaborStandardMaterialBonusPercent >= 0
+                        ? _workflowDraft.LaborStandardMaterialBonusPercent
+                        : TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent
+                };
         }
 
         return TradeOrderWorkflow.ResolvePaymentPolicy(_linkedOrder, _companyProfile?.PaymentPolicy);

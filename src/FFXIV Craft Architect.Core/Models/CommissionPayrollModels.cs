@@ -91,6 +91,10 @@ public sealed record TradePaymentPolicy(
     decimal LegacyCommissionPercent,
     TradeLaborStandard? LaborStandard)
 {
+    public const decimal DefaultLaborStandardMaterialBonusPercent = 10m;
+
+    public decimal LaborStandardMaterialBonusPercent { get; init; } = DefaultLaborStandardMaterialBonusPercent;
+
     public static TradePaymentPolicy LegacyDefault { get; } = new(
         TradePaymentContractMode.LegacyCommission,
         CommissionPayoutPolicy.Default.CommissionPercent,

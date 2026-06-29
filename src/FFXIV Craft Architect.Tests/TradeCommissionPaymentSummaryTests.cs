@@ -80,6 +80,7 @@ public class TradeCommissionPaymentSummaryTests
         var draft = new TradePayrollWorkflowDraft
         {
             CommissionPercent = 20m,
+            LaborStandardMaterialBonusPercent = 15m,
             LaborStandard = new TradeLaborStandard(
                 "Cobalt Rivets benchmark",
                 5099,
@@ -95,9 +96,9 @@ public class TradeCommissionPaymentSummaryTests
 
         Assert.Equal(240m, summary.Legacy.Total);
         Assert.True(summary.LaborStandard.IsAvailable);
-        Assert.Equal(20m, summary.LaborStandard.CommissionAmount);
+        Assert.Equal(30m, summary.LaborStandard.CommissionAmount);
         Assert.Equal(1_800m, summary.LaborStandard.CraftLaborTotal);
-        Assert.Equal(2_020m, summary.LaborStandard.Total);
+        Assert.Equal(2_030m, summary.LaborStandard.Total);
         Assert.Equal(240m, summary.TotalPayment);
     }
 

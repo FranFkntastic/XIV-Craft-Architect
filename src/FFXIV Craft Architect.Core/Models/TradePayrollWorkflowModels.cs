@@ -13,6 +13,7 @@ public sealed class TradePayrollWorkflowDraft
     public Guid? AssignedCrafterId { get; set; }
     public string? AssignedCrafterDisplayName { get; set; }
     public decimal CommissionPercent { get; set; } = CommissionPayoutPolicy.Default.CommissionPercent;
+    public decimal LaborStandardMaterialBonusPercent { get; set; } = TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent;
     public TradePaymentContractMode ActivePaymentContract { get; set; } = TradePaymentContractMode.LegacyCommission;
     public TradeLaborStandard? LaborStandard { get; set; }
     public IReadOnlyList<TradePayrollResponsibilityLine> Responsibilities { get; set; } = Array.Empty<TradePayrollResponsibilityLine>();
@@ -89,7 +90,12 @@ public sealed record TradeCommissionPaymentSummary(
             : new TradePaymentPolicy(
                 draft?.ActivePaymentContract ?? TradePaymentContractMode.LegacyCommission,
                 draft?.CommissionPercent > 0 ? draft.CommissionPercent : CommissionPayoutPolicy.Default.CommissionPercent,
-                draft?.LaborStandard);
+                draft?.LaborStandard)
+            {
+                LaborStandardMaterialBonusPercent = draft == null || draft.LaborStandardMaterialBonusPercent < 0
+                    ? TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent
+                    : draft.LaborStandardMaterialBonusPercent
+            };
         var paymentMaterials = materials
             .Select(material => new TradePaymentMaterialInput(
                 material.ItemId,

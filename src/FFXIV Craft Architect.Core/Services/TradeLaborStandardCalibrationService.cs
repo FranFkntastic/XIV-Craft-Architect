@@ -11,9 +11,16 @@ public sealed class TradeLaborStandardCalibrationService
 
     public static TradePaymentPolicy NormalizeManagedCobaltRivetsBenchmark(TradePaymentPolicy policy)
     {
-        return policy.LaborStandard == null
+        var normalized = policy.LaborStandard == null
             ? policy
             : policy with { LaborStandard = NormalizeManagedCobaltRivetsBenchmark(policy.LaborStandard) };
+
+        return normalized.LaborStandardMaterialBonusPercent < 0
+            ? normalized with
+            {
+                LaborStandardMaterialBonusPercent = TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent
+            }
+            : normalized;
     }
 
     public static TradeLaborStandard NormalizeManagedCobaltRivetsBenchmark(TradeLaborStandard standard)

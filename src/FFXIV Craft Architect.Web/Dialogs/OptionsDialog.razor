@@ -141,7 +141,15 @@
                     </MudSelect>
                     <MudNumericField T="decimal"
                                      @bind-Value="_companyLegacyCommissionPercent"
-                                     Label="Legacy commission percent"
+                                     Label="Legacy material commission percent"
+                                     Variant="Variant.Outlined"
+                                     Margin="Margin.Dense"
+                                     Min="0m"
+                                     Max="100m"
+                                     Class="my-2" />
+                    <MudNumericField T="decimal"
+                                     @bind-Value="_companyLaborMaterialBonusPercent"
+                                     Label="Labor material value bonus percent"
                                      Variant="Variant.Outlined"
                                      Margin="Margin.Dense"
                                      Min="0m"
@@ -357,6 +365,7 @@
     private bool _companyIsBusy;
     private TradePaymentContractMode _companyPaymentContract = TradePaymentContractMode.LegacyCommission;
     private decimal _companyLegacyCommissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
+    private decimal _companyLaborMaterialBonusPercent = TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent;
     private string _laborStandardName = "Cobalt Rivets benchmark";
     private int _laborBenchmarkItemId = TradeLaborStandardCalibrationService.CobaltRivetsItemId;
     private string _laborBenchmarkItemName = TradeLaborStandardCalibrationService.CobaltRivetsItemName;
@@ -443,6 +452,7 @@
             profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
         _companyPaymentContract = policy.ActiveContract;
         _companyLegacyCommissionPercent = policy.LegacyCommissionPercent;
+        _companyLaborMaterialBonusPercent = policy.LaborStandardMaterialBonusPercent;
 
         if (policy.LaborStandard != null)
         {
@@ -470,7 +480,13 @@
     {
         if (_companyLegacyCommissionPercent < 0 || _companyLegacyCommissionPercent > 100)
         {
-            Snackbar.Add("Legacy commission percent must be between 0 and 100.", Severity.Error);
+            Snackbar.Add("Legacy material commission percent must be between 0 and 100.", Severity.Error);
+            return null;
+        }
+
+        if (_companyLaborMaterialBonusPercent < 0 || _companyLaborMaterialBonusPercent > 100)
+        {
+            Snackbar.Add("Labor material value bonus percent must be between 0 and 100.", Severity.Error);
             return null;
         }
 
@@ -484,7 +500,10 @@
         return new TradePaymentPolicy(
             _companyPaymentContract,
             _companyLegacyCommissionPercent,
-            laborStandard);
+            laborStandard)
+        {
+            LaborStandardMaterialBonusPercent = _companyLaborMaterialBonusPercent
+        };
     }
 
     private TradeLaborStandard? BuildLaborStandard()
@@ -592,7 +611,10 @@
             _companyProfile.PaymentPolicy = new TradePaymentPolicy(
                 _companyPaymentContract,
                 _companyLegacyCommissionPercent,
-                result.LaborStandard);
+                result.LaborStandard)
+            {
+                LaborStandardMaterialBonusPercent = _companyLaborMaterialBonusPercent
+            };
 
             var saved = await TradeOperationsPersistence.SaveCompanyProfileAsync(_companyProfile);
             if (!saved)

@@ -27,7 +27,7 @@ public static class TradeOrderPaymentCopyFormatter
         builder.AppendLine($"Active basis: {FormatPaymentContract(active.Contract)}");
         builder.AppendLine($"Payment amount: {FormatGil(summary.TotalPayment)}");
         builder.AppendLine($"Crafter-procured reimbursement: {FormatGil(active.MaterialReimbursementTotal)}");
-        builder.AppendLine($"Material commission ({active.CommissionPercent:N0}%): {FormatGil(active.CommissionAmount)}");
+        builder.AppendLine($"{FormatMaterialAdjustmentLabel(active.Contract)} ({active.CommissionPercent:N0}%): {FormatGil(active.CommissionAmount)}");
         if (active.Contract == TradePaymentContractMode.LaborStandard)
         {
             builder.AppendLine($"Craft labor: {active.CraftSynthCount:N0} synths x {active.GilPerSynth:N2} gil = {FormatGil(active.CraftLaborTotal)}");
@@ -55,7 +55,7 @@ public static class TradeOrderPaymentCopyFormatter
         builder.AppendLine($"Labor-standard comparison: {FormatPaymentBreakdown(summary.LaborStandard)}");
         if (summary.LaborStandard.IsAvailable)
         {
-            builder.AppendLine($"Labor material commission ({summary.LaborStandard.CommissionPercent:N0}%): {FormatGil(summary.LaborStandard.CommissionAmount)}");
+            builder.AppendLine($"Labor material bonus ({summary.LaborStandard.CommissionPercent:N0}%): {FormatGil(summary.LaborStandard.CommissionAmount)}");
             builder.AppendLine($"Craft labor: {summary.LaborStandard.CraftSynthCount:N0} synths x {summary.LaborStandard.GilPerSynth:N2} gil = {FormatGil(summary.LaborStandard.CraftLaborTotal)}");
             builder.AppendLine($"Difference vs legacy: {FormatPaymentDifference(summary.LaborStandard, summary.Legacy)}");
         }
@@ -102,6 +102,13 @@ public static class TradeOrderPaymentCopyFormatter
         return mode == TradePaymentContractMode.LaborStandard
             ? "labor standard"
             : "legacy";
+    }
+
+    private static string FormatMaterialAdjustmentLabel(TradePaymentContractMode mode)
+    {
+        return mode == TradePaymentContractMode.LaborStandard
+            ? "Labor material bonus"
+            : "Legacy material commission";
     }
 
     private static StringBuilder CreateHeader(string title, TradeOrderPaymentCopyContext context)

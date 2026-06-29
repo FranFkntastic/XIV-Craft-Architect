@@ -81,6 +81,9 @@ public sealed class TradePayrollPersistenceService
             CommissionPercent = paymentPolicy?.LegacyCommissionPercent > 0
                 ? paymentPolicy.LegacyCommissionPercent
                 : CommissionPayoutPolicy.Default.CommissionPercent,
+            LaborStandardMaterialBonusPercent = paymentPolicy == null || paymentPolicy.LaborStandardMaterialBonusPercent < 0
+                ? TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent
+                : paymentPolicy.LaborStandardMaterialBonusPercent,
             LaborStandard = paymentPolicy?.LaborStandard,
             CreatedAtUtc = now,
             UpdatedAtUtc = now

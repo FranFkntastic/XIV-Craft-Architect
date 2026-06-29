@@ -118,7 +118,10 @@ public class TradePayrollPersistenceServiceTests
                 true,
                 150_000m,
                 200,
-                new DateTime(2026, 6, 25, 18, 0, 0, DateTimeKind.Utc)));
+                new DateTime(2026, 6, 25, 18, 0, 0, DateTimeKind.Utc)))
+        {
+            LaborStandardMaterialBonusPercent = 12m
+        };
         var service = new TradePayrollPersistenceService(new FakeTradePayrollDraftStore([]));
 
         var draft = await service.GetOrCreateDraftAsync(
@@ -133,6 +136,7 @@ public class TradePayrollPersistenceServiceTests
 
         Assert.Equal(TradePaymentContractMode.LaborStandard, draft.ActivePaymentContract);
         Assert.Equal(18m, draft.CommissionPercent);
+        Assert.Equal(12m, draft.LaborStandardMaterialBonusPercent);
         Assert.Equal(policy.LaborStandard, draft.LaborStandard);
     }
 
