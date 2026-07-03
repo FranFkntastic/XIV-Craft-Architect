@@ -4,6 +4,7 @@
 @inject AppState AppState
 @inject RecipeCalculationService RecipeService
 @inject IArtisanService ArtisanService
+@inject DiagnosticSnapshotBundleService DiagnosticSnapshotBundleService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
@@ -105,6 +106,38 @@
                     </MudButton>
                 }
             </MudTabPanel>
+
+            <MudTabPanel Text="Diagnostic Snapshot">
+                <MudText Typo="Typo.body2" Class="mb-4">
+                    Export active plan state, stored-plan payloads, market evidence, acquisition rows, procurement routes, and app context for debugging.
+                </MudText>
+                @if (_diagnosticSnapshotJson != null)
+                {
+                    <MudTextField Value="_diagnosticSnapshotJson"
+                                  Label="Diagnostic Snapshot JSON"
+                                  Variant="Variant.Outlined"
+                                  Lines="8"
+                                  ReadOnly="true" />
+                    <div class="d-flex gap-2 mt-4">
+                        <MudButton Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.ContentCopy"
+                                   OnClick="() => CopyToClipboard(_diagnosticSnapshotJson)">
+                            Copy JSON
+                        </MudButton>
+                        <MudButton Color="Color.Secondary"
+                                   StartIcon="@Icons.Material.Filled.Download"
+                                   OnClick="DownloadDiagnosticSnapshotJson">
+                            Download
+                        </MudButton>
+                    </div>
+                }
+                else
+                {
+                    <MudButton Color="Color.Primary" OnClick="GenerateDiagnosticSnapshotJson" Disabled="!CanExport">
+                        Generate Diagnostic Snapshot
+                    </MudButton>
+                }
+            </MudTabPanel>
         </MudTabs>
     </DialogContent>
     <DialogActions>
@@ -120,6 +153,7 @@
     private string? _nativeJson = null;
     private string? _teamcraftUrl = null;
     private string? _artisanJson = null;
+    private string? _diagnosticSnapshotJson = null;
     private bool _includeArtisanPrecrafts;
     
     protected override void OnInitialized()
@@ -254,6 +288,51 @@
         {
             Snackbar.Add($"Download failed: {ex.Message}", Severity.Error);
         }
+    }
+
+    private void GenerateDiagnosticSnapshotJson()
+    {
+        try
+        {
+            var bundle = DiagnosticSnapshotBundleService.BuildBundle(DateTime.UtcNow);
+            _diagnosticSnapshotJson = DiagnosticSnapshotBundleService.Serialize(bundle);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to generate diagnostic snapshot: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task DownloadDiagnosticSnapshotJson()
+    {
+        if (string.IsNullOrEmpty(_diagnosticSnapshotJson)) return;
+
+        try
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(_diagnosticSnapshotJson);
+            var stream = new MemoryStream(bytes);
+            using var streamRef = new DotNetStreamReference(stream);
+            var fileName = CreateDiagnosticSnapshotFileName();
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
+            Snackbar.Add($"Downloaded {fileName}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Download failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private string CreateDiagnosticSnapshotFileName()
+    {
+        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+        var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name ?? "plan";
+        var safePlanName = string.Join("_", planName.Split(Path.GetInvalidFileNameChars()));
+        if (safePlanName.Length > 60)
+        {
+            safePlanName = safePlanName[..60];
+        }
+
+        return $"{safePlanName}-{timestamp}.ca-diagnostic.json";
     }
     
     private void Cancel()

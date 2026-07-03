@@ -66,6 +66,7 @@ builder.Services.AddScoped<MarketAnalysisSubsetRefreshService>();
 builder.Services.AddScoped<MarketAnalysisItemRefreshService>();
 builder.Services.AddScoped<IMarketAnalysisAutoRunner, MarketAnalysisAutoRunner>();
 builder.Services.AddScoped<MarketAnalysisDiagnosticDumpService>();
+builder.Services.AddScoped<DiagnosticSnapshotBundleService>();
 builder.Services.AddScoped<ProcurementWorkflowService>();
 builder.Services.AddScoped<AcquisitionEvaluationWorkflowService>();
 builder.Services.AddScoped<AcquisitionSourceChangeImpactService>();
