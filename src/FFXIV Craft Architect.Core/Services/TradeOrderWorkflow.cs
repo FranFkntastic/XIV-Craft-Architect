@@ -109,6 +109,9 @@ public static class TradeOrderWorkflow
 
         var copy = CopyOrder(order);
         copy.SourceSnapshot ??= new TradeOrderSourceSnapshot();
+        copy.SourceSnapshot.SourceKind = TradeOrderSourceKind.TradeRequestedOutputs;
+        copy.SourceSnapshot.SourcePlanId = null;
+        copy.SourceSnapshot.SourcePlanName = "Trade requested outputs";
         copy.SourceSnapshot.RootItems = normalizedOutputs
             .Select(output => new TradeOrderRootItemSnapshot(
                 output.ItemId,

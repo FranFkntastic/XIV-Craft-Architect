@@ -340,22 +340,108 @@
                                               Disabled="@IsSelectedOrderArchived" />
                             </div>
                             <section class="trade-orders-work-section">
-                                <MudText Typo="Typo.subtitle2">Requested Outputs</MudText>
-                                <div class="trade-orders-breakdown-table">
-                                    <div class="trade-orders-breakdown-header">
-                                        <span>Item</span>
-                                        <span>Qty</span>
-                                        <span>HQ</span>
-                                    </div>
-                                    @foreach (var item in GetOrderRootItems(_selectedOrder))
+                                <div class="trade-orders-section-heading">
+                                    <MudText Typo="Typo.subtitle2">Requested Outputs</MudText>
+                                    @if (CanEditSelectedOrderOutputs)
                                     {
-                                        <div class="trade-orders-breakdown-row">
-                                            <span>@item.Name</span>
-                                            <span>@TradeDisplayFormatter.FormatQuantity(item.Quantity)</span>
-                                            <span>@FormatHq(item.MustBeHq)</span>
+                                        <div class="trade-orders-section-actions">
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Secondary"
+                                                       Size="Size.Small"
+                                                       StartIcon="@Icons.Material.Filled.Undo"
+                                                       OnClick="ResetSelectedOrderOutputEdits"
+                                                       Disabled="@(!HasSelectedOrderOutputChanges || _isSavingSelectedOrderOutputs)">
+                                                Reset
+                                            </MudButton>
+                                            <MudButton Variant="Variant.Filled"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       StartIcon="@Icons.Material.Filled.Save"
+                                                       OnClick="SaveSelectedOrderOutputsAsync"
+                                                       Disabled="@(!CanSaveSelectedOrderOutputs)">
+                                                @(_isSavingSelectedOrderOutputs ? "Saving..." : "Save Outputs")
+                                            </MudButton>
                                         </div>
                                     }
                                 </div>
+                                @if (CanEditSelectedOrderOutputs)
+                                {
+                                    <div class="trade-orders-search-row">
+                                        <MudTextField @bind-Value="_selectedOrderOutputSearchQuery"
+                                                      Label="Add output item"
+                                                      Variant="Variant.Outlined"
+                                                      Margin="Margin.Dense"
+                                                      Immediate="true"
+                                                      OnKeyUp="OnSelectedOrderOutputSearchKeyUp" />
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   OnClick="SearchSelectedOrderOutputItemsAsync"
+                                                   Disabled="@(_isSearchingSelectedOrderOutputs || string.IsNullOrWhiteSpace(_selectedOrderOutputSearchQuery))">
+                                            @(_isSearchingSelectedOrderOutputs ? "Searching..." : "Search")
+                                        </MudButton>
+                                    </div>
+                                    @if (_selectedOrderOutputSearchResults.Count > 0)
+                                    {
+                                        <div class="trade-orders-search-results">
+                                            @foreach (var result in _selectedOrderOutputSearchResults)
+                                            {
+                                                <button type="button"
+                                                        class="trade-orders-search-result"
+                                                        @onclick="() => AddSelectedOrderOutput(result)">
+                                                    <span>@result.Object.Name</span>
+                                                    <span>ID @result.Id</span>
+                                                </button>
+                                            }
+                                        </div>
+                                    }
+                                    <div class="trade-orders-output-table">
+                                        <div class="trade-orders-output-header">
+                                            <span>Item</span>
+                                            <span>Qty</span>
+                                            <span>HQ</span>
+                                            <span></span>
+                                        </div>
+                                        @foreach (var output in _selectedOrderOutputEditors)
+                                        {
+                                            <div class="trade-orders-output-row">
+                                                <span>@output.Name</span>
+                                                <MudNumericField T="int"
+                                                                 Value="@output.Quantity"
+                                                                 ValueChanged="quantity => UpdateSelectedOrderOutputQuantity(output, quantity)"
+                                                                 Min="1"
+                                                                 Max="9999"
+                                                                 Variant="Variant.Outlined"
+                                                                 Margin="Margin.Dense" />
+                                                <MudCheckBox T="bool"
+                                                             Value="@output.MustBeHq"
+                                                             ValueChanged="mustBeHq => UpdateSelectedOrderOutputHq(output, mustBeHq)"
+                                                             Color="Color.Primary" />
+                                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                               Color="Color.Error"
+                                                               Size="Size.Small"
+                                                               OnClick="() => RemoveSelectedOrderOutput(output)" />
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="trade-orders-breakdown-table">
+                                        <div class="trade-orders-breakdown-header">
+                                            <span>Item</span>
+                                            <span>Qty</span>
+                                            <span>HQ</span>
+                                        </div>
+                                        @foreach (var item in GetOrderRootItems(_selectedOrder))
+                                        {
+                                            <div class="trade-orders-breakdown-row">
+                                                <span>@item.Name</span>
+                                                <span>@TradeDisplayFormatter.FormatQuantity(item.Quantity)</span>
+                                                <span>@FormatHq(item.MustBeHq)</span>
+                                            </div>
+                                        }
+                                    </div>
+                                }
                             </section>
                             <section class="trade-orders-work-section">
                                 <div class="trade-orders-section-heading">
@@ -769,6 +855,11 @@
         WebTableSortState<TradeOrderProcurementColumn>.Unsorted;
     private List<GarlandSearchResult> _requestedOrderSearchResults = [];
     private List<RequestedOrderOutputEditor> _requestedOrderOutputs = [];
+    private List<TradeRequestedOrderOutputEditorRow> _selectedOrderOutputEditors = [];
+    private string _selectedOrderOutputSearchQuery = string.Empty;
+    private List<GarlandSearchResult> _selectedOrderOutputSearchResults = [];
+    private bool _isSearchingSelectedOrderOutputs;
+    private bool _isSavingSelectedOrderOutputs;
     private string _detailTitle = string.Empty;
     private Guid? _detailCrafterId;
     private TradeOrderStatus _detailStatus;
@@ -785,6 +876,20 @@
     private bool CanCreateRequestedOrder =>
         !string.IsNullOrWhiteSpace(_newRequestedOrderTitle) &&
         _requestedOrderOutputs.Any(output => output.Quantity > 0);
+
+    private bool CanEditSelectedOrderOutputs =>
+        _selectedOrder != null &&
+        TradeOrderWorkflow.CanEditRequestedOutputs(_selectedOrder);
+
+    private bool HasSelectedOrderOutputChanges =>
+        _selectedOrder != null &&
+        TradeRequestedOrderEditorMapper.HasChanges(_selectedOrder, _selectedOrderOutputEditors);
+
+    private bool CanSaveSelectedOrderOutputs =>
+        CanEditSelectedOrderOutputs &&
+        HasSelectedOrderOutputChanges &&
+        _selectedOrderOutputEditors.Count > 0 &&
+        !_isSavingSelectedOrderOutputs;
 
     private IReadOnlyList<OrderStatusGroup> ActiveOrderGroups => TradeOrderStatusWorkflow.ActiveStatuses
         .Where(status => status != TradeOrderStatus.Draft)
@@ -990,6 +1095,105 @@
     {
         _requestedOrderOutputs.Remove(output);
         RefreshRequestedOrderSuggestedTitle(force: _usingSuggestedRequestedOrderTitle);
+    }
+
+    private async Task SearchSelectedOrderOutputItemsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedOrderOutputSearchQuery) || _isSearchingSelectedOrderOutputs)
+        {
+            return;
+        }
+
+        _isSearchingSelectedOrderOutputs = true;
+        _selectedOrderOutputSearchResults = [];
+
+        try
+        {
+            _selectedOrderOutputSearchResults = (await GarlandService.SearchAsync(_selectedOrderOutputSearchQuery))
+                .Where(result => result.Id > 0 && !string.IsNullOrWhiteSpace(result.Object.Name))
+                .Take(8)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Item search failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSearchingSelectedOrderOutputs = false;
+        }
+    }
+
+    private Task OnSelectedOrderOutputSearchKeyUp(KeyboardEventArgs e)
+    {
+        return e.Key == "Enter"
+            ? SearchSelectedOrderOutputItemsAsync()
+            : Task.CompletedTask;
+    }
+
+    private void AddSelectedOrderOutput(GarlandSearchResult result)
+    {
+        var existing = _selectedOrderOutputEditors.FirstOrDefault(output => output.ItemId == result.Id && !output.MustBeHq);
+        if (existing != null)
+        {
+            ReplaceSelectedOrderOutput(existing, existing with
+            {
+                Quantity = TradeRequestedOrderEditorMapper.ClampQuantity(existing.Quantity + 1)
+            });
+        }
+        else
+        {
+            _selectedOrderOutputEditors.Add(new TradeRequestedOrderOutputEditorRow(
+                result.Id,
+                result.Object.Name,
+                1,
+                MustBeHq: false,
+                EstimatedSaleValue: 0m));
+        }
+
+        _selectedOrderOutputSearchQuery = string.Empty;
+        _selectedOrderOutputSearchResults = [];
+    }
+
+    private void UpdateSelectedOrderOutputQuantity(TradeRequestedOrderOutputEditorRow output, int quantity)
+    {
+        ReplaceSelectedOrderOutput(output, output with
+        {
+            Quantity = TradeRequestedOrderEditorMapper.ClampQuantity(quantity)
+        });
+    }
+
+    private void UpdateSelectedOrderOutputHq(TradeRequestedOrderOutputEditorRow output, bool mustBeHq)
+    {
+        ReplaceSelectedOrderOutput(output, output with { MustBeHq = mustBeHq });
+    }
+
+    private void RemoveSelectedOrderOutput(TradeRequestedOrderOutputEditorRow output)
+    {
+        _selectedOrderOutputEditors.Remove(output);
+    }
+
+    private void ResetSelectedOrderOutputEdits()
+    {
+        if (_selectedOrder == null)
+        {
+            return;
+        }
+
+        _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(_selectedOrder);
+        _selectedOrderOutputSearchQuery = string.Empty;
+        _selectedOrderOutputSearchResults = [];
+    }
+
+    private void ReplaceSelectedOrderOutput(
+        TradeRequestedOrderOutputEditorRow existing,
+        TradeRequestedOrderOutputEditorRow replacement)
+    {
+        var index = _selectedOrderOutputEditors.IndexOf(existing);
+        if (index >= 0)
+        {
+            _selectedOrderOutputEditors[index] = replacement;
+        }
     }
 
     private void RefreshRequestedOrderSuggestedTitle(bool force = false)
@@ -1305,6 +1509,9 @@
         _detailCrafterId = order.AssignedCrafterId;
         _detailStatus = order.Status;
         _detailNotes = order.Notes;
+        _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(order);
+        _selectedOrderOutputSearchQuery = string.Empty;
+        _selectedOrderOutputSearchResults = [];
         _manualNote = string.Empty;
         AppState.SelectTradeOrder(order.Id);
         PersistSelectedOrderInNavigation(order.Id);
@@ -1419,6 +1626,58 @@
         if (!string.IsNullOrWhiteSpace(current.Query))
         {
             NavigationManager.NavigateTo(current.AbsolutePath, replace: true);
+        }
+    }
+
+    private async Task SaveSelectedOrderOutputsAsync()
+    {
+        if (_selectedOrder == null || _companyProfile == null || _isSavingSelectedOrderOutputs)
+        {
+            return;
+        }
+
+        if (!TradeOrderWorkflow.CanEditRequestedOutputs(_selectedOrder))
+        {
+            Snackbar.Add("Requested outputs can only be edited before work starts.", Severity.Warning);
+            return;
+        }
+
+        var outputs = TradeRequestedOrderEditorMapper.ToOutputs(_selectedOrderOutputEditors);
+        if (outputs.Count == 0)
+        {
+            Snackbar.Add("Add at least one requested output before saving.", Severity.Warning);
+            return;
+        }
+
+        _isSavingSelectedOrderOutputs = true;
+        var orderId = _selectedOrder.Id;
+
+        try
+        {
+            var orderToSave = TradeOrderWorkflow.WithRequestedOutputs(_selectedOrder, outputs, DateTime.UtcNow);
+            var saved = await SaveOrderAndNotifyAsync(orderToSave);
+            if (!saved)
+            {
+                Snackbar.Add("Failed to save requested outputs.", Severity.Error);
+                return;
+            }
+
+            await LoadAsync();
+            if (string.IsNullOrWhiteSpace(_loadError) &&
+                SelectOrderAfterReload(orderId, "Requested outputs were saved, but the order could not be loaded."))
+            {
+                _activeOpsTab = 0;
+            }
+
+            Snackbar.Add("Requested outputs saved. Rebuild the linked craft plan before using payment totals.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save requested outputs: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSavingSelectedOrderOutputs = false;
         }
     }
 

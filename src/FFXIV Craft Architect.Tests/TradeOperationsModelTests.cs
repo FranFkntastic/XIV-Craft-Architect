@@ -527,6 +527,9 @@ public class TradeOperationsModelTests
             CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.OrderGenerated,
             SourceSnapshot = new TradeOrderSourceSnapshot
             {
+                SourceKind = TradeOrderSourceKind.ActiveCraftPlan,
+                SourcePlanId = "old-source-plan",
+                SourcePlanName = "Old source plan",
                 RootItems =
                 [
                     new TradeOrderRootItemSnapshot(100, "Old Plate", 999, false, 10_000m)
@@ -559,6 +562,9 @@ public class TradeOperationsModelTests
         Assert.Null(changed.CraftPlanName);
         Assert.Null(changed.CraftPlanSavedAtUtc);
         Assert.Equal(TradeOrderCraftPlanLinkKind.Unknown, changed.CraftPlanLinkKind);
+        Assert.Equal(TradeOrderSourceKind.TradeRequestedOutputs, changed.SourceSnapshot.SourceKind);
+        Assert.Null(changed.SourceSnapshot.SourcePlanId);
+        Assert.Equal("Trade requested outputs", changed.SourceSnapshot.SourcePlanName);
         Assert.Empty(changed.SourceSnapshot.Materials);
         Assert.Empty(changed.SourceSnapshot.CraftLabor);
         Assert.Contains(changed.SourceSnapshot.Warnings, warning => warning.Contains("Requested outputs changed", StringComparison.OrdinalIgnoreCase));
