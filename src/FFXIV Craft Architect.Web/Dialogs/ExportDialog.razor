@@ -5,6 +5,7 @@
 @inject RecipeCalculationService RecipeService
 @inject IArtisanService ArtisanService
 @inject DiagnosticSnapshotBundleService DiagnosticSnapshotBundleService
+@inject BrowserFileExportService BrowserFileExportService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
@@ -124,11 +125,15 @@
                                    OnClick="() => CopyToClipboard(_diagnosticSnapshotJson)">
                             Copy JSON
                         </MudButton>
-                        <MudButton Color="Color.Secondary"
-                                   StartIcon="@Icons.Material.Filled.Download"
-                                   OnClick="DownloadDiagnosticSnapshotJson">
-                            Download
-                        </MudButton>
+                        <button type="button"
+                                class="mud-button-root mud-button mud-button-filled mud-button-filled-secondary mud-button-filled-size-medium mud-ripple"
+                                onclick="window.CraftArchitectFileExport?.savePreparedFile('diagnostic-snapshot')">
+                            <span class="mud-button-label">
+                                <MudIcon Icon="@Icons.Material.Filled.Download"
+                                         Class="mud-button-icon-start mud-button-icon-size-medium" />
+                                Save As...
+                            </span>
+                        </button>
                     </div>
                 }
                 else
@@ -146,6 +151,8 @@
 </MudDialog>
 
 @code {
+    private const string DiagnosticSnapshotSaveKey = "diagnostic-snapshot";
+
     [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
     [Parameter] public int ActiveTab { get; set; } = 0;
     
@@ -290,35 +297,21 @@
         }
     }
 
-    private void GenerateDiagnosticSnapshotJson()
+    private async Task GenerateDiagnosticSnapshotJson()
     {
         try
         {
             var bundle = DiagnosticSnapshotBundleService.BuildBundle(DateTime.UtcNow);
             _diagnosticSnapshotJson = DiagnosticSnapshotBundleService.Serialize(bundle);
+            await BrowserFileExportService.PrepareTextFileSaveAsync(
+                DiagnosticSnapshotSaveKey,
+                CreateDiagnosticSnapshotFileName(),
+                _diagnosticSnapshotJson,
+                "application/json");
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Failed to generate diagnostic snapshot: {ex.Message}", Severity.Error);
-        }
-    }
-
-    private async Task DownloadDiagnosticSnapshotJson()
-    {
-        if (string.IsNullOrEmpty(_diagnosticSnapshotJson)) return;
-
-        try
-        {
-            var bytes = System.Text.Encoding.UTF8.GetBytes(_diagnosticSnapshotJson);
-            var stream = new MemoryStream(bytes);
-            using var streamRef = new DotNetStreamReference(stream);
-            var fileName = CreateDiagnosticSnapshotFileName();
-            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
-            Snackbar.Add($"Downloaded {fileName}", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Download failed: {ex.Message}", Severity.Error);
         }
     }
 
