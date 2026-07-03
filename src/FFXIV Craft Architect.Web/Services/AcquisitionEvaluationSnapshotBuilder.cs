@@ -299,26 +299,31 @@ public static class AcquisitionEvaluationSnapshotBuilder
             .ToList();
 
         costContext.TryGetShoppingPlan(node.ItemId, out var marketPlan);
+        var readState = SelectCheapestRepresentativeReadState(
+            aggregate,
+            effectiveOccurrences,
+            totalQuantity,
+            costContext);
 
         return new DecisionRow(
             node,
-            aggregate.ReadState.NodeId,
-            aggregate.ReadState.ItemId,
-            aggregate.ReadState.ItemName,
-            aggregate.ReadState.IconId,
-            aggregate.ReadState.Source,
-            aggregate.ReadState.SourceReason,
-            aggregate.ReadState.MustBeHq,
-            aggregate.ReadState.HasChildren,
-            aggregate.ReadState.CanCraft,
-            aggregate.ReadState.CanBeHq,
-            aggregate.ReadState.Yield,
-            aggregate.ReadState.CanBuyFromMarket,
-            aggregate.ReadState.CanBuyFromVendor,
-            aggregate.ReadState.UnitPrice,
-            aggregate.ReadState.HqUnitPrice,
-            aggregate.ReadState.VendorUnitPrice,
-            aggregate.ReadState.VendorOptions,
+            readState.NodeId,
+            readState.ItemId,
+            readState.ItemName,
+            readState.IconId,
+            readState.Source,
+            readState.SourceReason,
+            readState.MustBeHq,
+            readState.HasChildren,
+            readState.CanCraft,
+            readState.CanBeHq,
+            readState.Yield,
+            readState.CanBuyFromMarket,
+            readState.CanBuyFromVendor,
+            readState.UnitPrice,
+            readState.HqUnitPrice,
+            readState.VendorUnitPrice,
+            readState.VendorOptions,
             totalQuantity,
             activeQuantity,
             GetUsedInText(effectiveOccurrences),
@@ -332,17 +337,104 @@ public static class AcquisitionEvaluationSnapshotBuilder
                 node.ItemId,
                 marketPlan,
                 unavailableMarketItemIds,
-                aggregate.ReadState.Source == AcquisitionSource.MarketBuyHq),
-            GetEstimatedCost(aggregate, effectiveOccurrences, totalQuantity, costContext));
+                readState.Source == AcquisitionSource.MarketBuyHq),
+            GetEstimatedCost(readState, effectiveOccurrences, totalQuantity, costContext));
     }
 
-    private static string GetEstimatedCost(
+    private static DecisionRowReadState SelectCheapestRepresentativeReadState(
         DecisionAggregate aggregate,
         IReadOnlyList<DecisionOccurrence> effectiveOccurrences,
         int quantity,
         AcquisitionCostContext costContext)
     {
-        if (aggregate.ReadState.Source == AcquisitionSource.Craft)
+        var readState = aggregate.ReadState;
+        var candidates = GetRepresentativeSourceCandidates(readState)
+            .Select(source => (
+                Source: source,
+                HasCost: TryGetRepresentativeCost(readState, effectiveOccurrences, quantity, costContext, source, out var cost),
+                Cost: cost))
+            .Where(candidate => candidate.HasCost)
+            .OrderBy(candidate => candidate.Cost)
+            .ThenBy(candidate => GetRepresentativeSourceTieBreak(candidate.Source))
+            .ToList();
+
+        return candidates.Count == 0
+            ? readState
+            : readState with { Source = candidates[0].Source };
+    }
+
+    private static IEnumerable<AcquisitionSource> GetRepresentativeSourceCandidates(DecisionRowReadState readState)
+    {
+        if (readState.HasChildren && readState.CanCraft)
+        {
+            yield return AcquisitionSource.Craft;
+        }
+
+        if (readState.CanBuyFromMarket && !readState.MustBeHq)
+        {
+            yield return AcquisitionSource.MarketBuyNq;
+        }
+
+        if (readState.CanBuyFromMarket && readState.CanBeHq)
+        {
+            yield return AcquisitionSource.MarketBuyHq;
+        }
+
+        if (readState.CanBuyFromVendor)
+        {
+            yield return AcquisitionSource.VendorBuy;
+        }
+    }
+
+    private static bool TryGetRepresentativeCost(
+        DecisionRowReadState readState,
+        IReadOnlyList<DecisionOccurrence> effectiveOccurrences,
+        int quantity,
+        AcquisitionCostContext costContext,
+        AcquisitionSource source,
+        out decimal cost)
+    {
+        if (source != AcquisitionSource.Craft)
+        {
+            return AcquisitionEvaluationCostCalculator.TryGetCost(readState, quantity, source, costContext, out cost);
+        }
+
+        cost = 0;
+        foreach (var occurrence in effectiveOccurrences)
+        {
+            if (AcquisitionPlanningService.TryGetAcquisitionCost(
+                occurrence.Node,
+                AcquisitionSource.Craft,
+                costContext,
+                occurrence.Quantity,
+                out var occurrenceCost))
+            {
+                cost += occurrenceCost;
+            }
+        }
+
+        return cost > 0;
+    }
+
+    private static int GetRepresentativeSourceTieBreak(AcquisitionSource source)
+    {
+        return source switch
+        {
+            AcquisitionSource.VendorBuy => 0,
+            AcquisitionSource.MarketBuyNq => 1,
+            AcquisitionSource.MarketBuyHq => 2,
+            AcquisitionSource.Craft => 3,
+            _ => 4
+        };
+    }
+
+    private static string GetEstimatedCost(
+        DecisionRowReadState readState,
+        IReadOnlyList<DecisionOccurrence> effectiveOccurrences,
+        int quantity,
+        AcquisitionCostContext costContext)
+    {
+        if (readState.Source == AcquisitionSource.Craft)
         {
             decimal cost = 0;
             foreach (var occurrence in effectiveOccurrences)
@@ -362,9 +454,9 @@ public static class AcquisitionEvaluationSnapshotBuilder
         }
 
         return AcquisitionEvaluationCostCalculator.TryGetCost(
-            aggregate.ReadState,
+            readState,
             quantity,
-            aggregate.ReadState.Source,
+            readState.Source,
             costContext,
             out var directCost)
                 ? $"{directCost:N0}g"

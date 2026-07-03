@@ -582,6 +582,81 @@ public class AcquisitionEvaluationSnapshotBuilderTests
     }
 
     [Fact]
+    public void Build_SuppressedCraftRowUsesCheapestRepresentativeSource()
+    {
+        var root = CreateRoot(100, "Suppressing Parent");
+        root.Source = AcquisitionSource.MarketBuyNq;
+        root.CanBuyFromMarket = true;
+
+        var material = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Suppressed Material",
+            Quantity = 10,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            MarketPrice = 1_000,
+            Yield = 1,
+            Parent = root
+        };
+        material.Children.Add(new PlanNode
+        {
+            ItemId = 201,
+            Name = "Expensive Child",
+            Quantity = 10,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 10_000,
+            Parent = material
+        });
+        root.Children.Add(material);
+
+        var plan = new CraftingPlan { RootItems = [root] };
+        var projection = new RecipeDemandProjection(
+            AllPlanDemand:
+            [
+                CreateDemandRow(
+                    RecipeDemandViewKind.PlanOccurrence,
+                    material,
+                    quantity: 10,
+                    canBuyFromMarket: true,
+                    unitPrice: 1_000,
+                    canCraft: true,
+                    suppressedByNodeId: root.NodeId,
+                    suppressedByItemId: root.ItemId,
+                    suppressedByItemName: root.Name)
+            ],
+            MarketAnalysisCandidates: Array.Empty<RecipeDemandRow>(),
+            ActiveProcurementDemand: Array.Empty<RecipeDemandRow>(),
+            SuppressedDemand:
+            [
+                CreateDemandRow(
+                    RecipeDemandViewKind.Suppressed,
+                    material,
+                    quantity: 10,
+                    canBuyFromMarket: true,
+                    unitPrice: 1_000,
+                    canCraft: true,
+                    suppressedByNodeId: root.NodeId,
+                    suppressedByItemId: root.ItemId,
+                    suppressedByItemName: root.Name)
+            ]);
+        var snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
+            plan,
+            shoppingPlans: Array.Empty<DetailedShoppingPlan>(),
+            unavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>(),
+            AcquisitionFilter.All,
+            projection);
+
+        var row = snapshot.Rows.Single(row => row.ItemId == 200);
+
+        Assert.True(row.IsFullySuppressed);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, row.Source);
+        Assert.Equal("10,000g", row.EstimatedCost);
+    }
+
+    [Fact]
     public void Build_UsesRecipeDemandProjectionReadFieldsForDecisionRows()
     {
         var root = CreateRoot(100, "Final Craft");
