@@ -229,7 +229,8 @@ public enum TradeOrderHistoryEventKind
     Reopened,
     PayrollLinked,
     CraftPlanLinked,
-    PricingRefreshed
+    PricingRefreshed,
+    RequestUpdated
 }
 
 public sealed class TradeOrderHistoryEvent

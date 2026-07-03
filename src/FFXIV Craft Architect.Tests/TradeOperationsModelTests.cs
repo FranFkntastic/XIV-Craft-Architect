@@ -183,6 +183,30 @@ public class TradeOperationsModelTests
         Assert.Equal(TradeOrderCraftPlanLinkKind.Unknown, order.CraftPlanLinkKind);
     }
 
+    [Theory]
+    [InlineData(TradeOrderStatus.ReadyToAssign, false, true)]
+    [InlineData(TradeOrderStatus.ReadyToAssign, true, true)]
+    [InlineData(TradeOrderStatus.Draft, false, true)]
+    [InlineData(TradeOrderStatus.Assigned, true, true)]
+    [InlineData(TradeOrderStatus.Assigned, false, true)]
+    [InlineData(TradeOrderStatus.InProgress, true, false)]
+    [InlineData(TradeOrderStatus.AwaitingDelivery, true, false)]
+    [InlineData(TradeOrderStatus.Completed, false, false)]
+    [InlineData(TradeOrderStatus.Canceled, false, false)]
+    public void TradeOrderWorkflow_CanEditRequestedOutputsOnlyBeforeWorkStarts(
+        TradeOrderStatus status,
+        bool hasCrafter,
+        bool expected)
+    {
+        var order = new TradeOrder
+        {
+            Status = status,
+            AssignedCrafterId = hasCrafter ? Guid.NewGuid() : null
+        };
+
+        Assert.Equal(expected, TradeOrderWorkflow.CanEditRequestedOutputs(order));
+    }
+
     [Fact]
     public void TradeOrderWorkflow_CopyOrderCreatesDetachedMutableSnapshot()
     {
@@ -486,6 +510,106 @@ public class TradeOperationsModelTests
         Assert.Equal(2, assessment.OutputQuantity);
         Assert.Equal(1, assessment.MaterialLineCount);
         Assert.Equal(1, assessment.PricedMaterialLineCount);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_WithRequestedOutputsReplacesRootItemsAndClearsStaleEvidence()
+    {
+        var updatedAt = new DateTime(2026, 7, 2, 20, 0, 0, DateTimeKind.Utc);
+        var order = new TradeOrder
+        {
+            Id = Guid.NewGuid(),
+            CompanyProfileId = Guid.NewGuid(),
+            Status = TradeOrderStatus.ReadyToAssign,
+            CraftPlanId = "old-plan",
+            CraftPlanName = "Order - Old",
+            CraftPlanSavedAtUtc = updatedAt.AddDays(-1),
+            CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.OrderGenerated,
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                RootItems =
+                [
+                    new TradeOrderRootItemSnapshot(100, "Old Plate", 999, false, 10_000m)
+                ],
+                Materials =
+                [
+                    new TradeOrderMaterialSnapshot(200, "Old Ore", 3, false, 50m, 150m)
+                ],
+                CraftLabor =
+                [
+                    new TradeOrderCraftLaborSnapshot("old", 100, "Old Plate", 999, 999)
+                ],
+                Warnings = ["old warning"]
+            }
+        };
+
+        var changed = TradeOrderWorkflow.WithRequestedOutputs(
+            order,
+            [
+                new TradeRequestedOrderOutput(300, "New Plate", 1_998, false, 25_000m)
+            ],
+            updatedAt);
+
+        Assert.NotSame(order, changed);
+        var root = Assert.Single(changed.SourceSnapshot.RootItems);
+        Assert.Equal(300, root.ItemId);
+        Assert.Equal("New Plate", root.Name);
+        Assert.Equal(1_998, root.Quantity);
+        Assert.Null(changed.CraftPlanId);
+        Assert.Null(changed.CraftPlanName);
+        Assert.Null(changed.CraftPlanSavedAtUtc);
+        Assert.Equal(TradeOrderCraftPlanLinkKind.Unknown, changed.CraftPlanLinkKind);
+        Assert.Empty(changed.SourceSnapshot.Materials);
+        Assert.Empty(changed.SourceSnapshot.CraftLabor);
+        Assert.Contains(changed.SourceSnapshot.Warnings, warning => warning.Contains("Requested outputs changed", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(changed.History, history => history.Kind == TradeOrderHistoryEventKind.RequestUpdated);
+        Assert.Equal(updatedAt, changed.UpdatedAtUtc);
+        Assert.NotNull(order.CraftPlanId);
+        Assert.NotEmpty(order.SourceSnapshot.Materials);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_WithRequestedOutputsAllowsAssignedAwaitingPaymentOrders()
+    {
+        var order = new TradeOrder
+        {
+            Status = TradeOrderStatus.Assigned,
+            AssignedCrafterId = Guid.NewGuid()
+        };
+
+        var changed = TradeOrderWorkflow.WithRequestedOutputs(
+            order,
+            [new TradeRequestedOrderOutput(100, "Plate", 999, false, 0m)],
+            DateTime.UtcNow);
+
+        Assert.Equal(TradeOrderStatus.Assigned, changed.Status);
+        Assert.Equal(order.AssignedCrafterId, changed.AssignedCrafterId);
+        Assert.Contains(changed.SourceSnapshot.RootItems, item => item.ItemId == 100 && item.Quantity == 999);
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_WithRequestedOutputsRejectsInProgressOrders()
+    {
+        var order = new TradeOrder
+        {
+            Status = TradeOrderStatus.InProgress,
+            AssignedCrafterId = Guid.NewGuid()
+        };
+
+        Assert.Throws<InvalidOperationException>(() =>
+            TradeOrderWorkflow.WithRequestedOutputs(
+                order,
+                [new TradeRequestedOrderOutput(100, "Plate", 999, false, 0m)],
+                DateTime.UtcNow));
+    }
+
+    [Fact]
+    public void TradeOrderWorkflow_WithRequestedOutputsRejectsEmptyRequests()
+    {
+        var order = new TradeOrder { Status = TradeOrderStatus.ReadyToAssign };
+
+        Assert.Throws<ArgumentException>(() =>
+            TradeOrderWorkflow.WithRequestedOutputs(order, [], DateTime.UtcNow));
     }
 
     [Fact]

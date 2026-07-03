@@ -61,6 +61,86 @@ public static class TradeOrderWorkflow
         return TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(policy);
     }
 
+    public static bool CanEditRequestedOutputs(TradeOrder order)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+
+        return !TradeOrderStatusWorkflow.IsArchived(order.Status) &&
+            (order.Status == TradeOrderStatus.ReadyToAssign ||
+             order.Status == TradeOrderStatus.Draft ||
+             order.Status == TradeOrderStatus.Assigned);
+    }
+
+    public static TradeOrder WithRequestedOutputs(
+        TradeOrder order,
+        IReadOnlyList<TradeRequestedOrderOutput> outputs,
+        DateTime updatedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        ArgumentNullException.ThrowIfNull(outputs);
+
+        if (!CanEditRequestedOutputs(order))
+        {
+            throw new InvalidOperationException("Requested outputs can only be edited before work starts.");
+        }
+
+        var normalizedOutputs = outputs
+            .Where(output => output.Quantity > 0)
+            .GroupBy(output => (output.ItemId, output.MustBeHq))
+            .Select(group =>
+            {
+                var first = group.First();
+                return new TradeRequestedOrderOutput(
+                    first.ItemId,
+                    first.Name.Trim(),
+                    group.Sum(output => output.Quantity),
+                    first.MustBeHq,
+                    group.Sum(output => output.EstimatedSaleValue));
+            })
+            .Where(output => output.ItemId > 0 && !string.IsNullOrWhiteSpace(output.Name))
+            .OrderBy(output => output.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(output => output.MustBeHq)
+            .ToArray();
+
+        if (normalizedOutputs.Length == 0)
+        {
+            throw new ArgumentException("At least one requested output is required.", nameof(outputs));
+        }
+
+        var copy = CopyOrder(order);
+        copy.SourceSnapshot ??= new TradeOrderSourceSnapshot();
+        copy.SourceSnapshot.RootItems = normalizedOutputs
+            .Select(output => new TradeOrderRootItemSnapshot(
+                output.ItemId,
+                output.Name,
+                output.Quantity,
+                output.MustBeHq,
+                output.EstimatedSaleValue))
+            .ToArray();
+        copy.SourceSnapshot.Materials = [];
+        copy.SourceSnapshot.CraftLabor = [];
+        copy.SourceSnapshot.Warnings = AppendDistinctWarning(
+            copy.SourceSnapshot.Warnings,
+            "Requested outputs changed. Rebuild the linked craft plan and reprice before using payment totals.");
+        copy.SourceSnapshot.ImportedAtUtc = updatedAtUtc;
+        copy.CraftPlanId = null;
+        copy.CraftPlanName = null;
+        copy.CraftPlanSavedAtUtc = null;
+        copy.CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.Unknown;
+        copy.UpdatedAtUtc = updatedAtUtc;
+        AppendHistory(copy, new TradeOrderHistoryEvent
+        {
+            Id = Guid.NewGuid(),
+            CompanyProfileId = copy.CompanyProfileId,
+            OrderId = copy.Id,
+            Kind = TradeOrderHistoryEventKind.RequestUpdated,
+            Note = "Requested outputs changed.",
+            CreatedAtUtc = updatedAtUtc
+        });
+
+        return copy;
+    }
+
     public static TradeOrderSourceSnapshot CopySourceSnapshot(TradeOrderSourceSnapshot? source)
     {
         source ??= new TradeOrderSourceSnapshot();
@@ -434,6 +514,18 @@ public static class TradeOrderWorkflow
     {
         order.History = (order.History ?? Array.Empty<TradeOrderHistoryEvent>())
             .Append(historyEvent)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> AppendDistinctWarning(
+        IReadOnlyList<string>? warnings,
+        string warning)
+    {
+        return (warnings ?? Array.Empty<string>())
+            .Append(warning)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
 
