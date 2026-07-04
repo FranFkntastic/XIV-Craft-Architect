@@ -184,6 +184,90 @@ public class IndexedDbService
         }
     }
 
+    public async Task<Dictionary<string, string>> LoadAllSettingsAsync()
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<Dictionary<string, string>>("IndexedDB.loadAllSettings");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to load all settings from IndexedDB");
+            return new Dictionary<string, string>();
+        }
+    }
+
+    public async Task<bool> SaveSettingsBatchAsync(Dictionary<string, string> settings)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveSettingsBatch", settings);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save settings batch to IndexedDB");
+            return false;
+        }
+    }
+
+    public async Task<bool> SavePlansBatchAsync(IReadOnlyList<StoredPlan> plans)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.savePlansBatch", plans);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save plans batch to IndexedDB");
+            return false;
+        }
+    }
+
+    public async Task<bool> SaveTradeCraftersBatchAsync(IReadOnlyList<TradeCrafterProfile> crafters)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradeCraftersBatch", crafters);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save Trade crafters batch to IndexedDB");
+            return false;
+        }
+    }
+
+    public async Task<bool> SaveTradeOrdersBatchAsync(IReadOnlyList<TradeOrder> orders)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradeOrdersBatch", orders);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save Trade orders batch to IndexedDB");
+            return false;
+        }
+    }
+
+    public async Task<bool> SaveTradePayrollDraftsBatchAsync(IReadOnlyList<TradePayrollWorkflowDraft> drafts)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradePayrollDraftsBatch", drafts);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save Trade payroll drafts batch to IndexedDB");
+            return false;
+        }
+    }
+
     public async Task<bool> SaveTradeCompanyProfileAsync(TradeCompanyProfile profile)
     {
         try

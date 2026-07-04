@@ -438,6 +438,24 @@ async function saveStoreRecord(storeName, record) {
     });
 }
 
+async function saveStoreRecordsBatch(storeName, records) {
+    let database = await initDB();
+    database = await ensureTradeStores(database);
+    requireTradeStore(database, storeName);
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([storeName], 'readwrite');
+        const store = transaction.objectStore(storeName);
+        for (const record of records || []) {
+            store.put(record);
+        }
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
 async function loadStoreRecords(storeName) {
     let database = await initDB();
     database = await ensureTradeStores(database);
@@ -507,6 +525,10 @@ async function saveTradeCrafter(crafter) {
     return await saveStoreRecord(STORE_TRADE_CRAFTERS, crafter);
 }
 
+async function saveTradeCraftersBatch(crafters) {
+    return await saveStoreRecordsBatch(STORE_TRADE_CRAFTERS, crafters);
+}
+
 async function loadTradeCrafters(companyProfileId) {
     const crafters = await loadStoreRecords(STORE_TRADE_CRAFTERS);
     return crafters
@@ -516,6 +538,10 @@ async function loadTradeCrafters(companyProfileId) {
 
 async function saveTradeOrder(order) {
     return await saveStoreRecord(STORE_TRADE_ORDERS, order);
+}
+
+async function saveTradeOrdersBatch(orders) {
+    return await saveStoreRecordsBatch(STORE_TRADE_ORDERS, orders);
 }
 
 async function loadTradeOrders(companyProfileId) {
@@ -550,6 +576,10 @@ async function deleteTradeOrderCraftSnapshot(snapshotId) {
 
 async function saveTradePayrollDraft(draft) {
     return await saveStoreRecord(STORE_TRADE_PAYROLL_DRAFTS, draft);
+}
+
+async function saveTradePayrollDraftsBatch(drafts) {
+    return await saveStoreRecordsBatch(STORE_TRADE_PAYROLL_DRAFTS, drafts);
 }
 
 async function loadTradePayrollDrafts(companyProfileId) {
@@ -675,6 +705,62 @@ async function loadSetting(key) {
             resolve(result ? result.value : null);
         };
         request.onerror = () => reject(request.error);
+    });
+}
+
+async function loadAllSettings() {
+    const database = await initDB();
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_SETTINGS], 'readonly');
+        const store = transaction.objectStore(STORE_SETTINGS);
+        const request = store.openCursor();
+        const settings = {};
+
+        request.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+                settings[cursor.value.key] = cursor.value.value;
+                cursor.continue();
+            } else {
+                resolve(settings);
+            }
+        };
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function saveSettingsBatch(settings) {
+    const database = await initDB();
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_SETTINGS], 'readwrite');
+        const store = transaction.objectStore(STORE_SETTINGS);
+        for (const [key, value] of Object.entries(settings || {})) {
+            store.put({ key, value });
+        }
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
+async function savePlansBatch(plans) {
+    const database = await initDB();
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
+        const store = transaction.objectStore(STORE_PLANS);
+        const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
+        for (const plan of plans || []) {
+            store.put(plan);
+            summaryStore.put(toPlanSummary(plan));
+        }
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
 }
 
@@ -1075,10 +1161,13 @@ window.IndexedDB = {
     loadPlan,
     loadAllPlans,
     loadPlanSummaries,
+    savePlansBatch,
     patchMarketAnalysis,
     deletePlan,
     saveSetting,
     loadSetting,
+    loadAllSettings,
+    saveSettingsBatch,
     clearAllPlans,
     clearMarketCache,
     saveMarketData,
@@ -1091,8 +1180,10 @@ window.IndexedDB = {
     saveTradeCompanyProfile,
     loadTradeCompanyProfiles,
     saveTradeCrafter,
+    saveTradeCraftersBatch,
     loadTradeCrafters,
     saveTradeOrder,
+    saveTradeOrdersBatch,
     loadTradeOrders,
     deleteTradeOrder,
     saveTradeOrderCraftSnapshot,
@@ -1100,6 +1191,7 @@ window.IndexedDB = {
     loadTradeOrderCraftSnapshotsForCompany,
     deleteTradeOrderCraftSnapshot,
     saveTradePayrollDraft,
+    saveTradePayrollDraftsBatch,
     loadTradePayrollDrafts,
     deleteTradePayrollDraft,
     getTradeStoreDiagnostics
