@@ -49,6 +49,7 @@ builder.Services.AddScoped<CommissionPayrollService>();
 builder.Services.AddScoped<TradeLaborStandardCalibrationService>();
 builder.Services.AddScoped<ITradeLaborBenchmarkPlanBuilder, TradeLaborBenchmarkPlanBuilder>();
 builder.Services.AddWorkshopHostCraftAppraisal();
+builder.Services.AddScoped<CraftAppraisalQuoteExportService>();
 
 // Register Settings Service (Web implementation)
 builder.Services.AddScoped<ISettingsService, WebSettingsService>();

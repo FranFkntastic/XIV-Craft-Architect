@@ -115,6 +115,16 @@
         Market Analysis
     </MudButton>
 
+    <MudButton OnClick="OnExportCraftQuoteRequested"
+               Disabled="@(!CanExportCraftQuote)"
+               Color="Color.Secondary"
+               Variant="Variant.Outlined"
+               FullWidth="true"
+               Class="mt-2"
+               StartIcon="@Icons.Material.Filled.FileDownload">
+        Export Craft Quote
+    </MudButton>
+
     @if (ShoppingPlans.Any())
     {
         <MudDivider Class="my-4" />
@@ -147,6 +157,8 @@
     [Parameter] public string NoticeMessage { get; set; } = string.Empty;
 
     [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
+    [Parameter] public bool CanExportCraftQuote { get; set; }
+    [Parameter] public EventCallback OnExportCraftQuoteRequested { get; set; }
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
     [Parameter] public EventCallback OnGoToMarketAnalysisRequested { get; set; }
 

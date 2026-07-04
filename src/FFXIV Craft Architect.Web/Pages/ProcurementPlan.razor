@@ -9,6 +9,8 @@
 @inject CancellableOperationService CancellableOperations
 @inject ProcurementWorkflowService ProcurementWorkflow
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
+@inject BrowserFileExportService FileExportService
+@inject CraftAppraisalQuoteExportService CraftAppraisalQuoteExportService
 @implements IDisposable
 
 @{
@@ -27,6 +29,8 @@
             NoticeSeverity="@GetProcurementNoticeSeverity(evidenceSummary)"
             NoticeMessage="@GetProcurementNoticeMessage(evidenceSummary)"
             OnRunAnalysisRequested="RunAnalysisAsync"
+            CanExportCraftQuote="CanExportCraftQuote()"
+            OnExportCraftQuoteRequested="ExportCraftQuoteAsync"
             OnGoToPlannerRequested="GoToPlanner"
             OnGoToMarketAnalysisRequested="GoToMarketAnalysis" />
 
@@ -73,6 +77,11 @@
         return AppState.CurrentPlan != null &&
                GetBuyItems().Any() &&
                !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
+    }
+
+    private bool CanExportCraftQuote()
+    {
+        return AppState.CurrentPlan?.RootItems.Count == 1 && !AppState.IsBusy;
     }
 
     /// <summary>
@@ -263,6 +272,34 @@
     {
         // Use relative path (no leading slash) so it resolves against base href correctly
         NavigationManager.NavigateTo("market");
+    }
+
+    private async Task ExportCraftQuoteAsync()
+    {
+        try
+        {
+            var result = await CraftAppraisalQuoteExportService.CreateExportAsync(
+                AppState.CurrentPlan,
+                AppState.SelectedRegion,
+                AppState.SelectedDataCenter);
+
+            if (!result.IsAvailable)
+            {
+                Snackbar.Add(result.UnavailableReason ?? "Craft quote export is not available.", Severity.Warning);
+                return;
+            }
+
+            await FileExportService.PrepareTextFileSaveAsync(
+                "craft-appraisal-quote",
+                result.FileName,
+                result.Json,
+                "application/json");
+            Snackbar.Add($"Craft quote export prepared: {result.FileName}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Craft quote export failed: {ex.Message}", Severity.Error);
+        }
     }
 
     /// <summary>
