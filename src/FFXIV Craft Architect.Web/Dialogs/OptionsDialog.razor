@@ -3,6 +3,7 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Core.Services.Interfaces
+@using FFXIV_Craft_Architect.Web.Services.ProfileHosting
 @using System.Text.Json
 @inject AppState AppState
 @inject ISettingsService Settings
@@ -10,6 +11,9 @@
 @inject GarlandService GarlandService
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradeLaborBenchmarkCalibrationWorkflowService LaborBenchmarkCalibrationWorkflow
+@inject ProfileHostClient ProfileHostClient
+@inject ProfileSyncLocalStateService ProfileSyncLocalState
+@inject ProfileSyncService ProfileSync
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
@@ -374,6 +378,152 @@
                 }
             </MudTabPanel>
 
+            <MudTabPanel Text="Hosting">
+                <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
+                    Connect this browser profile to a private Craft Architect profile host.
+                </MudText>
+
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" md="7">
+                        <MudTextField @bind-Value="_profileHostUrl"
+                                      Label="Host URL"
+                                      Placeholder="https://craft.example.com"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Immediate="true"
+                                      Disabled="_profileHostIsBusy" />
+                    </MudItem>
+                    <MudItem xs="12" md="5">
+                        <MudTextField @bind-Value="_profileHostAccessKey"
+                                      Label="Access key"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Immediate="true"
+                                      InputType="InputType.Password"
+                                      Disabled="_profileHostIsBusy" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudRadioGroup T="FirstConnectMode" @bind-Value="_profileHostFirstConnectMode" Class="my-2">
+                    <MudRadio T="FirstConnectMode" Value="@FirstConnectMode.UploadLocal" Color="Color.Primary">
+                        Upload this browser first
+                    </MudRadio>
+                    <MudRadio T="FirstConnectMode" Value="@FirstConnectMode.DownloadRemote" Color="Color.Primary">
+                        Download server profile first
+                    </MudRadio>
+                </MudRadioGroup>
+
+                <div class="d-flex flex-wrap gap-2 my-3">
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Secondary"
+                               StartIcon="@Icons.Material.Filled.WifiTethering"
+                               OnClick="TestProfileHostConnectionAsync"
+                               Disabled="_profileHostIsBusy">
+                        Test
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.CloudSync"
+                               OnClick="ConnectProfileHostAsync"
+                               Disabled="_profileHostIsBusy">
+                        Connect
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Secondary"
+                               StartIcon="@Icons.Material.Filled.Sync"
+                               OnClick="SyncProfileHostNowAsync"
+                               Disabled="_profileHostIsBusy || !ProfileSync.CurrentStatus.IsConnected">
+                        Sync Now
+                    </MudButton>
+                    <MudButton Variant="Variant.Text"
+                               Color="Color.Error"
+                               StartIcon="@Icons.Material.Filled.LinkOff"
+                               OnClick="DisconnectProfileHostAsync"
+                               Disabled="_profileHostIsBusy || !ProfileSync.CurrentStatus.IsConnected">
+                        Disconnect
+                    </MudButton>
+                </div>
+
+                @if (_profileHostIsBusy)
+                {
+                    <MudProgressLinear Indeterminate="true" Class="my-3" />
+                }
+
+                <MudPaper Variant="Variant.Outlined" Class="pa-3 my-3">
+                    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;">
+                        <div>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Connection</MudText>
+                            <MudText Typo="Typo.body2">@GetProfileHostConnectionLabel()</MudText>
+                        </div>
+                        <div>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Host</MudText>
+                            <MudText Typo="Typo.body2">@GetProfileHostReachabilityLabel()</MudText>
+                        </div>
+                        <div>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Revision</MudText>
+                            <MudText Typo="Typo.body2">@ProfileSync.CurrentStatus.LastSyncRevision.ToString("N0")</MudText>
+                        </div>
+                        <div>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Queued / conflicts</MudText>
+                            <MudText Typo="Typo.body2">@ProfileSync.CurrentStatus.PendingCount.ToString("N0") / @ProfileSync.CurrentStatus.ConflictCount.ToString("N0")</MudText>
+                        </div>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_profileHostStatus))
+                    {
+                        <MudText Typo="Typo.caption" Color="@_profileHostStatusColor" Class="mt-2 d-block">
+                            @_profileHostStatus
+                        </MudText>
+                    }
+                    else if (!string.IsNullOrWhiteSpace(ProfileSync.CurrentStatus.Message))
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
+                            @ProfileSync.CurrentStatus.Message
+                        </MudText>
+                    }
+                </MudPaper>
+
+                @if (ProfileSync.Conflicts.Count > 0)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">Conflicts</MudText>
+                    <MudSimpleTable Dense="true" Hover="true">
+                        <thead>
+                            <tr>
+                                <th>Collection</th>
+                                <th>Object</th>
+                                <th class="text-right">Local rev.</th>
+                                <th class="text-right">Remote rev.</th>
+                                <th class="text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var conflict in ProfileSync.Conflicts)
+                            {
+                                <tr>
+                                    <td>@conflict.Collection</td>
+                                    <td>@conflict.ObjectId</td>
+                                    <td class="text-right">@conflict.LocalRevision.ToString("N0")</td>
+                                    <td class="text-right">@conflict.RemoteRevision.ToString("N0")</td>
+                                    <td class="text-right">
+                                        <MudButton Variant="Variant.Text"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   OnClick="() => AcceptRemoteConflictAsync(conflict)">
+                                            Apply Remote
+                                        </MudButton>
+                                        <MudButton Variant="Variant.Text"
+                                                   Color="Color.Primary"
+                                                   Size="Size.Small"
+                                                   OnClick="() => KeepLocalConflictAsync(conflict)">
+                                            Keep Local
+                                        </MudButton>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                }
+            </MudTabPanel>
+
             <MudTabPanel Text="Storage">
                 <MudText Typo="Typo.body2" Class="mb-4">
                     Manage your saved plans and application data.
@@ -484,6 +634,13 @@
     private string _laborBenchmarkItemSearchQuery = string.Empty;
     private bool _laborBenchmarkItemSearchIsSearching;
     private readonly List<GarlandSearchResult> _laborBenchmarkItemSearchResults = [];
+    private string _profileHostUrl = string.Empty;
+    private string _profileHostAccessKey = string.Empty;
+    private string? _profileHostProfileName;
+    private bool _profileHostIsBusy;
+    private FirstConnectMode _profileHostFirstConnectMode = FirstConnectMode.UploadLocal;
+    private string? _profileHostStatus;
+    private Color _profileHostStatusColor = Color.Secondary;
 
     private static readonly JsonSerializerOptions CompanyPackageJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -509,6 +666,7 @@
             await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
 
         await LoadCompanyProfileAsync();
+        await LoadProfileHostSettingsAsync();
     }
     
     private List<string> GetAvailableDataCenters()
@@ -909,6 +1067,192 @@
         }
 
         return $"trade-company-{safeName}-{exportedAtUtc:yyyyMMdd-HHmmss}.tradeprofile";
+    }
+
+    private async Task LoadProfileHostSettingsAsync()
+    {
+        var settings = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
+        _profileHostUrl = settings.HostUrl ?? string.Empty;
+        _profileHostAccessKey = settings.AccessKey ?? string.Empty;
+        _profileHostProfileName = settings.ConnectedProfileName;
+        await ProfileSync.InitializeAsync();
+    }
+
+    private async Task TestProfileHostConnectionAsync()
+    {
+        var settings = BuildProfileHostConnectionSettings();
+        if (settings == null)
+        {
+            return;
+        }
+
+        _profileHostIsBusy = true;
+        try
+        {
+            var health = await ProfileHostClient.GetHealthAsync(settings.HostUrl!, CancellationToken.None);
+            if (!health.ProfileHostEnabled)
+            {
+                SetProfileHostStatus("Profile hosting is not enabled on that server.", Color.Error);
+                return;
+            }
+
+            var profile = await ProfileHostClient.GetProfileAsync(settings.HostUrl!, settings.AccessKey!, CancellationToken.None);
+            _profileHostProfileName = profile.DisplayName;
+            SetProfileHostStatus($"Connected to {profile.DisplayName} at revision {profile.ServerRevision:N0}.", Color.Success);
+        }
+        catch (Exception ex)
+        {
+            SetProfileHostStatus($"Profile host check failed: {ex.Message}", Color.Error);
+        }
+        finally
+        {
+            _profileHostIsBusy = false;
+        }
+    }
+
+    private async Task ConnectProfileHostAsync()
+    {
+        var settings = BuildProfileHostConnectionSettings();
+        if (settings == null)
+        {
+            return;
+        }
+
+        _profileHostIsBusy = true;
+        try
+        {
+            var profile = await ProfileHostClient.GetProfileAsync(settings.HostUrl!, settings.AccessKey!, CancellationToken.None);
+            settings.ConnectedProfileId = profile.ProfileId;
+            settings.ConnectedProfileName = profile.DisplayName;
+            await ProfileSync.ConnectAsync(settings, _profileHostFirstConnectMode);
+            _profileHostProfileName = profile.DisplayName;
+            SetProfileHostStatus($"Hosted profile connected: {profile.DisplayName}.", Color.Success);
+        }
+        catch (Exception ex)
+        {
+            SetProfileHostStatus($"Hosted profile connection failed: {ex.Message}", Color.Error);
+        }
+        finally
+        {
+            _profileHostIsBusy = false;
+        }
+    }
+
+    private async Task SyncProfileHostNowAsync()
+    {
+        _profileHostIsBusy = true;
+        try
+        {
+            await ProfileSync.SyncNowAsync();
+            SetProfileHostStatus(ProfileSync.CurrentStatus.Message ?? "Sync complete.", Color.Success);
+        }
+        catch (Exception ex)
+        {
+            SetProfileHostStatus($"Sync failed: {ex.Message}", Color.Error);
+        }
+        finally
+        {
+            _profileHostIsBusy = false;
+        }
+    }
+
+    private async Task DisconnectProfileHostAsync()
+    {
+        _profileHostIsBusy = true;
+        try
+        {
+            await ProfileSync.DisconnectAsync();
+            _profileHostAccessKey = string.Empty;
+            _profileHostProfileName = null;
+            SetProfileHostStatus("Hosted profile disconnected. Local data was not deleted.", Color.Info);
+        }
+        finally
+        {
+            _profileHostIsBusy = false;
+        }
+    }
+
+    private async Task AcceptRemoteConflictAsync(ProfileSyncConflict conflict)
+    {
+        _profileHostIsBusy = true;
+        try
+        {
+            await ProfileSync.AcceptRemoteConflictAsync(conflict);
+            SetProfileHostStatus("Remote version applied.", Color.Success);
+        }
+        catch (Exception ex)
+        {
+            SetProfileHostStatus($"Could not apply remote version: {ex.Message}", Color.Error);
+        }
+        finally
+        {
+            _profileHostIsBusy = false;
+        }
+    }
+
+    private async Task KeepLocalConflictAsync(ProfileSyncConflict conflict)
+    {
+        _profileHostIsBusy = true;
+        try
+        {
+            await ProfileSync.KeepLocalConflictAsync(conflict);
+            SetProfileHostStatus("Local version kept.", Color.Success);
+        }
+        catch (Exception ex)
+        {
+            SetProfileHostStatus($"Could not keep local version: {ex.Message}", Color.Error);
+        }
+        finally
+        {
+            _profileHostIsBusy = false;
+        }
+    }
+
+    private HostedProfileConnectionSettings? BuildProfileHostConnectionSettings()
+    {
+        if (string.IsNullOrWhiteSpace(_profileHostUrl))
+        {
+            SetProfileHostStatus("Host URL is required.", Color.Error);
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(_profileHostAccessKey))
+        {
+            SetProfileHostStatus("Access key is required.", Color.Error);
+            return null;
+        }
+
+        return new HostedProfileConnectionSettings
+        {
+            HostUrl = _profileHostUrl.Trim(),
+            AccessKey = _profileHostAccessKey.Trim(),
+            RememberAccessKey = true,
+            ConnectedProfileName = _profileHostProfileName
+        };
+    }
+
+    private string GetProfileHostConnectionLabel()
+    {
+        return ProfileSync.CurrentStatus.IsConnected
+            ? string.IsNullOrWhiteSpace(_profileHostProfileName) ? "Connected" : _profileHostProfileName
+            : "Local only";
+    }
+
+    private string GetProfileHostReachabilityLabel()
+    {
+        if (!ProfileSync.CurrentStatus.IsConnected)
+        {
+            return "Not connected";
+        }
+
+        return ProfileSync.CurrentStatus.HostReachable ? "Reachable" : "Offline";
+    }
+
+    private void SetProfileHostStatus(string message, Color color)
+    {
+        _profileHostStatus = message;
+        _profileHostStatusColor = color;
+        Snackbar.Add(message, color == Color.Error ? Severity.Error : color == Color.Success ? Severity.Success : Severity.Info);
     }
     
     private async Task ClearAllPlans()

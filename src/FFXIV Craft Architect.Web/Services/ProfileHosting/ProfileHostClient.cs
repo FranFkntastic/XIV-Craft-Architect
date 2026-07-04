@@ -14,9 +14,11 @@ public sealed class ProfileHostClient
         _httpClient = httpClient;
     }
 
-    public async Task<ProfileHostHealthResponse> GetHealthAsync(CancellationToken ct)
+    public async Task<ProfileHostHealthResponse> GetHealthAsync(string hostUrl, CancellationToken ct)
     {
-        var response = await _httpClient.GetFromJsonAsync<ProfileHostHealthResponse>("/profile-host/health", ct);
+        var response = await _httpClient.GetFromJsonAsync<ProfileHostHealthResponse>(
+            BuildUri(hostUrl, "/profile-host/health"),
+            ct);
         return response ?? new ProfileHostHealthResponse
         {
             Status = "unavailable",
@@ -24,39 +26,42 @@ public sealed class ProfileHostClient
         };
     }
 
-    public async Task<ProfileHostProfileResponse> GetProfileAsync(string accessKey, CancellationToken ct)
+    public async Task<ProfileHostProfileResponse> GetProfileAsync(string hostUrl, string accessKey, CancellationToken ct)
     {
-        using var request = CreateRequest(HttpMethod.Get, "/profile-host/profile", accessKey);
+        using var request = CreateRequest(HttpMethod.Get, hostUrl, "/profile-host/profile", accessKey);
         using var response = await _httpClient.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<ProfileHostProfileResponse>(cancellationToken: ct))!;
     }
 
     public async Task<ProfileSyncChangesResponse> GetChangesAsync(
+        string hostUrl,
         string accessKey,
         long sinceRevision,
         CancellationToken ct)
     {
-        using var request = CreateRequest(HttpMethod.Get, $"/profile-host/changes?sinceRevision={sinceRevision}", accessKey);
+        using var request = CreateRequest(HttpMethod.Get, hostUrl, $"/profile-host/changes?sinceRevision={sinceRevision}", accessKey);
         using var response = await _httpClient.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<ProfileSyncChangesResponse>(cancellationToken: ct))!;
     }
 
     public async Task<ProfileSyncPutResponse> PutObjectAsync(
+        string hostUrl,
         string accessKey,
         string collection,
         string objectId,
         ProfileSyncPutRequest putRequest,
         CancellationToken ct)
     {
-        using var request = CreateRequest(HttpMethod.Put, $"/profile-host/objects/{collection}/{Uri.EscapeDataString(objectId)}", accessKey);
+        using var request = CreateRequest(HttpMethod.Put, hostUrl, $"/profile-host/objects/{collection}/{Uri.EscapeDataString(objectId)}", accessKey);
         request.Content = JsonContent.Create(putRequest);
         using var response = await _httpClient.SendAsync(request, ct);
         return await ReadProfileSyncPutResponseAsync(response, ct);
     }
 
     public async Task<ProfileSyncPutResponse> DeleteObjectAsync(
+        string hostUrl,
         string accessKey,
         string collection,
         string objectId,
@@ -65,6 +70,7 @@ public sealed class ProfileHostClient
     {
         using var request = CreateRequest(
             HttpMethod.Delete,
+            hostUrl,
             $"/profile-host/objects/{collection}/{Uri.EscapeDataString(objectId)}?expectedRevision={expectedRevision}",
             accessKey);
         using var response = await _httpClient.SendAsync(request, ct);
@@ -72,30 +78,42 @@ public sealed class ProfileHostClient
     }
 
     public async Task<ProfileSyncChangesResponse> UploadBootstrapAsync(
+        string hostUrl,
         string accessKey,
         ProfileHostBootstrapPayload payload,
         CancellationToken ct)
     {
-        using var request = CreateRequest(HttpMethod.Post, "/profile-host/bootstrap/upload", accessKey);
+        using var request = CreateRequest(HttpMethod.Post, hostUrl, "/profile-host/bootstrap/upload", accessKey);
         request.Content = JsonContent.Create(payload);
         using var response = await _httpClient.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<ProfileSyncChangesResponse>(cancellationToken: ct))!;
     }
 
-    public async Task<ProfileHostBootstrapPayload> ExportBootstrapAsync(string accessKey, CancellationToken ct)
+    public async Task<ProfileHostBootstrapPayload> ExportBootstrapAsync(string hostUrl, string accessKey, CancellationToken ct)
     {
-        using var request = CreateRequest(HttpMethod.Get, "/profile-host/bootstrap/export", accessKey);
+        using var request = CreateRequest(HttpMethod.Get, hostUrl, "/profile-host/bootstrap/export", accessKey);
         using var response = await _httpClient.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<ProfileHostBootstrapPayload>(cancellationToken: ct))!;
     }
 
-    private static HttpRequestMessage CreateRequest(HttpMethod method, string uri, string accessKey)
+    private static HttpRequestMessage CreateRequest(HttpMethod method, string hostUrl, string path, string accessKey)
     {
-        var request = new HttpRequestMessage(method, uri);
+        var request = new HttpRequestMessage(method, BuildUri(hostUrl, path));
         request.Headers.Add(AccessKeyHeaderName, accessKey);
         return request;
+    }
+
+    private static Uri BuildUri(string hostUrl, string path)
+    {
+        if (string.IsNullOrWhiteSpace(hostUrl))
+        {
+            throw new InvalidOperationException("A profile host URL is required.");
+        }
+
+        var baseUri = new Uri(hostUrl.Trim().TrimEnd('/') + "/");
+        return new Uri(baseUri, path.TrimStart('/'));
     }
 
     private static async Task<ProfileSyncPutResponse> ReadProfileSyncPutResponseAsync(

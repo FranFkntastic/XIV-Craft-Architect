@@ -10,10 +10,11 @@ public sealed class ProfileHostClientTests
         var handler = new RecordingHandler("""{"service":"FFXIV Craft Architect Private Backend","status":"ready","profileHostEnabled":true}""");
         var client = new ProfileHostClient(new HttpClient(handler) { BaseAddress = new Uri("https://host.test/") });
 
-        var health = await client.GetHealthAsync(CancellationToken.None);
+        var health = await client.GetHealthAsync("https://remote.test/craft/", CancellationToken.None);
 
         Assert.True(health.ProfileHostEnabled);
-        Assert.Equal("/profile-host/health", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("remote.test", handler.LastRequest!.RequestUri!.Host);
+        Assert.Equal("/craft/profile-host/health", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -25,6 +26,7 @@ public sealed class ProfileHostClientTests
         var client = new ProfileHostClient(new HttpClient(handler) { BaseAddress = new Uri("https://host.test/") });
 
         var result = await client.PutObjectAsync(
+            "https://host.test/",
             "profile-key",
             "plans",
             "plan-1",

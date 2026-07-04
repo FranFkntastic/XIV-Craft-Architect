@@ -74,7 +74,7 @@ public sealed class ProfileSyncService
         try
         {
             var lastRevision = await _localState.LoadLastSyncRevisionAsync();
-            var changes = await _client.GetChangesAsync(settings.AccessKey!, lastRevision, ct);
+            var changes = await _client.GetChangesAsync(settings.HostUrl!, settings.AccessKey!, lastRevision, ct);
             using (SuppressNotifications())
             {
                 foreach (var item in changes.Objects)
@@ -141,6 +141,7 @@ public sealed class ProfileSyncService
         try
         {
             var response = await _client.PutObjectAsync(
+                settings.HostUrl!,
                 settings.AccessKey!,
                 collection,
                 objectId,
@@ -201,10 +202,19 @@ public sealed class ProfileSyncService
             }
 
             var response = await _client.UploadBootstrapAsync(
+                settings.HostUrl ?? string.Empty,
                 settings.AccessKey ?? string.Empty,
                 new ProfileHostBootstrapPayload { Objects = objects },
                 ct);
             await _localState.SaveLastSyncRevisionAsync(response.ServerRevision);
+            SetStatus(new ProfileSyncStatus(
+                true,
+                true,
+                response.ServerRevision,
+                _pendingSaves.Count,
+                _conflicts.Count,
+                DateTime.UtcNow,
+                "Uploaded local profile"));
         }
         else
         {
@@ -218,6 +228,60 @@ public sealed class ProfileSyncService
         _pendingSaves.Clear();
         _conflicts.Clear();
         SetStatus(ProfileSyncStatus.LocalOnly());
+    }
+
+    public async Task AcceptRemoteConflictAsync(ProfileSyncConflict conflict, CancellationToken ct = default)
+    {
+        var adapter = GetAdapter(conflict.Collection);
+        using (SuppressNotifications())
+        {
+            await adapter.ApplyRemoteObjectAsync(conflict.RemoteObject, ct);
+            await _localState.SaveObjectRevisionAsync(
+                conflict.Collection,
+                conflict.ObjectId,
+                conflict.RemoteRevision);
+        }
+
+        _conflicts.Remove(conflict);
+        RefreshStatusMessage("Remote version applied");
+    }
+
+    public async Task KeepLocalConflictAsync(ProfileSyncConflict conflict, CancellationToken ct = default)
+    {
+        var settings = await _localState.LoadConnectionSettingsAsync();
+        if (!settings.IsConfigured)
+        {
+            return;
+        }
+
+        var adapter = GetAdapter(conflict.Collection);
+        var localObject = (await adapter.LoadLocalObjectsAsync(ct))
+            .FirstOrDefault(item => item.ObjectId == conflict.ObjectId);
+        if (localObject == null)
+        {
+            return;
+        }
+
+        var response = await _client.PutObjectAsync(
+            settings.HostUrl!,
+            settings.AccessKey!,
+            conflict.Collection,
+            conflict.ObjectId,
+            new ProfileSyncPutRequest
+            {
+                PayloadJson = localObject.PayloadJson,
+                ExpectedRevision = conflict.RemoteRevision
+            },
+            ct);
+        if (response.Success && response.Object != null)
+        {
+            await _localState.SaveObjectRevisionAsync(
+                conflict.Collection,
+                conflict.ObjectId,
+                response.Object.Revision);
+            _conflicts.Remove(conflict);
+            RefreshStatusMessage("Local version kept");
+        }
     }
 
     public IDisposable SuppressNotifications()
@@ -239,6 +303,17 @@ public sealed class ProfileSyncService
     private void SetStatus(ProfileSyncStatus status)
     {
         CurrentStatus = status;
+        StatusChanged?.Invoke();
+    }
+
+    private void RefreshStatusMessage(string message)
+    {
+        CurrentStatus = CurrentStatus with
+        {
+            PendingCount = _pendingSaves.Count,
+            ConflictCount = _conflicts.Count,
+            Message = message
+        };
         StatusChanged?.Invoke();
     }
 
