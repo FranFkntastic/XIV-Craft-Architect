@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using FFXIV_Craft_Architect.Core.Models;
 
@@ -52,8 +53,7 @@ public sealed class ProfileHostClient
         using var request = CreateRequest(HttpMethod.Put, $"/profile-host/objects/{collection}/{Uri.EscapeDataString(objectId)}", accessKey);
         request.Content = JsonContent.Create(putRequest);
         using var response = await _httpClient.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
-        return (await response.Content.ReadFromJsonAsync<ProfileSyncPutResponse>(cancellationToken: ct))!;
+        return await ReadProfileSyncPutResponseAsync(response, ct);
     }
 
     public async Task<ProfileSyncPutResponse> DeleteObjectAsync(
@@ -68,8 +68,7 @@ public sealed class ProfileHostClient
             $"/profile-host/objects/{collection}/{Uri.EscapeDataString(objectId)}?expectedRevision={expectedRevision}",
             accessKey);
         using var response = await _httpClient.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
-        return (await response.Content.ReadFromJsonAsync<ProfileSyncPutResponse>(cancellationToken: ct))!;
+        return await ReadProfileSyncPutResponseAsync(response, ct);
     }
 
     public async Task<ProfileSyncChangesResponse> UploadBootstrapAsync(
@@ -97,5 +96,17 @@ public sealed class ProfileHostClient
         var request = new HttpRequestMessage(method, uri);
         request.Headers.Add(AccessKeyHeaderName, accessKey);
         return request;
+    }
+
+    private static async Task<ProfileSyncPutResponse> ReadProfileSyncPutResponseAsync(
+        HttpResponseMessage response,
+        CancellationToken ct)
+    {
+        if (response.StatusCode != HttpStatusCode.Conflict)
+        {
+            response.EnsureSuccessStatusCode();
+        }
+
+        return (await response.Content.ReadFromJsonAsync<ProfileSyncPutResponse>(cancellationToken: ct))!;
     }
 }

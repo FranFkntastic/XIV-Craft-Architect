@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using FFXIV_Craft_Architect.Web;
 using FFXIV_Craft_Architect.Web.Services;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using MudBlazor.Services;
@@ -81,6 +82,15 @@ builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
 builder.Services.AddScoped<TradeCompanyProfilePackageService>();
 builder.Services.AddScoped<TradeOperationsPersistenceService>();
 builder.Services.AddScoped<TradeLaborBenchmarkCalibrationWorkflowService>();
+builder.Services.AddScoped<ProfileHostClient>();
+builder.Services.AddScoped<ProfileSyncLocalStateService>();
+builder.Services.AddScoped<IProfileSyncCollectionAdapter, SettingsProfileSyncAdapter>();
+builder.Services.AddScoped<IProfileSyncCollectionAdapter, PlansProfileSyncAdapter>();
+builder.Services.AddScoped<IProfileSyncCollectionAdapter, TradeCompanyProfileSyncAdapter>();
+builder.Services.AddScoped<IProfileSyncCollectionAdapter, TradeCrafterProfileSyncAdapter>();
+builder.Services.AddScoped<IProfileSyncCollectionAdapter, TradeOrderProfileSyncAdapter>();
+builder.Services.AddScoped<IProfileSyncCollectionAdapter, TradePayrollDraftProfileSyncAdapter>();
+builder.Services.AddScoped<ProfileSyncService>();
 builder.Services.AddScoped(_ => new LodestoneLookupClientOptions(ResolveLodestoneLookupBaseAddress(
     builder.Configuration["LodestoneLookup:BaseAddress"],
     builder.HostEnvironment.BaseAddress)));
