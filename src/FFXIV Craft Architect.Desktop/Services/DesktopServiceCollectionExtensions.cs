@@ -1,3 +1,4 @@
+using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Desktop.ViewModels;
@@ -29,6 +30,7 @@ public static class DesktopServiceCollectionExtensions
         services.AddSingleton<IGarlandService>(sp => sp.GetRequiredService<GarlandService>());
         services.AddSingleton<IVendorCacheService, VendorCacheService>();
         services.AddSingleton<RecipeCalculationService>();
+        services.AddWorkshopHostCraftAppraisal();
         services.AddSingleton<IDesktopRecipePlanBuilder>(sp =>
             IsDeterministicSmokeBuildEnabled()
                 ? new DesktopSmokeRecipePlanBuilder()

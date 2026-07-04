@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
+using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using FFXIV_Craft_Architect.Web;
 using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
@@ -47,6 +48,7 @@ builder.Services.AddScoped<CommissionCostBasisResolver>();
 builder.Services.AddScoped<CommissionPayrollService>();
 builder.Services.AddScoped<TradeLaborStandardCalibrationService>();
 builder.Services.AddScoped<ITradeLaborBenchmarkPlanBuilder, TradeLaborBenchmarkPlanBuilder>();
+builder.Services.AddWorkshopHostCraftAppraisal();
 
 // Register Settings Service (Web implementation)
 builder.Services.AddScoped<ISettingsService, WebSettingsService>();
