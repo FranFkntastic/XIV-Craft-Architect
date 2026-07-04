@@ -57,6 +57,66 @@ public sealed class SqliteProfileHostStore
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task<ProfileHostProfileResponse?> LoadProfileAsync(string profileId, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select id, display_name
+            from hosted_profiles
+            where id = $profileId and disabled_at_utc is null;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            return null;
+        }
+
+        var displayName = reader.GetString(1);
+        await reader.DisposeAsync();
+
+        return new ProfileHostProfileResponse
+        {
+            ProfileId = profileId,
+            DisplayName = displayName,
+            ServerRevision = await GetServerRevisionAsync(connection, profileId, ct)
+        };
+    }
+
+    public async Task RevokeAccessKeysAsync(string profileId, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            update profile_access_keys
+            set revoked_at_utc = $revokedAtUtc
+            where profile_id = $profileId and revoked_at_utc is null;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        command.Parameters.AddWithValue("$revokedAtUtc", DateTime.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task DisableProfileAsync(string profileId, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            update hosted_profiles
+            set disabled_at_utc = $disabledAtUtc,
+                updated_at_utc = $disabledAtUtc
+            where id = $profileId and disabled_at_utc is null;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        command.Parameters.AddWithValue("$disabledAtUtc", DateTime.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task<ProfileHostProfileResponse?> AuthenticateAsync(
         string plaintextKey,
         ProfileAccessKeyHasher hasher,

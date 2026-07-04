@@ -8,12 +8,13 @@ using Microsoft.Extensions.Configuration;
 
 namespace FFXIV_Craft_Architect.Tests;
 
+[Trait(TestTraits.Surface, TestTraits.DeployLodestone)]
 public sealed class ProfileHostEndpointsTests
 {
     [Fact]
     public async Task Health_ReturnsProfileHostEnabled()
     {
-        await using var app = new WebApplicationFactory<Program>();
+        await using var app = CreateFactory(enabled: true);
         var client = app.CreateClient();
 
         var health = await client.GetFromJsonAsync<ProfileHostHealthResponse>("/profile-host/health");
@@ -24,9 +25,20 @@ public sealed class ProfileHostEndpointsTests
     }
 
     [Fact]
+    public async Task Profile_WhenProfileHostDisabled_ReturnsNotFound()
+    {
+        await using var app = CreateFactory(enabled: false);
+        var client = app.CreateClient();
+
+        var response = await client.GetAsync("/profile-host/profile");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Profile_WithoutKey_ReturnsUnauthorized()
     {
-        await using var app = new WebApplicationFactory<Program>();
+        await using var app = CreateFactory(enabled: true);
         var client = app.CreateClient();
 
         var response = await client.GetAsync("/profile-host/profile");
@@ -87,6 +99,7 @@ public sealed class ProfileHostEndpointsTests
                     {
                         configuration.AddInMemoryCollection(new Dictionary<string, string?>
                         {
+                            ["ProfileHost:Enabled"] = "true",
                             ["ProfileHost:DatabasePath"] = _path
                         });
                     });
@@ -100,5 +113,20 @@ public sealed class ProfileHostEndpointsTests
                 File.Delete(_path);
             }
         }
+    }
+
+    private static WebApplicationFactory<Program> CreateFactory(bool enabled)
+    {
+        return new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.ConfigureAppConfiguration((_, configuration) =>
+                {
+                    configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["ProfileHost:Enabled"] = enabled.ToString()
+                    });
+                });
+            });
     }
 }

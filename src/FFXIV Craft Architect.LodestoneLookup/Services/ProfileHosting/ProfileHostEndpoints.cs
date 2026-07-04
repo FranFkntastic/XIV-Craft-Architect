@@ -10,19 +10,25 @@ public static class ProfileHostEndpoints
     {
         var group = routes.MapGroup("/profile-host");
 
-        group.MapGet("/health", () => Results.Ok(new ProfileHostHealthResponse
+        group.MapGet("/health", (ProfileHostOptions options) => Results.Ok(new ProfileHostHealthResponse
         {
-            ProfileHostEnabled = true
+            ProfileHostEnabled = options.Enabled
         }));
 
         group.MapGet(
             "/profile",
             async (
                 HttpRequest request,
+                ProfileHostOptions options,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
                 CancellationToken cancellationToken) =>
             {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
                 var profile = await AuthenticateAsync(request, store, hasher, cancellationToken);
                 return profile == null ? Results.Unauthorized() : Results.Ok(profile);
             });
@@ -31,11 +37,17 @@ public static class ProfileHostEndpoints
             "/changes",
             async (
                 HttpRequest request,
+                ProfileHostOptions options,
                 long? sinceRevision,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
                 CancellationToken cancellationToken) =>
             {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
                 var profile = await AuthenticateAsync(request, store, hasher, cancellationToken);
                 if (profile == null)
                 {
@@ -53,10 +65,16 @@ public static class ProfileHostEndpoints
                 string objectId,
                 ProfileSyncPutRequest putRequest,
                 HttpRequest request,
+                ProfileHostOptions options,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
                 CancellationToken cancellationToken) =>
             {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
                 var profile = await AuthenticateAsync(request, store, hasher, cancellationToken);
                 if (profile == null)
                 {
@@ -90,10 +108,16 @@ public static class ProfileHostEndpoints
                 string objectId,
                 long? expectedRevision,
                 HttpRequest request,
+                ProfileHostOptions options,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
                 CancellationToken cancellationToken) =>
             {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
                 var profile = await AuthenticateAsync(request, store, hasher, cancellationToken);
                 if (profile == null)
                 {
@@ -124,10 +148,16 @@ public static class ProfileHostEndpoints
             async (
                 ProfileHostBootstrapPayload payload,
                 HttpRequest request,
+                ProfileHostOptions options,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
                 CancellationToken cancellationToken) =>
             {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
                 var profile = await AuthenticateAsync(request, store, hasher, cancellationToken);
                 if (profile == null)
                 {
@@ -158,10 +188,16 @@ public static class ProfileHostEndpoints
             "/bootstrap/export",
             async (
                 HttpRequest request,
+                ProfileHostOptions options,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
                 CancellationToken cancellationToken) =>
             {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
                 var profile = await AuthenticateAsync(request, store, hasher, cancellationToken);
                 if (profile == null)
                 {

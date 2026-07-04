@@ -4,6 +4,7 @@ using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.XivData;
+using System.Text.Json;
 
 const string CorsPolicyName = "CraftArchitectWeb";
 const string PrivateNetworkAccessRequestHeader = "Access-Control-Request-Private-Network";
@@ -29,11 +30,19 @@ builder.Services.AddHttpClient<IGarlandService, GarlandService>();
 builder.Services.AddSingleton<IXivItemDataProvider, GarlandXivItemDataProvider>();
 builder.Services.AddSingleton(_ => new ProfileHostOptions
 {
+    Enabled = builder.Configuration.GetValue("ProfileHost:Enabled", false),
     DatabasePath = builder.Configuration["ProfileHost:DatabasePath"]
         ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db")
 });
 builder.Services.AddSingleton<ProfileAccessKeyHasher>();
 builder.Services.AddSingleton<SqliteProfileHostStore>();
+
+if (ProfileHostProvisioningCommand.TryParse(args) is { } profileHostCommand)
+{
+    var commandApp = builder.Build();
+    await RunProfileHostProvisioningCommandAsync(profileHostCommand, commandApp.Services, CancellationToken.None);
+    return;
+}
 
 var app = builder.Build();
 
@@ -150,5 +159,92 @@ app.MapGet(
 app.MapProfileHostEndpoints();
 
 app.Run();
+
+static async Task RunProfileHostProvisioningCommandAsync(
+    ProfileHostProvisioningCommand command,
+    IServiceProvider services,
+    CancellationToken cancellationToken)
+{
+    using var scope = services.CreateScope();
+    var store = scope.ServiceProvider.GetRequiredService<SqliteProfileHostStore>();
+    var hasher = scope.ServiceProvider.GetRequiredService<ProfileAccessKeyHasher>();
+
+    switch (command.Action)
+    {
+        case ProfileHostProvisioningAction.CreateProfile:
+        {
+            var displayName = command.DisplayName ?? throw new InvalidOperationException("Display name is required.");
+            var profile = await store.CreateProfileAsync(displayName, cancellationToken);
+            var key = hasher.CreateAccessKey();
+            await store.AddAccessKeyAsync(profile.ProfileId, key.StoredHash, cancellationToken);
+            WriteJson(new
+            {
+                profile.ProfileId,
+                profile.DisplayName,
+                AccessKey = key.PlaintextKey
+            });
+            break;
+        }
+        case ProfileHostProvisioningAction.RotateKey:
+        {
+            var profileId = command.ProfileId ?? throw new InvalidOperationException("Profile id is required.");
+            var profile = await store.LoadProfileAsync(profileId, cancellationToken);
+            if (profile == null)
+            {
+                Environment.ExitCode = 1;
+                Console.Error.WriteLine($"Profile '{profileId}' was not found or is disabled.");
+                return;
+            }
+
+            await store.RevokeAccessKeysAsync(profileId, cancellationToken);
+            var key = hasher.CreateAccessKey();
+            await store.AddAccessKeyAsync(profileId, key.StoredHash, cancellationToken);
+            WriteJson(new
+            {
+                profile.ProfileId,
+                profile.DisplayName,
+                AccessKey = key.PlaintextKey
+            });
+            break;
+        }
+        case ProfileHostProvisioningAction.DisableProfile:
+        {
+            var profileId = command.ProfileId ?? throw new InvalidOperationException("Profile id is required.");
+            await store.RevokeAccessKeysAsync(profileId, cancellationToken);
+            await store.DisableProfileAsync(profileId, cancellationToken);
+            WriteJson(new { ProfileId = profileId, Disabled = true });
+            break;
+        }
+        case ProfileHostProvisioningAction.ExportProfile:
+        {
+            var profileId = command.ProfileId ?? throw new InvalidOperationException("Profile id is required.");
+            var profile = await store.LoadProfileAsync(profileId, cancellationToken);
+            if (profile == null)
+            {
+                Environment.ExitCode = 1;
+                Console.Error.WriteLine($"Profile '{profileId}' was not found or is disabled.");
+                return;
+            }
+
+            var changes = await store.LoadChangesAsync(profileId, 0, cancellationToken);
+            WriteJson(new
+            {
+                Profile = profile,
+                Objects = changes.Objects
+            });
+            break;
+        }
+        default:
+            throw new InvalidOperationException($"Unsupported profile host command action '{command.Action}'.");
+    }
+}
+
+static void WriteJson(object payload)
+{
+    Console.WriteLine(JsonSerializer.Serialize(payload, new JsonSerializerOptions(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true
+    }));
+}
 
 public partial class Program;

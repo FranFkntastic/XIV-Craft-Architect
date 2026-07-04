@@ -2,6 +2,7 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Tests;
 
+[Trait(TestTraits.Surface, TestTraits.DeployLodestone)]
 public sealed class ProfileHostProvisioningCommandTests
 {
     [Fact]

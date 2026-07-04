@@ -100,13 +100,27 @@ jobs:
           executable="$release_dir/FFXIV Craft Architect.LodestoneLookup"
 
           sudo mkdir -p "$release_dir"
+          sudo mkdir -p "$root/data" "$root/env"
           sudo tar -xzf "$archive" -C "$release_dir"
           sudo chown -R "$USER:$USER" "$release_dir"
+          sudo chown -R "$USER:$USER" "$root/data" "$root/env"
           sudo chmod +x "$executable"
+
+          if [[ ! -f "$root/env/profile-host.env" ]]; then
+            tee "$root/env/profile-host.env" > /dev/null <<ENV
+          ProfileHost__Enabled=false
+          ProfileHost__DatabasePath=$root/data/profile-host.db
+          ENV
+          fi
 
           sudo tee "$root/run-lodestone.sh" > /dev/null <<'SCRIPT'
           #!/usr/bin/env bash
           set -euo pipefail
+          if [[ -f /srv/craftarchitect/services/lodestone/env/profile-host.env ]]; then
+            set -a
+            source /srv/craftarchitect/services/lodestone/env/profile-host.env
+            set +a
+          fi
           cd /srv/craftarchitect/services/lodestone/current
           exec "/srv/craftarchitect/services/lodestone/current/FFXIV Craft Architect.LodestoneLookup"
           SCRIPT
