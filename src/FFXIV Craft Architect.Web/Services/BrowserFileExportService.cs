@@ -42,6 +42,19 @@ public sealed class BrowserFileExportService
             contentType);
     }
 
+    public async Task SaveTextFileAsync(
+        string key,
+        string fileName,
+        string content,
+        string contentType,
+        CancellationToken cancellationToken = default)
+    {
+        await PrepareTextFileSaveAsync(key, fileName, content, contentType, cancellationToken);
+
+        var module = await GetModuleAsync(cancellationToken);
+        await module.InvokeVoidAsync("savePreparedFile", cancellationToken, key);
+    }
+
     private Task<IJSObjectReference> GetModuleAsync(CancellationToken cancellationToken)
     {
         _moduleTask ??= _jsRuntime
