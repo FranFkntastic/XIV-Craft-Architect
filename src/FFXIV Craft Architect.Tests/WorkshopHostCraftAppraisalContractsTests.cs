@@ -84,4 +84,56 @@ public sealed class WorkshopHostCraftAppraisalContractsTests
         Assert.Equal(3u, material.ItemId);
         Assert.Equal("Market evidence is stale.", Assert.Single(material.Warnings));
     }
+
+    [Fact]
+    public void RequestFixture_DeserializesAsV1Contract()
+    {
+        var json = File.ReadAllText(ResolveFixture("craft-appraisal-request.v1.sample.json"));
+        var request = JsonSerializer.Deserialize<CraftAppraisalRequest>(json, JsonOptions);
+
+        Assert.NotNull(request);
+        Assert.Equal(1, request.SchemaVersion);
+        Assert.Equal(2u, request.ItemId);
+        Assert.Equal(10u, request.Quantity);
+        Assert.Equal("North America", request.Scope.Region);
+        Assert.Equal("Either", request.Options.HqPolicy);
+    }
+
+    [Fact]
+    public void QuoteFixture_DeserializesAsAdvisoryEvidence()
+    {
+        var json = File.ReadAllText(ResolveFixture("craft-appraisal-quote.v1.sample.json"));
+        var quote = JsonSerializer.Deserialize<CraftAppraisalQuote>(json, JsonOptions);
+
+        Assert.NotNull(quote);
+        Assert.Equal(1, quote.SchemaVersion);
+        Assert.Equal("CraftArchitectLocal", quote.Source);
+        Assert.Contains(quote.Warnings, warning => warning.Contains("advisory", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(json, "authoritative", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveFixture(string fileName)
+    {
+        var root = AppContext.BaseDirectory;
+        for (var i = 0; i < 8; i++)
+        {
+            var candidate = Path.GetFullPath(Path.Combine(
+                root,
+                "..",
+                "..",
+                "..",
+                "..",
+                "docs",
+                "superpowers",
+                "fixtures",
+                "workshop-host",
+                fileName));
+            if (File.Exists(candidate))
+                return candidate;
+
+            root = Path.GetFullPath(Path.Combine(root, ".."));
+        }
+
+        throw new FileNotFoundException($"Could not find workshop host fixture '{fileName}'.");
+    }
 }
