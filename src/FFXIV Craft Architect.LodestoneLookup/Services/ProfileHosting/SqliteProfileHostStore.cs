@@ -39,6 +39,98 @@ public sealed class SqliteProfileHostStore
         };
     }
 
+    public async Task AddAccessKeyAsync(string profileId, string storedHash, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        var now = DateTime.UtcNow;
+
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            insert into profile_access_keys (id, profile_id, key_hash, created_at_utc)
+            values ($id, $profileId, $keyHash, $createdAtUtc);
+            """;
+        command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
+        command.Parameters.AddWithValue("$profileId", profileId);
+        command.Parameters.AddWithValue("$keyHash", storedHash);
+        command.Parameters.AddWithValue("$createdAtUtc", now.ToString("O"));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<ProfileHostProfileResponse?> AuthenticateAsync(
+        string plaintextKey,
+        ProfileAccessKeyHasher hasher,
+        CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select p.id, p.display_name, k.id, k.key_hash
+            from profile_access_keys k
+            inner join hosted_profiles p on p.id = k.profile_id
+            where k.revoked_at_utc is null and p.disabled_at_utc is null;
+            """;
+
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var profileId = reader.GetString(0);
+            var displayName = reader.GetString(1);
+            var keyId = reader.GetString(2);
+            var storedHash = reader.GetString(3);
+            if (!hasher.Verify(plaintextKey, storedHash))
+            {
+                continue;
+            }
+
+            await reader.DisposeAsync();
+            await TouchAccessKeyAsync(connection, keyId, ct);
+            var revision = await GetServerRevisionAsync(connection, profileId, ct);
+            return new ProfileHostProfileResponse
+            {
+                ProfileId = profileId,
+                DisplayName = displayName,
+                ServerRevision = revision
+            };
+        }
+
+        return null;
+    }
+
+    public async Task<ProfileSyncChangesResponse> LoadChangesAsync(
+        string profileId,
+        long sinceRevision,
+        CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select collection, object_id, payload_json, revision, updated_at_utc, deleted, deleted_at_utc
+            from sync_objects
+            where profile_id = $profileId and revision > $sinceRevision
+            order by revision asc;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        command.Parameters.AddWithValue("$sinceRevision", sinceRevision);
+
+        var objects = new List<ProfileSyncObjectEnvelope>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            objects.Add(ReadObject(reader));
+        }
+
+        return new ProfileSyncChangesResponse
+        {
+            ServerRevision = objects.Count == 0
+                ? await GetServerRevisionAsync(connection, profileId, ct)
+                : objects.Max(item => item.Revision),
+            Objects = objects
+        };
+    }
+
     public async Task<ProfileSyncPutResponse> PutObjectAsync(
         string profileId,
         string collection,
@@ -72,7 +164,7 @@ public sealed class SqliteProfileHostStore
             };
         }
 
-        var revision = (existing?.Revision ?? 0) + 1;
+        var revision = await GetNextRevisionAsync(connection, profileId, ct);
         var now = DateTime.UtcNow;
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -128,7 +220,7 @@ public sealed class SqliteProfileHostStore
             };
         }
 
-        var revision = (existing?.Revision ?? 0) + 1;
+        var revision = await GetNextRevisionAsync(connection, profileId, ct);
         var now = DateTime.UtcNow;
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -200,6 +292,53 @@ public sealed class SqliteProfileHostStore
                 ? null
                 : DateTime.Parse(reader.GetString(4), null, DateTimeStyles.RoundtripKind)
         };
+    }
+
+    private static ProfileSyncObjectEnvelope ReadObject(SqliteDataReader reader)
+    {
+        return new ProfileSyncObjectEnvelope
+        {
+            Collection = reader.GetString(0),
+            ObjectId = reader.GetString(1),
+            PayloadJson = reader.GetString(2),
+            Revision = reader.GetInt64(3),
+            UpdatedAtUtc = DateTime.Parse(reader.GetString(4), null, DateTimeStyles.RoundtripKind),
+            Deleted = reader.GetInt64(5) == 1,
+            DeletedAtUtc = reader.IsDBNull(6)
+                ? null
+                : DateTime.Parse(reader.GetString(6), null, DateTimeStyles.RoundtripKind)
+        };
+    }
+
+    private static async Task TouchAccessKeyAsync(SqliteConnection connection, string keyId, CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            update profile_access_keys
+            set last_used_at_utc = $lastUsedAtUtc
+            where id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", keyId);
+        command.Parameters.AddWithValue("$lastUsedAtUtc", DateTime.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    private static async Task<long> GetNextRevisionAsync(SqliteConnection connection, string profileId, CancellationToken ct)
+    {
+        return await GetServerRevisionAsync(connection, profileId, ct) + 1;
+    }
+
+    private static async Task<long> GetServerRevisionAsync(SqliteConnection connection, string profileId, CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select coalesce(max(revision), 0)
+            from sync_objects
+            where profile_id = $profileId;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        var scalar = await command.ExecuteScalarAsync(ct);
+        return Convert.ToInt64(scalar, CultureInfo.InvariantCulture);
     }
 
     private async Task EnsureSchemaAsync(CancellationToken ct)

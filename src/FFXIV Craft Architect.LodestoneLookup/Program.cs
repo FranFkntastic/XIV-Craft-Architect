@@ -1,6 +1,7 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.XivData;
 
@@ -26,6 +27,13 @@ builder.Services.AddCors(options =>
 builder.Services.AddSingleton<ILodestoneCrafterLookupService, NetStoneLodestoneCrafterLookupService>();
 builder.Services.AddHttpClient<IGarlandService, GarlandService>();
 builder.Services.AddSingleton<IXivItemDataProvider, GarlandXivItemDataProvider>();
+builder.Services.AddSingleton(_ => new ProfileHostOptions
+{
+    DatabasePath = builder.Configuration["ProfileHost:DatabasePath"]
+        ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db")
+});
+builder.Services.AddSingleton<ProfileAccessKeyHasher>();
+builder.Services.AddSingleton<SqliteProfileHostStore>();
 
 var app = builder.Build();
 
@@ -135,8 +143,12 @@ app.MapGet(
         {
             return Results.Json(
                 new XivDataErrorResponse("upstream_invalid_response", "The Garland item data source returned an unexpected response."),
-                statusCode: StatusCodes.Status502BadGateway);
+            statusCode: StatusCodes.Status502BadGateway);
         }
     });
 
+app.MapProfileHostEndpoints();
+
 app.Run();
+
+public partial class Program;
