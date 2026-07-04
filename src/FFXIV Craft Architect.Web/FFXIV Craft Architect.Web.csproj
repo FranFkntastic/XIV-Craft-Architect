@@ -42,7 +42,7 @@
     </ItemGroup>
   </Target>
 
-  <!-- GitHub Pages deployment configuration -->
+  <!-- Release web publish configuration for VPS deployment -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <PublishTrimmed>true</PublishTrimmed>
     <BlazorEnableCompression>true</BlazorEnableCompression>
