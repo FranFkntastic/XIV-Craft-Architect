@@ -99,6 +99,11 @@ public sealed class TradePayrollPersistenceService
         return await _store.SaveDraftAsync(draft);
     }
 
+    public async Task<bool> DeleteDraftAsync(string draftId)
+    {
+        return await _store.DeleteDraftAsync(draftId);
+    }
+
     public IReadOnlyList<CommissionPayrollInputLine> ApplyResponsibilities(
         IReadOnlyList<CommissionPayrollInputLine> regeneratedLines,
         TradePayrollWorkflowDraft draft)
