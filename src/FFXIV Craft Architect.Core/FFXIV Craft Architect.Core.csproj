@@ -6,6 +6,13 @@
     <Nullable>enable</Nullable>
     <RootNamespace>FFXIV_Craft_Architect.Core</RootNamespace>
     <AssemblyName>FFXIV_Craft_Architect.Core</AssemblyName>
+    <IsPackable>true</IsPackable>
+    <PackageId>Gooseworks.FFXIVCraftArchitect.Core</PackageId>
+    <Version>0.1.0-local</Version>
+    <Authors>Gooseworks</Authors>
+    <Description>Core planning and Workshop Host appraisal services for FFXIV Craft Architect.</Description>
+    <PackageTags>ffxiv;crafting;workshop-host;marketmafioso</PackageTags>
+    <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 
   <ItemGroup>
