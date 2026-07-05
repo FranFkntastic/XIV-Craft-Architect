@@ -12,6 +12,7 @@ public static class WorkshopHostCraftAppraisalServiceCollectionExtensions
     {
         services.AddLogging();
         services.TryAddScoped<RecipeCalculationService>();
+        services.TryAddScoped<ISettingsService, SettingsService>();
         services.TryAddScoped<IVendorCacheService, VendorCacheService>();
         services.TryAddScoped<IRecipeResolutionService, RecipeResolutionService>();
         if (!services.Any(descriptor => descriptor.ServiceType == typeof(GarlandService)))
@@ -19,8 +20,24 @@ public static class WorkshopHostCraftAppraisalServiceCollectionExtensions
             services.AddHttpClient<GarlandService>();
         }
 
+        if (!services.Any(descriptor => descriptor.ServiceType == typeof(UniversalisService)))
+        {
+            services.AddHttpClient<UniversalisService>();
+        }
+
         services.TryAddScoped<IGarlandService>(provider => provider.GetRequiredService<GarlandService>());
+        services.TryAddScoped<IUniversalisService>(provider => provider.GetRequiredService<UniversalisService>());
+        services.TryAddScoped<IMarketCacheService>(provider =>
+        {
+            var universalis = provider.GetRequiredService<UniversalisService>();
+            var cacheRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "FFXIV_Craft_Architect",
+                "WorkshopHostCache");
+            return new FFXIV_Craft_Architect.Desktop.Services.DesktopJsonMarketCacheService(universalis, cacheRoot);
+        });
         services.TryAddScoped<ICoreRecipePlanBuilder, CoreRecipeCalculationPlanBuilder>();
+        services.TryAddScoped<ICraftAppraisalPriceEvidenceService, CraftAppraisalPriceEvidenceService>();
         services.TryAddScoped<ICraftAppraisalService, CraftAppraisalService>();
         return services;
     }

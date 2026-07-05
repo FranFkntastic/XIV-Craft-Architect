@@ -22,21 +22,29 @@ public sealed record RecipeDemandProjection(
 {
     public IReadOnlyList<MaterialAggregate> ToMarketAnalysisMaterialAggregates()
     {
-        return ToMaterialAggregates(MarketAnalysisCandidates, useCraftedSourceFlag: true);
+        return ToMaterialAggregates(
+            MarketAnalysisCandidates,
+            useCraftedSourceFlag: true,
+            useSelectedSourceUnitPrice: false);
     }
 
     public IReadOnlyList<MaterialAggregate> ToActiveProcurementMaterialAggregates()
     {
-        return ToMaterialAggregates(ActiveProcurementDemand, useCraftedSourceFlag: false);
+        return ToMaterialAggregates(
+            ActiveProcurementDemand,
+            useCraftedSourceFlag: false,
+            useSelectedSourceUnitPrice: true);
     }
 
     private static IReadOnlyList<MaterialAggregate> ToMaterialAggregates(
         IReadOnlyList<RecipeDemandRow> rows,
-        bool useCraftedSourceFlag)
+        bool useCraftedSourceFlag,
+        bool useSelectedSourceUnitPrice)
     {
         var aggregates = new Dictionary<int, MaterialAggregate>();
         foreach (var row in rows.Where(row => row.Quantity > 0))
         {
+            var unitPrice = ResolveAggregateUnitPrice(row, useSelectedSourceUnitPrice);
             if (!aggregates.TryGetValue(row.ItemId, out var aggregate))
             {
                 aggregate = new MaterialAggregate
@@ -44,14 +52,14 @@ public sealed record RecipeDemandProjection(
                     ItemId = row.ItemId,
                     Name = row.ItemName,
                     IconId = row.IconId,
-                    UnitPrice = row.UnitPrice,
+                    UnitPrice = unitPrice,
                     RequiresHq = row.MustBeHq
                 };
                 aggregates[row.ItemId] = aggregate;
             }
 
             aggregate.TotalQuantity += row.Quantity;
-            aggregate.UnitPrice = row.UnitPrice;
+            aggregate.UnitPrice = unitPrice;
             aggregate.RequiresHq = aggregate.RequiresHq || row.MustBeHq;
             aggregate.Sources.Add(new MaterialSource
             {
@@ -62,6 +70,45 @@ public sealed record RecipeDemandProjection(
         }
 
         return aggregates.Values.OrderBy(item => item.Name).ToList();
+    }
+
+    private static decimal ResolveAggregateUnitPrice(
+        RecipeDemandRow row,
+        bool useSelectedSourceUnitPrice)
+    {
+        if (!useSelectedSourceUnitPrice)
+        {
+            return row.UnitPrice;
+        }
+
+        return row.Source switch
+        {
+            AcquisitionSource.VendorBuy => ResolveSelectedGilVendorPrice(row),
+            AcquisitionSource.MarketBuyHq => row.HqUnitPrice,
+            AcquisitionSource.MarketBuyNq => row.UnitPrice,
+            AcquisitionSource.UnknownSource => 0,
+            _ => row.MustBeHq && row.HqUnitPrice > 0 ? row.HqUnitPrice : row.UnitPrice
+        };
+    }
+
+    private static decimal ResolveSelectedGilVendorPrice(RecipeDemandRow row)
+    {
+        if (row.SelectedVendor?.IsGilVendor == true)
+        {
+            return row.SelectedVendor.Price;
+        }
+
+        var cheapestGilVendor = row.VendorOptions
+            .Where(vendor => vendor.IsGilVendor)
+            .OrderBy(vendor => vendor.Price)
+            .FirstOrDefault();
+
+        if (cheapestGilVendor != null)
+        {
+            return cheapestGilVendor.Price;
+        }
+
+        return row.VendorUnitPrice;
     }
 }
 

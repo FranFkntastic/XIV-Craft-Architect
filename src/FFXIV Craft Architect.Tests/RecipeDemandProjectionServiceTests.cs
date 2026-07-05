@@ -167,6 +167,127 @@ public class RecipeDemandProjectionServiceTests
     }
 
     [Fact]
+    public void Build_ActiveProcurementAggregates_UseVendorPriceForVendorBuyRows()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Root",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true
+        };
+        var vendorChild = new PlanNode
+        {
+            ItemId = 200,
+            Name = "Vendor Child",
+            Quantity = 3,
+            Source = AcquisitionSource.VendorBuy,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanBuyFromVendor = true,
+            CanBuyFromMarket = true,
+            MarketPrice = 0,
+            VendorPrice = 40,
+            Parent = root,
+            VendorOptions =
+            [
+                new VendorInfo
+                {
+                    Name = "Material Supplier",
+                    Location = "Limsa Lominsa",
+                    Price = 40,
+                    Currency = "gil"
+                }
+            ]
+        };
+        root.Children.Add(vendorChild);
+        var plan = new CraftingPlan { RootItems = [root] };
+        var service = new RecipeDemandProjectionService();
+
+        var projection = service.Build(plan, snapshot: null);
+
+        var aggregate = Assert.Single(projection.ToActiveProcurementMaterialAggregates());
+        Assert.Equal(200, aggregate.ItemId);
+        Assert.Equal(3, aggregate.TotalQuantity);
+        Assert.Equal(40m, aggregate.UnitPrice);
+        Assert.Equal(120m, aggregate.TotalCost);
+    }
+
+    [Fact]
+    public void Build_ActiveProcurementAggregates_UseHqMarketPriceForHqMarketRows()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Root",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true
+        };
+        var hqChild = new PlanNode
+        {
+            ItemId = 201,
+            Name = "HQ Child",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyHq,
+            SourceReason = AcquisitionSourceReason.UserSelected,
+            CanBuyFromMarket = true,
+            CanBeHq = true,
+            MustBeHq = true,
+            MarketPrice = 50,
+            HqMarketPrice = 75,
+            Parent = root
+        };
+        root.Children.Add(hqChild);
+        var plan = new CraftingPlan { RootItems = [root] };
+        var service = new RecipeDemandProjectionService();
+
+        var projection = service.Build(plan, snapshot: null);
+
+        var aggregate = Assert.Single(projection.ToActiveProcurementMaterialAggregates());
+        Assert.Equal(201, aggregate.ItemId);
+        Assert.Equal(2, aggregate.TotalQuantity);
+        Assert.Equal(75m, aggregate.UnitPrice);
+        Assert.True(aggregate.RequiresHq);
+    }
+
+    [Fact]
+    public void Build_MarketAnalysisAggregates_KeepMarketPriceWhenVendorIsAvailable()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Root",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true
+        };
+        var child = new PlanNode
+        {
+            ItemId = 202,
+            Name = "Dual Source Child",
+            Quantity = 4,
+            Source = AcquisitionSource.VendorBuy,
+            CanBuyFromMarket = true,
+            CanBuyFromVendor = true,
+            MarketPrice = 90,
+            VendorPrice = 40,
+            Parent = root
+        };
+        root.Children.Add(child);
+        var plan = new CraftingPlan { RootItems = [root] };
+        var service = new RecipeDemandProjectionService();
+
+        var projection = service.Build(plan, snapshot: null);
+
+        var aggregate = Assert.Single(
+            projection.ToMarketAnalysisMaterialAggregates(),
+            item => item.ItemId == 202);
+        Assert.Equal(202, aggregate.ItemId);
+        Assert.Equal(90m, aggregate.UnitPrice);
+    }
+
+    [Fact]
     public void RecipeDemandRow_Deconstruct_PreservesOriginalPositionalShape()
     {
         var row = new RecipeDemandRow(

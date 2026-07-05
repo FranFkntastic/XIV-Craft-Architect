@@ -55,6 +55,8 @@ public sealed class WorkshopHostCraftAppraisalContractsTests
             QuotedAtUtc = quotedAtUtc,
             Source = "CraftArchitectLocal",
             Confidence = "Medium",
+            IsComplete = true,
+            AppraisalStatus = "Complete",
             Materials =
             [
                 new CraftAppraisalMaterialQuote
@@ -65,7 +67,9 @@ public sealed class WorkshopHostCraftAppraisalContractsTests
                     TotalQuantity = 20,
                     UnitCost = 40m,
                     TotalCost = 800m,
+                    AcquisitionSource = "MarketBuyNq",
                     CostSource = "MarketEvidence",
+                    CostSourceDetails = "Aether current market evidence",
                     Warnings = ["Market evidence is stale."],
                 },
             ],
@@ -80,8 +84,12 @@ public sealed class WorkshopHostCraftAppraisalContractsTests
         Assert.Equal("gil", roundTripped.Currency);
         Assert.Equal(quotedAtUtc, roundTripped.QuotedAtUtc);
         Assert.Equal("Quote is advisory.", Assert.Single(roundTripped.Warnings));
+        Assert.True(roundTripped.IsComplete);
+        Assert.Equal("Complete", roundTripped.AppraisalStatus);
         var material = Assert.Single(roundTripped.Materials);
         Assert.Equal(3u, material.ItemId);
+        Assert.Equal("MarketBuyNq", material.AcquisitionSource);
+        Assert.Equal("Aether current market evidence", material.CostSourceDetails);
         Assert.Equal("Market evidence is stale.", Assert.Single(material.Warnings));
     }
 
@@ -129,7 +137,9 @@ public sealed class WorkshopHostCraftAppraisalContractsTests
                 "workshop-host",
                 fileName));
             if (File.Exists(candidate))
+            {
                 return candidate;
+            }
 
             root = Path.GetFullPath(Path.Combine(root, ".."));
         }

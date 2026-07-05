@@ -35,6 +35,13 @@ public sealed class WorkshopHostCraftAppraisalServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(ICraftAppraisalService) &&
             descriptor.ImplementationType == typeof(CraftAppraisalService) &&
             descriptor.Lifetime == ServiceLifetime.Scoped);
+        Assert.Contains(services, descriptor =>
+            descriptor.ServiceType == typeof(ICraftAppraisalPriceEvidenceService) &&
+            descriptor.ImplementationType == typeof(CraftAppraisalPriceEvidenceService) &&
+            descriptor.Lifetime == ServiceLifetime.Scoped);
+        Assert.Contains(services, descriptor =>
+            descriptor.ServiceType == typeof(IMarketCacheService) &&
+            descriptor.Lifetime == ServiceLifetime.Scoped);
     }
 
     [Fact]
@@ -51,8 +58,12 @@ public sealed class WorkshopHostCraftAppraisalServiceCollectionExtensionsTests
         using var scope = provider.CreateScope();
 
         var appraisalService = scope.ServiceProvider.GetRequiredService<ICraftAppraisalService>();
+        var evidenceService = scope.ServiceProvider.GetRequiredService<ICraftAppraisalPriceEvidenceService>();
+        var marketCache = scope.ServiceProvider.GetRequiredService<IMarketCacheService>();
 
         Assert.IsType<CraftAppraisalService>(appraisalService);
+        Assert.IsType<CraftAppraisalPriceEvidenceService>(evidenceService);
+        Assert.IsAssignableFrom<IMarketCacheService>(marketCache);
     }
 
     [Fact]

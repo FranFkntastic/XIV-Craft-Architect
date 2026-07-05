@@ -12,7 +12,7 @@ public sealed class WorkshopHostCraftAppraisalServiceTests
     {
         var builder = new CapturingPlanBuilder(CreatePricedPlan());
         var quotedAtUtc = new DateTimeOffset(2026, 7, 4, 14, 30, 0, TimeSpan.Zero);
-        var service = new CraftAppraisalService(builder, () => quotedAtUtc);
+        var service = new CraftAppraisalService(builder, new NoOpPriceEvidenceService(), () => quotedAtUtc);
         var request = CreateRequest(hqPolicy: "HqOnly");
 
         var quote = await service.AppraiseAsync(request);
@@ -28,6 +28,7 @@ public sealed class WorkshopHostCraftAppraisalServiceTests
     {
         var service = new CraftAppraisalService(
             new CapturingPlanBuilder(CreatePricedPlan()),
+            new NoOpPriceEvidenceService(),
             () => DateTimeOffset.UnixEpoch);
 
         var quote = await service.AppraiseAsync(CreateRequest());
@@ -42,6 +43,8 @@ public sealed class WorkshopHostCraftAppraisalServiceTests
         Assert.Equal("gil", quote.Currency);
         Assert.Equal("CraftArchitectLocal", quote.Source);
         Assert.Equal("Medium", quote.Confidence);
+        Assert.True(quote.IsComplete);
+        Assert.Equal("Complete", quote.AppraisalStatus);
         Assert.Contains(quote.Warnings, warning => warning.Contains("advisory", StringComparison.OrdinalIgnoreCase));
 
         var material = Assert.Single(quote.Materials);
@@ -51,7 +54,8 @@ public sealed class WorkshopHostCraftAppraisalServiceTests
         Assert.Equal(20m, material.TotalQuantity);
         Assert.Equal(40m, material.UnitCost);
         Assert.Equal(800m, material.TotalCost);
-        Assert.Equal("PlanEvidence", material.CostSource);
+        Assert.Equal("MarketBuyNq", material.AcquisitionSource);
+        Assert.Equal("MarketEvidence", material.CostSource);
         Assert.Empty(material.Warnings);
     }
 
@@ -60,17 +64,20 @@ public sealed class WorkshopHostCraftAppraisalServiceTests
     {
         var service = new CraftAppraisalService(
             new CapturingPlanBuilder(CreateMissingEvidencePlan()),
+            new NoOpPriceEvidenceService(),
             () => DateTimeOffset.UnixEpoch);
 
         var quote = await service.AppraiseAsync(CreateRequest());
 
         Assert.Equal("Low", quote.Confidence);
+        Assert.False(quote.IsComplete);
+        Assert.Equal("IncompletePriceEvidence", quote.AppraisalStatus);
         Assert.Equal(0m, quote.EstimatedUnitCost);
         Assert.Equal(0m, quote.EstimatedTotalCost);
         Assert.Contains(quote.Warnings, warning => warning.Contains("missing price evidence", StringComparison.OrdinalIgnoreCase));
         var material = Assert.Single(quote.Materials);
         Assert.Equal("MissingEvidence", material.CostSource);
-        Assert.Contains(material.Warnings, warning => warning.Contains("missing price evidence", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(material.Warnings, warning => warning.Contains("missing market price evidence", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -78,10 +85,112 @@ public sealed class WorkshopHostCraftAppraisalServiceTests
     {
         var service = new CraftAppraisalService(
             new CapturingPlanBuilder(CreatePricedPlan()),
+            new NoOpPriceEvidenceService(),
             () => DateTimeOffset.UnixEpoch);
         var request = CreateRequest() with { Quantity = 0 };
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.AppraiseAsync(request));
+    }
+
+    [Fact]
+    public async Task AppraiseAsync_UsesVendorSelectedSourcePrice()
+    {
+        var service = new CraftAppraisalService(
+            new CapturingPlanBuilder(CreateVendorPricedPlan()),
+            new NoOpPriceEvidenceService(),
+            () => DateTimeOffset.UnixEpoch);
+
+        var quote = await service.AppraiseAsync(CreateRequest());
+
+        Assert.True(quote.IsComplete);
+        Assert.Equal("Complete", quote.AppraisalStatus);
+        Assert.Equal(80m, quote.EstimatedUnitCost);
+        Assert.Equal(800m, quote.EstimatedTotalCost);
+        var material = Assert.Single(quote.Materials);
+        Assert.Equal("VendorBuy", material.AcquisitionSource);
+        Assert.Equal("VendorPrice", material.CostSource);
+        Assert.Equal(40m, material.UnitCost);
+    }
+
+    [Fact]
+    public async Task AppraiseAsync_AppliesPriceEvidenceBeforeMappingMaterials()
+    {
+        var plan = CreateMissingEvidencePlan();
+        var evidence = new MutatingPriceEvidenceService(targetItemId: 3, unitPrice: 25);
+        var service = new CraftAppraisalService(
+            new CapturingPlanBuilder(plan),
+            evidence,
+            () => DateTimeOffset.UnixEpoch);
+
+        var quote = await service.AppraiseAsync(CreateRequest());
+
+        Assert.True(evidence.WasCalled);
+        Assert.True(quote.IsComplete);
+        Assert.Equal(25m, Assert.Single(quote.Materials).UnitCost);
+    }
+
+    [Fact]
+    public async Task AppraiseAsync_DirectMarketItemWithoutEvidenceIsExplicitlyIncomplete()
+    {
+        var service = new CraftAppraisalService(
+            new CapturingPlanBuilder(CreateDirectMarketItemPlan()),
+            new NoOpPriceEvidenceService(),
+            () => DateTimeOffset.UnixEpoch);
+
+        var quote = await service.AppraiseAsync(CreateRequest());
+
+        Assert.False(quote.IsComplete);
+        Assert.Equal("IncompletePriceEvidence", quote.AppraisalStatus);
+        Assert.Equal("Low", quote.Confidence);
+        var material = Assert.Single(quote.Materials);
+        Assert.Equal("MarketBuyNq", material.AcquisitionSource);
+        Assert.Equal("MissingEvidence", material.CostSource);
+        Assert.Contains(
+            "missing market price evidence",
+            Assert.Single(material.Warnings),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AppraiseAsync_DirectMarketItemWithEvidenceReturnsCompleteDirectAcquisitionQuote()
+    {
+        var plan = CreateDirectMarketItemPlan();
+        plan.RootItems[0].MarketPrice = 8;
+        var service = new CraftAppraisalService(
+            new CapturingPlanBuilder(plan),
+            new NoOpPriceEvidenceService(),
+            () => DateTimeOffset.UnixEpoch);
+
+        var quote = await service.AppraiseAsync(CreateRequest());
+
+        Assert.True(quote.IsComplete);
+        Assert.Equal("Complete", quote.AppraisalStatus);
+        Assert.Equal(8m, quote.EstimatedUnitCost);
+        Assert.Equal(80m, quote.EstimatedTotalCost);
+        var material = Assert.Single(quote.Materials);
+        Assert.Equal("MarketEvidence", material.CostSource);
+    }
+
+    [Fact]
+    public async Task AppraiseAsync_DoesNotCollapseSameItemWithDifferentSelectedSources()
+    {
+        var service = new CraftAppraisalService(
+            new CapturingPlanBuilder(CreateMixedSourceSameItemPlan()),
+            new NoOpPriceEvidenceService(),
+            () => DateTimeOffset.UnixEpoch);
+
+        var quote = await service.AppraiseAsync(CreateRequest());
+
+        Assert.True(quote.IsComplete);
+        Assert.Equal(2, quote.Materials.Count(material => material.ItemId == 3));
+        Assert.Contains(quote.Materials, material =>
+            material.ItemId == 3 &&
+            material.AcquisitionSource == "VendorBuy" &&
+            material.UnitCost == 40m);
+        Assert.Contains(quote.Materials, material =>
+            material.ItemId == 3 &&
+            material.AcquisitionSource == "MarketBuyNq" &&
+            material.UnitCost == 60m);
     }
 
     private static CraftAppraisalRequest CreateRequest(string hqPolicy = "Either") => new()
@@ -145,6 +254,122 @@ public sealed class WorkshopHostCraftAppraisalServiceTests
         };
     }
 
+    private static CraftingPlan CreateVendorPricedPlan()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 2,
+            Name = "Fire Shard",
+            Quantity = 10,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Yield = 1,
+        };
+        var material = new PlanNode
+        {
+            ItemId = 3,
+            Name = "Vendor Material",
+            Quantity = 20,
+            Source = AcquisitionSource.VendorBuy,
+            CanBuyFromVendor = true,
+            CanBuyFromMarket = true,
+            MarketPrice = 0,
+            VendorPrice = 40,
+            Parent = root,
+            VendorOptions =
+            [
+                new VendorInfo
+                {
+                    Name = "Material Supplier",
+                    Location = "Limsa Lominsa",
+                    Price = 40,
+                    Currency = "gil"
+                }
+            ],
+        };
+        root.Children.Add(material);
+
+        return new CraftingPlan
+        {
+            RootItems = [root],
+            DataCenter = "Aether",
+            World = "Siren",
+        };
+    }
+
+    private static CraftingPlan CreateDirectMarketItemPlan()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 2,
+            Name = "Fire Shard",
+            Quantity = 10,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            CanCraft = false,
+            Yield = 1,
+        };
+
+        return new CraftingPlan
+        {
+            RootItems = [root],
+            DataCenter = "Aether",
+            World = "Siren",
+        };
+    }
+
+    private static CraftingPlan CreateMixedSourceSameItemPlan()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 2,
+            Name = "Fire Shard",
+            Quantity = 10,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Yield = 1,
+        };
+        var vendorMaterial = new PlanNode
+        {
+            ItemId = 3,
+            Name = "Shared Material",
+            Quantity = 2,
+            Source = AcquisitionSource.VendorBuy,
+            CanBuyFromVendor = true,
+            VendorPrice = 40,
+            Parent = root,
+            VendorOptions =
+            [
+                new VendorInfo
+                {
+                    Name = "Material Supplier",
+                    Location = "Limsa Lominsa",
+                    Price = 40,
+                    Currency = "gil"
+                }
+            ],
+        };
+        var marketMaterial = new PlanNode
+        {
+            ItemId = 3,
+            Name = "Shared Material",
+            Quantity = 3,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            MarketPrice = 60,
+            Parent = root,
+        };
+        root.Children.Add(vendorMaterial);
+        root.Children.Add(marketMaterial);
+
+        return new CraftingPlan
+        {
+            RootItems = [root],
+            DataCenter = "Aether",
+            World = "Siren",
+        };
+    }
+
     private sealed class CapturingPlanBuilder : ICoreRecipePlanBuilder
     {
         private readonly CraftingPlan plan;
@@ -173,6 +398,51 @@ public sealed class WorkshopHostCraftAppraisalServiceTests
         public Task FetchVendorPricesAsync(CraftingPlan plan, CancellationToken ct = default)
         {
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NoOpPriceEvidenceService : ICraftAppraisalPriceEvidenceService
+    {
+        public Task<CraftAppraisalPriceEvidenceResult> ApplyAsync(
+            CraftingPlan plan,
+            CraftAppraisalRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(CraftAppraisalPriceEvidenceResult.Empty);
+        }
+    }
+
+    private sealed class MutatingPriceEvidenceService(
+        int targetItemId,
+        decimal unitPrice) : ICraftAppraisalPriceEvidenceService
+    {
+        public bool WasCalled { get; private set; }
+
+        public Task<CraftAppraisalPriceEvidenceResult> ApplyAsync(
+            CraftingPlan plan,
+            CraftAppraisalRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            WasCalled = true;
+            foreach (var root in plan.RootItems)
+            {
+                Apply(root);
+            }
+
+            return Task.FromResult(new CraftAppraisalPriceEvidenceResult(1, 1, 0, []));
+        }
+
+        private void Apply(PlanNode node)
+        {
+            if (node.ItemId == targetItemId)
+            {
+                node.MarketPrice = unitPrice;
+            }
+
+            foreach (var child in node.Children)
+            {
+                Apply(child);
+            }
         }
     }
 }

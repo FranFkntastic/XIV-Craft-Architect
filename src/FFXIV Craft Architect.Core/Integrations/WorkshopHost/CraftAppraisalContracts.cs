@@ -36,6 +36,8 @@ public sealed record CraftAppraisalQuote
     public DateTimeOffset QuotedAtUtc { get; init; }
     public string Source { get; init; } = "CraftArchitectLocal";
     public string Confidence { get; init; } = "Unknown";
+    public bool IsComplete { get; init; }
+    public string AppraisalStatus { get; init; } = "Unknown";
     public IReadOnlyList<CraftAppraisalMaterialQuote> Materials { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
@@ -48,6 +50,8 @@ public sealed record CraftAppraisalMaterialQuote
     public decimal TotalQuantity { get; init; }
     public decimal UnitCost { get; init; }
     public decimal TotalCost { get; init; }
+    public string AcquisitionSource { get; init; } = "Unknown";
     public string CostSource { get; init; } = "Unknown";
+    public string CostSourceDetails { get; init; } = string.Empty;
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
