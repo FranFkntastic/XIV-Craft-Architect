@@ -16,6 +16,18 @@ public sealed class WorkshopHostCraftAppraisalServiceCollectionExtensionsTests
         services.AddWorkshopHostCraftAppraisal();
 
         Assert.Contains(services, descriptor =>
+            descriptor.ServiceType == typeof(RecipeCalculationService) &&
+            descriptor.ImplementationType == typeof(RecipeCalculationService) &&
+            descriptor.Lifetime == ServiceLifetime.Scoped);
+        Assert.Contains(services, descriptor =>
+            descriptor.ServiceType == typeof(IVendorCacheService) &&
+            descriptor.ImplementationType == typeof(VendorCacheService) &&
+            descriptor.Lifetime == ServiceLifetime.Scoped);
+        Assert.Contains(services, descriptor =>
+            descriptor.ServiceType == typeof(IRecipeResolutionService) &&
+            descriptor.ImplementationType == typeof(RecipeResolutionService) &&
+            descriptor.Lifetime == ServiceLifetime.Scoped);
+        Assert.Contains(services, descriptor =>
             descriptor.ServiceType == typeof(ICoreRecipePlanBuilder) &&
             descriptor.ImplementationType == typeof(CoreRecipeCalculationPlanBuilder) &&
             descriptor.Lifetime == ServiceLifetime.Scoped);
@@ -23,6 +35,24 @@ public sealed class WorkshopHostCraftAppraisalServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(ICraftAppraisalService) &&
             descriptor.ImplementationType == typeof(CraftAppraisalService) &&
             descriptor.Lifetime == ServiceLifetime.Scoped);
+    }
+
+    [Fact]
+    public void AddWorkshopHostCraftAppraisal_ResolvesAppraisalServiceWithDefaultDependencies()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkshopHostCraftAppraisal();
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true,
+        });
+        using var scope = provider.CreateScope();
+
+        var appraisalService = scope.ServiceProvider.GetRequiredService<ICraftAppraisalService>();
+
+        Assert.IsType<CraftAppraisalService>(appraisalService);
     }
 
     [Fact]
