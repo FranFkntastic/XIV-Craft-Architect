@@ -13,7 +13,7 @@ public interface IMarketCacheService
     /// Get cached market data for an item if it exists and is not stale.
     /// </summary>
     Task<CachedMarketData?> GetAsync(int itemId, string dataCenter, TimeSpan? maxAge = null);
-    
+
     /// <summary>
     /// Get cached market data even if it's stale. Returns null only if no data exists.
     /// </summary>
@@ -26,34 +26,34 @@ public interface IMarketCacheService
     Task<IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData>> GetManyAsync(
         IReadOnlyCollection<(int itemId, string dataCenter)> requests,
         TimeSpan? maxAge = null);
-    
+
     /// <summary>
     /// Store market data in the cache.
     /// </summary>
     Task SetAsync(int itemId, string dataCenter, CachedMarketData data);
-    
+
     /// <summary>
     /// Check if we have valid cached data for an item.
     /// </summary>
     Task<bool> HasValidCacheAsync(int itemId, string dataCenter, TimeSpan? maxAge = null);
-    
+
     /// <summary>
     /// Get multiple cached entries. Returns the keys that were NOT found.
     /// </summary>
     Task<List<(int itemId, string dataCenter)>> GetMissingAsync(
-        List<(int itemId, string dataCenter)> requests, 
+        List<(int itemId, string dataCenter)> requests,
         TimeSpan? maxAge = null);
-    
+
     /// <summary>
     /// Remove stale entries from the cache.
     /// </summary>
     Task<int> CleanupStaleAsync(TimeSpan maxAge);
-    
+
     /// <summary>
     /// Get cache statistics.
     /// </summary>
     Task<CacheStats> GetStatsAsync();
-    
+
     /// <summary>
     /// Ensures the cache contains reusable market data for the requested items.
     /// Fetches missing or stale data from Universalis API and stores it in the cache.
@@ -95,7 +95,7 @@ public class CachedMarketData
 {
     public int ItemId { get; set; }
     public string DataCenter { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Unix timestamp (seconds since epoch) when data was fetched.
     /// Store-only; use FetchedAt property for reading.
@@ -107,7 +107,7 @@ public class CachedMarketData
     /// This is market-board freshness, distinct from when this app fetched the response.
     /// </summary>
     public long? LastUploadTimeUnixMilliseconds { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the fetch time as UTC DateTime.
     /// Internally converts to/from Unix timestamp for safe serialization.
@@ -117,16 +117,16 @@ public class CachedMarketData
         get => DateTimeOffset.FromUnixTimeSeconds(FetchedAtUnix).UtcDateTime;
         set => FetchedAtUnix = new DateTimeOffset(CacheTimeHelper.NormalizeToUtc(value)).ToUnixTimeSeconds();
     }
-    
+
     public decimal DCAveragePrice { get; set; }
     public decimal? HQAveragePrice { get; set; }
     public List<CachedWorldData> Worlds { get; set; } = new();
-    
+
     /// <summary>
     /// Returns the age of this cached data.
     /// </summary>
     public TimeSpan Age => CacheTimeHelper.GetAge(FetchedAt);
-    
+
     /// <summary>
     /// Checks if this cached data is older than the specified maximum age.
     /// </summary>
@@ -168,7 +168,7 @@ public class CacheStats
     public DateTime? OldestEntry { get; set; }
     public DateTime? NewestEntry { get; set; }
     public long ApproximateSizeBytes { get; set; }
-    
-    public override string ToString() => 
+
+    public override string ToString() =>
         $"{ValidEntries} valid, {StaleEntries} stale (total: {TotalEntries})";
 }

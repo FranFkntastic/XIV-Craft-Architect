@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Net.Http.Json;
-using Microsoft.Extensions.Logging;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
+using Microsoft.Extensions.Logging;
 
 namespace FFXIV_Craft_Architect.Core.Services;
 
@@ -59,9 +59,14 @@ public class UniversalisService : IUniversalisService
         var queryParams = new List<string>();
 
         if (hqOnly)
+        {
             queryParams.Add("hq=true");
+        }
+
         if (entries != 10)
+        {
             queryParams.Add($"entries={entries}");
+        }
 
         var url = queryParams.Count > 0
             ? $"{baseUrl}?{string.Join("&", queryParams)}"
@@ -100,7 +105,9 @@ public class UniversalisService : IUniversalisService
 
         var itemIdList = itemIds.Distinct().ToList();
         if (itemIdList.Count == 0)
+        {
             return new Dictionary<int, UniversalisResponse>();
+        }
 
         var allResults = new ConcurrentDictionary<int, UniversalisResponse>();
         var delayStrategy = new AdaptiveDelayStrategy(
@@ -362,7 +369,11 @@ public class UniversalisService : IUniversalisService
                     _logger?.LogWarning(
                         "Rate limited (429) on chunk {ChunkIndex}, increasing delay to {Delay}ms",
                         workItem.ChunkIndex, delayStrategy.GetDelay());
-                    if (retry < maxRetries - 1) continue;
+                    if (retry < maxRetries - 1)
+                    {
+                        continue;
+                    }
+
                     return new ChunkFetchResult(false, false, new HttpRequestException("Rate limited by Universalis API"));
                 }
                 else if ((int)response.StatusCode == 504) // Gateway Timeout
@@ -379,7 +390,11 @@ public class UniversalisService : IUniversalisService
                         break; // Exit retry loop and signal split needed
                     }
 
-                    if (retry < maxRetries - 1) continue;
+                    if (retry < maxRetries - 1)
+                    {
+                        continue;
+                    }
+
                     return new ChunkFetchResult(false, false, new HttpRequestException("Gateway timeout from Universalis API"));
                 }
 
@@ -548,7 +563,9 @@ public class UniversalisService : IUniversalisService
     public async Task<WorldData> GetWorldDataAsync(CancellationToken ct = default)
     {
         if (_worldDataCache != null)
+        {
             return _worldDataCache;
+        }
 
         _logger?.LogDebug("Fetching world data from Universalis");
 
@@ -613,7 +630,9 @@ public class UniversalisService : IUniversalisService
         foreach (var listing in listings.OrderBy(l => l.PricePerUnit))
         {
             if (remaining <= 0)
+            {
                 break;
+            }
 
             var toBuy = Math.Min(listing.Quantity, remaining);
             totalCost += toBuy * listing.PricePerUnit;

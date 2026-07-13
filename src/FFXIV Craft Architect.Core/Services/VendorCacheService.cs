@@ -26,11 +26,11 @@ public class VendorCacheService : IVendorCacheService, IDisposable
     {
         _garlandService = garlandService;
         _logger = logger;
-        
+
         // Store cache in application directory
         var appDir = AppDomain.CurrentDomain.BaseDirectory;
         _cacheFilePath = Path.Combine(appDir, "vendor_cache.json");
-        
+
         // Load cache on startup (fire and forget - don't block construction)
         _ = LoadAsync();
     }
@@ -49,7 +49,7 @@ public class VendorCacheService : IVendorCacheService, IDisposable
         }
 
         _logger.LogDebug("[VendorCache] Cache miss for item {ItemId}, fetching from Garland", itemId);
-        
+
         var item = await _garlandService.GetItemAsync(itemId, ct);
         if (item == null)
         {
@@ -62,15 +62,15 @@ public class VendorCacheService : IVendorCacheService, IDisposable
         {
             _cache[itemId] = entry;
             _isDirty = true;
-            _logger.LogDebug("[VendorCache] Cached {VendorCount} vendors for item {ItemId}", 
+            _logger.LogDebug("[VendorCache] Cached {VendorCount} vendors for item {ItemId}",
                 entry.Vendors.Count, itemId);
         }
-        
+
         return entry;
     }
 
     public async Task<Dictionary<int, VendorCacheEntry>> GetOrFetchBatchAsync(
-        IEnumerable<int> itemIds, 
+        IEnumerable<int> itemIds,
         CancellationToken ct = default)
     {
         var results = new Dictionary<int, VendorCacheEntry>();
@@ -96,12 +96,12 @@ public class VendorCacheService : IVendorCacheService, IDisposable
             return results;
         }
 
-        _logger.LogInformation("[VendorCache] Fetching {Count} items from Garland ({Cached} already cached)", 
+        _logger.LogInformation("[VendorCache] Fetching {Count} items from Garland ({Cached} already cached)",
             toFetch.Count, results.Count);
 
         // Fetch missing items in parallel
         var fetchedItems = await _garlandService.GetItemsAsync(toFetch, useParallel: true, ct);
-        
+
         foreach (var kvp in fetchedItems)
         {
             var entry = CreateEntryFromGarlandItem(kvp.Value);
@@ -159,15 +159,15 @@ public class VendorCacheService : IVendorCacheService, IDisposable
                 Entries = _cache.ToDictionary(kvp => kvp.Key, kvp => kvp.Value)
             };
 
-            var json = JsonSerializer.Serialize(data, new JsonSerializerOptions 
-            { 
-                WriteIndented = true 
+            var json = JsonSerializer.Serialize(data, new JsonSerializerOptions
+            {
+                WriteIndented = true
             });
-            
+
             await File.WriteAllTextAsync(_cacheFilePath, json, ct);
             _isDirty = false;
-            
-            _logger.LogInformation("[VendorCache] Saved {Count} entries to {Path}", 
+
+            _logger.LogInformation("[VendorCache] Saved {Count} entries to {Path}",
                 data.Entries.Count, _cacheFilePath);
         }
         finally
@@ -189,7 +189,7 @@ public class VendorCacheService : IVendorCacheService, IDisposable
 
             var json = await File.ReadAllTextAsync(_cacheFilePath, ct);
             var data = JsonSerializer.Deserialize<VendorCacheData>(json);
-            
+
             if (data == null || data.Entries == null)
             {
                 _logger.LogWarning("[VendorCache] Failed to deserialize cache file");
@@ -201,10 +201,10 @@ public class VendorCacheService : IVendorCacheService, IDisposable
             {
                 _cache[kvp.Key] = kvp.Value;
             }
-            
+
             _isDirty = false;
-            
-            _logger.LogInformation("[VendorCache] Loaded {Count} entries from {Path} (saved at {SavedAt})", 
+
+            _logger.LogInformation("[VendorCache] Loaded {Count} entries from {Path} (saved at {SavedAt})",
                 data.Entries.Count, _cacheFilePath, data.SavedAt);
         }
         catch (Exception ex)
@@ -332,8 +332,11 @@ public class VendorCacheService : IVendorCacheService, IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        
+        if (_disposed)
+        {
+            return;
+        }
+
         // Save cache on shutdown if dirty
         if (_isDirty)
         {
@@ -346,7 +349,7 @@ public class VendorCacheService : IVendorCacheService, IDisposable
                 _logger.LogError(ex, "[VendorCache] Error saving cache on dispose");
             }
         }
-        
+
         _fileLock.Dispose();
         _disposed = true;
     }

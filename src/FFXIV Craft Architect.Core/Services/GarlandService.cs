@@ -47,12 +47,12 @@ public class GarlandService : IGarlandService
             _logger?.LogDebug("[GarlandService] Sending HTTP GET...");
             var response = await _httpClient.GetAsync(url, ct);
             _logger?.LogInformation("[GarlandService] HTTP Response: {Status}", response.StatusCode);
-            
+
             response.EnsureSuccessStatusCode();
 
             var rawJson = await response.Content.ReadAsStringAsync(ct);
             _logger?.LogDebug("[GarlandService] Response size: {Length} chars", rawJson.Length);
-            
+
             // Log first 1000 chars of JSON for debugging
             var preview = rawJson.Length > 1000 ? rawJson[..1000] + "..." : rawJson;
             _logger?.LogDebug("[GarlandService] JSON Preview:\n{Preview}", preview);
@@ -74,7 +74,7 @@ public class GarlandService : IGarlandService
                 _logger?.LogError("[GarlandService] Path: {Path}", ex.Path);
                 _logger?.LogError("[GarlandService] Line: {Line}, Position: {Pos}", ex.LineNumber, ex.BytePositionInLine);
                 _logger?.LogError("[GarlandService] Message: {Message}", ex.Message);
-                
+
                 // Try to extract problematic section
                 if (ex.Path?.StartsWith("$") == true)
                 {
@@ -82,7 +82,7 @@ public class GarlandService : IGarlandService
                     if (match.Success && int.TryParse(match.Groups[1].Value, out var index))
                     {
                         _logger?.LogError("[GarlandService] Problematic array index: {Index}", index);
-                        
+
                         // Extract surrounding context from JSON
                         var lines = rawJson.Split('\n');
                         var startLine = Math.Max(0, (ex.LineNumber ?? 1) - 5);
@@ -94,25 +94,25 @@ public class GarlandService : IGarlandService
                         }
                     }
                 }
-                
+
                 throw; // Re-throw to let caller handle
             }
-            
+
             // Filter to only items (not recipes, quests, etc.)
             // Defensive: filter out null results and results with null Type or Object
             var filteredResults = results
                 ?.Where(r => r != null && r.Type == "item" && r.Object != null)
                 .ToList() ?? new List<GarlandSearchResult>();
             _logger?.LogInformation("[GarlandService] Filtered to {Count} items (type='item')", filteredResults.Count);
-            
+
             // Log first few results
             for (var i = 0; i < Math.Min(3, filteredResults.Count); i++)
             {
                 var r = filteredResults[i];
-                _logger?.LogDebug("[GarlandService] Result[{Index}]: ID={Id}, Name='{Name}', Icon={Icon}", 
+                _logger?.LogDebug("[GarlandService] Result[{Index}]: ID={Id}, Name='{Name}', Icon={Icon}",
                     i, r.Id, r.Object?.Name ?? "null", r.Object?.IconId ?? 0);
             }
-            
+
             _logger?.LogInformation("[GarlandService] ===== Search Complete =====");
             return filteredResults;
         }
@@ -146,16 +146,16 @@ public class GarlandService : IGarlandService
             response.EnsureSuccessStatusCode();
 
             var data = await response.Content.ReadFromJsonAsync<GarlandItemResponse>(ct);
-            _logger?.LogInformation("[GarlandService] Item fetched: {Name} (Icon: {Icon})", 
+            _logger?.LogInformation("[GarlandService] Item fetched: {Name} (Icon: {Icon})",
                 data?.Item?.Name ?? "null", data?.Item?.IconId ?? 0);
-            
+
             // Transfer partials from response wrapper to item for vendor location resolution
             if (data?.Item != null && data.Partials != null)
             {
                 data.Item.Partials = data.Partials;
                 _logger?.LogDebug("[GarlandService] Transferred {PartialCount} partials to item", data.Partials.Count);
             }
-            
+
             return data?.Item;
         }
         catch (Exception ex)
@@ -171,7 +171,7 @@ public class GarlandService : IGarlandService
     public async Task<Recipe?> GetRecipeAsync(int itemId, CancellationToken ct = default)
     {
         _logger?.LogInformation("[GarlandService] Fetching recipe for item {ItemId}", itemId);
-        
+
         var item = await GetItemAsync(itemId, ct);
         if (item?.Crafts == null || item.Crafts.Count == 0)
         {
@@ -264,16 +264,18 @@ public class GarlandService : IGarlandService
     /// <param name="ct">Cancellation token</param>
     /// <returns>Dictionary of item ID to item data</returns>
     public async Task<Dictionary<int, GarlandItem>> GetItemsAsync(
-        IEnumerable<int> itemIds, 
+        IEnumerable<int> itemIds,
         bool useParallel = true,
         CancellationToken ct = default)
     {
         const int maxConcurrency = 2; // Conservative: only 2 concurrent requests
-        
+
         var ids = itemIds.Distinct().ToList();
         if (ids.Count == 0)
+        {
             return new Dictionary<int, GarlandItem>();
-        
+        }
+
         var results = new ConcurrentDictionary<int, GarlandItem>();
         var delayStrategy = new AdaptiveDelayStrategy(
             initialDelayMs: 200,  // Start conservative (200ms)
@@ -281,8 +283,8 @@ public class GarlandService : IGarlandService
             maxDelayMs: 10000,    // Max 10s backoff
             backoffMultiplier: 2.0,
             rateLimitMultiplier: 4.0);
-        
-        _logger?.LogInformation("[GarlandService] Fetching {Count} items (parallel={UseParallel})", 
+
+        _logger?.LogInformation("[GarlandService] Fetching {Count} items (parallel={UseParallel})",
             ids.Count, useParallel);
 
         if (useParallel && ids.Count > 1)
@@ -302,16 +304,16 @@ public class GarlandService : IGarlandService
                     {
                         await Task.Delay(delay, ct);
                     }
-                    
+
                     var item = await GetItemAsync(id, ct);
                     if (item != null)
                     {
                         results[id] = item;
                         delayStrategy.ReportSuccess();
                     }
-                    
+
                     var completed = Interlocked.Increment(ref completedCount);
-                    _logger?.LogDebug("[GarlandService] Item {ItemId} fetched ({Completed}/{Total})", 
+                    _logger?.LogDebug("[GarlandService] Item {ItemId} fetched ({Completed}/{Total})",
                         id, completed, ids.Count);
                 }
                 catch (Exception ex)
@@ -327,7 +329,7 @@ public class GarlandService : IGarlandService
             }).ToList();
 
             await Task.WhenAll(tasks);
-            
+
             _logger?.LogInformation(
                 "[GarlandService] Parallel fetch complete: {Completed}/{Total} succeeded, {Failed} failed, final delay: {Delay}ms",
                 completedCount, ids.Count, failedCount, delayStrategy.GetDelay());
@@ -344,7 +346,7 @@ public class GarlandService : IGarlandService
                     {
                         await Task.Delay(delay, ct);
                     }
-                    
+
                     var item = await GetItemAsync(id, ct);
                     if (item != null)
                     {
@@ -358,7 +360,7 @@ public class GarlandService : IGarlandService
                     _logger?.LogWarning(ex, "[GarlandService] Failed to fetch item {ItemId}", id);
                 }
             }
-            
+
             _logger?.LogInformation(
                 "[GarlandService] Sequential fetch complete: {FetchedCount}/{TotalCount} items, final delay: {Delay}ms",
                 results.Count, ids.Count, delayStrategy.GetDelay());

@@ -17,11 +17,11 @@ public interface IArtisanService
     /// <param name="ct">Cancellation token</param>
     /// <returns>Crafting plan or null if import failed</returns>
     Task<CraftingPlan?> ImportFromArtisanAsync(
-        string artisanJson, 
-        string dataCenter, 
+        string artisanJson,
+        string dataCenter,
         string world,
         CancellationToken ct = default);
-    
+
     /// <summary>
     /// Export a crafting plan to Artisan JSON format.
     /// Returns JSON that can be pasted into Artisan's "Import List From Clipboard" feature.
@@ -34,7 +34,7 @@ public interface IArtisanService
         CraftingPlan plan,
         bool includePrecrafts = false,
         CancellationToken ct = default);
-    
+
     /// <summary>
     /// Create a summary text of the export result for display to the user.
     /// </summary>

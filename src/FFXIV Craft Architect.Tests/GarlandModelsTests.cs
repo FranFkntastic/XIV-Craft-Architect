@@ -100,7 +100,7 @@ public class GarlandModelsTests
         Assert.NotNull(partial);
 
         var success = partial.TryGetNpcObject(out var npc, out var error);
-        
+
         Assert.True(success);
         Assert.NotNull(npc);
         Assert.Null(error);
@@ -125,7 +125,7 @@ public class GarlandModelsTests
         Assert.NotNull(partial);
 
         var success = partial.TryGetNpcObject(out var npc, out var error);
-        
+
         Assert.False(success);
         Assert.Null(npc);
         Assert.NotNull(error);
@@ -144,7 +144,7 @@ public class GarlandModelsTests
         Assert.NotNull(partial);
 
         var success = partial.TryGetNpcObject(out var npc, out var error);
-        
+
         Assert.False(success);
         Assert.Null(npc);
         Assert.NotNull(error);
@@ -165,7 +165,7 @@ public class GarlandModelsTests
         Assert.True(partial.ObjectRaw.HasValue);
 
         var success = partial.TryGetNpcObject(out var npc, out var error);
-        
+
         Assert.False(success);
         Assert.Null(npc);
         Assert.NotNull(error);
@@ -190,7 +190,7 @@ public class GarlandModelsTests
         Assert.NotNull(partial);
 
         var npc = partial.GetNpcObject();
-        
+
         Assert.NotNull(npc);
         Assert.Equal(123, npc.Id);
         Assert.Equal("Test NPC", npc.Name);
@@ -208,7 +208,7 @@ public class GarlandModelsTests
         Assert.NotNull(partial);
 
         var npc = partial.GetNpcObject();
-        
+
         Assert.Null(npc);
     }
 
@@ -244,12 +244,12 @@ public class GarlandModelsTests
         // If there were duplicates, the static constructor would throw
         var zone54 = ZoneMappingHelper.LocationIdToName(54);
         var zone148 = ZoneMappingHelper.LocationIdToName(148);
-        
+
         // 54 should be New Gridania
         Assert.Equal("New Gridania", zone54);
         // 148 should be Central Shroud (the fix we made)
         Assert.Equal("Central Shroud", zone148);
-        
+
         // They should not be the same
         Assert.NotEqual(zone54, zone148);
     }

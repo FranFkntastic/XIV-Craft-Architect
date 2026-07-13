@@ -241,21 +241,21 @@ public class CoreRecipePlannerCommandServiceTests
         var cache = CreateMarketCache(100, 200);
         var service = CreateService(
             builder: new FakeRecipePlanBuilder
-        {
-            BuildAsync = async ct =>
             {
-                callCount++;
-                if (callCount == 1)
+                BuildAsync = async ct =>
                 {
-                    firstStarted.SetResult();
-                    await releaseFirst.Task;
-                    ct.ThrowIfCancellationRequested();
-                    return olderPlan;
-                }
+                    callCount++;
+                    if (callCount == 1)
+                    {
+                        firstStarted.SetResult();
+                        await releaseFirst.Task;
+                        ct.ThrowIfCancellationRequested();
+                        return olderPlan;
+                    }
 
-                return newerPlan;
-            }
-        },
+                    return newerPlan;
+                }
+            },
             marketCache: cache.Object);
 
         var firstTask = service.BuildPlanAsync(new CoreBuildRecipePlanRequest(

@@ -1,10 +1,10 @@
+using FFXIV_Craft_Architect.Desktop.Services;
+using FFXIV_Craft_Architect.Desktop.ViewModels;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
-using WinRT.Interop;
-using FFXIV_Craft_Architect.Desktop.Services;
-using FFXIV_Craft_Architect.Desktop.ViewModels;
 using Microsoft.UI.Xaml.Controls;
+using WinRT.Interop;
 
 namespace FFXIV_Craft_Architect.Desktop;
 

@@ -22,14 +22,14 @@ public class PlanPersistenceService : IPlanPersistenceService
     {
         _logger = logger;
         _plansDirectory = Path.Combine(AppContext.BaseDirectory, "Plans");
-        
+
         _jsonOptions = new JsonSerializerOptions
         {
             WriteIndented = true,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
-        
+
         // Ensure directory exists
         EnsureDirectoryExists();
     }
@@ -61,12 +61,12 @@ public class PlanPersistenceService : IPlanPersistenceService
         try
         {
             EnsureDirectoryExists();
-            
+
             plan.MarkModified();
-            
+
             string filePath;
             string fileName;
-            
+
             if (!string.IsNullOrEmpty(overwritePath) && File.Exists(overwritePath))
             {
                 // Overwrite existing file
@@ -77,19 +77,19 @@ public class PlanPersistenceService : IPlanPersistenceService
             else
             {
                 // Generate filename from plan name or custom name
-                var baseName = !string.IsNullOrWhiteSpace(customName) 
-                    ? customName 
+                var baseName = !string.IsNullOrWhiteSpace(customName)
+                    ? customName
                     : plan.Name;
-                
+
                 // Sanitize filename
                 var safeName = string.Concat(baseName.Split(Path.GetInvalidFileNameChars()))
                     .Replace(" ", "_")
                     .Replace(".", "_");
-                
+
                 // Use name only (no timestamp) to allow natural overwriting
                 fileName = $"{safeName}.json";
                 filePath = Path.Combine(_plansDirectory, fileName);
-                
+
                 // If file exists, we'll overwrite it (user has already confirmed)
                 _logger.LogInformation("[PlanPersistence] Saving new plan '{PlanName}' ({FileName})", plan.Name, fileName);
             }
@@ -135,7 +135,7 @@ public class PlanPersistenceService : IPlanPersistenceService
 
             var json = await File.ReadAllTextAsync(filePath);
             var data = JsonSerializer.Deserialize<PlanFileData>(json, _jsonOptions);
-            
+
             if (data == null)
             {
                 _logger.LogWarning("[PlanPersistence] Failed to deserialize plan: {Path}", filePath);
@@ -180,24 +180,26 @@ public class PlanPersistenceService : IPlanPersistenceService
     public List<PlanInfo> ListSavedPlans()
     {
         var plans = new List<PlanInfo>();
-        
+
         try
         {
             EnsureDirectoryExists();
-            
+
             if (!Directory.Exists(_plansDirectory))
+            {
                 return plans;
+            }
 
             foreach (var file in Directory.GetFiles(_plansDirectory, "*.json").OrderByDescending(f => File.GetLastWriteTime(f)))
             {
                 try
                 {
                     var fileInfo = new FileInfo(file);
-                    
+
                     // Try to read just the header to get metadata
                     var json = File.ReadAllText(file);
                     var data = JsonSerializer.Deserialize<PlanFileData>(json, _jsonOptions);
-                    
+
                     if (data != null)
                     {
                         plans.Add(new PlanInfo
@@ -299,7 +301,7 @@ public class PlanPersistenceService : IPlanPersistenceService
     public async Task<CraftingPlan?> ImportPlanAsync(string filePath)
     {
         var plan = await LoadPlanAsync(filePath);
-        
+
         if (plan != null)
         {
             // Generate new ID to avoid conflicts
@@ -307,11 +309,11 @@ public class PlanPersistenceService : IPlanPersistenceService
             plan.Name = $"{plan.Name} (Imported)";
             plan.CreatedAt = DateTime.UtcNow;
             plan.ModifiedAt = DateTime.UtcNow;
-            
+
             // Save to default location
             await SavePlanAsync(plan);
         }
-        
+
         return plan;
     }
 
@@ -385,7 +387,7 @@ public class PlanPersistenceService : IPlanPersistenceService
             Notes = fileNode.Notes,
             Children = fileNode.Children?.Select(ConvertFromFileNode).ToList() ?? new List<PlanNode>()
         };
-        
+
         // Handle backward compatibility: old plans used IsBuy, new plans use Source
         if (fileNode.Source.HasValue)
         {
@@ -403,7 +405,7 @@ public class PlanPersistenceService : IPlanPersistenceService
             node.Source = AcquisitionSource.Craft;
             node.SourceReason = AcquisitionSourceReason.Restored;
         }
-        
+
         node.MustBeHq = fileNode.MustBeHq;
         node.CanBeHq = fileNode.CanBeHq;
         node.CanBuyFromVendor = fileNode.CanBuyFromVendor;

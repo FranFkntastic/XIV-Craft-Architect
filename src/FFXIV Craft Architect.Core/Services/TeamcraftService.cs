@@ -26,23 +26,23 @@ public class TeamcraftService : ITeamcraftService
     {
         // Teamcraft format: itemId,null,quantity;itemId,null,quantity;
         var sb = new StringBuilder();
-        
+
         foreach (var rootItem in plan.RootItems)
         {
             // Get the item ID from the root node
             // Teamcraft uses the resulting item ID, not recipe ID
             sb.Append($"{rootItem.ItemId},null,{rootItem.Quantity};");
         }
-        
+
         // Remove trailing semicolon
         var exportString = sb.ToString().TrimEnd(';');
-        
+
         // Base64 encode
         var plainTextBytes = Encoding.UTF8.GetBytes(exportString);
         var base64 = Convert.ToBase64String(plainTextBytes);
-        
+
         var url = $"https://ffxivteamcraft.com/import/{base64}";
-        
+
         _logger.LogInformation("[Teamcraft] Exported plan '{PlanName}' to Teamcraft format", plan.Name);
         return url;
     }
@@ -54,42 +54,48 @@ public class TeamcraftService : ITeamcraftService
     public List<(string name, int quantity)> ParseTeamcraftText(string text)
     {
         var items = new List<(string name, int quantity)>();
-        
+
         using var reader = new StringReader(text);
         string? line;
         while ((line = reader.ReadLine()) != null)
         {
             line = line.Trim();
             if (string.IsNullOrWhiteSpace(line))
+            {
                 continue;
-            
+            }
+
             // Parse "5x Item Name" format
             var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 2)
+            {
                 continue;
-            
+            }
+
             // First part should be "5x" or similar
             var quantityPart = parts[0];
             if (quantityPart.EndsWith('x') || quantityPart.EndsWith('×'))
             {
                 quantityPart = quantityPart.TrimEnd('x', '×');
             }
-            
+
             if (!int.TryParse(quantityPart, out var quantity))
+            {
                 continue;
-            
+            }
+
             // Rest is the item name
             var name = string.Join(" ", parts.Skip(1)).Trim();
-            
+
             // Remove HQ symbol if present
             name = name.Replace("", "").Trim(); // HQ symbol
-            
+
             if (!string.IsNullOrWhiteSpace(name))
             {
                 items.Add((name, quantity));
             }
         }
-        
+
         _logger.LogInformation("[Teamcraft] Parsed {Count} items from Teamcraft text", items.Count);
         return items;
     }
@@ -99,8 +105,8 @@ public class TeamcraftService : ITeamcraftService
     /// Requires searching for each item to get its ID.
     /// </summary>
     public async Task<CraftingPlan?> ImportFromTeamcraftTextAsync(
-        string name, 
-        string precraftText, 
+        string name,
+        string precraftText,
         string finalItemsText,
         string dataCenter,
         string world,
@@ -114,13 +120,13 @@ public class TeamcraftService : ITeamcraftService
         };
 
         var allItems = new List<(string name, int quantity)>();
-        
+
         // Parse pre-craft items
         if (!string.IsNullOrWhiteSpace(precraftText))
         {
             allItems.AddRange(ParseTeamcraftText(precraftText));
         }
-        
+
         // Parse final items
         if (!string.IsNullOrWhiteSpace(finalItemsText))
         {
@@ -139,9 +145,9 @@ public class TeamcraftService : ITeamcraftService
             try
             {
                 var results = await _garlandService.SearchAsync(itemName, ct);
-                var match = results.FirstOrDefault(r => 
+                var match = results.FirstOrDefault(r =>
                     string.Equals(r.Object?.Name, itemName, StringComparison.OrdinalIgnoreCase));
-                
+
                 if (match != null)
                 {
                     plan.RootItems.Add(new PlanNode
@@ -188,12 +194,12 @@ public class TeamcraftService : ITeamcraftService
     public string ExportToPlainText(CraftingPlan plan)
     {
         var sb = new StringBuilder();
-        
+
         foreach (var item in plan.RootItems)
         {
             sb.AppendLine($"{item.Quantity}x {item.Name}");
         }
-        
+
         return sb.ToString();
     }
 
@@ -204,14 +210,14 @@ public class TeamcraftService : ITeamcraftService
     {
         var sb = new StringBuilder();
         sb.AppendLine("Item Name,Quantity,Buy/Craft,Estimated Price");
-        
+
         foreach (var material in AcquisitionPlanningService.GetActiveProcurementItems(plan))
         {
             var source = material.Sources.FirstOrDefault();
             var buyCraft = source?.IsCrafted == true ? "Craft" : "Buy";
             sb.AppendLine($"\"{material.Name}\",{material.TotalQuantity},{buyCraft},{material.TotalCost:N0}");
         }
-        
+
         return sb.ToString();
     }
 }

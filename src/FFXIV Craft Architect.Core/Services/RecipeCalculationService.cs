@@ -80,10 +80,10 @@ public class RecipeCalculationService
     private readonly IVendorCacheService _vendorCacheService;
     private readonly IRecipeResolutionService _recipeResolutionService;
     private readonly ILogger<RecipeCalculationService>? _logger;
-    
+
     // Cache to avoid fetching the same item multiple times during calculation
     private readonly ConcurrentDictionary<int, GarlandItem> _itemCache = new();
-    
+
     // Maximum recursion depth to prevent stack overflow
     private const int MaxDepth = 20;
 
@@ -142,7 +142,7 @@ public class RecipeCalculationService
         IRecipePlanBuildDiagnosticRecorder? diagnostics = null)
     {
         _logger?.LogInformation("[RecipeCalc] Building plan for {Count} target items", targetItems.Count);
-        
+
         var plan = new CraftingPlan
         {
             Name = $"Plan {DateTime.Now:yyyy-MM-dd HH:mm}",
@@ -161,24 +161,24 @@ public class RecipeCalculationService
                 "build-plan.discover-tree",
                 token => DiscoverTreeLevelsAsync(targetItems, token),
                 ct);
-            
+
             // Phase 2: Fetch all levels in batches
-            _logger?.LogInformation("[RecipeCalc] Phase 2: Fetching {TotalItems} items across {Levels} levels", 
+            _logger?.LogInformation("[RecipeCalc] Phase 2: Fetching {TotalItems} items across {Levels} levels",
                 discovery.AllItemIds.Count, discovery.Levels.Count);
-            
+
             var itemCache = new Dictionary<int, GarlandItem>();
-            
+
             // Default settings (can be made configurable)
             const int batchSize = 5;
             const int maxConcurrent = 2;
             const int timeoutSeconds = 120;
-            
+
             for (int i = 0; i < discovery.Levels.Count; i++)
             {
                 var level = discovery.Levels[i];
-                _logger?.LogInformation("[RecipeCalc] Fetching level {Level} ({Current}/{Total})", 
+                _logger?.LogInformation("[RecipeCalc] Fetching level {Level} ({Current}/{Total})",
                     level.Depth, i + 1, discovery.Levels.Count);
-                
+
                 var levelItems = await RunDiagnosticPhaseAsync(
                     diagnostics,
                     $"build-plan.fetch-level-{level.Depth}",
@@ -190,13 +190,13 @@ public class RecipeCalculationService
                         null,
                         token),
                     ct);
-                
+
                 foreach (var kvp in levelItems)
                 {
                     itemCache[kvp.Key] = kvp.Value;
                 }
             }
-            
+
             // Phase 3: Build tree from cache
             _logger?.LogInformation("[RecipeCalc] Phase 3: Building tree from cache");
             var nodeCache = new Dictionary<int, PlanNode>();
@@ -234,7 +234,7 @@ public class RecipeCalculationService
                         }
                     }
                 });
-            
+
             // Apply vendor prices (data is already in cache from Phase 2)
             _logger?.LogInformation("[RecipeCalc] Applying vendor prices from cache");
             await RunDiagnosticPhaseAsync(
@@ -245,7 +245,7 @@ public class RecipeCalculationService
         }
         catch (TreeCalculationException tex)
         {
-            _logger?.LogError(tex, "[RecipeCalc] Tree calculation failed at level {Level} after {Elapsed}", 
+            _logger?.LogError(tex, "[RecipeCalc] Tree calculation failed at level {Level} after {Elapsed}",
                 tex.FailedLevel, tex.ElapsedTime);
             throw;
         }
@@ -317,22 +317,24 @@ public class RecipeCalculationService
     public async Task FetchVendorPricesAsync(CraftingPlan plan, CancellationToken ct = default)
     {
         if (plan?.RootItems == null || !plan.RootItems.Any())
+        {
             return;
+        }
 
         _logger?.LogInformation("[RecipeCalc] Fetching vendor prices for plan items");
-        
+
         // Collect all unique item IDs from the plan
         var allItemIds = new HashSet<int>();
         foreach (var root in plan.RootItems)
         {
             CollectItemIds(root, allItemIds);
         }
-        
+
         _logger?.LogInformation("[RecipeCalc] Collected {Count} unique items to fetch", allItemIds.Count);
-        
+
         // Use vendor cache service - it handles fetching from Garland only on cache miss
         var vendorEntries = await _vendorCacheService.GetOrFetchBatchAsync(allItemIds, ct);
-        
+
         // Build vendor price cache from entries
         var vendorPriceCache = new Dictionary<int, (decimal price, List<VendorInfo> vendors)>();
         foreach (var kvp in vendorEntries)
@@ -340,10 +342,10 @@ public class RecipeCalculationService
             var entry = kvp.Value;
             vendorPriceCache[kvp.Key] = (entry.CheapestGilPrice, entry.Vendors);
         }
-        
+
         int cachedCount = 0;
         int appliedCount = 0;
-        
+
         // Apply vendor data to all nodes
         foreach (var root in plan.RootItems)
         {
@@ -351,29 +353,31 @@ public class RecipeCalculationService
                 root, vendorPriceCache, cachedCount, appliedCount);
         }
 
-        _logger?.LogInformation("[RecipeCalc] Vendor prices: {Cached} with vendors, {Applied} applied to nodes", 
+        _logger?.LogInformation("[RecipeCalc] Vendor prices: {Cached} with vendors, {Applied} applied to nodes",
             cachedCount, appliedCount);
     }
-    
+
     /// <summary>
     /// Apply vendor prices from vendor cache to plan nodes.
     /// Uses the persistent vendor cache service.
     /// </summary>
     private async Task ApplyVendorPricesFromCacheAsync(
-        CraftingPlan plan, 
-        Dictionary<int, GarlandItem> itemCache, 
+        CraftingPlan plan,
+        Dictionary<int, GarlandItem> itemCache,
         CancellationToken ct)
     {
         if (plan?.RootItems == null || !plan.RootItems.Any())
+        {
             return;
-        
-        _logger?.LogInformation("[RecipeCalc] Applying vendor prices from vendor cache to {Count} root items", 
+        }
+
+        _logger?.LogInformation("[RecipeCalc] Applying vendor prices from vendor cache to {Count} root items",
             plan.RootItems.Count);
-        
+
         // Use vendor cache service for all item IDs
         var itemIds = itemCache.Keys.ToList();
         var vendorEntries = await _vendorCacheService.GetOrFetchBatchAsync(itemIds, ct);
-        
+
         // Build vendor price cache from entries
         var vendorPriceCache = new Dictionary<int, (decimal price, List<VendorInfo> vendors)>();
         foreach (var kvp in vendorEntries)
@@ -381,21 +385,21 @@ public class RecipeCalculationService
             var entry = kvp.Value;
             vendorPriceCache[kvp.Key] = (entry.CheapestGilPrice, entry.Vendors);
         }
-        
+
         int cachedCount = 0;
         int appliedCount = 0;
-        
+
         // Apply vendor data to all nodes
         foreach (var root in plan.RootItems)
         {
             (cachedCount, appliedCount) = ApplyVendorPricesToNode(
                 root, vendorPriceCache, cachedCount, appliedCount);
         }
-        
-        _logger?.LogInformation("[RecipeCalc] Vendor prices applied: {Applied} nodes, {Cached} with vendor data", 
+
+        _logger?.LogInformation("[RecipeCalc] Vendor prices applied: {Applied} nodes, {Cached} with vendor data",
             appliedCount, cachedCount);
     }
-    
+
     /// <summary>
     /// Recursively collect all unique item IDs from a plan node and its children.
     /// </summary>
@@ -407,7 +411,7 @@ public class RecipeCalculationService
             CollectItemIds(child, itemIds);
         }
     }
-    
+
     /// <summary>
     /// Apply cached vendor prices to a node and its children.
     /// </summary>
@@ -441,20 +445,23 @@ public class RecipeCalculationService
     /// </summary>
     private static decimal GetVendorPrice(GarlandItem? item)
     {
-        if (item == null) return 0;
-        
+        if (item == null)
+        {
+            return 0;
+        }
+
         // If we have full vendor objects with prices, use the cheapest
         if (item.Vendors.Count > 0)
         {
             return item.Vendors.Min(v => v.Price);
         }
-        
+
         // If vendors are listed as IDs only (e.g., Ixali Vendor), use root-level price
         if (item.HasVendorReferences && item.Price > 0)
         {
             return item.Price;
         }
-        
+
         return 0;
     }
 
@@ -503,7 +510,10 @@ public class RecipeCalculationService
     /// Returns empty list if no vendor data available.</returns>
     private List<VendorInfo> GetVendorOptions(GarlandItem? item)
     {
-        if (item == null) return new List<VendorInfo>();
+        if (item == null)
+        {
+            return new List<VendorInfo>();
+        }
 
         var vendors = new List<VendorInfo>();
 
@@ -513,11 +523,11 @@ public class RecipeCalculationService
             foreach (var garlandVendor in item.Vendors)
             {
                 var vendorInfo = VendorInfo.FromGarlandVendor(garlandVendor);
-                
+
                 // Log warning if location resolution failed (still shows "Zone {id}")
                 if (vendorInfo.Location.StartsWith("Zone ", StringComparison.OrdinalIgnoreCase))
                 {
-                    _logger?.LogWarning("[VendorInfo] Failed to resolve location for vendor '{VendorName}': RawLocation='{RawLocation}', LocationId={LocationId}, Result='{Result}'", 
+                    _logger?.LogWarning("[VendorInfo] Failed to resolve location for vendor '{VendorName}': RawLocation='{RawLocation}', LocationId={LocationId}, Result='{Result}'",
                         garlandVendor.Name, garlandVendor.Location, garlandVendor.LocationId, vendorInfo.Location);
                 }
 
@@ -530,7 +540,7 @@ public class RecipeCalculationService
                         .Where(loc => !string.IsNullOrEmpty(loc))
                         .Distinct()
                         .ToList();
-                    
+
                     // Exclude the primary location from alternate locations
                     vendorInfo.AlternateLocations = allLocations
                         .Where(loc => loc != vendorInfo.Location)
@@ -554,7 +564,7 @@ public class RecipeCalculationService
         {
             // Extract vendor IDs from VendorsRaw to filter NPC partials
             var vendorIds = item.VendorIds;
-            
+
             // Look for NPC partials that match the vendor IDs
             // This ensures we only include actual vendors, not unrelated NPCs (quest givers, etc.)
             var vendorNpcs = item.Partials
@@ -652,11 +662,11 @@ public class RecipeCalculationService
     /// <param name="ct">Cancellation token</param>
     /// <returns>Populated PlanNode or null on error</returns>
     private async Task<PlanNode?> BuildNodeRecursiveAsync(
-        int itemId, 
-        string name, 
-        int quantity, 
-        PlanNode? parent, 
-        int depth, 
+        int itemId,
+        string name,
+        int quantity,
+        PlanNode? parent,
+        int depth,
         CancellationToken ct)
     {
         // Prevent infinite recursion (safety guard)
@@ -697,11 +707,11 @@ public class RecipeCalculationService
 
         // Determine if item can be HQ
         var canBeHq = DetermineCanBeHq(itemData, itemId);
-        
+
         // Check if item can be bought from vendor (has vendor objects OR vendor ID references)
         var hasVendor = itemData?.HasVendorReferences == true;
         var canBuyFromMarket = itemData?.CanListOnMarket != false;
-        
+
         // Create the node
         var node = new PlanNode
         {
@@ -718,10 +728,10 @@ public class RecipeCalculationService
         // Check for both traditional crafts and company crafts
         var hasCraft = itemData?.Crafts?.Any() == true;
         var hasCompanyCraft = itemData?.CompanyCrafts?.Any() == true;
-        
+
         // Set craftability - company crafts are also considered "craftable"
         node.CanCraft = hasCraft || hasCompanyCraft;
-        
+
         if (!hasCraft && !hasCompanyCraft)
         {
             // No craft recipe - prefer vendor, then market, then explicit unknown source.
@@ -760,13 +770,13 @@ public class RecipeCalculationService
         {
             var ingredientQuantity = ingredient.Amount * craftCount;
             var childNode = await BuildNodeRecursiveAsync(
-                ingredient.Id, 
-                ingredient.Name ?? $"Item_{ingredient.Id}", 
-                ingredientQuantity, 
-                node, 
-                depth + 1, 
+                ingredient.Id,
+                ingredient.Name ?? $"Item_{ingredient.Id}",
+                ingredientQuantity,
+                node,
+                depth + 1,
                 ct);
-            
+
             if (childNode != null)
             {
                 node.Children.Add(childNode);
@@ -776,15 +786,15 @@ public class RecipeCalculationService
         // Smart default: determine best acquisition method
         // But NEVER default root items (parent == null) to buy - user wants to craft project items
         var isRootItem = parent == null;
-        
+
         // Priority: Vendor > Buy > Craft (for non-root items)
         // Vendor is cheapest and most convenient, so default to it when available
         var shouldDefaultToVendor = !isRootItem && hasVendor;
         var shouldDefaultToBuy = !isRootItem && !shouldDefaultToVendor && canBuyFromMarket && ShouldDefaultToBuy(node);
-        
-        _logger?.LogInformation("[RecipeCalc] {Name}: RecipeLevel={Level}, Children={ChildCount}, IsRoot={IsRoot}, HasVendor={HasVendor}, ShouldDefaultToVendor={ShouldVendor}, ShouldDefaultToBuy={ShouldBuy}", 
+
+        _logger?.LogInformation("[RecipeCalc] {Name}: RecipeLevel={Level}, Children={ChildCount}, IsRoot={IsRoot}, HasVendor={HasVendor}, ShouldDefaultToVendor={ShouldVendor}, ShouldDefaultToBuy={ShouldBuy}",
             node.Name, node.RecipeLevel, node.Children.Count, isRootItem, hasVendor, shouldDefaultToVendor, shouldDefaultToBuy);
-        
+
         if (shouldDefaultToVendor)
         {
             _logger?.LogInformation("[RecipeCalc] {Name}: Setting Source=VendorBuy (vendor available)", node.Name);
@@ -812,11 +822,15 @@ public class RecipeCalculationService
     private bool ShouldDefaultToBuy(PlanNode node)
     {
         if (!node.Children.Any())
+        {
             return true;
+        }
 
         if (node.RecipeLevel < 10 && node.Children.Count > 3)
+        {
             return true;
-        
+        }
+
         return false;
     }
 
@@ -838,7 +852,7 @@ public class RecipeCalculationService
     private void ScaleNodeQuantities(PlanNode node, double ratio)
     {
         node.Quantity = Math.Max(1, (int)(node.Quantity * ratio));
-        
+
         if (node.Children.Any() && node.Yield > 0)
         {
             foreach (var child in node.Children)
@@ -861,29 +875,29 @@ public class RecipeCalculationService
     /// Build a node for company workshop recipes (airships, submarines).
     /// </summary>
     private async Task<PlanNode> BuildCompanyCraftNodeAsync(
-        PlanNode node, 
-        GarlandCompanyCraft companyCraft, 
+        PlanNode node,
+        GarlandCompanyCraft companyCraft,
         int quantity,
         CancellationToken ct)
     {
         node.Job = "Company Workshop";
         node.RecipeLevel = 1;
         node.Yield = 1;
-        
-        _logger?.LogInformation("[RecipeCalc] Building company craft: {Name} x{Quantity} with {PhaseCount} phases", 
+
+        _logger?.LogInformation("[RecipeCalc] Building company craft: {Name} x{Quantity} with {PhaseCount} phases",
             node.Name, quantity, companyCraft.PhaseCount);
 
         foreach (var phase in companyCraft.Phases)
         {
             _logger?.LogDebug("[RecipeCalc] Processing phase {PhaseNumber} with {ItemCount} items",
                 phase.PhaseNumber + 1, phase.Items.Count);
-            
+
             foreach (var item in phase.Items)
             {
                 var ingredientQuantity = item.Amount * quantity;
                 _logger?.LogDebug("[RecipeCalc] Phase {PhaseNumber} item: {ItemName} x{Amount} = {TotalQuantity}",
                     phase.PhaseNumber + 1, item.Name, item.Amount, ingredientQuantity);
-                
+
                 var childNode = await BuildNodeRecursiveAsync(
                     item.Id,
                     item.Name ?? $"Item_{item.Id}",
@@ -891,11 +905,11 @@ public class RecipeCalculationService
                     node,  // Parent is the company craft node, not a phase node
                     0,
                     ct);
-                
+
                 if (childNode != null)
                 {
                     node.Children.Add(childNode);
-                    _logger?.LogDebug("[RecipeCalc] Added ingredient: {ItemName} x{Quantity}", 
+                    _logger?.LogDebug("[RecipeCalc] Added ingredient: {ItemName} x{Quantity}",
                         childNode.Name, childNode.Quantity);
                 }
                 else
@@ -919,25 +933,33 @@ public class RecipeCalculationService
     {
         // Crystals, shards, clusters cannot be HQ
         if (itemId >= 1 && itemId <= 19)
+        {
             return false;
-        
+        }
+
         if (itemData?.Name != null)
         {
             var lowerName = itemData.Name.ToLowerInvariant();
-            
-            if (lowerName.Contains("crystal") || 
-                lowerName.Contains("shard") || 
+
+            if (lowerName.Contains("crystal") ||
+                lowerName.Contains("shard") ||
                 lowerName.Contains("cluster"))
+            {
                 return false;
-            
+            }
+
             if (lowerName.Contains("aethersand"))
+            {
                 return false;
+            }
         }
-        
+
         // Only items with craft recipes can be HQ
         if (itemData?.Crafts?.Any() == true)
+        {
             return true;
-        
+        }
+
         return false;
     }
 
@@ -947,7 +969,7 @@ public class RecipeCalculationService
     public string SerializePlan(CraftingPlan plan)
     {
         var serializableNodes = new List<SerializablePlanNode>();
-        
+
         foreach (var root in plan.RootItems)
         {
             SerializeNode(root, null, serializableNodes);
@@ -1019,7 +1041,10 @@ public class RecipeCalculationService
         try
         {
             var wrapper = JsonSerializer.Deserialize<PlanSerializationWrapper>(json);
-            if (wrapper == null) return null;
+            if (wrapper == null)
+            {
+                return null;
+            }
 
             var nodeLookup = new Dictionary<string, PlanNode>();
             foreach (var sNode in wrapper.Nodes)
@@ -1041,7 +1066,7 @@ public class RecipeCalculationService
                     ParentNodeId = sNode.ParentNodeId,
                     Notes = sNode.Notes
                 };
-                
+
                 if (sNode.Source.HasValue)
                 {
                     node.Source = sNode.Source.Value;
@@ -1052,7 +1077,7 @@ public class RecipeCalculationService
                     node.Source = AcquisitionSource.Craft;
                     node.SourceReason = AcquisitionSourceReason.Restored;
                 }
-                
+
                 node.MustBeHq = sNode.MustBeHq;
                 node.CanBeHq = sNode.CanBeHq;
                 node.CanBuyFromMarket = sNode.CanBuyFromMarket;
@@ -1068,8 +1093,11 @@ public class RecipeCalculationService
 
             foreach (var sNode in wrapper.Nodes)
             {
-                if (!nodeLookup.TryGetValue(sNode.NodeId, out var node)) continue;
-                
+                if (!nodeLookup.TryGetValue(sNode.NodeId, out var node))
+                {
+                    continue;
+                }
+
                 if (sNode.ParentNodeId != null && nodeLookup.TryGetValue(sNode.ParentNodeId, out var parent))
                 {
                     node.Parent = parent;
@@ -1127,15 +1155,15 @@ public class RecipeCalculationService
     public Dictionary<int, PriceInfo> ExtractPricesFromPlan(CraftingPlan plan)
     {
         var prices = new Dictionary<int, PriceInfo>();
-        
+
         foreach (var root in plan.RootItems)
         {
             ExtractPricesFromNode(root, prices);
         }
-        
+
         return prices;
     }
-    
+
     private void ExtractPricesFromNode(PlanNode node, Dictionary<int, PriceInfo> prices)
     {
         if (!prices.ContainsKey(node.ItemId))
@@ -1154,8 +1182,8 @@ public class RecipeCalculationService
                     ItemName = node.Name,
                     UnitPrice = node.VendorPrice,
                     Source = PriceSource.Vendor,
-                    SourceDetails = cheapestVendor != null 
-                        ? $"Vendor: {cheapestVendor.DisplayName}" 
+                    SourceDetails = cheapestVendor != null
+                        ? $"Vendor: {cheapestVendor.DisplayName}"
                         : "Vendor",
                     Vendors = node.VendorOptions.ToList()
                 };
@@ -1173,7 +1201,7 @@ public class RecipeCalculationService
                 };
             }
         }
-        
+
         foreach (var child in node.Children)
         {
             ExtractPricesFromNode(child, prices);
@@ -1197,7 +1225,7 @@ public class RecipeCalculationService
                 node.PriceSource = priceInfo.Source;
                 node.PriceSourceDetails = priceInfo.SourceDetails;
             }
-            
+
             if (node.Children?.Any() == true)
             {
                 UpdateSingleNodePrice(node.Children, itemId, priceInfo);
@@ -1260,8 +1288,10 @@ public class RecipeCalculationService
     public decimal CalculateNodeCraftCost(PlanNode node)
     {
         if (!node.Children.Any())
+        {
             return 0;
-        
+        }
+
         decimal total = 0;
         foreach (var child in node.Children)
         {
@@ -1291,13 +1321,13 @@ public class RecipeCalculationService
                 total += CalculateNodeCraftCost(child);
             }
         }
-        
+
         // Account for recipe yield: cost per item = total ingredient cost / yield
         if (node.Yield > 1)
         {
             return total / node.Yield;
         }
-        
+
         return total;
     }
 
@@ -1344,7 +1374,10 @@ public class RecipeCalculationService
                 try
                 {
                     var itemData = await _garlandService.GetItemAsync(pendingNode.ItemId, ct);
-                    if (itemData?.Crafts?.Any() != true) return;
+                    if (itemData?.Crafts?.Any() != true)
+                    {
+                        return;
+                    }
 
                     var recipe = itemData.Crafts.OrderBy(r => r.RecipeLevel).First();
                     var yield = Math.Max(1, recipe.Yield);

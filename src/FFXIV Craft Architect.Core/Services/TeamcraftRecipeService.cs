@@ -55,7 +55,10 @@ public class TeamcraftRecipeService : ITeamcraftRecipeService
     {
         await EnsureLoadedAsync(ct);
         if (_recipesByItemId!.TryGetValue(itemId, out var recipes))
+        {
             return recipes;
+        }
+
         return Array.Empty<TeamcraftRecipe>();
     }
 
@@ -87,14 +90,18 @@ public class TeamcraftRecipeService : ITeamcraftRecipeService
     {
         // Fast path: already loaded
         if (_cachedRecipes != null)
+        {
             return;
+        }
 
         await _loadLock.WaitAsync(ct);
         try
         {
             // Double-check after acquiring lock
             if (_cachedRecipes != null)
+            {
                 return;
+            }
 
             _logger.LogInformation("Loading Teamcraft recipe data from CDN...");
 
@@ -107,7 +114,7 @@ public class TeamcraftRecipeService : ITeamcraftRecipeService
 
             // Filter out FC recipes (string IDs like "fc1" become 0 after conversion)
             var validRecipes = recipes.Where(r => r.Id > 0).ToList();
-            
+
             _cachedRecipes = validRecipes;
             _recipeById = validRecipes.ToDictionary(r => r.Id);
             _recipesByItemId = validRecipes

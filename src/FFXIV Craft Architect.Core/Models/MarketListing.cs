@@ -10,19 +10,19 @@ public class MarketListing
 {
     [JsonPropertyName("pricePerUnit")]
     public long PricePerUnit { get; set; }
-    
+
     [JsonPropertyName("quantity")]
     public int Quantity { get; set; }
-    
+
     [JsonPropertyName("worldName")]
     public string WorldName { get; set; } = string.Empty;
 
     [JsonPropertyName("dataCenterName")]
     public string? DataCenterName { get; set; }
-    
+
     [JsonPropertyName("retainerName")]
     public string RetainerName { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("hq")]
     public bool IsHq { get; set; }
 
@@ -37,10 +37,10 @@ public class UniversalisResponse
 {
     [JsonPropertyName("itemID")]
     public int ItemId { get; set; }
-    
+
     [JsonPropertyName("worldID")]
     public int? WorldId { get; set; }
-    
+
     [JsonPropertyName("dcName")]
     public string? DataCenterName { get; set; }
 
@@ -49,25 +49,25 @@ public class UniversalisResponse
 
     [JsonPropertyName("worldUploadTimes")]
     public Dictionary<int, long> WorldUploadTimes { get; set; } = new();
-    
+
     [JsonPropertyName("listings")]
     public List<MarketListing> Listings { get; set; } = new();
-    
+
     [JsonPropertyName("averagePrice")]
     public double AveragePrice { get; set; }
-    
+
     [JsonPropertyName("minPrice")]
     public long MinPrice { get; set; }
-    
+
     [JsonPropertyName("minPriceHQ")]
     public long MinPriceHq { get; set; }
-    
+
     [JsonPropertyName("minPriceNQ")]
     public long MinPriceNq { get; set; }
-    
+
     [JsonPropertyName("averagePriceHQ")]
     public double AveragePriceHq { get; set; }
-    
+
     [JsonPropertyName("averagePriceNQ")]
     public double AveragePriceNq { get; set; }
 }
@@ -79,7 +79,7 @@ public class UniversalisBulkResponse
 {
     [JsonPropertyName("itemIDs")]
     public List<int> ItemIds { get; set; } = new();
-    
+
     /// <summary>
     /// Items keyed by item ID string
     /// </summary>

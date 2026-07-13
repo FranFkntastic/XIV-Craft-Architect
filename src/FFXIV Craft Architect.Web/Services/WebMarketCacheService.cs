@@ -19,12 +19,12 @@ public class WebMarketCacheService : IMarketCacheService
     {
         var key = GetKey(itemId, dataCenter);
         var cutoff = DateTime.UtcNow - (maxAge ?? _defaultMaxAge);
-        
+
         if (_cache.TryGetValue(key, out var data) && data.FetchedAt > cutoff)
         {
             return Task.FromResult<CachedMarketData?>(data);
         }
-        
+
         return Task.FromResult<CachedMarketData?>(null);
     }
 
@@ -32,13 +32,13 @@ public class WebMarketCacheService : IMarketCacheService
     {
         var key = GetKey(itemId, dataCenter);
         var cutoff = DateTime.UtcNow - (maxAge ?? _defaultMaxAge);
-        
+
         if (_cache.TryGetValue(key, out var data))
         {
             var isStale = data.FetchedAt <= cutoff;
             return Task.FromResult<(CachedMarketData?, bool)>((data, isStale));
         }
-        
+
         return Task.FromResult<(CachedMarketData?, bool)>((null, false));
     }
 
@@ -72,16 +72,16 @@ public class WebMarketCacheService : IMarketCacheService
     {
         var key = GetKey(itemId, dataCenter);
         var cutoff = DateTime.UtcNow - (maxAge ?? _defaultMaxAge);
-        
+
         return Task.FromResult(_cache.TryGetValue(key, out var data) && data.FetchedAt > cutoff);
     }
 
     public Task<List<(int itemId, string dataCenter)>> GetMissingAsync(
-        List<(int itemId, string dataCenter)> requests, 
+        List<(int itemId, string dataCenter)> requests,
         TimeSpan? maxAge = null)
     {
         var missing = new List<(int, string)>();
-        
+
         foreach (var (itemId, dataCenter) in requests)
         {
             if (!HasValidCacheAsync(itemId, dataCenter, maxAge).Result)
@@ -89,7 +89,7 @@ public class WebMarketCacheService : IMarketCacheService
                 missing.Add((itemId, dataCenter));
             }
         }
-        
+
         return Task.FromResult(missing);
     }
 
@@ -97,12 +97,12 @@ public class WebMarketCacheService : IMarketCacheService
     {
         var cutoff = DateTime.UtcNow - maxAge;
         var staleKeys = _cache.Where(kvp => kvp.Value.FetchedAt < cutoff).Select(kvp => kvp.Key).ToList();
-        
+
         foreach (var key in staleKeys)
         {
             _cache.TryRemove(key, out _);
         }
-        
+
         return Task.FromResult(staleKeys.Count);
     }
 
@@ -110,7 +110,7 @@ public class WebMarketCacheService : IMarketCacheService
     {
         var now = DateTime.UtcNow;
         var entries = _cache.Values.ToList();
-        
+
         return Task.FromResult(new CacheStats
         {
             TotalEntries = entries.Count,

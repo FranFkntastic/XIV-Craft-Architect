@@ -136,7 +136,9 @@ public static class RecipePlanDisplayHelpers
     public static string FormatPrice(decimal price)
     {
         if (price <= 0)
+        {
             return "-";
+        }
 
         return $"{price:N0}g";
     }
@@ -147,12 +149,19 @@ public static class RecipePlanDisplayHelpers
     public static string FormatPriceCompact(decimal price)
     {
         if (price <= 0)
+        {
             return "-";
+        }
 
         if (price >= 1_000_000)
+        {
             return $"{(price / 1_000_000m):0.0}M";
+        }
+
         if (price >= 1_000)
+        {
             return $"{(price / 1_000m):0.0}k";
+        }
 
         return $"{price:N0}";
     }
@@ -163,10 +172,14 @@ public static class RecipePlanDisplayHelpers
     public static string FormatPriceRange(decimal minPrice, decimal maxPrice)
     {
         if (minPrice <= 0 && maxPrice <= 0)
+        {
             return "-";
+        }
 
         if (minPrice == maxPrice)
+        {
             return FormatPrice(minPrice);
+        }
 
         return $"{FormatPriceCompact(minPrice)} - {FormatPriceCompact(maxPrice)}";
     }
@@ -193,7 +206,9 @@ public static class RecipePlanDisplayHelpers
     public static int CalculateMaxDepth(PlanNode node, int currentDepth = 0)
     {
         if (node.Children == null || !node.Children.Any())
+        {
             return currentDepth;
+        }
 
         var maxChildDepth = currentDepth;
         foreach (var child in node.Children)
@@ -243,7 +258,9 @@ public static class RecipePlanDisplayHelpers
     public static string FormatSavingsPercent(double percent)
     {
         if (percent <= 0)
+        {
             return $"{percent:F1}%";
+        }
 
         return $"+{percent:F1}%";
     }

@@ -20,7 +20,7 @@ public class PriceCheckService
     private readonly ISettingsService _settingsService;
     private readonly IMarketCacheService _marketCache;
     private readonly ILogger<PriceCheckService> _logger;
-    
+
     // In-memory cache for hot paths (backed by SQLite)
     private readonly ConcurrentDictionary<int, PriceInfo> _memoryCache = new();
 
@@ -57,19 +57,19 @@ public class PriceCheckService
     public async Task<PriceInfo> GetBestPriceAsync(int itemId, string itemName, string worldOrDc, CancellationToken ct = default)
     {
         var ttl = GetCacheTtl();
-        
+
         // Check memory cache first (fastest)
-        if (_memoryCache.TryGetValue(itemId, out var memCached) && 
+        if (_memoryCache.TryGetValue(itemId, out var memCached) &&
             DateTime.UtcNow - memCached.LastUpdated < ttl)
         {
             _logger.LogDebug("[PriceCheck] Memory cache hit for {ItemName}", itemName);
             return memCached;
         }
-        
+
         // Get vendor data from cache (uses persisted cache, only fetches on miss)
         var vendorEntry = await _vendorCacheService.GetOrFetchAsync(itemId, ct);
         var vendorPrice = vendorEntry?.CheapestGilPrice ?? 0;
-        
+
         // Check if item cannot be listed on the market board (need Garland data for this check).
         var garlandItem = await _garlandService.GetItemAsync(itemId, ct);
         if (garlandItem?.CanListOnMarket == false)
@@ -86,33 +86,33 @@ public class PriceCheckService
             _memoryCache[itemId] = untradeableInfo;
             return untradeableInfo;
         }
-        
+
         // Get market price from cache (caller should have pre-populated)
         var (cachedData, isStale) = await _marketCache.GetWithStaleAsync(itemId, worldOrDc, ttl);
         var marketPrice = cachedData?.DCAveragePrice ?? 0;
-        
+
         if (cachedData != null)
         {
             var age = DateTime.UtcNow - cachedData.FetchedAt;
-            _logger.LogDebug("[PriceCheck] Cache data for {ItemName}@{DC}: Age={Age:F1}min, TTL={TTL:F1}h, IsStale={IsStale}", 
+            _logger.LogDebug("[PriceCheck] Cache data for {ItemName}@{DC}: Age={Age:F1}min, TTL={TTL:F1}h, IsStale={IsStale}",
                 itemName, worldOrDc, age.TotalMinutes, ttl.TotalHours, isStale);
         }
-        
+
         // Determine best price (vendor prioritized if equal)
         PriceInfo priceInfo;
         if (vendorPrice > 0 && (marketPrice <= 0 || vendorPrice <= marketPrice))
         {
             // Use gil vendors from cache entry
             var vendorInfos = vendorEntry?.GilVendors ?? new List<VendorInfo>();
-            
+
             priceInfo = new PriceInfo
             {
                 ItemId = itemId,
                 ItemName = itemName,
                 UnitPrice = vendorPrice,
                 Source = PriceSource.Vendor,
-                SourceDetails = vendorInfos.FirstOrDefault() != null 
-                    ? $"Vendor: {vendorInfos.First().Name}" 
+                SourceDetails = vendorInfos.FirstOrDefault() != null
+                    ? $"Vendor: {vendorInfos.First().Name}"
                     : "Vendor",
                 Vendors = vendorInfos,
                 LastUpdated = DateTime.UtcNow
@@ -126,8 +126,8 @@ public class PriceCheckService
                 ItemName = itemName,
                 UnitPrice = marketPrice,
                 Source = PriceSource.Market,
-                SourceDetails = isStale 
-                    ? $"Market ({worldOrDc}) - stale" 
+                SourceDetails = isStale
+                    ? $"Market ({worldOrDc}) - stale"
                     : $"Market ({worldOrDc})",
                 LastUpdated = cachedData?.FetchedAt ?? DateTime.UtcNow
             };
@@ -144,11 +144,11 @@ public class PriceCheckService
                 LastUpdated = DateTime.UtcNow
             };
         }
-        
+
         _memoryCache[itemId] = priceInfo;
         return priceInfo;
     }
-    
+
     /// <summary>
     /// Force a fresh fetch from APIs, bypassing cache. Saves result to cache.
     /// </summary>
@@ -157,7 +157,7 @@ public class PriceCheckService
         _logger.LogInformation("[PriceCheck] Force refresh for {ItemName}", itemName);
         return await FetchAndCachePriceAsync(itemId, itemName, worldOrDc, ct);
     }
-    
+
     /// <summary>
     /// Get price even if stale. Returns null only if no data exists.
     /// </summary>
@@ -165,19 +165,19 @@ public class PriceCheckService
     {
         var ttl = GetCacheTtl();
         var (cachedData, isStale) = await _marketCache.GetWithStaleAsync(itemId, worldOrDc, ttl);
-        
+
         if (cachedData == null)
         {
             // No data at all - fetch fresh
             return await FetchAndCachePriceAsync(itemId, itemName, worldOrDc, ct);
         }
-        
+
         if (isStale && !allowStale)
         {
             // Stale and not allowed - fetch fresh
             return await FetchAndCachePriceAsync(itemId, itemName, worldOrDc, ct);
         }
-        
+
         return ConvertCachedDataToPriceInfo(cachedData, itemName);
     }
 
@@ -197,7 +197,7 @@ public class PriceCheckService
         {
             // Fetch item data from Garland (for vendor prices and tradeability)
             var garlandItem = await _garlandService.GetItemAsync(itemId, ct);
-            
+
             // Check if item can be listed on the market board.
             if (garlandItem?.CanListOnMarket == false)
             {
@@ -210,7 +210,7 @@ public class PriceCheckService
 
             // Check vendor prices first
             var vendorPrice = GetVendorPrice(garlandItem);
-            
+
             // Fetch market prices from Universalis
             var marketDataByItemId = await _universalisService.GetMarketDataBulkAsync(worldOrDc, [itemId], useParallel: false, ct);
             if (!marketDataByItemId.TryGetValue(itemId, out var marketData))
@@ -228,7 +228,7 @@ public class PriceCheckService
                 var garlandVendors = garlandItem?.Vendors
                     ?.Where(v => string.Equals(v.Currency, "gil", StringComparison.OrdinalIgnoreCase))
                     .ToList() ?? new List<GarlandVendor>();
-                
+
                 // Convert GarlandVendor to VendorInfo and enrich with partial data when available
                 priceInfo.Vendors = garlandVendors.Select(v =>
                 {
@@ -259,11 +259,11 @@ public class PriceCheckService
 
                     return vendorInfo;
                 }).ToList();
-                
+
                 priceInfo.UnitPrice = vendorPrice;
                 priceInfo.Source = PriceSource.Vendor;
                 var vendor = priceInfo.Vendors.FirstOrDefault();
-                priceInfo.SourceDetails = vendor != null 
+                priceInfo.SourceDetails = vendor != null
                     ? $"Vendor: {vendor.Name} ({vendor.Location})"
                     : "Vendor";
             }
@@ -279,10 +279,10 @@ public class PriceCheckService
                 priceInfo.Source = PriceSource.Unknown;
                 priceInfo.SourceDetails = "No price data";
             }
-            
+
             // Save to memory cache
             _memoryCache[itemId] = priceInfo;
-            
+
             // Save to SQLite cache (fire and forget - don't block)
             if (marketData != null)
             {
@@ -296,7 +296,7 @@ public class PriceCheckService
                             marketData,
                             _universalisService.GetCachedWorldData(),
                             DateTime.UtcNow);
-                        
+
                         await _marketCache.SetAsync(itemId, worldOrDc, cachedData);
                         _logger.LogDebug("[PriceCheck] Saved {ItemName} to SQLite cache", itemName);
                     }
@@ -306,7 +306,7 @@ public class PriceCheckService
                     }
                 });
             }
-            
+
             return priceInfo;
         }
         catch (Exception ex)
@@ -318,17 +318,17 @@ public class PriceCheckService
             return priceInfo;
         }
     }
-    
+
     private PriceInfo ConvertCachedDataToPriceInfo(CachedMarketData cached, string itemName)
     {
         // Determine best price from cached data
         var bestPrice = cached.DCAveragePrice;
         var source = PriceSource.Market;
         var details = $"Market ({cached.DataCenter}) - cached";
-        
+
         // Check for vendor price (we don't cache vendor prices in SQLite, so this is market-only)
         // Vendor prices are fetched fresh each time as they're more reliable
-        
+
         return new PriceInfo
         {
             ItemId = cached.ItemId,
@@ -341,12 +341,12 @@ public class PriceCheckService
     }
 
     // ... rest of existing methods (GetBestPricesBulkAsync, GetVendorPrice, etc.) ...
-    
+
     /// <summary>
     /// Get best prices for multiple items in bulk with progress reporting.
     /// </summary>
     public async Task<Dictionary<int, PriceInfo>> GetBestPricesBulkAsync(
-        List<(int itemId, string name)> items, 
+        List<(int itemId, string name)> items,
         string worldOrDc,
         CancellationToken ct = default,
         IProgress<(int completed, int total, string currentItem, PriceFetchStage stage, string message)>? progress = null,
@@ -356,14 +356,14 @@ public class PriceCheckService
         var ttl = GetCacheTtl();
 
         progress?.Report((0, items.Count, "", PriceFetchStage.CheckingCache, "Checking cache..."));
-        
+
         int processed = 0;
         foreach (var (itemId, name) in items)
         {
             try
             {
                 PriceInfo priceInfo;
-                
+
                 if (forceRefresh)
                 {
                     priceInfo = await ForceRefreshAsync(itemId, name, worldOrDc, ct);
@@ -372,11 +372,11 @@ public class PriceCheckService
                 {
                     priceInfo = await GetBestPriceAsync(itemId, name, worldOrDc, ct);
                 }
-                
+
                 results[itemId] = priceInfo;
                 processed++;
-                
-                progress?.Report((processed, items.Count, name, PriceFetchStage.FetchingMarketData, 
+
+                progress?.Report((processed, items.Count, name, PriceFetchStage.FetchingMarketData,
                     $"Processed {processed}/{items.Count}"));
             }
             catch (Exception ex)
@@ -393,16 +393,16 @@ public class PriceCheckService
                 processed++;
             }
         }
-        
+
         progress?.Report((processed, items.Count, "", PriceFetchStage.Complete, $"Complete - {processed} items"));
         return results;
     }
-    
+
     /// <summary>
     /// North American Data Centers for multi-DC search.
     /// </summary>
     private static readonly string[] NorthAmericanDCs = { "Aether", "Primal", "Crystal", "Dynamis" };
-    
+
     /// <summary>
     /// Get best prices for multiple items across all NA Data Centers.
     /// Returns the best price found across all DCs for each item.
@@ -415,12 +415,12 @@ public class PriceCheckService
     {
         var results = new Dictionary<int, PriceInfo>();
         var ttl = GetCacheTtl();
-        
-        _logger.LogInformation("[PriceCheck] Starting multi-DC price fetch for {Count} items across {DCCount} NA DCs", 
+
+        _logger.LogInformation("[PriceCheck] Starting multi-DC price fetch for {Count} items across {DCCount} NA DCs",
             items.Count, NorthAmericanDCs.Length);
 
         progress?.Report((0, items.Count, "", PriceFetchStage.CheckingCache, "Checking cache across all NA DCs..."));
-        
+
         int processed = 0;
         foreach (var (itemId, name) in items)
         {
@@ -428,12 +428,12 @@ public class PriceCheckService
             {
                 PriceInfo? bestPriceInfo = null;
                 var checkedDCs = new List<string>();
-                
+
                 // Check each NA DC and find the best price
                 foreach (var dc in NorthAmericanDCs)
                 {
                     ct.ThrowIfCancellationRequested();
-                    
+
                     PriceInfo dcPriceInfo;
                     if (forceRefresh)
                     {
@@ -443,9 +443,9 @@ public class PriceCheckService
                     {
                         dcPriceInfo = await GetBestPriceAsync(itemId, name, dc, ct);
                     }
-                    
+
                     checkedDCs.Add(dc);
-                    
+
                     // Track the best price across DCs
                     if (bestPriceInfo == null || dcPriceInfo.UnitPrice < bestPriceInfo.UnitPrice && dcPriceInfo.UnitPrice > 0)
                     {
@@ -457,7 +457,7 @@ public class PriceCheckService
                         }
                     }
                 }
-                
+
                 // If we found a valid price, use it; otherwise return the last checked result
                 results[itemId] = bestPriceInfo ?? new PriceInfo
                 {
@@ -467,9 +467,9 @@ public class PriceCheckService
                     Source = PriceSource.Unknown,
                     SourceDetails = "No price found on any NA DC"
                 };
-                
+
                 processed++;
-                progress?.Report((processed, items.Count, name, PriceFetchStage.FetchingMarketData, 
+                progress?.Report((processed, items.Count, name, PriceFetchStage.FetchingMarketData,
                     $"Processed {processed}/{items.Count} (checked {string.Join(", ", checkedDCs)})"));
             }
             catch (Exception ex)
@@ -486,7 +486,7 @@ public class PriceCheckService
                 processed++;
             }
         }
-        
+
         _logger.LogInformation("[PriceCheck] Multi-DC price fetch complete for {Count} items", processed);
         progress?.Report((processed, items.Count, "", PriceFetchStage.Complete, $"Complete - {processed} items across all NA DCs"));
         return results;
@@ -498,8 +498,10 @@ public class PriceCheckService
     private static long GetVendorPrice(GarlandItem? item)
     {
         if (item?.Vendors == null || item.Vendors.Count == 0)
+        {
             return 0;
-            
+        }
+
         // Get cheapest vendor price
         return item.Vendors.Min(v => v.Price);
     }
@@ -510,19 +512,25 @@ public class PriceCheckService
     private static long GetAverageMarketPrice(UniversalisResponse? data, bool hqOnly)
     {
         if (data?.Listings == null || data.Listings.Count == 0)
+        {
             return 0;
+        }
 
         var relevantListings = data.Listings
             .Where(l => !hqOnly || l.IsHq)
             .ToList();
 
         if (relevantListings.Count == 0)
+        {
             return 0;
+        }
 
         // Weighted average by quantity
         var totalQuantity = relevantListings.Sum(l => l.Quantity);
         if (totalQuantity == 0)
+        {
             return 0;
+        }
 
         var weightedSum = relevantListings.Sum(l => l.PricePerUnit * l.Quantity);
         return weightedSum / totalQuantity;

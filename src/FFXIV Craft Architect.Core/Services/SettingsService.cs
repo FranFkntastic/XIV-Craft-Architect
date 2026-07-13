@@ -69,21 +69,21 @@ public class SettingsService : ISettingsService
     public SettingsService(ILogger<SettingsService> logger)
     {
         _logger = logger;
-        
+
         // Get the LocalApplicationData folder (e.g., C:\Users\User\AppData\Local)
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         _logger.LogInformation("[SettingsService] LocalApplicationData = '{LocalAppData}'", localAppData);
-        
+
         var appDataDir = Path.Combine(localAppData, "FFXIV_Craft_Architect");
         _logger.LogInformation("[SettingsService] AppDataDir = '{AppDataDir}'", appDataDir);
-        
+
         Directory.CreateDirectory(appDataDir);
         _settingsPath = Path.Combine(appDataDir, "settings.json");
-        
+
         _logger.LogInformation("[SettingsService] Settings file path: {Path}", _settingsPath);
         _logger.LogInformation("[SettingsService] Current working directory: {CWD}", Environment.CurrentDirectory);
         _logger.LogInformation("[SettingsService] Executable directory: {ExeDir}", Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location));
-        
+
         _jsonOptions = new JsonSerializerOptions
         {
             WriteIndented = true,
@@ -92,7 +92,7 @@ public class SettingsService : ISettingsService
         };
 
         _settings = LoadSettings();
-        
+
         _logger.LogInformation("Loaded settings - market.default_datacenter: {DC}, market.home_world: {Home}",
             Get<string>("market.default_datacenter", "NOT_SET"),
             Get<string>("market.home_world", "NOT_SET"));
@@ -115,14 +115,14 @@ public class SettingsService : ISettingsService
                     _logger.LogWarning("[Get] Key '{Key}' not found in dictionary - returning default for '{KeyPath}'", key, keyPath);
                     return defaultValue;
                 }
-                
+
                 if (!dict.TryGetValue(key, out var value))
                 {
-                    _logger.LogWarning("[Get] Key '{Key}' not found - returning default '{Default}' for '{KeyPath}'", 
+                    _logger.LogWarning("[Get] Key '{Key}' not found - returning default '{Default}' for '{KeyPath}'",
                         key, defaultValue, keyPath);
                     return defaultValue;
                 }
-                
+
                 current = value;
             }
 
@@ -140,7 +140,7 @@ public class SettingsService : ISettingsService
                 var json = JsonSerializer.Serialize(current);
                 result = JsonSerializer.Deserialize<T>(json);
             }
-            
+
             _logger.LogDebug("[Get] '{KeyPath}' = '{Result}'", keyPath, result);
             return result;
         }
@@ -156,7 +156,7 @@ public class SettingsService : ISettingsService
         try
         {
             var targetType = typeof(T);
-            
+
             if (Nullable.GetUnderlyingType(targetType) != null)
             {
                 targetType = Nullable.GetUnderlyingType(targetType)!;
@@ -165,30 +165,45 @@ public class SettingsService : ISettingsService
             if (targetType == typeof(string))
             {
                 if (element.ValueKind == JsonValueKind.String)
+                {
                     return (T)(object)element.GetString()!;
+                }
+
                 return (T)(object)element.ToString()!;
             }
-            
+
             if (targetType == typeof(bool))
             {
                 if (element.ValueKind == JsonValueKind.True)
+                {
                     return (T)(object)true;
+                }
+
                 if (element.ValueKind == JsonValueKind.False)
+                {
                     return (T)(object)false;
+                }
+
                 return defaultValue;
             }
-            
+
             if (targetType == typeof(int) || targetType == typeof(long))
             {
                 if (element.TryGetInt64(out var longVal))
+                {
                     return (T)Convert.ChangeType(longVal, targetType);
+                }
+
                 return defaultValue;
             }
-            
+
             if (targetType == typeof(double))
             {
                 if (element.TryGetDouble(out var doubleVal))
+                {
                     return (T)(object)doubleVal;
+                }
+
                 return defaultValue;
             }
 
@@ -216,13 +231,13 @@ public class SettingsService : ISettingsService
                 child = new Dictionary<string, object>();
                 current[keys[i]] = child;
             }
-            
+
             if (child is not Dictionary<string, object> childDict)
             {
                 childDict = new Dictionary<string, object>();
                 current[keys[i]] = childDict;
             }
-            
+
             current = childDict;
         }
 
@@ -235,7 +250,7 @@ public class SettingsService : ISettingsService
         current[keys[^1]] = value;
 
         _logger.LogDebug("Setting {Key}: {OldValue} -> {NewValue}", keyPath, oldValue, value);
-        
+
         SaveSettings();
     }
 
@@ -252,20 +267,20 @@ public class SettingsService : ISettingsService
         SaveSettings();
         _logger.LogInformation("Settings reset to defaults");
     }
-    
+
     // ISettingsService async implementations (wrapper around sync methods)
-    
+
     public Task<T?> GetAsync<T>(string keyPath, T? defaultValue = default)
     {
         return Task.FromResult(Get(keyPath, defaultValue));
     }
-    
+
     public Task SetAsync<T>(string keyPath, T value)
     {
         Set(keyPath, value);
         return Task.CompletedTask;
     }
-    
+
     public Task ResetToDefaultsAsync()
     {
         ResetToDefaults();
@@ -275,7 +290,7 @@ public class SettingsService : ISettingsService
     private Dictionary<string, object> LoadSettings()
     {
         _logger.LogInformation("[LoadSettings] START - Looking for settings at: {Path}", _settingsPath);
-        
+
         try
         {
             if (!File.Exists(_settingsPath))
@@ -288,25 +303,25 @@ public class SettingsService : ISettingsService
             }
 
             var fileInfo = new FileInfo(_settingsPath);
-            _logger.LogInformation("[LoadSettings] Settings file FOUND: {Path} ({Bytes} bytes, LastModified: {Modified})", 
+            _logger.LogInformation("[LoadSettings] Settings file FOUND: {Path} ({Bytes} bytes, LastModified: {Modified})",
                 _settingsPath, fileInfo.Length, fileInfo.LastWriteTime);
 
             var json = File.ReadAllText(_settingsPath);
             _logger.LogDebug("[LoadSettings] Raw JSON content:\n{Json}", json);
-            
+
             var loaded = JsonSerializer.Deserialize<Dictionary<string, object>>(json, _jsonOptions);
-            
+
             if (loaded == null)
             {
                 _logger.LogError("[LoadSettings] Deserialization returned NULL, using defaults");
                 return DeepClone(DefaultSettings);
             }
 
-            _logger.LogInformation("[LoadSettings] Deserialized {Count} top-level keys: {Keys}", 
+            _logger.LogInformation("[LoadSettings] Deserialized {Count} top-level keys: {Keys}",
                 loaded.Count, string.Join(", ", loaded.Keys));
-            
+
             var merged = MergeWithDefaults(loaded);
-            
+
             _logger.LogInformation("[LoadSettings] After merge - Settings contains:");
             foreach (var key in merged.Keys)
             {
@@ -320,7 +335,7 @@ public class SettingsService : ISettingsService
                     _logger.LogInformation("[LoadSettings]   [{Key}]: {Value}", key, value);
                 }
             }
-            
+
             return merged;
         }
         catch (Exception ex)
@@ -333,20 +348,20 @@ public class SettingsService : ISettingsService
     private void SaveSettings(Dictionary<string, object>? settings = null)
     {
         settings ??= _settings;
-        
+
         try
         {
             _logger.LogInformation("[SaveSettings] Saving settings to: {Path}", _settingsPath);
-            
+
             var json = JsonSerializer.Serialize(settings, _jsonOptions);
             _logger.LogDebug("[SaveSettings] JSON to save:\n{Json}", json);
-            
+
             File.WriteAllText(_settingsPath, json);
-            
+
             var fileInfo = new FileInfo(_settingsPath);
             if (fileInfo.Exists)
             {
-                _logger.LogInformation("[SaveSettings] SUCCESS - Saved {Bytes} bytes to {Path}", 
+                _logger.LogInformation("[SaveSettings] SUCCESS - Saved {Bytes} bytes to {Path}",
                     fileInfo.Length, _settingsPath);
             }
             else
@@ -369,11 +384,11 @@ public class SettingsService : ISettingsService
     private static Dictionary<string, object> MergeWithDefaults(Dictionary<string, object> loaded)
     {
         var merged = DeepClone(DefaultSettings);
-        
+
         foreach (var kvp in loaded)
         {
             Dictionary<string, object>? loadedDict = null;
-            
+
             if (kvp.Value is Dictionary<string, object> dict)
             {
                 loadedDict = dict;
@@ -382,7 +397,7 @@ public class SettingsService : ISettingsService
             {
                 loadedDict = JsonSerializer.Deserialize<Dictionary<string, object>>(jsonElement.GetRawText());
             }
-            
+
             // Get or create the target dictionary in merged
             if (!merged.TryGetValue(kvp.Key, out var targetValue))
             {
@@ -390,7 +405,7 @@ public class SettingsService : ISettingsService
                 merged[kvp.Key] = kvp.Value;
                 continue;
             }
-            
+
             // Convert target to Dictionary<string, object> if needed
             Dictionary<string, object>? targetDict = null;
             if (targetValue is Dictionary<string, object> targetDictObj)
@@ -405,7 +420,7 @@ public class SettingsService : ISettingsService
                     merged[kvp.Key] = targetDict; // Replace with proper dictionary
                 }
             }
-            
+
             if (loadedDict != null && targetDict != null)
             {
                 // Merge loaded values into target
@@ -420,7 +435,7 @@ public class SettingsService : ISettingsService
                 merged[kvp.Key] = kvp.Value;
             }
         }
-        
+
         return merged;
     }
 }

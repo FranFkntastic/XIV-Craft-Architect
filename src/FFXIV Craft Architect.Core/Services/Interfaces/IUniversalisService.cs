@@ -22,12 +22,12 @@ public interface IUniversalisService
     /// <param name="ct">Cancellation token</param>
     [Obsolete("Use GetMarketDataBulkAsync instead. This method will be removed in a future version.")]
     Task<UniversalisResponse> GetMarketDataAsync(
-        string worldOrDc, 
-        int itemId, 
+        string worldOrDc,
+        int itemId,
         bool hqOnly = false,
         int entries = 10,
         CancellationToken ct = default);
-    
+
     /// <summary>
     /// Get market data for multiple items at once.
     /// Universalis API has a limit of 100 items per request, so we chunk large requests.
@@ -38,28 +38,28 @@ public interface IUniversalisService
     /// <param name="useParallel">Whether to use parallel fetching (default: true)</param>
     /// <param name="ct">Cancellation token</param>
     Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkAsync(
-        string worldOrDc, 
-        IEnumerable<int> itemIds, 
+        string worldOrDc,
+        IEnumerable<int> itemIds,
         bool useParallel = true,
         CancellationToken ct = default);
-    
+
     /// <summary>
     /// Get world and data center information.
     /// </summary>
     /// <param name="ct">Cancellation token</param>
     Task<WorldData> GetWorldDataAsync(CancellationToken ct = default);
-    
+
     /// <summary>
     /// Get cached world data (returns null if not loaded yet).
     /// </summary>
     WorldData? GetCachedWorldData();
-    
+
     /// <summary>
     /// Get the URL to view an item on Universalis website.
     /// </summary>
     /// <param name="itemId">Item ID</param>
     static string GetMarketUrl(int itemId) => $"https://universalis.app/market/{itemId}";
-    
+
     /// <summary>
     /// Calculate optimal shopping plan for a set of items.
     /// </summary>

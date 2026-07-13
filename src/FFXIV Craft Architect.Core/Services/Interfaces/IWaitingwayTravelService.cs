@@ -11,32 +11,32 @@ public interface IWaitingwayTravelService
     /// Gets the current travel prohibition status for all worlds.
     /// </summary>
     Task<Dictionary<int, bool>> GetTravelProhibitionsAsync(CancellationToken ct = default);
-    
+
     /// <summary>
     /// Checks if travel to a specific world is currently prohibited.
     /// </summary>
     Task<bool> IsTravelProhibitedAsync(int worldId, CancellationToken ct = default);
-    
+
     /// <summary>
     /// Checks if travel to a specific world is currently prohibited by name.
     /// </summary>
     Task<bool> IsTravelProhibitedAsync(string worldName, Dictionary<string, int> worldNameToId, CancellationToken ct = default);
-    
+
     /// <summary>
     /// Gets the current average DC travel time in seconds.
     /// </summary>
     Task<int?> GetAverageTravelTimeAsync(CancellationToken ct = default);
-    
+
     /// <summary>
     /// Gets the full travel status data including metadata.
     /// </summary>
     Task<TravelStatusData?> GetTravelStatusDataAsync(CancellationToken ct = default);
-    
+
     /// <summary>
     /// Forces a refresh of the travel status from the API.
     /// </summary>
     Task<bool> RefreshAsync(CancellationToken ct = default);
-    
+
     /// <summary>
     /// Gets world status information from Waitingway.
     /// </summary>
@@ -62,7 +62,7 @@ public class WorldStatusInfo
     public int Status { get; set; }
     public int Category { get; set; }
     public bool CanCreateCharacter { get; set; }
-    
+
     /// <summary>
     /// World category classification.
     /// </summary>

@@ -1301,7 +1301,7 @@ public class MarketAnalysisGridViewServiceTests
                 WideSplit: null,
                 CheapestObserved: coverage,
                 AllCandidates: [coverage])
-            };
+        };
     }
 
     private static DetailedShoppingPlan CreatePlanWithSupportedSingleWorldAndCheapestObservedDiagnostic()

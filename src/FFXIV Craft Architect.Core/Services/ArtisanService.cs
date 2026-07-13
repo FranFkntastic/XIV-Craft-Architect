@@ -22,8 +22,8 @@ public class ArtisanService : IArtisanService
     private readonly IRecipeOperationSnapshotService _recipeOperationSnapshotService;
 
     public ArtisanService(
-        ILogger<ArtisanService> logger, 
-        GarlandService garlandService, 
+        ILogger<ArtisanService> logger,
+        GarlandService garlandService,
         RecipeCalculationService recipeCalcService,
         ITeamcraftRecipeService teamcraftService,
         HttpClient httpClient,
@@ -40,8 +40,8 @@ public class ArtisanService : IArtisanService
     #region Import FROM Artisan
 
     public async Task<CraftingPlan?> ImportFromArtisanAsync(
-        string artisanJson, 
-        string dataCenter, 
+        string artisanJson,
+        string dataCenter,
         string world,
         CancellationToken ct = default)
     {
@@ -68,12 +68,12 @@ public class ArtisanService : IArtisanService
             return null;
         }
 
-        _logger.LogInformation("[Artisan] Importing list '{ListName}' with {RecipeCount} recipes", 
+        _logger.LogInformation("[Artisan] Importing list '{ListName}' with {RecipeCount} recipes",
             artisanList.Name, artisanList.Recipes.Count);
 
         var recipeInfos = new List<ArtisanRecipeInfo>();
         var recipeIdToItemId = new Dictionary<uint, int>();
-        
+
         foreach (var artisanItem in artisanList.Recipes)
         {
             try
@@ -110,7 +110,7 @@ public class ArtisanService : IArtisanService
             .Where(r => !subcraftItemIds.Contains(r.ResultItemId))
             .ToList();
 
-        _logger.LogInformation("[Artisan] Identified {RootCount} root recipes out of {TotalCount} total recipes", 
+        _logger.LogInformation("[Artisan] Identified {RootCount} root recipes out of {TotalCount} total recipes",
             rootRecipes.Count, recipeInfos.Count);
 
         if (rootRecipes.Count == 0)
@@ -124,16 +124,16 @@ public class ArtisanService : IArtisanService
             .ToList();
 
         var plan = await _recipeCalcService.BuildPlanAsync(
-            targetItems, 
-            dataCenter, 
-            world, 
+            targetItems,
+            dataCenter,
+            world,
             ct);
 
-        plan.Name = string.IsNullOrWhiteSpace(artisanList.Name) 
-            ? "Imported from Artisan" 
+        plan.Name = string.IsNullOrWhiteSpace(artisanList.Name)
+            ? "Imported from Artisan"
             : $"{artisanList.Name} (Artisan)";
 
-        _logger.LogInformation("[Artisan] Successfully imported plan '{PlanName}' with {RootCount} root items", 
+        _logger.LogInformation("[Artisan] Successfully imported plan '{PlanName}' with {RootCount} root items",
             plan.Name, plan.RootItems.Count);
 
         return plan;
@@ -152,14 +152,14 @@ public class ArtisanService : IArtisanService
     private async Task<ArtisanRecipeInfo?> GetRecipeInfoAsync(ArtisanListItem artisanItem, CancellationToken ct)
     {
         var id = (int)artisanItem.ID;
-        
+
         var itemData = await TryFindItemByRecipeIdAsync(id, ct);
-        
+
         if (itemData == null)
         {
             itemData = await _garlandService.GetItemAsync(id, ct);
         }
-        
+
         if (itemData == null)
         {
             _logger.LogWarning("[Artisan] Could not find item for recipe ID {RecipeId}", id);
@@ -174,7 +174,7 @@ public class ArtisanService : IArtisanService
 
         if (craft == null)
         {
-            _logger.LogWarning("[Artisan] No craft found for item {ItemName} (ID: {ItemId})", 
+            _logger.LogWarning("[Artisan] No craft found for item {ItemName} (ID: {ItemId})",
                 itemData.Name, itemData.Id);
             return null;
         }
@@ -238,9 +238,9 @@ public class ArtisanService : IArtisanService
         {
             _logger.LogDebug(ex, "[Artisan] XIVAPI recipe lookup failed for recipe ID {RecipeId}", recipeId);
         }
-        
+
         _logger.LogWarning("[Artisan] Could not find item for recipe ID {RecipeId}", recipeId);
-        
+
         return null;
     }
 
@@ -250,24 +250,24 @@ public class ArtisanService : IArtisanService
         {
             var url = $"https://xivapi.com/recipe/{recipeId}";
             _logger.LogDebug("[Artisan] Querying XIVAPI: {Url}", url);
-            
+
             var response = await _httpClient.GetAsync(url, ct);
-            
+
             if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
             {
                 _logger.LogWarning("[Artisan] XIVAPI rate limit hit for recipe {RecipeId}", recipeId);
                 return null;
             }
-            
+
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogDebug("[Artisan] XIVAPI returned {StatusCode} for recipe {RecipeId}", 
+                _logger.LogDebug("[Artisan] XIVAPI returned {StatusCode} for recipe {RecipeId}",
                     response.StatusCode, recipeId);
                 return null;
             }
 
             var json = await response.Content.ReadAsStringAsync(ct);
-            
+
             var recipe = JsonSerializer.Deserialize<XivApiRecipe>(json, new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true,
@@ -352,7 +352,7 @@ public class ArtisanService : IArtisanService
 
         result.RecipeCount = artisanList.Recipes.Count;
 
-        _logger.LogInformation("[Artisan] Exported plan '{PlanName}' with {RecipeCount} recipes to Artisan format", 
+        _logger.LogInformation("[Artisan] Exported plan '{PlanName}' with {RecipeCount} recipes to Artisan format",
             plan.Name, result.RecipeCount);
 
         return result;

@@ -16,18 +16,18 @@ public class GarlandSearchResult
 {
     [JsonPropertyName("type")]
     public string Type { get; set; } = string.Empty;
-    
+
     // Store as object to handle int/string polymorphism
     [JsonPropertyName("id")]
     public object? IdRaw { get; set; }
-    
+
     // Computed property converts to int
     [JsonIgnore]
     public int Id => ConvertToInt(IdRaw);
-    
+
     [JsonPropertyName("obj")]
     public GarlandSearchObject Object { get; set; } = new();
-    
+
     private static int ConvertToInt(object? value)
     {
         return value switch
@@ -41,7 +41,7 @@ public class GarlandSearchResult
             _ => 0
         };
     }
-    
+
     private static int ConvertJsonElementToInt(JsonElement element)
     {
         return element.ValueKind switch
@@ -57,28 +57,28 @@ public class GarlandSearchObject
 {
     [JsonPropertyName("n")]
     public string Name { get; set; } = string.Empty;
-    
+
     // Icon ID can be int, string, or missing
     [JsonPropertyName("i")]
     public object? IconIdRaw { get; set; }
-    
+
     [JsonIgnore]
     public int IconId => ConvertToInt(IconIdRaw);
-    
+
     // ClassJob can be int, string, or missing
     [JsonPropertyName("c")]
     public object? ClassJobRaw { get; set; }
-    
+
     [JsonIgnore]
     public int? ClassJob => ConvertToNullableInt(ClassJobRaw);
-    
+
     // Level can be int, string, or missing
     [JsonPropertyName("l")]
     public object? LevelRaw { get; set; }
-    
+
     [JsonIgnore]
     public int? Level => ConvertToNullableInt(LevelRaw);
-    
+
     private static int ConvertToInt(object? value)
     {
         return value switch
@@ -92,7 +92,7 @@ public class GarlandSearchObject
             _ => 0
         };
     }
-    
+
     private static int? ConvertToNullableInt(object? value)
     {
         return value switch
@@ -106,7 +106,7 @@ public class GarlandSearchObject
             _ => null
         };
     }
-    
+
     private static int ConvertJsonElementToInt(JsonElement element)
     {
         return element.ValueKind switch
@@ -116,7 +116,7 @@ public class GarlandSearchObject
             _ => 0
         };
     }
-    
+
     private static int? ConvertJsonElementToNullableInt(JsonElement element)
     {
         return element.ValueKind switch
@@ -148,51 +148,54 @@ public class GarlandItem
 {
     [JsonPropertyName("id")]
     public int Id { get; set; }
-    
+
     [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("icon")]
     [JsonConverter(typeof(GarlandIconIdConverter))]
     public int IconId { get; set; }
-    
+
     [JsonPropertyName("description")]
     public string? Description { get; set; }
-    
+
     /// <summary>
     /// Crafting recipes this item is used in (traditional crafting)
     /// </summary>
     [JsonPropertyName("craft")]
     public List<GarlandCraft>? Crafts { get; set; }
-    
+
     /// <summary>
     /// Company workshop recipes (airships, submarines, etc.)
     /// </summary>
     [JsonPropertyName("companyCraft")]
     public List<GarlandCompanyCraft>? CompanyCrafts { get; set; }
-    
+
     /// <summary>
     /// Recipes that produce this item
     /// </summary>
     [JsonPropertyName("usedInCraft")]
     public List<GarlandUsedInCraft>? UsedInCrafts { get; set; }
-    
+
     /// <summary>
     /// Vendors that sell this item. Can be an array of vendor objects or vendor IDs (integers).
     /// </summary>
     [JsonPropertyName("vendors")]
     public List<object>? VendorsRaw { get; set; }
-    
+
     /// <summary>
     /// Parsed vendor information (only includes properly formatted vendor objects)
     /// </summary>
     [JsonIgnore]
     public List<GarlandVendor> Vendors => ParseVendors(VendorsRaw, Id);
-    
+
     private static List<GarlandVendor> ParseVendors(List<object>? rawVendors, int itemId)
     {
-        if (rawVendors == null) return new List<GarlandVendor>();
-        
+        if (rawVendors == null)
+        {
+            return new List<GarlandVendor>();
+        }
+
         var result = new List<GarlandVendor>();
         foreach (var v in rawVendors)
         {
@@ -202,7 +205,7 @@ public class GarlandItem
                 result.Add(garlandVendor);
                 continue;
             }
-            
+
             // Handle JsonElement (from fresh JSON deserialization)
             if (v is JsonElement element)
             {
@@ -211,7 +214,10 @@ public class GarlandItem
                     try
                     {
                         var vendor = JsonSerializer.Deserialize<GarlandVendor>(element.GetRawText());
-                        if (vendor != null) result.Add(vendor);
+                        if (vendor != null)
+                        {
+                            result.Add(vendor);
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -221,14 +227,17 @@ public class GarlandItem
                 // Integer vendor IDs are ignored - we can't use them without additional lookups
                 continue;
             }
-            
+
             // Handle JsonDocument (alternative JSON representation)
             if (v is JsonDocument doc)
             {
                 try
                 {
                     var vendor = JsonSerializer.Deserialize<GarlandVendor>(doc.RootElement.GetRawText());
-                    if (vendor != null) result.Add(vendor);
+                    if (vendor != null)
+                    {
+                        result.Add(vendor);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -239,7 +248,7 @@ public class GarlandItem
         }
         return result;
     }
-    
+
     /// <summary>
     /// Whether this item has any vendor references (including integer IDs).
     /// Use this to check if item can be bought from a vendor, since some vendors
@@ -247,25 +256,30 @@ public class GarlandItem
     /// </summary>
     [JsonIgnore]
     public bool HasVendorReferences => VendorsRaw?.Any() == true;
-    
+
     /// <summary>
     /// Extracts vendor IDs from VendorsRaw for items where vendors are listed as integers.
     /// Used to match vendor IDs with NPC partials.
     /// </summary>
     [JsonIgnore]
     public List<int> VendorIds => ExtractVendorIds(VendorsRaw);
-    
+
     private static List<int> ExtractVendorIds(List<object>? rawVendors)
     {
         var ids = new List<int>();
-        if (rawVendors == null) return ids;
-        
+        if (rawVendors == null)
+        {
+            return ids;
+        }
+
         foreach (var v in rawVendors)
         {
             if (v is JsonElement element && element.ValueKind == JsonValueKind.Number)
             {
                 if (element.TryGetInt32(out int id))
+                {
                     ids.Add(id);
+                }
             }
             else if (v is int intVal)
             {
@@ -278,14 +292,14 @@ public class GarlandItem
         }
         return ids;
     }
-    
+
     /// <summary>
     /// Vendor price in gil (root-level price field).
     /// This is set when the item can be purchased from vendors listed as IDs only.
     /// </summary>
     [JsonPropertyName("price")]
     public int Price { get; set; }
-    
+
     /// <summary>
     /// Whether this item can be traded on the market board (1 = true, 0 = false in JSON)
     /// </summary>
@@ -339,7 +353,10 @@ public class GarlandItem
     /// </summary>
     public List<GarlandNpcPartial> GetNpcPartialsByName(string npcName)
     {
-        if (Partials == null) return new List<GarlandNpcPartial>();
+        if (Partials == null)
+        {
+            return new List<GarlandNpcPartial>();
+        }
 
         return Partials
             .Where(p => p.Type == "npc")
@@ -359,10 +376,10 @@ public class GarlandCraft
     [JsonPropertyName("id")]
     [JsonConverter(typeof(FlexibleStringConverter))]
     public string? Id { get; set; }
-    
+
     [JsonPropertyName("job")]
     public int JobId { get; set; }
-    
+
     [JsonPropertyName("rlvl")]
     public int RecipeLevel { get; set; }
 
@@ -375,10 +392,10 @@ public class GarlandCraft
     [JsonPropertyName("unlockId")]
     [JsonConverter(typeof(FlexibleIntConverter))]
     public int UnlockItemId { get; set; }
-    
+
     [JsonPropertyName("yield")]
     public int Yield { get; set; } = 1;
-    
+
     [JsonPropertyName("ingredients")]
     public List<GarlandIngredient> Ingredients { get; set; } = new();
 }
@@ -391,13 +408,13 @@ public class GarlandCompanyCraft
 {
     [JsonPropertyName("id")]
     public int Id { get; set; }
-    
+
     /// <summary>
     /// Company crafting has multiple phases (up to 4)
     /// </summary>
     [JsonPropertyName("phases")]
     public List<GarlandCompanyPhase> Phases { get; set; } = new();
-    
+
     /// <summary>
     /// Total number of phases
     /// </summary>
@@ -412,7 +429,7 @@ public class GarlandCompanyPhase
     /// </summary>
     [JsonPropertyName("phase")]
     public int PhaseNumber { get; set; }
-    
+
     /// <summary>
     /// List of items required for this phase
     /// </summary>
@@ -424,13 +441,13 @@ public class GarlandCompanyIngredient
 {
     [JsonPropertyName("id")]
     public int Id { get; set; }
-    
+
     [JsonPropertyName("amount")]
     public int Amount { get; set; }
-    
+
     [JsonPropertyName("name")]
     public string? Name { get; set; }
-    
+
     /// <summary>
     /// Phase number this ingredient belongs to
     /// </summary>
@@ -442,10 +459,10 @@ public class GarlandIngredient
 {
     [JsonPropertyName("id")]
     public int Id { get; set; }
-    
+
     [JsonPropertyName("amount")]
     public int Amount { get; set; }
-    
+
     [JsonPropertyName("name")]
     public string? Name { get; set; }
 }
@@ -463,36 +480,36 @@ public class GarlandVendor
 {
     [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Location as a string. May be a zone name ("Limsa Lominsa") or an ID ("28").
     /// Use LocationName property for resolved zone name.
     /// </summary>
     [JsonPropertyName("location")]
     public string Location { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Location ID if available from the API. 0 if not provided.
     /// </summary>
     [JsonPropertyName("locationId")]
     public int LocationId { get; set; }
-    
+
     /// <summary>
     /// Gets the resolved location name.
     /// If LocationId is set, uses ZoneMappingHelper for name resolution.
     /// Otherwise attempts to resolve the Location string (which may be an ID).
     /// </summary>
     [JsonIgnore]
-    public string LocationName => LocationId > 0 
+    public string LocationName => LocationId > 0
         ? ZoneMappingHelper.LocationIdToName(LocationId)
         : ZoneMappingHelper.ResolveLocationName(Location);
-    
+
     /// <summary>
     /// Price in gil
     /// </summary>
     [JsonPropertyName("price")]
     public int Price { get; set; }
-    
+
     /// <summary>
     /// Currency type (usually "gil" but can be tomestones, etc.)
     /// </summary>
@@ -537,7 +554,9 @@ public class GarlandPartial
     public GarlandNpcPartial? GetNpcObject()
     {
         if (Type != "npc" || !ObjectRaw.HasValue)
+        {
             return null;
+        }
 
         try
         {

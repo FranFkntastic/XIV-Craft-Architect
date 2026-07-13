@@ -1,5 +1,5 @@
-using FFXIV_Craft_Architect.Core.Models;
 using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 

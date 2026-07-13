@@ -23,7 +23,7 @@ public static class ZoneMappingHelper
         [128] = "Limsa Lominsa",
         [130] = "Gridania",
         [131] = "Ul'dah",
-        
+
         // City Areas
         [28] = "Limsa Lominsa Upper Decks",
         [29] = "Limsa Lominsa Lower Decks",
@@ -32,7 +32,7 @@ public static class ZoneMappingHelper
         [54] = "New Gridania",
         [40] = "Ul'dah - Steps of Nald",
         [41] = "Ul'dah - Steps of Thal",
-        
+
         // City Inns/Aetheryte Plazas
         [129] = "The Drowning Wench (Limsa)",
         [137] = "The Quicksand (Ul'dah)",
@@ -104,8 +104,8 @@ public static class ZoneMappingHelper
     /// <returns>Human-readable zone name or "Zone {id}" if not found</returns>
     public static string LocationIdToName(int locationId)
     {
-        return ZoneNameMappings.TryGetValue(locationId, out var name) 
-            ? name 
+        return ZoneNameMappings.TryGetValue(locationId, out var name)
+            ? name
             : $"Zone {locationId}";
     }
 
@@ -118,15 +118,21 @@ public static class ZoneMappingHelper
     public static string ResolveLocationName(string? location)
     {
         if (string.IsNullOrEmpty(location))
+        {
             return "Unknown Location";
+        }
 
         // If it's already a descriptive name (contains letters), return as-is
         if (location.Any(char.IsLetter))
+        {
             return location;
+        }
 
         // Try to parse as ID
         if (int.TryParse(location, out var locationId))
+        {
             return LocationIdToName(locationId);
+        }
 
         return location;
     }

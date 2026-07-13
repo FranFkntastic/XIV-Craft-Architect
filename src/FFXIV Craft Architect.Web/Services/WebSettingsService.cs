@@ -13,7 +13,7 @@ public class WebSettingsService : ISettingsService
     private readonly ILogger<WebSettingsService>? _logger;
     private readonly Dictionary<string, object> _cache = new();
     private bool _isLoaded = false;
-    
+
     private static readonly Dictionary<string, object> DefaultSettings = new()
     {
         ["market.default_datacenter"] = "Aether",
@@ -38,8 +38,11 @@ public class WebSettingsService : ISettingsService
 
     private async Task EnsureLoadedAsync()
     {
-        if (_isLoaded) return;
-        
+        if (_isLoaded)
+        {
+            return;
+        }
+
         try
         {
             // Load all settings from IndexedDB
@@ -90,7 +93,7 @@ public class WebSettingsService : ISettingsService
     public async Task<T?> GetAsync<T>(string keyPath, T? defaultValue = default)
     {
         await EnsureLoadedAsync();
-        
+
         if (_cache.TryGetValue(keyPath, out var value))
         {
             return ConvertValue<T>(value, defaultValue);
@@ -135,12 +138,12 @@ public class WebSettingsService : ISettingsService
         {
             return typedValue;
         }
-        
+
         if (value is JsonElement jsonElement)
         {
             var targetType = typeof(T);
             var underlyingType = Nullable.GetUnderlyingType(targetType) ?? targetType;
-            
+
             if (underlyingType == typeof(string))
             {
                 return (T?)(object?)jsonElement.GetString();
@@ -158,7 +161,7 @@ public class WebSettingsService : ISettingsService
                 return (T?)(object?)jsonElement.GetDouble();
             }
         }
-        
+
         try
         {
             return (T?)Convert.ChangeType(value, typeof(T));

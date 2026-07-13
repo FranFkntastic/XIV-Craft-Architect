@@ -1,6 +1,6 @@
+using FFXIV_Craft_Architect.Desktop.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
-using FFXIV_Craft_Architect.Desktop.Services;
 
 namespace FFXIV_Craft_Architect.Desktop;
 

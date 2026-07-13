@@ -403,7 +403,10 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
     private IProgress<(int completed, int total, string currentItem, PriceFetchStage stage, string message)>?
         CreateInternalProgress(IProgress<PriceRefreshProgress>? progress, int totalItems)
     {
-        if (progress == null) return null;
+        if (progress == null)
+        {
+            return null;
+        }
 
         return new Progress<(int completed, int total, string currentItem, PriceFetchStage stage, string message)>(p =>
         {

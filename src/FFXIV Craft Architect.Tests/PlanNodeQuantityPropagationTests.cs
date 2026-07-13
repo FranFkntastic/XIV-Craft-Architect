@@ -160,13 +160,13 @@ public class PlanNodeQuantityPropagationTests
     {
         // Parent with multiple children having different yields
         var parent = new PlanNode { ItemId = 1, Name = "Parent", Quantity = 6, Yield = 1 };
-        
+
         // Child 1: qty=4, yield=3 -> ceil(6*4/3) = ceil(8) = 8
         var child1 = new PlanNode { ItemId = 2, Name = "Child1", Quantity = 4, Yield = 3, Parent = parent };
-        
+
         // Child 2: qty=5, yield=2 -> ceil(6*5/2) = ceil(15) = 15
         var child2 = new PlanNode { ItemId = 3, Name = "Child2", Quantity = 5, Yield = 2, Parent = parent };
-        
+
         // Child 3: qty=3, yield=1 -> ceil(6*3/1) = 18
         var child3 = new PlanNode { ItemId = 4, Name = "Child3", Quantity = 3, Yield = 1, Parent = parent };
 
@@ -284,7 +284,7 @@ public class PlanNodeQuantityPropagationTests
         // Note: The fix stores originalQuantity at the start, so we need to reset it
         // This test actually tests a scenario that would require the caller to manage
         // base quantities, but it verifies our fix doesn't use the mutated value
-        
+
         // Recreate with same base quantity
         child.Quantity = 3;  // Reset to original base
         child.PropagateQuantityChange(10);

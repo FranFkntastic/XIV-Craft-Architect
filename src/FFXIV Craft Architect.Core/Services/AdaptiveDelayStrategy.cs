@@ -64,12 +64,12 @@ public class AdaptiveDelayStrategy
     public void ReportFailure(System.Net.HttpStatusCode statusCode)
     {
         _consecutiveFailures++;
-        
+
         // Use higher multiplier for rate limit errors (429)
-        var multiplier = statusCode == System.Net.HttpStatusCode.TooManyRequests 
-            ? _rateLimitMultiplier 
+        var multiplier = statusCode == System.Net.HttpStatusCode.TooManyRequests
+            ? _rateLimitMultiplier
             : _backoffMultiplier;
-        
+
         var newDelay = (int)(_currentDelayMs * multiplier);
         _currentDelayMs = Math.Min(_maxDelay, newDelay);
     }

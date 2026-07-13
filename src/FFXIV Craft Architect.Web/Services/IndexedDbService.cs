@@ -171,10 +171,12 @@ public class IndexedDbService
         {
             await EnsureInitialized();
             var serialized = await _jsRuntime.InvokeAsync<string?>("IndexedDB.loadSetting", key);
-            
+
             if (string.IsNullOrEmpty(serialized))
+            {
                 return defaultValue;
-                
+            }
+
             return JsonSerializer.Deserialize<T>(serialized);
         }
         catch (Exception ex)
@@ -441,11 +443,15 @@ public class IndexedDbService
             var totalElapsed = Stopwatch.StartNew();
 
             if (!state.HasPlanOrProjectItems)
+            {
                 return false;
+            }
 
             autoSaveLease = await state.BeginAutoSaveAsync(skipIfInFlight);
             if (autoSaveLease == null)
+            {
                 return false;
+            }
 
             var snapshotElapsed = Stopwatch.StartNew();
             var planData = state.CreateStoredPlanSnapshot(
@@ -659,7 +665,7 @@ public class StoredPlan
     public string DataCenter { get; set; } = "Aether";
     public List<StoredProjectItem> ProjectItems { get; set; } = new();
     public string? PlanJson { get; set; }
-    
+
     /// <summary>
     /// Serialized market analysis shopping plans.
     /// </summary>
@@ -684,7 +690,7 @@ public class StoredPlan
     /// Serialized market-analysis publication scope used to detect stale-scope evidence.
     /// </summary>
     public string? MarketAnalysisScopeSnapshotJson { get; set; }
-    
+
     /// <summary>
     /// Recommendation mode used for the saved market analysis.
     /// </summary>

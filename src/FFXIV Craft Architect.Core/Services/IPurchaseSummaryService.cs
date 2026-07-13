@@ -13,12 +13,12 @@ public interface IPurchaseSummaryService
     /// Creates a purchase summary from a detailed shopping plan.
     /// </summary>
     PurchaseSummary CreateSummary(DetailedShoppingPlan plan);
-    
+
     /// <summary>
     /// Creates purchase summaries from multiple shopping plans.
     /// </summary>
     List<PurchaseSummary> CreateSummaries(IEnumerable<DetailedShoppingPlan> plans);
-    
+
     /// <summary>
     /// Creates a purchase summary for a split-world purchase portion.
     /// </summary>

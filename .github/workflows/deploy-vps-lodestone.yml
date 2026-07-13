@@ -11,6 +11,7 @@ on:
       - 'src/FFXIV Craft Architect.Web/wwwroot/appsettings.json'
       - 'src/FFXIV Craft Architect.Tests/**'
       - 'scripts/Assert-DeployTestSurface.ps1'
+      - 'global.json'
       - '.github/workflows/deploy-vps-lodestone.yml'
   workflow_dispatch:
 
@@ -32,7 +33,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          global-json-file: global.json
 
       - name: Validate Lodestone deploy test slice
         shell: pwsh
@@ -67,7 +68,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          global-json-file: global.json
 
       - name: Publish Lodestone helper
         run: >

@@ -94,7 +94,7 @@ public class ShoppingOptimizationCoordinator : IShoppingOptimizationCoordinator
             // Step 5: Determine status and build message
             var status = DetermineStatus(itemsWithOptions, itemsWithoutOptions, marketItems.Count);
             var message = BuildResultMessage(
-                status, itemsWithOptions, itemsWithoutOptions, 
+                status, itemsWithOptions, itemsWithoutOptions,
                 vendorItems.Count, untradeableItems.Count, totalCost);
 
             _logger.LogInformation(

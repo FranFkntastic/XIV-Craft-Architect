@@ -98,64 +98,64 @@ public class CraftingPlan
     /// Unique identifier for this plan
     /// </summary>
     public Guid Id { get; set; } = Guid.NewGuid();
-    
+
     /// <summary>
     /// User-defined name for the plan
     /// </summary>
     public string Name { get; set; } = "New Plan";
-    
+
     /// <summary>
     /// When the plan was created
     /// </summary>
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    
+
     /// <summary>
     /// When the plan was last modified
     /// </summary>
     public DateTime ModifiedAt { get; set; } = DateTime.UtcNow;
-    
+
     /// <summary>
     /// Data center used for market prices
     /// </summary>
     public string DataCenter { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// World used for market prices (empty = entire DC)
     /// </summary>
     public string World { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Top-level items in the plan (the "project items")
     /// </summary>
     public List<PlanNode> RootItems { get; set; } = new();
-    
+
     /// <summary>
     /// Saved market shopping plans with recommended worlds and listings.
     /// Populated when prices are fetched and saved with the plan.
     /// </summary>
     [JsonIgnore]
     public List<DetailedShoppingPlan> SavedMarketPlans { get; set; } = new();
-    
+
     /// <summary>
     /// Legacy material projection from the plan tree. Prefer RecipeDemandProjection for workflow logic.
     /// </summary>
     [JsonIgnore]
     [Obsolete("Use RecipeDemandProjection/AcquisitionPlanningService.GetActiveProcurementItems for choice-aware material demand.")]
     public List<MaterialAggregate> AggregatedMaterials => AggregateMaterials();
-    
+
     /// <summary>
     /// Total estimated cost based on current buy/craft decisions
     /// </summary>
     [JsonIgnore]
     public decimal TotalEstimatedCost => CalculateTotalCost();
-    
+
     /// <summary>
     /// Version counter incremented when market prices are updated.
     /// Used to trigger UI re-renders in RecipeNodeView components.
     /// </summary>
     [JsonIgnore]
     public int PriceVersion { get; set; }
-    
+
     /// <summary>
     /// Recursively find a node by item ID
     /// </summary>
@@ -164,22 +164,32 @@ public class CraftingPlan
         foreach (var root in RootItems)
         {
             var found = FindNodeRecursive(root, itemId);
-            if (found != null) return found;
+            if (found != null)
+            {
+                return found;
+            }
         }
         return null;
     }
-    
+
     private PlanNode? FindNodeRecursive(PlanNode node, int itemId)
     {
-        if (node.ItemId == itemId) return node;
+        if (node.ItemId == itemId)
+        {
+            return node;
+        }
+
         foreach (var child in node.Children)
         {
             var found = FindNodeRecursive(child, itemId);
-            if (found != null) return found;
+            if (found != null)
+            {
+                return found;
+            }
         }
         return null;
     }
-    
+
     /// <summary>
     /// Get all unique item IDs in the plan (including all children)
     /// </summary>
@@ -192,7 +202,7 @@ public class CraftingPlan
         }
         return ids.ToList();
     }
-    
+
     private void CollectItemIdsRecursive(PlanNode node, HashSet<int> ids)
     {
         ids.Add(node.ItemId);
@@ -201,7 +211,7 @@ public class CraftingPlan
             CollectItemIdsRecursive(child, ids);
         }
     }
-    
+
     /// <summary>
     /// Aggregates all materials needed across the entire plan into a flat shopping list.
     /// 
@@ -227,24 +237,24 @@ public class CraftingPlan
     private List<MaterialAggregate> AggregateMaterials()
     {
         var aggregates = new Dictionary<int, MaterialAggregate>();
-        
+
         System.Diagnostics.Debug.WriteLine($"[AggregateMaterials] START - RootItems.Count={RootItems.Count}");
-        
+
         foreach (var root in RootItems)
         {
             System.Diagnostics.Debug.WriteLine($"[AggregateMaterials] Processing root: {root.Name} (ID:{root.ItemId}) Source={root.Source}, Children.Count={root.Children.Count}");
             AggregateNode(root, aggregates, depth: 0);
         }
-        
+
         System.Diagnostics.Debug.WriteLine($"[AggregateMaterials] END - Aggregated {aggregates.Count} materials: [{string.Join(", ", aggregates.Values.Select(m => m.Name))}]");
         return aggregates.Values.OrderBy(m => m.Name).ToList();
     }
-    
+
     private void AggregateNode(PlanNode node, Dictionary<int, MaterialAggregate> aggregates, int depth)
     {
         var indent = new string(' ', depth * 2);
         System.Diagnostics.Debug.WriteLine($"[AggregateNode] {indent}{node.Name} (ID:{node.ItemId}) Source={node.Source}, Children={node.Children.Count}");
-        
+
         // If buying from market (NQ or HQ), this item goes to shopping list (not its children)
         if (node.Source == AcquisitionSource.MarketBuyNq || node.Source == AcquisitionSource.MarketBuyHq)
         {
@@ -253,7 +263,7 @@ public class CraftingPlan
             // Don't recurse into children - we're buying the finished item
             return;
         }
-        
+
         // If buying from vendor, add to aggregation
         if (node.Source == AcquisitionSource.VendorBuy)
         {
@@ -261,7 +271,7 @@ public class CraftingPlan
             AddToAggregation(node, aggregates, isCrafted: false, requiresHq: node.MustBeHq);
             return;
         }
-        
+
         // If leaf node (can't be crafted), add to aggregation
         if (!node.Children.Any())
         {
@@ -272,14 +282,14 @@ public class CraftingPlan
         {
             System.Diagnostics.Debug.WriteLine($"[AggregateNode] {indent}  -> Recursing into {node.Children.Count} children...");
         }
-        
+
         // Recurse into children (sub-materials needed for crafting)
         foreach (var child in node.Children)
         {
             AggregateNode(child, aggregates, depth + 1);
         }
     }
-    
+
     private void AddToAggregation(PlanNode node, Dictionary<int, MaterialAggregate> aggregates, bool isCrafted, bool requiresHq = false)
     {
         if (!aggregates.TryGetValue(node.ItemId, out var aggregate))
@@ -304,12 +314,12 @@ public class CraftingPlan
             IsCrafted = isCrafted
         });
     }
-    
+
     private decimal CalculateTotalCost()
     {
         return AcquisitionPlanningService.GetActiveProcurementItems(this).Sum(m => m.TotalQuantity * m.UnitPrice);
     }
-    
+
     /// <summary>
     /// Mark the plan as modified and update timestamp
     /// </summary>
@@ -332,22 +342,22 @@ public class PlanNode
 
     [JsonIgnore]
     public string UniversalisUrl => UniversalisService.GetMarketUrl(ItemId);
-    
+
     /// <summary>
     /// Item name
     /// </summary>
     public string Name { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Icon ID for displaying the item image
     /// </summary>
     public int IconId { get; set; }
-    
+
     /// <summary>
     /// How many of this item are needed
     /// </summary>
     public int Quantity { get; set; } = 1;
-    
+
     /// <summary>
     /// How to acquire this item (craft, buy, vendor, etc.)
     /// </summary>
@@ -357,31 +367,31 @@ public class PlanNode
     /// Why the current acquisition source is selected.
     /// </summary>
     public AcquisitionSourceReason SourceReason { get; set; } = AcquisitionSourceReason.SystemDefault;
-    
+
     /// <summary>
     /// If true, HQ version is required (for buying from market)
     /// </summary>
     [Obsolete("Use MustBeHq instead - this was conflated with acquisition source")]
     public bool RequiresHq { get; set; }
-    
+
     /// <summary>
     /// If true, this item must be HQ quality (regardless of acquisition method).
     /// Applies to both crafted items (need to HQ the craft) and bought items (buy HQ listing).
     /// </summary>
     public bool MustBeHq { get; set; }
-    
+
     /// <summary>
     /// If true, this item cannot be crafted (gathered, dropped, etc.)
     /// </summary>
     [Obsolete("Use Source instead")]
     public bool IsUncraftable { get; set; }
-    
+
     /// <summary>
     /// Legacy property: true if buying from market (NQ or HQ) OR vendor
     /// </summary>
     [JsonIgnore]
     public bool IsBuy => Source == AcquisitionSource.MarketBuyNq || Source == AcquisitionSource.MarketBuyHq || Source == AcquisitionSource.VendorBuy;
-    
+
     /// <summary>
     /// Internal recipe level table value from game data.
     /// </summary>
@@ -401,38 +411,38 @@ public class PlanNode
     /// Unlock item ID for master-book recipes, if Garland provides one.
     /// </summary>
     public int RecipeUnlockItemId { get; set; }
-    
+
     /// <summary>
     /// Job required to craft (e.g., "Blacksmith", "Weaver")
     /// </summary>
     public string Job { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// How many items the recipe produces per craft
     /// </summary>
     public int Yield { get; set; } = 1;
-    
+
     /// <summary>
     /// Number of crafts needed = Ceiling(Quantity / Yield)
     /// </summary>
     [JsonIgnore]
     public int CraftCount => (int)Math.Ceiling((double)Quantity / Yield);
-    
+
     /// <summary>
     /// Current market price per unit (NQ) (fetched from Universalis)
     /// </summary>
     public decimal MarketPrice { get; set; }
-    
+
     /// <summary>
     /// HQ market price per unit (fetched from Universalis)
     /// </summary>
     public decimal HqMarketPrice { get; set; }
-    
+
     /// <summary>
     /// Vendor price per unit (if available, fetched from Garland)
     /// </summary>
     public decimal VendorPrice { get; set; }
-    
+
     /// <summary>
     /// Whether this item can be HQ (crafted items and gathered materials can, crystals/clusters/aethersands cannot)
     /// </summary>
@@ -443,51 +453,51 @@ public class PlanNode
     /// Defaults to true so older saved plans keep their previous behavior.
     /// </summary>
     public bool CanBuyFromMarket { get; set; } = true;
-    
+
     /// <summary>
     /// Source of the price (Vendor, Market, Untradeable)
     /// </summary>
     [JsonIgnore]
     public PriceSource PriceSource { get; set; }
-    
+
     /// <summary>
     /// Details about the price source (vendor name, market location, etc.)
     /// </summary>
     [JsonIgnore]
     public string PriceSourceDetails { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Parent node in the tree (null for root items)
     /// </summary>
     [JsonIgnore]
     public PlanNode? Parent { get; set; }
-    
+
     /// <summary>
     /// Child nodes representing ingredients needed to craft this item
     /// </summary>
     public List<PlanNode> Children { get; set; } = new();
-    
+
     /// <summary>
     /// Unique identifier for serialization (to handle parent references)
     /// </summary>
     public string NodeId { get; set; } = Guid.NewGuid().ToString("N")[..8];
-    
+
     /// <summary>
     /// Reference to parent's NodeId for serialization
     /// </summary>
     public string? ParentNodeId { get; set; }
-    
+
     /// <summary>
     /// User notes for this item
     /// </summary>
     public string? Notes { get; set; }
-    
+
     /// <summary>
     /// If true, this node represents a circular reference in the recipe tree.
     /// The item appears elsewhere in the crafting chain and cannot be expanded further.
     /// </summary>
     public bool IsCircularReference { get; set; }
-    
+
     /// <summary>
     /// If true, this item can be bought from a vendor using gil.
     /// Set during FetchVendorPricesAsync based on Garland API data.
@@ -561,7 +571,11 @@ public class PlanNode
         get
         {
             var gilVendors = VendorOptions.Where(v => v.IsGilVendor).ToList();
-            if (!gilVendors.Any()) return new List<VendorInfo>();
+            if (!gilVendors.Any())
+            {
+                return new List<VendorInfo>();
+            }
+
             var minPrice = gilVendors.Min(v => v.Price);
             return gilVendors.Where(v => v.Price == minPrice).ToList();
         }
@@ -605,7 +619,7 @@ public class PlanNode
     {
         AcquisitionPlanningService.EnsureValidAcquisitionSource(this);
     }
-    
+
     /// <summary>
     /// Deep clone this node and all children
     /// </summary>
@@ -659,7 +673,7 @@ public class PlanNode
 
         return clone;
     }
-    
+
     /// <summary>
     /// Recalculate quantities when parent quantity changes
     /// </summary>
@@ -667,19 +681,19 @@ public class PlanNode
     {
         // Store original base quantity before mutation
         int originalQuantity = Quantity;
-        
+
         // Recalculate based on parent's new quantity
         // Formula: newQuantity = ceil(parentQuantity * (originalQuantity / Yield))
-        Quantity = Yield > 0 
+        Quantity = Yield > 0
             ? (int)Math.Ceiling(parentQuantity * (double)originalQuantity / Yield)
             : originalQuantity;
-        
+
         foreach (var child in Children)
         {
             child.PropagateQuantityChange(Quantity);
         }
     }
-    
+
     /// <summary>
     /// Toggle between buy and craft, with smart defaults for children
     /// </summary>
@@ -687,7 +701,7 @@ public class PlanNode
     {
         Source = buy ? AcquisitionSource.MarketBuyNq : AcquisitionSource.Craft;
     }
-    
+
     public override string ToString() => $"{Name} x{Quantity}";
 }
 
@@ -705,12 +719,12 @@ public class MaterialAggregate
     public int TotalQuantity { get; set; }
     public decimal UnitPrice { get; set; }
     public decimal TotalCost => TotalQuantity * UnitPrice;
-    
+
     /// <summary>
     /// If true, HQ version is required (for market purchases).
     /// </summary>
     public bool RequiresHq { get; set; }
-    
+
     public List<MaterialSource> Sources { get; set; } = new();
 }
 
@@ -733,27 +747,27 @@ public class SerializablePlanNode
     public string Name { get; set; } = string.Empty;
     public int IconId { get; set; }
     public int Quantity { get; set; }
-    
+
     /// <summary>Legacy property for backward compatibility. Use Source instead.</summary>
     public bool IsBuy { get; set; }
-    
+
     /// <summary>Acquisition source (new preferred property).</summary>
     public AcquisitionSource? Source { get; set; }
 
     /// <summary>Why this acquisition source is currently selected.</summary>
     public AcquisitionSourceReason? SourceReason { get; set; }
-    
+
     /// <summary>Legacy: Use MustBeHq instead.</summary>
     public bool RequiresHq { get; set; }
-    
+
     /// <summary>If true, this item must be HQ quality (for plan sharing).</summary>
     public bool MustBeHq { get; set; }
-    
+
     /// <summary>If true, this item can be HQ (crafted/gathered items can, crystals/aethersands cannot).</summary>
     public bool CanBeHq { get; set; }
 
     public bool CanBuyFromMarket { get; set; } = true;
-    
+
     public bool IsUncraftable { get; set; }
     public int RecipeLevel { get; set; }
     public int RecipeDisplayLevel { get; set; }
@@ -762,16 +776,16 @@ public class SerializablePlanNode
     public string Job { get; set; } = string.Empty;
     public int Yield { get; set; } = 1;
     public decimal MarketPrice { get; set; }
-    
+
     /// <summary>HQ market price per unit.</summary>
     public decimal HqMarketPrice { get; set; }
-    
+
     /// <summary>Vendor price per unit (if available).</summary>
     public decimal VendorPrice { get; set; }
-    
+
     /// <summary>If true, this item can be bought from a vendor.</summary>
     public bool CanBuyFromVendor { get; set; }
-    
+
     /// <summary>If true, this item has a craft recipe and can be crafted.</summary>
     public bool CanCraft { get; set; }
 

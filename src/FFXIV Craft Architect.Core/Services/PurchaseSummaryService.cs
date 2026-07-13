@@ -30,8 +30,8 @@ public class PurchaseSummaryService : IPurchaseSummaryService
             var recommendedSplit = plan.RecommendedSplit;
             quantityToPurchase = recommendedSplit.Sum(s => s.QuantityToBuy);
             totalCost = plan.SplitTotalCost ?? 0;
-            averagePricePerUnit = quantityToPurchase > 0 
-                ? (decimal)totalCost / quantityToPurchase 
+            averagePricePerUnit = quantityToPurchase > 0
+                ? (decimal)totalCost / quantityToPurchase
                 : 0;
         }
         else if (plan.RecommendedWorld != null)

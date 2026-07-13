@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
-using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -64,7 +64,7 @@ public class ThreadSafetyTests
         var tasks = new List<Task>();
         var exceptions = new ConcurrentBag<Exception>();
         var results = new ConcurrentBag<PriceInfo>();
-        
+
         // Act - Simulate concurrent access
         for (int i = 0; i < 100; i++)
         {
@@ -81,9 +81,9 @@ public class ThreadSafetyTests
                 }
             }));
         }
-        
+
         await Task.WhenAll(tasks);
-        
+
         // Assert
         Assert.Empty(exceptions);
         Assert.Equal(100, results.Count);
@@ -105,10 +105,10 @@ public class ThreadSafetyTests
         // Arrange
         var service = new ItemCacheService(new NullLogger<ItemCacheService>());
         service.StoreItem(1, "Test Item", 100);
-        
+
         // Act
         var result = await service.GetItemNameAsync(1);
-        
+
         // Assert
         Assert.Equal("Test Item", result);
     }
@@ -120,7 +120,7 @@ public class ThreadSafetyTests
         var service = new ItemCacheService(new NullLogger<ItemCacheService>());
         using var cts = new CancellationTokenSource();
         cts.Cancel();
-        
+
         // Act & Assert - Should throw OperationCanceledException (or derived TaskCanceledException) when cancelled
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
@@ -134,10 +134,10 @@ public class ThreadSafetyTests
         // Arrange
         var service = new ItemCacheService(new NullLogger<ItemCacheService>());
         service.StoreItem(1, "Test Item", 100);
-        
+
         // Act
         var result = await service.GetIconIdAsync(1);
-        
+
         // Assert
         Assert.Equal(100, result);
     }
@@ -148,10 +148,10 @@ public class ThreadSafetyTests
         // Arrange
         var service = new ItemCacheService(new NullLogger<ItemCacheService>());
         service.StoreItem(1, "Test Item", 100);
-        
+
         // Act
         var (name, iconId) = await service.GetItemAsync(1);
-        
+
         // Assert
         Assert.Equal("Test Item", name);
         Assert.Equal(100, iconId);
@@ -162,11 +162,11 @@ public class ThreadSafetyTests
     {
         // Arrange
         var service = new ItemCacheService(new NullLogger<ItemCacheService>());
-        
+
         // Act
         await service.StoreItemAsync(1, "Async Item", 200);
         var result = service.GetItemName(1);
-        
+
         // Assert
         Assert.Equal("Async Item", result);
     }
@@ -182,10 +182,10 @@ public class ThreadSafetyTests
             (Id: 2, Name: "Item 2", IconId: 200),
             (Id: 3, Name: "Item 3", IconId: 300)
         };
-        
+
         // Act
         await service.StoreItemsAsync(items);
-        
+
         // Assert
         Assert.Equal("Item 1", service.GetItemName(1));
         Assert.Equal("Item 2", service.GetItemName(2));
@@ -198,7 +198,7 @@ public class ThreadSafetyTests
         // Arrange
         var service = new ItemCacheService(new NullLogger<ItemCacheService>());
         service.StoreItem(1, "Test Item", 100);
-        
+
         // Act & Assert
         Assert.True(await service.ContainsAsync(1));
         Assert.False(await service.ContainsAsync(999));
@@ -211,10 +211,10 @@ public class ThreadSafetyTests
         var service = new ItemCacheService(new NullLogger<ItemCacheService>());
         service.StoreItem(1, "Item 1", 100);
         service.StoreItem(2, "Item 2", 200);
-        
+
         // Act
         var (count, oldest) = await service.GetStatsAsync();
-        
+
         // Assert
         Assert.Equal(2, count);
         Assert.NotNull(oldest);
@@ -227,7 +227,7 @@ public class ThreadSafetyTests
         var service = new ItemCacheService(new NullLogger<ItemCacheService>());
         var exceptions = new ConcurrentBag<Exception>();
         var tasks = new List<Task>();
-        
+
         // Act - Multiple concurrent async operations
         for (int i = 0; i < 50; i++)
         {
@@ -247,9 +247,9 @@ public class ThreadSafetyTests
                 }
             }));
         }
-        
+
         await Task.WhenAll(tasks);
-        
+
         // Assert
         Assert.Empty(exceptions);
     }
@@ -260,13 +260,13 @@ public class ThreadSafetyTests
         // Verify backward compatibility - sync methods should still work
         // Arrange
         var service = new ItemCacheService(new NullLogger<ItemCacheService>());
-        
+
         // Act & Assert
         service.StoreItem(1, "Sync Item", 100);
         Assert.Equal("Sync Item", service.GetItemName(1));
         Assert.Equal(100, service.GetIconId(1));
         Assert.True(service.Contains(1));
-        
+
         var (count, _) = service.GetStats();
         Assert.Equal(1, count);
     }

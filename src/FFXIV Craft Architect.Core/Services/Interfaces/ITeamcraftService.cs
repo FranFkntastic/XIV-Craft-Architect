@@ -14,7 +14,7 @@ public interface ITeamcraftService
     /// <param name="plan">Crafting plan to export</param>
     /// <returns>Teamcraft import URL</returns>
     string ExportToTeamcraft(CraftingPlan plan);
-    
+
     /// <summary>
     /// Create a plain text summary of the plan (for clipboard).
     /// Format: "5x Item Name\n3x Other Item"
@@ -22,14 +22,14 @@ public interface ITeamcraftService
     /// <param name="plan">Crafting plan to export</param>
     /// <returns>Plain text representation</returns>
     string ExportToPlainText(CraftingPlan plan);
-    
+
     /// <summary>
     /// Export shopping list to CSV format.
     /// </summary>
     /// <param name="plan">Crafting plan to export</param>
     /// <returns>CSV formatted string</returns>
     string ExportToCsv(CraftingPlan plan);
-    
+
     /// <summary>
     /// Parse Teamcraft "Copy as Text" format into a list of items.
     /// Format: "5x Item Name\n3x Other Item"
@@ -37,7 +37,7 @@ public interface ITeamcraftService
     /// <param name="text">Text to parse</param>
     /// <returns>List of item names and quantities</returns>
     List<(string name, int quantity)> ParseTeamcraftText(string text);
-    
+
     /// <summary>
     /// Import from Teamcraft text format and create a new crafting plan.
     /// Requires searching for each item to get its ID.
@@ -50,10 +50,10 @@ public interface ITeamcraftService
     /// <param name="ct">Cancellation token</param>
     /// <returns>Crafting plan or null if import failed</returns>
     Task<CraftingPlan?> ImportFromTeamcraftTextAsync(
-        string name, 
-        string precraftText, 
+        string name,
+        string precraftText,
         string finalItemsText,
-        string dataCenter, 
+        string dataCenter,
         string world,
         CancellationToken ct = default);
 }

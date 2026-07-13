@@ -1,9 +1,8 @@
 using System.IO;
 using Microsoft.Extensions.Logging;
-
+using CancellationToken = System.Threading.CancellationToken;
 // Required for async method signatures
 using Task = System.Threading.Tasks.Task;
-using CancellationToken = System.Threading.CancellationToken;
 
 namespace FFXIV_Craft_Architect.Core.Services;
 
@@ -26,7 +25,7 @@ public class ItemCacheService
             AppContext.BaseDirectory,
             "item_cache.json"
         );
-        
+
         LoadCache();
     }
 
@@ -307,7 +306,10 @@ public class ItemCacheService
     /// </summary>
     public void SaveCache()
     {
-        if (!_isDirty) return;
+        if (!_isDirty)
+        {
+            return;
+        }
 
         _lock.Wait();
         try
@@ -316,17 +318,17 @@ public class ItemCacheService
             {
                 WriteIndented = true
             };
-            
+
             var data = new CacheData
             {
                 SavedAt = DateTime.UtcNow,
                 Items = _cache.Values.ToList()
             };
-            
+
             var json = System.Text.Json.JsonSerializer.Serialize(data, options);
             File.WriteAllText(_cacheFilePath, json);
             _isDirty = false;
-            
+
             _logger.LogInformation("Item cache saved: {Count} items", _cache.Count);
         }
         catch (Exception ex)
@@ -351,7 +353,7 @@ public class ItemCacheService
 
             var json = File.ReadAllText(_cacheFilePath);
             var data = System.Text.Json.JsonSerializer.Deserialize<CacheData>(json);
-            
+
             if (data?.Items != null)
             {
                 foreach (var item in data.Items)

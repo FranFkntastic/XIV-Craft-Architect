@@ -6,12 +6,18 @@ on:
     paths:
       - 'src/**'
       - 'tools/**'
+      - '.editorconfig'
+      - '.gitattributes'
+      - 'global.json'
       - '.github/workflows/test-regression.yml'
   push:
     branches: [ main, master, local-dev ]
     paths:
       - 'src/**'
       - 'tools/**'
+      - '.editorconfig'
+      - '.gitattributes'
+      - 'global.json'
       - '.github/workflows/test-regression.yml'
 
 permissions:
@@ -28,12 +34,26 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          global-json-file: global.json
+
+      - name: Restore solution
+        run: dotnet restore "FFXIV Craft Architect.sln"
+
+      - name: Audit vulnerable dependencies
+        run: dotnet list "FFXIV Craft Architect.sln" package --vulnerable --include-transitive --no-restore
+
+      - name: Verify formatting
+        run: dotnet format "FFXIV Craft Architect.sln" --verify-no-changes --no-restore
+
+      - name: Build full solution
+        run: dotnet build "FFXIV Craft Architect.sln" --configuration Release --no-restore
 
       - name: Run regression suite
         run: >
           dotnet test "src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj"
           --configuration Release
+          --no-build
+          --no-restore
           --filter "Surface!=Desktop"
           --blame-hang
           --blame-hang-timeout 5m

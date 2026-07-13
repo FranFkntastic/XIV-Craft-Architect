@@ -28,14 +28,14 @@ public class WorldDataCoordinator
     public async Task<WorldData> InitializeWorldDataAsync()
     {
         var worldData = await _universalisService.GetWorldDataAsync();
-        
+
         var worldNameToId = worldData.WorldIdToName.ToDictionary(
             kvp => kvp.Value,
             kvp => kvp.Key,
             StringComparer.OrdinalIgnoreCase);
-        
+
         _marketShoppingService.SetWorldNameToIdMapping(worldNameToId);
-        
+
         return worldData;
     }
 

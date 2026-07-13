@@ -1,6 +1,6 @@
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
-using System.Text.Json;
 
 namespace FFXIV_Craft_Architect.Tests;
 

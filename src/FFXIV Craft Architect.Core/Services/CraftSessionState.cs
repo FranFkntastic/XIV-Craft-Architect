@@ -1,5 +1,5 @@
-using System.Text.Json;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Core.Services;
@@ -1011,7 +1011,7 @@ public sealed class CraftSessionState
 
     private void RestoreRollbackSnapshot(CraftSessionRollbackSnapshot snapshot)
     {
-            Identity = snapshot.Identity;
+        Identity = snapshot.Identity;
         _planSessionVersion = snapshot.PlanSessionVersion;
         _activePlan = ClonePlan(snapshot.ActivePlan);
         _projectItems = snapshot.ProjectItems.Select(CloneProjectItem).ToArray();
