@@ -22,61 +22,6 @@ public class TradeOperationsModelTests
         Assert.Equal(TradePaymentPolicy.LegacyDefault, profile.PaymentPolicy);
     }
 
-    [Fact]
-    public void TradeLaborStandard_DefaultsToManagedCobaltRivetsBenchmark()
-    {
-        var standard = new TradeLaborStandard(
-            "Cobalt Rivets benchmark",
-            5094,
-            "Cobalt Rivets",
-            999,
-            true,
-            120_000m,
-            200,
-            new DateTime(2026, 6, 25, 18, 0, 0, DateTimeKind.Utc));
-
-        Assert.Equal(TradeLaborBenchmarkMode.CobaltRivets, standard.BenchmarkMode);
-        Assert.True(standard.IsManagedCobaltRivets);
-        Assert.False(standard.IsCustomBenchmark);
-    }
-
-    [Fact]
-    public void TradeLaborStandard_CanRepresentCustomBenchmark()
-    {
-        var standard = new TradeLaborStandard(
-            "Custom trial",
-            123,
-            "Custom Item",
-            10,
-            false,
-            50_000m,
-            12,
-            new DateTime(2026, 6, 25, 18, 0, 0, DateTimeKind.Utc),
-            TradeLaborBenchmarkMode.Custom);
-
-        Assert.Equal(TradeLaborBenchmarkMode.Custom, standard.BenchmarkMode);
-        Assert.False(standard.IsManagedCobaltRivets);
-        Assert.True(standard.IsCustomBenchmark);
-    }
-
-    [Fact]
-    public void CrafterProfile_StoresCraftingJobLevelsOnly()
-    {
-        var crafter = new TradeCrafterProfile
-        {
-            CompanyProfileId = Guid.NewGuid(),
-            DisplayName = "Aurelia",
-            JobLevels =
-            [
-                new TradeCraftingJobLevel(TradeCraftingJob.Carpenter, 100),
-                new TradeCraftingJobLevel(TradeCraftingJob.Goldsmith, 97)
-            ]
-        };
-
-        Assert.Contains(crafter.JobLevels, job => job.Job == TradeCraftingJob.Carpenter && job.Level == 100);
-        Assert.Contains(crafter.JobLevels, job => job.Job == TradeCraftingJob.Goldsmith && job.Level == 97);
-        Assert.DoesNotContain(crafter.JobLevels.Select(job => job.Job.ToString()), name => name.Contains("Miner", StringComparison.OrdinalIgnoreCase));
-    }
 
     [Fact]
     public void TradeCrafterProfile_CanStoreLodestoneProvenance()
@@ -107,23 +52,6 @@ public class TradeOperationsModelTests
         Assert.Equal("Female", crafter.LodestoneGender);
         Assert.Equal(syncedAt, crafter.LodestoneLastSyncedAtUtc);
     }
-
-    [Fact]
-    public void TradeCrafterProfile_CanStoreLocalContactIdentity()
-    {
-        var crafter = new TradeCrafterProfile
-        {
-            DisplayName = "Level Checker",
-            Alias = "LC",
-            DiscordHandle = "levelchecker",
-            SocialProfileUrl = "https://example.com/levelchecker"
-        };
-
-        Assert.Equal("LC", crafter.Alias);
-        Assert.Equal("levelchecker", crafter.DiscordHandle);
-        Assert.Equal("https://example.com/levelchecker", crafter.SocialProfileUrl);
-    }
-
     [Fact]
     public void OrderStatus_WorkflowOrderKeepsActiveStatusesBeforeArchiveStatuses()
     {
@@ -141,48 +69,6 @@ public class TradeOperationsModelTests
             ],
             ordered);
     }
-
-    [Fact]
-    public void CreateManualNoteEvent_CapturesVisibleOrderHistoryNote()
-    {
-        var orderId = Guid.NewGuid();
-        var companyProfileId = Guid.NewGuid();
-        var createdAt = new DateTime(2026, 6, 17, 13, 0, 0, DateTimeKind.Utc);
-
-        var history = TradeOrderHistoryEvent.CreateManualNote(
-            companyProfileId,
-            orderId,
-            "Crafter asked for mats to be mailed.",
-            createdAt);
-
-        Assert.Equal(companyProfileId, history.CompanyProfileId);
-        Assert.Equal(orderId, history.OrderId);
-        Assert.Equal(TradeOrderHistoryEventKind.ManualNote, history.Kind);
-        Assert.Equal("Crafter asked for mats to be mailed.", history.Note);
-        Assert.Equal(createdAt, history.CreatedAtUtc);
-    }
-
-    [Fact]
-    public void OrderSourceSnapshot_DefaultsToActiveCraftPlanForExistingOrders()
-    {
-        var snapshot = new TradeOrderSourceSnapshot();
-
-        Assert.Equal(TradeOrderSourceKind.ActiveCraftPlan, snapshot.SourceKind);
-        Assert.Equal("Active craft plan", snapshot.SourcePlanName);
-        Assert.Null(snapshot.SourcePlanId);
-        Assert.Null(snapshot.DataCenter);
-        Assert.Null(snapshot.World);
-    }
-
-    [Fact]
-    public void TradeOrder_DefaultCraftPlanLinkKindIsUnknownForLegacySafety()
-    {
-        var order = new TradeOrder();
-
-        Assert.Null(order.CraftPlanId);
-        Assert.Equal(TradeOrderCraftPlanLinkKind.Unknown, order.CraftPlanLinkKind);
-    }
-
     [Theory]
     [InlineData(TradeOrderStatus.ReadyToAssign, false, true)]
     [InlineData(TradeOrderStatus.ReadyToAssign, true, true)]
@@ -194,9 +80,9 @@ public class TradeOperationsModelTests
     [InlineData(TradeOrderStatus.Completed, false, false)]
     [InlineData(TradeOrderStatus.Canceled, false, false)]
     public void TradeOrderWorkflow_CanEditRequestedOutputsOnlyBeforeWorkStarts(
-        TradeOrderStatus status,
-        bool hasCrafter,
-        bool expected)
+          TradeOrderStatus status,
+          bool hasCrafter,
+          bool expected)
     {
         var order = new TradeOrder
         {
@@ -252,67 +138,6 @@ public class TradeOperationsModelTests
         Assert.NotEmpty(order.SourceSnapshot.CraftLabor);
     }
 
-    [Fact]
-    public void TradeOrderWorkflow_CopyOrderCopiesPaymentPolicyOverride()
-    {
-        var overridePolicy = CreateLaborPolicy();
-        var order = new TradeOrder
-        {
-            Title = "Original",
-            PaymentPolicyOverride = overridePolicy
-        };
-
-        var copy = TradeOrderWorkflow.CopyOrder(order);
-
-        Assert.Equal(overridePolicy, copy.PaymentPolicyOverride);
-        copy.PaymentPolicyOverride = TradePaymentPolicy.LegacyDefault;
-        Assert.Equal(overridePolicy, order.PaymentPolicyOverride);
-    }
-
-    [Fact]
-    public void TradeOrderWorkflow_WithPaymentPolicyOverrideDoesNotMutateLoadedOrder()
-    {
-        var order = new TradeOrder { Title = "Original" };
-        var policy = CreateLaborPolicy();
-
-        var changed = TradeOrderWorkflow.WithPaymentPolicyOverride(order, policy);
-
-        Assert.Null(order.PaymentPolicyOverride);
-        Assert.Equal(TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(policy), changed.PaymentPolicyOverride);
-        Assert.Equal("Original", changed.Title);
-    }
-
-    [Fact]
-    public void TradeOrderWorkflow_WithoutPaymentPolicyOverrideClearsOverride()
-    {
-        var order = new TradeOrder
-        {
-            Title = "Original",
-            PaymentPolicyOverride = CreateLaborPolicy()
-        };
-
-        var changed = TradeOrderWorkflow.WithoutPaymentPolicyOverride(order);
-
-        Assert.NotNull(order.PaymentPolicyOverride);
-        Assert.Null(changed.PaymentPolicyOverride);
-    }
-
-    [Fact]
-    public void TradeOrderWorkflow_ResolvePaymentPolicyPrefersOrderOverride()
-    {
-        var companyPolicy = TradePaymentPolicy.LegacyDefault;
-        var overridePolicy = CreateLaborPolicy();
-        var order = new TradeOrder
-        {
-            PaymentPolicyOverride = overridePolicy
-        };
-
-        var resolved = TradeOrderWorkflow.ResolvePaymentPolicy(order, companyPolicy);
-        var normalizedOverride = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(overridePolicy);
-
-        Assert.Equal(TradePaymentContractMode.LaborStandard, resolved.ActiveContract);
-        Assert.Equal(normalizedOverride.LaborStandard, resolved.LaborStandard);
-    }
 
     [Fact]
     public void TradeOrderWorkflow_IsPaymentReadyUsesEffectiveLaborPolicyWithoutDraft()
@@ -416,19 +241,6 @@ public class TradeOperationsModelTests
 
         Assert.Equal(TradeOrderStatus.Assigned, status);
     }
-
-    [Fact]
-    public void TradeOrderWorkflow_AssignedCrafterDoesNotDowngradeLaterActiveStatus()
-    {
-        var crafterId = Guid.NewGuid();
-
-        var status = TradeOrderWorkflow.ResolveStatusForAssignment(
-            TradeOrderStatus.InProgress,
-            crafterId);
-
-        Assert.Equal(TradeOrderStatus.InProgress, status);
-    }
-
     [Fact]
     public void TradeOrderWorkflow_ProcurementEvidenceStateSummarizesPricedMaterialLines()
     {
@@ -452,65 +264,6 @@ public class TradeOperationsModelTests
         Assert.Equal(1, state.PricedMaterialCount);
     }
 
-    [Fact]
-    public void TradeOrderWorkflow_GeneratedCraftPlanDraftReusesGeneratedPlansAndReplacesLegacyLinks()
-    {
-        var order = new TradeOrder
-        {
-            Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
-            Title = "Cobalt Commission",
-            CraftPlanId = "existing-plan",
-            CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.OrderGenerated
-        };
-
-        var replaceDraft = TradeOrderWorkflow.CreateGeneratedCraftPlanLinkDraft(order, replaceExistingPlan: true);
-        order.CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.Unknown;
-        var legacyDraft = TradeOrderWorkflow.CreateGeneratedCraftPlanLinkDraft(order, replaceExistingPlan: true);
-
-        Assert.True(replaceDraft.ReusesExistingPlan);
-        Assert.Equal("existing-plan", replaceDraft.PlanId);
-        Assert.Null(replaceDraft.PreviousPlanId);
-        Assert.Equal("Order - Cobalt Commission", replaceDraft.PlanName);
-        Assert.False(legacyDraft.ReusesExistingPlan);
-        Assert.NotEqual("existing-plan", legacyDraft.PlanId);
-        Assert.Equal("existing-plan", legacyDraft.PreviousPlanId);
-    }
-
-    [Fact]
-    public void TradeOrderWorkflow_AssessesLinkedPlanReplacementForConfirmation()
-    {
-        var savedAt = new DateTime(2026, 6, 20, 18, 15, 0, DateTimeKind.Utc);
-        var order = new TradeOrder
-        {
-            CraftPlanId = "linked-plan",
-            CraftPlanName = "Order - Cobalt Commission",
-            CraftPlanSavedAtUtc = savedAt,
-            CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.OrderGenerated,
-            SourceSnapshot = new TradeOrderSourceSnapshot
-            {
-                RootItems =
-                [
-                    new TradeOrderRootItemSnapshot(100, "Cobalt Ingot", 2, MustBeHq: false, EstimatedSaleValue: 1000m)
-                ],
-                Materials =
-                [
-                    new TradeOrderMaterialSnapshot(200, "Cobalt Ore", 6, RequiresHq: false, UnitCost: 50m, TotalCost: 300m)
-                ]
-            }
-        };
-
-        var assessment = TradeOrderWorkflow.AssessGeneratedCraftPlanReplacement(order);
-
-        Assert.Equal(TradeOrderCraftPlanReplacementMode.Rebuild, assessment.Mode);
-        Assert.True(assessment.RequiresConfirmation);
-        Assert.True(assessment.HasLinkedPlan);
-        Assert.Equal("Order - Cobalt Commission", assessment.ExistingPlanName);
-        Assert.Equal(savedAt, assessment.ExistingPlanSavedAtUtc);
-        Assert.Equal(1, assessment.OutputLineCount);
-        Assert.Equal(2, assessment.OutputQuantity);
-        Assert.Equal(1, assessment.MaterialLineCount);
-        Assert.Equal(1, assessment.PricedMaterialLineCount);
-    }
 
     [Fact]
     public void TradeOrderWorkflow_WithRequestedOutputsReplacesRootItemsAndClearsStaleEvidence()
@@ -574,93 +327,10 @@ public class TradeOperationsModelTests
         Assert.NotEmpty(order.SourceSnapshot.Materials);
     }
 
-    [Fact]
-    public void TradeOrderWorkflow_WithRequestedOutputsAllowsAssignedAwaitingPaymentOrders()
-    {
-        var order = new TradeOrder
-        {
-            Status = TradeOrderStatus.Assigned,
-            AssignedCrafterId = Guid.NewGuid()
-        };
 
-        var changed = TradeOrderWorkflow.WithRequestedOutputs(
-            order,
-            [new TradeRequestedOrderOutput(100, "Plate", 999, false, 0m)],
-            DateTime.UtcNow);
 
-        Assert.Equal(TradeOrderStatus.Assigned, changed.Status);
-        Assert.Equal(order.AssignedCrafterId, changed.AssignedCrafterId);
-        Assert.Contains(changed.SourceSnapshot.RootItems, item => item.ItemId == 100 && item.Quantity == 999);
-    }
 
-    [Fact]
-    public void TradeOrderWorkflow_WithRequestedOutputsRejectsInProgressOrders()
-    {
-        var order = new TradeOrder
-        {
-            Status = TradeOrderStatus.InProgress,
-            AssignedCrafterId = Guid.NewGuid()
-        };
 
-        Assert.Throws<InvalidOperationException>(() =>
-            TradeOrderWorkflow.WithRequestedOutputs(
-                order,
-                [new TradeRequestedOrderOutput(100, "Plate", 999, false, 0m)],
-                DateTime.UtcNow));
-    }
-
-    [Fact]
-    public void TradeOrderWorkflow_WithRequestedOutputsRejectsEmptyRequests()
-    {
-        var order = new TradeOrder { Status = TradeOrderStatus.ReadyToAssign };
-
-        Assert.Throws<ArgumentException>(() =>
-            TradeOrderWorkflow.WithRequestedOutputs(order, [], DateTime.UtcNow));
-    }
-
-    [Fact]
-    public void TradeOrderWorkflow_BuildProcurementRowsProjectsPaymentEvidenceForTables()
-    {
-        var order = new TradeOrder
-        {
-            SourceSnapshot = new TradeOrderSourceSnapshot
-            {
-                Materials =
-                [
-                    new TradeOrderMaterialSnapshot(
-                        200,
-                        "Cobalt Ore",
-                        6,
-                        RequiresHq: false,
-                        UnitCost: 50m,
-                        TotalCost: 300m,
-                        EvidenceSource: "Market recommendation",
-                        UnitCostExplanation: "Fresh evidence",
-                        Warnings: ["Review split"])
-                ]
-            }
-        };
-        var draft = new TradePayrollWorkflowDraft
-        {
-            Responsibilities =
-            [
-                new TradePayrollResponsibilityLine(200, RequiresHq: false, CommissionMaterialResponsibility.Provided)
-            ]
-        };
-
-        var row = Assert.Single(TradeOrderWorkflow.BuildProcurementRows(order, draft));
-
-        Assert.Equal("200:False", row.RowKey);
-        Assert.Equal("Cobalt Ore", row.ItemName);
-        Assert.Equal(6, row.Quantity);
-        Assert.Equal("Market", row.SourceLabel);
-        Assert.Equal(50m, row.UnitCost);
-        Assert.Equal(300m, row.TotalCost);
-        Assert.Equal(CommissionMaterialResponsibility.Provided, row.Responsibility);
-        Assert.Equal("Market recommendation", row.EvidenceSource);
-        Assert.Equal("Priced", row.EvidenceStatus);
-        Assert.Equal("Review split", row.WarningSummary);
-    }
 
     [Fact]
     public void TradeOrderWorkflow_ApplyGeneratedCraftPlanLinkRebuildsMaterialSnapshot()

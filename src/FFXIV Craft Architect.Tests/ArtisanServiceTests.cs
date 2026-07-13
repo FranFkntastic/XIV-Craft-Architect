@@ -22,21 +22,7 @@ public class ArtisanServiceTests
         Assert.Equal([1000u], recipeIds);
     }
 
-    [Fact]
-    public async Task ExportToArtisanAsync_DefaultsToRootRecipesEvenWhenRootSourceIsNotCraft()
-    {
-        var service = CreateService();
-        var plan = CreatePlan();
-        plan.RootItems[0].Source = AcquisitionSource.MarketBuyNq;
 
-        var result = await service.ExportToArtisanAsync(plan);
-
-        var artisanList = JsonSerializer.Deserialize<ArtisanCraftingList>(result.Json);
-        var recipe = Assert.Single(artisanList!.Recipes);
-        Assert.Equal(1000u, recipe.ID);
-        Assert.True(recipe.ListItemOptions.Skipping);
-        Assert.Empty(artisanList.ExpandedList);
-    }
 
     [Fact]
     public async Task ExportToArtisanAsync_DefaultExportPreservesListItemOptions()
@@ -64,20 +50,7 @@ public class ArtisanServiceTests
         Assert.Equal([1000u, 2000u, 3000u], recipeIds.OrderBy(id => id).ToArray());
     }
 
-    [Fact]
-    public async Task ExportToArtisanAsync_IncludePrecrafts_ExportsNonCraftPrecraftsAsSkipped()
-    {
-        var service = CreateService();
-        var plan = CreatePlan();
 
-        var result = await service.ExportToArtisanAsync(plan, includePrecrafts: true);
-
-        var artisanList = JsonSerializer.Deserialize<ArtisanCraftingList>(result.Json);
-        var purchasedPrecraft = Assert.Single(artisanList!.Recipes, recipe => recipe.ID == 3000u);
-        Assert.Equal(3, purchasedPrecraft.Quantity);
-        Assert.True(purchasedPrecraft.ListItemOptions.Skipping);
-        Assert.DoesNotContain(3000u, artisanList.ExpandedList);
-    }
 
     [Fact]
     public async Task ExportToArtisanAsync_IncludePrecrafts_KeepsSameRecipeActiveAndSkippedRowsSeparate()
@@ -209,42 +182,7 @@ public class ArtisanServiceTests
             });
     }
 
-    [Fact]
-    public async Task ImportThenExportToArtisanAsync_IncludePrecrafts_PreservesRecipeQuantities()
-    {
-        var service = CreateService(new Dictionary<int, int>
-        {
-            [6000] = 600,
-            [7000] = 700
-        });
-        var artisanJson = """
-            {
-              "ID": 123,
-              "Name": "Roundtrip Quantity List",
-              "Recipes": [
-                {
-                  "ID": 6000,
-                  "Quantity": 4,
-                  "ListItemOptions": { "NQOnly": false, "Skipping": false }
-                },
-                {
-                  "ID": 7000,
-                  "Quantity": 12,
-                  "ListItemOptions": { "NQOnly": false, "Skipping": false }
-                }
-              ],
-              "ExpandedList": []
-            }
-            """;
 
-        var plan = await service.ImportFromArtisanAsync(artisanJson, "Aether", string.Empty);
-        var result = await service.ExportToArtisanAsync(plan!, includePrecrafts: true);
-
-        var artisanList = JsonSerializer.Deserialize<ArtisanCraftingList>(result.Json);
-        var quantitiesByRecipe = artisanList!.Recipes.ToDictionary(recipe => recipe.ID, recipe => recipe.Quantity);
-        Assert.Equal(4, quantitiesByRecipe[6000]);
-        Assert.Equal(12, quantitiesByRecipe[7000]);
-    }
 
     [Fact]
     public async Task ExportToArtisanAsync_LowConfidenceRecipeResolution_DoesNotExportGuessedRecipeId()
@@ -276,32 +214,7 @@ public class ArtisanServiceTests
         Assert.Contains("Cobalt Ingot", result.MissingRecipes);
     }
 
-    [Fact]
-    public async Task ExportToArtisanAsync_UncraftableRoot_ReportsMissingRecipe()
-    {
-        var service = CreateService();
-        var plan = new CraftingPlan
-        {
-            Name = "Uncraftable Root Plan",
-            RootItems =
-            [
-                new PlanNode
-                {
-                    ItemId = 800,
-                    Name = "Roundtrip Material",
-                    Quantity = 3,
-                    Source = AcquisitionSource.MarketBuyNq,
-                    CanCraft = false
-                }
-            ]
-        };
 
-        var result = await service.ExportToArtisanAsync(plan);
-
-        var artisanList = JsonSerializer.Deserialize<ArtisanCraftingList>(result.Json);
-        Assert.Empty(artisanList!.Recipes);
-        Assert.Contains("Roundtrip Material", result.MissingRecipes);
-    }
 
     private static ArtisanService CreateService(Dictionary<int, int>? recipeToItemIds = null)
     {

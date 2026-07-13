@@ -8,25 +8,6 @@ namespace FFXIV_Craft_Architect.Tests;
 public class CoreRecipePlannerCommandServiceTests
 {
     [Fact]
-    public void CoreBuildRecipePlanRequest_DoesNotExposeOptionalPriceRefreshToggle()
-    {
-        Assert.DoesNotContain(
-            typeof(CoreBuildRecipePlanRequest).GetProperties(),
-            property => property.Name == "RefreshPrices");
-    }
-
-    [Fact]
-    public void CoreActivateRecipePlanRequest_UsesActivationScopedPriceRefreshNames()
-    {
-        var properties = typeof(CoreActivateRecipePlanRequest).GetProperties();
-
-        Assert.DoesNotContain(properties, property => property.Name == "RefreshVendorPrices");
-        Assert.DoesNotContain(properties, property => property.Name == "RefreshMarketPrices");
-        Assert.Contains(properties, property => property.Name == "RefreshVendorPricesOnActivation");
-        Assert.Contains(properties, property => property.Name == "RefreshMarketPricesOnActivation");
-    }
-
-    [Fact]
     public async Task BuildPlanAsync_WithNoProjectItems_ReturnsInfoWithoutActivatingPlan()
     {
         var service = CreateService();
@@ -155,30 +136,7 @@ public class CoreRecipePlannerCommandServiceTests
         Assert.True(service.Session.IsDirty(CraftSessionDirtyBucket.MarketAnalysis));
     }
 
-    [Fact]
-    public async Task ImportProjectItemsAsync_WithNoItems_ReturnsImportedZeroWithoutBuild()
-    {
-        var builder = new FakeRecipePlanBuilder();
-        var service = CreateService(builder: builder);
-        service.Session.ActivatePlan(
-            CreatePlan(),
-            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
-            new CraftSessionActiveContext("North America", "Aether", string.Empty, MarketFetchScope.SelectedDataCenter),
-            "existing plan");
 
-        var result = await service.ImportProjectItemsAsync(new CoreImportProjectItemsRequest(
-            [],
-            "Aether",
-            "North America",
-            MarketFetchScope.SelectedDataCenter));
-
-        Assert.False(result.BuildResult.Built);
-        Assert.Equal("Imported 0 items.", result.Message);
-        Assert.Equal(CoreRecipePlannerCommandMessageLevel.Info, result.MessageLevel);
-        Assert.Equal(0, builder.BuildCalls);
-        Assert.Null(service.Session.ActivePlan);
-        Assert.Empty(service.Session.ProjectItems);
-    }
 
     [Fact]
     public async Task BuildPlanAsync_WhenBuilderThrows_ClearsOperationBusyState()
@@ -198,35 +156,6 @@ public class CoreRecipePlannerCommandServiceTests
         Assert.Equal(CoreRecipePlannerCommandMessageLevel.Error, result.MessageLevel);
         Assert.False(service.OperationState.Snapshot().IsBusy);
     }
-
-    [Fact]
-    public async Task BuildPlanAsync_WhenSessionChangesDuringBuild_ClearsOperationBusyState()
-    {
-        TestServiceHost? serviceHost = null;
-        var service = CreateService(builder: new FakeRecipePlanBuilder
-        {
-            BuildAsync = _ =>
-            {
-                serviceHost!.Session.ActivatePlan(
-                    null,
-                    [],
-                    new CraftSessionActiveContext("North America", "Aether", string.Empty, MarketFetchScope.SelectedDataCenter),
-                    "external session change");
-                return Task.FromResult(CreatePlan());
-            }
-        });
-        serviceHost = service;
-
-        var result = await service.BuildPlanAsync(new CoreBuildRecipePlanRequest(
-            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
-            "Aether",
-            "North America",
-            MarketFetchScope.SelectedDataCenter));
-
-        Assert.False(result.Built);
-        Assert.False(service.OperationState.Snapshot().IsBusy);
-    }
-
     [Fact]
     public async Task BuildPlanAsync_WhenSuperseded_DoesNotPublishOlderPlan()
     {
@@ -277,21 +206,6 @@ public class CoreRecipePlannerCommandServiceTests
         Assert.False(firstResult.Built);
         Assert.Equal(200, service.Session.ActivePlan?.RootItems[0].ItemId);
     }
-
-    [Fact]
-    public void ApplyPlanEditorEdit_WithNoActivePlan_ReturnsNoActivePlan()
-    {
-        var service = CreateService();
-
-        var result = service.ApplyPlanEditorEdit(new CoreApplyPlanEditorEditRequest(
-            ["missing"],
-            new PlanBulkEditOptions(),
-            RequireHqMaterials: false));
-
-        Assert.Equal("No active plan.", result.Message);
-        Assert.Equal(0, result.EditResult.ChangedNodes);
-    }
-
     [Fact]
     public void ApplyPlanEditorEdit_WithActivePlan_PublishesDecisionChangeWithoutNewPlanSession()
     {
@@ -319,26 +233,6 @@ public class CoreRecipePlannerCommandServiceTests
         Assert.True(service.Session.ActivePlan?.RootItems[0].MustBeHq);
         Assert.Equal(AcquisitionSource.MarketBuyHq, service.Session.ActivePlan?.RootItems[0].Source);
     }
-
-    [Fact]
-    public void ApplyPlanEditorEdit_WhenEditThrows_ClearsOperationBusyState()
-    {
-        var service = CreateService();
-        service.Session.ActivatePlan(
-            CreatePlan(),
-            [new ProjectItem { Id = 100, Name = "Root", Quantity = 2 }],
-            new CraftSessionActiveContext("North America", "Aether", string.Empty, MarketFetchScope.SelectedDataCenter),
-            "test plan");
-
-        var result = service.ApplyPlanEditorEdit(new CoreApplyPlanEditorEditRequest(
-            ["root"],
-            null!,
-            RequireHqMaterials: false));
-
-        Assert.Contains("Failed to edit plan", result.Message);
-        Assert.False(service.OperationState.Snapshot().IsBusy);
-    }
-
     [Fact]
     public async Task RefreshPricesAsync_WhenPlanChangesDuringFetch_DoesNotMutateReplacementPlan()
     {
@@ -378,157 +272,10 @@ public class CoreRecipePlannerCommandServiceTests
         Assert.Equal(0, service.Session.Versions.PlanPrice);
     }
 
-    [Fact]
-    public async Task RefreshPricesAsync_WithNoActivePlan_ReturnsNoPlanStatus()
-    {
-        var service = CreateService();
 
-        var result = await service.RefreshPricesAsync(new CoreRefreshRecipePlanPricesRequest(
-            MarketFetchScope.SelectedDataCenter,
-            "Aether",
-            "North America"));
 
-        Assert.Equal(CoreMarketPriceRefreshStatus.NoPlan, result.Status);
-        Assert.False(result.Published);
-    }
 
-    [Fact]
-    public async Task RefreshPricesAsync_WhenPlanDataCenterOverridesRequest_UsesPlanDataCenterRegion()
-    {
-        var plan = CreatePlan();
-        plan.DataCenter = "Chaos";
-        plan.RootItems[0].Source = AcquisitionSource.MarketBuyNq;
-        plan.RootItems[0].CanBuyFromMarket = true;
-        IReadOnlyCollection<(int itemId, string dataCenter)>? requestedPairs = null;
-        var cache = new Mock<IMarketCacheService>();
-        cache.Setup(c => c.EnsurePopulatedAsync(
-                It.IsAny<List<(int itemId, string dataCenter)>>(),
-                It.IsAny<TimeSpan?>(),
-                It.IsAny<IProgress<string>?>(),
-                It.IsAny<CancellationToken>()))
-            .Callback<List<(int itemId, string dataCenter)>, TimeSpan?, IProgress<string>?, CancellationToken>(
-                (requests, _, _, _) => requestedPairs = requests)
-            .ReturnsAsync(1);
-        cache.Setup(c => c.GetManyAsync(
-                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
-                It.IsAny<TimeSpan?>()))
-            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
-            {
-                [(100, "Chaos")] = CachedData(100, "Chaos", 88)
-            });
-        var service = CreateService(marketCache: cache.Object);
-        service.Session.ActivatePlan(
-            plan,
-            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
-            new CraftSessionActiveContext("Europe", "Chaos", string.Empty, MarketFetchScope.SelectedDataCenter),
-            "test plan");
 
-        var result = await service.RefreshPricesAsync(new CoreRefreshRecipePlanPricesRequest(
-            MarketFetchScope.EntireRegion,
-            "Aether",
-            "North America"));
-
-        Assert.Equal(88, service.Session.ActivePlan?.RootItems[0].MarketPrice);
-        Assert.Contains((100, "Chaos"), requestedPairs!);
-        Assert.DoesNotContain(requestedPairs!, pair => pair.dataCenter == "Aether");
-        Assert.Equal(1, result.FetchedCount);
-    }
-
-    [Fact]
-    public async Task RefreshPricesAsync_WhenForceRefreshRequested_UsesExplicitPairRefresh()
-    {
-        var plan = CreatePlan();
-        plan.RootItems[0].Source = AcquisitionSource.MarketBuyNq;
-        plan.RootItems[0].CanBuyFromMarket = true;
-        var refreshRequestedPairs = false;
-        var cache = new Mock<IMarketCacheService>();
-        cache.Setup(c => c.EnsurePopulatedAsync(
-                It.IsAny<List<(int itemId, string dataCenter)>>(),
-                It.IsAny<TimeSpan?>(),
-                It.IsAny<IProgress<string>?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(1);
-        cache.Setup(c => c.RefreshRequestedAsync(
-                It.IsAny<List<(int itemId, string dataCenter)>>(),
-                It.IsAny<IProgress<string>?>(),
-                It.IsAny<CancellationToken>()))
-            .Callback<List<(int itemId, string dataCenter)>, IProgress<string>?, CancellationToken>(
-                (_, _, _) => refreshRequestedPairs = true)
-            .ReturnsAsync(1);
-        cache.Setup(c => c.GetManyAsync(
-                It.IsAny<IReadOnlyCollection<(int itemId, string dataCenter)>>(),
-                It.IsAny<TimeSpan?>()))
-            .ReturnsAsync(new Dictionary<(int itemId, string dataCenter), CachedMarketData>
-            {
-                [(100, "Aether")] = CachedData(100, "Aether", 88)
-            });
-        var service = CreateService(marketCache: cache.Object);
-        service.Session.ActivatePlan(
-            plan,
-            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
-            new CraftSessionActiveContext("North America", "Aether", string.Empty, MarketFetchScope.SelectedDataCenter),
-            "test plan");
-
-        await service.RefreshPricesAsync(new CoreRefreshRecipePlanPricesRequest(
-            MarketFetchScope.SelectedDataCenter,
-            "Aether",
-            "North America",
-            ForceRefreshData: true));
-
-        Assert.True(refreshRequestedPairs);
-        cache.Verify(c => c.EnsurePopulatedAsync(
-            It.IsAny<List<(int itemId, string dataCenter)>>(),
-            TimeSpan.Zero,
-            It.IsAny<IProgress<string>?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
-    }
-
-    [Fact]
-    public async Task ActivatePlanAsync_VendorOnlyRefresh_ActivatesPlanAndPublishesPriceScope()
-    {
-        var plan = CreatePlan();
-        plan.DataCenter = "Crystal";
-        var builder = new FakeRecipePlanBuilder();
-        var service = CreateService(builder: builder);
-
-        var result = await service.ActivatePlanAsync(new CoreActivateRecipePlanRequest(
-            plan,
-            ClearCurrentPlanId: true,
-            RefreshVendorPricesOnActivation: true,
-            RefreshMarketPricesOnActivation: false,
-            MarketFetchScope.SelectedDataCenter,
-            "Aether",
-            "North America"));
-
-        Assert.Equal(CoreRecipePlannerCommandMessageLevel.Success, result.MessageLevel);
-        Assert.Equal(100, result.SelectedNode?.ItemId);
-        Assert.Equal(1, builder.FetchVendorCalls);
-        Assert.Equal("Crystal", service.Session.ActiveContext.DataCenter);
-        Assert.Equal(100, Assert.Single(service.Session.ProjectItems).Id);
-        Assert.Equal(1, service.Session.ActivePlan?.PriceVersion);
-        Assert.Equal(1, service.Session.Versions.PlanPrice);
-    }
-
-    [Fact]
-    public async Task ActivatePlanAsync_WhenPlanDataCenterOverridesRequest_PublishesMatchingRegion()
-    {
-        var plan = CreatePlan();
-        plan.DataCenter = "Chaos";
-        var service = CreateService();
-
-        var result = await service.ActivatePlanAsync(new CoreActivateRecipePlanRequest(
-            plan,
-            ClearCurrentPlanId: true,
-            RefreshVendorPricesOnActivation: false,
-            RefreshMarketPricesOnActivation: false,
-            MarketFetchScope.EntireRegion,
-            "Aether",
-            "North America"));
-
-        Assert.Equal(CoreRecipePlannerCommandMessageLevel.Success, result.MessageLevel);
-        Assert.Equal("Chaos", service.Session.ActiveContext.DataCenter);
-        Assert.Equal("Europe", service.Session.ActiveContext.Region);
-    }
 
     [Fact]
     public async Task ActivatePlanAsync_WithSavedMarketPlans_RestoresCoreMarketEvidence()

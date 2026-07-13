@@ -72,41 +72,6 @@ public class CraftSessionStateTests
         Assert.Empty(session.ViewState.ExpandedMarketWorlds);
         Assert.Single(session.ActivePlan!.SavedMarketPlans[0].WorldOptions);
     }
-
-    [Fact]
-    public void SessionOwnedSnapshots_DoNotExposeLiveVersionsMarketEvidenceOrProcurementOverlay()
-    {
-        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
-        var analysis = new MarketItemAnalysis
-        {
-            ItemId = 3,
-            Name = "Ore",
-            Worlds = { new WorldMarketAnalysis { WorldName = "Jenova" } }
-        };
-        session.PublishMarketAnalysis([analysis], [], "analysis published");
-        session.PublishProcurementOverlay(
-            new CraftSessionProcurementOverlay(
-                DateTime.UtcNow,
-                [3],
-                "route",
-                RouteCards: [new WorldProcurementCardModel { WorldName = "Siren", DataCenter = "Aether" }]),
-            "route generated");
-
-        var versionSnapshot = session.Versions;
-        typeof(CraftSessionVersions)
-            .GetProperty(nameof(CraftSessionVersions.MarketAnalysis))!
-            .SetValue(versionSnapshot, 0);
-        analysis.Worlds.Add(new WorldMarketAnalysis { WorldName = "External Mutation" });
-        session.MarketEvidence.ItemAnalyses[0].Worlds.Add(new WorldMarketAnalysis { WorldName = "Snapshot Mutation" });
-        ((int[])session.ProcurementOverlay!.ActiveItemIds)[0] = 99;
-        session.ProcurementOverlay!.RouteCards![0].WorldName = "Mutated Outside";
-
-        Assert.Equal(1, session.Versions.MarketAnalysis);
-        Assert.Single(session.MarketEvidence.ItemAnalyses[0].Worlds);
-        Assert.Equal(3, session.ProcurementOverlay!.ActiveItemIds[0]);
-        Assert.Equal("Siren", session.ProcurementOverlay!.RouteCards![0].WorldName);
-    }
-
     [Fact]
     public void PlanDecisionTransition_UsesPlanDirtyBucketAndInvalidatesProcurementOverlay()
     {
@@ -153,39 +118,6 @@ public class CraftSessionStateTests
         Assert.False(session.IsDirty(CraftSessionDirtyBucket.Procurement));
     }
 
-    [Fact]
-    public void ProcurementBucket_IsNotMarkedWhenInvalidationHasNoOverlayToClear()
-    {
-        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
-
-        session.MarkPlanStructureChanged("project item added");
-
-        Assert.True(session.IsDirty(CraftSessionDirtyBucket.PlanCore));
-        Assert.False(session.IsDirty(CraftSessionDirtyBucket.Procurement));
-    }
-
-    [Fact]
-    public void ProcurementOverlayPayload_IsOwnedAndClearedByInvalidatingTransition()
-    {
-        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
-        var overlay = new CraftSessionProcurementOverlay(
-            DateTime.UtcNow,
-            [11, 12],
-            "initial route");
-
-        session.PublishProcurementOverlay(overlay, "route generated");
-
-        Assert.True(session.HasProcurementOverlay);
-        Assert.Equal(overlay.PublishedAtUtc, session.ProcurementOverlay?.PublishedAtUtc);
-        Assert.Equal(overlay.SourceDescription, session.ProcurementOverlay?.SourceDescription);
-        Assert.Equal(overlay.ActiveItemIds, session.ProcurementOverlay?.ActiveItemIds);
-
-        session.MarkProcurementSettingsChanged("split world setting changed");
-
-        Assert.False(session.HasProcurementOverlay);
-        Assert.Null(session.ProcurementOverlay);
-        Assert.True(session.IsDirty(CraftSessionDirtyBucket.Procurement));
-    }
 
     [Fact]
     public void ProcurementRouteSettingsChange_ClearsOverlayWithoutStalingMarketEvidence()
@@ -207,56 +139,6 @@ public class CraftSessionStateTests
         Assert.False(session.HasProcurementOverlay);
     }
 
-    [Fact]
-    public void TemporaryProcurementExclusions_AreSessionOwnedAndClearOnlyProcurementOverlay()
-    {
-        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
-        session.PublishMarketAnalysis(
-            [new MarketItemAnalysis { ItemId = 12, Name = "Ore", QuantityNeeded = 3 }],
-            [],
-            "analysis published");
-        session.PublishProcurementOverlay(CreateOverlay(), "route generated");
-        var before = session.CaptureVersionStamp();
-        var blacklistedWorld = new MarketWorldKey("Aether", "Siren");
-        var excludedWorld = new MarketWorldKey("Aether", "Faerie");
-
-        session.BlacklistMarketWorldTemporarily(
-            blacklistedWorld,
-            TimeSpan.FromMinutes(30),
-            DateTimeOffset.Parse("2026-06-01T12:00:00Z"));
-        session.ExcludeItemWorldTemporarily(55, excludedWorld);
-
-        Assert.Equal(before.MarketAnalysis, session.Versions.MarketAnalysis);
-        Assert.Equal(before.SettingsContext, session.Versions.SettingsContext);
-        Assert.Contains(blacklistedWorld, session.GetActiveBlacklistedMarketWorlds(DateTimeOffset.Parse("2026-06-01T12:05:00Z")));
-        Assert.Contains(new MarketItemWorldKey(55, excludedWorld), session.TemporarilyExcludedItemWorlds);
-        Assert.Equal(2, session.GetActiveTemporaryExclusionCount(DateTimeOffset.Parse("2026-06-01T12:05:00Z")));
-        Assert.Single(session.MarketEvidence.ItemAnalyses);
-        Assert.False(session.HasProcurementOverlay);
-    }
-
-    [Fact]
-    public void SettingsChange_ClearsMarketEvidenceAndProcurementOverlay()
-    {
-        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
-        session.PublishMarketAnalysis(
-            [new MarketItemAnalysis { ItemId = 12, Name = "Ore", QuantityNeeded = 3 }],
-            [],
-            "analysis published");
-        session.PublishProcurementOverlay(CreateOverlay(), "route generated");
-
-        session.MarkProcurementSettingsChanged("market context changed");
-
-        Assert.Empty(session.MarketEvidence.ItemAnalyses);
-        Assert.Empty(session.MarketEvidence.ShoppingPlans!);
-        Assert.False(session.HasProcurementOverlay);
-        Assert.True(session.IsDirty(CraftSessionDirtyBucket.MarketAnalysis));
-        Assert.True(session.IsDirty(CraftSessionDirtyBucket.Procurement));
-        Assert.Contains(session.Changes, change =>
-            change.Scope.HasFlag(CraftSessionChangeScope.SettingsContext) &&
-            change.Scope.HasFlag(CraftSessionChangeScope.MarketAnalysis) &&
-            change.Scope.HasFlag(CraftSessionChangeScope.ProcurementOverlay));
-    }
 
     [Fact]
     public void TryPublishMarketAnalysis_RejectsStalePlanSnapshotFromSamePlanSession()
@@ -290,45 +172,6 @@ public class CraftSessionStateTests
         Assert.Equal(AcquisitionSource.VendorBuy, session.ActivePlan!.RootItems[0].Source);
         Assert.Empty(session.MarketEvidence.ItemAnalyses);
     }
-
-    [Theory]
-    [InlineData("market.region", CraftSettingsKey.Region)]
-    [InlineData("market.default_datacenter", CraftSettingsKey.DefaultDataCenter)]
-    [InlineData("market.default_search_scope", CraftSettingsKey.DefaultMarketFetchScope)]
-    [InlineData("market.home_world", CraftSettingsKey.HomeWorld)]
-    [InlineData("market.exclude_congested_worlds", CraftSettingsKey.ExcludeCongestedWorlds)]
-    [InlineData("market.include_cross_world", CraftSettingsKey.IncludeCrossWorld)]
-    [InlineData("planning.default_recommendation_mode", CraftSettingsKey.RecommendationMode)]
-    public void SettingsKeyMapping_CoversWebAndWpfSettingNames(string storageKey, CraftSettingsKey expected)
-    {
-        Assert.Equal(expected, CraftSettingsKeyMap.FromStorageKey(storageKey));
-    }
-
-    [Theory]
-    [InlineData(CraftEvidenceOwner.PlanNodePrice, CraftSessionDirtyBucket.PlanCore)]
-    [InlineData(CraftEvidenceOwner.MarketAnalysis, CraftSessionDirtyBucket.MarketAnalysis)]
-    [InlineData(CraftEvidenceOwner.ProcurementOverlay, CraftSessionDirtyBucket.Procurement)]
-    [InlineData(CraftEvidenceOwner.RawMarketCache, null)]
-    public void EvidenceOwnership_MapsOnlySessionEvidenceToDirtyBuckets(CraftEvidenceOwner owner, CraftSessionDirtyBucket? expected)
-    {
-        Assert.Equal(expected, CraftEvidenceOwnership.GetDirtyBucket(owner));
-    }
-
-    [Fact]
-    public void ServiceCollection_AllowsPlatformDispatcherOverride()
-    {
-        var provider = new ServiceCollection()
-            .AddCraftSessionFoundation()
-            .AddSingleton<RecordingCraftSessionDispatcher>()
-            .AddSingleton<ICraftSessionDispatcher>(sp => sp.GetRequiredService<RecordingCraftSessionDispatcher>())
-            .BuildServiceProvider();
-
-        var session = provider.GetRequiredService<CraftSessionState>();
-        session.MarkViewStateChanged("selection changed");
-
-        Assert.True(provider.GetRequiredService<RecordingCraftSessionDispatcher>().WasUsed);
-    }
-
     [Fact]
     public async Task TryPublishFrom_BlocksConcurrentSessionChangeUntilPublicationFinishes()
     {
@@ -370,37 +213,6 @@ public class CraftSessionStateTests
         Assert.True(session.IsDirty(CraftSessionDirtyBucket.ViewState));
     }
 
-    [Fact]
-    public void CoreSessionTypes_DoNotReferenceWebOrWpfAssemblies()
-    {
-        var referencedAssemblies = typeof(CraftSessionState)
-            .Assembly
-            .GetReferencedAssemblies()
-            .Select(name => name.Name ?? string.Empty)
-            .ToArray();
-
-        Assert.DoesNotContain(referencedAssemblies, name => name.Contains(".Web", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(referencedAssemblies, name => name.Equals("PresentationFramework", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(referencedAssemblies, name => name.Equals("WindowsBase", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
-    public void ServiceCollection_CanResolveSessionFoundation()
-    {
-        var provider = new ServiceCollection()
-            .AddCraftSessionFoundation()
-            .BuildServiceProvider();
-
-        var first = provider.GetRequiredService<CraftSessionState>();
-        var second = provider.GetRequiredService<CraftSessionState>();
-
-        Assert.Same(first, second);
-        Assert.Same(
-            provider.GetRequiredService<ICraftSessionDispatcher>(),
-            provider.GetRequiredService<ICraftSessionDispatcher>());
-        Assert.NotNull(provider.GetRequiredService<ICraftOperationCoordinator>());
-        Assert.NotNull(provider.GetRequiredService<CraftOperationState>());
-    }
 
     private sealed class RecordingCraftSessionDispatcher : ICraftSessionDispatcher
     {

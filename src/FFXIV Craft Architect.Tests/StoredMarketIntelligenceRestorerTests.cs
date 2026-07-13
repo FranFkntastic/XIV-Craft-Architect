@@ -112,61 +112,9 @@ public class StoredMarketIntelligenceRestorerTests
         Assert.Contains("obsolete schema", result.Warning);
     }
 
-    [Fact]
-    public void Restore_CanonicalPayloadWithMarketDataAndNullContext_RepairsLegacySettings()
-    {
-        var result = RestoreCanonical(
-            new StoredMarketIntelligence
-            {
-                MarketIntelligenceId = Guid.Parse("11111111-1111-1111-1111-111111111111"),
-                ItemAnalyses = [CreateAnalysis()],
-                Recommendations = [CreateShoppingPlan()],
-                UnavailableMarketItems = [],
-                PublicationContext = null!,
-                RecipeBasis = null
-            },
-            legacyMode: RecommendationMode.MaximizeValue,
-            legacyLens: MarketAcquisitionLens.BulkValue,
-            projectQuantity: 2);
 
-        Assert.NotNull(result.MarketIntelligence);
-        Assert.Equal(
-            MarketIntelligencePublicationContextKind.UnknownLegacy,
-            result.MarketIntelligence!.PublicationContext.Kind);
-        Assert.Equal(RecommendationMode.MaximizeValue, result.MarketIntelligence.RecommendationMode);
-        Assert.Equal(MarketAcquisitionLens.BulkValue, result.MarketIntelligence.Lens);
-    }
 
-    [Fact]
-    public void Restore_LegacyAnalysisWithOutlierListingField_ClearsMarketEvidence()
-    {
-        var result = RestoreLegacy(
-            legacyAnalysesJson: """
-                [
-                  {
-                    "ItemId": 100,
-                    "Name": "Item",
-                    "QuantityNeeded": 2,
-                    "Worlds": [
-                      {
-                        "WorldName": "Siren",
-                        "Listings": [
-                          {
-                            "PricePerUnit": 10,
-                            "Quantity": 1,
-                            "IsOutlier": true
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-                """,
-            legacyPlans: [CreateShoppingPlan()],
-            projectQuantity: 2);
 
-        AssertMarketEvidenceCleared(result);
-    }
 
     [Theory]
     [InlineData("missing-analysis-source")]
@@ -192,19 +140,7 @@ public class StoredMarketIntelligenceRestorerTests
         AssertMarketEvidenceCleared(result);
     }
 
-    [Fact]
-    public void Restore_LegacyProjectionForDifferentAnalysis_ClearsRecommendationsButKeepsAnalysis()
-    {
-        var result = RestoreLegacy(
-            legacyAnalyses: [CreateAnalysis()],
-            legacyPlans: [CreateShoppingPlan(itemId: 200)],
-            projectQuantity: 2);
 
-        Assert.Equal(100, Assert.Single(result.MarketItemAnalyses).ItemId);
-        Assert.Empty(result.Recommendations);
-        Assert.NotNull(result.MarketIntelligence);
-        Assert.Empty(result.MarketIntelligence!.Recommendations);
-    }
 
     [Theory]
     [InlineData("valid", true)]

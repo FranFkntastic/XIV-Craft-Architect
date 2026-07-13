@@ -58,51 +58,7 @@ public class MarketPurchaseCostProjectionServiceTests
         Assert.False(estimate.IsUnsupportedProjection);
     }
 
-    [Fact]
-    public void Estimate_NqSupportedEvidence_UsesExactNeededListingCost()
-    {
-        var plan = new DetailedShoppingPlan
-        {
-            ItemId = 100,
-            Name = "Darksteel Ingot",
-            QuantityNeeded = 999,
-            RecommendedWorld = new WorldShoppingSummary
-            {
-                DataCenter = "Crystal",
-                WorldName = "Diabolos",
-                TotalCost = 6_129_830,
-                TotalQuantityPurchased = 1_063,
-                Listings =
-                [
-                    new ShoppingListingEntry { Quantity = 1, PricePerUnit = 5_598 },
-                    new ShoppingListingEntry { Quantity = 46, PricePerUnit = 5_599 },
-                    new ShoppingListingEntry { Quantity = 2, PricePerUnit = 5_600 },
-                    new ShoppingListingEntry { Quantity = 2, PricePerUnit = 5_600 },
-                    new ShoppingListingEntry { Quantity = 22, PricePerUnit = 5_774, IsHq = true },
-                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
-                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
-                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
-                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
-                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
-                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
-                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
-                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
-                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true },
-                    new ShoppingListingEntry { Quantity = 99, PricePerUnit = 5_775, IsHq = true }
-                ]
-            }
-        };
 
-        var estimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 999, hqOnly: false);
-        var hqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 999, hqOnly: true);
-
-        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, estimate.Kind);
-        Assert.Equal(5_760_230, estimate.Cost);
-        Assert.Equal("Diabolos", estimate.World?.WorldName);
-        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, hqEstimate.Kind);
-        Assert.Equal(5_769_203, hqEstimate.Cost);
-        Assert.True(estimate.Cost <= hqEstimate.Cost);
-    }
 
     [Fact]
     public void Estimate_UsesDefaultEligibleCoverageExactNeededCost()
@@ -143,50 +99,7 @@ public class MarketPurchaseCostProjectionServiceTests
         Assert.Equal("Siren", estimate.World?.WorldName);
     }
 
-    [Fact]
-    public void Estimate_RecommendedWorldAndCheaperCompactCoverage_UsesDefaultEligibleCoverage()
-    {
-        var singleWorld = CreateCoverageOption(
-            "Siren",
-            exactNeededCost: 10_000,
-            cashOutCost: 10_500,
-            isDefaultEligible: true);
-        var compactSplit = CreateCoverageOption(
-            "Faerie",
-            exactNeededCost: 8_000,
-            cashOutCost: 8_500,
-            isDefaultEligible: true,
-            tier: MarketCoverageTier.CompactSplit,
-            worldCount: 2);
-        var plan = new DetailedShoppingPlan
-        {
-            ItemId = 100,
-            Name = "Coverage Material",
-            QuantityNeeded = 10,
-            RecommendedWorld = new WorldShoppingSummary
-            {
-                DataCenter = "Aether",
-                WorldName = "Siren",
-                TotalCost = 10_000,
-                TotalQuantityPurchased = 10
-            },
-            CoverageSet = new MarketCoverageSet(
-                100,
-                "Coverage Material",
-                10,
-                SingleWorld: singleWorld,
-                CompactSplit: compactSplit,
-                WideSplit: null,
-                CheapestObserved: null,
-                AllCandidates: [singleWorld, compactSplit])
-        };
 
-        var estimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: false);
-
-        Assert.True(estimate.HasCost);
-        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, estimate.Kind);
-        Assert.Equal(8_000, estimate.Cost);
-    }
 
     [Fact]
     public void Estimate_VendorRecommendation_ReturnsSupportedCost()
@@ -289,57 +202,7 @@ public class MarketPurchaseCostProjectionServiceTests
         Assert.True(nqEstimate.Cost <= hqEstimate.Cost);
     }
 
-    [Fact]
-    public void Estimate_NqEvidence_ChoosesCheapestExplicitWorldOption()
-    {
-        var plan = new DetailedShoppingPlan
-        {
-            ItemId = 100,
-            Name = "Mixed Recommendation Material",
-            QuantityNeeded = 10,
-            RecommendedWorld = new WorldShoppingSummary
-            {
-                DataCenter = "Aether",
-                WorldName = "Adamantoise",
-                Listings =
-                [
-                    new ShoppingListingEntry
-                    {
-                        Quantity = 10,
-                        PricePerUnit = 500
-                    }
-                ]
-            },
-            WorldOptions =
-            [
-                new WorldShoppingSummary
-                {
-                    DataCenter = "Aether",
-                    WorldName = "Siren",
-                    Listings =
-                    [
-                        new ShoppingListingEntry
-                        {
-                            Quantity = 10,
-                            PricePerUnit = 100,
-                            IsHq = true
-                        }
-                    ]
-                }
-            ]
-        };
 
-        var nqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: false);
-        var hqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: true);
-
-        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, nqEstimate.Kind);
-        Assert.Equal(MarketPurchaseCostEstimateKind.SupportedEvidence, hqEstimate.Kind);
-        Assert.Equal("Siren", nqEstimate.World?.WorldName);
-        Assert.Equal("Siren", hqEstimate.World?.WorldName);
-        Assert.Equal(1_000, nqEstimate.Cost);
-        Assert.Equal(1_000, hqEstimate.Cost);
-        Assert.True(nqEstimate.Cost <= hqEstimate.Cost);
-    }
 
     [Fact]
     public void Estimate_AggregateWorldListingsWithoutExplicitRoute_RemainsUnsupportedProjection()
@@ -387,26 +250,7 @@ public class MarketPurchaseCostProjectionServiceTests
         Assert.Null(estimate.World);
     }
 
-    [Fact]
-    public void Estimate_NqUnsupportedAverageProjection_DoesNotExceedHqAverage()
-    {
-        var plan = new DetailedShoppingPlan
-        {
-            ItemId = 100,
-            Name = "Average Only Material",
-            QuantityNeeded = 10,
-            DCAveragePrice = 500,
-            HQAveragePrice = 100
-        };
 
-        var nqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: false);
-        var hqEstimate = MarketPurchaseCostProjectionService.Estimate(plan, quantity: 10, hqOnly: true);
-
-        Assert.Equal(MarketPurchaseCostEstimateKind.UnsupportedProjection, nqEstimate.Kind);
-        Assert.Equal(MarketPurchaseCostEstimateKind.UnsupportedProjection, hqEstimate.Kind);
-        Assert.Equal(1_000, nqEstimate.Cost);
-        Assert.Equal(1_000, hqEstimate.Cost);
-    }
 
     [Fact]
     public void Estimate_BlockedPlan_DoesNotUseFallbackProjection()

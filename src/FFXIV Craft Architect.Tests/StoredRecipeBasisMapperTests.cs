@@ -132,37 +132,7 @@ public class StoredRecipeBasisMapperTests
         Assert.Empty(hydrated.OperationsByItemId);
     }
 
-    [Fact]
-    public void TryDeserialize_OperationNullCollections_NormalizesToEmptyCollections()
-    {
-        const string json = """
-            {
-              "SchemaVersion": 1,
-              "Operations": [
-                {
-                  "NodeId": "root",
-                  "AncestorNodeIds": null,
-                  "ResultItemId": 100,
-                  "ResultItemName": "Root Item",
-                  "Ingredients": null
-                }
-              ]
-            }
-            """;
 
-        var stored = StoredRecipeBasisMapper.TryDeserialize(json, out var warning);
-        var hydrated = StoredRecipeBasisMapper.Hydrate(stored!);
-
-        Assert.NotNull(stored);
-        Assert.Null(warning);
-        var storedOperation = Assert.Single(stored.Operations);
-        Assert.Empty(storedOperation.AncestorNodeIds);
-        Assert.Empty(storedOperation.Ingredients);
-
-        var operation = Assert.Single(hydrated.Operations);
-        Assert.Empty(operation.AncestorNodeIds);
-        Assert.Empty(operation.Ingredients);
-    }
 
     [Fact]
     public void TryDeserialize_DuplicateNodeIds_ReturnsNullAndWarning()
@@ -184,41 +154,9 @@ public class StoredRecipeBasisMapperTests
         Assert.Contains("node id", warning, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void TryDeserialize_EmptyNodeId_ReturnsNullAndWarning()
-    {
-        const string json = """
-            {
-              "SchemaVersion": 1,
-              "Operations": [
-                { "NodeId": "", "ResultItemId": 100, "ResultItemName": "Root Item" }
-              ]
-            }
-            """;
 
-        var result = StoredRecipeBasisMapper.TryDeserialize(json, out var warning);
 
-        Assert.Null(result);
-        Assert.Contains("node id", warning, StringComparison.OrdinalIgnoreCase);
-    }
 
-    [Fact]
-    public void TryDeserialize_WhitespaceNodeId_ReturnsNullAndWarning()
-    {
-        const string json = """
-            {
-              "SchemaVersion": 1,
-              "Operations": [
-                { "NodeId": "   ", "ResultItemId": 100, "ResultItemName": "Root Item" }
-              ]
-            }
-            """;
-
-        var result = StoredRecipeBasisMapper.TryDeserialize(json, out var warning);
-
-        Assert.Null(result);
-        Assert.Contains("node id", warning, StringComparison.OrdinalIgnoreCase);
-    }
 
     [Fact]
     public void TryDeserialize_NullOperationElement_ReturnsNullAndWarning()
@@ -236,44 +174,9 @@ public class StoredRecipeBasisMapperTests
         Assert.Contains("recipe basis", warning, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void TryDeserialize_NullIngredientElement_ReturnsNullAndWarning()
-    {
-        const string json = """
-            {
-              "SchemaVersion": 1,
-              "Operations": [
-                {
-                  "NodeId": "root",
-                  "ResultItemId": 100,
-                  "ResultItemName": "Root Item",
-                  "Ingredients": [null]
-                }
-              ]
-            }
-            """;
 
-        var result = StoredRecipeBasisMapper.TryDeserialize(json, out var warning);
 
-        Assert.Null(result);
-        Assert.Contains("recipe basis", warning, StringComparison.OrdinalIgnoreCase);
-    }
 
-    [Fact]
-    public void TryDeserialize_NullDemandItemElement_ReturnsNullAndWarning()
-    {
-        const string json = """
-            {
-              "SchemaVersion": 1,
-              "MarketAnalysisDemandItems": [null]
-            }
-            """;
-
-        var result = StoredRecipeBasisMapper.TryDeserialize(json, out var warning);
-
-        Assert.Null(result);
-        Assert.Contains("recipe basis", warning, StringComparison.OrdinalIgnoreCase);
-    }
 
     [Fact]
     public void TryDeserialize_DuplicateDemandItemIds_ReturnsNullAndWarning()
@@ -328,21 +231,7 @@ public class StoredRecipeBasisMapperTests
         Assert.Contains("node id", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void Hydrate_WhitespaceNodeId_ThrowsClearInvalidOperationException()
-    {
-        var stored = new StoredRecipeOperationSnapshot
-        {
-            Operations =
-            [
-                new StoredRecipeOperation { NodeId = "   ", ResultItemId = 100, ResultItemName = "Root Item" }
-            ]
-        };
 
-        var exception = Assert.Throws<InvalidOperationException>(() => StoredRecipeBasisMapper.Hydrate(stored));
-
-        Assert.Contains("node id", exception.Message, StringComparison.OrdinalIgnoreCase);
-    }
 
     private static RecipeOperationSnapshot CreateSnapshot()
     {

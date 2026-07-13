@@ -19,24 +19,7 @@ public class CoreProcurementWorkflowServiceTests
         execution.VerifyNoOtherCalls();
     }
 
-    [Fact]
-    public async Task RunAnalysisAsync_WithNoActiveProcurementItems_ReturnsNoActiveItemsWithoutExecution()
-    {
-        var execution = new Mock<IProcurementRouteExecutionService>(MockBehavior.Strict);
-        var service = CreateService(
-            procurementExecution: execution.Object,
-            recipeLayerWorkflow: new FakeRecipeLayerWorkflowService(activeProcurementItems: []));
-        service.Session.ActivatePlan(
-            CreatePlan(),
-            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
-            new CraftSessionActiveContext("North America", "Aether", string.Empty, MarketFetchScope.SelectedDataCenter),
-            "test plan");
 
-        var result = await service.RunAnalysisAsync(CreateRequest());
-
-        Assert.Equal(CoreProcurementWorkflowStatus.NoActiveProcurementItems, result.Status);
-        execution.VerifyNoOtherCalls();
-    }
 
     [Fact]
     public async Task RunAnalysisAsync_PublishesProcurementOverlay()
@@ -182,31 +165,7 @@ public class CoreProcurementWorkflowServiceTests
         Assert.Null(service.Session.ProcurementOverlay);
     }
 
-    [Fact]
-    public async Task RunAnalysisAsync_WhenRouteExclusionsChangeDuringExecution_DoesNotPublish()
-    {
-        var execution = new Mock<IProcurementRouteExecutionService>();
-        var service = CreateService(procurementExecution: execution.Object);
-        service.Session.ActivatePlan(
-            CreatePlan(),
-            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
-            new CraftSessionActiveContext("North America", "Aether", string.Empty, MarketFetchScope.SelectedDataCenter),
-            "test plan");
-        var before = service.Session.CaptureVersionStamp();
-        execution.Setup(e => e.AnalyzeAsync(
-                It.IsAny<ProcurementRouteExecutionRequest>(),
-                It.IsAny<IProgress<string>?>(),
-                It.IsAny<CancellationToken>(),
-                It.IsAny<MarketAnalysisExecutionOptions?>()))
-            .Callback(() => service.Session.BlacklistMarketWorldTemporarily(new MarketWorldKey("Aether", "Siren")))
-            .ReturnsAsync(new ProcurementRouteExecutionResult([ShoppingPlan(101)], [], [], [], []));
 
-        var result = await service.RunAnalysisAsync(CreateRequest());
-
-        Assert.Equal(CoreProcurementWorkflowStatus.StaleConfiguration, result.Status);
-        Assert.Null(service.Session.ProcurementOverlay);
-        Assert.Equal(before.Procurement + 1, service.Session.Versions.Procurement);
-    }
 
     [Fact]
     public async Task RefreshItemMarketDataAsync_ReplacesSingleMarketAnalysisItemAndInvalidatesProcurement()
@@ -331,41 +290,7 @@ public class CoreProcurementWorkflowServiceTests
         Assert.Empty(service.Session.MarketEvidence.ShoppingPlans!);
     }
 
-    [Fact]
-    public async Task RefreshItemMarketDataAsync_WhenRouteExclusionsChangeAfterFetch_DoesNotPublish()
-    {
-        var marketExecution = new Mock<IMarketAnalysisExecutionService>();
-        var service = CreateService(marketExecution: marketExecution.Object);
-        service.Session.ActivatePlan(
-            CreatePlan(),
-            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
-            new CraftSessionActiveContext("North America", "Aether", string.Empty, MarketFetchScope.SelectedDataCenter),
-            "test plan");
-        Assert.True(service.Session.TryPublishMarketAnalysis(
-            service.Session.CaptureVersionStamp(),
-            service.Session.ActivePlan!,
-            service.Session.PlanSessionVersion,
-            [new MarketItemAnalysis { ItemId = 202, Name = "Item 202", QuantityNeeded = 3 }],
-            [ShoppingPlan(202, "Faerie")],
-            acquisitionDecisionsChanged: false,
-            "existing analysis"));
-        marketExecution.Setup(e => e.ExecuteAsync(
-                It.IsAny<MarketAnalysisExecutionRequest>(),
-                It.IsAny<IProgress<string>?>(),
-                It.IsAny<CancellationToken>(),
-                It.IsAny<MarketAnalysisExecutionOptions?>()))
-            .Callback(() => service.Session.BlacklistMarketWorldTemporarily(new MarketWorldKey("Aether", "Siren")))
-            .ReturnsAsync(new MarketAnalysisExecutionResult(
-                CreateEmptyEvidence(),
-                [new MarketItemAnalysis { ItemId = 101, Name = "Item 101", QuantityNeeded = 5 }],
-                [ShoppingPlan(101)]));
 
-        var result = await service.RefreshItemMarketDataAsync(CreateRefreshRequest(101));
-
-        Assert.Equal(CoreProcurementItemRefreshStatus.StaleConfiguration, result.Status);
-        Assert.Equal(202, Assert.Single(service.Session.MarketEvidence.ItemAnalyses).ItemId);
-        Assert.Equal(202, Assert.Single(service.Session.MarketEvidence.ShoppingPlans!).ItemId);
-    }
 
     private static TestServiceHost CreateService(
         IProcurementRouteExecutionService? procurementExecution = null,

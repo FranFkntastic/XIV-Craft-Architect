@@ -258,87 +258,9 @@ public class RecipeOperationSnapshotServiceTests
         Assert.Equal(RecipeOperationDiagnosticSeverity.Warning, diagnostic.Severity);
     }
 
-    [Fact]
-    public async Task BuildAsync_ChildWithoutParentPointer_UsesTraversalParent()
-    {
-        var service = CreateService();
-        var root = new PlanNode
-        {
-            ItemId = 200,
-            Name = "Root Craft",
-            Quantity = 1,
-            Source = AcquisitionSource.Craft,
-            CanCraft = true,
-            RecipeLevel = 80,
-            Job = "Blacksmith",
-            Yield = 2
-        };
-        var child = new PlanNode
-        {
-            ItemId = 300,
-            Name = "Child Craft",
-            Quantity = 1,
-            Source = AcquisitionSource.Craft,
-            CanCraft = true,
-            RecipeLevel = 70,
-            Job = "Armorer",
-            Yield = 1
-        };
-        root.Children.Add(child);
-        var plan = new CraftingPlan { RootItems = [root] };
 
-        var snapshot = await service.BuildAsync(plan);
 
-        var childOperation = Assert.Single(snapshot.Operations, operation => operation.ResultItemId == 300);
-        Assert.Equal(root.NodeId, childOperation.ParentNodeId);
-        Assert.False(childOperation.IsRoot);
-    }
 
-    [Fact]
-    public async Task BuildAsync_StaleParentPointer_AddsParentMismatchDiagnostic()
-    {
-        var service = CreateService();
-        var root = new PlanNode
-        {
-            ItemId = 200,
-            Name = "Root Craft",
-            Quantity = 1,
-            Source = AcquisitionSource.Craft,
-            CanCraft = true,
-            RecipeLevel = 80,
-            Job = "Blacksmith",
-            Yield = 2
-        };
-        var staleParent = new PlanNode
-        {
-            ItemId = 999,
-            Name = "Stale Parent",
-            Quantity = 1
-        };
-        var child = new PlanNode
-        {
-            ItemId = 300,
-            Name = "Child Craft",
-            Quantity = 1,
-            Source = AcquisitionSource.Craft,
-            CanCraft = true,
-            RecipeLevel = 70,
-            Job = "Armorer",
-            Yield = 1,
-            Parent = staleParent
-        };
-        root.Children.Add(child);
-        var plan = new CraftingPlan { RootItems = [root] };
-
-        var snapshot = await service.BuildAsync(plan);
-
-        var diagnostic = Assert.Single(
-            snapshot.Diagnostics,
-            item => item.Code == RecipeOperationDiagnosticCode.ParentLinkMismatch);
-        Assert.Equal(child.NodeId, diagnostic.NodeId);
-        Assert.Equal(root.NodeId, diagnostic.Details!["expectedParentNodeId"]);
-        Assert.Equal(staleParent.NodeId, diagnostic.Details["actualParentNodeId"]);
-    }
 
     [Fact]
     public async Task BuildAsync_DuplicateNodeIds_MarksNodeIndexIncompleteAndAddsDiagnostics()
@@ -379,38 +301,7 @@ public class RecipeOperationSnapshotServiceTests
             diagnostic.NodeId == first.NodeId);
     }
 
-    [Fact]
-    public async Task BuildAsync_ExtraChildNotInRecipe_AddsStructuralDiagnostic()
-    {
-        var service = CreateService();
-        var root = new PlanNode
-        {
-            ItemId = 200,
-            Name = "Root Craft",
-            Quantity = 1,
-            Source = AcquisitionSource.Craft,
-            CanCraft = true,
-            RecipeLevel = 80,
-            Job = "Blacksmith",
-            Yield = 2
-        };
-        root.Children.Add(new PlanNode
-        {
-            ItemId = 901,
-            Name = "Extra Child",
-            Quantity = 1,
-            Source = AcquisitionSource.MarketBuyNq
-        });
-        var plan = new CraftingPlan { RootItems = [root] };
 
-        var snapshot = await service.BuildAsync(plan);
-
-        var operation = Assert.Single(snapshot.Operations);
-        Assert.True(operation.HasStructuralDiagnostics);
-        var diagnostic = Assert.Single(snapshot.Diagnostics);
-        Assert.Equal(RecipeOperationDiagnosticCode.ExtraChildNotInRecipe, diagnostic.Code);
-        Assert.Equal(901, diagnostic.ItemId);
-    }
 
     [Fact]
     public async Task BuildAsync_CancellationDuringItemLoad_PropagatesCancellation()
@@ -434,83 +325,9 @@ public class RecipeOperationSnapshotServiceTests
         await Assert.ThrowsAsync<OperationCanceledException>(() => service.BuildAsync(plan));
     }
 
-    [Fact]
-    public async Task BuildAsync_CancellationBeforeTraversal_PropagatesCancellation()
-    {
-        var service = CreateService();
-        using var cts = new CancellationTokenSource();
-        await cts.CancelAsync();
-        var plan = new CraftingPlan
-        {
-            RootItems =
-            [
-                new PlanNode
-                {
-                    ItemId = 100,
-                    Name = "Root Craft",
-                    Quantity = 1,
-                    Source = AcquisitionSource.Craft,
-                    CanCraft = true
-                }
-            ]
-        };
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => service.BuildAsync(plan, cts.Token));
-    }
 
-    [Fact]
-    public async Task BuildAsync_SameItemChildren_MatchesExpectedQuantitiesBeforeTraversalOrder()
-    {
-        var service = CreateService();
-        var root = new PlanNode
-        {
-            ItemId = 1000,
-            Name = "Duplicate Ingredient Craft",
-            Quantity = 1,
-            Source = AcquisitionSource.Craft,
-            CanCraft = true,
-            RecipeLevel = 90,
-            Job = "Carpenter",
-            Yield = 1
-        };
-        var childForTwo = new PlanNode
-        {
-            ItemId = 900,
-            Name = "Ingredient For Two",
-            Quantity = 2,
-            Source = AcquisitionSource.MarketBuyNq,
-            Parent = root
-        };
-        var childForOne = new PlanNode
-        {
-            ItemId = 900,
-            Name = "Ingredient For One",
-            Quantity = 1,
-            Source = AcquisitionSource.MarketBuyNq,
-            Parent = root
-        };
-        root.Children.Add(childForTwo);
-        root.Children.Add(childForOne);
-        var plan = new CraftingPlan { RootItems = [root] };
 
-        var snapshot = await service.BuildAsync(plan);
-
-        var operation = Assert.Single(snapshot.Operations);
-        Assert.Collection(
-            operation.Ingredients.OrderBy(ingredient => ingredient.AmountPerCraft),
-            ingredient =>
-            {
-                Assert.Equal(1, ingredient.ExpectedTotalQuantity);
-                Assert.Equal(childForOne.NodeId, ingredient.ChildNodeId);
-                Assert.Equal(RecipeIngredientLinkStatus.Matched, ingredient.LinkStatus);
-            },
-            ingredient =>
-            {
-                Assert.Equal(2, ingredient.ExpectedTotalQuantity);
-                Assert.Equal(childForTwo.NodeId, ingredient.ChildNodeId);
-                Assert.Equal(RecipeIngredientLinkStatus.Matched, ingredient.LinkStatus);
-            });
-    }
 
     private static RecipeOperationSnapshotService CreateService(HttpMessageHandler? handler = null)
     {

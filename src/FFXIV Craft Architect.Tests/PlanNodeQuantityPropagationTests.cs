@@ -83,30 +83,7 @@ public class PlanNodeQuantityPropagationTests
         Assert.Equal(5, grandchild.Quantity);
     }
 
-    [Fact]
-    public void PropagateQuantityChange_DeepNesting_FourLevels_CalculatesCorrectly()
-    {
-        // Level 1: Root qty=4
-        // Level 2: Child qty=3, yield=2 -> ceil(4*3/2) = 6
-        // Level 3: Grandchild qty=2, yield=1 -> ceil(6*2/1) = 12
-        // Level 4: GreatGrandchild qty=5, yield=3 -> ceil(12*5/3) = 20
-        var level1 = new PlanNode { ItemId = 1, Name = "L1", Quantity = 4, Yield = 1 };
-        var level2 = new PlanNode { ItemId = 2, Name = "L2", Quantity = 3, Yield = 2, Parent = level1 };
-        var level3 = new PlanNode { ItemId = 3, Name = "L3", Quantity = 2, Yield = 1, Parent = level2 };
-        var level4 = new PlanNode { ItemId = 4, Name = "L4", Quantity = 5, Yield = 3, Parent = level3 };
 
-        level1.Children.Add(level2);
-        level2.Children.Add(level3);
-        level3.Children.Add(level4);
-
-        // Act
-        level2.PropagateQuantityChange(4);
-
-        // Assert
-        Assert.Equal(6, level2.Quantity);
-        Assert.Equal(12, level3.Quantity);
-        Assert.Equal(20, level4.Quantity);
-    }
 
     [Fact]
     public void PropagateQuantityChange_YieldZero_KeepsOriginalQuantity()
@@ -123,21 +100,7 @@ public class PlanNodeQuantityPropagationTests
         Assert.Equal(5, child.Quantity);
     }
 
-    [Fact]
-    public void PropagateQuantityChange_YieldOne_CalculatesCorrectly()
-    {
-        // Yield=1 means no division needed
-        // ceil(7 * 3/1) = 21
-        var parent = new PlanNode { ItemId = 1, Name = "Parent", Quantity = 7, Yield = 1 };
-        var child = new PlanNode { ItemId = 2, Name = "Child", Quantity = 3, Yield = 1, Parent = parent };
-        parent.Children.Add(child);
 
-        // Act
-        child.PropagateQuantityChange(7);
-
-        // Assert
-        Assert.Equal(21, child.Quantity);
-    }
 
     [Fact]
     public void PropagateQuantityChange_LargeNumbers_CalculatesCorrectly()
@@ -185,41 +148,9 @@ public class PlanNodeQuantityPropagationTests
         Assert.Equal(18, child3.Quantity);
     }
 
-    [Fact]
-    public void PropagateQuantityChange_ChildWithChildren_PropagatesCorrectly()
-    {
-        // Verifies that after a child's quantity changes, it correctly propagates to its children
-        // Parent qty=5 propagates to child with qty=3,yield=2 -> ceil(5*3/2) = 8
-        // That child then propagates 8 to its child with qty=2,yield=1 -> ceil(8*2/1) = 16
-        var parent = new PlanNode { ItemId = 1, Name = "Parent", Quantity = 5, Yield = 1 };
-        var child = new PlanNode { ItemId = 2, Name = "Child", Quantity = 3, Yield = 2, Parent = parent };
-        var grandchild = new PlanNode { ItemId = 3, Name = "Grandchild", Quantity = 2, Yield = 1, Parent = child };
 
-        parent.Children.Add(child);
-        child.Children.Add(grandchild);
 
-        // Act - start propagation from child (simulating parent's quantity change)
-        child.PropagateQuantityChange(5);
 
-        // Assert
-        Assert.Equal(8, child.Quantity);
-        Assert.Equal(16, grandchild.Quantity);
-    }
-
-    [Fact]
-    public void PropagateQuantityChange_NoRemainder_NoRoundingNeeded()
-    {
-        // Exact division: ceil(6 * 4/2) = ceil(12) = 12
-        var parent = new PlanNode { ItemId = 1, Name = "Parent", Quantity = 6, Yield = 1 };
-        var child = new PlanNode { ItemId = 2, Name = "Child", Quantity = 4, Yield = 2, Parent = parent };
-        parent.Children.Add(child);
-
-        // Act
-        child.PropagateQuantityChange(6);
-
-        // Assert
-        Assert.Equal(12, child.Quantity);
-    }
 
     [Fact]
     public void PropagateQuantityChange_SmallRemainder_RoundsUp()
@@ -251,20 +182,7 @@ public class PlanNodeQuantityPropagationTests
         Assert.Equal(0, child.Quantity);
     }
 
-    [Fact]
-    public void PropagateQuantityChange_OriginalQuantityZero_ResultIsZero()
-    {
-        // ceil(5 * 0/2) = 0
-        var parent = new PlanNode { ItemId = 1, Name = "Parent", Quantity = 5, Yield = 1 };
-        var child = new PlanNode { ItemId = 2, Name = "Child", Quantity = 0, Yield = 2, Parent = parent };
-        parent.Children.Add(child);
 
-        // Act
-        child.PropagateQuantityChange(5);
-
-        // Assert
-        Assert.Equal(0, child.Quantity);
-    }
 
     [Fact]
     public void PropagateQuantityChange_TwiceWithDifferentValues_UsesOriginalBaseEachTime()

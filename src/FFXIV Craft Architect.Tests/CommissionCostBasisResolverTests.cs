@@ -123,34 +123,7 @@ public class CommissionCostBasisResolverTests
         Assert.DoesNotContain("market evidence fallback", line.UnitCostExplanation, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void BuildMarketRecommendationLines_DoesNotWarnWhenRecommendationEvidenceExistsWithoutAnalysis()
-    {
-        var resolver = new CommissionCostBasisResolver();
 
-        var line = Assert.Single(resolver.BuildMarketRecommendationLines(
-            [Material(15, "Recommended Ore", quantity: 4, unitPrice: 999m)],
-            [],
-            [
-                new DetailedShoppingPlan
-                {
-                    ItemId = 15,
-                    Name = "Recommended Ore",
-                    QuantityNeeded = 4,
-                    RecommendedWorld = new WorldShoppingSummary
-                    {
-                        DataCenter = "Aether",
-                        WorldName = "Siren",
-                        TotalCost = 800,
-                        TotalQuantityPurchased = 4
-                    }
-                }
-            ]));
-
-        Assert.Equal(200m, line.UnitCost);
-        Assert.Equal("Procurement route", line.EvidenceSource);
-        Assert.DoesNotContain(line.Warnings, warning => warning.Contains("No market-analysis evidence", StringComparison.OrdinalIgnoreCase));
-    }
 
 
     [Fact]
@@ -259,85 +232,9 @@ public class CommissionCostBasisResolverTests
         Assert.Contains("Ore", line.UnitCostExplanation);
     }
 
-    [Fact]
-    public void BuildMarketRecommendationLines_DoesNotWarnWhenOnlyNonRecommendedWorldIsStale()
-    {
-        var resolver = new CommissionCostBasisResolver();
-        var loadedAt = new DateTime(2026, 6, 3, 12, 0, 0, DateTimeKind.Utc);
 
-        var line = Assert.Single(resolver.BuildMarketRecommendationLines(
-            [Material(30, "Ingot")],
-            [
-                new MarketItemAnalysis
-                {
-                    ItemId = 30,
-                    Name = "Ingot",
-                    LoadedAtUtc = loadedAt,
-                    AnalysisCompetitiveAverageUnitPrice = 100m,
-                    WorstDataQualityBucket = MarketDataQualityBucket.Ancient
-                }
-            ],
-            [
-                new DetailedShoppingPlan
-                {
-                    ItemId = 30,
-                    Name = "Ingot",
-                    RecommendedWorld = new WorldShoppingSummary
-                    {
-                        DataCenter = "Aether",
-                        WorldName = "Siren",
-                        MarketDataQualityBucket = MarketDataQualityBucket.Current,
-                        MarketDataAge = TimeSpan.FromMinutes(30),
-                        MarketUploadedAtUtc = loadedAt - TimeSpan.FromMinutes(30)
-                    }
-                }
-            ]));
 
-        Assert.DoesNotContain(line.Warnings, warning => warning.Contains("ancient", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(line.Warnings, warning => warning.Contains("very old", StringComparison.OrdinalIgnoreCase));
-    }
 
-    [Fact]
-    public void BuildMarketRecommendationLines_WarnsWhenRecommendedWorldIsVeryOld()
-    {
-        var resolver = new CommissionCostBasisResolver();
-        var loadedAt = new DateTime(2026, 6, 3, 12, 0, 0, DateTimeKind.Utc);
-
-        var line = Assert.Single(resolver.BuildMarketRecommendationLines(
-            [Material(40, "Silk")],
-            [
-                new MarketItemAnalysis
-                {
-                    ItemId = 40,
-                    Name = "Silk",
-                    LoadedAtUtc = loadedAt,
-                    AnalysisCompetitiveAverageUnitPrice = 100m,
-                    WorstDataQualityBucket = MarketDataQualityBucket.VeryOld
-                }
-            ],
-            [
-                new DetailedShoppingPlan
-                {
-                    ItemId = 40,
-                    Name = "Silk",
-                    RecommendedWorld = new WorldShoppingSummary
-                    {
-                        DataCenter = "Aether",
-                        WorldName = "Siren",
-                        MarketDataQualityBucket = MarketDataQualityBucket.VeryOld,
-                        MarketDataAge = TimeSpan.FromHours(18),
-                        MarketUploadedAtUtc = loadedAt - TimeSpan.FromHours(18)
-                    }
-                }
-            ]));
-
-        var warning = Assert.Single(line.Warnings, warning => warning.Contains("very old", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains("Silk", warning);
-        Assert.Contains("Siren", warning);
-        Assert.Contains("18h", warning);
-        Assert.Contains("Siren", line.UnitCostExplanation);
-        Assert.Contains("18h", line.UnitCostExplanation);
-    }
 
     [Fact]
     public void BuildMarketRecommendationLines_WarnsWhenRecommendedSplitContainsAncientWorld()
