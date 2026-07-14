@@ -545,7 +545,7 @@
             _marketMafiosoActiveItemWorld = key;
             await PersistActiveMarketMafiosoRequestAsync(key, request.Id);
             Snackbar.Add(
-                $"Sent {approved.Quantity:N0} {approved.ItemName} on {approved.PurchaseWorld} to MarketMafioso. Review and accept it in-game.",
+                $"Sent {approved.Quantity:N0} {approved.ItemName} on {approved.PurchaseWorld} to MarketMafioso. Check the dashboard, claim and accept it, then choose Refresh Evidence for a purchase-free board read.",
                 Severity.Success);
         }
         catch (Exception ex)
@@ -572,7 +572,7 @@
         {
             var status = string.IsNullOrWhiteSpace(timeline.Request.Status) ? "pending" : timeline.Request.Status;
             Snackbar.Add(
-                $"MarketMafioso request is {status}; no {action.World.WorldName} board observation has arrived yet.",
+                $"MarketMafioso request is {status}. {MarketMafiosoAcquisitionWorkflowService.DescribeNextEvidenceStep(status, action.World.WorldName)}",
                 Severity.Info);
             return;
         }

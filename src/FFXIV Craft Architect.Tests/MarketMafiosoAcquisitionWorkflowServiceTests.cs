@@ -41,6 +41,18 @@ public sealed class MarketMafiosoAcquisitionWorkflowServiceTests
         Assert.Equal(2_000u, line.GilCap);
     }
 
+    [Theory]
+    [InlineData("PendingPickup", "check the dashboard")]
+    [InlineData("Claimed", "Accept the claimed request")]
+    [InlineData("AcceptedInPlugin", "Refresh Evidence")]
+    [InlineData("Running", "still working")]
+    public void DescribeNextEvidenceStep_MapsLifecycleToConcreteUserAction(string status, string expected)
+    {
+        var message = MarketMafiosoAcquisitionWorkflowService.DescribeNextEvidenceStep(status, "Siren");
+
+        Assert.Contains(expected, message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class RecordingClient : IWorkshopHostAcquisitionClient
     {
         public WorkshopHostAcquisitionBatchCreateRequest? CreateRequest { get; private set; }

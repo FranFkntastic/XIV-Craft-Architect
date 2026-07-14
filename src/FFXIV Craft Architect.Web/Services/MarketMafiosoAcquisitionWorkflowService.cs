@@ -87,6 +87,21 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
             cancellationToken);
     }
 
+    public static string DescribeNextEvidenceStep(string? status, string worldName)
+    {
+        var normalized = status?.Trim() ?? string.Empty;
+        if (normalized.Equals("PendingPickup", StringComparison.OrdinalIgnoreCase))
+            return "Open Market Acquisition in MarketMafioso, check the dashboard, and claim the request.";
+        if (normalized.Equals("Claimed", StringComparison.OrdinalIgnoreCase))
+            return "Accept the claimed request in MarketMafioso.";
+        if (normalized.Equals("AcceptedInPlugin", StringComparison.OrdinalIgnoreCase))
+            return $"Choose Refresh Evidence in MarketMafioso to read {worldName} without purchasing.";
+        if (normalized.Equals("Running", StringComparison.OrdinalIgnoreCase))
+            return "MarketMafioso is still working; sync again after the evidence refresh finishes.";
+
+        return $"No {worldName} observation is available yet; review the request in MarketMafioso.";
+    }
+
     private static void Validate(
         MarketMafiosoHandoffConfiguration configuration,
         MarketMafiosoSingleWorldHandoff handoff)
