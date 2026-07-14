@@ -142,6 +142,10 @@ public partial class AppState
     /// This may be filtered, re-routed, or affected by temporary world exclusions.
     /// </summary>
     public IReadOnlyList<DetailedShoppingPlan> ProcurementShoppingPlans => _procurementShoppingPlans.AsReadOnly();
+    public MarketRouteDecision? ProcurementRouteDecision { get; private set; }
+    public bool IsProcurementRouteStale { get; private set; }
+    public string? ProcurementRouteStaleReason { get; private set; }
+    public string? ProcurementRouteFailure { get; private set; }
     public IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems { get; private set; } = Array.Empty<CoreMarketDataUnavailableItem>();
     public RecommendationMode RecommendationMode { get; private set; } = RecommendationMode.MinimizeTotalCost;
     public MarketAcquisitionLens MarketAnalysisLens { get; private set; } = MarketAcquisitionLens.MinimumUpfrontCost;
@@ -192,6 +196,7 @@ public partial class AppState
     public bool ProcurementSearchEntireRegion { get; private set; } = false;
     public bool ProcurementEnableSplitWorldPurchases { get; private set; } = false;
     public int ProcurementTravelTolerance { get; private set; } = 0; // 0 = shortest route, 11 = cheapest
+    public bool ProcurementStartFromHomeDataCenter { get; private set; }
 
     // Current plan tracking for save-overwrite behavior
     public string? CurrentPlanId { get; private set; }

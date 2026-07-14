@@ -964,7 +964,8 @@ public sealed class CraftSessionState
                 overlay.ActiveItemIds.ToArray(),
                 overlay.SourceDescription,
                 overlay.ShoppingPlans?.Select(CloneDetailedShoppingPlan).ToArray(),
-                overlay.RouteCards?.Select(CloneWorldProcurementCard).ToArray());
+                overlay.RouteCards?.Select(CloneWorldProcurementCard).ToArray(),
+                overlay.RouteDecision);
 
     private void RegisterPlanInstance(CraftingPlan? plan, long planSessionVersion)
     {

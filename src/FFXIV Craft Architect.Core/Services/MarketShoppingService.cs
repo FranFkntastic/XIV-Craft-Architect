@@ -173,7 +173,7 @@ public class MarketShoppingService
 
     /// <summary>
     /// Selects active procurement recommendations globally across a set of market evidence plans.
-    /// The input plans are preserved, with only RecommendedWorld/RecommendedSplit updated for final choices.
+    /// The input plans are preserved, with their active recommendation updated for final choices.
     /// </summary>
     public List<DetailedShoppingPlan> OptimizeProcurementRoute(
         IEnumerable<DetailedShoppingPlan> evidencePlans,
@@ -188,10 +188,34 @@ public class MarketShoppingService
             progress: null,
             CancellationToken.None)
             .GetAwaiter()
-            .GetResult();
+            .GetResult()
+            .ShoppingPlans;
     }
 
     public Task<List<DetailedShoppingPlan>> OptimizeProcurementRouteAsync(
+        IEnumerable<DetailedShoppingPlan> evidencePlans,
+        MarketAnalysisConfig? config = null,
+        bool includeSplitPurchases = false,
+        MarketAnalysisExecutionOptions? executionOptions = null,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        return OptimizeProcurementRouteAsyncCore();
+
+        async Task<List<DetailedShoppingPlan>> OptimizeProcurementRouteAsyncCore()
+        {
+            var result = await OptimizeProcurementRouteCoreAsync(
+                evidencePlans,
+                config,
+                includeSplitPurchases,
+                executionOptions ?? MarketAnalysisExecutionOptions.Interactive,
+                progress,
+                ct);
+            return result.ShoppingPlans;
+        }
+    }
+
+    public Task<ProcurementRouteOptimizationResult> OptimizeProcurementRouteWithDecisionAsync(
         IEnumerable<DetailedShoppingPlan> evidencePlans,
         MarketAnalysisConfig? config = null,
         bool includeSplitPurchases = false,
@@ -208,7 +232,7 @@ public class MarketShoppingService
             ct);
     }
 
-    private async Task<List<DetailedShoppingPlan>> OptimizeProcurementRouteCoreAsync(
+    private async Task<ProcurementRouteOptimizationResult> OptimizeProcurementRouteCoreAsync(
         IEnumerable<DetailedShoppingPlan> evidencePlans,
         MarketAnalysisConfig? config,
         bool includeSplitPurchases,
@@ -224,7 +248,7 @@ public class MarketShoppingService
             .ToList();
         if (plans.Count == 0)
         {
-            return plans;
+            return new ProcurementRouteOptimizationResult(plans, null);
         }
 
         var candidatePlanIndexes = plans
@@ -274,12 +298,7 @@ public class MarketShoppingService
                 }
             }
 
-            beam = nextBeam
-                .OrderBy(s => s, Comparer<ProcurementRouteSearchState>.Create(
-                    (left, right) => CompareRouteStates(left, right, config)))
-                .ThenBy(s => s.TieBreakKey, StringComparer.Ordinal)
-                .Take(MaxProcurementRouteBeamWidth)
-                .ToList();
+            beam = PruneRouteBeam(nextBeam, config);
 
             var completedItems = planIndex + 1;
             if (executionOptions.ShouldReportProgress(completedItems))
@@ -303,17 +322,21 @@ public class MarketShoppingService
 
             plan.RecommendedWorld = null;
             plan.RecommendedSplit = null;
+            plan.CoverageSet = null;
         }
 
-        var bestState = beam
-            .OrderBy(s => s, Comparer<ProcurementRouteSearchState>.Create(
-                (left, right) => CompareRouteStates(left, right, config)))
-            .ThenBy(s => s.TieBreakKey, StringComparer.Ordinal)
+        var frontier = ReduceToParetoFrontier(beam, config);
+        var cheapestState = frontier
+            .OrderBy(state => state.TotalDecisionCost)
+            .ThenBy(state => state.TotalEvidencePenalty)
+            .ThenBy(state => state.TotalGilCost)
+            .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
             .FirstOrDefault();
+        var bestState = OrderRouteStates(frontier, config).FirstOrDefault();
 
         if (bestState == null)
         {
-            return plans;
+            return new ProcurementRouteOptimizationResult(plans, null);
         }
 
         foreach (var choice in bestState.Choices)
@@ -321,6 +344,16 @@ public class MarketShoppingService
             var plan = plans[choice.PlanIndex];
             if (choice.Candidate == null)
             {
+                continue;
+            }
+
+            if (choice.Candidate.Coverage != null)
+            {
+                plan.CoverageSet = CreateSelectedCoverageSet(plan, choice.Candidate.Coverage);
+                plan.RecommendedWorld = choice.Candidate.Coverage.Worlds.Count == 1
+                    ? FindWorldOption(plan, choice.Candidate.Coverage.Worlds[0])
+                    : null;
+                plan.RecommendedSplit = null;
                 continue;
             }
 
@@ -338,7 +371,48 @@ public class MarketShoppingService
             }
         }
 
-        return plans;
+        var decision = cheapestState == null || bestState.Choices.All(choice => choice.Candidate == null)
+            ? null
+            : new MarketRouteDecision(
+                config.TravelTolerance,
+                MarketRouteScoring.GetMaximumPremiumRate(config.TravelTolerance),
+                cheapestState.TotalGilCost,
+                bestState.TotalGilCost,
+                bestState.TotalEvidencePenalty,
+                cheapestState.WorldStops,
+                bestState.WorldStops,
+                cheapestState.GetDataCenterTransfers(config),
+                bestState.GetDataCenterTransfers(config),
+                config.StartFromHomeDataCenter && !string.IsNullOrWhiteSpace(config.HomeDataCenter),
+                config.StartFromHomeDataCenter ? config.HomeDataCenter : null);
+
+        return new ProcurementRouteOptimizationResult(plans, decision);
+    }
+
+    private static MarketCoverageSet CreateSelectedCoverageSet(
+        DetailedShoppingPlan plan,
+        MarketCoverageOption selectedCoverage)
+    {
+        var selected = selectedCoverage with { IsDefaultEligible = true };
+
+        return new MarketCoverageSet(
+            plan.ItemId,
+            plan.Name,
+            plan.QuantityNeeded,
+            selected.Tier == MarketCoverageTier.SingleWorld ? selected : null,
+            selected.Tier == MarketCoverageTier.CompactSplit ? selected : null,
+            selected.Tier == MarketCoverageTier.WideSplit ? selected : null,
+            selected.Tier == MarketCoverageTier.CheapestObserved ? selected : null,
+            [selected]);
+    }
+
+    private static WorldShoppingSummary? FindWorldOption(
+        DetailedShoppingPlan plan,
+        MarketCoverageWorld coverageWorld)
+    {
+        return plan.WorldOptions.FirstOrDefault(option =>
+            string.Equals(option.DataCenter, coverageWorld.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(option.WorldName, coverageWorld.WorldName, StringComparison.OrdinalIgnoreCase));
     }
 
     public async Task<List<DetailedShoppingPlan>> CalculateDetailedShoppingPlansAsync(
@@ -994,6 +1068,21 @@ public class MarketShoppingService
             return candidates;
         }
 
+        var coverageCandidates = MarketCoverageSelection.GetCandidates(plan.CoverageSet)
+            .Where(coverage => coverage.Kind == MarketCoverageKind.SupportedListings)
+            .Where(coverage => coverage.QualityPolicy == MarketCoverageQualityPolicy.NqOrHq)
+            .Where(coverage => coverage.QuantityCovered >= plan.QuantityNeeded)
+            .ToList();
+        if (coverageCandidates.Count > 0)
+        {
+            return coverageCandidates
+                .Select(coverage => CreateCoveragePurchaseCandidate(plan, coverage))
+                .OrderBy(candidate => candidate.GilCost)
+                .ThenBy(candidate => candidate.Worlds.Count)
+                .ThenBy(candidate => candidate.Coverage!.CandidateId, StringComparer.Ordinal)
+                .ToList();
+        }
+
         var singleWorlds = plan.WorldOptions
             .Where(w => w.TotalQuantityPurchased >= plan.QuantityNeeded)
             .OrderBy(w => GetProcurementPriorityScore(w, w.TotalCost))
@@ -1051,6 +1140,61 @@ public class MarketShoppingService
         }
 
         return candidates;
+    }
+
+    private static MarketPurchaseCandidate CreateCoveragePurchaseCandidate(
+        DetailedShoppingPlan plan,
+        MarketCoverageOption coverage)
+    {
+        var gilCost = ToLongSaturating(coverage.CashOutCost);
+        var evidencePenalty = 0L;
+        foreach (var coverageWorld in coverage.Worlds)
+        {
+            var world = plan.WorldOptions.FirstOrDefault(option =>
+                string.Equals(option.DataCenter, coverageWorld.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(option.WorldName, coverageWorld.WorldName, StringComparison.OrdinalIgnoreCase));
+            if (world == null)
+            {
+                continue;
+            }
+
+            evidencePenalty = SaturatingAddCost(
+                evidencePenalty,
+                MarketWorldRecommendationScoring.CalculateEvidencePenalty(
+                    ToLongSaturating(coverageWorld.CashOutCost),
+                    world));
+        }
+
+        return new MarketPurchaseCandidate(
+            gilCost,
+            coverage.Worlds.Select(world => new MarketWorldKey(world.DataCenter, world.WorldName)))
+        {
+            ItemId = plan.ItemId,
+            ItemName = plan.Name,
+            QuantityNeeded = plan.QuantityNeeded,
+            QuantityFulfilled = coverage.QuantityCovered,
+            MarketEvidencePenalty = evidencePenalty,
+            Coverage = coverage
+        };
+    }
+
+    private static long ToLongSaturating(decimal value)
+    {
+        if (value <= 0)
+        {
+            return 0;
+        }
+
+        return value >= long.MaxValue
+            ? long.MaxValue
+            : (long)Math.Ceiling(value);
+    }
+
+    private static long SaturatingAddCost(long left, long right)
+    {
+        return left > 0 && right > long.MaxValue - left
+            ? long.MaxValue
+            : left + right;
     }
 
     private static List<List<SplitWorldPurchase>> GenerateSplitPurchaseAlternatives(
@@ -1551,23 +1695,91 @@ public class MarketShoppingService
         }
     }
 
-    private static int CompareRouteStates(
+    private static List<ProcurementRouteSearchState> PruneRouteBeam(
+        IEnumerable<ProcurementRouteSearchState> states,
+        MarketAnalysisConfig config)
+    {
+        var distinctStates = states
+            .GroupBy(state => state.RouteShapeKey, StringComparer.Ordinal)
+            .Select(group => group
+                .OrderBy(state => state.TotalDecisionCost)
+                .ThenBy(state => state.TotalEvidencePenalty)
+                .ThenBy(state => state.TotalGilCost)
+                .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
+                .First())
+            .ToList();
+        if (distinctStates.Count <= MaxProcurementRouteBeamWidth)
+        {
+            return OrderRouteStates(distinctStates, config).ToList();
+        }
+
+        var preferred = OrderRouteStates(distinctStates, config)
+            .Take(MaxProcurementRouteBeamWidth - 16);
+        var cheapest = distinctStates
+            .OrderBy(state => state.TotalDecisionCost)
+            .ThenBy(state => state.TotalEvidencePenalty)
+            .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
+            .Take(16);
+
+        return preferred
+            .Concat(cheapest)
+            .DistinctBy(state => state.RouteShapeKey, StringComparer.Ordinal)
+            .Take(MaxProcurementRouteBeamWidth)
+            .ToList();
+    }
+
+    private static List<ProcurementRouteSearchState> ReduceToParetoFrontier(
+        IEnumerable<ProcurementRouteSearchState> states,
+        MarketAnalysisConfig config)
+    {
+        var materialized = states.ToList();
+        return materialized
+            .Where(candidate => !materialized.Any(other =>
+                !ReferenceEquals(candidate, other) &&
+                Dominates(other, candidate, config)))
+            .OrderBy(state => state.TieBreakKey, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static bool Dominates(
         ProcurementRouteSearchState left,
         ProcurementRouteSearchState right,
         MarketAnalysisConfig config)
     {
-        var leftCandidate = new MarketPurchaseCandidate(left.TotalGilCost, left.Route.Worlds);
-        var rightCandidate = new MarketPurchaseCandidate(right.TotalGilCost, right.Route.Worlds);
-        var emptyRoute = new MarketRouteState();
-        var leftScore = MarketRouteScoring.ScoreCandidate(leftCandidate, emptyRoute, config);
-        var rightScore = MarketRouteScoring.ScoreCandidate(rightCandidate, emptyRoute, config);
-        var scoreComparison = MarketRouteScoring.CompareScores(leftScore, rightScore);
-        if (scoreComparison != 0)
-        {
-            return scoreComparison;
-        }
+        var leftTransfers = left.GetDataCenterTransfers(config);
+        var rightTransfers = right.GetDataCenterTransfers(config);
+        var noWorse = left.TotalDecisionCost <= right.TotalDecisionCost &&
+            left.TotalEvidencePenalty <= right.TotalEvidencePenalty &&
+            leftTransfers <= rightTransfers &&
+            left.WorldStops <= right.WorldStops;
+        var strictlyBetter = left.TotalDecisionCost < right.TotalDecisionCost ||
+            left.TotalEvidencePenalty < right.TotalEvidencePenalty ||
+            leftTransfers < rightTransfers ||
+            left.WorldStops < right.WorldStops;
+        return noWorse && strictlyBetter;
+    }
 
-        return left.Choices.Count.CompareTo(right.Choices.Count);
+    private static IOrderedEnumerable<ProcurementRouteSearchState> OrderRouteStates(
+        IEnumerable<ProcurementRouteSearchState> states,
+        MarketAnalysisConfig config)
+    {
+        var materialized = states.ToList();
+        var cheapestDecisionCost = materialized.Count == 0
+            ? 0
+            : materialized.Min(state => state.TotalDecisionCost);
+        var maximumPremiumRate = MarketRouteScoring.GetMaximumPremiumRate(config.TravelTolerance);
+
+        return materialized
+            .OrderBy(state => !MarketRouteScoring.IsWithinPremium(
+                state.TotalDecisionCost,
+                cheapestDecisionCost,
+                maximumPremiumRate))
+            .ThenBy(state => state.GetDataCenterTransfers(config))
+            .ThenBy(state => state.WorldStops)
+            .ThenBy(state => state.TotalEvidencePenalty)
+            .ThenBy(state => state.TotalDecisionCost)
+            .ThenBy(state => state.TotalGilCost)
+            .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal);
     }
 
     private static bool IsFixedVendorPlan(DetailedShoppingPlan plan)
@@ -1601,25 +1813,50 @@ public class MarketShoppingService
     private sealed class ProcurementRouteSearchState
     {
         public ProcurementRouteSearchState()
-            : this(new MarketRouteState(), 0, [])
+            : this(new MarketRouteState(), 0, 0, [])
         {
         }
 
         private ProcurementRouteSearchState(
             MarketRouteState route,
             long totalGilCost,
+            long totalEvidencePenalty,
             IReadOnlyList<ProcurementRouteChoice> choices)
         {
             Route = route;
             TotalGilCost = totalGilCost;
+            TotalEvidencePenalty = totalEvidencePenalty;
             Choices = choices;
             TieBreakKey = BuildTieBreakKey(choices);
+            RouteShapeKey = BuildRouteShapeKey(route, choices);
         }
 
         public MarketRouteState Route { get; }
         public long TotalGilCost { get; }
+        public long TotalEvidencePenalty { get; }
+        public long TotalDecisionCost => SaturatingAdd(TotalGilCost, TotalEvidencePenalty);
+        public int WorldStops => Route.Worlds.Count;
         public IReadOnlyList<ProcurementRouteChoice> Choices { get; }
         public string TieBreakKey { get; }
+        public string RouteShapeKey { get; }
+
+        public int GetDataCenterTransfers(MarketAnalysisConfig config)
+        {
+            var dataCenterCount = Route.DataCenters.Count;
+            if (dataCenterCount == 0)
+            {
+                return 0;
+            }
+
+            if (!config.StartFromHomeDataCenter || string.IsNullOrWhiteSpace(config.HomeDataCenter))
+            {
+                return Math.Max(0, dataCenterCount - 1);
+            }
+
+            return Route.ContainsDataCenter(config.HomeDataCenter)
+                ? Math.Max(0, dataCenterCount - 1)
+                : dataCenterCount;
+        }
 
         public ProcurementRouteSearchState WithCandidate(int planIndex, MarketPurchaseCandidate candidate)
         {
@@ -1631,6 +1868,7 @@ public class MarketShoppingService
             return new ProcurementRouteSearchState(
                 route,
                 SaturatingAdd(TotalGilCost, candidate.GilCost),
+                SaturatingAdd(TotalEvidencePenalty, candidate.MarketEvidencePenalty),
                 choices);
         }
 
@@ -1640,7 +1878,7 @@ public class MarketShoppingService
                 .Append(new ProcurementRouteChoice(planIndex, null))
                 .ToList();
 
-            return new ProcurementRouteSearchState(Route, TotalGilCost, choices);
+            return new ProcurementRouteSearchState(Route, TotalGilCost, TotalEvidencePenalty, choices);
         }
 
         private static long SaturatingAdd(long left, long right)
@@ -1673,6 +1911,24 @@ public class MarketShoppingService
 
                     return $"{choice.PlanIndex:D8}:{choice.Candidate.GilCost:D20}:{routeKey}";
                 }));
+        }
+
+        private static string BuildRouteShapeKey(
+            MarketRouteState route,
+            IEnumerable<ProcurementRouteChoice> choices)
+        {
+            var worlds = string.Join(
+                ",",
+                route.Worlds
+                    .OrderBy(world => world.DataCenter)
+                    .ThenBy(world => world.WorldName)
+                    .Select(world => $"{world.DataCenter}:{world.WorldName}"));
+            var missingPlans = string.Join(
+                ",",
+                choices
+                    .Where(choice => choice.Candidate == null)
+                    .Select(choice => choice.PlanIndex));
+            return $"{worlds}|missing:{missingPlans}";
         }
     }
 

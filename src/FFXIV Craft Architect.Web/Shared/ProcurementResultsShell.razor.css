@@ -1,5 +1,48 @@
 .pp-results-column {
-    padding: 16px;
-    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 20px;
+    overflow: auto;
     min-width: 0;
+}
+
+.pp-route-state,
+.pp-exclusion-outcome {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-size: .82rem;
+}
+
+.pp-route-state.is-stale {
+    color: #f2c879;
+    border: 1px solid #6b5430;
+    background: #2d271e;
+}
+
+.pp-route-state.is-error {
+    color: #ffb4ab;
+    border: 1px solid #7d403d;
+    background: #33211f;
+}
+
+.pp-exclusion-outcome {
+    justify-content: space-between;
+    color: #f0d9a5;
+    border: 1px solid #665333;
+    background: #29251d;
+}
+
+@media (max-width: 680px) {
+    .pp-results-column {
+        padding: 12px;
+    }
+
+    .pp-exclusion-outcome {
+        align-items: flex-start;
+        flex-direction: column;
+    }
 }

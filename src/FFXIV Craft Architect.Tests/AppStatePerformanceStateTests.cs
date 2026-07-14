@@ -171,7 +171,7 @@ public class AppStatePerformanceStateTests
         Assert.False(appState.MarketAnalysisWorldGridSortDescending);
     }
     [Fact]
-    public void ReplaceMarketAnalysisItem_ReplacesSingleAnalysisPlanAndClearsProcurementOverlay()
+    public void ReplaceMarketAnalysisItem_ReplacesSingleAnalysisPlanAndMarksProcurementOverlayStale()
     {
         var appState = new AppState();
         appState.ReplaceMarketAnalysis(
@@ -197,7 +197,9 @@ public class AppStatePerformanceStateTests
         Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
         Assert.Equal(["Keep Analysis", "New Analysis"], appState.MarketItemAnalyses.Select(analysis => analysis.Name));
         Assert.Equal(["Keep Plan", "New Plan"], appState.ShoppingPlans.Select(plan => plan.Name));
-        Assert.Empty(appState.ProcurementShoppingPlans);
+        Assert.Single(appState.ProcurementShoppingPlans);
+        Assert.True(appState.IsProcurementRouteStale);
+        Assert.Equal("Market evidence changed.", appState.ProcurementRouteStaleReason);
         Assert.True(appState.IsPersistedBucketDirty(PersistedStateBucket.MarketAnalysis));
         Assert.False(appState.IsPersistedBucketDirty(PersistedStateBucket.PlanCore));
     }
@@ -401,7 +403,7 @@ public class AppStatePerformanceStateTests
 
 
     [Fact]
-    public void SetProcurementSettings_WhenRouteMeaningChanges_ClearsProcurementOverlayOnly()
+    public void SetProcurementSettings_WhenRouteMeaningChanges_PreservesAndMarksProcurementOverlayStale()
     {
         var appState = new AppState();
         appState.ReplaceMarketAnalysis(
@@ -423,7 +425,9 @@ public class AppStatePerformanceStateTests
         Assert.Equal(7, appState.ProcurementTravelTolerance);
         Assert.Single(appState.ShoppingPlans);
         Assert.Single(appState.MarketItemAnalyses);
-        Assert.Empty(appState.ProcurementShoppingPlans);
+        Assert.Single(appState.ProcurementShoppingPlans);
+        Assert.True(appState.IsProcurementRouteStale);
+        Assert.Equal("Route settings changed.", appState.ProcurementRouteStaleReason);
         Assert.True(change.HasScope(AppStateChangeScope.Settings));
         Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
         Assert.False(change.HasScope(AppStateChangeScope.MarketAnalysis));

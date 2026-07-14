@@ -18,7 +18,7 @@ public class MarketAnalysisConfig
 
     /// <summary>
     /// Route-wide tolerance for world and data-center travel.
-    /// 0 strongly prefers the current route; 11 uses raw gil cost.
+    /// 0 minimizes travel; 11 requires the cheapest trustworthy route.
     /// </summary>
     public int TravelTolerance
     {
@@ -30,6 +30,17 @@ public class MarketAnalysisConfig
     /// Whether to enable multi-world split purchases.
     /// </summary>
     public bool EnableSplitWorld { get; set; } = false;
+
+    /// <summary>
+    /// Whether route travel starts from <see cref="HomeDataCenter"/>.
+    /// The origin affects travel comparison but does not require a purchase there.
+    /// </summary>
+    public bool StartFromHomeDataCenter { get; set; }
+
+    /// <summary>
+    /// Optional route origin used when <see cref="StartFromHomeDataCenter"/> is enabled.
+    /// </summary>
+    public string HomeDataCenter { get; set; } = string.Empty;
 
     /// <summary>
     /// Maximum price multiplier for filtering out fraud/gouging listings.
@@ -47,7 +58,9 @@ public class MarketAnalysisConfig
         {
             MaxWorldsPerItem = settings.Get<int?>("analysis.max_worlds_per_item", null),
             EnableSplitWorld = settings.Get("analysis.enable_split_world", false),
-            TravelTolerance = settings.Get("analysis.travel_tolerance", 0)
+            TravelTolerance = settings.Get("analysis.travel_tolerance", 0),
+            StartFromHomeDataCenter = settings.Get("analysis.start_from_home_data_center", false),
+            HomeDataCenter = settings.Get("analysis.home_data_center", string.Empty) ?? string.Empty
         };
     }
 
@@ -151,8 +164,9 @@ public class MarketPurchaseCandidate
     public long MarketEvidencePenalty { get; init; }
     public WorldShoppingSummary? SingleWorld { get; init; }
     public List<SplitWorldPurchase>? Split { get; init; }
-    public bool IsSingleWorldPurchase => SingleWorld != null;
-    public bool IsSplitPurchase => Split?.Count > 0;
+    public MarketCoverageOption? Coverage { get; init; }
+    public bool IsSingleWorldPurchase => SingleWorld != null || Coverage?.Worlds.Count == 1;
+    public bool IsSplitPurchase => Split?.Count > 0 || Coverage?.Worlds.Count > 1;
     public bool IsFullyFulfilled => QuantityNeeded <= 0 || QuantityFulfilled >= QuantityNeeded;
     public bool HasInsufficientStock => QuantityNeeded > 0 && QuantityFulfilled < QuantityNeeded;
 }
@@ -245,8 +259,36 @@ public sealed class RoutePenaltyBreakdown
 
 public static class MarketRouteScoring
 {
-    private const long WorldRoutePenalty = 100_000;
-    private const long DataCenterRoutePenalty = 1_000_000;
+    private static readonly decimal?[] MaximumPremiumRates =
+    [
+        null,
+        1.00m,
+        0.75m,
+        0.50m,
+        0.35m,
+        0.25m,
+        0.18m,
+        0.12m,
+        0.08m,
+        0.05m,
+        0.02m,
+        0m
+    ];
+
+    public static decimal? GetMaximumPremiumRate(int travelTolerance)
+    {
+        return MaximumPremiumRates[Math.Clamp(travelTolerance, 0, 11)];
+    }
+
+    public static string GetToleranceLabel(int travelTolerance)
+    {
+        return Math.Clamp(travelTolerance, 0, 11) switch
+        {
+            0 => "Fewest stops",
+            11 => "Lowest cost",
+            var value => $"Up to {GetMaximumPremiumRate(value)!.Value:P0} extra for less travel"
+        };
+    }
 
     public static RoutePenaltyBreakdown ScoreCandidate(
         MarketPurchaseCandidate candidate,
@@ -263,16 +305,13 @@ public static class MarketRouteScoring
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Count(dc => !currentRoute.ContainsDataCenter(dc));
 
-        var routePenalty = CalculateRoutePenalty(addedWorldCount, addedDataCenterCount, config.TravelTolerance);
-        var comparisonCost = SaturatingAdd(
-            SaturatingAdd(candidate.GilCost, candidate.MarketEvidencePenalty),
-            routePenalty);
+        var comparisonCost = SaturatingAdd(candidate.GilCost, candidate.MarketEvidencePenalty);
 
         return new RoutePenaltyBreakdown(
             candidate.GilCost,
             addedWorldCount,
             addedDataCenterCount,
-            routePenalty,
+            0,
             candidate.MarketEvidencePenalty,
             comparisonCost,
             config.TravelTolerance);
@@ -284,10 +323,9 @@ public static class MarketRouteScoring
         MarketRouteState currentRoute,
         MarketAnalysisConfig config)
     {
-        var leftScore = ScoreCandidate(left, currentRoute, config);
-        var rightScore = ScoreCandidate(right, currentRoute, config);
-
-        return CompareScores(leftScore, rightScore);
+        return CompareScores(
+            ScoreCandidate(left, currentRoute, config),
+            ScoreCandidate(right, currentRoute, config));
     }
 
     public static int CompareScores(RoutePenaltyBreakdown left, RoutePenaltyBreakdown right)
@@ -299,56 +337,53 @@ public static class MarketRouteScoring
                 nameof(right));
         }
 
-        if (left.TravelTolerance == 0)
+        var premiumRate = GetMaximumPremiumRate(left.TravelTolerance);
+        var cheapestCost = Math.Min(left.GetComparisonNumericScore(), right.GetComparisonNumericScore());
+        var leftEligible = IsWithinPremium(left.GetComparisonNumericScore(), cheapestCost, premiumRate);
+        var rightEligible = IsWithinPremium(right.GetComparisonNumericScore(), cheapestCost, premiumRate);
+        if (leftEligible != rightEligible)
         {
-            var dataCenterComparison = left.AddedDataCenterCount.CompareTo(right.AddedDataCenterCount);
-            if (dataCenterComparison != 0)
-            {
-                return dataCenterComparison;
-            }
+            return leftEligible ? -1 : 1;
+        }
 
-            var worldComparison = left.AddedWorldCount.CompareTo(right.AddedWorldCount);
-            if (worldComparison != 0)
-            {
-                return worldComparison;
-            }
+        var dataCenterComparison = left.AddedDataCenterCount.CompareTo(right.AddedDataCenterCount);
+        if (dataCenterComparison != 0)
+        {
+            return dataCenterComparison;
+        }
 
-            var comparisonScore = left.GetComparisonNumericScore().CompareTo(right.GetComparisonNumericScore());
-            if (comparisonScore != 0)
-            {
-                return comparisonScore;
-            }
+        var worldComparison = left.AddedWorldCount.CompareTo(right.AddedWorldCount);
+        if (worldComparison != 0)
+        {
+            return worldComparison;
+        }
 
-            return left.GilCost.CompareTo(right.GilCost);
+        var evidenceComparison = left.MarketEvidencePenalty.CompareTo(right.MarketEvidencePenalty);
+        if (evidenceComparison != 0)
+        {
+            return evidenceComparison;
         }
 
         var scoreComparison = left.GetComparisonNumericScore().CompareTo(right.GetComparisonNumericScore());
-        if (scoreComparison != 0)
-        {
-            return scoreComparison;
-        }
-
-        var routeComparison = left.RoutePenalty.CompareTo(right.RoutePenalty);
-        if (routeComparison != 0)
-        {
-            return routeComparison;
-        }
-
-        return left.GilCost.CompareTo(right.GilCost);
+        return scoreComparison != 0
+            ? scoreComparison
+            : left.GilCost.CompareTo(right.GilCost);
     }
 
-    private static long CalculateRoutePenalty(int addedWorldCount, int addedDataCenterCount, int travelTolerance)
+    internal static bool IsWithinPremium(long cost, long cheapestCost, decimal? premiumRate)
     {
-        if (travelTolerance >= 11)
+        if (premiumRate == null)
         {
-            return 0;
+            return true;
         }
 
-        var toleranceMultiplier = 11 - travelTolerance;
-        var worldPenalty = SaturatingMultiply((long)addedWorldCount * toleranceMultiplier, WorldRoutePenalty);
-        var dataCenterPenalty = SaturatingMultiply((long)addedDataCenterCount * toleranceMultiplier, DataCenterRoutePenalty);
+        if (cheapestCost <= 0)
+        {
+            return cost <= cheapestCost;
+        }
 
-        return SaturatingAdd(worldPenalty, dataCenterPenalty);
+        var maximumCost = cheapestCost * (1m + premiumRate.Value);
+        return cost <= maximumCost;
     }
 
     private static long SaturatingAdd(long left, long right)
@@ -361,20 +396,6 @@ public static class MarketRouteScoring
         return left + right;
     }
 
-    private static long SaturatingMultiply(long left, long right)
-    {
-        if (left == 0 || right == 0)
-        {
-            return 0;
-        }
-
-        if (left > long.MaxValue / right)
-        {
-            return long.MaxValue;
-        }
-
-        return left * right;
-    }
 }
 
 /// <summary>

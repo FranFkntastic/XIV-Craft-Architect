@@ -1,77 +1,93 @@
 @using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
+@inject ISettingsService Settings
 
-<div class="pp-controls-column">
-    <MudText Typo="Typo.h6" Color="Color.Primary" Class="mb-4">Procurement Plan</MudText>
+<aside class="pp-controls-column" aria-labelledby="procurement-page-title">
+    <h1 id="procurement-page-title" class="pp-page-title">Procurement Plan</h1>
 
-    <MudText Typo="Typo.subtitle2" Class="pp-section-title">Procurement Route Settings</MudText>
+    <section class="pp-settings" aria-labelledby="procurement-settings-title">
+        <h2 id="procurement-settings-title" class="pp-section-title">Route settings</h2>
 
-    <div class="pp-field-block">
-        <MudCheckBox T="bool"
-                     Value="AppState.ProcurementSearchEntireRegion"
-                     ValueChanged="OnProcurementSearchEntireRegionChanged"
-                     Dense="true"
-                     Color="Color.Primary">
-            <MudText Typo="Typo.body2">Use region-wide market evidence</MudText>
-        </MudCheckBox>
-    </div>
+        <div class="pp-setting-grid">
+            <div class="pp-field-block">
+                <MudCheckBox T="bool"
+                             Value="AppState.ProcurementSearchEntireRegion"
+                             ValueChanged="OnProcurementSearchEntireRegionChanged"
+                             Dense="true"
+                             Color="Color.Primary">
+                    <span>Search the whole region</span>
+                </MudCheckBox>
+                <p>Uses listings from every data center in @AppState.SelectedRegion, which can lower cost but add transfers.</p>
+            </div>
 
-    <div class="pp-field-block">
-        <MudCheckBox T="bool"
-                     Value="AppState.ProcurementEnableSplitWorldPurchases"
-                     ValueChanged="OnProcurementEnableSplitWorldPurchasesChanged"
-                     Dense="true"
-                     Color="Color.Secondary">
-            <MudText Typo="Typo.body2">Allow split-world purchases</MudText>
-        </MudCheckBox>
-    </div>
+            <div class="pp-field-block">
+                <MudCheckBox T="bool"
+                             Value="AppState.ProcurementEnableSplitWorldPurchases"
+                             ValueChanged="OnProcurementEnableSplitWorldPurchasesChanged"
+                             Dense="true"
+                             Color="Color.Secondary">
+                    <span>Allow split purchases</span>
+                </MudCheckBox>
+                <p>May divide one item across worlds when the combined listings beat every complete stack.</p>
+            </div>
 
-    <div class="pp-field-block">
-        <div class="pp-field-label">Travel tolerance: @GetTravelToleranceLabel()</div>
-        <MudSlider T="int"
-                   Value="AppState.ProcurementTravelTolerance"
-                   ValueChanged="OnProcurementTravelToleranceChanged"
-                   Min="0"
-                   Max="11"
-                   Step="1"
-                   Color="Color.Primary"
-                   Class="pp-full-width" />
-        <MudStack Row="true" Justify="Justify.SpaceBetween" Class="pp-slider-endpoints">
-            <MudText Typo="Typo.caption">Shortest route</MudText>
-            <MudText Typo="Typo.caption">Cheapest</MudText>
-        </MudStack>
-    </div>
+            <div class="pp-field-block pp-travel-field">
+                <label id="procurement-travel-label" class="pp-field-label">
+                    Travel preference
+                    <strong>@MarketRouteScoring.GetToleranceLabel(AppState.ProcurementTravelTolerance)</strong>
+                </label>
+                <MudSlider T="int"
+                           Value="AppState.ProcurementTravelTolerance"
+                           ValueChanged="OnProcurementTravelToleranceChanged"
+                           Min="0"
+                           Max="11"
+                           Step="1"
+                           Color="Color.Primary"
+                           Class="pp-full-width"
+                           aria-labelledby="procurement-travel-label"
+                           aria-describedby="procurement-travel-help" />
+                <div class="pp-slider-endpoints" aria-hidden="true">
+                    <span>Fewer stops</span>
+                    <span>Lower cost</span>
+                </div>
+                <p id="procurement-travel-help">Position @AppState.ProcurementTravelTolerance of 11. The allowance narrows as the slider moves toward lower cost.</p>
+                @if (AppState.ProcurementSearchEntireRegion && AppState.ProcurementStartFromHomeDataCenter)
+                {
+                    <p class="pp-origin-note"><MudIcon Icon="@Icons.Material.Filled.Home" Size="Size.Small" /> Starts from @AppState.SelectedDataCenter.</p>
+                }
+            </div>
 
-    <div class="pp-field-block">
-        <div class="pp-field-label">World exclusion duration</div>
-        <MudSelect T="int"
-                   Value="AppState.TemporaryWorldBlacklistDurationMinutes"
-                   ValueChanged="OnTemporaryWorldBlacklistDurationChanged"
-                   Variant="Variant.Outlined"
-                   Dense="true"
-                   Class="pp-full-width">
-            <MudSelectItem Value="15">15 minutes</MudSelectItem>
-            <MudSelectItem Value="60">1 hour</MudSelectItem>
-            <MudSelectItem Value="240">4 hours</MudSelectItem>
-            <MudSelectItem Value="1440">1 day</MudSelectItem>
-        </MudSelect>
-    </div>
+            <div class="pp-field-block pp-duration-field">
+                <MudSelect T="int"
+                           Label="World exclusion duration"
+                           Value="AppState.TemporaryWorldBlacklistDurationMinutes"
+                           ValueChanged="OnTemporaryWorldBlacklistDurationChanged"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Class="pp-full-width">
+                    <MudSelectItem Value="15">15 minutes</MudSelectItem>
+                    <MudSelectItem Value="60">1 hour</MudSelectItem>
+                    <MudSelectItem Value="240">4 hours</MudSelectItem>
+                    <MudSelectItem Value="1440">1 day</MudSelectItem>
+                </MudSelect>
+            </div>
+        </div>
+    </section>
 
     @if (AppState.ActiveTemporaryExclusionCount > 0)
     {
-        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
-            <MudText Typo="Typo.caption">
-                Excluding @AppState.ActiveTemporaryExclusionCount world/item rule(s) from procurement recommendations.
-            </MudText>
-        </MudAlert>
-        <MudButton OnClick="ClearWorldExclusions"
-                   Color="Color.Warning"
-                   Variant="Variant.Outlined"
-                   FullWidth="true"
-                   Class="mb-4"
-                   StartIcon="@Icons.Material.Filled.Clear">
-            Clear World Exclusions
-        </MudButton>
+        <div class="pp-exclusion-summary" role="status">
+            <span>@FormatExclusionCount()</span>
+            <MudButton OnClick="OnClearExclusionsRequested"
+                       Color="Color.Warning"
+                       Variant="Variant.Text"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Clear">
+                Clear
+            </MudButton>
+        </div>
     }
 
     <MudButton OnClick="OnRunAnalysisRequested"
@@ -79,130 +95,80 @@
                Color="Color.Primary"
                Variant="Variant.Filled"
                FullWidth="true"
-               Class="mb-4"
-               StartIcon="@(IsAnalyzing ? "" : Icons.Material.Filled.Assignment)">
+               Class="pp-primary-action"
+               StartIcon="@(IsAnalyzing ? string.Empty : Icons.Material.Filled.Route)">
         @if (IsAnalyzing)
         {
             <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-            <span>Analyzing...</span>
+            <span>Generating route…</span>
         }
         else
         {
-            <span>Generate Plan</span>
+            <span>@PrimaryActionLabel</span>
         }
     </MudButton>
 
-    <MudDivider Class="my-4" />
-
-    <MudAlert Severity="NoticeSeverity" Class="mb-4" Dense="true">
-        <MudText Typo="Typo.caption">@NoticeMessage</MudText>
-    </MudAlert>
-
-    <MudButton OnClick="OnGoToPlannerRequested"
-               Color="Color.Info"
-               Variant="Variant.Outlined"
-               FullWidth="true"
-               Class="mb-2"
-               StartIcon="@Icons.Material.Filled.ArrowBack">
-        Back to Planner
-    </MudButton>
-
-    <MudButton OnClick="OnGoToMarketAnalysisRequested"
-               Color="Color.Warning"
-               Variant="Variant.Outlined"
-               FullWidth="true"
-               StartIcon="@Icons.Material.Filled.Analytics">
-        Market Analysis
-    </MudButton>
-
-    <MudButton OnClick="OnExportCraftQuoteRequested"
-               Disabled="@(!CanExportCraftQuote)"
-               Color="Color.Secondary"
-               Variant="Variant.Outlined"
-               FullWidth="true"
-               Class="mt-2"
-               StartIcon="@Icons.Material.Filled.FileDownload">
-        Export Craft Quote
-    </MudButton>
-
-    @if (ShoppingPlans.Any())
+    @if (ShowNotice)
     {
-        <MudDivider Class="my-4" />
-
-        <MudPaper Elevation="2" Class="pa-3 pp-summary-paper">
-            <MudText Typo="Typo.caption" Class="pp-summary-label">Total Market Cost</MudText>
-            <MudText Typo="Typo.h6" Class="pp-summary-value">
-                @(ShoppingPlans.Sum(GetPlanCost).ToString("N0"))g
-            </MudText>
-
-            <div class="pp-summary-stat-row">
-                <div class="pp-summary-stat">
-                    <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" Class="pp-summary-stat-icon" />
-                    <MudText Typo="Typo.caption" Class="pp-summary-stat-text">
-                        @EvidenceSummary.ActiveProcurementItemCount active
-                    </MudText>
-                </div>
-            </div>
-        </MudPaper>
+        <MudAlert Severity="NoticeSeverity" Class="pp-notice" Dense="true">
+            @NoticeMessage
+        </MudAlert>
     }
-</div>
+
+    <nav class="pp-secondary-actions" aria-label="Procurement navigation">
+        <MudButton OnClick="OnGoToPlannerRequested"
+                   Variant="Variant.Text"
+                   StartIcon="@Icons.Material.Filled.ArrowBack">
+            Planner
+        </MudButton>
+        <MudButton OnClick="OnGoToMarketAnalysisRequested"
+                   Variant="Variant.Text"
+                   StartIcon="@Icons.Material.Filled.Analytics">
+            Market Analysis
+        </MudButton>
+        <MudButton OnClick="OnExportCraftQuoteRequested"
+                   Disabled="@(!CanExportCraftQuote)"
+                   Variant="Variant.Text"
+                   StartIcon="@Icons.Material.Filled.FileDownload">
+            Export Quote
+        </MudButton>
+    </nav>
+</aside>
 
 @code {
     [Parameter, EditorRequired] public AppState AppState { get; set; } = default!;
-    [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
-    [Parameter] public ProcurementEvidenceSummary EvidenceSummary { get; set; } = new(0, 0, 0, 0, 0);
     [Parameter] public bool IsAnalyzing { get; set; }
     [Parameter] public bool CanAnalyze { get; set; }
+    [Parameter] public string PrimaryActionLabel { get; set; } = "Generate Route";
+    [Parameter] public bool ShowNotice { get; set; } = true;
     [Parameter] public Severity NoticeSeverity { get; set; } = Severity.Info;
     [Parameter] public string NoticeMessage { get; set; } = string.Empty;
-
     [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
+    [Parameter] public EventCallback OnClearExclusionsRequested { get; set; }
     [Parameter] public bool CanExportCraftQuote { get; set; }
     [Parameter] public EventCallback OnExportCraftQuoteRequested { get; set; }
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
     [Parameter] public EventCallback OnGoToMarketAnalysisRequested { get; set; }
 
-    private static long GetPlanCost(DetailedShoppingPlan plan)
+    private string FormatExclusionCount()
     {
-        return PurchaseRecommendationCost.GetRecommendedCost(plan);
+        var count = AppState.ActiveTemporaryExclusionCount;
+        return $"{count} temporary exclusion{(count == 1 ? string.Empty : "s")} active";
     }
 
-    private string GetTravelToleranceLabel()
-    {
-        return AppState.ProcurementTravelTolerance switch
-        {
-            0 => "shortest route",
-            11 => "cheapest",
-            _ => $"balanced {AppState.ProcurementTravelTolerance}/11"
-        };
-    }
+    private Task OnProcurementSearchEntireRegionChanged(bool value) =>
+        ApplyProcurementSettingsAsync(searchEntireRegion: value);
 
-    private void ClearWorldExclusions()
-    {
-        AppState.ClearTemporaryMarketWorldBlacklists();
-    }
+    private Task OnProcurementEnableSplitWorldPurchasesChanged(bool value) =>
+        ApplyProcurementSettingsAsync(enableSplitWorldPurchases: value);
 
-    private void OnProcurementSearchEntireRegionChanged(bool searchEntireRegion)
-    {
-        ApplyProcurementSettings(searchEntireRegion: searchEntireRegion);
-    }
+    private Task OnProcurementTravelToleranceChanged(int value) =>
+        ApplyProcurementSettingsAsync(travelTolerance: value);
 
-    private void OnProcurementEnableSplitWorldPurchasesChanged(bool enableSplitWorldPurchases)
-    {
-        ApplyProcurementSettings(enableSplitWorldPurchases: enableSplitWorldPurchases);
-    }
+    private Task OnTemporaryWorldBlacklistDurationChanged(int value) =>
+        ApplyProcurementSettingsAsync(temporaryWorldBlacklistDurationMinutes: value);
 
-    private void OnProcurementTravelToleranceChanged(int travelTolerance)
-    {
-        ApplyProcurementSettings(travelTolerance: travelTolerance);
-    }
-
-    private void OnTemporaryWorldBlacklistDurationChanged(int durationMinutes)
-    {
-        ApplyProcurementSettings(temporaryWorldBlacklistDurationMinutes: durationMinutes);
-    }
-
-    private void ApplyProcurementSettings(
+    private async Task ApplyProcurementSettingsAsync(
         bool? searchEntireRegion = null,
         bool? enableSplitWorldPurchases = null,
         int? travelTolerance = null,
@@ -213,5 +179,10 @@
             enableSplitWorldPurchases ?? AppState.ProcurementEnableSplitWorldPurchases,
             travelTolerance ?? AppState.ProcurementTravelTolerance,
             temporaryWorldBlacklistDurationMinutes ?? AppState.TemporaryWorldBlacklistDurationMinutes);
+
+        await Settings.SetAsync("procurement.search_entire_region", AppState.ProcurementSearchEntireRegion);
+        await Settings.SetAsync("procurement.enable_split_world_purchases", AppState.ProcurementEnableSplitWorldPurchases);
+        await Settings.SetAsync("procurement.travel_tolerance", AppState.ProcurementTravelTolerance);
+        await Settings.SetAsync("procurement.world_exclusion_duration_minutes", AppState.TemporaryWorldBlacklistDurationMinutes);
     }
 }

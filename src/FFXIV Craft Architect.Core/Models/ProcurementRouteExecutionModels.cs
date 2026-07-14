@@ -35,4 +35,33 @@ public sealed record ProcurementRouteExecutionResult(
     List<DetailedShoppingPlan> EvidencePlans,
     List<DetailedShoppingPlan> ReusableEvidence,
     List<DetailedShoppingPlan> RefreshedEvidence,
-    IReadOnlyList<MaterialAggregate> MissingItems);
+    IReadOnlyList<MaterialAggregate> MissingItems,
+    MarketRouteDecision? RouteDecision = null);
+
+public sealed record ProcurementRouteOptimizationResult(
+    List<DetailedShoppingPlan> ShoppingPlans,
+    MarketRouteDecision? Decision);
+
+public sealed record MarketRouteDecision(
+    int TravelTolerance,
+    decimal? MaximumPremiumRate,
+    long CheapestGilCost,
+    long SelectedGilCost,
+    long SelectedEvidencePenalty,
+    int CheapestWorldStops,
+    int SelectedWorldStops,
+    int CheapestDataCenterTransfers,
+    int SelectedDataCenterTransfers,
+    bool StartsFromHomeDataCenter,
+    string? HomeDataCenter)
+{
+    public long PremiumGil => Math.Max(0, SelectedGilCost - CheapestGilCost);
+
+    public decimal PremiumRate => CheapestGilCost > 0
+        ? PremiumGil / (decimal)CheapestGilCost
+        : 0;
+
+    public int WorldStopsAvoided => Math.Max(0, CheapestWorldStops - SelectedWorldStops);
+
+    public int DataCenterTransfersAvoided => Math.Max(0, CheapestDataCenterTransfers - SelectedDataCenterTransfers);
+}

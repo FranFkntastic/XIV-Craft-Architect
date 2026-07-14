@@ -44,7 +44,7 @@ public partial class AppState
             : Guid.Empty;
         _marketAnalysisRecipeBasis = CloneRecipeBasis(recipeBasis);
         _publishedMarketAnalysisScope = publishedScope;
-        _procurementShoppingPlans.Clear();
+        InvalidateProcurementRouteState("Market evidence changed.");
         var viewChanged = PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses, publishChange: false);
         var navigationChanged = ApplyPendingMarketItemAutoExpand(publishChange: false);
         using (BeginStateChangeBatch())
@@ -73,7 +73,7 @@ public partial class AppState
         }
 
         _publishedMarketAnalysisScope ??= CreateCurrentMarketAnalysisScopeSnapshot();
-        _procurementShoppingPlans.Clear();
+        InvalidateProcurementRouteState("Market evidence changed.");
         var viewChanged = PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses, publishChange: false);
         var navigationChanged = ApplyPendingMarketItemAutoExpand(publishChange: false);
         using (BeginStateChangeBatch())
@@ -114,7 +114,7 @@ public partial class AppState
         }
 
         _publishedMarketAnalysisScope ??= CreateCurrentMarketAnalysisScopeSnapshot();
-        _procurementShoppingPlans.Clear();
+        InvalidateProcurementRouteState("Market evidence changed.");
         var viewChanged = PruneMarketAnalysisViewState(_shoppingPlans, _marketItemAnalyses, publishChange: false);
         var navigationChanged = ApplyPendingMarketItemAutoExpand(publishChange: false);
         using (BeginStateChangeBatch())
@@ -130,14 +130,62 @@ public partial class AppState
 
     public void ClearProcurementOverlay()
     {
-        _procurementShoppingPlans.Clear();
+        ResetProcurementOverlayState();
         NotifyProcurementOverlayChanged();
     }
 
-    public void ReplaceProcurementOverlay(IEnumerable<DetailedShoppingPlan> shoppingPlans)
+    public void ReplaceProcurementOverlay(
+        IEnumerable<DetailedShoppingPlan> shoppingPlans,
+        MarketRouteDecision? routeDecision = null)
     {
         ReplaceListContents(_procurementShoppingPlans, shoppingPlans);
+        ProcurementRouteDecision = routeDecision;
+        IsProcurementRouteStale = false;
+        ProcurementRouteStaleReason = null;
+        ProcurementRouteFailure = null;
         NotifyProcurementOverlayChanged();
+    }
+
+    public void InvalidateProcurementRoute(string reason)
+    {
+        if (!InvalidateProcurementRouteState(reason))
+        {
+            return;
+        }
+
+        NotifyProcurementOverlayChanged();
+    }
+
+    private bool InvalidateProcurementRouteState(string reason)
+    {
+        if (_procurementShoppingPlans.Count == 0)
+        {
+            return false;
+        }
+
+        IsProcurementRouteStale = true;
+        ProcurementRouteStaleReason = reason;
+        ProcurementRouteFailure = null;
+        return true;
+    }
+
+    public void MarkProcurementRouteFailed(string message)
+    {
+        ProcurementRouteFailure = message;
+        if (_procurementShoppingPlans.Count > 0)
+        {
+            IsProcurementRouteStale = true;
+        }
+        NotifyProcurementOverlayChanged();
+    }
+
+    private void ResetProcurementOverlayState()
+    {
+        _procurementShoppingPlans.Clear();
+        ProcurementRouteDecision = null;
+        IsProcurementRouteStale = false;
+        ProcurementRouteStaleReason = null;
+        ProcurementRouteFailure = null;
     }
 
     public void SetMarketEvidenceSettings(
@@ -166,7 +214,7 @@ public partial class AppState
 
         if (changesMarketContext)
         {
-            _procurementShoppingPlans.Clear();
+            InvalidateProcurementRouteState("The market location changed.");
             UnavailableMarketItems = Array.Empty<CoreMarketDataUnavailableItem>();
             ClearMarketAnalysisViewState(publishChange: false);
             PublishChange(
@@ -208,7 +256,7 @@ public partial class AppState
 
         if (changesRouteMeaning)
         {
-            _procurementShoppingPlans.Clear();
+            InvalidateProcurementRouteState("Route settings changed.");
             PublishChange(
                 AppStateChangeScope.Settings | AppStateChangeScope.ProcurementOverlay,
                 raiseShoppingListChanged: true);
@@ -216,6 +264,21 @@ public partial class AppState
         }
 
         NotifySettingsChanged();
+    }
+
+    public bool SetProcurementHomeDataCenterOrigin(bool enabled)
+    {
+        if (ProcurementStartFromHomeDataCenter == enabled)
+        {
+            return false;
+        }
+
+        ProcurementStartFromHomeDataCenter = enabled;
+        InvalidateProcurementRouteState("The route origin changed.");
+        PublishChange(
+            AppStateChangeScope.Settings | AppStateChangeScope.ProcurementOverlay,
+            raiseShoppingListChanged: true);
+        return true;
     }
 
     public bool SetMarketAnalysisLens(MarketAcquisitionLens lens)
@@ -253,7 +316,7 @@ public partial class AppState
 
         EnableMultiWorldSplits = enableMultiWorldSplits;
         MaxWorldsPerItem = normalizedMaxWorlds;
-        _procurementShoppingPlans.Clear();
+        InvalidateProcurementRouteState("Market split settings changed.");
         PublishChange(
             AppStateChangeScope.Settings | AppStateChangeScope.ProcurementOverlay,
             raiseShoppingListChanged: true);
@@ -447,7 +510,7 @@ public partial class AppState
     {
         _shoppingPlans.Clear();
         _marketItemAnalyses.Clear();
-        _procurementShoppingPlans.Clear();
+        ResetProcurementOverlayState();
         _marketIntelligenceId = Guid.Empty;
         _marketAnalysisRecipeBasis = null;
         _publishedMarketAnalysisScope = null;
@@ -537,14 +600,38 @@ public partial class AppState
         var duration = TimeSpan.FromMinutes(Math.Max(1, TemporaryWorldBlacklistDurationMinutes));
         TemporaryMarketWorldBlacklist.Add(world, duration);
         SyncTemporaryBlacklistSets();
-        ClearProcurementOverlay();
+        InvalidateProcurementRoute($"{world.WorldName} was temporarily excluded.");
     }
 
     public void ExcludeItemWorldTemporarily(int itemId, MarketWorldKey world)
     {
         _temporarilyExcludedItemWorlds.Add(new MarketItemWorldKey(itemId, world));
         RefreshTemporaryExclusionViews();
-        ClearProcurementOverlay();
+        InvalidateProcurementRoute($"{world.WorldName} was excluded for one item.");
+    }
+
+    public bool RemoveTemporaryMarketWorldBlacklist(MarketWorldKey world)
+    {
+        if (!TemporaryMarketWorldBlacklist.Remove(world))
+        {
+            return false;
+        }
+
+        SyncTemporaryBlacklistSets();
+        InvalidateProcurementRoute($"The exclusion for {world.WorldName} was removed.");
+        return true;
+    }
+
+    public bool RemoveTemporaryItemWorldExclusion(int itemId, MarketWorldKey world)
+    {
+        if (!_temporarilyExcludedItemWorlds.Remove(new MarketItemWorldKey(itemId, world)))
+        {
+            return false;
+        }
+
+        RefreshTemporaryExclusionViews();
+        InvalidateProcurementRoute($"The item exclusion for {world.WorldName} was removed.");
+        return true;
     }
 
     public int ActiveTemporaryExclusionCount =>
@@ -688,7 +775,7 @@ public partial class AppState
         _temporarilyBlacklistedWorlds.Clear();
         _temporarilyExcludedItemWorlds.Clear();
         RefreshTemporaryExclusionViews();
-        ClearProcurementOverlay();
+        InvalidateProcurementRoute("Temporary exclusions were cleared.");
     }
 
     public bool PruneExpiredTemporaryMarketWorldBlacklists()
@@ -700,7 +787,7 @@ public partial class AppState
             return false;
         }
 
-        ClearProcurementOverlay();
+        InvalidateProcurementRoute("A temporary world exclusion expired.");
         return true;
     }
 

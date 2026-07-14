@@ -36,6 +36,11 @@ public sealed class MarketWorldBlacklist
         _entries.Clear();
     }
 
+    public bool Remove(MarketWorldKey world)
+    {
+        return _entries.RemoveAll(entry => entry.World.Equals(world)) > 0;
+    }
+
     public void PruneExpired(DateTimeOffset? now = null)
     {
         var currentTime = now ?? DateTimeOffset.UtcNow;

@@ -212,7 +212,8 @@ public sealed class CoreProcurementWorkflowService
                         shoppingPlans.Select(plan => plan.ItemId).ToArray(),
                         "procurement route analysis",
                         shoppingPlans,
-                        routeCards),
+                        routeCards,
+                        result.RouteDecision),
                     "procurement route published"),
                 "Procurement route published.");
             if (!published)

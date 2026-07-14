@@ -228,7 +228,7 @@
                  Style="color: #d4a73a; text-decoration: none; font-size: 14px;">GitHub</MudLink>
     </MudAppBar>
     
-    <MudMainContent Style="background-color: #1e1e1e; flex: 1; overflow-y: auto; overflow-x: hidden;">
+    <MudMainContent Class="ca-main-content" Style="background-color: #1e1e1e; flex: 1; overflow-y: auto; overflow-x: hidden;">
         @Body
     </MudMainContent>
     
@@ -340,6 +340,11 @@
             var selectedDataCenter = string.IsNullOrEmpty(AppState.SelectedDataCenter)
                 ? defaultDc
                 : AppState.SelectedDataCenter;
+            var procurementSearchEntireRegion = await Settings.GetAsync("procurement.search_entire_region", false);
+            var procurementEnableSplits = await Settings.GetAsync("procurement.enable_split_world_purchases", false);
+            var procurementTravelTolerance = await Settings.GetAsync("procurement.travel_tolerance", 0);
+            var procurementExclusionDuration = await Settings.GetAsync("procurement.world_exclusion_duration_minutes", 60);
+            var procurementStartFromHome = await Settings.GetAsync("procurement.start_from_home_data_center", false);
 
             AppState.SetAutoSaveEnabled(autoSave);
             AppState.SetSecretDebugToolsEnabled(secretDebugToolsEnabled);
@@ -348,6 +353,12 @@
                 region,
                 defaultScope,
                 defaultScope == MarketFetchScope.EntireRegion);
+            AppState.SetProcurementSettings(
+                procurementSearchEntireRegion,
+                procurementEnableSplits,
+                procurementTravelTolerance,
+                procurementExclusionDuration);
+            AppState.SetProcurementHomeDataCenterOrigin(procurementStartFromHome);
         }
         catch { /* Ignore settings load errors */ }
     }
@@ -415,6 +426,7 @@
         if (_disposed) return;
         
         UpdateActiveTab(e.Location);
+        _ = JSRuntime.InvokeVoidAsync("mudScrollManager.scrollTo", ".ca-main-content", 0, 0, "auto").AsTask();
         _ = InvokeAsync(StateHasChanged);
     }
 

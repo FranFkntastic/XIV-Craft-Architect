@@ -7,6 +7,150 @@ namespace FFXIV_Craft_Architect.Tests;
 public class MarketRouteOptimizationTests
 {
     [Fact]
+    public void OptimizeProcurementRoute_IntermediateToleranceUsesPercentagePremiumBudget()
+    {
+        var plans = new[]
+        {
+            Plan(1, "Anchor", 1,
+                World("Aether", "Siren", 1_000, 1_000, Listing(1, 1_000, "Siren Anchor"))),
+            Plan(2, "Flexible", 1,
+                World("Aether", "Siren", 1_000, 1_000, Listing(1, 1_000, "Siren Flexible")),
+                World("Aether", "Gilgamesh", 700, 700, Listing(1, 700, "Gilgamesh Flexible")))
+        };
+
+        var toleranceSix = Optimize(plans, travelTolerance: 6, includeSplitPurchases: false);
+        var toleranceSeven = Optimize(plans, travelTolerance: 7, includeSplitPurchases: false);
+
+        Assert.All(toleranceSix, plan => Assert.Equal("Siren", plan.RecommendedWorld?.WorldName));
+        Assert.Equal("Gilgamesh", toleranceSeven[1].RecommendedWorld?.WorldName);
+    }
+
+    [Fact]
+    public void OptimizeProcurementRoute_SingleItemEqualShapeAlwaysChoosesLowerCost()
+    {
+        var plan = Plan(1, "Equal Shape", 1,
+            World("Aether", "Siren", 500, 500, Listing(1, 500, "Siren")),
+            World("Primal", "Leviathan", 100, 100, Listing(1, 100, "Leviathan")));
+
+        foreach (var tolerance in Enumerable.Range(0, 12))
+        {
+            var optimized = Optimize([plan], tolerance, includeSplitPurchases: false);
+            Assert.Equal("Leviathan", optimized[0].RecommendedWorld?.WorldName);
+        }
+    }
+
+    [Fact]
+    public async Task OptimizeProcurementRoute_HomeOriginOnlyChangesTravelWhenEnabled()
+    {
+        var plan = Plan(1, "Origin", 1,
+            World("Aether", "Siren", 120, 120, Listing(1, 120, "Siren")),
+            World("Primal", "Leviathan", 100, 100, Listing(1, 100, "Leviathan")));
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var withoutOrigin = await service.OptimizeProcurementRouteWithDecisionAsync(
+            [plan],
+            new MarketAnalysisConfig { TravelTolerance = 0 });
+        var withOrigin = await service.OptimizeProcurementRouteWithDecisionAsync(
+            [plan],
+            new MarketAnalysisConfig
+            {
+                TravelTolerance = 0,
+                StartFromHomeDataCenter = true,
+                HomeDataCenter = "Aether"
+            });
+
+        Assert.Equal("Leviathan", withoutOrigin.ShoppingPlans[0].RecommendedWorld?.WorldName);
+        Assert.Equal("Siren", withOrigin.ShoppingPlans[0].RecommendedWorld?.WorldName);
+        Assert.False(withoutOrigin.Decision?.StartsFromHomeDataCenter);
+        Assert.True(withOrigin.Decision?.StartsFromHomeDataCenter);
+    }
+
+    [Fact]
+    public async Task OptimizeProcurementRoute_DecisionExplainsSelectedVersusCheapestRoute()
+    {
+        var plans = new[]
+        {
+            Plan(1, "Anchor", 1,
+                World("Aether", "Siren", 1_000, 1_000, Listing(1, 1_000, "Siren Anchor"))),
+            Plan(2, "Flexible", 1,
+                World("Aether", "Siren", 1_000, 1_000, Listing(1, 1_000, "Siren Flexible")),
+                World("Aether", "Gilgamesh", 700, 700, Listing(1, 700, "Gilgamesh Flexible")))
+        };
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var result = await service.OptimizeProcurementRouteWithDecisionAsync(
+            plans,
+            new MarketAnalysisConfig { TravelTolerance = 6 });
+
+        var decision = Assert.IsType<MarketRouteDecision>(result.Decision);
+        Assert.Equal(1_700, decision.CheapestGilCost);
+        Assert.Equal(2_000, decision.SelectedGilCost);
+        Assert.Equal(300, decision.PremiumGil);
+        Assert.Equal(1, decision.WorldStopsAvoided);
+    }
+
+    [Fact]
+    public async Task OptimizeProcurementRoute_FullRouteRetainsAccumulatedEvidencePenalty()
+    {
+        var lowQuality = World("Aether", "Faerie", 100, 100, Listing(1, 100, "Stale listing"));
+        lowQuality.MarketDataQualityScore = 5;
+        lowQuality.MarketDataQualityBucket = MarketDataQualityBucket.VeryOld;
+        var current = World("Aether", "Siren", 200, 200, Listing(1, 200, "Current listing"));
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var result = await service.OptimizeProcurementRouteWithDecisionAsync(
+            [Plan(1, "Evidence", 1, lowQuality, current)],
+            new MarketAnalysisConfig { TravelTolerance = 11 },
+            includeSplitPurchases: false);
+
+        Assert.Equal("Siren", result.ShoppingPlans[0].RecommendedWorld?.WorldName);
+        Assert.Equal(200, result.Decision?.SelectedGilCost);
+        Assert.Equal(0, result.Decision?.SelectedEvidencePenalty);
+    }
+
+    [Fact]
+    public async Task OptimizeProcurementRoute_CoverageSelectionMatchesDecisionAndWorldCards()
+    {
+        var plan = Plan(1, "Cash-out alignment", 1,
+            World("Aether", "Faerie", 500, 500, Listing(1, 500, "Faerie listing")),
+            World("Dynamis", "Cuchulainn", 100, 100, Listing(10, 100, "Cuchulainn stack")));
+        plan.CoverageSet = MarketCoverageBuilder.Build(plan);
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var result = await service.OptimizeProcurementRouteWithDecisionAsync(
+            [plan],
+            new MarketAnalysisConfig { TravelTolerance = 0 },
+            includeSplitPurchases: false);
+
+        var optimizedPlan = Assert.Single(result.ShoppingPlans);
+        var decision = Assert.IsType<MarketRouteDecision>(result.Decision);
+        Assert.Equal(500, decision.SelectedGilCost);
+        Assert.Equal(decision.SelectedGilCost, PurchaseRecommendationCost.GetRecommendedCost(optimizedPlan));
+
+        var card = Assert.Single(ProcurementWorldCardBuilder.BuildWorldCards(result.ShoppingPlans, "Aether"));
+        Assert.Equal("Faerie", card.WorldName);
+        Assert.Equal(decision.SelectedGilCost, card.TotalCost);
+    }
+
+    [Fact]
+    public void OptimizeProcurementRoute_MovingTowardCostNeverIncreasesSelectedCashCost()
+    {
+        var plans = new[]
+        {
+            Plan(1, "Anchor", 1,
+                World("Aether", "Siren", 1_000, 1_000, Listing(1, 1_000, "Siren Anchor"))),
+            Plan(2, "Flexible", 1,
+                World("Aether", "Siren", 1_000, 1_000, Listing(1, 1_000, "Siren Flexible")),
+                World("Aether", "Gilgamesh", 700, 700, Listing(1, 700, "Gilgamesh Flexible")))
+        };
+        var costs = Enumerable.Range(0, 12)
+            .Select(tolerance => Optimize(plans, tolerance, false).Sum(PurchaseRecommendationCost.GetRecommendedCost))
+            .ToList();
+
+        Assert.All(costs.Zip(costs.Skip(1)), pair => Assert.True(pair.First >= pair.Second));
+    }
+
+    [Fact]
     public void OptimizeProcurementRoute_TravelToleranceZero_ConsolidatesRouteBeforeGil()
     {
         var plans = new[]
@@ -106,20 +250,22 @@ public class MarketRouteOptimizationTests
 
         var plan = Assert.Single(optimized);
         Assert.Null(plan.RecommendedWorld);
-        Assert.NotNull(plan.RecommendedSplit);
+        Assert.Null(plan.RecommendedSplit);
+        var coverage = Assert.IsType<MarketCoverageOption>(
+            PurchaseRecommendationCost.GetDefaultCoverageOption(plan));
         Assert.Collection(
-            plan.RecommendedSplit!,
+            coverage.Worlds,
             siren =>
             {
                 Assert.Equal("Aether", siren.DataCenter);
                 Assert.Equal("Siren", siren.WorldName);
-                Assert.Equal(5, siren.QuantityToBuy);
+                Assert.Equal(5, siren.QuantityToPurchase);
             },
             leviathan =>
             {
                 Assert.Equal("Primal", leviathan.DataCenter);
                 Assert.Equal("Leviathan", leviathan.WorldName);
-                Assert.Equal(5, leviathan.QuantityToBuy);
+                Assert.Equal(5, leviathan.QuantityToPurchase);
             });
     }
 

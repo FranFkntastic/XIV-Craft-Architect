@@ -115,7 +115,7 @@ public sealed class ProcurementWorkflowService
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.Superseded);
         }
 
-        _appState.ReplaceProcurementOverlay(result.ShoppingPlans);
+        _appState.ReplaceProcurementOverlay(result.ShoppingPlans, result.RouteDecision);
         return new ProcurementWorkflowResult(ProcurementWorkflowStatus.Published, result.ShoppingPlans.Count);
     }
 
@@ -178,6 +178,7 @@ public sealed class ProcurementWorkflowService
             _appState.MarketAnalysisLens,
             _appState.ProcurementEnableSplitWorldPurchases,
             _appState.ProcurementTravelTolerance,
+            _appState.ProcurementStartFromHomeDataCenter,
             _appState.GetActiveBlacklistedMarketWorlds(),
             _appState.TemporarilyExcludedItemWorlds.ToHashSet());
     }
@@ -194,6 +195,7 @@ public sealed class ProcurementWorkflowService
                snapshot.Lens == _appState.MarketAnalysisLens &&
                snapshot.IncludeSplitPurchases == _appState.ProcurementEnableSplitWorldPurchases &&
                snapshot.TravelTolerance == _appState.ProcurementTravelTolerance &&
+               snapshot.StartFromHomeDataCenter == _appState.ProcurementStartFromHomeDataCenter &&
                snapshot.BlacklistedWorlds.SetEquals(_appState.GetActiveBlacklistedMarketWorlds()) &&
                snapshot.ExcludedItemWorlds.SetEquals(_appState.TemporarilyExcludedItemWorlds);
     }
@@ -204,7 +206,8 @@ public sealed class ProcurementWorkflowService
         {
             EnableSplitWorld = _appState.ProcurementEnableSplitWorldPurchases,
             MaxWorldsPerItem = null,
-            TravelTolerance = _appState.ProcurementTravelTolerance
+            TravelTolerance = _appState.ProcurementTravelTolerance,
+            StartFromHomeDataCenter = _appState.ProcurementStartFromHomeDataCenter
         };
     }
 
@@ -215,6 +218,7 @@ public sealed class ProcurementWorkflowService
         MarketAcquisitionLens Lens,
         bool IncludeSplitPurchases,
         int TravelTolerance,
+        bool StartFromHomeDataCenter,
         HashSet<MarketWorldKey> BlacklistedWorlds,
         HashSet<MarketItemWorldKey> ExcludedItemWorlds);
 }

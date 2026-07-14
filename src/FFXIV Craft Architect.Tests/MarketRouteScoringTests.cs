@@ -5,6 +5,31 @@ namespace FFXIV_Craft_Architect.Tests;
 public class MarketRouteScoringTests
 {
     [Fact]
+    public void TravelTolerancePremiumCurve_HasExactEndpointsAndNarrowsMonotonically()
+    {
+        Assert.Null(MarketRouteScoring.GetMaximumPremiumRate(0));
+        Assert.Equal(0m, MarketRouteScoring.GetMaximumPremiumRate(11));
+
+        var boundedRates = Enumerable.Range(1, 11)
+            .Select(MarketRouteScoring.GetMaximumPremiumRate)
+            .Select(rate => rate!.Value)
+            .ToList();
+
+        Assert.All(
+            boundedRates.Zip(boundedRates.Skip(1)),
+            pair => Assert.True(pair.First >= pair.Second));
+    }
+
+    [Theory]
+    [InlineData(0, "Fewest stops")]
+    [InlineData(7, "Up to 12% extra for less travel")]
+    [InlineData(11, "Lowest cost")]
+    public void TravelToleranceLabel_ExplainsTheContract(int tolerance, string expected)
+    {
+        Assert.Equal(expected, MarketRouteScoring.GetToleranceLabel(tolerance));
+    }
+
+    [Fact]
     public void CompareCandidates_TravelToleranceZero_PrefersFewerDataCentersThenWorldsOverPrice()
     {
         var config = new MarketAnalysisConfig { TravelTolerance = 0 };

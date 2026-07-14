@@ -1,9 +1,9 @@
 @page "/procurement"
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
-@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 @inject AppState AppState
 @inject NavigationManager NavigationManager
 @inject CancellableOperationService CancellableOperations
@@ -13,29 +13,34 @@
 @inject CraftAppraisalQuoteExportService CraftAppraisalQuoteExportService
 @implements IDisposable
 
-@{
-    var procurementShoppingPlans = GetProcurementShoppingPlans();
-    var evidenceSummary = GetEvidenceSummary();
-}
-
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 pp-page-container">
     <div class="pp-grid-layout">
         <ProcurementControlsPanel
             AppState="AppState"
-            ShoppingPlans="procurementShoppingPlans"
-            EvidenceSummary="evidenceSummary"
             IsAnalyzing="_isAnalyzing"
             CanAnalyze="CanAnalyze()"
-            NoticeSeverity="@GetProcurementNoticeSeverity(evidenceSummary)"
-            NoticeMessage="@GetProcurementNoticeMessage(evidenceSummary)"
+            PrimaryActionLabel="@GetPrimaryActionLabel()"
+            ShowNotice="@ShouldShowControlNotice()"
+            NoticeSeverity="@GetNoticeSeverity()"
+            NoticeMessage="@GetNoticeMessage()"
             OnRunAnalysisRequested="RunAnalysisAsync"
+            OnClearExclusionsRequested="ClearExclusionsAsync"
             CanExportCraftQuote="CanExportCraftQuote()"
             OnExportCraftQuoteRequested="ExportCraftQuoteAsync"
             OnGoToPlannerRequested="GoToPlanner"
             OnGoToMarketAnalysisRequested="GoToMarketAnalysis" />
 
         <ProcurementResultsShell
-            ShoppingPlans="procurementShoppingPlans"
+            ShoppingPlans="AppState.ProcurementShoppingPlans"
+            RouteDecision="AppState.ProcurementRouteDecision"
+            IsStale="AppState.IsProcurementRouteStale"
+            IsAnalyzing="_isAnalyzing"
+            FailureMessage="@AppState.ProcurementRouteFailure"
+            StaleReason="@AppState.ProcurementRouteStaleReason"
+            ExclusionOutcome="@_exclusionOutcome"
+            OnUndoExclusionRequested="UndoLastExclusionAsync"
+            EmptyTitle="@GetEmptyTitle()"
+            EmptyMessage="@GetEmptyMessage()"
             OnReanalyzeWithoutWorldRequested="ReanalyzeWithoutWorldAsync"
             OnExcludeWorldForItemRequested="ExcludeWorldForItemAsync"
             OnRefreshItemRequested="RefreshItemMarketDataAsync" />
@@ -43,92 +48,64 @@
 </MudContainer>
 
 @code {
-    private bool _isAnalyzing = false;
+    private bool _isAnalyzing;
     private CancellableOperationLease? _procurementAnalysisOperation;
+    private PendingExclusion? _lastExclusion;
+    private string? _exclusionOutcome;
 
     protected override void OnInitialized()
     {
-        // Subscribe to changes (including restoration from auto-save)
-        AppState.OnPlanChanged += OnPlanChanged;
-        AppState.OnShoppingListChanged += OnShoppingListChanged;
+        AppState.PruneExpiredTemporaryMarketWorldBlacklists();
+        AppState.OnPlanChanged += OnStateChanged;
+        AppState.OnShoppingListChanged += OnStateChanged;
     }
 
-    private void OnPlanChanged()
-    {
-        InvokeAsync(StateHasChanged);
-    }
-
-    private void OnShoppingListChanged()
-    {
-        InvokeAsync(StateHasChanged);
-    }
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
 
     public void Dispose()
     {
         CancellableOperations.Cancel(CancellableOperationWorkflow.ProcurementAnalysis);
         CancellableOperations.Cancel(CancellableOperationWorkflow.ItemMarketRefresh);
         _procurementAnalysisOperation = null;
-        AppState.OnPlanChanged -= OnPlanChanged;
-        AppState.OnShoppingListChanged -= OnShoppingListChanged;
+        AppState.OnPlanChanged -= OnStateChanged;
+        AppState.OnShoppingListChanged -= OnStateChanged;
     }
 
-    private bool CanAnalyze()
-    {
-        return AppState.CurrentPlan != null &&
-               GetBuyItems().Any() &&
-               !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
-    }
+    private bool CanAnalyze() =>
+        AppState.CurrentPlan != null &&
+        GetBuyItems().Any() &&
+        !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
 
-    private bool CanExportCraftQuote()
-    {
-        return AppState.CurrentPlan?.RootItems.Count == 1 && !AppState.IsBusy;
-    }
+    private bool CanExportCraftQuote() =>
+        AppState.CurrentPlan?.RootItems.Count == 1 && !AppState.IsBusy;
 
-    /// <summary>
-    /// Get the current items marked for buying from the recipe plan.
-    /// </summary>
-    private List<MaterialAggregate> GetBuyItems()
-    {
-        return RecipeLayerWorkflowService
+    private List<MaterialAggregate> GetBuyItems() =>
+        RecipeLayerWorkflowService
             .BuildActiveProcurementItems(AppState.CurrentPlan)
-            .Where(m => m.TotalQuantity > 0)
+            .Where(item => item.TotalQuantity > 0)
             .ToList();
-    }
 
-    private IReadOnlyList<DetailedShoppingPlan> GetProcurementShoppingPlans()
+    private string GetPrimaryActionLabel() =>
+        AppState.ProcurementShoppingPlans.Count > 0 ? "Regenerate Route" : "Generate Route";
+
+    private bool ShouldShowControlNotice() => AppState.ProcurementShoppingPlans.Count == 0;
+
+    private Severity GetNoticeSeverity()
     {
-        AppState.PruneExpiredTemporaryMarketWorldBlacklists();
-        return AppState.ProcurementShoppingPlans;
-    }
-
-    private ProcurementEvidenceSummary GetEvidenceSummary()
-    {
-        return AcquisitionPlanningService.GetProcurementEvidenceSummary(
-            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan),
-            RecipeLayerWorkflowService.BuildMarketAnalysisCandidates(AppState.CurrentPlan),
-            AppState.ShoppingPlans);
-    }
-
-    private Severity GetProcurementNoticeSeverity(ProcurementEvidenceSummary evidenceSummary)
-    {
-        var overlaySummary = AcquisitionPlanningService.GetProcurementEvidenceSummary(
-            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan),
-            RecipeLayerWorkflowService.BuildMarketAnalysisCandidates(AppState.CurrentPlan),
-            AppState.ProcurementShoppingPlans);
-        if (overlaySummary.HasCompleteActiveEvidence)
-        {
-            return Severity.Info;
-        }
-
-        if (!CanAnalyze() || evidenceSummary.ActiveItemsMissingEvidence > 0)
+        if (!CanAnalyze())
         {
             return Severity.Warning;
         }
 
-        return AppState.ShoppingPlans.Any() ? Severity.Info : Severity.Success;
+        if (!string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
+        {
+            return Severity.Error;
+        }
+
+        return AppState.IsProcurementRouteStale ? Severity.Warning : Severity.Info;
     }
 
-    private string GetProcurementNoticeMessage(ProcurementEvidenceSummary evidenceSummary)
+    private string GetNoticeMessage()
     {
         if (AppState.CurrentPlan == null)
         {
@@ -137,72 +114,81 @@
 
         if (!GetBuyItems().Any())
         {
-            return "Mark at least one active item for purchase before generating a procurement route.";
+            return "Mark at least one active item for purchase before generating a route.";
         }
 
         if (string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
         {
-            return "Select a data center before generating a procurement route.";
+            return "Select a data center before generating a route.";
         }
 
-        if (AppState.ShoppingPlans.Any())
+        if (!string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
         {
-            if (evidenceSummary.ActiveItemsMissingEvidence > 0)
-            {
-                var overlaySummary = AcquisitionPlanningService.GetProcurementEvidenceSummary(
-                    AppState.CurrentPlan,
-                    AppState.ProcurementShoppingPlans);
-                if (overlaySummary.HasCompleteActiveEvidence)
-                {
-                    return $"Using procurement-only market data for {overlaySummary.ActiveProcurementItemCount} active items. Run Market Analysis to update full comparison.";
-                }
-
-                return $"{evidenceSummary.ActiveItemsMissingEvidence} active procurement items need market evidence.";
-            }
-
-            var message = $"Using market data for {evidenceSummary.ActiveProcurementItemCount} active procurement items from {evidenceSummary.AnalyzedCandidateCount} analyzed candidates.";
-            if (evidenceSummary.SuppressedMarketCandidateCount > 0)
-            {
-                message += $" {evidenceSummary.SuppressedMarketCandidateCount} analyzed candidates are suppressed by acquisition choices.";
-            }
-
-            return message;
+            return $"The latest regeneration failed. The previous route remains visible: {AppState.ProcurementRouteFailure}";
         }
 
-        var procurementOverlaySummary = AcquisitionPlanningService.GetProcurementEvidenceSummary(
-            AppState.CurrentPlan,
-            AppState.ProcurementShoppingPlans);
-        if (procurementOverlaySummary.HasCompleteActiveEvidence)
+        if (_isAnalyzing)
         {
-            return $"Using procurement-only market data for {procurementOverlaySummary.ActiveProcurementItemCount} active items. Run Market Analysis to update full comparison.";
+            return AppState.ProcurementShoppingPlans.Count > 0
+                ? "Generating a new route. The previous route remains visible until the replacement is ready."
+                : "Fetching prices and comparing complete routes.";
         }
 
-        return "Ready to fetch active procurement prices.";
+        if (AppState.IsProcurementRouteStale)
+        {
+            return $"The route is out of date. {AppState.ProcurementRouteStaleReason} Regenerate it when ready.";
+        }
+
+        if (AppState.ProcurementShoppingPlans.Count > 0)
+        {
+            return "This route matches the current settings and temporary exclusions.";
+        }
+
+        return AppState.ShoppingPlans.Count > 0
+            ? "Market evidence is ready. Generate a route with the settings above."
+            : "Generate a route to fetch prices for the active purchase items.";
+    }
+
+    private string GetEmptyTitle()
+    {
+        if (AppState.CurrentPlan == null)
+        {
+            return "No recipe plan yet";
+        }
+
+        return GetBuyItems().Any() ? "Route ready to generate" : "No purchase items";
+    }
+
+    private string GetEmptyMessage()
+    {
+        if (AppState.CurrentPlan == null)
+        {
+            return "Build a plan, then return here to organize its market purchases.";
+        }
+
+        return GetBuyItems().Any()
+            ? "Choose the route settings and generate the first route."
+            : "Change at least one active material to Buy before generating a route.";
     }
 
     private async Task RunAnalysisAsync()
     {
         if (!CanAnalyze())
+        {
             return;
+        }
 
-        var plan = AppState.CurrentPlan;
-        if (plan == null)
-            return;
-
+        AppState.PruneExpiredTemporaryMarketWorldBlacklists();
         _isAnalyzing = true;
         using var operation = CancellableOperations.Start(
             CancellableOperationWorkflow.ProcurementAnalysis,
             "Procurement Analysis",
-            "Generating optimal procurement plan...");
+            "Generating procurement route...");
         _procurementAnalysisOperation = operation;
 
         try
         {
-            var progress = new Progress<string>(msg =>
-            {
-                operation.ReportStatus(msg);
-            });
-
+            var progress = new Progress<string>(message => operation.ReportStatus(message));
             var result = await ProcurementWorkflow.RunAnalysisAsync(
                 new ProcurementWorkflowRequest(
                     IsCurrentOperation: () => operation.IsCurrent,
@@ -213,7 +199,7 @@
             if (result.Status == ProcurementWorkflowStatus.StaleDecision)
             {
                 FinishStaleProcurementAnalysis(operation.Operation);
-                Snackbar.Add("Procurement route was discarded because acquisition choices changed.", Severity.Info);
+                Snackbar.Add("Acquisition choices changed, so the unfinished route was discarded.", Severity.Info);
                 return;
             }
 
@@ -223,8 +209,8 @@
                 return;
             }
 
-            operation.Complete("Shopping plans generated!");
-            Snackbar.Add("Shopping plans generated successfully!", Severity.Success);
+            operation.Complete("Procurement route generated.");
+            Snackbar.Add("Procurement route generated.", Severity.Success);
         }
         catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
         {
@@ -234,8 +220,9 @@
         {
             if (operation.ShouldReportError(ex))
             {
-                operation.Complete($"Analysis failed: {ex.Message}");
-                Snackbar.Add($"Procurement analysis failed: {ex.Message}", Severity.Error);
+                AppState.MarkProcurementRouteFailed(ex.Message);
+                operation.Complete($"Route generation failed: {ex.Message}");
+                Snackbar.Add($"Route generation failed: {ex.Message}", Severity.Error);
             }
         }
         finally
@@ -250,29 +237,16 @@
 
     private void FinishStaleProcurementAnalysis(AppStateOperation operation)
     {
-        const string message = "Acquisition choices changed; regenerate procurement route when ready.";
-        if (AppState.EndOperation(operation, message))
-        {
-            return;
-        }
-
-        if (!AppState.IsBusy)
+        const string message = "Acquisition choices changed; regenerate the route when ready.";
+        if (!AppState.EndOperation(operation, message) && !AppState.IsBusy)
         {
             AppState.SetStatus(message, busy: false);
         }
     }
 
-    private void GoToPlanner()
-    {
-        // Use relative path (no leading slash) so it resolves against base href correctly
-        NavigationManager.NavigateTo("./");
-    }
+    private void GoToPlanner() => NavigationManager.NavigateTo("./");
 
-    private void GoToMarketAnalysis()
-    {
-        // Use relative path (no leading slash) so it resolves against base href correctly
-        NavigationManager.NavigateTo("market");
-    }
+    private void GoToMarketAnalysis() => NavigationManager.NavigateTo("market");
 
     private async Task ExportCraftQuoteAsync()
     {
@@ -282,7 +256,6 @@
                 AppState.CurrentPlan,
                 AppState.SelectedRegion,
                 AppState.SelectedDataCenter);
-
             if (!result.IsAvailable)
             {
                 Snackbar.Add(result.UnavailableReason ?? "Craft quote export is not available.", Severity.Warning);
@@ -294,7 +267,7 @@
                 result.FileName,
                 result.Json,
                 "application/json");
-            Snackbar.Add($"Craft quote export prepared: {result.FileName}", Severity.Success);
+            Snackbar.Add($"Craft quote prepared: {result.FileName}", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -302,38 +275,125 @@
         }
     }
 
-    /// <summary>
-    /// Re-runs analysis with the specified world blacklisted.
-    /// Called when user clicks "Re-analyze without this world" on a congested world card.
-    /// </summary>
     private async Task ReanalyzeWithoutWorldAsync(WorldProcurementCardModel world)
     {
-        AppState.BlacklistMarketWorldTemporarily(new MarketWorldKey(world.DataCenter, world.WorldName));
-
-        Snackbar.Add($"Re-analyzing without {world.WorldName} ({world.DataCenter}) for {AppState.TemporaryWorldBlacklistDurationMinutes} minutes...", Severity.Info);
-
-        // Re-run the analysis
-        await RunAnalysisAsync();
-
-        // Show results
-        var blacklistedCount = AppState.GetActiveBlacklistedMarketWorlds().Count;
-        if (blacklistedCount > 0)
+        var confirmed = await DialogService.ShowMessageBox(
+            $"Exclude {world.WorldName}?",
+            $"Exclude every {world.WorldName} listing for {AppState.TemporaryWorldBlacklistDurationMinutes} minutes and generate a replacement route?",
+            yesText: "Exclude and Regenerate",
+            cancelText: "Cancel");
+        if (confirmed != true)
         {
-            Snackbar.Add($"Analysis complete. Excluded worlds: {FormatBlacklistedMarketWorlds()}", Severity.Success);
+            return;
         }
+
+        var before = AppState.ProcurementRouteDecision;
+        var key = new MarketWorldKey(world.DataCenter, world.WorldName);
+        AppState.BlacklistMarketWorldTemporarily(key);
+        _lastExclusion = new PendingExclusion(ExclusionKind.World, key, 0, world.WorldName, before);
+        await RunAnalysisAsync();
+        SetExclusionOutcome(world.WorldName, before, AppState.ProcurementRouteDecision);
     }
 
     private async Task ExcludeWorldForItemAsync(WorldItemProcurementAction action)
     {
         var world = action.World;
         var item = action.Item;
-        AppState.ExcludeItemWorldTemporarily(
-            item.ItemId,
-            new MarketWorldKey(world.DataCenter, world.WorldName));
+        var confirmed = await DialogService.ShowMessageBox(
+            $"Exclude {world.WorldName} for {item.ItemName}?",
+            $"Ignore {world.WorldName} listings for {item.ItemName} during this session and generate a replacement route?",
+            yesText: "Exclude and Regenerate",
+            cancelText: "Cancel");
+        if (confirmed != true)
+        {
+            return;
+        }
 
-        Snackbar.Add($"Removed {world.WorldName} listings from {item.ItemName} and re-running procurement.", Severity.Info);
+        var before = AppState.ProcurementRouteDecision;
+        var key = new MarketWorldKey(world.DataCenter, world.WorldName);
+        AppState.ExcludeItemWorldTemporarily(item.ItemId, key);
+        _lastExclusion = new PendingExclusion(ExclusionKind.ItemWorld, key, item.ItemId, $"{world.WorldName} for {item.ItemName}", before);
+        await RunAnalysisAsync();
+        SetExclusionOutcome($"{world.WorldName} for {item.ItemName}", before, AppState.ProcurementRouteDecision);
+    }
+
+    private async Task UndoLastExclusionAsync()
+    {
+        if (_lastExclusion == null)
+        {
+            return;
+        }
+
+        var exclusion = _lastExclusion;
+        var removed = exclusion.Kind == ExclusionKind.World
+            ? AppState.RemoveTemporaryMarketWorldBlacklist(exclusion.World)
+            : AppState.RemoveTemporaryItemWorldExclusion(exclusion.ItemId, exclusion.World);
+        if (!removed)
+        {
+            _lastExclusion = null;
+            _exclusionOutcome = null;
+            return;
+        }
+
+        _lastExclusion = null;
+        _exclusionOutcome = null;
+        await RunAnalysisAsync();
+        Snackbar.Add($"Restored {exclusion.Label} to route selection.", Severity.Success);
+    }
+
+    private async Task ClearExclusionsAsync()
+    {
+        var count = AppState.ActiveTemporaryExclusionCount;
+        if (count == 0)
+        {
+            return;
+        }
+
+        var confirmed = await DialogService.ShowMessageBox(
+            "Clear temporary exclusions?",
+            $"Restore all {count} temporary exclusion{(count == 1 ? string.Empty : "s")} and regenerate the route?",
+            yesText: "Clear and Regenerate",
+            cancelText: "Cancel");
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        AppState.ClearTemporaryMarketWorldBlacklists();
+        _lastExclusion = null;
+        _exclusionOutcome = null;
         await RunAnalysisAsync();
     }
+
+    private void SetExclusionOutcome(
+        string label,
+        MarketRouteDecision? before,
+        MarketRouteDecision? after)
+    {
+        if (after == null)
+        {
+            _exclusionOutcome = $"Excluded {label}. No complete replacement route was available.";
+            return;
+        }
+
+        var costDelta = after.SelectedGilCost - (before?.SelectedGilCost ?? after.SelectedGilCost);
+        var stopDelta = after.SelectedWorldStops - (before?.SelectedWorldStops ?? after.SelectedWorldStops);
+        _exclusionOutcome = $"Excluded {label}. Route cost {FormatSignedGil(costDelta)}; world stops {FormatSignedNumber(stopDelta)}.";
+    }
+
+    private static string FormatSignedGil(long value) => value switch
+    {
+        > 0 => $"increased {value:N0}g",
+        < 0 => $"decreased {Math.Abs(value):N0}g",
+        _ => "didn't change"
+    };
+
+    private static string FormatSignedNumber(int value) => value switch
+    {
+        > 0 => $"increased by {value}",
+        < 0 => $"decreased by {Math.Abs(value)}",
+        _ => "didn't change"
+    };
 
     private async Task RefreshItemMarketDataAsync(WorldItemProcurementAction action)
     {
@@ -343,49 +403,22 @@
             $"Refreshing {action.Item.ItemName}...");
         try
         {
-            var progress = new Progress<string>(msg => operation.ReportStatus(msg));
             var result = await ProcurementWorkflow.RefreshItemMarketDataAsync(
                 new ProcurementItemRefreshWorkflowRequest(
-                    ItemId: action.Item.ItemId,
-                    ItemName: action.Item.ItemName,
-                    IsCurrentOperation: () => operation.IsCurrent,
-                    ExecutionOptions: MarketAnalysisExecutionOptions.Interactive),
-                progress,
+                    action.Item.ItemId,
+                    action.Item.ItemName,
+                    () => operation.IsCurrent,
+                    MarketAnalysisExecutionOptions.Interactive),
+                new Progress<string>(message => operation.ReportStatus(message)),
                 operation.Token);
-
-            if (result.Status == ProcurementItemRefreshStatus.NotFound)
-            {
-                operation.Complete($"Could not find {action.Item.ItemName} in the market analysis candidates.");
-                Snackbar.Add($"Could not find {action.Item.ItemName} in the market analysis candidates.", Severity.Warning);
-                return;
-            }
-
-            if (result.Status == ProcurementItemRefreshStatus.NoData)
-            {
-                operation.Complete($"No refreshed market data was returned for {action.Item.ItemName}.");
-                Snackbar.Add($"No refreshed market data was returned for {action.Item.ItemName}.", Severity.Warning);
-                return;
-            }
-
-            if (result.Status == ProcurementItemRefreshStatus.StaleDecision)
-            {
-                operation.Cancel("Acquisition choices changed; refresh the item again when ready.");
-                Snackbar.Add("Item refresh was discarded because acquisition choices changed.", Severity.Info);
-                return;
-            }
 
             if (result.Status != ProcurementItemRefreshStatus.Refreshed)
             {
                 operation.Cancel();
+                Snackbar.Add($"No newer market data was available for {action.Item.ItemName}.", Severity.Info);
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(result.ItemName))
-            {
-                throw new InvalidOperationException("Item refresh reported success without a refreshed item name.");
-            }
-
-            Snackbar.Add($"Refreshed {result.ItemName}; re-running procurement.", Severity.Info);
             await RunAnalysisAsync();
         }
         catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
@@ -402,20 +435,16 @@
         }
     }
 
-    private string FormatBlacklistedMarketWorlds()
+    private enum ExclusionKind
     {
-        var activeWorlds = AppState.GetActiveBlacklistedMarketWorlds();
-        if (activeWorlds.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        return string.Join(
-            ", ",
-            activeWorlds
-                .OrderBy(world => world.DataCenter)
-                .ThenBy(world => world.WorldName)
-                .Select(world => $"{world.WorldName} ({world.DataCenter})"));
+        World,
+        ItemWorld
     }
 
+    private sealed record PendingExclusion(
+        ExclusionKind Kind,
+        MarketWorldKey World,
+        int ItemId,
+        string Label,
+        MarketRouteDecision? PreviousDecision);
 }

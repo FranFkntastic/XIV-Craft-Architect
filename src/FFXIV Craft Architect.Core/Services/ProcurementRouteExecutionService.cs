@@ -86,20 +86,38 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
 
         var scopedEvidence = PrepareProcurementEvidenceForScope(evidencePlans, request);
         progress?.Report($"Optimizing procurement route for {scopedEvidence.Count} items...");
-        var shoppingPlans = await _marketShoppingService.OptimizeProcurementRouteAsync(
+        var procurementConfig = CopyProcurementConfig(request);
+        var optimization = await _marketShoppingService.OptimizeProcurementRouteWithDecisionAsync(
             scopedEvidence,
-            request.ProcurementConfig,
+            procurementConfig,
             request.IncludeSplitPurchases,
             executionOptions,
             progress,
             ct);
 
         return new ProcurementRouteExecutionResult(
-            shoppingPlans,
+            optimization.ShoppingPlans,
             evidencePlans,
             reusableEvidence,
             refreshedEvidence,
-            missingItems);
+            missingItems,
+            optimization.Decision);
+    }
+
+    private static MarketAnalysisConfig CopyProcurementConfig(ProcurementRouteExecutionRequest request)
+    {
+        var source = request.ProcurementConfig;
+        return new MarketAnalysisConfig
+        {
+            MaxWorldsPerItem = source.MaxWorldsPerItem,
+            TravelTolerance = source.TravelTolerance,
+            EnableSplitWorld = source.EnableSplitWorld,
+            MaxPriceMultiplier = source.MaxPriceMultiplier,
+            StartFromHomeDataCenter = source.StartFromHomeDataCenter,
+            HomeDataCenter = source.StartFromHomeDataCenter
+                ? request.SelectedDataCenter
+                : string.Empty
+        };
     }
 
     private static IReadOnlyList<MaterialAggregate> GetActiveProcurementItems(ProcurementRouteExecutionRequest request)

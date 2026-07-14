@@ -94,6 +94,15 @@
                     Used when building plans and as the startup Market Analysis scope.
                 </MudText>
 
+                <MudSwitch T="bool"
+                           @bind-Value="_procurementStartFromHomeDataCenter"
+                           Label="Start procurement routes from the home data center"
+                           Color="Color.Primary"
+                           Class="mt-4" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Counts leaving @_defaultDataCenter as a transfer when comparing region-wide routes. It doesn't require a purchase there.
+                </MudText>
+
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-4">
                     These settings determine which market board prices are shown by default.
                 </MudText>
@@ -604,6 +613,7 @@
     private string _defaultDataCenter = "Aether";
     private string _selectedRegion = "North America";
     private MarketFetchScope _defaultMarketFetchScope = MarketFetchScope.EntireRegion;
+    private bool _procurementStartFromHomeDataCenter;
     private bool _isClearing = false;
     private TradeCompanyProfile? _companyProfile;
     private string _companyName = string.Empty;
@@ -664,6 +674,7 @@
         _selectedRegion = await Settings.GetAsync("market.region", "North America") ?? "North America";
         _defaultMarketFetchScope = ParseMarketFetchScope(
             await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
+        _procurementStartFromHomeDataCenter = await Settings.GetAsync("procurement.start_from_home_data_center", false);
 
         await LoadCompanyProfileAsync();
         await LoadProfileHostSettingsAsync();
@@ -1312,12 +1323,14 @@
             _selectedRegion,
             _defaultMarketFetchScope,
             _defaultMarketFetchScope == MarketFetchScope.EntireRegion);
+        AppState.SetProcurementHomeDataCenterOrigin(_procurementStartFromHomeDataCenter);
 
         // Persist settings via ISettingsService
         await Settings.SetAsync("ui.auto_save_enabled", _autoSaveEnabled);
         await Settings.SetAsync("market.default_datacenter", _defaultDataCenter);
         await Settings.SetAsync("market.region", _selectedRegion);
         await Settings.SetAsync("market.default_search_scope", _defaultMarketFetchScope.ToString());
+        await Settings.SetAsync("procurement.start_from_home_data_center", _procurementStartFromHomeDataCenter);
         
         Snackbar.Add("Settings saved", Severity.Success);
         MudDialog.Close(DialogResult.Ok(true));

@@ -44,7 +44,12 @@ public enum CraftSettingsKey
     ExcludeCongestedWorlds,
     ParallelApiRequests,
     WarmCacheForCraftedItems,
-    MarketCacheTtlHours
+    MarketCacheTtlHours,
+    ProcurementSearchEntireRegion,
+    ProcurementEnableSplitWorldPurchases,
+    ProcurementTravelTolerance,
+    ProcurementWorldExclusionDurationMinutes,
+    ProcurementStartFromHomeDataCenter
 }
 
 public enum CraftOperationWorkflow
@@ -162,7 +167,8 @@ public sealed record CraftSessionProcurementOverlay(
     IReadOnlyList<int> ActiveItemIds,
     string SourceDescription,
     IReadOnlyList<DetailedShoppingPlan>? ShoppingPlans = null,
-    IReadOnlyList<WorldProcurementCardModel>? RouteCards = null);
+    IReadOnlyList<WorldProcurementCardModel>? RouteCards = null,
+    MarketRouteDecision? RouteDecision = null);
 
 public static class CraftSettingsKeyMap
 {
@@ -181,6 +187,11 @@ public static class CraftSettingsKeyMap
         ["market.warm_cache_for_crafted_items"] = CraftSettingsKey.WarmCacheForCraftedItems,
         ["market.cache_ttl_hours"] = CraftSettingsKey.MarketCacheTtlHours,
         ["planning.default_recommendation_mode"] = CraftSettingsKey.RecommendationMode,
+        ["procurement.search_entire_region"] = CraftSettingsKey.ProcurementSearchEntireRegion,
+        ["procurement.enable_split_world_purchases"] = CraftSettingsKey.ProcurementEnableSplitWorldPurchases,
+        ["procurement.travel_tolerance"] = CraftSettingsKey.ProcurementTravelTolerance,
+        ["procurement.world_exclusion_duration_minutes"] = CraftSettingsKey.ProcurementWorldExclusionDurationMinutes,
+        ["procurement.start_from_home_data_center"] = CraftSettingsKey.ProcurementStartFromHomeDataCenter,
         ["Market.Region"] = CraftSettingsKey.Region,
         ["Market.DefaultDataCenter"] = CraftSettingsKey.DefaultDataCenter,
         ["Market.DefaultSearchScope"] = CraftSettingsKey.DefaultMarketFetchScope,

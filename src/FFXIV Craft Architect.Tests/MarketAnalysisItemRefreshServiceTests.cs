@@ -41,7 +41,9 @@ public class MarketAnalysisItemRefreshServiceTests
         Assert.Contains(appState.MarketItemAnalyses, analysis => analysis.ItemId == 101 && analysis.Name == "Fresh Item 101");
         Assert.Contains(appState.MarketItemAnalyses, analysis => analysis.ItemId == 202 && analysis.Name == "Old Item 202");
         Assert.Equal(101, appState.SelectedMarketAnalysisItemId);
-        Assert.Empty(appState.ProcurementShoppingPlans);
+        Assert.Collection(appState.ProcurementShoppingPlans, plan => Assert.Equal("Old Route", plan.Name));
+        Assert.True(appState.IsProcurementRouteStale);
+        Assert.Equal("Market evidence changed.", appState.ProcurementRouteStaleReason);
     }
 
     [Fact]

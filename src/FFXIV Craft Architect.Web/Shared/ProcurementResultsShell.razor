@@ -1,13 +1,80 @@
-<div class="pp-results-column">
+@using FFXIV_Craft_Architect.Core.Models
+
+<main class="pp-results-column" aria-label="Procurement route results">
+    @if (ShoppingPlans.Count > 0 && (IsStale || IsAnalyzing || !string.IsNullOrWhiteSpace(FailureMessage)))
+    {
+        <div class="pp-route-state @(FailureMessage != null ? "is-error" : "is-stale")" role="status">
+            <MudIcon Icon="@(FailureMessage != null ? Icons.Material.Filled.ErrorOutline : IsAnalyzing ? Icons.Material.Filled.Sync : Icons.Material.Filled.Update)"
+                     Size="Size.Small" />
+            <span>
+                @if (!string.IsNullOrWhiteSpace(FailureMessage))
+                {
+                    <strong>Regeneration failed.</strong> <text>The previous route is still shown.</text>
+                }
+                else if (IsAnalyzing)
+                {
+                    <strong>Generating a replacement.</strong> <text>The previous route remains usable until it finishes.</text>
+                }
+                else
+                {
+                    <strong>Route needs regeneration.</strong> <text>@StaleReason</text>
+                }
+            </span>
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(ExclusionOutcome))
+    {
+        <div class="pp-exclusion-outcome" role="status">
+            <span>@ExclusionOutcome</span>
+            <MudButton Variant="Variant.Outlined"
+                       @ref="_undoButton"
+                       Color="Color.Warning"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Undo"
+                       OnClick="OnUndoExclusionRequested">
+                Undo
+            </MudButton>
+        </div>
+    }
+
     <ProcurementRouteTreePanel ShoppingPlans="ShoppingPlans"
+                               RouteDecision="RouteDecision"
+                               EmptyTitle="@EmptyTitle"
+                               EmptyMessage="@EmptyMessage"
                                OnReanalyzeWithoutWorldRequested="OnReanalyzeWithoutWorldRequested"
                                OnExcludeWorldForItemRequested="OnExcludeWorldForItemRequested"
                                OnRefreshItemRequested="OnRefreshItemRequested" />
-</div>
+</main>
 
 @code {
+    private MudButton? _undoButton;
+    private string? _focusedExclusionOutcome;
+
     [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
+    [Parameter] public MarketRouteDecision? RouteDecision { get; set; }
+    [Parameter] public bool IsStale { get; set; }
+    [Parameter] public bool IsAnalyzing { get; set; }
+    [Parameter] public string? FailureMessage { get; set; }
+    [Parameter] public string? StaleReason { get; set; }
+    [Parameter] public string? ExclusionOutcome { get; set; }
+    [Parameter] public string EmptyTitle { get; set; } = "Route ready to generate";
+    [Parameter] public string EmptyMessage { get; set; } = "Choose route settings and generate a route.";
+    [Parameter] public EventCallback OnUndoExclusionRequested { get; set; }
     [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnExcludeWorldForItemRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnRefreshItemRequested { get; set; }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_undoButton == null ||
+            string.IsNullOrWhiteSpace(ExclusionOutcome) ||
+            string.Equals(_focusedExclusionOutcome, ExclusionOutcome, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _focusedExclusionOutcome = ExclusionOutcome;
+        await _undoButton.FocusAsync();
+    }
 }

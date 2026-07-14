@@ -50,8 +50,10 @@ public class MarketShoppingServiceDataCenterTests
 
         var plan = Assert.Single(plans);
         Assert.All(plan.WorldOptions, world => Assert.Equal("Aether", world.DataCenter));
-        Assert.NotNull(plan.RecommendedSplit);
-        Assert.All(plan.RecommendedSplit!, split => Assert.Equal("Aether", split.DataCenter));
+        var coverage = Assert.IsType<MarketCoverageOption>(
+            PurchaseRecommendationCost.GetDefaultCoverageOption(plan));
+        Assert.Equal(2, coverage.Worlds.Count);
+        Assert.All(coverage.Worlds, world => Assert.Equal("Aether", world.DataCenter));
     }
 
     [Fact]
