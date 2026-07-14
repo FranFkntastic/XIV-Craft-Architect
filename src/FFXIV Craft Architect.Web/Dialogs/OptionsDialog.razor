@@ -14,12 +14,13 @@
 @inject ProfileHostClient ProfileHostClient
 @inject ProfileSyncLocalStateService ProfileSyncLocalState
 @inject ProfileSyncService ProfileSync
+@inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
 <MudDialog>
     <DialogContent>
-        <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-4">
+        <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-4" @bind-ActivePanelIndex="_activePanelIndex">
             <MudTabPanel Text="General">
                 <MudSwitch @bind-Value="_autoSaveEnabled" 
                            Label="Auto-save plans" 
@@ -131,29 +132,109 @@
             </MudTabPanel>
 
             <MudTabPanel Text="Integrations">
-                <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
-                    Connect CA to the private Workshop Host acquisition queue used by MarketMafioso.
-                </MudText>
-                <MudTextField @bind-Value="_marketMafiosoApiUrl"
-                              Label="Workshop Host API URL"
-                              Variant="Variant.Outlined"
-                              Class="my-3" />
-                <MudTextField @bind-Value="_marketMafiosoApiKey"
-                              Label="Workshop Host API key"
-                              Variant="Variant.Outlined"
-                              InputType="InputType.Password"
-                              Class="my-3" />
-                <MudTextField @bind-Value="_marketMafiosoTargetCharacter"
-                              Label="MarketMafioso character"
-                              Variant="Variant.Outlined"
-                              Class="my-3" />
-                <MudTextField @bind-Value="_marketMafiosoTargetWorld"
-                              Label="Character home world"
-                              Variant="Variant.Outlined"
-                              Class="my-3" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                    The character and home world identify which plugin instance can claim CA requests. Each procurement action carries its recommended purchase world separately.
-                </MudText>
+                <MudPaper Variant="Variant.Outlined" Class="pa-4">
+                    <div class="d-flex align-center justify-space-between gap-3 mb-1">
+                        <div>
+                            <MudText Typo="Typo.h6">MarketMafioso</MudText>
+                            <MudText Typo="Typo.caption" Style="opacity: 0.72;">
+                                Connect this browser profile to a private Workshop Host acquisition queue.
+                            </MudText>
+                        </div>
+                        <MudChip T="string"
+                                 Size="Size.Small"
+                                 Variant="Variant.Outlined"
+                                 Color="@GetMarketMafiosoConnectionColor()">
+                            @GetMarketMafiosoConnectionLabel()
+                        </MudChip>
+                    </div>
+
+                    <MudTextField @bind-Value="_marketMafiosoApiUrl"
+                                  Label="Workshop Host API URL"
+                                  Placeholder="https://host.example/marketmafioso/api/"
+                                  HelperText="Use the API root ending in /api/. If the hosts differ, allow this CA origin in the receiver."
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  Disabled="_marketMafiosoConnectionIsBusy"
+                                  Class="mt-4" />
+                    <MudTextField @bind-Value="_marketMafiosoApiKey"
+                                  Label="Client API key"
+                                  HelperText="Use the same client key configured in the MarketMafioso receiver and plugin. It is stored in this browser profile."
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  InputType="InputType.Password"
+                                  Disabled="_marketMafiosoConnectionIsBusy"
+                                  Class="mt-3" />
+
+                    <MudGrid Spacing="2" Class="mt-2">
+                        <MudItem xs="12" sm="7">
+                            <MudTextField @bind-Value="_marketMafiosoTargetCharacter"
+                                          Label="Claiming character"
+                                          Placeholder="Eriana Ning"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          Immediate="true" />
+                        </MudItem>
+                        <MudItem xs="12" sm="5">
+                            <MudTextField @bind-Value="_marketMafiosoTargetWorld"
+                                          Label="Home world"
+                                          Placeholder="Siren"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          Immediate="true" />
+                        </MudItem>
+                    </MudGrid>
+                    <MudText Typo="Typo.caption" Style="opacity: 0.72;">
+                        These identify the plugin instance allowed to claim CA requests. The recommended purchase world is sent separately with each item.
+                    </MudText>
+
+                    <MudSwitch T="bool"
+                               @bind-Value="_marketMafiosoAutoSyncEvidence"
+                               Label="Automatically import refreshed evidence"
+                               Color="Color.Primary"
+                               Class="mt-3" />
+                    <MudText Typo="Typo.caption" Style="opacity: 0.72;">
+                        While Procurement Plan is open, CA watches the active request and reroutes as soon as MarketMafioso publishes a board observation. Sync MM remains available as a manual retry.
+                    </MudText>
+
+                    <div class="mt-4">
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.WifiTethering"
+                                   OnClick="TestMarketMafiosoConnectionAsync"
+                                   Disabled="_marketMafiosoConnectionIsBusy"
+                                   Style="white-space: nowrap;">
+                            @if (_marketMafiosoConnectionIsBusy)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                <span>Testing</span>
+                            }
+                            else
+                            {
+                                <span>Test connection</span>
+                            }
+                        </MudButton>
+                        <MudText Typo="Typo.caption" Class="mt-2" Style="opacity: 0.72;">
+                            Checks authentication and the acquisition.queue v1 capability.
+                        </MudText>
+                    </div>
+
+                    @if (IsCurrentMarketMafiosoConnectionTest() && _marketMafiosoConnectionTest != null)
+                    {
+                        <MudAlert Severity="@(_marketMafiosoConnectionTest.AcquisitionQueueAvailable ? Severity.Success : Severity.Warning)"
+                                  Dense="true"
+                                  Class="mt-3">
+                            @_marketMafiosoConnectionStatus
+                        </MudAlert>
+                    }
+                    else if (IsCurrentMarketMafiosoConnectionTest() && !string.IsNullOrWhiteSpace(_marketMafiosoConnectionStatus))
+                    {
+                        <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
+                            @_marketMafiosoConnectionStatus
+                        </MudAlert>
+                    }
+                </MudPaper>
             </MudTabPanel>
             
             <MudTabPanel Text="Company">
@@ -656,6 +737,9 @@
 
 @code {
     [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public int InitialPanelIndex { get; set; }
+
+    private int _activePanelIndex;
     
     private bool _autoSaveEnabled = true;
     private string _defaultDataCenter = "Aether";
@@ -668,6 +752,11 @@
     private string _marketMafiosoApiKey = string.Empty;
     private string _marketMafiosoTargetCharacter = string.Empty;
     private string _marketMafiosoTargetWorld = string.Empty;
+    private bool _marketMafiosoAutoSyncEvidence = true;
+    private bool _marketMafiosoConnectionIsBusy;
+    private int? _marketMafiosoTestedConfigurationHash;
+    private MarketMafiosoConnectionTestResult? _marketMafiosoConnectionTest;
+    private string? _marketMafiosoConnectionStatus;
     private bool _isClearing = false;
     private TradeCompanyProfile? _companyProfile;
     private string _companyName = string.Empty;
@@ -723,6 +812,7 @@
     
     protected override async Task OnInitializedAsync()
     {
+        _activePanelIndex = InitialPanelIndex;
         _autoSaveEnabled = await Settings.GetAsync("ui.auto_save_enabled", true);
         _defaultDataCenter = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
         _selectedRegion = await Settings.GetAsync("market.region", "North America") ?? "North America";
@@ -740,9 +830,72 @@
         _marketMafiosoApiKey = await Settings.GetAsync("marketmafioso.api_key", string.Empty) ?? string.Empty;
         _marketMafiosoTargetCharacter = await Settings.GetAsync("marketmafioso.target_character", string.Empty) ?? string.Empty;
         _marketMafiosoTargetWorld = await Settings.GetAsync("marketmafioso.target_world", string.Empty) ?? string.Empty;
+        _marketMafiosoAutoSyncEvidence = await Settings.GetAsync("marketmafioso.auto_sync_evidence", true);
 
         await LoadCompanyProfileAsync();
         await LoadProfileHostSettingsAsync();
+    }
+
+    private async Task TestMarketMafiosoConnectionAsync()
+    {
+        _marketMafiosoConnectionIsBusy = true;
+        _marketMafiosoConnectionTest = null;
+        _marketMafiosoConnectionStatus = null;
+        _marketMafiosoTestedConfigurationHash = GetMarketMafiosoConfigurationHash();
+        try
+        {
+            _marketMafiosoConnectionTest = await MarketMafiosoAcquisitionWorkflow.TestConnectionAsync(
+                _marketMafiosoApiUrl,
+                _marketMafiosoApiKey);
+            var service = string.IsNullOrWhiteSpace(_marketMafiosoConnectionTest.Service)
+                ? "Workshop Host"
+                : _marketMafiosoConnectionTest.Service;
+            _marketMafiosoConnectionStatus = _marketMafiosoConnectionTest.AcquisitionQueueAvailable
+                ? $"Connected to {service}. Market acquisition queue v1 is ready."
+                : $"Connected to {service}, but acquisition.queue v1 is not available on this instance.";
+        }
+        catch (Exception ex)
+        {
+            _marketMafiosoConnectionStatus = DescribeMarketMafiosoConnectionFailure(ex);
+        }
+        finally
+        {
+            _marketMafiosoConnectionIsBusy = false;
+        }
+    }
+
+    private bool IsCurrentMarketMafiosoConnectionTest() =>
+        _marketMafiosoTestedConfigurationHash == GetMarketMafiosoConfigurationHash();
+
+    private int GetMarketMafiosoConfigurationHash() => HashCode.Combine(
+        _marketMafiosoApiUrl.Trim().ToUpperInvariant(),
+        _marketMafiosoApiKey.Trim());
+
+    private string GetMarketMafiosoConnectionLabel()
+    {
+        if (!IsCurrentMarketMafiosoConnectionTest())
+            return "Not tested";
+        if (_marketMafiosoConnectionTest?.AcquisitionQueueAvailable == true)
+            return "Ready";
+        return _marketMafiosoConnectionTest == null ? "Failed" : "Limited";
+    }
+
+    private Color GetMarketMafiosoConnectionColor()
+    {
+        if (!IsCurrentMarketMafiosoConnectionTest())
+            return Color.Secondary;
+        if (_marketMafiosoConnectionTest?.AcquisitionQueueAvailable == true)
+            return Color.Success;
+        return _marketMafiosoConnectionTest == null ? Color.Error : Color.Warning;
+    }
+
+    private static string DescribeMarketMafiosoConnectionFailure(Exception exception)
+    {
+        if (exception is HttpRequestException { StatusCode: System.Net.HttpStatusCode.Unauthorized })
+            return "Connection failed: the Workshop Host rejected this client API key.";
+        if (exception is HttpRequestException { StatusCode: null })
+            return "Connection failed: CA could not reach the Workshop Host. Check the API URL and MarketMafioso__AllowedOrigins__0 when the hosts differ.";
+        return $"Connection failed: {exception.Message}";
     }
     
     private List<string> GetAvailableDataCenters()
@@ -1408,6 +1561,7 @@
         await Settings.SetAsync("marketmafioso.api_key", _marketMafiosoApiKey.Trim());
         await Settings.SetAsync("marketmafioso.target_character", _marketMafiosoTargetCharacter.Trim());
         await Settings.SetAsync("marketmafioso.target_world", _marketMafiosoTargetWorld.Trim());
+        await Settings.SetAsync("marketmafioso.auto_sync_evidence", _marketMafiosoAutoSyncEvidence);
         
         Snackbar.Add("Settings saved", Severity.Success);
         MudDialog.Close(DialogResult.Ok(true));

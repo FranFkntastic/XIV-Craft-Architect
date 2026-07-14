@@ -53,15 +53,78 @@ public sealed class MarketMafiosoAcquisitionWorkflowServiceTests
         Assert.Contains(expected, message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task TestConnectionAsyncReportsAcquisitionCapability()
+    {
+        var client = new RecordingClient();
+        var service = new MarketMafiosoAcquisitionWorkflowService(client, ConfiguredSettings());
+
+        var result = await service.TestConnectionAsync(
+            "https://example.test/marketmafioso/api/",
+            "secret");
+
+        Assert.True(result.AcquisitionQueueAvailable);
+        Assert.Equal("MarketMafioso", result.Service);
+        Assert.Equal("https://example.test/marketmafioso/api/", client.LastConnection?.ApiBaseUrl);
+    }
+
+    [Fact]
+    public async Task WaitForEvidenceAsyncPollsUntilMatchingObservationArrives()
+    {
+        var client = new RecordingClient();
+        client.Timelines.Enqueue(new WorkshopHostAcquisitionTimeline
+        {
+            Request = new WorkshopHostAcquisitionRequestView { Status = "AcceptedInPlugin" },
+        });
+        client.Timelines.Enqueue(new WorkshopHostAcquisitionTimeline
+        {
+            Request = new WorkshopHostAcquisitionRequestView { Status = "AcceptedInPlugin" },
+            MarketObservations =
+            [
+                new WorkshopHostMarketObservation
+                {
+                    ItemId = 2,
+                    WorldName = "Siren",
+                    ObservedAtUtc = DateTimeOffset.UtcNow,
+                },
+            ],
+        });
+        var service = new MarketMafiosoAcquisitionWorkflowService(client, ConfiguredSettings());
+
+        var result = await service.WaitForEvidenceAsync(
+            "request-1",
+            2,
+            "Siren",
+            TimeSpan.Zero);
+
+        Assert.Equal("Siren", result.Observation?.WorldName);
+        Assert.Equal(2, client.TimelineCalls);
+    }
+
+    private static DictionarySettings ConfiguredSettings() => new()
+    {
+        ["marketmafioso.workshop_host_url"] = "https://example.test/marketmafioso/api/",
+        ["marketmafioso.api_key"] = "secret",
+        ["marketmafioso.target_character"] = "Eriana Ning",
+        ["marketmafioso.target_world"] = "Siren",
+    };
+
     private sealed class RecordingClient : IWorkshopHostAcquisitionClient
     {
         public WorkshopHostAcquisitionBatchCreateRequest? CreateRequest { get; private set; }
+        public WorkshopHostConnectionOptions? LastConnection { get; private set; }
+        public Queue<WorkshopHostAcquisitionTimeline> Timelines { get; } = new();
+        public int TimelineCalls { get; private set; }
 
         public Task<WorkshopHostCapabilityResponse> GetCapabilitiesAsync(
             WorkshopHostConnectionOptions connection,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(new WorkshopHostCapabilityResponse
+            CancellationToken cancellationToken = default)
+        {
+            LastConnection = connection;
+            return Task.FromResult(new WorkshopHostCapabilityResponse
             {
+                Service = "MarketMafioso",
+                SchemaVersion = 1,
                 Capabilities =
                 [
                     new WorkshopHostCapabilityDescriptor
@@ -72,6 +135,7 @@ public sealed class MarketMafiosoAcquisitionWorkflowServiceTests
                     },
                 ],
             });
+        }
 
         public Task<WorkshopHostAcquisitionRequestView> CreateBatchAsync(
             WorkshopHostConnectionOptions connection,
@@ -85,8 +149,13 @@ public sealed class MarketMafiosoAcquisitionWorkflowServiceTests
         public Task<WorkshopHostAcquisitionTimeline> GetTimelineAsync(
             WorkshopHostConnectionOptions connection,
             string requestId,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(new WorkshopHostAcquisitionTimeline());
+            CancellationToken cancellationToken = default)
+        {
+            TimelineCalls++;
+            return Task.FromResult(Timelines.Count > 0
+                ? Timelines.Dequeue()
+                : new WorkshopHostAcquisitionTimeline());
+        }
     }
 
     private sealed class DictionarySettings : Dictionary<string, object>, ISettingsService

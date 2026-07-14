@@ -31,6 +31,7 @@ public class WebSettingsService : ISettingsService
         ["marketmafioso.api_key"] = "",
         ["marketmafioso.target_character"] = "",
         ["marketmafioso.target_world"] = "",
+        ["marketmafioso.auto_sync_evidence"] = true,
         ["marketmafioso.active_request_id"] = "",
         ["marketmafioso.active_item_id"] = 0,
         ["marketmafioso.active_data_center"] = "",
@@ -137,7 +138,7 @@ public class WebSettingsService : ISettingsService
         try
         {
             await _indexedDb.SaveSettingAsync(key, value);
-            _logger?.LogDebug("[WebSettingsService] Saved setting '{Key}' = '{Value}'", key, value);
+            _logger?.LogDebug("[WebSettingsService] Saved setting '{Key}'", key);
         }
         catch (Exception ex)
         {

@@ -26,6 +26,33 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
             await _settings.GetAsync("marketmafioso.target_world", string.Empty) ?? string.Empty);
     }
 
+    public async Task<MarketMafiosoConnectionTestResult> TestConnectionAsync(
+        string apiUrl,
+        string apiKey,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(apiUrl) || string.IsNullOrWhiteSpace(apiKey))
+        {
+            throw new InvalidOperationException("Enter the Workshop Host API URL and client API key first.");
+        }
+
+        var capabilities = await _client.GetCapabilitiesAsync(
+            new WorkshopHostConnectionOptions
+            {
+                ApiBaseUrl = apiUrl,
+                ApiKey = apiKey,
+            },
+            cancellationToken);
+        var acquisition = capabilities.Capabilities.FirstOrDefault(capability =>
+            string.Equals(capability.Id, "acquisition.queue", StringComparison.OrdinalIgnoreCase));
+
+        return new MarketMafiosoConnectionTestResult(
+            capabilities.Service,
+            capabilities.SchemaVersion,
+            capabilities.Supports("acquisition.queue"),
+            acquisition?.RequiredScopes ?? []);
+    }
+
     public async Task<WorkshopHostAcquisitionRequestView> CreateSingleWorldHandoffAsync(
         MarketMafiosoSingleWorldHandoff handoff,
         CancellationToken cancellationToken = default)
@@ -91,6 +118,41 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
             cancellationToken);
     }
 
+    public async Task<MarketMafiosoEvidenceWaitResult> WaitForEvidenceAsync(
+        string requestId,
+        int itemId,
+        string worldName,
+        TimeSpan pollInterval,
+        CancellationToken cancellationToken = default)
+    {
+        if (itemId <= 0 || string.IsNullOrWhiteSpace(worldName))
+        {
+            throw new ArgumentException("An item and purchase world are required to monitor MarketMafioso evidence.");
+        }
+
+        while (true)
+        {
+            var timeline = await GetTimelineAsync(requestId, cancellationToken);
+            var observation = timeline.MarketObservations
+                .Where(candidate =>
+                    candidate.ItemId == itemId &&
+                    candidate.WorldName.Equals(worldName, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(candidate => candidate.ObservedAtUtc)
+                .FirstOrDefault();
+            if (observation != null)
+            {
+                return new MarketMafiosoEvidenceWaitResult(observation, timeline.Request.Status);
+            }
+
+            if (IsTerminalStatus(timeline.Request.Status))
+            {
+                return new MarketMafiosoEvidenceWaitResult(null, timeline.Request.Status);
+            }
+
+            await Task.Delay(pollInterval, cancellationToken);
+        }
+    }
+
     public static string DescribeNextEvidenceStep(string? status, string worldName)
     {
         var normalized = status?.Trim() ?? string.Empty;
@@ -136,13 +198,33 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
             throw new InvalidOperationException("Quantity, maximum unit price, and gil cap must all be greater than zero.");
         }
     }
+
+    public static bool IsTerminalStatus(string? status) =>
+        status?.Trim().ToUpperInvariant() is "COMPLETED" or "FAILED" or "REJECTED" or "CANCELLED" or "EXPIRED";
 }
 
 public sealed record MarketMafiosoHandoffConfiguration(
     string ApiUrl,
     string ApiKey,
     string TargetCharacter,
-    string TargetWorld);
+    string TargetWorld)
+{
+    public bool IsComplete =>
+        !string.IsNullOrWhiteSpace(ApiUrl) &&
+        !string.IsNullOrWhiteSpace(ApiKey) &&
+        !string.IsNullOrWhiteSpace(TargetCharacter) &&
+        !string.IsNullOrWhiteSpace(TargetWorld);
+}
+
+public sealed record MarketMafiosoConnectionTestResult(
+    string Service,
+    int SchemaVersion,
+    bool AcquisitionQueueAvailable,
+    IReadOnlyList<string> RequiredScopes);
+
+public sealed record MarketMafiosoEvidenceWaitResult(
+    WorkshopHostMarketObservation? Observation,
+    string Status);
 
 public sealed record MarketMafiosoSingleWorldHandoff(
     int ItemId,

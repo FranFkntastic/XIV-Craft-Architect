@@ -63,6 +63,7 @@
     private MarketItemWorldKey? _marketMafiosoActiveItemWorld;
     private MarketItemWorldKey? _marketMafiosoBusyItemWorld;
     private string? _marketMafiosoActiveRequestId;
+    private CancellationTokenSource? _marketMafiosoMonitorCancellation;
 
     protected override void OnInitialized()
     {
@@ -85,6 +86,10 @@
             _marketMafiosoActiveItemWorld = new MarketItemWorldKey(
                 itemId,
                 new MarketWorldKey(dataCenter, purchaseWorld));
+            if (await Settings.GetAsync("marketmafioso.auto_sync_evidence", true))
+            {
+                StartMarketMafiosoMonitor(_marketMafiosoActiveRequestId, _marketMafiosoActiveItemWorld.Value);
+            }
         }
     }
 
@@ -95,6 +100,8 @@
         CancellableOperations.Cancel(CancellableOperationWorkflow.ProcurementAnalysis);
         CancellableOperations.Cancel(CancellableOperationWorkflow.ItemMarketRefresh);
         _procurementAnalysisOperation = null;
+        _marketMafiosoMonitorCancellation?.Cancel();
+        _marketMafiosoMonitorCancellation?.Dispose();
         AppState.OnPlanChanged -= OnStateChanged;
         AppState.OnShoppingListChanged -= OnStateChanged;
     }
@@ -426,7 +433,7 @@
     private Task RefreshItemMarketDataAsync(WorldItemProcurementAction action) =>
         RefreshItemMarketDataAsync(action, observedEvidence: null);
 
-    private async Task RefreshItemMarketDataAsync(
+    private async Task<bool> RefreshItemMarketDataAsync(
         WorldItemProcurementAction action,
         MarketWorldEvidenceSnapshot? observedEvidence)
     {
@@ -461,7 +468,7 @@
                 Snackbar.Add(
                     $"Couldn't update {action.Item.ItemName} on {action.World.WorldName}.",
                     Severity.Info);
-                return;
+                return false;
             }
 
             operation.Complete($"{action.Item.ItemName} rechecked on {action.World.WorldName}.");
@@ -482,6 +489,7 @@
         catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
         {
             operation.Cancel();
+            return false;
         }
         catch (Exception ex)
         {
@@ -490,6 +498,7 @@
                 operation.Complete($"Item refresh failed: {ex.Message}");
                 Snackbar.Add($"Failed to refresh {action.Item.ItemName}: {ex.Message}", Severity.Error);
             }
+            return false;
         }
         finally
         {
@@ -499,6 +508,8 @@
                 await InvokeAsync(StateHasChanged);
             }
         }
+
+        return true;
     }
 
     private async Task HandleMarketMafiosoAsync(WorldItemProcurementAction action)
@@ -506,6 +517,32 @@
         var key = new MarketItemWorldKey(
             action.Item.ItemId,
             new MarketWorldKey(action.World.DataCenter, action.World.WorldName));
+        if (_marketMafiosoActiveItemWorld != null &&
+            _marketMafiosoActiveItemWorld != key &&
+            !string.IsNullOrWhiteSpace(_marketMafiosoActiveRequestId))
+        {
+            try
+            {
+                if (await ReleaseTerminalMarketMafiosoRequestAsync())
+                {
+                    Snackbar.Add("Cleared the finished MarketMafioso handoff. You can send this item now.", Severity.Info);
+                }
+                else
+                {
+                    Snackbar.Add("Finish or cancel the active MarketMafioso handoff before sending another item.", Severity.Warning);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Couldn't check the active MarketMafioso handoff: {ex.Message}", Severity.Error);
+                return;
+            }
+        }
+
+        if (_marketMafiosoActiveItemWorld != key && !await EnsureMarketMafiosoConfiguredAsync())
+            return;
+
         _marketMafiosoBusyItemWorld = key;
         await InvokeAsync(StateHasChanged);
         try
@@ -544,8 +581,12 @@
             _marketMafiosoActiveRequestId = request.Id;
             _marketMafiosoActiveItemWorld = key;
             await PersistActiveMarketMafiosoRequestAsync(key, request.Id);
+            if (await Settings.GetAsync("marketmafioso.auto_sync_evidence", true))
+            {
+                StartMarketMafiosoMonitor(request.Id, key);
+            }
             Snackbar.Add(
-                $"Sent {approved.Quantity:N0} {approved.ItemName} on {approved.PurchaseWorld} to MarketMafioso. Check the dashboard, claim and accept it, then choose Refresh Evidence for a purchase-free board read.",
+                $"Sent {approved.Quantity:N0} {approved.ItemName} on {approved.PurchaseWorld} to MarketMafioso. Claim and accept it, then choose Refresh Evidence. CA will import the observation automatically while this page is open.",
                 Severity.Success);
         }
         catch (Exception ex)
@@ -571,13 +612,23 @@
         if (observation == null)
         {
             var status = string.IsNullOrWhiteSpace(timeline.Request.Status) ? "pending" : timeline.Request.Status;
+            if (MarketMafiosoAcquisitionWorkflowService.IsTerminalStatus(status))
+            {
+                await ClearActiveMarketMafiosoRequestAsync(requestId);
+                Snackbar.Add(
+                    $"MarketMafioso request ended as {status} without a usable {action.World.WorldName} observation. The handoff has been cleared.",
+                    Severity.Warning);
+                return;
+            }
+
             Snackbar.Add(
                 $"MarketMafioso request is {status}. {MarketMafiosoAcquisitionWorkflowService.DescribeNextEvidenceStep(status, action.World.WorldName)}",
                 Severity.Info);
             return;
         }
 
-        await RefreshItemMarketDataAsync(action, observation.ToMarketEvidenceSnapshot());
+        if (await RefreshItemMarketDataAsync(action, observation.ToMarketEvidenceSnapshot()))
+            await ClearActiveMarketMafiosoRequestAsync(requestId);
     }
 
     private async Task PersistActiveMarketMafiosoRequestAsync(MarketItemWorldKey key, string requestId)
@@ -586,6 +637,142 @@
         await Settings.SetAsync("marketmafioso.active_item_id", key.ItemId);
         await Settings.SetAsync("marketmafioso.active_data_center", key.World.DataCenter);
         await Settings.SetAsync("marketmafioso.active_purchase_world", key.World.WorldName);
+    }
+
+    private async Task<bool> EnsureMarketMafiosoConfiguredAsync()
+    {
+        if ((await MarketMafiosoAcquisitionWorkflow.GetConfigurationAsync()).IsComplete)
+            return true;
+
+        Snackbar.Add("Configure the MarketMafioso connection before sending this item.", Severity.Info);
+        var parameters = new DialogParameters { [nameof(OptionsDialog.InitialPanelIndex)] = 2 };
+        var dialog = DialogService.Show<OptionsDialog>(
+            "Options",
+            parameters,
+            new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+        return result?.Canceled == false &&
+               (await MarketMafiosoAcquisitionWorkflow.GetConfigurationAsync()).IsComplete;
+    }
+
+    private void StartMarketMafiosoMonitor(string requestId, MarketItemWorldKey key)
+    {
+        _marketMafiosoMonitorCancellation?.Cancel();
+        _marketMafiosoMonitorCancellation?.Dispose();
+        _marketMafiosoMonitorCancellation = new CancellationTokenSource();
+        _ = MonitorMarketMafiosoEvidenceAsync(requestId, key, _marketMafiosoMonitorCancellation.Token);
+    }
+
+    private async Task MonitorMarketMafiosoEvidenceAsync(
+        string requestId,
+        MarketItemWorldKey key,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await MarketMafiosoAcquisitionWorkflow.WaitForEvidenceAsync(
+                requestId,
+                key.ItemId,
+                key.World.WorldName,
+                TimeSpan.FromSeconds(10),
+                cancellationToken);
+            if (!string.Equals(_marketMafiosoActiveRequestId, requestId, StringComparison.Ordinal))
+                return;
+
+            if (result.Observation == null)
+            {
+                await InvokeAsync(async () =>
+                {
+                    await ClearActiveMarketMafiosoRequestAsync(requestId);
+                    Snackbar.Add(
+                        $"MarketMafioso request ended as {result.Status} without usable evidence. The handoff has been cleared.",
+                        Severity.Warning);
+                    StateHasChanged();
+                });
+                return;
+            }
+
+            var action = FindMarketMafiosoAction(key);
+            if (action == null)
+            {
+                await InvokeAsync(() => Snackbar.Add(
+                    $"MarketMafioso evidence for {key.World.WorldName} is ready, but the item is no longer in this route. Regenerate the route and use Sync MM to import it.",
+                    Severity.Info));
+                return;
+            }
+
+            await InvokeAsync(async () =>
+            {
+                _marketMafiosoBusyItemWorld = key;
+                StateHasChanged();
+                try
+                {
+                    if (await RefreshItemMarketDataAsync(action, result.Observation.ToMarketEvidenceSnapshot()))
+                        await ClearActiveMarketMafiosoRequestAsync(requestId);
+                }
+                finally
+                {
+                    _marketMafiosoBusyItemWorld = null;
+                    StateHasChanged();
+                }
+            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            await InvokeAsync(() => Snackbar.Add(
+                $"Automatic MarketMafioso sync stopped: {ex.Message} Use Sync MM to retry.",
+                Severity.Warning));
+        }
+    }
+
+    private WorldItemProcurementAction? FindMarketMafiosoAction(MarketItemWorldKey key)
+    {
+        var world = ProcurementWorldCardBuilder
+            .BuildWorldCards(AppState.ProcurementShoppingPlans, AppState.SelectedDataCenter)
+            .FirstOrDefault(candidate =>
+                candidate.DataCenter.Equals(key.World.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+                candidate.WorldName.Equals(key.World.WorldName, StringComparison.OrdinalIgnoreCase));
+        var item = world?.Items.FirstOrDefault(candidate => candidate.ItemId == key.ItemId);
+        return world == null || item == null
+            ? null
+            : new WorldItemProcurementAction { World = world, Item = item };
+    }
+
+    private async Task ClearActiveMarketMafiosoRequestAsync(string requestId)
+    {
+        if (!string.Equals(_marketMafiosoActiveRequestId, requestId, StringComparison.Ordinal))
+            return;
+
+        _marketMafiosoActiveRequestId = null;
+        _marketMafiosoActiveItemWorld = null;
+        _marketMafiosoMonitorCancellation?.Cancel();
+        await Settings.SetAsync("marketmafioso.active_request_id", string.Empty);
+        await Settings.SetAsync("marketmafioso.active_item_id", 0);
+        await Settings.SetAsync("marketmafioso.active_data_center", string.Empty);
+        await Settings.SetAsync("marketmafioso.active_purchase_world", string.Empty);
+    }
+
+    private async Task<bool> ReleaseTerminalMarketMafiosoRequestAsync()
+    {
+        var requestId = _marketMafiosoActiveRequestId;
+        if (string.IsNullOrWhiteSpace(requestId))
+            return true;
+
+        try
+        {
+            var timeline = await MarketMafiosoAcquisitionWorkflow.GetTimelineAsync(requestId);
+            if (!MarketMafiosoAcquisitionWorkflowService.IsTerminalStatus(timeline.Request.Status))
+                return false;
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+        }
+
+        await ClearActiveMarketMafiosoRequestAsync(requestId);
+        return true;
     }
 
     private enum ExclusionKind
