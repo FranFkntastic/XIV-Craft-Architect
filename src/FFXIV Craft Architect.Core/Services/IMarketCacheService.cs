@@ -141,6 +141,8 @@ public class CachedWorldData
     public int? WorldId { get; set; }
     public string WorldName { get; set; } = string.Empty;
     public long? LastUploadTimeUnixMilliseconds { get; set; }
+    public MarketEvidenceOrigin EvidenceOrigin { get; set; } = MarketEvidenceOrigin.Universalis;
+    public long? ObservedAtUnixMilliseconds { get; set; }
     public List<CachedListing> Listings { get; set; } = new();
     public bool IsCongested { get; set; }
 }

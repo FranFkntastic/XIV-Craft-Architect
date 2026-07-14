@@ -1,19 +1,17 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Desktop.Services;
 
 public sealed class DesktopMarketRefreshQueueService
 {
-    public const string CheckedWarning = "Desktop market evidence refreshed from Universalis.";
-    public const string NoListingsWarning = "No Universalis listings returned for this item.";
-    public const string FetchFailedWarningPrefix = "Market evidence refresh failed:";
+    private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
 
-    private readonly IMarketCacheService _marketCache;
-
-    public DesktopMarketRefreshQueueService(IMarketCacheService marketCache)
+    public DesktopMarketRefreshQueueService(IMarketEvidenceReconciliationService marketEvidenceReconciliation)
     {
-        _marketCache = marketCache ?? throw new ArgumentNullException(nameof(marketCache));
+        _marketEvidenceReconciliation = marketEvidenceReconciliation ??
+            throw new ArgumentNullException(nameof(marketEvidenceReconciliation));
     }
 
     public async Task<DesktopMarketRefreshQueueResult> RefreshSelectedItemAsync(
@@ -35,7 +33,13 @@ public sealed class DesktopMarketRefreshQueueService
             TotalQuantity = item.Quantity,
             RequiresHq = item.MustBeHq
         };
-        return await RefreshMaterialsAsync(session, [material], selectedDataCenter, "selected item market evidence refreshed", ct);
+        return await RefreshMaterialsAsync(
+            session,
+            [material],
+            selectedDataCenter,
+            "selected item market evidence refreshed",
+            replaceAllEvidence: false,
+            ct);
     }
 
     public async Task<DesktopMarketRefreshQueueResult> RefreshPlanEvidenceAsync(
@@ -51,7 +55,13 @@ public sealed class DesktopMarketRefreshQueueService
             return DesktopMarketRefreshQueueResult.NoPlanItems;
         }
 
-        return await RefreshMaterialsAsync(session, materials, selectedDataCenter, "active plan market evidence refreshed", ct);
+        return await RefreshMaterialsAsync(
+            session,
+            materials,
+            selectedDataCenter,
+            "active plan market evidence refreshed",
+            replaceAllEvidence: true,
+            ct);
     }
 
     private async Task<DesktopMarketRefreshQueueResult> RefreshMaterialsAsync(
@@ -59,87 +69,105 @@ public sealed class DesktopMarketRefreshQueueService
         IReadOnlyList<MaterialAggregate> materials,
         string? selectedDataCenter,
         string reason,
+        bool replaceAllEvidence,
         CancellationToken ct)
     {
-        var now = DateTime.UtcNow;
         var dataCenter = string.IsNullOrWhiteSpace(selectedDataCenter)
             ? "Aether"
             : selectedDataCenter;
-        IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> cachedData;
-        string? fetchError = null;
+        var plan = session.ActivePlan;
+        var planSessionVersion = session.PlanSessionVersion;
+        if (plan == null)
+        {
+            return DesktopMarketRefreshQueueResult.NoPlanItems;
+        }
 
+        var capturedVersions = session.CaptureVersionStamp();
+        MarketEvidenceReconciliationResult reconciliation;
         try
         {
-            var requests = materials.Select(item => (item.ItemId, dataCenter)).ToList();
-            await _marketCache.RefreshRequestedAsync(requests, ct: ct);
-            cachedData = await _marketCache.GetManyAsync(requests);
+            var existingEvidence = session.MarketEvidence;
+            var itemIds = materials.Select(item => item.ItemId).ToHashSet();
+            reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+                new MarketEvidenceReconciliationRequest
+                {
+                    Items = materials,
+                    PublishedAnalyses = existingEvidence.ItemAnalyses
+                        .Where(analysis => itemIds.Contains(analysis.ItemId))
+                        .ToList(),
+                    PublishedShoppingPlans = (existingEvidence.ShoppingPlans ?? [])
+                        .Where(shoppingPlan => itemIds.Contains(shoppingPlan.ItemId))
+                        .ToList(),
+                    Scope = MarketFetchScope.SelectedDataCenter,
+                    SelectedDataCenter = dataCenter,
+                    SelectedRegion = MarketFetchScopeResolver.ResolveRegionForDataCenter(
+                        dataCenter,
+                        "North America"),
+                    RecommendationMode = existingEvidence.RecommendationMode,
+                    Lens = existingEvidence.Lens,
+                    Policy = MarketEvidenceReconciliationPolicy.ForcedRefresh()
+                },
+                ct: ct,
+                executionOptions: MarketAnalysisExecutionOptions.Synchronous);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            cachedData = new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
-            fetchError = $"{FetchFailedWarningPrefix} {ex.Message}";
+            return new DesktopMarketRefreshQueueResult(
+                DesktopMarketRefreshQueueStatus.Failed,
+                materials.Count,
+                materials.FirstOrDefault()?.Name,
+                ex.Message);
         }
 
-        var analyses = materials
-            .Select(item => CreateAnalysis(item, cachedData.GetValueOrDefault((item.ItemId, dataCenter)), dataCenter, now, fetchError))
-            .ToArray();
-
-        session.PublishMarketAnalysis(
+        var existing = session.MarketEvidence;
+        var analyses = replaceAllEvidence
+            ? reconciliation.Analyses.ToList()
+            : MarketEvidenceCollectionMerger.MergeAnalyses(existing.ItemAnalyses, reconciliation.Analyses);
+        var shoppingPlans = replaceAllEvidence
+            ? reconciliation.ShoppingPlans.ToList()
+            : MarketEvidenceCollectionMerger.MergeShoppingPlans(
+                existing.ShoppingPlans ?? [],
+                reconciliation.ShoppingPlans);
+        var unavailableItemIds = replaceAllEvidence
+            ? reconciliation.UnavailableItemIds
+            : existing.UnavailableMarketItemIds
+                .Except(materials.Select(item => item.ItemId))
+                .Concat(reconciliation.UnavailableItemIds)
+                .ToHashSet();
+        var published = session.TryPublishMarketAnalysis(
+            capturedVersions,
+            plan,
+            planSessionVersion,
             analyses,
-            session.MarketEvidence.UnavailableMarketItemIds,
-            reason,
-            session.MarketEvidence.RecommendationMode,
-            session.MarketEvidence.Lens,
-            session.MarketEvidence.RecipeBasis);
-
-        var status = fetchError != null
-            ? DesktopMarketRefreshQueueStatus.Failed
-            : analyses.Any(analysis => analysis.WorstDataQualityBucket == MarketDataQualityBucket.Current)
-                ? DesktopMarketRefreshQueueStatus.Processed
-                : DesktopMarketRefreshQueueStatus.NoData;
-        return new DesktopMarketRefreshQueueResult(status, analyses.Length, analyses.FirstOrDefault()?.Name, fetchError);
-    }
-
-    private static MarketItemAnalysis CreateAnalysis(
-        MaterialAggregate item,
-        CachedMarketData? cachedData,
-        string dataCenter,
-        DateTime loadedAtUtc,
-        string? fetchError)
-    {
-        var listings = cachedData?.Worlds
-            .SelectMany(world => world.Listings)
-            .Where(listing => !item.RequiresHq || listing.IsHq)
-            .Where(listing => listing.PricePerUnit > 0 && listing.Quantity > 0)
-            .OrderBy(listing => listing.PricePerUnit)
-            .ToList() ?? [];
-        var averageUnitPrice = listings.Count > 0
-            ? listings.Take(10).Average(listing => listing.PricePerUnit)
-            : 0;
-        var medianUnitPrice = listings.Count > 0
-            ? listings[listings.Count / 2].PricePerUnit
-            : 0;
-        var warning = fetchError ?? (listings.Count == 0 ? NoListingsWarning : null);
-
-        return new MarketItemAnalysis
+            shoppingPlans,
+            acquisitionDecisionsChanged: false,
+            reason: reason,
+            unavailableMarketItemIds: unavailableItemIds,
+            recommendationMode: existing.RecommendationMode,
+            lens: existing.Lens,
+            recipeBasis: existing.RecipeBasis);
+        if (!published)
         {
-            ItemId = item.ItemId,
-            Name = item.Name,
-            QuantityNeeded = item.TotalQuantity,
-            Scope = MarketFetchScope.SelectedDataCenter,
-            LoadedAtUtc = loadedAtUtc,
-            AnalysisScopeBaselineUnitPrice = (decimal)averageUnitPrice,
-            AnalysisScopeAverageUnitPrice = (decimal)averageUnitPrice,
-            AnalysisCompetitiveAverageUnitPrice = (decimal)averageUnitPrice,
-            AnalysisScopeMedianUnitPrice = medianUnitPrice,
-            CompetitiveThresholdUnitPrice = (decimal)averageUnitPrice,
-            SaneThresholdUnitPrice = (decimal)averageUnitPrice,
-            RequestedDataCenters = [dataCenter],
-            PresentDataCenters = listings.Count > 0 ? [dataCenter] : [],
-            MissingDataCenters = listings.Count > 0 ? [] : [dataCenter],
-            WorstDataQualityBucket = listings.Count > 0 ? MarketDataQualityBucket.Current : MarketDataQualityBucket.Missing,
-            Warning = warning
-        };
+            return new DesktopMarketRefreshQueueResult(
+                DesktopMarketRefreshQueueStatus.Failed,
+                materials.Count,
+                materials.FirstOrDefault()?.Name,
+                "The active plan changed before refreshed evidence could be published.");
+        }
+
+        var status = reconciliation.Analyses.Count == 0 ||
+                     reconciliation.Analyses.All(analysis =>
+                         analysis.WorstDataQualityBucket == MarketDataQualityBucket.Missing)
+            ? DesktopMarketRefreshQueueStatus.NoData
+            : DesktopMarketRefreshQueueStatus.Processed;
+        var detail = reconciliation.FetchedCount > 0
+            ? $"Fetched {reconciliation.FetchedCount} market evidence pair(s)."
+            : "Rebuilt market analysis from reusable cache evidence.";
+        return new DesktopMarketRefreshQueueResult(
+            status,
+            reconciliation.Analyses.Count,
+            reconciliation.Analyses.FirstOrDefault()?.Name,
+            detail);
     }
 }
 

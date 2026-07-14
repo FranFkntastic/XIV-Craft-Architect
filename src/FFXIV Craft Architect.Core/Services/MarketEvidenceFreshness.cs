@@ -9,6 +9,9 @@ public static class MarketEvidenceFreshness
             MarketDataQualityBucket.Aging or
             MarketDataQualityBucket.Old;
 
+    public static bool IsRecommendationEligible(TimeSpan? age, TimeSpan? maximumAge = null) =>
+        age.HasValue && age.Value < (maximumAge ?? MarketEvidencePolicyDefaults.MaximumRecommendationAge);
+
     public static MarketEvidenceFreshnessResult Evaluate(
         DateTime timestampUtc,
         DateTime evaluatedAtUtc,
@@ -33,22 +36,22 @@ public static class MarketEvidenceFreshness
 
     private static MarketDataQualityBucket GetBucket(TimeSpan age)
     {
-        if (age < TimeSpan.FromHours(1))
+        if (age < MarketEvidencePolicyDefaults.ReusableCacheMaxAge)
         {
             return MarketDataQualityBucket.Current;
         }
 
-        if (age < TimeSpan.FromHours(6))
+        if (age < MarketEvidencePolicyDefaults.AgingThreshold)
         {
             return MarketDataQualityBucket.Aging;
         }
 
-        if (age < TimeSpan.FromHours(12))
+        if (age < MarketEvidencePolicyDefaults.MaximumRecommendationAge)
         {
             return MarketDataQualityBucket.Old;
         }
 
-        if (age < TimeSpan.FromHours(24))
+        if (age < MarketEvidencePolicyDefaults.VeryOldThreshold)
         {
             return MarketDataQualityBucket.VeryOld;
         }

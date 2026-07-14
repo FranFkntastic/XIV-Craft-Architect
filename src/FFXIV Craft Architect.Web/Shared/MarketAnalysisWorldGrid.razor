@@ -243,6 +243,8 @@
             MarketDataAgeSource.UniversalisWorldUpload => "MB ",
             MarketDataAgeSource.UniversalisResponseUpload => "API ",
             MarketDataAgeSource.LocalFetchFallback => "Cache ",
+            MarketDataAgeSource.MarketMafiosoObservation => "MM ",
+            MarketDataAgeSource.ManualObservation => "Observed ",
             _ => string.Empty
         };
         var age = world.DataAge.Value;
@@ -284,6 +286,8 @@
             MarketDataAgeSource.UniversalisWorldUpload => $"World upload: {FormatTimestamp(world.MarketUploadedAtUtc)}; local fetch: {FormatTimestamp(world.FetchedAtUtc)}",
             MarketDataAgeSource.UniversalisResponseUpload => $"API response upload: {FormatTimestamp(world.MarketUploadedAtUtc)}; local fetch: {FormatTimestamp(world.FetchedAtUtc)}",
             MarketDataAgeSource.LocalFetchFallback => $"Universalis upload time unavailable; using local cache fetch time: {FormatTimestamp(world.FetchedAtUtc)}",
+            MarketDataAgeSource.MarketMafiosoObservation => $"Observed by Market Mafioso: {FormatTimestamp(world.MarketUploadedAtUtc)}",
+            MarketDataAgeSource.ManualObservation => $"Manually observed: {FormatTimestamp(world.MarketUploadedAtUtc)}",
             _ => "Market data missing"
         };
     }

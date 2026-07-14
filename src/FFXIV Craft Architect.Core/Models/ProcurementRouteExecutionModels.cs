@@ -10,6 +10,8 @@ public sealed class ProcurementRouteExecutionRequest
 
     public IReadOnlyList<DetailedShoppingPlan> SourceShoppingPlans { get; init; } = Array.Empty<DetailedShoppingPlan>();
 
+    public IReadOnlyList<MarketItemAnalysis> SourceMarketAnalyses { get; init; } = Array.Empty<MarketItemAnalysis>();
+
     public MarketFetchScope Scope { get; init; } = MarketFetchScope.SelectedDataCenter;
 
     public string SelectedDataCenter { get; init; } = string.Empty;
@@ -28,6 +30,8 @@ public sealed class ProcurementRouteExecutionRequest
 
     public IReadOnlyDictionary<string, IReadOnlyList<string>> ExpectedWorldsByDataCenter { get; init; }
         = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+
+    public MarketEvidenceReconciliationPolicy ReconciliationPolicy { get; init; } = new();
 }
 
 public sealed record ProcurementRouteExecutionResult(
@@ -36,7 +40,8 @@ public sealed record ProcurementRouteExecutionResult(
     List<DetailedShoppingPlan> ReusableEvidence,
     List<DetailedShoppingPlan> RefreshedEvidence,
     IReadOnlyList<MaterialAggregate> MissingItems,
-    MarketRouteDecision? RouteDecision = null);
+    MarketRouteDecision? RouteDecision = null,
+    IReadOnlyList<MarketEvidenceReconciliationItemResult>? ReconciliationItems = null);
 
 public sealed record ProcurementRouteOptimizationResult(
     List<DetailedShoppingPlan> ShoppingPlans,

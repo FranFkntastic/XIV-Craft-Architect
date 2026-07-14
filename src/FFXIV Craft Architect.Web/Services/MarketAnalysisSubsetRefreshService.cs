@@ -12,6 +12,12 @@ public sealed record MarketAnalysisSubsetRefreshWorkflowRequest(
     public MarketFetchScope Scope { get; init; } = MarketFetchScope.SelectedDataCenter;
 
     public Func<bool>? IsCurrentConfiguration { get; init; }
+
+    public string? TargetDataCenter { get; init; }
+
+    public string? TargetWorldName { get; init; }
+
+    public MarketWorldEvidenceSnapshot? ObservedEvidence { get; init; }
 }
 
 public sealed record MarketAnalysisSubsetRefreshWorkflowResult(
@@ -59,7 +65,7 @@ public enum MarketAnalysisSubsetRefreshStatus
 public sealed class MarketAnalysisSubsetRefreshService
 {
     private readonly AppState _appState;
-    private readonly IMarketAnalysisExecutionService _marketAnalysisExecution;
+    private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly MarketShoppingService _marketShoppingService;
     private readonly WebPlanPersistenceService _planPersistence;
     private readonly IndexedDbService _indexedDb;
@@ -67,14 +73,14 @@ public sealed class MarketAnalysisSubsetRefreshService
 
     public MarketAnalysisSubsetRefreshService(
         AppState appState,
-        IMarketAnalysisExecutionService marketAnalysisExecution,
+        IMarketEvidenceReconciliationService marketEvidenceReconciliation,
         MarketShoppingService marketShoppingService,
         WebPlanPersistenceService planPersistence,
         IndexedDbService indexedDb,
         IRecipeLayerWorkflowService recipeLayerWorkflow)
     {
         _appState = appState;
-        _marketAnalysisExecution = marketAnalysisExecution;
+        _marketEvidenceReconciliation = marketEvidenceReconciliation;
         _marketShoppingService = marketShoppingService;
         _planPersistence = planPersistence;
         _indexedDb = indexedDb;
@@ -156,21 +162,65 @@ public sealed class MarketAnalysisSubsetRefreshService
                 }
             });
 
-        var executionResult = await _marketAnalysisExecution.ExecuteAsync(
-            new MarketAnalysisExecutionRequest
+        IReadOnlyList<MarketItemAnalysis> reconciledAnalyses;
+        IReadOnlyList<DetailedShoppingPlan> reconciledShoppingPlans;
+        int fetchedCount;
+        if (!string.IsNullOrWhiteSpace(request.TargetWorldName) &&
+            !string.IsNullOrWhiteSpace(request.TargetDataCenter))
+        {
+            if (candidates.Count != 1)
             {
-                Items = candidates,
-                Scope = request.Scope,
-                SelectedDataCenter = _appState.SelectedDataCenter,
-                SelectedRegion = _appState.SelectedRegion,
-                ForceRefreshData = true,
-                RecommendationMode = RecommendationMode.MinimizeTotalCost,
-                Lens = _appState.MarketAnalysisLens,
-                ExpectedWorldsByDataCenter = _appState.GetExpectedMarketWorlds(request.Scope)
-            },
-            guardedProgress,
-            ct,
-            executionOptions: request.ExecutionOptions);
+                throw new InvalidOperationException("World reconciliation requires exactly one market item.");
+            }
+
+            var worldResult = await _marketEvidenceReconciliation.ReconcileWorldAsync(
+                new MarketWorldEvidenceReconciliationRequest
+                {
+                    Item = candidates[0],
+                    DataCenter = request.TargetDataCenter,
+                    WorldName = request.TargetWorldName,
+                    ObservedEvidence = request.ObservedEvidence,
+                    Scope = request.Scope,
+                    SelectedDataCenter = _appState.SelectedDataCenter,
+                    SelectedRegion = _appState.SelectedRegion,
+                    RecommendationMode = RecommendationMode.MinimizeTotalCost,
+                    Lens = _appState.MarketAnalysisLens,
+                    ExpectedWorldsByDataCenter = _appState.GetExpectedMarketWorlds(request.Scope)
+                },
+                guardedProgress,
+                ct,
+                executionOptions: request.ExecutionOptions);
+            reconciledAnalyses = [worldResult.Analysis];
+            reconciledShoppingPlans = [worldResult.ShoppingPlan];
+            fetchedCount = request.ObservedEvidence == null ? 1 : 0;
+        }
+        else
+        {
+            var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+                new MarketEvidenceReconciliationRequest
+                {
+                    Items = candidates,
+                    PublishedAnalyses = _appState.MarketItemAnalyses
+                        .Where(analysis => candidateIds.Contains(analysis.ItemId))
+                        .ToList(),
+                    PublishedShoppingPlans = _appState.ShoppingPlans
+                        .Where(plan => candidateIds.Contains(plan.ItemId))
+                        .ToList(),
+                    Scope = request.Scope,
+                    SelectedDataCenter = _appState.SelectedDataCenter,
+                    SelectedRegion = _appState.SelectedRegion,
+                    RecommendationMode = RecommendationMode.MinimizeTotalCost,
+                    Lens = _appState.MarketAnalysisLens,
+                    ExpectedWorldsByDataCenter = _appState.GetExpectedMarketWorlds(request.Scope),
+                    Policy = MarketEvidenceReconciliationPolicy.ForcedRefresh()
+                },
+                guardedProgress,
+                ct,
+                executionOptions: request.ExecutionOptions);
+            reconciledAnalyses = reconciliation.Analyses;
+            reconciledShoppingPlans = reconciliation.ShoppingPlans;
+            fetchedCount = reconciliation.FetchedCount;
+        }
         ct.ThrowIfCancellationRequested();
 
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
@@ -201,11 +251,11 @@ public sealed class MarketAnalysisSubsetRefreshService
                 requestedItemIds);
         }
 
-        var analysisByItemId = executionResult.Analyses
+        var analysisByItemId = reconciledAnalyses
             .Where(analysis => candidateIds.Contains(analysis.ItemId))
             .GroupBy(analysis => analysis.ItemId)
             .ToDictionary(group => group.Key, group => group.First());
-        var shoppingPlanByItemId = executionResult.ShoppingPlans
+        var shoppingPlanByItemId = reconciledShoppingPlans
             .Where(shoppingPlan => candidateIds.Contains(shoppingPlan.ItemId))
             .GroupBy(shoppingPlan => shoppingPlan.ItemId)
             .ToDictionary(group => group.Key, group => group.First());
@@ -229,7 +279,7 @@ public sealed class MarketAnalysisSubsetRefreshService
                 missingCandidateItemIds,
                 noDataItemIds,
                 AnalyzedCount: 0,
-                executionResult.Evidence.FetchedCount,
+                fetchedCount,
                 Published: false);
         }
 
@@ -300,7 +350,7 @@ public sealed class MarketAnalysisSubsetRefreshService
             missingCandidateItemIds,
             noDataItemIds,
             refreshedAnalyses.Count,
-            executionResult.Evidence.FetchedCount,
+            fetchedCount,
             Published: true);
     }
 

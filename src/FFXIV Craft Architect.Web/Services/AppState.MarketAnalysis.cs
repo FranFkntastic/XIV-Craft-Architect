@@ -65,8 +65,12 @@ public partial class AppState
         ArgumentNullException.ThrowIfNull(analysis);
         ArgumentNullException.ThrowIfNull(shoppingPlan);
 
-        ReplaceListContents(_marketItemAnalyses, ReplaceAnalysisByItemId(_marketItemAnalyses, analysis));
-        ReplaceListContents(_shoppingPlans, ReplaceShoppingPlanByItemId(_shoppingPlans, shoppingPlan));
+        ReplaceListContents(
+            _marketItemAnalyses,
+            MarketEvidenceCollectionMerger.MergeAnalyses(_marketItemAnalyses, [analysis]));
+        ReplaceListContents(
+            _shoppingPlans,
+            MarketEvidenceCollectionMerger.MergeShoppingPlans(_shoppingPlans, [shoppingPlan]));
         if (_marketIntelligenceId == Guid.Empty)
         {
             _marketIntelligenceId = Guid.NewGuid();
@@ -94,17 +98,8 @@ public partial class AppState
         ArgumentNullException.ThrowIfNull(analyses);
         ArgumentNullException.ThrowIfNull(shoppingPlans);
 
-        var updatedAnalyses = _marketItemAnalyses;
-        foreach (var analysis in analyses)
-        {
-            updatedAnalyses = ReplaceAnalysisByItemId(updatedAnalyses, analysis).ToList();
-        }
-
-        var updatedShoppingPlans = _shoppingPlans;
-        foreach (var shoppingPlan in shoppingPlans)
-        {
-            updatedShoppingPlans = ReplaceShoppingPlanByItemId(updatedShoppingPlans, shoppingPlan).ToList();
-        }
+        var updatedAnalyses = MarketEvidenceCollectionMerger.MergeAnalyses(_marketItemAnalyses, analyses);
+        var updatedShoppingPlans = MarketEvidenceCollectionMerger.MergeShoppingPlans(_shoppingPlans, shoppingPlans);
 
         ReplaceListContents(_marketItemAnalyses, updatedAnalyses);
         ReplaceListContents(_shoppingPlans, updatedShoppingPlans);
@@ -830,58 +825,6 @@ public partial class AppState
             ? null
             : System.Text.Json.JsonSerializer.Deserialize<StoredRecipeOperationSnapshot>(
                 System.Text.Json.JsonSerializer.Serialize(recipeBasis));
-    }
-
-    private static List<MarketItemAnalysis> ReplaceAnalysisByItemId(
-        IEnumerable<MarketItemAnalysis> analyses,
-        MarketItemAnalysis replacement)
-    {
-        var replaced = false;
-        var result = new List<MarketItemAnalysis>();
-        foreach (var analysis in analyses)
-        {
-            if (analysis.ItemId == replacement.ItemId)
-            {
-                result.Add(replacement);
-                replaced = true;
-                continue;
-            }
-
-            result.Add(analysis);
-        }
-
-        if (!replaced)
-        {
-            result.Add(replacement);
-        }
-
-        return result;
-    }
-
-    private static List<DetailedShoppingPlan> ReplaceShoppingPlanByItemId(
-        IEnumerable<DetailedShoppingPlan> shoppingPlans,
-        DetailedShoppingPlan replacement)
-    {
-        var replaced = false;
-        var result = new List<DetailedShoppingPlan>();
-        foreach (var shoppingPlan in shoppingPlans)
-        {
-            if (shoppingPlan.ItemId == replacement.ItemId)
-            {
-                result.Add(replacement);
-                replaced = true;
-                continue;
-            }
-
-            result.Add(shoppingPlan);
-        }
-
-        if (!replaced)
-        {
-            result.Add(replacement);
-        }
-
-        return result;
     }
 
     /// <summary>

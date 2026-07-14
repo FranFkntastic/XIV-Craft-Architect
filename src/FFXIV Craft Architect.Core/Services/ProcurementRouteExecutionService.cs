@@ -5,14 +5,14 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutionService
 {
-    private readonly IMarketAnalysisExecutionService _marketAnalysisExecutionService;
+    private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly MarketShoppingService _marketShoppingService;
 
     public ProcurementRouteExecutionService(
-        IMarketAnalysisExecutionService marketAnalysisExecutionService,
+        IMarketEvidenceReconciliationService marketEvidenceReconciliation,
         MarketShoppingService marketShoppingService)
     {
-        _marketAnalysisExecutionService = marketAnalysisExecutionService;
+        _marketEvidenceReconciliation = marketEvidenceReconciliation;
         _marketShoppingService = marketShoppingService;
     }
 
@@ -24,64 +24,32 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        progress?.Report("Selecting procurement market evidence...");
+        progress?.Report("Reconciling procurement market evidence...");
         var activeProcurementItems = GetActiveProcurementItems(request);
-        var selection = AcquisitionPlanningService.SelectActiveProcurementEvidence(
-            activeProcurementItems,
-            request.SourceShoppingPlans,
-            request.Scope,
-            request.SelectedDataCenter);
-        var reusableEvidence = selection.ReusablePlans.ToList();
-        var missingItems = selection.MissingItems.ToList();
-        if (request.Scope == MarketFetchScope.EntireRegion &&
-            request.ExpectedWorldsByDataCenter.Count > 0)
-        {
-            var activeItemsByItemId = activeProcurementItems
-                .Where(item => item.TotalQuantity > 0)
-                .GroupBy(item => item.ItemId)
-                .ToDictionary(group => group.Key, group => group.First());
-            var incompleteRegionEvidence = reusableEvidence
-                .Where(plan => !HasExpectedRegionEvidence(plan, request.ExpectedWorldsByDataCenter))
-                .ToList();
-            reusableEvidence = reusableEvidence
-                .Except(incompleteRegionEvidence)
-                .ToList();
-            foreach (var incompletePlan in incompleteRegionEvidence)
+        var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+            new MarketEvidenceReconciliationRequest
             {
-                if (activeItemsByItemId.TryGetValue(incompletePlan.ItemId, out var item) &&
-                    missingItems.All(missingItem => missingItem.ItemId != item.ItemId))
-                {
-                    missingItems.Add(item);
-                }
-            }
-        }
-
-        var refreshedEvidence = new List<DetailedShoppingPlan>();
-        if (missingItems.Count > 0)
-        {
-            progress?.Report($"Fetching procurement prices for {missingItems.Count} active items...");
-            var marketResult = await _marketAnalysisExecutionService.ExecuteAsync(
-                new MarketAnalysisExecutionRequest
-                {
-                    Items = missingItems,
-                    Scope = request.Scope,
-                    SelectedDataCenter = request.SelectedDataCenter,
-                    SelectedRegion = request.SelectedRegion,
-                    RecommendationMode = RecommendationMode.MinimizeTotalCost,
-                    Lens = request.Lens,
-                    ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter
-                },
-                progress,
-                ct,
-                executionOptions);
-            refreshedEvidence = marketResult.ShoppingPlans;
-            _marketShoppingService.ApplyVendorPurchaseOverrides(request.Plan, refreshedEvidence);
-        }
-
-        var evidencePlans = AcquisitionPlanningService.MergeActiveProcurementEvidence(
-            activeProcurementItems,
-            reusableEvidence,
-            refreshedEvidence);
+                Items = activeProcurementItems,
+                PublishedAnalyses = request.SourceMarketAnalyses,
+                PublishedShoppingPlans = request.SourceShoppingPlans,
+                Scope = request.Scope,
+                SelectedDataCenter = request.SelectedDataCenter,
+                SelectedRegion = request.SelectedRegion,
+                RecommendationMode = RecommendationMode.MinimizeTotalCost,
+                Lens = request.Lens,
+                ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter,
+                Policy = request.ReconciliationPolicy
+            },
+            progress,
+            ct,
+            executionOptions);
+        var evidencePlans = reconciliation.ShoppingPlans.ToList();
+        var reusableEvidence = evidencePlans
+            .Where(plan => reconciliation.ReusedItemIds.Contains(plan.ItemId))
+            .ToList();
+        var refreshedEvidence = evidencePlans
+            .Where(plan => reconciliation.RefreshedItemIds.Contains(plan.ItemId))
+            .ToList();
         _marketShoppingService.ApplyVendorPurchaseOverrides(request.Plan, evidencePlans);
 
         var scopedEvidence = PrepareProcurementEvidenceForScope(evidencePlans, request);
@@ -100,8 +68,9 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             evidencePlans,
             reusableEvidence,
             refreshedEvidence,
-            missingItems,
-            optimization.Decision);
+            reconciliation.ReconciledItems,
+            optimization.Decision,
+            reconciliation.Items);
     }
 
     private static MarketAnalysisConfig CopyProcurementConfig(ProcurementRouteExecutionRequest request)
@@ -125,49 +94,6 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         return request.ActiveProcurementItems.Count > 0
             ? request.ActiveProcurementItems
             : AcquisitionPlanningService.GetActiveProcurementItems(request.Plan);
-    }
-
-    private static bool HasExpectedRegionEvidence(
-        DetailedShoppingPlan shoppingPlan,
-        IReadOnlyDictionary<string, IReadOnlyList<string>> expectedWorldsByDataCenter)
-    {
-        if (IsVendorPlan(shoppingPlan))
-        {
-            return true;
-        }
-
-        var evidenceDataCenters = GetEvidenceDataCenters(shoppingPlan)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return expectedWorldsByDataCenter.Keys.All(evidenceDataCenters.Contains);
-    }
-
-    private static IEnumerable<string> GetEvidenceDataCenters(DetailedShoppingPlan shoppingPlan)
-    {
-        foreach (var world in shoppingPlan.WorldOptions)
-        {
-            if (!string.IsNullOrWhiteSpace(world.DataCenter))
-            {
-                yield return world.DataCenter;
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(shoppingPlan.RecommendedWorld?.DataCenter))
-        {
-            yield return shoppingPlan.RecommendedWorld.DataCenter;
-        }
-
-        if (shoppingPlan.RecommendedSplit == null)
-        {
-            yield break;
-        }
-
-        foreach (var split in shoppingPlan.RecommendedSplit)
-        {
-            if (!string.IsNullOrWhiteSpace(split.DataCenter))
-            {
-                yield return split.DataCenter;
-            }
-        }
     }
 
     private static List<DetailedShoppingPlan> PrepareProcurementEvidenceForScope(

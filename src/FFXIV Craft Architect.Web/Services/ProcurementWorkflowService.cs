@@ -76,6 +76,7 @@ public sealed class ProcurementWorkflowService
                 Plan = plan,
                 ActiveProcurementItems = activeItemsList,
                 SourceShoppingPlans = _appState.ShoppingPlans,
+                SourceMarketAnalyses = _appState.MarketItemAnalyses,
                 Scope = scope,
                 SelectedDataCenter = _appState.SelectedDataCenter,
                 SelectedRegion = _appState.SelectedRegion,
@@ -135,7 +136,10 @@ public sealed class ProcurementWorkflowService
                 request.ExecutionOptions)
             {
                 Scope = scope,
-                IsCurrentConfiguration = () => IsCurrentRequest(requestSnapshot)
+                IsCurrentConfiguration = () => IsCurrentRequest(requestSnapshot),
+                TargetDataCenter = request.TargetDataCenter,
+                TargetWorldName = request.TargetWorldName,
+                ObservedEvidence = request.ObservedEvidence
             },
             progress,
             ct);
@@ -257,7 +261,14 @@ public sealed record ProcurementItemRefreshWorkflowRequest(
     int ItemId,
     string ItemName,
     Func<bool>? IsCurrentOperation = null,
-    MarketAnalysisExecutionOptions? ExecutionOptions = null);
+    MarketAnalysisExecutionOptions? ExecutionOptions = null)
+{
+    public string? TargetDataCenter { get; init; }
+
+    public string? TargetWorldName { get; init; }
+
+    public MarketWorldEvidenceSnapshot? ObservedEvidence { get; init; }
+}
 
 public sealed record ProcurementItemRefreshWorkflowResult(
     ProcurementItemRefreshStatus Status,

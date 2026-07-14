@@ -712,7 +712,8 @@ public sealed partial class DesktopShellViewModel : ObservableObject, IDisposabl
         _logger.LogDebug("Clear stale market cache requested.");
         try
         {
-            var removed = await _localInfrastructure.CleanupStaleMarketCacheAsync(TimeSpan.FromHours(1));
+            var removed = await _localInfrastructure.CleanupStaleMarketCacheAsync(
+                MarketEvidencePolicyDefaults.ReusableCacheMaxAge);
             OperationStatusText = removed == 0
                 ? "No stale market cache entries to clear."
                 : $"Cleared {removed:N0} stale market cache entr{(removed == 1 ? "y" : "ies")}.";
@@ -1242,13 +1243,13 @@ public sealed partial class DesktopShellViewModel : ObservableObject, IDisposabl
         var marketEvidence = _session.MarketEvidence;
         MarketStatusText = marketEvidence.PublishedAgainstVersion == null
             ? "Market evidence not run"
-            : marketEvidence.ItemAnalyses.Any(analysis => analysis.Warning?.StartsWith(DesktopMarketRefreshQueueService.FetchFailedWarningPrefix, StringComparison.Ordinal) == true)
-                ? "Market evidence failed"
-                : marketEvidence.ItemAnalyses.Any(analysis => analysis.Warning == DesktopMarketRefreshQueueService.NoListingsWarning)
-                    ? "Market evidence partial"
-                    : marketEvidence.ItemAnalyses.Any(analysis => analysis.WorstDataQualityBucket == MarketDataQualityBucket.Current)
-                        ? "Market evidence fresh"
-                        : "Market evidence available";
+            : marketEvidence.ItemAnalyses.Any(analysis =>
+                analysis.WorstDataQualityBucket == MarketDataQualityBucket.Missing)
+                ? "Market evidence incomplete"
+                : marketEvidence.ItemAnalyses.All(analysis =>
+                    MarketEvidenceFreshness.IsRouteEligible(analysis.WorstDataQualityBucket))
+                    ? "Market evidence recommendation-ready"
+                    : "Market evidence needs refresh";
         MarketRibbonSummary = MarketStatusText;
 
         ReplacePlanItems(activePlan, projectItems);
@@ -1613,18 +1614,13 @@ public sealed partial class DesktopShellViewModel : ObservableObject, IDisposabl
 
     private static string GetMarketAnalysisTrustText(MarketItemAnalysis analysis)
     {
-        if (analysis.Warning?.StartsWith(DesktopMarketRefreshQueueService.FetchFailedWarningPrefix, StringComparison.Ordinal) == true)
+        if (analysis.WorstDataQualityBucket == MarketDataQualityBucket.Missing)
         {
-            return "Failed";
+            return string.IsNullOrWhiteSpace(analysis.Warning) ? "Missing" : "No data";
         }
 
-        if (analysis.Warning == DesktopMarketRefreshQueueService.NoListingsWarning)
-        {
-            return "No listings";
-        }
-
-        return analysis.WorstDataQualityBucket == MarketDataQualityBucket.Current
-            ? "Fresh"
+        return MarketEvidenceFreshness.IsRouteEligible(analysis.WorstDataQualityBucket)
+            ? "Recommendation-ready"
             : analysis.WorstDataQualityBucket.ToString();
     }
 
@@ -1696,24 +1692,21 @@ public sealed partial class DesktopShellViewModel : ObservableObject, IDisposabl
             return "Needs data";
         }
 
-        var warning = marketEvidence.ItemAnalyses
-            .FirstOrDefault(analysis => analysis.ItemId == itemId)
-            ?.Warning;
-        if (warning?.StartsWith(DesktopMarketRefreshQueueService.FetchFailedWarningPrefix, StringComparison.Ordinal) == true)
+        var itemAnalysis = marketEvidence.ItemAnalyses
+            .FirstOrDefault(analysis => analysis.ItemId == itemId);
+        if (itemAnalysis == null)
         {
-            return "Refresh failed";
+            return "Needs data";
         }
 
-        if (warning == DesktopMarketRefreshQueueService.NoListingsWarning)
+        if (itemAnalysis.WorstDataQualityBucket == MarketDataQualityBucket.Missing)
         {
-            return "No listings";
+            return "No data";
         }
 
-        if (marketEvidence.ItemAnalyses
-            .FirstOrDefault(analysis => analysis.ItemId == itemId)
-            ?.WorstDataQualityBucket == MarketDataQualityBucket.Current)
+        if (MarketEvidenceFreshness.IsRouteEligible(itemAnalysis.WorstDataQualityBucket))
         {
-            return "Fresh";
+            return "Recommendation-ready";
         }
 
         return shoppingPlan == null ? "Review" : GetShoppingPlanTrust(shoppingPlan);
@@ -2198,11 +2191,12 @@ public sealed partial class DesktopShellViewModel : ObservableObject, IDisposabl
             return "Refresh market evidence for every active procurement item in the plan.";
         }
 
-        var freshCount = analyses.Count(analysis => analysis.WorstDataQualityBucket == MarketDataQualityBucket.Current);
-        var reviewCount = analyses.Count - freshCount;
+        var eligibleCount = analyses.Count(analysis =>
+            MarketEvidenceFreshness.IsRouteEligible(analysis.WorstDataQualityBucket));
+        var reviewCount = analyses.Count - eligibleCount;
         return reviewCount == 0
-            ? $"{freshCount:N0} procurement item{(freshCount == 1 ? string.Empty : "s")} have fresh market evidence."
-            : $"{freshCount:N0} fresh, {reviewCount:N0} need review.";
+            ? $"{eligibleCount:N0} procurement item{(eligibleCount == 1 ? string.Empty : "s")} have recommendation-ready market evidence."
+            : $"{eligibleCount:N0} recommendation-ready, {reviewCount:N0} need refresh.";
     }
 
     private static string FormatRefreshQueueResult(DesktopMarketRefreshQueueResult result) =>

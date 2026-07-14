@@ -15,7 +15,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
     private readonly IJSRuntime _jsRuntime;
     private readonly UniversalisService _universalisService;
     private readonly ILogger<IndexedDbMarketCacheService>? _logger;
-    private readonly TimeSpan _defaultMaxAge = TimeSpan.FromHours(1);
+    private readonly TimeSpan _defaultMaxAge = MarketEvidencePolicyDefaults.ReusableCacheMaxAge;
     private readonly SemaphoreSlim _populateSemaphore = new(1, 1);
     private const long MaxCacheSizeBytes = 500 * 1024 * 1024; // 500MB max
     private const int MaxCacheEntries = 10000; // Max 10k items

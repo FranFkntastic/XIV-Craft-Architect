@@ -42,6 +42,7 @@
                                RouteDecision="RouteDecision"
                                EmptyTitle="@EmptyTitle"
                                EmptyMessage="@EmptyMessage"
+                               ReconcilingItemWorld="ReconcilingItemWorld"
                                OnReanalyzeWithoutWorldRequested="OnReanalyzeWithoutWorldRequested"
                                OnExcludeWorldForItemRequested="OnExcludeWorldForItemRequested"
                                OnRefreshItemRequested="OnRefreshItemRequested" />
@@ -60,6 +61,7 @@
     [Parameter] public string? ExclusionOutcome { get; set; }
     [Parameter] public string EmptyTitle { get; set; } = "Route ready to generate";
     [Parameter] public string EmptyMessage { get; set; } = "Choose route settings and generate a route.";
+    [Parameter] public MarketItemWorldKey? ReconcilingItemWorld { get; set; }
     [Parameter] public EventCallback OnUndoExclusionRequested { get; set; }
     [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnExcludeWorldForItemRequested { get; set; }

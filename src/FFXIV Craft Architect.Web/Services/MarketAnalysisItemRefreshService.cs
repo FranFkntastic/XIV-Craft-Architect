@@ -12,6 +12,12 @@ public sealed record MarketAnalysisItemRefreshWorkflowRequest(
     public MarketFetchScope Scope { get; init; } = MarketFetchScope.SelectedDataCenter;
 
     public Func<bool>? IsCurrentConfiguration { get; init; }
+
+    public string? TargetDataCenter { get; init; }
+
+    public string? TargetWorldName { get; init; }
+
+    public MarketWorldEvidenceSnapshot? ObservedEvidence { get; init; }
 }
 
 public sealed record MarketAnalysisItemRefreshWorkflowResult(
@@ -58,7 +64,10 @@ public sealed class MarketAnalysisItemRefreshService
                 request.ExecutionOptions)
             {
                 Scope = request.Scope,
-                IsCurrentConfiguration = request.IsCurrentConfiguration
+                IsCurrentConfiguration = request.IsCurrentConfiguration,
+                TargetDataCenter = request.TargetDataCenter,
+                TargetWorldName = request.TargetWorldName,
+                ObservedEvidence = request.ObservedEvidence
             },
             progress,
             ct);

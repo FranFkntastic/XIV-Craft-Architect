@@ -24,7 +24,7 @@ public class ProcurementRouteExecutionServiceTests
         };
         var marketExecution = new Mock<IMarketAnalysisExecutionService>(MockBehavior.Strict);
         var service = new ProcurementRouteExecutionService(
-            marketExecution.Object,
+            new MarketEvidenceReconciliationService(marketExecution.Object),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()));
 
         var result = await service.AnalyzeAsync(
@@ -32,6 +32,11 @@ public class ProcurementRouteExecutionServiceTests
             {
                 Plan = plan,
                 SourceShoppingPlans = sourcePlans,
+                SourceMarketAnalyses =
+                [
+                    MarketAnalysis(101, "Existing Item", MarketFetchScope.SelectedDataCenter, "Aether"),
+                    MarketAnalysis(202, "Missing Item", MarketFetchScope.SelectedDataCenter, "Aether")
+                ],
                 Scope = MarketFetchScope.SelectedDataCenter,
                 SelectedDataCenter = "Aether",
                 SelectedRegion = "North America",
@@ -75,7 +80,7 @@ public class ProcurementRouteExecutionServiceTests
         };
         var marketExecution = new Mock<IMarketAnalysisExecutionService>(MockBehavior.Strict);
         var service = new ProcurementRouteExecutionService(
-            marketExecution.Object,
+            new MarketEvidenceReconciliationService(marketExecution.Object),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()));
 
         var result = await service.AnalyzeAsync(
@@ -92,6 +97,10 @@ public class ProcurementRouteExecutionServiceTests
                     }
                 ],
                 SourceShoppingPlans = sourcePlans,
+                SourceMarketAnalyses =
+                [
+                    MarketAnalysis(202, "Projected Active Item", MarketFetchScope.SelectedDataCenter, "Aether")
+                ],
                 Scope = MarketFetchScope.SelectedDataCenter,
                 SelectedDataCenter = "Aether",
                 SelectedRegion = "North America",
@@ -129,6 +138,11 @@ public class ProcurementRouteExecutionServiceTests
             {
                 Plan = plan,
                 SourceShoppingPlans = sourcePlans,
+                SourceMarketAnalyses =
+                [
+                    MarketAnalysis(101, "Existing Item", MarketFetchScope.SelectedDataCenter, "Aether"),
+                    MarketAnalysis(202, "Missing Item", MarketFetchScope.SelectedDataCenter, "Aether")
+                ],
                 Scope = MarketFetchScope.SelectedDataCenter,
                 SelectedDataCenter = "Aether",
                 SelectedRegion = "North America",
@@ -142,6 +156,11 @@ public class ProcurementRouteExecutionServiceTests
                 Plan = plan,
                 ActiveProcurementItems = activeProcurementItems,
                 SourceShoppingPlans = sourcePlans,
+                SourceMarketAnalyses =
+                [
+                    MarketAnalysis(101, "Existing Item", MarketFetchScope.SelectedDataCenter, "Aether"),
+                    MarketAnalysis(202, "Missing Item", MarketFetchScope.SelectedDataCenter, "Aether")
+                ],
                 Scope = MarketFetchScope.SelectedDataCenter,
                 SelectedDataCenter = "Aether",
                 SelectedRegion = "North America",
@@ -186,7 +205,7 @@ public class ProcurementRouteExecutionServiceTests
                 [],
                 [fetchedPlan]));
         var service = new ProcurementRouteExecutionService(
-            marketExecution.Object,
+            new MarketEvidenceReconciliationService(marketExecution.Object),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()));
 
         var result = await service.AnalyzeAsync(
@@ -194,6 +213,10 @@ public class ProcurementRouteExecutionServiceTests
             {
                 Plan = plan,
                 SourceShoppingPlans = [reusablePlan],
+                SourceMarketAnalyses =
+                [
+                    MarketAnalysis(101, "Existing Item", MarketFetchScope.SelectedDataCenter, "Aether")
+                ],
                 Scope = MarketFetchScope.SelectedDataCenter,
                 SelectedDataCenter = "Aether",
                 SelectedRegion = "North America",
@@ -220,6 +243,69 @@ public class ProcurementRouteExecutionServiceTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_RefreshesStructurallyCompletePlanWhenEvidenceHasExpired()
+    {
+        var plan = CreatePlan();
+        var stalePlan = ShoppingPlan(
+            101,
+            "Existing Item",
+            World("Aether", "Siren", 500, 5));
+        var currentPlan = ShoppingPlan(
+            202,
+            "Missing Item",
+            World("Aether", "Faerie", 700, 5));
+        var replacementPlan = ShoppingPlan(
+            101,
+            "Existing Item",
+            World("Aether", "Adamantoise", 300, 5));
+        var marketExecution = new Mock<IMarketAnalysisExecutionService>();
+        marketExecution.Setup(service => service.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(new MarketAnalysisExecutionResult(
+                CreateEmptyEvidence(),
+                [MarketAnalysis(101, "Existing Item", MarketFetchScope.SelectedDataCenter, "Aether")],
+                [replacementPlan]));
+        var service = new ProcurementRouteExecutionService(
+            new MarketEvidenceReconciliationService(marketExecution.Object),
+            new MarketShoppingService(Mock.Of<IMarketCacheService>()));
+
+        var result = await service.AnalyzeAsync(
+            new ProcurementRouteExecutionRequest
+            {
+                Plan = plan,
+                SourceShoppingPlans = [stalePlan, currentPlan],
+                SourceMarketAnalyses =
+                [
+                    MarketAnalysis(
+                        101,
+                        "Existing Item",
+                        MarketFetchScope.SelectedDataCenter,
+                        DateTime.UtcNow - TimeSpan.FromHours(13),
+                        "Aether"),
+                    MarketAnalysis(202, "Missing Item", MarketFetchScope.SelectedDataCenter, "Aether")
+                ],
+                Scope = MarketFetchScope.SelectedDataCenter,
+                SelectedDataCenter = "Aether",
+                SelectedRegion = "North America",
+                ProcurementConfig = new MarketAnalysisConfig { TravelTolerance = 0 }
+            },
+            executionOptions: MarketAnalysisExecutionOptions.Synchronous);
+
+        marketExecution.Verify(service => service.ExecuteAsync(
+            It.Is<MarketAnalysisExecutionRequest>(request =>
+                request.Items.Count == 1 && request.Items[0].ItemId == 101),
+            It.IsAny<IProgress<string>?>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<MarketAnalysisExecutionOptions?>()));
+        Assert.Equal("Adamantoise", result.EvidencePlans.Single(item => item.ItemId == 101).RecommendedWorld?.WorldName);
+        var reconciliation = Assert.Single(result.ReconciliationItems!, item => item.ItemId == 101);
+        Assert.Equal(MarketEvidenceReconciliationReason.RecommendationExpired, reconciliation.Reason);
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_EntireRegionPreservesMultiDataCenterEvidence()
     {
         var plan = CreatePlan();
@@ -237,7 +323,7 @@ public class ProcurementRouteExecutionServiceTests
                 World("Primal", "Leviathan", 200, 5))
         };
         var service = new ProcurementRouteExecutionService(
-            Mock.Of<IMarketAnalysisExecutionService>(),
+            new MarketEvidenceReconciliationService(Mock.Of<IMarketAnalysisExecutionService>()),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()));
 
         var result = await service.AnalyzeAsync(
@@ -245,11 +331,17 @@ public class ProcurementRouteExecutionServiceTests
             {
                 Plan = plan,
                 SourceShoppingPlans = sourcePlans,
+                SourceMarketAnalyses =
+                [
+                    MarketAnalysis(101, "Existing Item", MarketFetchScope.EntireRegion, "Aether", "Primal"),
+                    MarketAnalysis(202, "Missing Item", MarketFetchScope.EntireRegion, "Aether", "Primal")
+                ],
                 Scope = MarketFetchScope.EntireRegion,
                 SelectedDataCenter = "Aether",
                 SelectedRegion = "North America",
                 Lens = MarketAcquisitionLens.MinimumUpfrontCost,
-                ProcurementConfig = new MarketAnalysisConfig { TravelTolerance = 11 }
+                ProcurementConfig = new MarketAnalysisConfig { TravelTolerance = 11 },
+                ReconciliationPolicy = new MarketEvidenceReconciliationPolicy { RequireCompleteScope = false }
             },
             executionOptions: MarketAnalysisExecutionOptions.Synchronous);
 
@@ -292,7 +384,7 @@ public class ProcurementRouteExecutionServiceTests
                 [],
                 [completeRegionPlan, secondItemPlan]));
         var service = new ProcurementRouteExecutionService(
-            marketExecution.Object,
+            new MarketEvidenceReconciliationService(marketExecution.Object),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()));
 
         var result = await service.AnalyzeAsync(
@@ -300,6 +392,10 @@ public class ProcurementRouteExecutionServiceTests
             {
                 Plan = plan,
                 SourceShoppingPlans = [partialRegionPlan],
+                SourceMarketAnalyses =
+                [
+                    MarketAnalysis(101, "Existing Item", MarketFetchScope.EntireRegion, "Aether", "Primal")
+                ],
                 Scope = MarketFetchScope.EntireRegion,
                 SelectedDataCenter = "Aether",
                 SelectedRegion = "North America",
@@ -341,7 +437,7 @@ public class ProcurementRouteExecutionServiceTests
                 World("Aether", "Faerie", 500, 5))
         };
         var service = new ProcurementRouteExecutionService(
-            Mock.Of<IMarketAnalysisExecutionService>(),
+            new MarketEvidenceReconciliationService(Mock.Of<IMarketAnalysisExecutionService>()),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()));
 
         var result = await service.AnalyzeAsync(
@@ -349,6 +445,11 @@ public class ProcurementRouteExecutionServiceTests
             {
                 Plan = plan,
                 SourceShoppingPlans = sourcePlans,
+                SourceMarketAnalyses =
+                [
+                    MarketAnalysis(101, "Existing Item", MarketFetchScope.SelectedDataCenter, "Aether"),
+                    MarketAnalysis(202, "Missing Item", MarketFetchScope.SelectedDataCenter, "Aether")
+                ],
                 Scope = MarketFetchScope.SelectedDataCenter,
                 SelectedDataCenter = "Aether",
                 SelectedRegion = "North America",
@@ -397,7 +498,7 @@ public class ProcurementRouteExecutionServiceTests
     private static ProcurementRouteExecutionService CreateService()
     {
         return new ProcurementRouteExecutionService(
-            Mock.Of<IMarketAnalysisExecutionService>(),
+            new MarketEvidenceReconciliationService(Mock.Of<IMarketAnalysisExecutionService>()),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()));
     }
 
@@ -457,6 +558,44 @@ public class ProcurementRouteExecutionServiceTests
                     RetainerName = $"{worldName} Retainer"
                 }
             ]
+        };
+    }
+
+    private static MarketItemAnalysis MarketAnalysis(
+        int itemId,
+        string name,
+        MarketFetchScope scope,
+        params string[] dataCenters)
+    {
+        return MarketAnalysis(itemId, name, scope, DateTime.UtcNow, dataCenters);
+    }
+
+    private static MarketItemAnalysis MarketAnalysis(
+        int itemId,
+        string name,
+        MarketFetchScope scope,
+        DateTime evidenceTimestampUtc,
+        params string[] dataCenters)
+    {
+        var loadedAtUtc = DateTime.UtcNow;
+        return new MarketItemAnalysis
+        {
+            ItemId = itemId,
+            Name = name,
+            QuantityNeeded = 5,
+            Scope = scope,
+            LoadedAtUtc = loadedAtUtc,
+            RequestedDataCenters = dataCenters,
+            PresentDataCenters = dataCenters,
+            Worlds = dataCenters
+                .Select(dataCenter => new WorldMarketAnalysis
+                {
+                    DataCenter = dataCenter,
+                    WorldName = dataCenter == "Aether" ? "Siren" : "Leviathan",
+                    MarketUploadedAtUtc = evidenceTimestampUtc,
+                    DataQualityBucket = MarketDataQualityBucket.Current
+                })
+                .ToList()
         };
     }
 

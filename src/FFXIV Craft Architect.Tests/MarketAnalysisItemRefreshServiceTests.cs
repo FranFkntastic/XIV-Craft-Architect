@@ -115,7 +115,7 @@ public class MarketAnalysisItemRefreshServiceTests
 
         var subsetRefreshService = new MarketAnalysisSubsetRefreshService(
             appState,
-            execution,
+            new MarketEvidenceReconciliationService(execution),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
             persistence,
             indexedDb,

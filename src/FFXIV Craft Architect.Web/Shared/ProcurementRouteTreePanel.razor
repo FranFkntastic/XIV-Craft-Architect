@@ -139,6 +139,7 @@
     [Parameter] public MarketRouteDecision? RouteDecision { get; set; }
     [Parameter] public string EmptyTitle { get; set; } = "Route ready to generate";
     [Parameter] public string EmptyMessage { get; set; } = "Choose route settings and generate a route.";
+    [Parameter] public MarketItemWorldKey? ReconcilingItemWorld { get; set; }
     [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnExcludeWorldForItemRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnRefreshItemRequested { get; set; }
@@ -213,6 +214,10 @@
                         @foreach (var item in world.Items.OrderBy(item => item.ItemName))
                         {
                             var itemDecision = GetItemDecision(item);
+                            var itemWorldKey = new MarketItemWorldKey(
+                                item.ItemId,
+                                new MarketWorldKey(world.DataCenter, world.WorldName));
+                            var isReconciling = ReconcilingItemWorld == itemWorldKey;
                             <tr>
                                 <th scope="row" data-label="Item">
                                     <div class="pp-item-main">
@@ -238,14 +243,29 @@
                                     <span class="pp-item-actions">
                                         @if (!world.IsVendor)
                                         {
+                                            <button class="pp-recheck-action"
+                                                    type="button"
+                                                    disabled="@isReconciling"
+                                                    aria-label="@(isReconciling
+                                                        ? $"Checking {item.ItemName} on {world.WorldName}"
+                                                        : GetRefreshItemTitle(world, item))"
+                                                    title="@GetRefreshItemTitle(world, item)"
+                                                    @onclick="() => RefreshItem(world, item)">
+                                                @if (isReconciling)
+                                                {
+                                                    <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                                                    <span>Checking</span>
+                                                }
+                                                else
+                                                {
+                                                    <MudIcon Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" />
+                                                    <span>Recheck</span>
+                                                }
+                                            </button>
                                             <MudIconButton Icon="@Icons.Material.Filled.Block"
                                                            Size="Size.Small"
                                                            Title="@GetExcludeItemTitle(world, item)"
                                                            OnClick="() => ExcludeWorldForItem(world, item)" />
-                                            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
-                                                           Size="Size.Small"
-                                                           Title="@GetRefreshItemTitle(item)"
-                                                           OnClick="() => RefreshItem(world, item)" />
                                         }
                                         <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
                                                        Size="Size.Small"
@@ -345,13 +365,13 @@
     private static string Pluralize(int count, string singular, string plural) => count == 1 ? singular : plural;
 
     private static string GetExcludeWorldTitle(WorldProcurementCardModel world) =>
-        $"Temporarily exclude {world.WorldName} from this route";
+        $"Temporarily skip travel to {world.WorldName}";
 
     private static string GetExcludeItemTitle(WorldProcurementCardModel world, WorldItemPurchase item) =>
         $"Exclude {world.WorldName} listings for {item.ItemName}";
 
-    private static string GetRefreshItemTitle(WorldItemPurchase item) =>
-        $"Refresh market data for {item.ItemName}";
+    private static string GetRefreshItemTitle(WorldProcurementCardModel world, WorldItemPurchase item) =>
+        $"Recheck {item.ItemName} on {world.WorldName} and update the route";
 
     private static string GetCopyItemTitle(WorldItemPurchase item) => $"Copy {item.ItemName}";
 

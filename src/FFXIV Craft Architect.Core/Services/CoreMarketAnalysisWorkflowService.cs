@@ -24,7 +24,7 @@ public sealed record CoreMarketAnalysisWorkflowResult(
 public sealed class CoreMarketAnalysisWorkflowService
 {
     private readonly CraftSessionState _session;
-    private readonly IMarketAnalysisExecutionService _marketAnalysisExecution;
+    private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly MarketShoppingService _marketShoppingService;
     private readonly IMarketPriceLadderAnalysisService _marketPriceLadderAnalysis;
     private readonly ICoreRecipeLayerWorkflowService _recipeLayerWorkflow;
@@ -32,14 +32,14 @@ public sealed class CoreMarketAnalysisWorkflowService
 
     public CoreMarketAnalysisWorkflowService(
         CraftSessionState session,
-        IMarketAnalysisExecutionService marketAnalysisExecution,
+        IMarketEvidenceReconciliationService marketEvidenceReconciliation,
         MarketShoppingService marketShoppingService,
         IMarketPriceLadderAnalysisService marketPriceLadderAnalysis,
         ICoreRecipeLayerWorkflowService recipeLayerWorkflow,
         ICraftOperationCoordinator operationCoordinator)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
-        _marketAnalysisExecution = marketAnalysisExecution ?? throw new ArgumentNullException(nameof(marketAnalysisExecution));
+        _marketEvidenceReconciliation = marketEvidenceReconciliation ?? throw new ArgumentNullException(nameof(marketEvidenceReconciliation));
         _marketShoppingService = marketShoppingService ?? throw new ArgumentNullException(nameof(marketShoppingService));
         _marketPriceLadderAnalysis = marketPriceLadderAnalysis ?? throw new ArgumentNullException(nameof(marketPriceLadderAnalysis));
         _recipeLayerWorkflow = recipeLayerWorkflow ?? throw new ArgumentNullException(nameof(recipeLayerWorkflow));
@@ -88,17 +88,19 @@ public sealed class CoreMarketAnalysisWorkflowService
             }
 
             var capturedVersions = _session.CaptureVersionStamp();
-            var executionResult = await _marketAnalysisExecution.ExecuteAsync(
-                new MarketAnalysisExecutionRequest
+            var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+                new MarketEvidenceReconciliationRequest
                 {
                     Items = materials,
                     Scope = request.Scope,
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,
-                    ForceRefreshData = request.ForceRefreshData,
                     RecommendationMode = request.RecommendationMode,
                     Lens = request.Lens,
-                    ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter
+                    ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter,
+                    Policy = request.ForceRefreshData
+                        ? MarketEvidenceReconciliationPolicy.ForcedRefresh()
+                        : new MarketEvidenceReconciliationPolicy()
                 },
                 progress,
                 linkedCancellation.Token,
@@ -108,7 +110,7 @@ public sealed class CoreMarketAnalysisWorkflowService
             if (_session.CaptureVersionStamp().PlanSession != capturedVersions.PlanSession)
             {
                 operation.Cancel();
-                return new CoreMarketAnalysisWorkflowResult(false, 0, 0, executionResult.Evidence.FetchedCount);
+                return new CoreMarketAnalysisWorkflowResult(false, 0, 0, reconciliation.FetchedCount);
             }
 
             var published = PublishMarketAnalysis(
@@ -116,21 +118,21 @@ public sealed class CoreMarketAnalysisWorkflowService
                 plan,
                 planSessionVersion,
                 capturedVersions,
-                executionResult.Analyses,
-                executionResult.ShoppingPlans,
+                reconciliation.Analyses,
+                reconciliation.ShoppingPlans.ToList(),
                 request.RecommendationMode,
                 request.Lens,
                 recipeBasis);
             if (published == null)
             {
-                return new CoreMarketAnalysisWorkflowResult(false, 0, 0, executionResult.Evidence.FetchedCount);
+                return new CoreMarketAnalysisWorkflowResult(false, 0, 0, reconciliation.FetchedCount);
             }
 
             return new CoreMarketAnalysisWorkflowResult(
                 true,
-                executionResult.ShoppingPlans.Count,
+                reconciliation.ShoppingPlans.Count,
                 published.ChangedDecisionCount,
-                executionResult.Evidence.FetchedCount);
+                reconciliation.FetchedCount);
         }
         catch (OperationCanceledException) when (operation.Token.IsCancellationRequested || ct.IsCancellationRequested)
         {

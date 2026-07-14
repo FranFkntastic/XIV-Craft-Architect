@@ -1027,10 +1027,31 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         CachedWorldData world,
         DateTime nowUtc)
     {
+        if (TryGetUtcFromUnixMilliseconds(world.ObservedAtUnixMilliseconds, out var observedAtUtc) &&
+            world.EvidenceOrigin is MarketEvidenceOrigin.MarketMafioso or MarketEvidenceOrigin.ManualObservation)
+        {
+            var (score, bucket, age) = MarketEvidenceFreshness.Evaluate(observedAtUtc, nowUtc);
+            var source = world.EvidenceOrigin == MarketEvidenceOrigin.MarketMafioso
+                ? MarketDataAgeSource.MarketMafiosoObservation
+                : MarketDataAgeSource.ManualObservation;
+            return new DataQualityEvaluation(score, bucket, age, observedAtUtc, source);
+        }
+
         if (TryGetUtcFromUnixMilliseconds(world.LastUploadTimeUnixMilliseconds, out var worldUploadedAtUtc))
         {
             var (score, bucket, age) = MarketEvidenceFreshness.Evaluate(worldUploadedAtUtc, nowUtc);
             return new DataQualityEvaluation(score, bucket, age, worldUploadedAtUtc, MarketDataAgeSource.UniversalisWorldUpload);
+        }
+
+        if (TryGetUtcFromUnixMilliseconds(world.ObservedAtUnixMilliseconds, out observedAtUtc))
+        {
+            var observedFallback = MarketEvidenceFreshness.Evaluate(observedAtUtc, nowUtc, capCurrentToAging: true);
+            return new DataQualityEvaluation(
+                observedFallback.Score,
+                observedFallback.Bucket,
+                observedFallback.Age,
+                null,
+                MarketDataAgeSource.LocalFetchFallback);
         }
 
         if (TryGetUtcFromUnixMilliseconds(entry.LastUploadTimeUnixMilliseconds, out var responseUploadedAtUtc))

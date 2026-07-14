@@ -15,7 +15,7 @@ public sealed record MarketAnalysisWorkflowResult(
 public sealed class MarketAnalysisWorkflowService
 {
     private readonly AppState _appState;
-    private readonly IMarketAnalysisExecutionService _marketAnalysisExecution;
+    private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly MarketShoppingService _marketShoppingService;
     private readonly IMarketPriceLadderAnalysisService _marketPriceLadderAnalysis;
     private readonly WebPlanPersistenceService _planPersistence;
@@ -24,7 +24,7 @@ public sealed class MarketAnalysisWorkflowService
 
     public MarketAnalysisWorkflowService(
         AppState appState,
-        IMarketAnalysisExecutionService marketAnalysisExecution,
+        IMarketEvidenceReconciliationService marketEvidenceReconciliation,
         MarketShoppingService marketShoppingService,
         IMarketPriceLadderAnalysisService marketPriceLadderAnalysis,
         WebPlanPersistenceService planPersistence,
@@ -32,7 +32,7 @@ public sealed class MarketAnalysisWorkflowService
         IRecipeLayerWorkflowService recipeLayerWorkflow)
     {
         _appState = appState;
-        _marketAnalysisExecution = marketAnalysisExecution;
+        _marketEvidenceReconciliation = marketEvidenceReconciliation;
         _marketShoppingService = marketShoppingService;
         _marketPriceLadderAnalysis = marketPriceLadderAnalysis;
         _planPersistence = planPersistence;
@@ -72,17 +72,19 @@ public sealed class MarketAnalysisWorkflowService
             _appState.SelectedDataCenter,
             _appState.SelectedRegion,
             _appState.MarketAnalysisLens);
-        var executionResult = await _marketAnalysisExecution.ExecuteAsync(
-            new MarketAnalysisExecutionRequest
+        var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+            new MarketEvidenceReconciliationRequest
             {
                 Items = materials,
                 Scope = scope,
                 SelectedDataCenter = _appState.SelectedDataCenter,
                 SelectedRegion = _appState.SelectedRegion,
-                ForceRefreshData = request.ForceRefreshData,
                 RecommendationMode = RecommendationMode.MinimizeTotalCost,
                 Lens = _appState.MarketAnalysisLens,
-                ExpectedWorldsByDataCenter = _appState.GetExpectedMarketWorlds(scope)
+                ExpectedWorldsByDataCenter = _appState.GetExpectedMarketWorlds(scope),
+                Policy = request.ForceRefreshData
+                    ? MarketEvidenceReconciliationPolicy.ForcedRefresh()
+                    : new MarketEvidenceReconciliationPolicy()
             },
             progress,
             ct,
@@ -91,33 +93,33 @@ public sealed class MarketAnalysisWorkflowService
 
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
-            return new MarketAnalysisWorkflowResult(false, 0, 0, executionResult.Evidence.FetchedCount);
+            return new MarketAnalysisWorkflowResult(false, 0, 0, reconciliation.FetchedCount);
         }
 
         if (!IsCurrentRequest(requestSnapshot))
         {
-            return new MarketAnalysisWorkflowResult(false, 0, 0, executionResult.Evidence.FetchedCount);
+            return new MarketAnalysisWorkflowResult(false, 0, 0, reconciliation.FetchedCount);
         }
 
         var published = await PublishMarketAnalysisAsync(
             plan,
             planSessionVersion,
             planId,
-            executionResult.Analyses,
-            executionResult.ShoppingPlans,
+            reconciliation.Analyses,
+            reconciliation.ShoppingPlans.ToList(),
             recipeBasis,
             _appState.CreateCurrentMarketAnalysisScopeSnapshot(),
             ct);
         if (published == null)
         {
-            return new MarketAnalysisWorkflowResult(false, 0, 0, executionResult.Evidence.FetchedCount);
+            return new MarketAnalysisWorkflowResult(false, 0, 0, reconciliation.FetchedCount);
         }
 
         return new MarketAnalysisWorkflowResult(
             true,
             _appState.ShoppingPlans.Count,
             published.ChangedDecisionCount,
-            executionResult.Evidence.FetchedCount);
+            reconciliation.FetchedCount);
     }
 
     public async Task<MarketAnalysisWorkflowResult> ApplyLensAsync(

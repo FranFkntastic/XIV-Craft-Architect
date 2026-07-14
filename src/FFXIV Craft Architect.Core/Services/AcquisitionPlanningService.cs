@@ -126,92 +126,6 @@ public static class AcquisitionPlanningService
         return summary.HasCompleteActiveEvidence;
     }
 
-    public static ProcurementEvidenceSelection SelectActiveProcurementEvidence(
-        CraftingPlan? plan,
-        IEnumerable<DetailedShoppingPlan> sourceShoppingPlans,
-        MarketFetchScope requiredScope,
-        string selectedDataCenter)
-    {
-        if (plan == null)
-        {
-            return new ProcurementEvidenceSelection(
-                Array.Empty<DetailedShoppingPlan>(),
-                Array.Empty<MaterialAggregate>());
-        }
-
-        return SelectActiveProcurementEvidence(
-            GetActiveProcurementItems(plan),
-            sourceShoppingPlans,
-            requiredScope,
-            selectedDataCenter);
-    }
-
-    public static ProcurementEvidenceSelection SelectActiveProcurementEvidence(
-        IReadOnlyList<MaterialAggregate> activeItems,
-        IEnumerable<DetailedShoppingPlan> sourceShoppingPlans,
-        MarketFetchScope requiredScope,
-        string selectedDataCenter)
-    {
-        var sourcePlanByItemId = sourceShoppingPlans
-            .GroupBy(shoppingPlan => shoppingPlan.ItemId)
-            .ToDictionary(group => group.Key, group => group.First());
-        var reusablePlans = new List<DetailedShoppingPlan>();
-        var missingItems = new List<MaterialAggregate>();
-        foreach (var item in activeItems.Where(item => item.TotalQuantity > 0))
-        {
-            if (!sourcePlanByItemId.TryGetValue(item.ItemId, out var shoppingPlan) ||
-                !HasUsableEvidenceForScope(shoppingPlan, requiredScope, selectedDataCenter))
-            {
-                missingItems.Add(item);
-                continue;
-            }
-
-            reusablePlans.Add(shoppingPlan);
-        }
-
-        return new ProcurementEvidenceSelection(reusablePlans, missingItems);
-    }
-
-    public static List<DetailedShoppingPlan> MergeActiveProcurementEvidence(
-        CraftingPlan? plan,
-        IEnumerable<DetailedShoppingPlan> reusablePlans,
-        IEnumerable<DetailedShoppingPlan> fetchedMissingPlans)
-    {
-        if (plan == null)
-        {
-            return new List<DetailedShoppingPlan>();
-        }
-
-        return MergeActiveProcurementEvidence(
-            GetActiveProcurementItems(plan),
-            reusablePlans,
-            fetchedMissingPlans);
-    }
-
-    public static List<DetailedShoppingPlan> MergeActiveProcurementEvidence(
-        IReadOnlyList<MaterialAggregate> activeItems,
-        IEnumerable<DetailedShoppingPlan> reusablePlans,
-        IEnumerable<DetailedShoppingPlan> fetchedMissingPlans)
-    {
-        var activeItemIds = activeItems
-            .Select(item => item.ItemId)
-            .ToHashSet();
-        var resultByItemId = reusablePlans
-            .Where(shoppingPlan => activeItemIds.Contains(shoppingPlan.ItemId))
-            .GroupBy(shoppingPlan => shoppingPlan.ItemId)
-            .ToDictionary(group => group.Key, group => group.First());
-
-        foreach (var fetchedPlan in fetchedMissingPlans.Where(shoppingPlan => activeItemIds.Contains(shoppingPlan.ItemId)))
-        {
-            resultByItemId[fetchedPlan.ItemId] = fetchedPlan;
-        }
-
-        return activeItems
-            .Where(item => resultByItemId.ContainsKey(item.ItemId))
-            .Select(item => resultByItemId[item.ItemId])
-            .ToList();
-    }
-
     public static List<MaterialAggregate> GetActiveProcurementItemsMissingEvidence(
         CraftingPlan? plan,
         IEnumerable<DetailedShoppingPlan> shoppingPlans)
@@ -662,70 +576,6 @@ public static class AcquisitionPlanningService
              shoppingPlan.Vendors.Any());
     }
 
-    internal static bool HasUsableEvidenceForScope(
-        DetailedShoppingPlan shoppingPlan,
-        MarketFetchScope requiredScope,
-        string selectedDataCenter)
-    {
-        if (!HasUsableEvidence(shoppingPlan))
-        {
-            return false;
-        }
-
-        if (IsVendorPlan(shoppingPlan))
-        {
-            return true;
-        }
-
-        var evidenceDataCenters = GetEvidenceDataCenters(shoppingPlan)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (requiredScope == MarketFetchScope.EntireRegion)
-        {
-            return evidenceDataCenters.Count > 1;
-        }
-
-        return evidenceDataCenters.Any(dataCenter =>
-            string.Equals(dataCenter, selectedDataCenter, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static IEnumerable<string> GetEvidenceDataCenters(DetailedShoppingPlan shoppingPlan)
-    {
-        foreach (var world in shoppingPlan.WorldOptions)
-        {
-            if (!string.IsNullOrWhiteSpace(world.DataCenter))
-            {
-                yield return world.DataCenter;
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(shoppingPlan.RecommendedWorld?.DataCenter))
-        {
-            yield return shoppingPlan.RecommendedWorld.DataCenter;
-        }
-
-        if (shoppingPlan.RecommendedSplit == null)
-        {
-            yield break;
-        }
-
-        foreach (var split in shoppingPlan.RecommendedSplit)
-        {
-            if (!string.IsNullOrWhiteSpace(split.DataCenter))
-            {
-                yield return split.DataCenter;
-            }
-        }
-    }
-
-    private static bool IsVendorPlan(DetailedShoppingPlan shoppingPlan)
-    {
-        return string.Equals(
-            shoppingPlan.RecommendedWorld?.WorldName,
-            MarketShoppingConstants.VendorWorldName,
-            StringComparison.OrdinalIgnoreCase);
-    }
-
     private static IReadOnlyDictionary<int, DetailedShoppingPlan> CreatePlanLookup(IEnumerable<DetailedShoppingPlan> shoppingPlans)
     {
         return shoppingPlans
@@ -1128,10 +978,6 @@ public sealed record ProcurementEvidenceSummary(
 {
     public bool HasCompleteActiveEvidence => ActiveProcurementItemCount > 0 && ActiveItemsMissingEvidence == 0;
 }
-
-public sealed record ProcurementEvidenceSelection(
-    IReadOnlyList<DetailedShoppingPlan> ReusablePlans,
-    IReadOnlyList<MaterialAggregate> MissingItems);
 
 public sealed class AcquisitionCostContext
 {

@@ -41,11 +41,13 @@ public class PriceCheckService
     }
 
     /// <summary>
-    /// Get the TTL for market cache from settings (default 3 hours).
+    /// Get the reusable-cache window from settings.
     /// </summary>
     private TimeSpan GetCacheTtl()
     {
-        var hours = _settingsService.Get("market.cache_ttl_hours", 3.0);
+        var hours = _settingsService.Get(
+            "market.cache_ttl_hours",
+            MarketEvidencePolicyDefaults.ReusableCacheMaxAge.TotalHours);
         return TimeSpan.FromHours(hours);
     }
 

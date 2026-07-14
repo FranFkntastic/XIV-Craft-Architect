@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.Web.Services;
@@ -11,7 +12,7 @@ namespace FFXIV_Craft_Architect.Web.Services;
 public class WebMarketCacheService : IMarketCacheService
 {
     private readonly ConcurrentDictionary<string, CachedMarketData> _cache = new();
-    private readonly TimeSpan _defaultMaxAge = TimeSpan.FromHours(1);
+    private readonly TimeSpan _defaultMaxAge = MarketEvidencePolicyDefaults.ReusableCacheMaxAge;
 
     private static string GetKey(int itemId, string dataCenter) => $"{itemId}@{dataCenter}";
 

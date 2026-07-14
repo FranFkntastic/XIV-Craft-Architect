@@ -325,7 +325,35 @@
 
 .pp-item-actions {
     display: flex;
+    align-items: center;
+    gap: 2px;
     justify-content: flex-end;
+}
+
+.pp-recheck-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 28px;
+    padding: 2px 7px;
+    border: 1px solid #38546b;
+    border-radius: 5px;
+    background: #17232c;
+    color: #9ed4ff;
+    cursor: pointer;
+    font: inherit;
+    font-size: .7rem;
+    font-weight: 700;
+}
+
+.pp-recheck-action:hover:not(:disabled) {
+    border-color: #5f8fb4;
+    background: #1d303e;
+}
+
+.pp-recheck-action:disabled {
+    cursor: wait;
+    opacity: .75;
 }
 
 .pp-error-row {

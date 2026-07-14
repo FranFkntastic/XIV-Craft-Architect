@@ -325,7 +325,8 @@ public class ProcurementWorkflowServiceTests
             new PlanSessionLoadService(appState));
         var subsetRefreshService = new MarketAnalysisSubsetRefreshService(
             appState,
-            marketExecution ?? Mock.Of<IMarketAnalysisExecutionService>(),
+            new MarketEvidenceReconciliationService(
+                marketExecution ?? Mock.Of<IMarketAnalysisExecutionService>()),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
             persistence,
             indexedDb,
@@ -433,6 +434,10 @@ public class ProcurementWorkflowServiceTests
                     ItemId = 101,
                     Name = "Item 101",
                     QuantityNeeded = 5,
+                    Scope = MarketFetchScope.SelectedDataCenter,
+                    LoadedAtUtc = DateTime.UtcNow,
+                    RequestedDataCenters = ["Aether"],
+                    PresentDataCenters = ["Aether"],
                     AnalysisScopeBaselineUnitPrice = includeDisplayFields ? 100 : 0,
                     SaneThresholdUnitPrice = includeDisplayFields ? 200 : 0,
                     Worlds =
@@ -442,6 +447,8 @@ public class ProcurementWorkflowServiceTests
                             DataCenter = "Aether",
                             WorldName = "Siren",
                             QuantityNeeded = 5,
+                            MarketUploadedAtUtc = DateTime.UtcNow,
+                            DataQualityBucket = MarketDataQualityBucket.Current,
                             AnalysisScopeBaselineUnitPrice = includeDisplayFields ? 100 : 0,
                             SaneThresholdUnitPrice = includeDisplayFields ? 200 : 0,
                             ScopeSaneQuantity = includeDisplayFields ? 5 : 0,
@@ -454,7 +461,7 @@ public class ProcurementWorkflowServiceTests
             [sourcePlan]);
         var marketExecution = new Mock<IMarketAnalysisExecutionService>(MockBehavior.Strict);
         var routeExecution = new ProcurementRouteExecutionService(
-            marketExecution.Object,
+            new MarketEvidenceReconciliationService(marketExecution.Object),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()));
         var service = CreateService(appState, procurementExecution: routeExecution);
 

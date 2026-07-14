@@ -72,7 +72,8 @@ public sealed class TradeLaborBenchmarkPlanBuilder : ITradeLaborBenchmarkPlanBui
 
 public sealed class TradeLaborBenchmarkCalibrationWorkflowService
 {
-    private static readonly TimeSpan DefaultFreshnessWindow = TimeSpan.FromHours(1);
+    private static readonly TimeSpan DefaultFreshnessWindow =
+        MarketEvidencePolicyDefaults.ReusableCacheMaxAge;
 
     private readonly IMarketCacheService _marketCache;
     private readonly MarketShoppingService _marketShoppingService;

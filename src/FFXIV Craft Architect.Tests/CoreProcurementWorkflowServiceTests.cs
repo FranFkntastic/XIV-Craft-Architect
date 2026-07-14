@@ -300,10 +300,11 @@ public class CoreProcurementWorkflowServiceTests
         var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
         var operationState = new CraftOperationState();
         var operationCoordinator = new CraftOperationCoordinator(session, operationState);
+        var execution = marketExecution ?? Mock.Of<IMarketAnalysisExecutionService>();
         var service = new CoreProcurementWorkflowService(
             session,
             procurementExecution ?? Mock.Of<IProcurementRouteExecutionService>(),
-            marketExecution ?? Mock.Of<IMarketAnalysisExecutionService>(),
+            new MarketEvidenceReconciliationService(execution),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
             recipeLayerWorkflow ?? new FakeRecipeLayerWorkflowService(),
             operationCoordinator);

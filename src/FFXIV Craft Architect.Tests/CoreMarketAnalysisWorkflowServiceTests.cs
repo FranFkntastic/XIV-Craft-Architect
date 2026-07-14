@@ -227,9 +227,10 @@ public class CoreMarketAnalysisWorkflowServiceTests
         var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
         var operationState = new CraftOperationState();
         var operationCoordinator = new CraftOperationCoordinator(session, operationState);
+        var marketExecution = execution ?? Mock.Of<IMarketAnalysisExecutionService>();
         var service = new CoreMarketAnalysisWorkflowService(
             session,
-            execution ?? Mock.Of<IMarketAnalysisExecutionService>(),
+            new MarketEvidenceReconciliationService(marketExecution),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
             ladder ?? Mock.Of<IMarketPriceLadderAnalysisService>(),
             recipeLayerWorkflow ?? new FakeRecipeLayerWorkflowService(),

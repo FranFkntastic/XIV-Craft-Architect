@@ -41,10 +41,12 @@ public enum MarketTravelPriority
 
 public enum MarketDataAgeSource
 {
-    UniversalisWorldUpload,
-    UniversalisResponseUpload,
-    LocalFetchFallback,
-    Missing
+    UniversalisWorldUpload = 0,
+    UniversalisResponseUpload = 1,
+    LocalFetchFallback = 2,
+    Missing = 3,
+    MarketMafiosoObservation = 4,
+    ManualObservation = 5
 }
 
 public sealed record PublishedMarketAnalysisScopeSnapshot(

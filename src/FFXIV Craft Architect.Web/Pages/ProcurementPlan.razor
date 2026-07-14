@@ -38,6 +38,7 @@
             FailureMessage="@AppState.ProcurementRouteFailure"
             StaleReason="@AppState.ProcurementRouteStaleReason"
             ExclusionOutcome="@_exclusionOutcome"
+            ReconcilingItemWorld="@_reconcilingItemWorld"
             OnUndoExclusionRequested="UndoLastExclusionAsync"
             EmptyTitle="@GetEmptyTitle()"
             EmptyMessage="@GetEmptyMessage()"
@@ -52,6 +53,7 @@
     private CancellableOperationLease? _procurementAnalysisOperation;
     private PendingExclusion? _lastExclusion;
     private string? _exclusionOutcome;
+    private MarketItemWorldKey? _reconcilingItemWorld;
 
     protected override void OnInitialized()
     {
@@ -278,9 +280,9 @@
     private async Task ReanalyzeWithoutWorldAsync(WorldProcurementCardModel world)
     {
         var confirmed = await DialogService.ShowMessageBox(
-            $"Exclude {world.WorldName}?",
-            $"Exclude every {world.WorldName} listing for {AppState.TemporaryWorldBlacklistDurationMinutes} minutes and generate a replacement route?",
-            yesText: "Exclude and Regenerate",
+            $"Skip travel to {world.WorldName}?",
+            $"Remove {world.WorldName} as a route stop for {AppState.TemporaryWorldBlacklistDurationMinutes} minutes and generate a replacement route? Use the item Recheck action when the market board is stale.",
+            yesText: "Skip and Regenerate",
             cancelText: "Cancel");
         if (confirmed != true)
         {
@@ -397,10 +399,15 @@
 
     private async Task RefreshItemMarketDataAsync(WorldItemProcurementAction action)
     {
+        var target = new MarketItemWorldKey(
+            action.Item.ItemId,
+            new MarketWorldKey(action.World.DataCenter, action.World.WorldName));
+        _reconcilingItemWorld = target;
+        await InvokeAsync(StateHasChanged);
         using var operation = CancellableOperations.Start(
             CancellableOperationWorkflow.ItemMarketRefresh,
-            "Market Refresh",
-            $"Refreshing {action.Item.ItemName}...");
+            "Market Recheck",
+            $"Checking {action.Item.ItemName} on {action.World.WorldName}...");
         try
         {
             var result = await ProcurementWorkflow.RefreshItemMarketDataAsync(
@@ -408,18 +415,37 @@
                     action.Item.ItemId,
                     action.Item.ItemName,
                     () => operation.IsCurrent,
-                    MarketAnalysisExecutionOptions.Interactive),
+                    MarketAnalysisExecutionOptions.Interactive)
+                {
+                    TargetDataCenter = action.World.DataCenter,
+                    TargetWorldName = action.World.WorldName
+                },
                 new Progress<string>(message => operation.ReportStatus(message)),
                 operation.Token);
 
             if (result.Status != ProcurementItemRefreshStatus.Refreshed)
             {
                 operation.Cancel();
-                Snackbar.Add($"No newer market data was available for {action.Item.ItemName}.", Severity.Info);
+                Snackbar.Add(
+                    $"Couldn't update {action.Item.ItemName} on {action.World.WorldName}.",
+                    Severity.Info);
                 return;
             }
 
+            operation.Complete($"{action.Item.ItemName} rechecked on {action.World.WorldName}.");
             await RunAnalysisAsync();
+            if (!AppState.IsProcurementRouteStale && string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
+            {
+                Snackbar.Add(
+                    $"Rechecked {action.Item.ItemName} on {action.World.WorldName} and updated the route.",
+                    Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add(
+                    $"Updated {action.Item.ItemName} on {action.World.WorldName}, but the route still needs regeneration.",
+                    Severity.Warning);
+            }
         }
         catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
         {
@@ -431,6 +457,14 @@
             {
                 operation.Complete($"Item refresh failed: {ex.Message}");
                 Snackbar.Add($"Failed to refresh {action.Item.ItemName}: {ex.Message}", Severity.Error);
+            }
+        }
+        finally
+        {
+            if (_reconcilingItemWorld == target)
+            {
+                _reconcilingItemWorld = null;
+                await InvokeAsync(StateHasChanged);
             }
         }
     }

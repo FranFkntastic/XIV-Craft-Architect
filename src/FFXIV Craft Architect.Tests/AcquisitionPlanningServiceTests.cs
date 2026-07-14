@@ -137,48 +137,6 @@ public class AcquisitionPlanningServiceTests
 
 
     [Fact]
-    public void SelectActiveProcurementEvidence_TreatsSelectedDcMismatchAsMissing()
-    {
-        var plan = CreatePlanWithBoughtIntermediate();
-        var marketPlans = new List<DetailedShoppingPlan>
-        {
-            CreateMarketPlan(200, "Intermediate", "Primal", "Leviathan")
-        };
-
-        var selection = AcquisitionPlanningService.SelectActiveProcurementEvidence(
-            plan,
-            marketPlans,
-            MarketFetchScope.SelectedDataCenter,
-            "Aether");
-
-        Assert.Empty(selection.ReusablePlans);
-        var missingItem = Assert.Single(selection.MissingItems);
-        Assert.Equal(200, missingItem.ItemId);
-    }
-
-    [Fact]
-    public void MergeActiveProcurementEvidence_WithExplicitActiveItems_PreservesActiveOrderAndExcludesInactivePlans()
-    {
-        var activeItems = new List<MaterialAggregate>
-        {
-            new() { ItemId = 300, Name = "Second Active", TotalQuantity = 6 },
-            new() { ItemId = 200, Name = "First Active", TotalQuantity = 2 }
-        };
-        var reusablePlan = CreateMarketPlan(200, "First Active", "Aether", "Siren", totalCost: 500);
-        var inactivePlan = CreateMarketPlan(400, "Inactive", "Aether", "Siren", totalCost: 100);
-        var fetchedPlan = CreateMarketPlan(300, "Second Active", "Aether", "Adamantoise", totalCost: 200);
-
-        var merged = AcquisitionPlanningService.MergeActiveProcurementEvidence(
-            activeItems,
-            [reusablePlan, inactivePlan],
-            [fetchedPlan]);
-
-        Assert.Equal([300, 200], merged.Select(plan => plan.ItemId));
-        Assert.Equal("Adamantoise", merged[0].RecommendedWorld?.WorldName);
-        Assert.Equal("Siren", merged[1].RecommendedWorld?.WorldName);
-    }
-
-    [Fact]
     public void CalculateCraftCost_UsesMarketEvidenceForBoughtChildren()
     {
         var ingot = new PlanNode

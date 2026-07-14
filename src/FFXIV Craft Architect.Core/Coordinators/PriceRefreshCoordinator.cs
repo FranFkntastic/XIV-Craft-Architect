@@ -243,7 +243,9 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
                 cacheRequests = cacheCandidateItemIds.Select(itemId => (itemId, dataCenter)).ToList();
             }
 
-            var reusableCacheTtl = TimeSpan.FromHours(_settingsService.Get("market.cache_ttl_hours", 3.0));
+            var reusableCacheTtl = TimeSpan.FromHours(_settingsService.Get(
+                "market.cache_ttl_hours",
+                MarketEvidencePolicyDefaults.ReusableCacheMaxAge.TotalHours));
             TimeSpan? cacheReadMaxAge = forceRefresh ? null : reusableCacheTtl;
             if (forceRefresh)
             {
@@ -343,7 +345,9 @@ public class PriceRefreshCoordinator : IPriceRefreshCoordinator
             ? new[] { "Aether", "Primal", "Crystal", "Dynamis" }
             : new[] { dataCenter };
 
-        var cacheTtl = TimeSpan.FromHours(_settingsService.Get("market.cache_ttl_hours", 3.0));
+        var cacheTtl = TimeSpan.FromHours(_settingsService.Get(
+            "market.cache_ttl_hours",
+            MarketEvidencePolicyDefaults.ReusableCacheMaxAge.TotalHours));
         var itemCacheByItemId = new Dictionary<int, ItemCacheInspectionResult>();
 
         foreach (var itemId in cacheCandidateItemIds)

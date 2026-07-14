@@ -331,7 +331,7 @@ public class MarketAnalysisWorkflowServiceTests
             new PlanSessionLoadService(appState));
         return new MarketAnalysisWorkflowService(
             appState,
-            execution,
+            new MarketEvidenceReconciliationService(execution),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
             new MarketPriceLadderAnalysisService(),
             persistence,

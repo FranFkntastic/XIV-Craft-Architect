@@ -166,6 +166,7 @@ public partial class App : Application
         services.AddSingleton<IMarketPriceEvaluationService, MarketPriceEvaluationService>();
         services.AddSingleton<IMarketPriceLadderAnalysisService, MarketPriceLadderAnalysisService>();
         services.AddSingleton<IMarketAnalysisExecutionService, MarketAnalysisExecutionService>();
+        services.AddSingleton<IMarketEvidenceReconciliationService, MarketEvidenceReconciliationService>();
         services.AddSingleton<IProcurementRouteExecutionService, ProcurementRouteExecutionService>();
         services.AddSingleton<CoreMarketAnalysisWorkflowService>();
         services.AddSingleton<CoreProcurementWorkflowService>();

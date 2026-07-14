@@ -22,8 +22,13 @@ public static class DesktopServiceCollectionExtensions
         services.AddSingleton<CoreSessionPersistenceService>();
         services.AddSingleton<CoreAcquisitionDecisionService>();
         services.AddSingleton(_ => new UniversalisService(new HttpClient()));
+        services.AddSingleton<IUniversalisService>(provider => provider.GetRequiredService<UniversalisService>());
         services.AddSingleton<DesktopJsonMarketCacheService>();
         services.AddSingleton<IMarketCacheService>(sp => sp.GetRequiredService<DesktopJsonMarketCacheService>());
+        services.AddSingleton<IMarketPriceEvaluationService, MarketPriceEvaluationService>();
+        services.AddSingleton<IMarketPriceLadderAnalysisService, MarketPriceLadderAnalysisService>();
+        services.AddSingleton<IMarketAnalysisExecutionService, MarketAnalysisExecutionService>();
+        services.AddSingleton<IMarketEvidenceReconciliationService, MarketEvidenceReconciliationService>();
         services.AddSingleton<GarlandService>(sp => new GarlandService(
             new HttpClient(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<GarlandService>>()));

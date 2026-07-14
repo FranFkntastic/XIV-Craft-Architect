@@ -71,7 +71,7 @@ public sealed class CoreProcurementWorkflowService
 {
     private readonly CraftSessionState _session;
     private readonly IProcurementRouteExecutionService _procurementRouteExecutionService;
-    private readonly IMarketAnalysisExecutionService _marketAnalysisExecutionService;
+    private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly MarketShoppingService _marketShoppingService;
     private readonly ICoreRecipeLayerWorkflowService _recipeLayerWorkflow;
     private readonly ICraftOperationCoordinator _operationCoordinator;
@@ -79,14 +79,14 @@ public sealed class CoreProcurementWorkflowService
     public CoreProcurementWorkflowService(
         CraftSessionState session,
         IProcurementRouteExecutionService procurementRouteExecutionService,
-        IMarketAnalysisExecutionService marketAnalysisExecutionService,
+        IMarketEvidenceReconciliationService marketEvidenceReconciliation,
         MarketShoppingService marketShoppingService,
         ICoreRecipeLayerWorkflowService recipeLayerWorkflow,
         ICraftOperationCoordinator operationCoordinator)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _procurementRouteExecutionService = procurementRouteExecutionService ?? throw new ArgumentNullException(nameof(procurementRouteExecutionService));
-        _marketAnalysisExecutionService = marketAnalysisExecutionService ?? throw new ArgumentNullException(nameof(marketAnalysisExecutionService));
+        _marketEvidenceReconciliation = marketEvidenceReconciliation ?? throw new ArgumentNullException(nameof(marketEvidenceReconciliation));
         _marketShoppingService = marketShoppingService ?? throw new ArgumentNullException(nameof(marketShoppingService));
         _recipeLayerWorkflow = recipeLayerWorkflow ?? throw new ArgumentNullException(nameof(recipeLayerWorkflow));
         _operationCoordinator = operationCoordinator ?? throw new ArgumentNullException(nameof(operationCoordinator));
@@ -160,6 +160,7 @@ public sealed class CoreProcurementWorkflowService
                     Plan = plan,
                     ActiveProcurementItems = activeItemsList,
                     SourceShoppingPlans = request.SourceShoppingPlans,
+                    SourceMarketAnalyses = _session.MarketEvidence.ItemAnalyses,
                     Scope = request.Scope,
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,
@@ -290,17 +291,24 @@ public sealed class CoreProcurementWorkflowService
                     }
                 });
 
-            var result = await _marketAnalysisExecutionService.ExecuteAsync(
-                new MarketAnalysisExecutionRequest
+            var existingEvidence = _session.MarketEvidence;
+            var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+                new MarketEvidenceReconciliationRequest
                 {
                     Items = [candidate],
+                    PublishedAnalyses = existingEvidence.ItemAnalyses
+                        .Where(analysis => analysis.ItemId == candidate.ItemId)
+                        .ToList(),
+                    PublishedShoppingPlans = (existingEvidence.ShoppingPlans ?? [])
+                        .Where(shoppingPlan => shoppingPlan.ItemId == candidate.ItemId)
+                        .ToList(),
                     Scope = request.Scope,
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,
-                    ForceRefreshData = true,
                     RecommendationMode = RecommendationMode.MinimizeTotalCost,
                     Lens = request.Lens,
-                    ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter
+                    ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter,
+                    Policy = MarketEvidenceReconciliationPolicy.ForcedRefresh()
                 },
                 guardedProgress,
                 linkedCancellation.Token,
@@ -314,14 +322,14 @@ public sealed class CoreProcurementWorkflowService
                 return CoreProcurementItemRefreshWorkflowResult.Noop(staleStatus.Value);
             }
 
-            var refreshedAnalysis = result.Analyses.SingleOrDefault();
-            if (refreshedAnalysis == null || result.ShoppingPlans.Count == 0)
+            var refreshedAnalysis = reconciliation.Analyses.SingleOrDefault();
+            if (refreshedAnalysis == null || reconciliation.ShoppingPlans.Count == 0)
             {
                 operation.Cancel();
                 return CoreProcurementItemRefreshWorkflowResult.Noop(CoreProcurementItemRefreshStatus.NoData);
             }
 
-            var refreshedPlans = new List<DetailedShoppingPlan> { result.ShoppingPlans.Single() };
+            var refreshedPlans = new List<DetailedShoppingPlan> { reconciliation.ShoppingPlans.Single() };
             _marketShoppingService.ApplyVendorPurchaseOverrides(plan, refreshedPlans);
             staleStatus = GetStaleRefreshStatus(planSessionVersion, capturedVersions, request.IsCurrentOperation);
             if (staleStatus != null)
@@ -330,9 +338,12 @@ public sealed class CoreProcurementWorkflowService
                 return CoreProcurementItemRefreshWorkflowResult.Noop(staleStatus.Value);
             }
 
-            var existingEvidence = _session.MarketEvidence;
-            var analyses = ReplaceAnalysisByItemId(existingEvidence.ItemAnalyses, refreshedAnalysis);
-            var shoppingPlans = ReplaceShoppingPlanByItemId(existingEvidence.ShoppingPlans ?? [], refreshedPlans[0]);
+            var analyses = MarketEvidenceCollectionMerger.MergeAnalyses(
+                existingEvidence.ItemAnalyses,
+                [refreshedAnalysis]);
+            var shoppingPlans = MarketEvidenceCollectionMerger.MergeShoppingPlans(
+                existingEvidence.ShoppingPlans ?? [],
+                refreshedPlans);
             var published = false;
             var completed = operation.CompleteIfCurrent(
                 () =>
@@ -428,55 +439,4 @@ public sealed class CoreProcurementWorkflowService
         return null;
     }
 
-    private static List<MarketItemAnalysis> ReplaceAnalysisByItemId(
-        IEnumerable<MarketItemAnalysis> analyses,
-        MarketItemAnalysis replacement)
-    {
-        var replaced = false;
-        var result = new List<MarketItemAnalysis>();
-        foreach (var analysis in analyses)
-        {
-            if (analysis.ItemId == replacement.ItemId)
-            {
-                result.Add(replacement);
-                replaced = true;
-                continue;
-            }
-
-            result.Add(analysis);
-        }
-
-        if (!replaced)
-        {
-            result.Add(replacement);
-        }
-
-        return result;
-    }
-
-    private static List<DetailedShoppingPlan> ReplaceShoppingPlanByItemId(
-        IEnumerable<DetailedShoppingPlan> shoppingPlans,
-        DetailedShoppingPlan replacement)
-    {
-        var replaced = false;
-        var result = new List<DetailedShoppingPlan>();
-        foreach (var shoppingPlan in shoppingPlans)
-        {
-            if (shoppingPlan.ItemId == replacement.ItemId)
-            {
-                result.Add(replacement);
-                replaced = true;
-                continue;
-            }
-
-            result.Add(shoppingPlan);
-        }
-
-        if (!replaced)
-        {
-            result.Add(replacement);
-        }
-
-        return result;
-    }
 }

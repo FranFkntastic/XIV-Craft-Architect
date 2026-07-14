@@ -22,7 +22,7 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
     private readonly UniversalisService _universalisService;
     private readonly string _dbPath;
     private readonly SqliteConnection _connection;
-    private readonly TimeSpan _defaultMaxAge = TimeSpan.FromHours(3);
+    private readonly TimeSpan _defaultMaxAge = MarketEvidencePolicyDefaults.ReusableCacheMaxAge;
     private readonly JsonSerializerOptions _jsonOptions;
 
     public SqliteMarketCacheService(

@@ -13,7 +13,7 @@ public sealed class DesktopJsonMarketCacheService : IMarketCacheService
 
     private readonly UniversalisService _universalis;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly TimeSpan _defaultMaxAge = TimeSpan.FromHours(1);
+    private readonly TimeSpan _defaultMaxAge = MarketEvidencePolicyDefaults.ReusableCacheMaxAge;
     private Dictionary<string, CachedMarketData>? _cache;
 
     public DesktopJsonMarketCacheService(UniversalisService universalis)

@@ -175,7 +175,7 @@ public sealed class MarketAnalysisSubsetRefreshServiceTests
 
         return new MarketAnalysisSubsetRefreshService(
             appState,
-            execution,
+            new MarketEvidenceReconciliationService(execution),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
             persistence,
             indexedDb,
