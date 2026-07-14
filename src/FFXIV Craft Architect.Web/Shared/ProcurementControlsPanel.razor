@@ -27,18 +27,22 @@
                                             RouteDecision="AppState.ProcurementRouteDecision"
                                             TravelToleranceChanged="OnProcurementTravelToleranceChanged" />
                 <p id="procurement-travel-help">@GetTravelPreferenceHelp()</p>
-                <p class="pp-route-policy-note">
-                    <MudIcon Icon="@(AppState.ProcurementEnableSplitWorldPurchases ? Icons.Material.Filled.CallSplit : Icons.Material.Filled.HorizontalRule)" Size="Size.Small" />
-                    @(AppState.ProcurementEnableSplitWorldPurchases ? "Split purchases allowed" : "Single-world purchases only") · managed in Options
-                </p>
-                <p class="pp-route-policy-note">
-                    <MudIcon Icon="@Icons.Material.Filled.Sort" Size="Size.Small" />
-                    @GetTravelPriorityLabel() - managed in Options
-                </p>
-                @if (AppState.ProcurementSearchEntireRegion && AppState.ProcurementStartFromHomeDataCenter)
-                {
-                    <p class="pp-origin-note"><MudIcon Icon="@Icons.Material.Filled.Home" Size="Size.Small" /> Starts from @AppState.SelectedDataCenter.</p>
-                }
+                <div class="pp-route-policies" aria-label="Route policies">
+                    <p class="pp-route-policy-note">
+                        <MudIcon Icon="@(AppState.ProcurementEnableSplitWorldPurchases ? Icons.Material.Filled.CallSplit : Icons.Material.Filled.HorizontalRule)" Size="Size.Small" />
+                        <span>@(AppState.ProcurementEnableSplitWorldPurchases ? "Split purchases allowed" : "Single-world purchases only")</span>
+                        <small>Set in Options</small>
+                    </p>
+                    <p class="pp-route-policy-note">
+                        <MudIcon Icon="@Icons.Material.Filled.Sort" Size="Size.Small" />
+                        <span>@GetTravelPriorityLabel()</span>
+                        <small>Set in Options</small>
+                    </p>
+                    @if (AppState.ProcurementSearchEntireRegion && AppState.ProcurementStartFromHomeDataCenter)
+                    {
+                        <p class="pp-origin-note"><MudIcon Icon="@Icons.Material.Filled.Home" Size="Size.Small" /> <span>Starts from @AppState.SelectedDataCenter</span></p>
+                    }
+                </div>
             </div>
 
             <div class="pp-field-block pp-duration-field">

@@ -58,10 +58,10 @@
     </div>
 </div>
 
-<div class="pp-clutch-shell">
+<div class="pp-clutch-shell @(RouteDecision?.RepresentativeRoutes.Count > 0 ? "has-routes" : "is-empty")">
     <div class="pp-clutch-axis" aria-hidden="true">
-        <span>Fewer stops</span>
-        <span>Lower cost</span>
+        <span><strong>Travel</strong><small>Fewer stops</small></span>
+        <span><strong>Price</strong><small>Lower cost</small></span>
     </div>
     <div class="pp-clutch-control">
         <div class="pp-clutch-rail" aria-hidden="true"></div>
@@ -77,7 +77,8 @@
                 </button>
             }
             <span class="pp-clutch-handle"
-                  style="@GetTrackRowStyle(TravelTolerance)"></span>
+                  style="@GetTrackRowStyle(TravelTolerance)"
+                  aria-hidden="true">@TravelTolerance</span>
         </div>
         <input id="procurement-travel-clutch"
                class="pp-clutch-input"
@@ -106,7 +107,7 @@
                         @onclick="() => SelectRoute(option)">
                     <span class="pp-frontier-summary">
                         <strong>@option.GilCost.ToString("N0")g</strong>
-                        <small>@option.WorldStops W / @option.DataCenterTransfers DC</small>
+                        <small>@GetTravelSummary(option)</small>
                     </span>
                     <span class="pp-frontier-detail">
                         @GetToleranceRange(option) - @GetPremiumText(option)
@@ -204,6 +205,9 @@
 
     private static string GetRouteTitle(MarketRouteFrontierOption option) =>
         $"{GetToleranceRange(option)}: {option.GilCost:N0} gil, {option.WorldStops} world visits, {option.DataCenterTransfers} data-center transfers";
+
+    private static string GetTravelSummary(MarketRouteFrontierOption option) =>
+        $"{option.WorldStops} world{(option.WorldStops == 1 ? string.Empty : "s")} · {option.DataCenterTransfers} transfer{(option.DataCenterTransfers == 1 ? string.Empty : "s")}";
 
     private static string GetTrackRowStyle(int tolerance) =>
         $"grid-row: {Math.Clamp(tolerance, 0, 11) + 1};";

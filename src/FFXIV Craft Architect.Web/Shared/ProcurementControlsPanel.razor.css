@@ -53,6 +53,12 @@
     margin-left: 0;
 }
 
+#procurement-travel-help {
+    margin-top: 7px;
+    color: #c6ccd0;
+    line-height: 1.35;
+}
+
 .pp-full-width {
     width: 100%;
 }
@@ -69,6 +75,32 @@
     align-items: center;
     gap: 5px;
     color: #aeb5bb !important;
+}
+
+.pp-route-policies {
+    display: grid;
+    gap: 5px;
+    margin-top: 9px;
+    padding: 8px 9px;
+    border-left: 2px solid #3d4449;
+    background: #191c1f;
+}
+
+.pp-route-policies p {
+    margin: 0;
+}
+
+.pp-route-policies span {
+    min-width: 0;
+}
+
+.pp-route-policies small {
+    flex: 0 0 auto;
+    margin-left: auto;
+    color: #7f898f;
+    font-size: .58rem;
+    letter-spacing: .04em;
+    text-transform: uppercase;
 }
 
 .pp-exclusion-summary {
