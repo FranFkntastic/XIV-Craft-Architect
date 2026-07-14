@@ -8,17 +8,23 @@ public static class MarketEvidenceCacheMerger
     {
         ArgumentNullException.ThrowIfNull(incoming);
         if (retained == null || retained.Worlds.Count == 0 || incoming.Worlds.Count == 0)
+        {
             return incoming;
+        }
 
         for (var index = 0; index < incoming.Worlds.Count; index++)
         {
             var incomingWorld = incoming.Worlds[index];
             var retainedWorld = retained.Worlds.FirstOrDefault(world => SameWorld(world, incomingWorld));
             if (retainedWorld == null)
+            {
                 continue;
+            }
 
             if (GetEvidenceTime(retainedWorld, retained.FetchedAt) > GetEvidenceTime(incomingWorld, incoming.FetchedAt))
+            {
                 incoming.Worlds[index] = retainedWorld;
+            }
         }
 
         return incoming;

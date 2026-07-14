@@ -39,7 +39,9 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
         };
         var capabilities = await _client.GetCapabilitiesAsync(connection, cancellationToken);
         if (!capabilities.Supports("acquisition.queue"))
+        {
             throw new InvalidOperationException("Workshop Host doesn't advertise the acquisition.queue v1 capability.");
+        }
 
         return await _client.CreateBatchAsync(
             connection,
@@ -75,7 +77,9 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
     {
         var configuration = await GetConfigurationAsync();
         if (string.IsNullOrWhiteSpace(configuration.ApiUrl) || string.IsNullOrWhiteSpace(configuration.ApiKey))
+        {
             throw new InvalidOperationException("Configure the Workshop Host URL and API key in Options first.");
+        }
 
         return await _client.GetTimelineAsync(
             new WorkshopHostConnectionOptions
@@ -91,13 +95,24 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
     {
         var normalized = status?.Trim() ?? string.Empty;
         if (normalized.Equals("PendingPickup", StringComparison.OrdinalIgnoreCase))
+        {
             return "Open Market Acquisition in MarketMafioso, check the dashboard, and claim the request.";
+        }
+
         if (normalized.Equals("Claimed", StringComparison.OrdinalIgnoreCase))
+        {
             return "Accept the claimed request in MarketMafioso.";
+        }
+
         if (normalized.Equals("AcceptedInPlugin", StringComparison.OrdinalIgnoreCase))
+        {
             return $"Choose Refresh Evidence in MarketMafioso to read {worldName} without purchasing.";
+        }
+
         if (normalized.Equals("Running", StringComparison.OrdinalIgnoreCase))
+        {
             return "MarketMafioso is still working; sync again after the evidence refresh finishes.";
+        }
 
         return $"No {worldName} observation is available yet; review the request in MarketMafioso.";
     }
@@ -107,11 +122,19 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
         MarketMafiosoSingleWorldHandoff handoff)
     {
         if (string.IsNullOrWhiteSpace(configuration.ApiUrl) || string.IsNullOrWhiteSpace(configuration.ApiKey))
+        {
             throw new InvalidOperationException("Configure the Workshop Host URL and API key in Options first.");
+        }
+
         if (string.IsNullOrWhiteSpace(configuration.TargetCharacter) || string.IsNullOrWhiteSpace(configuration.TargetWorld))
+        {
             throw new InvalidOperationException("Configure the MarketMafioso character and home world in Options first.");
+        }
+
         if (handoff.Quantity == 0 || handoff.MaxUnitPrice == 0 || handoff.GilCap == 0)
+        {
             throw new InvalidOperationException("Quantity, maximum unit price, and gil cap must all be greater than zero.");
+        }
     }
 }
 

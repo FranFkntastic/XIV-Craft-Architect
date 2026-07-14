@@ -42,7 +42,9 @@ public sealed class WorkshopHostAcquisitionClient : IWorkshopHostAcquisitionClie
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(requestId))
+        {
             throw new ArgumentException("Acquisition request id is required.", nameof(requestId));
+        }
 
         return SendAsync<WorkshopHostAcquisitionTimeline>(
             connection,
@@ -66,7 +68,9 @@ public sealed class WorkshopHostAcquisitionClient : IWorkshopHostAcquisitionClie
         request.Headers.Add("X-Api-Key", connection.ApiKey.Trim());
         request.Headers.Accept.ParseAdd("application/json");
         if (body != null)
+        {
             request.Content = JsonContent.Create(body, options: JsonOptions);
+        }
 
         using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
@@ -86,9 +90,14 @@ public sealed class WorkshopHostAcquisitionClient : IWorkshopHostAcquisitionClie
     {
         ArgumentNullException.ThrowIfNull(connection);
         if (string.IsNullOrWhiteSpace(connection.ApiBaseUrl))
+        {
             throw new ArgumentException("Workshop Host API URL is required.", nameof(connection));
+        }
+
         if (string.IsNullOrWhiteSpace(connection.ApiKey))
+        {
             throw new ArgumentException("Workshop Host API key is required.", nameof(connection));
+        }
 
         var baseUri = Uri.TryCreate(connection.ApiBaseUrl.Trim(), UriKind.Absolute, out var absolute)
             ? absolute
@@ -97,9 +106,15 @@ public sealed class WorkshopHostAcquisitionClient : IWorkshopHostAcquisitionClie
                 : new Uri(_httpClient.BaseAddress, connection.ApiBaseUrl.Trim());
         var path = baseUri.AbsolutePath.TrimEnd('/');
         if (path.EndsWith("/inventory", StringComparison.OrdinalIgnoreCase))
+        {
             path = path[..^"/inventory".Length];
+        }
+
         if (!path.EndsWith("/api", StringComparison.OrdinalIgnoreCase))
+        {
             path = $"{path}/api";
+        }
+
         return new UriBuilder(baseUri) { Path = $"{path.TrimEnd('/')}/" }.Uri;
     }
 }
