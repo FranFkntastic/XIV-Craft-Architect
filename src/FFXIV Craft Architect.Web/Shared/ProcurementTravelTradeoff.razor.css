@@ -20,7 +20,7 @@
 
 .pp-clutch-shell {
     display: grid;
-    grid-template-columns: 62px 40px minmax(0, 1fr);
+    grid-template-columns: 62px 48px minmax(0, 1fr);
     gap: 8px;
     min-height: 304px;
     margin-top: 10px;
@@ -43,19 +43,23 @@
 
 .pp-clutch-control {
     position: relative;
-    min-height: 282px;
+    height: 282px;
 }
 
 .pp-clutch-input {
     position: absolute;
-    top: 125px;
-    left: -121px;
-    width: 282px;
-    height: 32px;
+    z-index: 4;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 30px;
+    height: 100%;
     margin: 0;
-    transform: rotate(90deg);
+    appearance: none;
+    opacity: 0;
+    writing-mode: vertical-lr;
+    direction: ltr;
     cursor: grab;
-    accent-color: #d4b35b;
 }
 
 .pp-clutch-input:active {
@@ -63,37 +67,87 @@
 }
 
 .pp-clutch-input:focus-visible {
-    outline: 2px solid #90caf9;
-    outline-offset: 3px;
+    outline: none;
+}
+
+.pp-clutch-rail {
+    position: absolute;
+    z-index: 1;
+    top: calc(100% / 24);
+    bottom: calc(100% / 24);
+    left: 22px;
+    width: 4px;
+    border-radius: 999px;
+    background: #3f474d;
 }
 
 .pp-clutch-track {
     position: absolute;
+    z-index: 2;
     inset: 0;
+    display: grid;
+    grid-template-rows: repeat(12, minmax(0, 1fr));
+    gap: 1px;
+    pointer-events: none;
 }
 
 .pp-clutch-tick {
-    position: absolute;
-    z-index: 2;
-    top: calc(var(--clutch-position) * 100% / 11);
-    left: 9px;
-    width: 22px;
-    height: 8px;
+    z-index: 5;
+    grid-column: 1;
+    display: flex;
+    align-self: center;
+    align-items: center;
+    justify-self: start;
+    justify-content: flex-start;
+    width: 18px;
+    height: 100%;
     padding: 0;
-    transform: translateY(-50%);
+    overflow: visible;
     border: 0;
-    background: #4a5258;
-    background-clip: content-box;
+    background: transparent;
     cursor: pointer;
+    pointer-events: auto;
 }
 
-.pp-clutch-tick.is-active {
+.pp-clutch-tick-mark {
+    display: block;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 6px;
+    border-radius: 1px;
+    background: #4a5258;
+    pointer-events: none;
+    transition: width 100ms ease, background 100ms ease;
+}
+
+.pp-clutch-tick.is-active .pp-clutch-tick-mark {
+    width: 36px;
     background: #e2bd5c;
 }
 
 .pp-clutch-tick:focus-visible {
     outline: 2px solid #90caf9;
     outline-offset: 1px;
+}
+
+.pp-clutch-handle {
+    z-index: 3;
+    grid-column: 1;
+    align-self: center;
+    justify-self: center;
+    width: 20px;
+    height: 20px;
+    border: 2px solid #eef1f3;
+    border-radius: 50%;
+    background: #596168;
+    box-shadow: 0 2px 5px rgb(0 0 0 / 48%);
+    transition: border-color 100ms ease, background 100ms ease, box-shadow 100ms ease;
+}
+
+.pp-clutch-control:focus-within .pp-clutch-handle {
+    border-color: #90caf9;
+    background: #6a747b;
+    box-shadow: 0 0 0 3px rgb(144 202 249 / 22%), 0 2px 5px rgb(0 0 0 / 48%);
 }
 
 .pp-frontier-lane {
@@ -286,7 +340,7 @@
 
 @media (max-width: 520px) {
     .pp-clutch-shell {
-        grid-template-columns: 54px 40px minmax(150px, 1fr);
+        grid-template-columns: 54px 48px minmax(150px, 1fr);
     }
 
     .pp-tradeoff-diagram {

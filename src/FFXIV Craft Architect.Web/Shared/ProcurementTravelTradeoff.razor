@@ -64,15 +64,20 @@
         <span>Lower cost</span>
     </div>
     <div class="pp-clutch-control">
+        <div class="pp-clutch-rail" aria-hidden="true"></div>
         <div class="pp-clutch-track" aria-label="Travel preference positions">
             @foreach (var tolerance in Enumerable.Range(0, 12))
             {
                 <button type="button"
                         class="pp-clutch-tick @(tolerance == TravelTolerance ? "is-active" : null)"
-                        style="@GetTickStyle(tolerance)"
+                        style="@GetTrackRowStyle(tolerance)"
                         aria-label="Set travel preference to position @tolerance"
-                        @onclick="() => SelectTolerance(tolerance)"></button>
+                        @onclick="() => SelectTolerance(tolerance)">
+                    <span class="pp-clutch-tick-mark"></span>
+                </button>
             }
+            <span class="pp-clutch-handle"
+                  style="@GetTrackRowStyle(TravelTolerance)"></span>
         </div>
         <input id="procurement-travel-clutch"
                class="pp-clutch-input"
@@ -81,7 +86,6 @@
                max="11"
                step="1"
                value="@TravelTolerance"
-               orient="vertical"
                aria-labelledby="procurement-travel-label"
                aria-describedby="procurement-travel-help"
                aria-valuetext="@MarketRouteScoring.GetToleranceLabel(TravelTolerance)"
@@ -201,7 +205,8 @@
     private static string GetRouteTitle(MarketRouteFrontierOption option) =>
         $"{GetToleranceRange(option)}: {option.GilCost:N0} gil, {option.WorldStops} world visits, {option.DataCenterTransfers} data-center transfers";
 
-    private static string GetTickStyle(int tolerance) => $"--clutch-position: {tolerance};";
+    private static string GetTrackRowStyle(int tolerance) =>
+        $"grid-row: {Math.Clamp(tolerance, 0, 11) + 1};";
 
     private static string GetRouteStyle(MarketRouteFrontierOption option) =>
         $"grid-row: {option.MinimumTolerance + 1} / span {option.MaximumTolerance - option.MinimumTolerance + 1};";
