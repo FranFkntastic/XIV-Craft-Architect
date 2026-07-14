@@ -140,9 +140,12 @@
     [Parameter] public string EmptyTitle { get; set; } = "Route ready to generate";
     [Parameter] public string EmptyMessage { get; set; } = "Choose route settings and generate a route.";
     [Parameter] public MarketItemWorldKey? ReconcilingItemWorld { get; set; }
+    [Parameter] public MarketItemWorldKey? MarketMafiosoActiveItemWorld { get; set; }
+    [Parameter] public MarketItemWorldKey? MarketMafiosoBusyItemWorld { get; set; }
     [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnExcludeWorldForItemRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnRefreshItemRequested { get; set; }
+    [Parameter] public EventCallback<WorldItemProcurementAction> OnMarketMafiosoRequested { get; set; }
 
     private readonly HashSet<string> _expandedWorlds = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<WorldProcurementCardModel> _routeCards = Array.Empty<WorldProcurementCardModel>();
@@ -218,6 +221,8 @@
                                 item.ItemId,
                                 new MarketWorldKey(world.DataCenter, world.WorldName));
                             var isReconciling = ReconcilingItemWorld == itemWorldKey;
+                            var isMarketMafiosoActive = MarketMafiosoActiveItemWorld == itemWorldKey;
+                            var isMarketMafiosoBusy = MarketMafiosoBusyItemWorld == itemWorldKey;
                             <tr>
                                 <th scope="row" data-label="Item">
                                     <div class="pp-item-main">
@@ -260,6 +265,29 @@
                                                 {
                                                     <MudIcon Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" />
                                                     <span>Recheck</span>
+                                                }
+                                            </button>
+                                            <button class="pp-recheck-action"
+                                                    type="button"
+                                                    disabled="@isMarketMafiosoBusy"
+                                                    title="@(isMarketMafiosoActive
+                                                        ? $"Sync MarketMafioso evidence for {item.ItemName} on {world.WorldName}"
+                                                        : $"Send {item.ItemName} on {world.WorldName} to MarketMafioso")"
+                                                    @onclick="() => MarketMafiosoItem(world, item)">
+                                                @if (isMarketMafiosoBusy)
+                                                {
+                                                    <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                                                    <span>Working</span>
+                                                }
+                                                else if (isMarketMafiosoActive)
+                                                {
+                                                    <MudIcon Icon="@Icons.Material.Filled.Sync" Size="Size.Small" />
+                                                    <span>Sync MM</span>
+                                                }
+                                                else
+                                                {
+                                                    <MudIcon Icon="@Icons.Material.Filled.Send" Size="Size.Small" />
+                                                    <span>Send to MM</span>
                                                 }
                                             </button>
                                             <MudIconButton Icon="@Icons.Material.Filled.Block"
@@ -321,6 +349,9 @@
 
     private Task RefreshItem(WorldProcurementCardModel world, WorldItemPurchase item) =>
         OnRefreshItemRequested.InvokeAsync(new WorldItemProcurementAction { World = world, Item = item });
+
+    private Task MarketMafiosoItem(WorldProcurementCardModel world, WorldItemPurchase item) =>
+        OnMarketMafiosoRequested.InvokeAsync(new WorldItemProcurementAction { World = world, Item = item });
 
     private Task CopyItemName(string itemName) =>
         JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", itemName).AsTask();

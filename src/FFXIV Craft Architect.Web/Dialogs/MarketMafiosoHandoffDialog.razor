@@ -1,0 +1,50 @@
+@using FFXIV_Craft_Architect.Web.Services
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-4">
+            MarketMafioso will visit <strong>@Draft.PurchaseWorld</strong> for @Draft.ItemName. These are hard authorization caps, not estimates.
+        </MudText>
+        <MudNumericField T="uint" @bind-Value="_quantity" Label="Exact quantity" Variant="Variant.Outlined" Min="1" Class="mb-3" />
+        <MudNumericField T="uint" @bind-Value="_maxUnitPrice" Label="Maximum unit price" Variant="Variant.Outlined" Min="1" Adornment="Adornment.End" AdornmentText="gil" Class="mb-3" />
+        <MudNumericField T="uint" @bind-Value="_gilCap" Label="Maximum total spend" Variant="Variant.Outlined" Min="1" Adornment="Adornment.End" AdornmentText="gil" />
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-4">
+            The request stops at either cap. MarketMafioso still requires its normal in-game review and execution controls.
+        </MudAlert>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Send to MarketMafioso</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter, EditorRequired] public MarketMafiosoSingleWorldHandoff Draft { get; set; } = null!;
+
+    private uint _quantity;
+    private uint _maxUnitPrice;
+    private uint _gilCap;
+
+    protected override void OnInitialized()
+    {
+        _quantity = Draft.Quantity;
+        _maxUnitPrice = Draft.MaxUnitPrice;
+        _gilCap = Draft.GilCap;
+    }
+
+    private void Submit()
+    {
+        if (_quantity == 0 || _maxUnitPrice == 0 || _gilCap == 0)
+            return;
+
+        MudDialog.Close(DialogResult.Ok(Draft with
+        {
+            Quantity = _quantity,
+            MaxUnitPrice = _maxUnitPrice,
+            GilCap = _gilCap,
+        }));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

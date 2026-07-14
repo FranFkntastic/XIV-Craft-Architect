@@ -62,12 +62,21 @@ public enum MarketEvidenceOrigin
     ManualObservation
 }
 
+public enum MarketEvidenceCompleteness
+{
+    Complete,
+    Partial,
+    Unavailable
+}
+
 public sealed record MarketWorldEvidenceListing(
     int Quantity,
     long PricePerUnit,
     string RetainerName,
     bool IsHq,
-    long? LastReviewTimeUnix = null);
+    long? LastReviewTimeUnix = null,
+    string? ListingId = null,
+    string? RetainerId = null);
 
 /// <summary>
 /// A complete observation of one item's listings on one world. External acquisition
@@ -80,7 +89,11 @@ public sealed record MarketWorldEvidenceSnapshot(
     MarketEvidenceOrigin Origin,
     DateTime ObservedAtUtc,
     DateTime? MarketUpdatedAtUtc,
-    IReadOnlyList<MarketWorldEvidenceListing> Listings);
+    IReadOnlyList<MarketWorldEvidenceListing> Listings,
+    MarketEvidenceCompleteness Completeness = MarketEvidenceCompleteness.Complete,
+    int? ReportedListingCount = null,
+    int? ListingCapacity = null,
+    bool IsTruncated = false);
 
 public sealed class MarketWorldEvidenceReconciliationRequest
 {
@@ -111,7 +124,9 @@ public sealed class MarketWorldEvidenceReconciliationRequest
 public sealed record MarketWorldEvidenceReconciliationResult(
     MarketItemAnalysis Analysis,
     DetailedShoppingPlan ShoppingPlan,
-    MarketWorldEvidenceSnapshot Evidence);
+    MarketWorldEvidenceSnapshot Evidence,
+    bool Applied = true,
+    string? ReconciliationMessage = null);
 
 public sealed record MarketEvidenceReconciliationItemResult(
     int ItemId,

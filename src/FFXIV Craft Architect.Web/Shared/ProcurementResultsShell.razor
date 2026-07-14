@@ -43,9 +43,12 @@
                                EmptyTitle="@EmptyTitle"
                                EmptyMessage="@EmptyMessage"
                                ReconcilingItemWorld="ReconcilingItemWorld"
+                               MarketMafiosoActiveItemWorld="MarketMafiosoActiveItemWorld"
+                               MarketMafiosoBusyItemWorld="MarketMafiosoBusyItemWorld"
                                OnReanalyzeWithoutWorldRequested="OnReanalyzeWithoutWorldRequested"
                                OnExcludeWorldForItemRequested="OnExcludeWorldForItemRequested"
-                               OnRefreshItemRequested="OnRefreshItemRequested" />
+                               OnRefreshItemRequested="OnRefreshItemRequested"
+                               OnMarketMafiosoRequested="OnMarketMafiosoRequested" />
 </main>
 
 @code {
@@ -62,10 +65,13 @@
     [Parameter] public string EmptyTitle { get; set; } = "Route ready to generate";
     [Parameter] public string EmptyMessage { get; set; } = "Choose route settings and generate a route.";
     [Parameter] public MarketItemWorldKey? ReconcilingItemWorld { get; set; }
+    [Parameter] public MarketItemWorldKey? MarketMafiosoActiveItemWorld { get; set; }
+    [Parameter] public MarketItemWorldKey? MarketMafiosoBusyItemWorld { get; set; }
     [Parameter] public EventCallback OnUndoExclusionRequested { get; set; }
     [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnExcludeWorldForItemRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnRefreshItemRequested { get; set; }
+    [Parameter] public EventCallback<WorldItemProcurementAction> OnMarketMafiosoRequested { get; set; }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {

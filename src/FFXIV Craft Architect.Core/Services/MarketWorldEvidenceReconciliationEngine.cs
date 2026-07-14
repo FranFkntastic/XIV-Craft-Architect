@@ -37,8 +37,12 @@ internal sealed class MarketWorldEvidenceReconciliationEngine
 
         progress?.Report($"Updating {request.Item.Name} evidence for {request.WorldName}...");
         var existing = (await _marketCache.GetWithStaleAsync(request.Item.ItemId, request.DataCenter)).Data;
-        var patched = PatchWorldEvidence(existing, request, snapshot);
-        await _marketCache.SetAsync(request.Item.ItemId, request.DataCenter, patched);
+        var patch = PatchWorldEvidence(existing, request, snapshot);
+        var patched = patch.Data;
+        if (patch.Applied)
+        {
+            await _marketCache.SetAsync(request.Item.ItemId, request.DataCenter, patched);
+        }
 
         var dataCenters = MarketFetchScopeResolver.GetDataCenters(
             request.Scope,
@@ -93,7 +97,12 @@ internal sealed class MarketWorldEvidenceReconciliationEngine
             request.Lens,
             request.AnalysisConfig);
 
-        return new MarketWorldEvidenceReconciliationResult(analysis, shoppingPlan, snapshot);
+        return new MarketWorldEvidenceReconciliationResult(
+            analysis,
+            shoppingPlan,
+            snapshot,
+            patch.Applied,
+            patch.Message);
     }
 
     private async Task<MarketWorldEvidenceSnapshot> FetchWorldEvidenceAsync(
@@ -146,37 +155,64 @@ internal sealed class MarketWorldEvidenceReconciliationEngine
                 .ToList());
     }
 
-    private static CachedMarketData PatchWorldEvidence(
+    private static MarketWorldEvidencePatchResult PatchWorldEvidence(
         CachedMarketData? existing,
         MarketWorldEvidenceReconciliationRequest request,
         MarketWorldEvidenceSnapshot snapshot)
     {
+        var existingWorld = existing?.Worlds.FirstOrDefault(world =>
+            string.Equals(world.WorldName, request.WorldName, StringComparison.OrdinalIgnoreCase));
+        if (snapshot.Completeness == MarketEvidenceCompleteness.Unavailable)
+        {
+            if (existing == null || existingWorld == null)
+            {
+                throw new InvalidOperationException(
+                    $"No retained evidence exists for unavailable observation {request.Item.Name} on {request.WorldName}.");
+            }
+
+            return new MarketWorldEvidencePatchResult(
+                existing,
+                false,
+                "The market-board observation was unavailable, so retained evidence was left unchanged.");
+        }
+
+        if (existingWorld != null && IsOlderThanRetainedEvidence(snapshot, existingWorld))
+        {
+            return new MarketWorldEvidencePatchResult(
+                existing!,
+                false,
+                "The observation was older than the retained authoritative evidence and was ignored.");
+        }
+
         var worlds = existing?.Worlds
             .Where(world => !string.Equals(world.WorldName, request.WorldName, StringComparison.OrdinalIgnoreCase))
             .Select(CloneWorld)
             .ToList() ?? [];
+        var incomingListings = snapshot.Listings.Select(ToCachedListing).ToList();
+        var reconciledListings = snapshot.Completeness == MarketEvidenceCompleteness.Partial && existingWorld != null
+            ? MergePartialListings(existingWorld.Listings, incomingListings)
+            : incomingListings;
         worlds.Add(new CachedWorldData
         {
+            WorldId = existingWorld?.WorldId,
             WorldName = request.WorldName.Trim(),
             LastUploadTimeUnixMilliseconds = snapshot.MarketUpdatedAtUtc.HasValue
                 ? new DateTimeOffset(CacheTimeHelper.NormalizeToUtc(snapshot.MarketUpdatedAtUtc.Value)).ToUnixTimeMilliseconds()
-                : null,
+                : existingWorld?.LastUploadTimeUnixMilliseconds,
             EvidenceOrigin = snapshot.Origin,
             ObservedAtUnixMilliseconds = new DateTimeOffset(
                 CacheTimeHelper.NormalizeToUtc(snapshot.ObservedAtUtc)).ToUnixTimeMilliseconds(),
-            Listings = snapshot.Listings.Select(listing => new CachedListing
-            {
-                Quantity = listing.Quantity,
-                PricePerUnit = listing.PricePerUnit,
-                RetainerName = string.IsNullOrWhiteSpace(listing.RetainerName) ? "Unknown" : listing.RetainerName,
-                IsHq = listing.IsHq,
-                LastReviewTimeUnix = listing.LastReviewTimeUnix
-            }).ToList()
+            EvidenceCompleteness = snapshot.Completeness,
+            ReportedListingCount = snapshot.ReportedListingCount ?? snapshot.Listings.Count,
+            ListingCapacity = snapshot.ListingCapacity,
+            IsTruncated = snapshot.IsTruncated || snapshot.Completeness == MarketEvidenceCompleteness.Partial,
+            IsCongested = existingWorld?.IsCongested ?? false,
+            Listings = reconciledListings
         });
 
         var nqListings = worlds.SelectMany(world => world.Listings).Where(listing => !listing.IsHq).ToList();
         var hqListings = worlds.SelectMany(world => world.Listings).Where(listing => listing.IsHq).ToList();
-        return new CachedMarketData
+        var patched = new CachedMarketData
         {
             ItemId = request.Item.ItemId,
             DataCenter = request.DataCenter.Trim(),
@@ -188,7 +224,94 @@ internal sealed class MarketWorldEvidenceReconciliationEngine
             HQAveragePrice = existing?.HQAveragePrice ?? (hqListings.Count > 0 ? CalculateAverage(hqListings) : null),
             Worlds = worlds
         };
+        return new MarketWorldEvidencePatchResult(
+            patched,
+            true,
+            snapshot.Completeness == MarketEvidenceCompleteness.Partial
+                ? "Partial live evidence was merged without removing unseen retained listings."
+                : "Complete world evidence replaced the retained world snapshot.");
     }
+
+    private static bool IsOlderThanRetainedEvidence(
+        MarketWorldEvidenceSnapshot snapshot,
+        CachedWorldData retained)
+    {
+        var incomingTimestamp = GetAuthoritativeTimestamp(snapshot);
+        var retainedTimestamp = GetAuthoritativeTimestamp(retained);
+        return incomingTimestamp.HasValue && retainedTimestamp.HasValue && incomingTimestamp < retainedTimestamp;
+    }
+
+    private static DateTime? GetAuthoritativeTimestamp(MarketWorldEvidenceSnapshot snapshot) =>
+        snapshot.Origin == MarketEvidenceOrigin.Universalis && snapshot.MarketUpdatedAtUtc.HasValue
+            ? CacheTimeHelper.NormalizeToUtc(snapshot.MarketUpdatedAtUtc.Value)
+            : CacheTimeHelper.NormalizeToUtc(snapshot.ObservedAtUtc);
+
+    private static DateTime? GetAuthoritativeTimestamp(CachedWorldData world)
+    {
+        var unix = world.EvidenceOrigin == MarketEvidenceOrigin.Universalis
+            ? world.LastUploadTimeUnixMilliseconds ?? world.ObservedAtUnixMilliseconds
+            : world.ObservedAtUnixMilliseconds;
+        return unix is > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(unix.Value).UtcDateTime
+            : null;
+    }
+
+    private static List<CachedListing> MergePartialListings(
+        IEnumerable<CachedListing> retained,
+        IEnumerable<CachedListing> observed)
+    {
+        var merged = retained.Select(CloneListing).ToList();
+        var indexByKey = merged
+            .Select((listing, index) => (Key: GetListingKey(listing), Index: index))
+            .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().Index, StringComparer.Ordinal);
+        foreach (var listing in observed)
+        {
+            var key = GetListingKey(listing);
+            if (indexByKey.TryGetValue(key, out var index))
+            {
+                merged[index] = listing;
+            }
+            else
+            {
+                indexByKey[key] = merged.Count;
+                merged.Add(listing);
+            }
+        }
+
+        return merged;
+    }
+
+    private static string GetListingKey(CachedListing listing) =>
+        !string.IsNullOrWhiteSpace(listing.ListingId)
+            ? $"listing:{listing.ListingId}"
+            : !string.IsNullOrWhiteSpace(listing.RetainerId)
+                ? $"retainer:{listing.RetainerId}:{listing.PricePerUnit}:{listing.Quantity}:{listing.IsHq}"
+                : $"visible:{listing.RetainerName}:{listing.PricePerUnit}:{listing.Quantity}:{listing.IsHq}";
+
+    private static CachedListing ToCachedListing(MarketWorldEvidenceListing listing) =>
+        new()
+        {
+            Quantity = listing.Quantity,
+            PricePerUnit = listing.PricePerUnit,
+            RetainerName = string.IsNullOrWhiteSpace(listing.RetainerName) ? "Unknown" : listing.RetainerName,
+            ListingId = listing.ListingId,
+            RetainerId = listing.RetainerId,
+            IsHq = listing.IsHq,
+            LastReviewTimeUnix = listing.LastReviewTimeUnix
+        };
+
+    private static CachedListing CloneListing(CachedListing listing) =>
+        new()
+        {
+            Quantity = listing.Quantity,
+            PricePerUnit = listing.PricePerUnit,
+            RetainerName = listing.RetainerName,
+            ListingId = listing.ListingId,
+            RetainerId = listing.RetainerId,
+            IsHq = listing.IsHq,
+            LastReviewTimeUnix = listing.LastReviewTimeUnix
+        };
 
     private static CachedWorldData CloneWorld(CachedWorldData world) =>
         new()
@@ -198,15 +321,12 @@ internal sealed class MarketWorldEvidenceReconciliationEngine
             LastUploadTimeUnixMilliseconds = world.LastUploadTimeUnixMilliseconds,
             EvidenceOrigin = world.EvidenceOrigin,
             ObservedAtUnixMilliseconds = world.ObservedAtUnixMilliseconds,
+            EvidenceCompleteness = world.EvidenceCompleteness,
+            ReportedListingCount = world.ReportedListingCount,
+            ListingCapacity = world.ListingCapacity,
+            IsTruncated = world.IsTruncated,
             IsCongested = world.IsCongested,
-            Listings = world.Listings.Select(listing => new CachedListing
-            {
-                Quantity = listing.Quantity,
-                PricePerUnit = listing.PricePerUnit,
-                RetainerName = listing.RetainerName,
-                IsHq = listing.IsHq,
-                LastReviewTimeUnix = listing.LastReviewTimeUnix
-            }).ToList()
+            Listings = world.Listings.Select(CloneListing).ToList()
         };
 
     private static decimal CalculateAverage(IEnumerable<CachedListing> listings)
@@ -231,7 +351,12 @@ internal sealed class MarketWorldEvidenceReconciliationEngine
                     : null,
                 Listings = snapshot.Listings
                     .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
-                    .ToList()
+                    .ToList(),
+                ReportedListingCount = Math.Max(
+                    snapshot.Listings.Count,
+                    snapshot.ReportedListingCount ?? snapshot.Listings.Count),
+                ListingCapacity = snapshot.ListingCapacity is > 0 ? snapshot.ListingCapacity : null,
+                IsTruncated = snapshot.IsTruncated || snapshot.Completeness == MarketEvidenceCompleteness.Partial
             };
 
     private static void ValidateRequest(MarketWorldEvidenceReconciliationRequest request)
@@ -274,4 +399,9 @@ internal sealed class MarketWorldEvidenceReconciliationEngine
                 nameof(request));
         }
     }
+
+    private sealed record MarketWorldEvidencePatchResult(
+        CachedMarketData Data,
+        bool Applied,
+        string Message);
 }

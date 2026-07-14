@@ -51,6 +51,8 @@ builder.Services.AddScoped<CommissionPayrollService>();
 builder.Services.AddScoped<TradeLaborStandardCalibrationService>();
 builder.Services.AddScoped<ITradeLaborBenchmarkPlanBuilder, TradeLaborBenchmarkPlanBuilder>();
 builder.Services.AddWorkshopHostCraftAppraisal();
+builder.Services.AddScoped<IWorkshopHostAcquisitionClient>(provider =>
+    new WorkshopHostAcquisitionClient(provider.GetRequiredService<HttpClient>()));
 builder.Services.AddScoped<CraftAppraisalQuoteExportService>();
 
 // Register Settings Service (Web implementation)
@@ -75,6 +77,7 @@ builder.Services.AddScoped<MarketAnalysisDiagnosticDumpService>();
 builder.Services.AddScoped<DiagnosticSnapshotBundleService>();
 builder.Services.AddScoped<BrowserFileExportService>();
 builder.Services.AddScoped<ProcurementWorkflowService>();
+builder.Services.AddScoped<MarketMafiosoAcquisitionWorkflowService>();
 builder.Services.AddScoped<AcquisitionEvaluationWorkflowService>();
 builder.Services.AddScoped<AcquisitionSourceChangeImpactService>();
 builder.Services.AddScoped<TradePayrollDraftFactory>();

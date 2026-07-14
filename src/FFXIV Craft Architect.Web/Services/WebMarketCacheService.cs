@@ -65,7 +65,8 @@ public class WebMarketCacheService : IMarketCacheService
     public Task SetAsync(int itemId, string dataCenter, CachedMarketData data)
     {
         var key = GetKey(itemId, dataCenter);
-        _cache[key] = data;
+        _cache.TryGetValue(key, out var retained);
+        _cache[key] = MarketEvidenceCacheMerger.PreferNewestWorldEvidence(retained, data);
         return Task.CompletedTask;
     }
 

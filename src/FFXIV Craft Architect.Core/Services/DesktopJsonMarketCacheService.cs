@@ -82,6 +82,8 @@ public sealed class DesktopJsonMarketCacheService : IMarketCacheService
         ArgumentNullException.ThrowIfNull(data);
 
         var cache = await LoadCacheAsync();
+        cache.TryGetValue(GetKey(itemId, dataCenter), out var retained);
+        data = MarketEvidenceCacheMerger.PreferNewestWorldEvidence(retained, data);
         data.ItemId = itemId;
         data.DataCenter = dataCenter;
         cache[GetKey(itemId, dataCenter)] = data;

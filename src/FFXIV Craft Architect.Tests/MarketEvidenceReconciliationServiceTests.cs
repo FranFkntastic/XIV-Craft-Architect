@@ -251,6 +251,75 @@ public sealed class MarketEvidenceReconciliationServiceTests
         Assert.Null(result.ShoppingPlan.RecommendedWorld);
     }
 
+    [Fact]
+    public async Task ReconcileWorldAsync_PartialObservationPreservesUnseenRetainedListings()
+    {
+        CachedMarketData? stored = null;
+        var retained = CachedWorld("Siren", 100);
+        retained.EvidenceOrigin = MarketEvidenceOrigin.MarketMafioso;
+        retained.ObservedAtUnixMilliseconds = DateTimeOffset.UtcNow.AddMinutes(-2).ToUnixTimeMilliseconds();
+        retained.Listings[0].ListingId = "retained";
+        var cache = new Mock<IMarketCacheService>();
+        cache.Setup(service => service.GetWithStaleAsync(101, "Aether", It.IsAny<TimeSpan?>()))
+            .ReturnsAsync((CachedEntry(retained), false));
+        cache.Setup(service => service.SetAsync(101, "Aether", It.IsAny<CachedMarketData>()))
+            .Callback<int, string, CachedMarketData>((_, _, value) => stored = value)
+            .Returns(Task.CompletedTask);
+        var service = WorldService(cache.Object, Mock.Of<IUniversalisService>());
+        var snapshot = new MarketWorldEvidenceSnapshot(
+            101,
+            "Aether",
+            "Siren",
+            MarketEvidenceOrigin.MarketMafioso,
+            DateTime.UtcNow,
+            MarketUpdatedAtUtc: null,
+            [new MarketWorldEvidenceListing(2, 175, "Visible", false, ListingId: "visible")],
+            MarketEvidenceCompleteness.Partial,
+            ReportedListingCount: 8,
+            ListingCapacity: 2,
+            IsTruncated: true);
+
+        var result = await service.ReconcileWorldAsync(WorldRequest(snapshot));
+
+        var world = Assert.Single(stored!.Worlds);
+        Assert.Equal(MarketEvidenceCompleteness.Partial, world.EvidenceCompleteness);
+        Assert.True(world.IsTruncated);
+        Assert.Equal(8, world.ReportedListingCount);
+        Assert.Equal(2, world.Listings.Count);
+        Assert.Contains(world.Listings, listing => listing.ListingId == "retained");
+        Assert.Contains(world.Listings, listing => listing.ListingId == "visible");
+        Assert.True(result.Applied);
+    }
+
+    [Fact]
+    public async Task ReconcileWorldAsync_OlderObservationDoesNotReplaceNewerLiveEvidence()
+    {
+        var retained = CachedWorld("Siren", 100);
+        retained.EvidenceOrigin = MarketEvidenceOrigin.MarketMafioso;
+        retained.ObservedAtUnixMilliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var cache = new Mock<IMarketCacheService>();
+        cache.Setup(service => service.GetWithStaleAsync(101, "Aether", It.IsAny<TimeSpan?>()))
+            .ReturnsAsync((CachedEntry(retained), false));
+        var service = WorldService(cache.Object, Mock.Of<IUniversalisService>());
+        var snapshot = new MarketWorldEvidenceSnapshot(
+            101,
+            "Aether",
+            "Siren",
+            MarketEvidenceOrigin.MarketMafioso,
+            DateTime.UtcNow.AddMinutes(-5),
+            MarketUpdatedAtUtc: null,
+            [new MarketWorldEvidenceListing(2, 175, "Older", false)]);
+
+        var result = await service.ReconcileWorldAsync(WorldRequest(snapshot));
+
+        Assert.False(result.Applied);
+        Assert.Equal(100, Assert.Single(Assert.Single(result.Analysis.Worlds).Listings).PricePerUnit);
+        cache.Verify(service => service.SetAsync(
+            It.IsAny<int>(),
+            It.IsAny<string>(),
+            It.IsAny<CachedMarketData>()), Times.Never);
+    }
+
     private static MarketEvidenceReconciliationRequest Request(
         MarketItemAnalysis analysis,
         DetailedShoppingPlan plan) =>

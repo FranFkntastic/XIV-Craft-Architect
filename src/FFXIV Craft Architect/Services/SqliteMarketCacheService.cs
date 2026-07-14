@@ -302,6 +302,8 @@ public class SqliteMarketCacheService : Core.Services.IMarketCacheService, IDisp
 
     public async Task SetAsync(int itemId, string dataCenter, Core.Services.CachedMarketData data)
     {
+        var (retained, _) = await GetWithStaleAsync(itemId, dataCenter);
+        data = MarketEvidenceCacheMerger.PreferNewestWorldEvidence(retained, data);
         var age = DateTime.UtcNow - data.FetchedAt;
         _logger.LogDebug("[SqliteMarketCache] Storing {ItemId}@{DataCenter} with FetchedAt={FetchedAt} (age={Age:F1}min)", 
             itemId, dataCenter, data.FetchedAt, age.TotalMinutes);

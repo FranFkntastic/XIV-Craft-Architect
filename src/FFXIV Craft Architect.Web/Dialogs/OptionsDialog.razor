@@ -129,6 +129,32 @@
                     These settings determine which market board prices are shown by default.
                 </MudText>
             </MudTabPanel>
+
+            <MudTabPanel Text="Integrations">
+                <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
+                    Connect CA to the private Workshop Host acquisition queue used by MarketMafioso.
+                </MudText>
+                <MudTextField @bind-Value="_marketMafiosoApiUrl"
+                              Label="Workshop Host API URL"
+                              Variant="Variant.Outlined"
+                              Class="my-3" />
+                <MudTextField @bind-Value="_marketMafiosoApiKey"
+                              Label="Workshop Host API key"
+                              Variant="Variant.Outlined"
+                              InputType="InputType.Password"
+                              Class="my-3" />
+                <MudTextField @bind-Value="_marketMafiosoTargetCharacter"
+                              Label="MarketMafioso character"
+                              Variant="Variant.Outlined"
+                              Class="my-3" />
+                <MudTextField @bind-Value="_marketMafiosoTargetWorld"
+                              Label="Character home world"
+                              Variant="Variant.Outlined"
+                              Class="my-3" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    The character and home world identify which plugin instance can claim CA requests. Each procurement action carries its recommended purchase world separately.
+                </MudText>
+            </MudTabPanel>
             
             <MudTabPanel Text="Company">
                 @if (!string.IsNullOrWhiteSpace(_companyLoadError))
@@ -638,6 +664,10 @@
     private bool _procurementEnableSplitWorldPurchases = true;
     private bool _procurementStartFromHomeDataCenter;
     private MarketTravelPriority _procurementTravelPriority = MarketTravelPriority.DataCenterTransfersFirst;
+    private string _marketMafiosoApiUrl = "https://dev.xivcraftarchitect.com/marketmafioso/api/";
+    private string _marketMafiosoApiKey = string.Empty;
+    private string _marketMafiosoTargetCharacter = string.Empty;
+    private string _marketMafiosoTargetWorld = string.Empty;
     private bool _isClearing = false;
     private TradeCompanyProfile? _companyProfile;
     private string _companyName = string.Empty;
@@ -704,6 +734,12 @@
             await Settings.GetAsync(
                 "procurement.travel_priority",
                 nameof(MarketTravelPriority.DataCenterTransfersFirst)));
+        _marketMafiosoApiUrl = await Settings.GetAsync(
+            "marketmafioso.workshop_host_url",
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/") ?? string.Empty;
+        _marketMafiosoApiKey = await Settings.GetAsync("marketmafioso.api_key", string.Empty) ?? string.Empty;
+        _marketMafiosoTargetCharacter = await Settings.GetAsync("marketmafioso.target_character", string.Empty) ?? string.Empty;
+        _marketMafiosoTargetWorld = await Settings.GetAsync("marketmafioso.target_world", string.Empty) ?? string.Empty;
 
         await LoadCompanyProfileAsync();
         await LoadProfileHostSettingsAsync();
@@ -1368,6 +1404,10 @@
         await Settings.SetAsync("procurement.enable_split_world_purchases", _procurementEnableSplitWorldPurchases);
         await Settings.SetAsync("procurement.start_from_home_data_center", _procurementStartFromHomeDataCenter);
         await Settings.SetAsync("procurement.travel_priority", _procurementTravelPriority.ToString());
+        await Settings.SetAsync("marketmafioso.workshop_host_url", _marketMafiosoApiUrl.Trim());
+        await Settings.SetAsync("marketmafioso.api_key", _marketMafiosoApiKey.Trim());
+        await Settings.SetAsync("marketmafioso.target_character", _marketMafiosoTargetCharacter.Trim());
+        await Settings.SetAsync("marketmafioso.target_world", _marketMafiosoTargetWorld.Trim());
         
         Snackbar.Add("Settings saved", Severity.Success);
         MudDialog.Close(DialogResult.Ok(true));

@@ -1,6 +1,7 @@
 @page "/procurement"
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -8,6 +9,8 @@
 @inject NavigationManager NavigationManager
 @inject CancellableOperationService CancellableOperations
 @inject ProcurementWorkflowService ProcurementWorkflow
+@inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
+@inject ISettingsService Settings
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject BrowserFileExportService FileExportService
 @inject CraftAppraisalQuoteExportService CraftAppraisalQuoteExportService
@@ -39,12 +42,15 @@
             StaleReason="@AppState.ProcurementRouteStaleReason"
             ExclusionOutcome="@_exclusionOutcome"
             ReconcilingItemWorld="@_reconcilingItemWorld"
+            MarketMafiosoActiveItemWorld="@_marketMafiosoActiveItemWorld"
+            MarketMafiosoBusyItemWorld="@_marketMafiosoBusyItemWorld"
             OnUndoExclusionRequested="UndoLastExclusionAsync"
             EmptyTitle="@GetEmptyTitle()"
             EmptyMessage="@GetEmptyMessage()"
             OnReanalyzeWithoutWorldRequested="ReanalyzeWithoutWorldAsync"
             OnExcludeWorldForItemRequested="ExcludeWorldForItemAsync"
-            OnRefreshItemRequested="RefreshItemMarketDataAsync" />
+            OnRefreshItemRequested="RefreshItemMarketDataAsync"
+            OnMarketMafiosoRequested="HandleMarketMafiosoAsync" />
     </div>
 </MudContainer>
 
@@ -54,12 +60,32 @@
     private PendingExclusion? _lastExclusion;
     private string? _exclusionOutcome;
     private MarketItemWorldKey? _reconcilingItemWorld;
+    private MarketItemWorldKey? _marketMafiosoActiveItemWorld;
+    private MarketItemWorldKey? _marketMafiosoBusyItemWorld;
+    private string? _marketMafiosoActiveRequestId;
 
     protected override void OnInitialized()
     {
         AppState.PruneExpiredTemporaryMarketWorldBlacklists();
         AppState.OnPlanChanged += OnStateChanged;
         AppState.OnShoppingListChanged += OnStateChanged;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _marketMafiosoActiveRequestId = await Settings.GetAsync("marketmafioso.active_request_id", string.Empty);
+        var itemId = await Settings.GetAsync("marketmafioso.active_item_id", 0);
+        var dataCenter = await Settings.GetAsync("marketmafioso.active_data_center", string.Empty) ?? string.Empty;
+        var purchaseWorld = await Settings.GetAsync("marketmafioso.active_purchase_world", string.Empty) ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(_marketMafiosoActiveRequestId) &&
+            itemId > 0 &&
+            !string.IsNullOrWhiteSpace(dataCenter) &&
+            !string.IsNullOrWhiteSpace(purchaseWorld))
+        {
+            _marketMafiosoActiveItemWorld = new MarketItemWorldKey(
+                itemId,
+                new MarketWorldKey(dataCenter, purchaseWorld));
+        }
     }
 
     private void OnStateChanged() => InvokeAsync(StateHasChanged);
@@ -397,7 +423,12 @@
         _ => "didn't change"
     };
 
-    private async Task RefreshItemMarketDataAsync(WorldItemProcurementAction action)
+    private Task RefreshItemMarketDataAsync(WorldItemProcurementAction action) =>
+        RefreshItemMarketDataAsync(action, observedEvidence: null);
+
+    private async Task RefreshItemMarketDataAsync(
+        WorldItemProcurementAction action,
+        MarketWorldEvidenceSnapshot? observedEvidence)
     {
         var target = new MarketItemWorldKey(
             action.Item.ItemId,
@@ -418,7 +449,8 @@
                     MarketAnalysisExecutionOptions.Interactive)
                 {
                     TargetDataCenter = action.World.DataCenter,
-                    TargetWorldName = action.World.WorldName
+                    TargetWorldName = action.World.WorldName,
+                    ObservedEvidence = observedEvidence,
                 },
                 new Progress<string>(message => operation.ReportStatus(message)),
                 operation.Token);
@@ -467,6 +499,93 @@
                 await InvokeAsync(StateHasChanged);
             }
         }
+    }
+
+    private async Task HandleMarketMafiosoAsync(WorldItemProcurementAction action)
+    {
+        var key = new MarketItemWorldKey(
+            action.Item.ItemId,
+            new MarketWorldKey(action.World.DataCenter, action.World.WorldName));
+        _marketMafiosoBusyItemWorld = key;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            if (_marketMafiosoActiveItemWorld == key && !string.IsNullOrWhiteSpace(_marketMafiosoActiveRequestId))
+            {
+                await SyncMarketMafiosoAsync(action, _marketMafiosoActiveRequestId);
+                return;
+            }
+
+            var quantity = checked((uint)Math.Max(1, action.Item.QuantityOnThisWorld));
+            var maxUnitPrice = checked((uint)Math.Clamp(
+                decimal.Ceiling(action.Item.PricePerUnit),
+                1m,
+                uint.MaxValue));
+            var gilCap = checked((uint)Math.Clamp(action.Item.TotalCost, 1L, (long)uint.MaxValue));
+            var draft = new MarketMafiosoSingleWorldHandoff(
+                action.Item.ItemId,
+                action.Item.ItemName,
+                AppState.SelectedRegion,
+                action.World.DataCenter,
+                action.World.WorldName,
+                quantity,
+                maxUnitPrice,
+                gilCap);
+            var parameters = new DialogParameters { [nameof(MarketMafiosoHandoffDialog.Draft)] = draft };
+            var dialog = DialogService.Show<MarketMafiosoHandoffDialog>(
+                "MarketMafioso handoff",
+                parameters,
+                new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true });
+            var result = await dialog.Result;
+            if (result?.Canceled != false || result.Data is not MarketMafiosoSingleWorldHandoff approved)
+                return;
+
+            var request = await MarketMafiosoAcquisitionWorkflow.CreateSingleWorldHandoffAsync(approved);
+            _marketMafiosoActiveRequestId = request.Id;
+            _marketMafiosoActiveItemWorld = key;
+            await PersistActiveMarketMafiosoRequestAsync(key, request.Id);
+            Snackbar.Add(
+                $"Sent {approved.Quantity:N0} {approved.ItemName} on {approved.PurchaseWorld} to MarketMafioso. Review and accept it in-game.",
+                Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _marketMafiosoBusyItemWorld = null;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task SyncMarketMafiosoAsync(WorldItemProcurementAction action, string requestId)
+    {
+        var timeline = await MarketMafiosoAcquisitionWorkflow.GetTimelineAsync(requestId);
+        var observation = timeline.MarketObservations
+            .Where(candidate =>
+                candidate.ItemId == action.Item.ItemId &&
+                candidate.WorldName.Equals(action.World.WorldName, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(candidate => candidate.ObservedAtUtc)
+            .FirstOrDefault();
+        if (observation == null)
+        {
+            var status = string.IsNullOrWhiteSpace(timeline.Request.Status) ? "pending" : timeline.Request.Status;
+            Snackbar.Add(
+                $"MarketMafioso request is {status}; no {action.World.WorldName} board observation has arrived yet.",
+                Severity.Info);
+            return;
+        }
+
+        await RefreshItemMarketDataAsync(action, observation.ToMarketEvidenceSnapshot());
+    }
+
+    private async Task PersistActiveMarketMafiosoRequestAsync(MarketItemWorldKey key, string requestId)
+    {
+        await Settings.SetAsync("marketmafioso.active_request_id", requestId);
+        await Settings.SetAsync("marketmafioso.active_item_id", key.ItemId);
+        await Settings.SetAsync("marketmafioso.active_data_center", key.World.DataCenter);
+        await Settings.SetAsync("marketmafioso.active_purchase_world", key.World.WorldName);
     }
 
     private enum ExclusionKind

@@ -214,6 +214,8 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
     public async Task SetAsync(int itemId, string dataCenter, CachedMarketData data)
     {
         var key = GetKey(itemId, dataCenter);
+        var (retained, _) = await GetWithStaleAsync(itemId, dataCenter);
+        data = MarketEvidenceCacheMerger.PreferNewestWorldEvidence(retained, data);
         var age = data.Age;
 
         _logger?.LogDebug("[IndexedDbMarketCache] Storing {ItemId}@{DataCenter} with FetchedAtUnix={FetchedAt} (age={Age:F1}min)",
@@ -512,8 +514,12 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
             return;
         }
 
-        var batchEntries = entries
-            .Select(entry => new IndexedDbMarketCacheBatchEntry
+        var batchEntries = new List<IndexedDbMarketCacheBatchEntry>(entries.Count);
+        foreach (var entry in entries)
+        {
+            var (retained, _) = await GetWithStaleAsync(entry.itemId, entry.dataCenter);
+            var data = MarketEvidenceCacheMerger.PreferNewestWorldEvidence(retained, entry.data);
+            batchEntries.Add(new IndexedDbMarketCacheBatchEntry
             {
                 Key = GetKey(entry.itemId, entry.dataCenter),
                 Data = new IndexedDbMarketCacheEntry
@@ -521,14 +527,14 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
                     Key = GetKey(entry.itemId, entry.dataCenter),
                     ItemId = entry.itemId,
                     DataCenter = entry.dataCenter,
-                    FetchedAtUnix = entry.data.FetchedAtUnix,
-                    LastUploadTimeUnixMilliseconds = entry.data.LastUploadTimeUnixMilliseconds,
-                    DcAvgPrice = entry.data.DCAveragePrice,
-                    HqAvgPrice = entry.data.HQAveragePrice,
-                    Worlds = entry.data.Worlds
+                    FetchedAtUnix = data.FetchedAtUnix,
+                    LastUploadTimeUnixMilliseconds = data.LastUploadTimeUnixMilliseconds,
+                    DcAvgPrice = data.DCAveragePrice,
+                    HqAvgPrice = data.HQAveragePrice,
+                    Worlds = data.Worlds
                 }
-            })
-            .ToList();
+            });
+        }
 
         try
         {

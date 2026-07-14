@@ -143,6 +143,10 @@ public class CachedWorldData
     public long? LastUploadTimeUnixMilliseconds { get; set; }
     public MarketEvidenceOrigin EvidenceOrigin { get; set; } = MarketEvidenceOrigin.Universalis;
     public long? ObservedAtUnixMilliseconds { get; set; }
+    public MarketEvidenceCompleteness EvidenceCompleteness { get; set; } = MarketEvidenceCompleteness.Complete;
+    public int? ReportedListingCount { get; set; }
+    public int? ListingCapacity { get; set; }
+    public bool IsTruncated { get; set; }
     public List<CachedListing> Listings { get; set; } = new();
     public bool IsCongested { get; set; }
 }
@@ -155,6 +159,8 @@ public class CachedListing
     public int Quantity { get; set; }
     public long PricePerUnit { get; set; }
     public string RetainerName { get; set; } = string.Empty;
+    public string? ListingId { get; set; }
+    public string? RetainerId { get; set; }
     public bool IsHq { get; set; }
     public long? LastReviewTimeUnix { get; set; }
 }
