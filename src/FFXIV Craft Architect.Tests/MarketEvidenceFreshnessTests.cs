@@ -61,4 +61,18 @@ public class MarketEvidenceFreshnessTests
 
         Assert.Equal(MarketDataQualityBucket.Missing, worst);
     }
+
+    [Theory]
+    [InlineData(MarketDataQualityBucket.Current, true)]
+    [InlineData(MarketDataQualityBucket.Aging, true)]
+    [InlineData(MarketDataQualityBucket.Old, true)]
+    [InlineData(MarketDataQualityBucket.VeryOld, false)]
+    [InlineData(MarketDataQualityBucket.Ancient, false)]
+    [InlineData(MarketDataQualityBucket.Missing, false)]
+    public void IsRouteEligible_RequiresEvidenceNewerThanTwelveHours(
+        MarketDataQualityBucket bucket,
+        bool expected)
+    {
+        Assert.Equal(expected, MarketEvidenceFreshness.IsRouteEligible(bucket));
+    }
 }

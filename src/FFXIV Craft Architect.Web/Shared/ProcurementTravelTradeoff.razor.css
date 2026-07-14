@@ -18,6 +18,178 @@
     font-size: .82rem;
 }
 
+.pp-clutch-shell {
+    display: grid;
+    grid-template-columns: 62px 40px minmax(0, 1fr);
+    gap: 8px;
+    min-height: 304px;
+    margin-top: 10px;
+    padding: 10px;
+    border: 1px solid #343b41;
+    border-radius: 10px;
+    background: #181b1e;
+}
+
+.pp-clutch-axis {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 2px 0;
+    color: #9da5aa;
+    font-size: .66rem;
+    line-height: 1.2;
+    text-align: right;
+}
+
+.pp-clutch-control {
+    position: relative;
+    min-height: 282px;
+}
+
+.pp-clutch-input {
+    position: absolute;
+    top: 125px;
+    left: -121px;
+    width: 282px;
+    height: 32px;
+    margin: 0;
+    transform: rotate(90deg);
+    cursor: grab;
+    accent-color: #d4b35b;
+}
+
+.pp-clutch-input:active {
+    cursor: grabbing;
+}
+
+.pp-clutch-input:focus-visible {
+    outline: 2px solid #90caf9;
+    outline-offset: 3px;
+}
+
+.pp-clutch-track {
+    position: absolute;
+    inset: 0;
+}
+
+.pp-clutch-tick {
+    position: absolute;
+    z-index: 2;
+    top: calc(var(--clutch-position) * 100% / 11);
+    left: 9px;
+    width: 22px;
+    height: 8px;
+    padding: 0;
+    transform: translateY(-50%);
+    border: 0;
+    background: #4a5258;
+    background-clip: content-box;
+    cursor: pointer;
+}
+
+.pp-clutch-tick.is-active {
+    background: #e2bd5c;
+}
+
+.pp-clutch-tick:focus-visible {
+    outline: 2px solid #90caf9;
+    outline-offset: 1px;
+}
+
+.pp-frontier-lane {
+    display: grid;
+    grid-template-rows: repeat(12, minmax(22px, 1fr));
+    gap: 1px;
+    min-width: 0;
+}
+
+.pp-frontier-chit {
+    z-index: 1;
+    display: flex;
+    align-self: center;
+    flex-direction: column;
+    justify-content: center;
+    width: 100%;
+    min-height: 22px;
+    padding: 3px 7px;
+    overflow: hidden;
+    border: 1px solid #3b454c;
+    border-radius: 6px;
+    background: #22282c;
+    color: #dfe3e5;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.pp-frontier-chit:hover,
+.pp-frontier-chit:focus-visible,
+.pp-frontier-chit.is-selected {
+    z-index: 3;
+    overflow: visible;
+    border-color: #8f7740;
+    background: #2b2922;
+    box-shadow: 0 5px 16px rgb(0 0 0 / 32%);
+}
+
+.pp-frontier-chit:focus-visible {
+    outline: 2px solid #90caf9;
+    outline-offset: 2px;
+}
+
+.pp-frontier-summary {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 7px;
+    white-space: nowrap;
+}
+
+.pp-frontier-summary strong {
+    color: #e2bd5c;
+    font-size: .72rem;
+}
+
+.pp-frontier-summary small {
+    color: #acb4b9;
+    font-size: .62rem;
+}
+
+.pp-frontier-detail {
+    max-height: 0;
+    overflow: hidden;
+    color: #c5ccd0;
+    font-size: .62rem;
+    line-height: 1.35;
+    opacity: 0;
+    transition: max-height 120ms ease, opacity 120ms ease, margin 120ms ease;
+}
+
+.pp-frontier-chit:hover .pp-frontier-detail,
+.pp-frontier-chit:focus-visible .pp-frontier-detail,
+.pp-frontier-chit.is-selected .pp-frontier-detail {
+    max-height: 24px;
+    margin-top: 2px;
+    opacity: 1;
+}
+
+.pp-frontier-empty {
+    grid-row: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 7px;
+    padding: 16px;
+    border: 1px dashed #3b4349;
+    border-radius: 7px;
+    color: #8f989e;
+    font-size: .69rem;
+    line-height: 1.35;
+    text-align: center;
+}
+
 .pp-tradeoff-anchor {
     position: relative;
     margin-top: -7px;
@@ -113,6 +285,10 @@
 }
 
 @media (max-width: 520px) {
+    .pp-clutch-shell {
+        grid-template-columns: 54px 40px minmax(150px, 1fr);
+    }
+
     .pp-tradeoff-diagram {
         grid-template-columns: 1fr;
     }

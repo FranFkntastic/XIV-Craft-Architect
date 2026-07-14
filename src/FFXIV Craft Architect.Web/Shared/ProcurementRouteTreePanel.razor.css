@@ -94,6 +94,19 @@
     color: #f2f2f2;
 }
 
+.pp-decision-warning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: -4px;
+    padding: 9px 12px;
+    border: 1px solid #76522e;
+    border-radius: 7px;
+    background: #2b241d;
+    color: #f0bd7b;
+    font-size: .76rem;
+}
+
 .pp-route-content {
     min-height: 320px;
 }
@@ -276,6 +289,7 @@
 .pp-item-main {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 6px;
     min-width: 0;
 }
@@ -283,6 +297,11 @@
 .pp-item-main small {
     color: #a7e3aa;
     font-weight: 400;
+}
+
+.pp-item-main .pp-item-premium {
+    flex-basis: 100%;
+    color: #f0bd7b;
 }
 
 .pp-item-link {

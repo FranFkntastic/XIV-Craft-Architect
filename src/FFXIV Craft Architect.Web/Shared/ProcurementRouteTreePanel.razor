@@ -38,6 +38,13 @@
                 <span><strong>@RouteDecision.SelectedDataCenterTransfers</strong> DC @Pluralize(RouteDecision.SelectedDataCenterTransfers, "transfer", "transfers")</span>
             </div>
         </div>
+        @if (RouteDecision.PremiumRate >= 1m)
+        {
+            <div class="pp-decision-warning" role="status">
+                <MudIcon Icon="@Icons.Material.Filled.PriceChange" Size="Size.Small" />
+                <span>Minimizing travel more than doubles the route cost: +@RouteDecision.PremiumGil.ToString("N0")g over the cheapest eligible route.</span>
+            </div>
+        }
     }
 
     <div class="pp-route-content">
@@ -205,6 +212,7 @@
                     <tbody>
                         @foreach (var item in world.Items.OrderBy(item => item.ItemName))
                         {
+                            var itemDecision = GetItemDecision(item);
                             <tr>
                                 <th scope="row" data-label="Item">
                                     <div class="pp-item-main">
@@ -213,6 +221,10 @@
                                             <MudIcon Icon="@Icons.Material.Filled.CallSplit" Size="Size.Small" Class="pp-split-icon" />
                                         }
                                         <button class="pp-item-link" type="button" @onclick="() => GoToMarketAnalysis(item)">@item.ItemName</button>
+                                        @if (item.TravelContext == TravelContextConstants.Primary && itemDecision?.ConsolidationPremiumGil > 0)
+                                        {
+                                            <small class="pp-item-premium">Route consolidation: +@itemDecision.ConsolidationPremiumGil.ToString("N0")g vs cheapest eligible</small>
+                                        }
                                         @if (world.IsVendor && item.Vendor != null)
                                         {
                                             <small>@item.Vendor.Name · @item.Vendor.Location</small>
@@ -308,7 +320,7 @@
             : string.Empty;
         if (decision.PremiumGil == 0)
         {
-            return $"This route matches the cheapest trustworthy route at {decision.SelectedGilCost:N0}g.{origin}";
+            return $"This route matches the cheapest eligible route at {decision.SelectedGilCost:N0}g.{origin}";
         }
 
         var avoided = new List<string>();
@@ -324,6 +336,9 @@
         var benefit = avoided.Count > 0 ? $" and avoids {string.Join(" and ", avoided)}" : string.Empty;
         return $"This route costs {decision.PremiumGil:N0}g ({decision.PremiumRate:P1}) more than the cheapest route{benefit}.{origin}";
     }
+
+    private MarketRouteItemDecision? GetItemDecision(WorldItemPurchase item) =>
+        RouteDecision?.ItemPremiums.FirstOrDefault(decision => decision.ItemId == item.ItemId);
 
     private static string FormatCount(int count, string noun) => $"{count:N0} {noun}{(count == 1 ? string.Empty : "s")}";
 

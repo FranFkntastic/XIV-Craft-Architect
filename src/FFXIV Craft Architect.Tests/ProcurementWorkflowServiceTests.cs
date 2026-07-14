@@ -46,7 +46,8 @@ public class ProcurementWorkflowServiceTests
                 request.SelectedDataCenter == "Aether" &&
                 request.SelectedRegion == "North America" &&
                 request.Lens == appState.MarketAnalysisLens &&
-                request.ProcurementConfig.TravelTolerance == appState.ProcurementTravelTolerance),
+                request.ProcurementConfig.TravelTolerance == appState.ProcurementTravelTolerance &&
+                request.ProcurementConfig.TravelPriority == appState.ProcurementTravelPriority),
             It.IsAny<IProgress<string>?>(),
             It.IsAny<CancellationToken>(),
             It.IsAny<MarketAnalysisExecutionOptions?>()));

@@ -93,7 +93,7 @@ public class MarketRouteScoringTests
     }
 
     [Fact]
-    public void CompareCandidates_SameRouteImpact_UsesMarketEvidencePenaltyBeforeRawGilCost()
+    public void CompareCandidates_SameRouteImpact_UsesRawGilBeforeEvidencePenalty()
     {
         var config = new MarketAnalysisConfig { TravelTolerance = 11 };
         var currentRoute = new MarketRouteState();
@@ -107,7 +107,36 @@ public class MarketRouteScoringTests
             10_000,
             [new MarketWorldKey("Aether", "Siren")]);
 
-        Assert.True(MarketRouteScoring.CompareCandidates(freshCostlier, staleCheap, currentRoute, config) < 0);
+        Assert.True(MarketRouteScoring.CompareCandidates(staleCheap, freshCostlier, currentRoute, config) < 0);
+    }
+
+    [Fact]
+    public void CompareCandidates_TravelPriorityChangesWhichTravelDimensionWins()
+    {
+        var currentRoute = new MarketRouteState([new MarketWorldKey("Aether", "Siren")]);
+        var extraTransfer = new MarketPurchaseCandidate(
+            100,
+            [new MarketWorldKey("Crystal", "Balmung")]);
+        var extraWorldVisits = new MarketPurchaseCandidate(
+            100,
+            [
+                new MarketWorldKey("Aether", "Gilgamesh"),
+                new MarketWorldKey("Aether", "Faerie")
+            ]);
+
+        var transferFirst = new MarketAnalysisConfig
+        {
+            TravelTolerance = 0,
+            TravelPriority = MarketTravelPriority.DataCenterTransfersFirst
+        };
+        var worldsFirst = new MarketAnalysisConfig
+        {
+            TravelTolerance = 0,
+            TravelPriority = MarketTravelPriority.WorldVisitsFirst
+        };
+
+        Assert.True(MarketRouteScoring.CompareCandidates(extraWorldVisits, extraTransfer, currentRoute, transferFirst) < 0);
+        Assert.True(MarketRouteScoring.CompareCandidates(extraTransfer, extraWorldVisits, currentRoute, worldsFirst) < 0);
     }
 
     [Fact]

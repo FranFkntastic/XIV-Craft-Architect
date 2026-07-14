@@ -112,6 +112,19 @@
                     Counts leaving @_defaultDataCenter as a transfer when comparing region-wide routes. It doesn't require a purchase there.
                 </MudText>
 
+                <MudSelect T="MarketTravelPriority"
+                           @bind-Value="_procurementTravelPriority"
+                           Label="Route travel priority"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Class="mt-4">
+                    <MudSelectItem Value="@MarketTravelPriority.DataCenterTransfersFirst">Avoid data-center transfers first</MudSelectItem>
+                    <MudSelectItem Value="@MarketTravelPriority.WorldVisitsFirst">Avoid total world visits first</MudSelectItem>
+                </MudSelect>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Applied after the selected gil ceiling. It decides whether CA removes transfers or individual world visits first.
+                </MudText>
+
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-4">
                     These settings determine which market board prices are shown by default.
                 </MudText>
@@ -624,6 +637,7 @@
     private MarketFetchScope _defaultMarketFetchScope = MarketFetchScope.EntireRegion;
     private bool _procurementEnableSplitWorldPurchases = true;
     private bool _procurementStartFromHomeDataCenter;
+    private MarketTravelPriority _procurementTravelPriority = MarketTravelPriority.DataCenterTransfersFirst;
     private bool _isClearing = false;
     private TradeCompanyProfile? _companyProfile;
     private string _companyName = string.Empty;
@@ -686,6 +700,10 @@
             await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
         _procurementEnableSplitWorldPurchases = await Settings.GetAsync("procurement.enable_split_world_purchases", true);
         _procurementStartFromHomeDataCenter = await Settings.GetAsync("procurement.start_from_home_data_center", false);
+        _procurementTravelPriority = ParseTravelPriority(
+            await Settings.GetAsync(
+                "procurement.travel_priority",
+                nameof(MarketTravelPriority.DataCenterTransfersFirst)));
 
         await LoadCompanyProfileAsync();
         await LoadProfileHostSettingsAsync();
@@ -1340,6 +1358,7 @@
             AppState.ProcurementTravelTolerance,
             AppState.TemporaryWorldBlacklistDurationMinutes);
         AppState.SetProcurementHomeDataCenterOrigin(_procurementStartFromHomeDataCenter);
+        AppState.SetProcurementTravelPriority(_procurementTravelPriority);
 
         // Persist settings via ISettingsService
         await Settings.SetAsync("ui.auto_save_enabled", _autoSaveEnabled);
@@ -1348,6 +1367,7 @@
         await Settings.SetAsync("market.default_search_scope", _defaultMarketFetchScope.ToString());
         await Settings.SetAsync("procurement.enable_split_world_purchases", _procurementEnableSplitWorldPurchases);
         await Settings.SetAsync("procurement.start_from_home_data_center", _procurementStartFromHomeDataCenter);
+        await Settings.SetAsync("procurement.travel_priority", _procurementTravelPriority.ToString());
         
         Snackbar.Add("Settings saved", Severity.Success);
         MudDialog.Close(DialogResult.Ok(true));
@@ -1371,6 +1391,13 @@
         return Enum.TryParse<MarketFetchScope>(value, ignoreCase: true, out var scope)
             ? scope
             : MarketFetchScope.EntireRegion;
+    }
+
+    private static MarketTravelPriority ParseTravelPriority(string? value)
+    {
+        return Enum.TryParse<MarketTravelPriority>(value, ignoreCase: true, out var priority)
+            ? priority
+            : MarketTravelPriority.DataCenterTransfersFirst;
     }
 
     private static string? NormalizeOptionalText(string? value)

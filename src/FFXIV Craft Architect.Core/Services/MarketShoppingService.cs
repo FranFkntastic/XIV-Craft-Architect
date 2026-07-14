@@ -255,6 +255,20 @@ public class MarketShoppingService
             .Select((plan, index) => new { Plan = plan, Index = index })
             .Where(p => !IsFixedVendorPlan(p.Plan))
             .ToList();
+        var standaloneCandidatesByPlan = candidatePlanIndexes.ToDictionary(
+            entry => entry.Index,
+            entry => GeneratePurchaseCandidates(entry.Plan)
+                .Where(candidate => candidate.IsFullyFulfilled)
+                .Where(candidate => includeSplitPurchases || !candidate.IsSplitPurchase)
+                .ToList());
+        var cheapestEligibleCandidateByPlan = standaloneCandidatesByPlan.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value
+                .Where(candidate => candidate.HasTrustworthyEvidence)
+                .OrderBy(candidate => candidate.GilCost)
+                .ThenBy(candidate => candidate.MarketEvidencePenalty)
+                .ThenBy(candidate => candidate.Worlds.Count)
+                .FirstOrDefault());
 
         var beam = new List<ProcurementRouteSearchState>
         {
@@ -274,6 +288,7 @@ public class MarketShoppingService
                 var candidates = GeneratePurchaseCandidates(planEntry.Plan, state.Route)
                     .Where(c => c.IsFullyFulfilled)
                     .Where(c => includeSplitPurchases || !c.IsSplitPurchase)
+                    .Where(c => c.HasTrustworthyEvidence)
                     .OrderBy(c => c, Comparer<MarketPurchaseCandidate>.Create(
                         (left, right) => MarketRouteScoring.CompareCandidates(left, right, state.Route, config)))
                     .ThenBy(c => c.ItemId)
@@ -327,9 +342,8 @@ public class MarketShoppingService
 
         var frontier = ReduceToParetoFrontier(beam, config);
         var cheapestState = frontier
-            .OrderBy(state => state.TotalDecisionCost)
+            .OrderBy(state => state.TotalGilCost)
             .ThenBy(state => state.TotalEvidencePenalty)
-            .ThenBy(state => state.TotalGilCost)
             .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
             .FirstOrDefault();
         var bestState = OrderRouteStates(frontier, config).FirstOrDefault();
@@ -344,6 +358,11 @@ public class MarketShoppingService
             var plan = plans[choice.PlanIndex];
             if (choice.Candidate == null)
             {
+                var standaloneCandidates = standaloneCandidatesByPlan.GetValueOrDefault(choice.PlanIndex) ?? [];
+                if (standaloneCandidates.Count > 0 && standaloneCandidates.All(candidate => !candidate.HasTrustworthyEvidence))
+                {
+                    plan.Error ??= "Market evidence is 12 hours old or older. Refresh this item before routing it.";
+                }
                 continue;
             }
 
@@ -371,6 +390,20 @@ public class MarketShoppingService
             }
         }
 
+        var representativeRoutes = BuildRepresentativeRoutes(frontier, config);
+        var itemDecisions = bestState.Choices
+            .Where(choice => choice.Candidate != null)
+            .Select(choice =>
+            {
+                var selected = choice.Candidate!;
+                var cheapest = cheapestEligibleCandidateByPlan.GetValueOrDefault(choice.PlanIndex);
+                return new MarketRouteItemDecision(
+                    selected.ItemId,
+                    selected.ItemName,
+                    cheapest?.GilCost ?? selected.GilCost,
+                    selected.GilCost);
+            })
+            .ToList();
         var decision = cheapestState == null || bestState.Choices.All(choice => choice.Candidate == null)
             ? null
             : new MarketRouteDecision(
@@ -384,7 +417,10 @@ public class MarketShoppingService
                 cheapestState.GetDataCenterTransfers(config),
                 bestState.GetDataCenterTransfers(config),
                 config.StartFromHomeDataCenter && !string.IsNullOrWhiteSpace(config.HomeDataCenter),
-                config.StartFromHomeDataCenter ? config.HomeDataCenter : null);
+                config.StartFromHomeDataCenter ? config.HomeDataCenter : null,
+                config.TravelPriority,
+                representativeRoutes,
+                itemDecisions);
 
         return new ProcurementRouteOptimizationResult(plans, decision);
     }
@@ -1102,6 +1138,7 @@ public class MarketShoppingService
                 QuantityNeeded = plan.QuantityNeeded,
                 QuantityFulfilled = plan.QuantityNeeded,
                 MarketEvidencePenalty = MarketWorldRecommendationScoring.CalculateEvidencePenalty(world.TotalCost, world),
+                HasTrustworthyEvidence = MarketEvidenceFreshness.IsRouteEligible(world.MarketDataQualityBucket),
                 SingleWorld = world
             });
         }
@@ -1135,6 +1172,8 @@ public class MarketShoppingService
                 QuantityNeeded = plan.QuantityNeeded,
                 QuantityFulfilled = quantityFulfilled,
                 MarketEvidencePenalty = evidencePenalty,
+                HasTrustworthyEvidence = HasTrustworthyEvidence(plan, split.Select(world =>
+                    new MarketWorldKey(world.DataCenter, world.WorldName))),
                 Split = split
             });
         }
@@ -1174,8 +1213,29 @@ public class MarketShoppingService
             QuantityNeeded = plan.QuantityNeeded,
             QuantityFulfilled = coverage.QuantityCovered,
             MarketEvidencePenalty = evidencePenalty,
+            HasTrustworthyEvidence = HasTrustworthyEvidence(
+                plan,
+                coverage.Worlds.Select(world => new MarketWorldKey(world.DataCenter, world.WorldName))),
             Coverage = coverage
         };
+    }
+
+    private static bool HasTrustworthyEvidence(
+        DetailedShoppingPlan plan,
+        IEnumerable<MarketWorldKey> worlds)
+    {
+        foreach (var worldKey in worlds)
+        {
+            var world = plan.WorldOptions.FirstOrDefault(option =>
+                string.Equals(option.DataCenter, worldKey.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(option.WorldName, worldKey.WorldName, StringComparison.OrdinalIgnoreCase));
+            if (world == null || !MarketEvidenceFreshness.IsRouteEligible(world.MarketDataQualityBucket))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static long ToLongSaturating(decimal value)
@@ -1702,9 +1762,8 @@ public class MarketShoppingService
         var distinctStates = states
             .GroupBy(state => state.RouteShapeKey, StringComparer.Ordinal)
             .Select(group => group
-                .OrderBy(state => state.TotalDecisionCost)
+                .OrderBy(state => state.TotalGilCost)
                 .ThenBy(state => state.TotalEvidencePenalty)
-                .ThenBy(state => state.TotalGilCost)
                 .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
                 .First())
             .ToList();
@@ -1716,7 +1775,7 @@ public class MarketShoppingService
         var preferred = OrderRouteStates(distinctStates, config)
             .Take(MaxProcurementRouteBeamWidth - 16);
         var cheapest = distinctStates
-            .OrderBy(state => state.TotalDecisionCost)
+            .OrderBy(state => state.TotalGilCost)
             .ThenBy(state => state.TotalEvidencePenalty)
             .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
             .Take(16);
@@ -1748,11 +1807,11 @@ public class MarketShoppingService
     {
         var leftTransfers = left.GetDataCenterTransfers(config);
         var rightTransfers = right.GetDataCenterTransfers(config);
-        var noWorse = left.TotalDecisionCost <= right.TotalDecisionCost &&
+        var noWorse = left.TotalGilCost <= right.TotalGilCost &&
             left.TotalEvidencePenalty <= right.TotalEvidencePenalty &&
             leftTransfers <= rightTransfers &&
             left.WorldStops <= right.WorldStops;
-        var strictlyBetter = left.TotalDecisionCost < right.TotalDecisionCost ||
+        var strictlyBetter = left.TotalGilCost < right.TotalGilCost ||
             left.TotalEvidencePenalty < right.TotalEvidencePenalty ||
             leftTransfers < rightTransfers ||
             left.WorldStops < right.WorldStops;
@@ -1761,25 +1820,66 @@ public class MarketShoppingService
 
     private static IOrderedEnumerable<ProcurementRouteSearchState> OrderRouteStates(
         IEnumerable<ProcurementRouteSearchState> states,
-        MarketAnalysisConfig config)
+        MarketAnalysisConfig config,
+        int? travelToleranceOverride = null)
     {
         var materialized = states.ToList();
-        var cheapestDecisionCost = materialized.Count == 0
+        var cheapestGilCost = materialized.Count == 0
             ? 0
-            : materialized.Min(state => state.TotalDecisionCost);
-        var maximumPremiumRate = MarketRouteScoring.GetMaximumPremiumRate(config.TravelTolerance);
-
-        return materialized
+            : materialized.Min(state => state.TotalGilCost);
+        var travelTolerance = travelToleranceOverride ?? config.TravelTolerance;
+        var maximumPremiumRate = MarketRouteScoring.GetMaximumPremiumRate(travelTolerance);
+        var eligible = materialized
             .OrderBy(state => !MarketRouteScoring.IsWithinPremium(
-                state.TotalDecisionCost,
-                cheapestDecisionCost,
-                maximumPremiumRate))
-            .ThenBy(state => state.GetDataCenterTransfers(config))
-            .ThenBy(state => state.WorldStops)
+                state.TotalGilCost,
+                cheapestGilCost,
+                maximumPremiumRate));
+        var travelOrdered = config.TravelPriority == MarketTravelPriority.WorldVisitsFirst
+            ? eligible
+                .ThenBy(state => state.WorldStops)
+                .ThenBy(state => state.GetDataCenterTransfers(config))
+            : eligible
+                .ThenBy(state => state.GetDataCenterTransfers(config))
+                .ThenBy(state => state.WorldStops);
+
+        return travelOrdered
             .ThenBy(state => state.TotalEvidencePenalty)
-            .ThenBy(state => state.TotalDecisionCost)
             .ThenBy(state => state.TotalGilCost)
             .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal);
+    }
+
+    private static IReadOnlyList<MarketRouteFrontierOption> BuildRepresentativeRoutes(
+        IReadOnlyList<ProcurementRouteSearchState> frontier,
+        MarketAnalysisConfig config)
+    {
+        var representatives = new List<MarketRouteFrontierOption>();
+        ProcurementRouteSearchState? previous = null;
+        for (var tolerance = 0; tolerance <= 11; tolerance++)
+        {
+            var state = OrderRouteStates(frontier, config, tolerance).FirstOrDefault();
+            if (state == null)
+            {
+                continue;
+            }
+
+            if (previous != null &&
+                string.Equals(previous.TieBreakKey, state.TieBreakKey, StringComparison.Ordinal) &&
+                representatives.Count > 0)
+            {
+                representatives[^1] = representatives[^1] with { MaximumTolerance = tolerance };
+                continue;
+            }
+
+            representatives.Add(new MarketRouteFrontierOption(
+                tolerance,
+                tolerance,
+                state.TotalGilCost,
+                state.WorldStops,
+                state.GetDataCenterTransfers(config)));
+            previous = state;
+        }
+
+        return representatives;
     }
 
     private static bool IsFixedVendorPlan(DetailedShoppingPlan plan)
@@ -1834,7 +1934,6 @@ public class MarketShoppingService
         public MarketRouteState Route { get; }
         public long TotalGilCost { get; }
         public long TotalEvidencePenalty { get; }
-        public long TotalDecisionCost => SaturatingAdd(TotalGilCost, TotalEvidencePenalty);
         public int WorldStops => Route.Worlds.Count;
         public IReadOnlyList<ProcurementRouteChoice> Choices { get; }
         public string TieBreakKey { get; }

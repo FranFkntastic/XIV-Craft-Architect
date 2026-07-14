@@ -1,7 +1,7 @@
 @using FFXIV_Craft_Architect.Core.Models
 
 <div class="pp-travel-heading">
-    <label id="procurement-travel-label" class="pp-travel-label">
+    <label id="procurement-travel-label" class="pp-travel-label" for="procurement-travel-clutch">
         <span>Travel preference</span>
         <strong>@MarketRouteScoring.GetToleranceLabel(TravelTolerance)</strong>
     </label>
@@ -35,11 +35,11 @@
 
                 <p>@GetExplanation()</p>
 
-                <div class="pp-tradeoff-diagram" aria-label="The cheapest trustworthy route is the cost baseline. The selected preference permits a higher cost in exchange for fewer stops.">
+                <div class="pp-tradeoff-diagram" aria-label="The cheapest eligible route is the cost baseline. The selected preference permits a higher cost in exchange for less travel.">
                     <div class="pp-tradeoff-point">
                         <MudIcon Icon="@Icons.Material.Filled.Savings" Size="Size.Medium" Color="Color.Success" />
                         <span>Cost baseline</span>
-                        <strong>Cheapest trustworthy route</strong>
+                        <strong>Cheapest eligible route</strong>
                     </div>
                     <div class="pp-tradeoff-rule">
                         <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Medium" />
@@ -52,14 +52,78 @@
                     </div>
                 </div>
 
-                <p class="pp-tradeoff-footnote">Transfers are compared before individual world stops. Market evidence must still be trustworthy enough to use.</p>
+                <p class="pp-tradeoff-footnote">@GetPriorityExplanation() Market evidence 12 hours old or older must be refreshed before CA will use it.</p>
             </section>
         </MudPopover>
     </div>
 </div>
 
+<div class="pp-clutch-shell">
+    <div class="pp-clutch-axis" aria-hidden="true">
+        <span>Fewer stops</span>
+        <span>Lower cost</span>
+    </div>
+    <div class="pp-clutch-control">
+        <div class="pp-clutch-track" aria-label="Travel preference positions">
+            @foreach (var tolerance in Enumerable.Range(0, 12))
+            {
+                <button type="button"
+                        class="pp-clutch-tick @(tolerance == TravelTolerance ? "is-active" : null)"
+                        style="@GetTickStyle(tolerance)"
+                        aria-label="Set travel preference to position @tolerance"
+                        @onclick="() => SelectTolerance(tolerance)"></button>
+            }
+        </div>
+        <input id="procurement-travel-clutch"
+               class="pp-clutch-input"
+               type="range"
+               min="0"
+               max="11"
+               step="1"
+               value="@TravelTolerance"
+               orient="vertical"
+               aria-labelledby="procurement-travel-label"
+               aria-describedby="procurement-travel-help"
+               aria-valuetext="@MarketRouteScoring.GetToleranceLabel(TravelTolerance)"
+               @oninput="OnSliderInput" />
+    </div>
+
+    <div class="pp-frontier-lane" aria-label="Representative route choices">
+        @if (RouteDecision?.RepresentativeRoutes.Count > 0)
+        {
+            @foreach (var option in RouteDecision.RepresentativeRoutes)
+            {
+                var selected = ContainsTolerance(option, TravelTolerance);
+                <button type="button"
+                        class="pp-frontier-chit @(selected ? "is-selected" : null)"
+                        style="@GetRouteStyle(option)"
+                        title="@GetRouteTitle(option)"
+                        aria-pressed="@selected.ToString().ToLowerInvariant()"
+                        @onclick="() => SelectRoute(option)">
+                    <span class="pp-frontier-summary">
+                        <strong>@option.GilCost.ToString("N0")g</strong>
+                        <small>@option.WorldStops W / @option.DataCenterTransfers DC</small>
+                    </span>
+                    <span class="pp-frontier-detail">
+                        @GetToleranceRange(option) - @GetPremiumText(option)
+                    </span>
+                </button>
+            }
+        }
+        else
+        {
+            <div class="pp-frontier-empty">
+                <MudIcon Icon="@Icons.Material.Outlined.Route" Size="Size.Small" />
+                <span>Generate a route to reveal the viable tradeoffs.</span>
+            </div>
+        }
+    </div>
+</div>
+
 @code {
     [Parameter] public int TravelTolerance { get; set; }
+    [Parameter] public MarketRouteDecision? RouteDecision { get; set; }
+    [Parameter] public EventCallback<int> TravelToleranceChanged { get; set; }
 
     private bool _open;
 
@@ -67,14 +131,27 @@
 
     private void Close() => _open = false;
 
+    private Task OnSliderInput(ChangeEventArgs args)
+    {
+        return int.TryParse(args.Value?.ToString(), out var value)
+            ? TravelToleranceChanged.InvokeAsync(Math.Clamp(value, 0, 11))
+            : Task.CompletedTask;
+    }
+
+    private Task SelectRoute(MarketRouteFrontierOption option) =>
+        TravelToleranceChanged.InvokeAsync(option.RepresentativeTolerance);
+
+    private Task SelectTolerance(int tolerance) =>
+        TravelToleranceChanged.InvokeAsync(tolerance);
+
     private string GetExplanation()
     {
         var tolerance = Math.Clamp(TravelTolerance, 0, 11);
         return tolerance switch
         {
-            0 => "CA applies no gil ceiling. It chooses the complete route with the fewest data-center transfers, then the fewest world stops.",
-            11 => "CA permits no extra gil. It chooses the cheapest complete route, using travel only to break cost ties.",
-            _ => $"CA may choose a route costing up to {MarketRouteScoring.GetMaximumPremiumRate(tolerance)!.Value:P0} more gil than the cheapest complete route when that removes transfers or world stops."
+            0 => "CA applies no gil ceiling. It chooses the eligible route with the least travel under your selected travel priority.",
+            11 => "CA permits no extra gil. It chooses the cheapest eligible route, using travel and evidence quality only to break cost ties.",
+            _ => $"CA may choose a route costing up to {MarketRouteScoring.GetMaximumPremiumRate(tolerance)!.Value:P0} more gil than the cheapest eligible route when that reduces travel."
         };
     }
 
@@ -94,9 +171,38 @@
         var tolerance = Math.Clamp(TravelTolerance, 0, 11);
         return tolerance switch
         {
-            0 => "Fewest transfers and stops",
+            0 => "Least travel",
             11 => "Lowest gil cost",
-            _ => "Fewer transfers or stops"
+            _ => "Less travel within budget"
         };
     }
+
+    private string GetPriorityExplanation() => RouteDecision?.TravelPriority switch
+    {
+        MarketTravelPriority.WorldVisitsFirst => "World visits are compared before data-center transfers.",
+        _ => "Data-center transfers are compared before individual world visits."
+    };
+
+    private string GetPremiumText(MarketRouteFrontierOption option)
+    {
+        var cheapest = RouteDecision?.CheapestGilCost ?? option.GilCost;
+        var premium = Math.Max(0, option.GilCost - cheapest);
+        return premium == 0 ? "cost baseline" : $"+{premium:N0}g";
+    }
+
+    private static bool ContainsTolerance(MarketRouteFrontierOption option, int tolerance) =>
+        tolerance >= option.MinimumTolerance && tolerance <= option.MaximumTolerance;
+
+    private static string GetToleranceRange(MarketRouteFrontierOption option) =>
+        option.MinimumTolerance == option.MaximumTolerance
+            ? $"Position {option.MinimumTolerance}"
+            : $"Positions {option.MinimumTolerance}-{option.MaximumTolerance}";
+
+    private static string GetRouteTitle(MarketRouteFrontierOption option) =>
+        $"{GetToleranceRange(option)}: {option.GilCost:N0} gil, {option.WorldStops} world visits, {option.DataCenterTransfers} data-center transfers";
+
+    private static string GetTickStyle(int tolerance) => $"--clutch-position: {tolerance};";
+
+    private static string GetRouteStyle(MarketRouteFrontierOption option) =>
+        $"grid-row: {option.MinimumTolerance + 1} / span {option.MaximumTolerance - option.MinimumTolerance + 1};";
 }

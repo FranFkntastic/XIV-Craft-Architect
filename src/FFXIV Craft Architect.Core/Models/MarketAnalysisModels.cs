@@ -33,6 +33,12 @@ public enum MarketDataQualityBucket
     Missing
 }
 
+public enum MarketTravelPriority
+{
+    DataCenterTransfersFirst,
+    WorldVisitsFirst
+}
+
 public enum MarketDataAgeSource
 {
     UniversalisWorldUpload,

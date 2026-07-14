@@ -105,7 +105,94 @@ public class MarketRouteOptimizationTests
 
         Assert.Equal("Siren", result.ShoppingPlans[0].RecommendedWorld?.WorldName);
         Assert.Equal(200, result.Decision?.SelectedGilCost);
+        Assert.Equal(200, result.Decision?.CheapestGilCost);
         Assert.Equal(0, result.Decision?.SelectedEvidencePenalty);
+    }
+
+    [Fact]
+    public async Task OptimizeProcurementRoute_OldEvidenceRemainsEligibleAndGilCeilingUsesCashCost()
+    {
+        var oldCheap = World("Aether", "Faerie", 100, 100, Listing(1, 100, "Old listing"));
+        oldCheap.MarketDataQualityScore = 25;
+        oldCheap.MarketDataQualityBucket = MarketDataQualityBucket.Old;
+        var current = World("Aether", "Siren", 150, 150, Listing(1, 150, "Current listing"));
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var result = await service.OptimizeProcurementRouteWithDecisionAsync(
+            [Plan(1, "Evidence", 1, oldCheap, current)],
+            new MarketAnalysisConfig { TravelTolerance = 11 },
+            includeSplitPurchases: false);
+
+        Assert.Equal("Faerie", result.ShoppingPlans[0].RecommendedWorld?.WorldName);
+        Assert.Equal(100, result.Decision?.CheapestGilCost);
+        Assert.Equal(100, result.Decision?.SelectedGilCost);
+        Assert.True(result.Decision?.SelectedEvidencePenalty > 0);
+    }
+
+    [Fact]
+    public async Task OptimizeProcurementRoute_UntrustedOnlyEvidenceRequiresRefresh()
+    {
+        var ancient = World("Aether", "Faerie", 100, 100, Listing(1, 100, "Ancient listing"));
+        ancient.MarketDataQualityBucket = MarketDataQualityBucket.Ancient;
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var result = await service.OptimizeProcurementRouteWithDecisionAsync(
+            [Plan(1, "Evidence", 1, ancient)],
+            new MarketAnalysisConfig { TravelTolerance = 11 },
+            includeSplitPurchases: false);
+
+        Assert.Null(result.Decision);
+        Assert.Contains("12 hours old or older", result.ShoppingPlans[0].Error);
+    }
+
+    [Fact]
+    public async Task OptimizeProcurementRoute_DecisionExposesEveryRepresentativeSliderRoute()
+    {
+        var plans = new[]
+        {
+            Plan(1, "Anchor", 1,
+                World("Aether", "Siren", 1_000, 1_000, Listing(1, 1_000, "Siren Anchor"))),
+            Plan(2, "Flexible", 1,
+                World("Aether", "Siren", 1_000, 1_000, Listing(1, 1_000, "Siren Flexible")),
+                World("Aether", "Gilgamesh", 700, 700, Listing(1, 700, "Gilgamesh Flexible")))
+        };
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var result = await service.OptimizeProcurementRouteWithDecisionAsync(
+            plans,
+            new MarketAnalysisConfig { TravelTolerance = 6 });
+
+        var decision = Assert.IsType<MarketRouteDecision>(result.Decision);
+        Assert.Equal(2, decision.RepresentativeRoutes.Count);
+        Assert.Equal(Enumerable.Range(0, 12), decision.RepresentativeRoutes.SelectMany(route =>
+            Enumerable.Range(route.MinimumTolerance, route.MaximumTolerance - route.MinimumTolerance + 1)));
+        Assert.Single(decision.RepresentativeRoutes, route =>
+            decision.TravelTolerance >= route.MinimumTolerance &&
+            decision.TravelTolerance <= route.MaximumTolerance);
+    }
+
+    [Fact]
+    public async Task OptimizeProcurementRoute_DecisionExposesItemConsolidationPremium()
+    {
+        var plans = new[]
+        {
+            Plan(1, "Anchor", 1,
+                World("Aether", "Siren", 1_000, 1_000, Listing(1, 1_000, "Anchor"))),
+            Plan(2, "Premium item", 1,
+                World("Aether", "Siren", 500, 500, Listing(1, 500, "Consolidated")),
+                World("Aether", "Faerie", 100, 100, Listing(1, 100, "Cheapest")))
+        };
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var result = await service.OptimizeProcurementRouteWithDecisionAsync(
+            plans,
+            new MarketAnalysisConfig { TravelTolerance = 0 });
+
+        var decision = Assert.IsType<MarketRouteDecision>(result.Decision);
+        var item = Assert.Single(decision.ItemPremiums, item => item.ItemId == 2);
+        Assert.Equal(100, item.CheapestEligibleGilCost);
+        Assert.Equal(500, item.SelectedGilCost);
+        Assert.Equal(400, item.ConsolidationPremiumGil);
     }
 
     [Fact]

@@ -5,8 +5,8 @@
     padding: 20px;
     border-right: 1px solid #353b40;
     overflow-y: auto;
-    min-width: 300px;
-    max-width: 300px;
+    min-width: 390px;
+    max-width: 390px;
     background: #1b1e21;
 }
 
@@ -55,14 +55,6 @@
 
 .pp-full-width {
     width: 100%;
-}
-
-.pp-slider-endpoints {
-    display: flex;
-    justify-content: space-between;
-    margin-top: -9px;
-    color: #9ba3a9;
-    font-size: .68rem;
 }
 
 .pp-origin-note {

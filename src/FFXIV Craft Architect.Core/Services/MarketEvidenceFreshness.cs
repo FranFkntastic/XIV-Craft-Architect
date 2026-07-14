@@ -4,6 +4,11 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 public static class MarketEvidenceFreshness
 {
+    public static bool IsRouteEligible(MarketDataQualityBucket bucket) =>
+        bucket is MarketDataQualityBucket.Current or
+            MarketDataQualityBucket.Aging or
+            MarketDataQualityBucket.Old;
+
     public static MarketEvidenceFreshnessResult Evaluate(
         DateTime timestampUtc,
         DateTime evaluatedAtUtc,

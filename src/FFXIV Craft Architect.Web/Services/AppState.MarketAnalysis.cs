@@ -281,6 +281,21 @@ public partial class AppState
         return true;
     }
 
+    public bool SetProcurementTravelPriority(MarketTravelPriority priority)
+    {
+        if (ProcurementTravelPriority == priority)
+        {
+            return false;
+        }
+
+        ProcurementTravelPriority = priority;
+        InvalidateProcurementRouteState("The travel priority changed.");
+        PublishChange(
+            AppStateChangeScope.Settings | AppStateChangeScope.ProcurementOverlay,
+            raiseShoppingListChanged: true);
+        return true;
+    }
+
     public bool SetMarketAnalysisLens(MarketAcquisitionLens lens)
     {
         if (MarketAnalysisLens == lens)

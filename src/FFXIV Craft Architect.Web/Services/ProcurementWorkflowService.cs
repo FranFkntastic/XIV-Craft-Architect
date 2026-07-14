@@ -178,6 +178,7 @@ public sealed class ProcurementWorkflowService
             _appState.MarketAnalysisLens,
             _appState.ProcurementEnableSplitWorldPurchases,
             _appState.ProcurementTravelTolerance,
+            _appState.ProcurementTravelPriority,
             _appState.ProcurementStartFromHomeDataCenter,
             _appState.GetActiveBlacklistedMarketWorlds(),
             _appState.TemporarilyExcludedItemWorlds.ToHashSet());
@@ -195,6 +196,7 @@ public sealed class ProcurementWorkflowService
                snapshot.Lens == _appState.MarketAnalysisLens &&
                snapshot.IncludeSplitPurchases == _appState.ProcurementEnableSplitWorldPurchases &&
                snapshot.TravelTolerance == _appState.ProcurementTravelTolerance &&
+               snapshot.TravelPriority == _appState.ProcurementTravelPriority &&
                snapshot.StartFromHomeDataCenter == _appState.ProcurementStartFromHomeDataCenter &&
                snapshot.BlacklistedWorlds.SetEquals(_appState.GetActiveBlacklistedMarketWorlds()) &&
                snapshot.ExcludedItemWorlds.SetEquals(_appState.TemporarilyExcludedItemWorlds);
@@ -207,6 +209,7 @@ public sealed class ProcurementWorkflowService
             EnableSplitWorld = _appState.ProcurementEnableSplitWorldPurchases,
             MaxWorldsPerItem = null,
             TravelTolerance = _appState.ProcurementTravelTolerance,
+            TravelPriority = _appState.ProcurementTravelPriority,
             StartFromHomeDataCenter = _appState.ProcurementStartFromHomeDataCenter
         };
     }
@@ -218,6 +221,7 @@ public sealed class ProcurementWorkflowService
         MarketAcquisitionLens Lens,
         bool IncludeSplitPurchases,
         int TravelTolerance,
+        MarketTravelPriority TravelPriority,
         bool StartFromHomeDataCenter,
         HashSet<MarketWorldKey> BlacklistedWorlds,
         HashSet<MarketItemWorldKey> ExcludedItemWorlds);

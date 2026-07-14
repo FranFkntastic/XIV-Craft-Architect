@@ -23,25 +23,17 @@
             </div>
 
             <div class="pp-field-block pp-travel-field">
-                <ProcurementTravelTradeoff TravelTolerance="AppState.ProcurementTravelTolerance" />
-                <MudSlider T="int"
-                           Value="AppState.ProcurementTravelTolerance"
-                           ValueChanged="OnProcurementTravelToleranceChanged"
-                           Min="0"
-                           Max="11"
-                           Step="1"
-                           Color="Color.Primary"
-                           Class="pp-full-width"
-                           aria-labelledby="procurement-travel-label"
-                           aria-describedby="procurement-travel-help" />
-                <div class="pp-slider-endpoints" aria-hidden="true">
-                    <span>Fewer stops</span>
-                    <span>Lower cost</span>
-                </div>
+                <ProcurementTravelTradeoff TravelTolerance="AppState.ProcurementTravelTolerance"
+                                            RouteDecision="AppState.ProcurementRouteDecision"
+                                            TravelToleranceChanged="OnProcurementTravelToleranceChanged" />
                 <p id="procurement-travel-help">@GetTravelPreferenceHelp()</p>
                 <p class="pp-route-policy-note">
                     <MudIcon Icon="@(AppState.ProcurementEnableSplitWorldPurchases ? Icons.Material.Filled.CallSplit : Icons.Material.Filled.HorizontalRule)" Size="Size.Small" />
                     @(AppState.ProcurementEnableSplitWorldPurchases ? "Split purchases allowed" : "Single-world purchases only") · managed in Options
+                </p>
+                <p class="pp-route-policy-note">
+                    <MudIcon Icon="@Icons.Material.Filled.Sort" Size="Size.Small" />
+                    @GetTravelPriorityLabel() - managed in Options
                 </p>
                 @if (AppState.ProcurementSearchEntireRegion && AppState.ProcurementStartFromHomeDataCenter)
                 {
@@ -158,11 +150,23 @@
         var premium = MarketRouteScoring.GetMaximumPremiumRate(tolerance);
         return tolerance switch
         {
-            0 => "Position 0 of 11. No gil ceiling; minimize data-center transfers, then world stops.",
-            11 => "Position 11 of 11. No extra gil; choose the cheapest trustworthy route.",
-            _ => $"Position {tolerance} of 11. Routes may cost up to {premium!.Value:P0} more gil than the cheapest trustworthy route."
+            0 => $"Position 0 of 11. No gil ceiling; {GetTravelPriorityAction()}.",
+            11 => "Position 11 of 11. No extra gil; choose the cheapest eligible route.",
+            _ => $"Position {tolerance} of 11. Routes may cost up to {premium!.Value:P0} more gil than the cheapest eligible route."
         };
     }
+
+    private string GetTravelPriorityAction() => AppState.ProcurementTravelPriority switch
+    {
+        MarketTravelPriority.WorldVisitsFirst => "minimize world visits, then data-center transfers",
+        _ => "minimize data-center transfers, then world visits"
+    };
+
+    private string GetTravelPriorityLabel() => AppState.ProcurementTravelPriority switch
+    {
+        MarketTravelPriority.WorldVisitsFirst => "World visits ranked before transfers",
+        _ => "Data-center transfers ranked before world visits"
+    };
 
     private Task OnTemporaryWorldBlacklistDurationChanged(int value) =>
         ApplyProcurementSettingsAsync(temporaryWorldBlacklistDurationMinutes: value);

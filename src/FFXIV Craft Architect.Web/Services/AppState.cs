@@ -197,6 +197,7 @@ public partial class AppState
     public bool ProcurementEnableSplitWorldPurchases { get; private set; } = true;
     public int ProcurementTravelTolerance { get; private set; } = 0; // 0 = shortest route, 11 = cheapest
     public bool ProcurementStartFromHomeDataCenter { get; private set; }
+    public MarketTravelPriority ProcurementTravelPriority { get; private set; } = MarketTravelPriority.DataCenterTransfersFirst;
 
     // Current plan tracking for save-overwrite behavior
     public string? CurrentPlanId { get; private set; }

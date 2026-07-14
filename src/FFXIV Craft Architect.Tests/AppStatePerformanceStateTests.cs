@@ -441,6 +441,25 @@ public class AppStatePerformanceStateTests
         Assert.False(change.HasScope(AppStateChangeScope.MarketAnalysis));
     }
 
+    [Fact]
+    public void SetProcurementTravelPriority_PreservesAndMarksProcurementOverlayStale()
+    {
+        var appState = new AppState();
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 100, Name = "Route Item" }]);
+        var changes = new List<AppStateChange>();
+        appState.OnStateChanged += changes.Add;
+
+        Assert.True(appState.SetProcurementTravelPriority(MarketTravelPriority.WorldVisitsFirst));
+
+        var change = Assert.Single(changes);
+        Assert.Equal(MarketTravelPriority.WorldVisitsFirst, appState.ProcurementTravelPriority);
+        Assert.Single(appState.ProcurementShoppingPlans);
+        Assert.True(appState.IsProcurementRouteStale);
+        Assert.Equal("The travel priority changed.", appState.ProcurementRouteStaleReason);
+        Assert.True(change.HasScope(AppStateChangeScope.Settings));
+        Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
+    }
+
 
 
 

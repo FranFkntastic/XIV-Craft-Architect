@@ -53,7 +53,10 @@ public sealed record MarketRouteDecision(
     int CheapestDataCenterTransfers,
     int SelectedDataCenterTransfers,
     bool StartsFromHomeDataCenter,
-    string? HomeDataCenter)
+    string? HomeDataCenter,
+    MarketTravelPriority TravelPriority = MarketTravelPriority.DataCenterTransfersFirst,
+    IReadOnlyList<MarketRouteFrontierOption>? FrontierOptions = null,
+    IReadOnlyList<MarketRouteItemDecision>? ItemDecisions = null)
 {
     public long PremiumGil => Math.Max(0, SelectedGilCost - CheapestGilCost);
 
@@ -64,4 +67,33 @@ public sealed record MarketRouteDecision(
     public int WorldStopsAvoided => Math.Max(0, CheapestWorldStops - SelectedWorldStops);
 
     public int DataCenterTransfersAvoided => Math.Max(0, CheapestDataCenterTransfers - SelectedDataCenterTransfers);
+
+    public IReadOnlyList<MarketRouteFrontierOption> RepresentativeRoutes =>
+        FrontierOptions ?? Array.Empty<MarketRouteFrontierOption>();
+
+    public IReadOnlyList<MarketRouteItemDecision> ItemPremiums =>
+        ItemDecisions ?? Array.Empty<MarketRouteItemDecision>();
+}
+
+public sealed record MarketRouteFrontierOption(
+    int MinimumTolerance,
+    int MaximumTolerance,
+    long GilCost,
+    int WorldStops,
+    int DataCenterTransfers)
+{
+    public int RepresentativeTolerance => (MinimumTolerance + MaximumTolerance) / 2;
+}
+
+public sealed record MarketRouteItemDecision(
+    int ItemId,
+    string ItemName,
+    long CheapestEligibleGilCost,
+    long SelectedGilCost)
+{
+    public long ConsolidationPremiumGil => Math.Max(0, SelectedGilCost - CheapestEligibleGilCost);
+
+    public decimal ConsolidationPremiumRate => CheapestEligibleGilCost > 0
+        ? ConsolidationPremiumGil / (decimal)CheapestEligibleGilCost
+        : 0;
 }
