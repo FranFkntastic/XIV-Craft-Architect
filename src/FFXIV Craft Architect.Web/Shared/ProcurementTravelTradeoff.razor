@@ -1,0 +1,102 @@
+@using FFXIV_Craft_Architect.Core.Models
+
+<div class="pp-travel-heading">
+    <label id="procurement-travel-label" class="pp-travel-label">
+        <span>Travel preference</span>
+        <strong>@MarketRouteScoring.GetToleranceLabel(TravelTolerance)</strong>
+    </label>
+    <div class="pp-tradeoff-anchor">
+        <MudIconButton Icon="@Icons.Material.Outlined.Info"
+                       Size="Size.Small"
+                       Color="Color.Info"
+                       OnClick="Toggle"
+                       aria-label="Explain the gil cost and travel tradeoff"
+                       aria-expanded="@_open.ToString().ToLowerInvariant()"
+                       aria-controls="procurement-travel-explainer" />
+        <MudPopover Open="@_open"
+                    AnchorOrigin="Origin.BottomLeft"
+                    TransformOrigin="Origin.TopLeft"
+                    OverflowBehavior="OverflowBehavior.FlipOnOpen"
+                    Paper="true"
+                    Class="pp-tradeoff-popover">
+            <section id="procurement-travel-explainer"
+                     class="pp-tradeoff-card"
+                     aria-label="Travel preference explanation">
+                <header>
+                    <div>
+                        <span>Cost versus travel</span>
+                        <strong>@MarketRouteScoring.GetToleranceLabel(TravelTolerance)</strong>
+                    </div>
+                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                   Size="Size.Small"
+                                   OnClick="Close"
+                                   aria-label="Close travel preference explanation" />
+                </header>
+
+                <p>@GetExplanation()</p>
+
+                <div class="pp-tradeoff-diagram" aria-label="The cheapest trustworthy route is the cost baseline. The selected preference permits a higher cost in exchange for fewer stops.">
+                    <div class="pp-tradeoff-point">
+                        <MudIcon Icon="@Icons.Material.Filled.Savings" Size="Size.Medium" Color="Color.Success" />
+                        <span>Cost baseline</span>
+                        <strong>Cheapest trustworthy route</strong>
+                    </div>
+                    <div class="pp-tradeoff-rule">
+                        <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Medium" />
+                        <strong>@GetPremiumRule()</strong>
+                    </div>
+                    <div class="pp-tradeoff-point">
+                        <MudIcon Icon="@Icons.Material.Filled.Route" Size="Size.Medium" Color="Color.Info" />
+                        <span>Route preference</span>
+                        <strong>@GetRouteRule()</strong>
+                    </div>
+                </div>
+
+                <p class="pp-tradeoff-footnote">Transfers are compared before individual world stops. Market evidence must still be trustworthy enough to use.</p>
+            </section>
+        </MudPopover>
+    </div>
+</div>
+
+@code {
+    [Parameter] public int TravelTolerance { get; set; }
+
+    private bool _open;
+
+    private void Toggle() => _open = !_open;
+
+    private void Close() => _open = false;
+
+    private string GetExplanation()
+    {
+        var tolerance = Math.Clamp(TravelTolerance, 0, 11);
+        return tolerance switch
+        {
+            0 => "CA applies no gil ceiling. It chooses the complete route with the fewest data-center transfers, then the fewest world stops.",
+            11 => "CA permits no extra gil. It chooses the cheapest complete route, using travel only to break cost ties.",
+            _ => $"CA may choose a route costing up to {MarketRouteScoring.GetMaximumPremiumRate(tolerance)!.Value:P0} more gil than the cheapest complete route when that removes transfers or world stops."
+        };
+    }
+
+    private string GetPremiumRule()
+    {
+        var tolerance = Math.Clamp(TravelTolerance, 0, 11);
+        return tolerance switch
+        {
+            0 => "No gil ceiling",
+            11 => "+0% gil",
+            _ => $"Up to +{MarketRouteScoring.GetMaximumPremiumRate(tolerance)!.Value:P0} gil"
+        };
+    }
+
+    private string GetRouteRule()
+    {
+        var tolerance = Math.Clamp(TravelTolerance, 0, 11);
+        return tolerance switch
+        {
+            0 => "Fewest transfers and stops",
+            11 => "Lowest gil cost",
+            _ => "Fewer transfers or stops"
+        };
+    }
+}

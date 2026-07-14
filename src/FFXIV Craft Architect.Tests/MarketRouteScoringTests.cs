@@ -22,7 +22,7 @@ public class MarketRouteScoringTests
 
     [Theory]
     [InlineData(0, "Fewest stops")]
-    [InlineData(7, "Up to 12% extra for less travel")]
+    [InlineData(7, "Up to 12% more gil for fewer stops")]
     [InlineData(11, "Lowest cost")]
     public void TravelToleranceLabel_ExplainsTheContract(int tolerance, string expected)
     {

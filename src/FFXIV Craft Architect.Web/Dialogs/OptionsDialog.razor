@@ -95,6 +95,15 @@
                 </MudText>
 
                 <MudSwitch T="bool"
+                           @bind-Value="_procurementEnableSplitWorldPurchases"
+                           Label="Allow split purchases"
+                           Color="Color.Primary"
+                           Class="mt-4" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Lets one item use listings from multiple worlds when that completes the quantity or produces a better route. Travel preference still decides whether the savings justify the extra stops.
+                </MudText>
+
+                <MudSwitch T="bool"
                            @bind-Value="_procurementStartFromHomeDataCenter"
                            Label="Start procurement routes from the home data center"
                            Color="Color.Primary"
@@ -613,6 +622,7 @@
     private string _defaultDataCenter = "Aether";
     private string _selectedRegion = "North America";
     private MarketFetchScope _defaultMarketFetchScope = MarketFetchScope.EntireRegion;
+    private bool _procurementEnableSplitWorldPurchases = true;
     private bool _procurementStartFromHomeDataCenter;
     private bool _isClearing = false;
     private TradeCompanyProfile? _companyProfile;
@@ -674,6 +684,7 @@
         _selectedRegion = await Settings.GetAsync("market.region", "North America") ?? "North America";
         _defaultMarketFetchScope = ParseMarketFetchScope(
             await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
+        _procurementEnableSplitWorldPurchases = await Settings.GetAsync("procurement.enable_split_world_purchases", true);
         _procurementStartFromHomeDataCenter = await Settings.GetAsync("procurement.start_from_home_data_center", false);
 
         await LoadCompanyProfileAsync();
@@ -1323,6 +1334,11 @@
             _selectedRegion,
             _defaultMarketFetchScope,
             _defaultMarketFetchScope == MarketFetchScope.EntireRegion);
+        AppState.SetProcurementSettings(
+            AppState.ProcurementSearchEntireRegion,
+            _procurementEnableSplitWorldPurchases,
+            AppState.ProcurementTravelTolerance,
+            AppState.TemporaryWorldBlacklistDurationMinutes);
         AppState.SetProcurementHomeDataCenterOrigin(_procurementStartFromHomeDataCenter);
 
         // Persist settings via ISettingsService
@@ -1330,6 +1346,7 @@
         await Settings.SetAsync("market.default_datacenter", _defaultDataCenter);
         await Settings.SetAsync("market.region", _selectedRegion);
         await Settings.SetAsync("market.default_search_scope", _defaultMarketFetchScope.ToString());
+        await Settings.SetAsync("procurement.enable_split_world_purchases", _procurementEnableSplitWorldPurchases);
         await Settings.SetAsync("procurement.start_from_home_data_center", _procurementStartFromHomeDataCenter);
         
         Snackbar.Add("Settings saved", Severity.Success);

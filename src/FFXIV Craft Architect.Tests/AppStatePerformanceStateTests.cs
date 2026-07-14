@@ -7,6 +7,14 @@ namespace FFXIV_Craft_Architect.Tests;
 public class AppStatePerformanceStateTests
 {
     [Fact]
+    public void ProcurementSplitPurchases_DefaultToEnabled()
+    {
+        var appState = new AppState();
+
+        Assert.True(appState.ProcurementEnableSplitWorldPurchases);
+    }
+
+    [Fact]
     public void Constructor_DefaultMarketSearchScopeIsEntireRegion()
     {
         var appState = new AppState();

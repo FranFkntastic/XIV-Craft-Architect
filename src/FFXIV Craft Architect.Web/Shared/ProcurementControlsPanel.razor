@@ -22,22 +22,8 @@
                 <p>Uses listings from every data center in @AppState.SelectedRegion, which can lower cost but add transfers.</p>
             </div>
 
-            <div class="pp-field-block">
-                <MudCheckBox T="bool"
-                             Value="AppState.ProcurementEnableSplitWorldPurchases"
-                             ValueChanged="OnProcurementEnableSplitWorldPurchasesChanged"
-                             Dense="true"
-                             Color="Color.Secondary">
-                    <span>Allow split purchases</span>
-                </MudCheckBox>
-                <p>May divide one item across worlds when the combined listings beat every complete stack.</p>
-            </div>
-
             <div class="pp-field-block pp-travel-field">
-                <label id="procurement-travel-label" class="pp-field-label">
-                    Travel preference
-                    <strong>@MarketRouteScoring.GetToleranceLabel(AppState.ProcurementTravelTolerance)</strong>
-                </label>
+                <ProcurementTravelTradeoff TravelTolerance="AppState.ProcurementTravelTolerance" />
                 <MudSlider T="int"
                            Value="AppState.ProcurementTravelTolerance"
                            ValueChanged="OnProcurementTravelToleranceChanged"
@@ -52,7 +38,11 @@
                     <span>Fewer stops</span>
                     <span>Lower cost</span>
                 </div>
-                <p id="procurement-travel-help">Position @AppState.ProcurementTravelTolerance of 11. The allowance narrows as the slider moves toward lower cost.</p>
+                <p id="procurement-travel-help">@GetTravelPreferenceHelp()</p>
+                <p class="pp-route-policy-note">
+                    <MudIcon Icon="@(AppState.ProcurementEnableSplitWorldPurchases ? Icons.Material.Filled.CallSplit : Icons.Material.Filled.HorizontalRule)" Size="Size.Small" />
+                    @(AppState.ProcurementEnableSplitWorldPurchases ? "Split purchases allowed" : "Single-world purchases only") · managed in Options
+                </p>
                 @if (AppState.ProcurementSearchEntireRegion && AppState.ProcurementStartFromHomeDataCenter)
                 {
                     <p class="pp-origin-note"><MudIcon Icon="@Icons.Material.Filled.Home" Size="Size.Small" /> Starts from @AppState.SelectedDataCenter.</p>
@@ -159,11 +149,20 @@
     private Task OnProcurementSearchEntireRegionChanged(bool value) =>
         ApplyProcurementSettingsAsync(searchEntireRegion: value);
 
-    private Task OnProcurementEnableSplitWorldPurchasesChanged(bool value) =>
-        ApplyProcurementSettingsAsync(enableSplitWorldPurchases: value);
-
     private Task OnProcurementTravelToleranceChanged(int value) =>
         ApplyProcurementSettingsAsync(travelTolerance: value);
+
+    private string GetTravelPreferenceHelp()
+    {
+        var tolerance = AppState.ProcurementTravelTolerance;
+        var premium = MarketRouteScoring.GetMaximumPremiumRate(tolerance);
+        return tolerance switch
+        {
+            0 => "Position 0 of 11. No gil ceiling; minimize data-center transfers, then world stops.",
+            11 => "Position 11 of 11. No extra gil; choose the cheapest trustworthy route.",
+            _ => $"Position {tolerance} of 11. Routes may cost up to {premium!.Value:P0} more gil than the cheapest trustworthy route."
+        };
+    }
 
     private Task OnTemporaryWorldBlacklistDurationChanged(int value) =>
         ApplyProcurementSettingsAsync(temporaryWorldBlacklistDurationMinutes: value);

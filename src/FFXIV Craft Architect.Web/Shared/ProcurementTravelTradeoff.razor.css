@@ -1,0 +1,127 @@
+.pp-travel-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.pp-travel-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: #c8cdd1;
+    font-size: .78rem;
+}
+
+.pp-travel-label strong {
+    color: #90caf9;
+    font-size: .82rem;
+}
+
+.pp-tradeoff-anchor {
+    position: relative;
+    margin-top: -7px;
+}
+
+.pp-tradeoff-popover {
+    width: min(420px, calc(100vw - 32px));
+    border: 1px solid #414950;
+    background: #202428;
+}
+
+.pp-tradeoff-card {
+    display: grid;
+    gap: 14px;
+    padding: 16px;
+    color: #dce1e5;
+}
+
+.pp-tradeoff-card header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.pp-tradeoff-card header > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.pp-tradeoff-card header span,
+.pp-tradeoff-point span {
+    color: #aeb5bb;
+    font-size: .72rem;
+}
+
+.pp-tradeoff-card header strong {
+    color: #90caf9;
+    font-size: .94rem;
+}
+
+.pp-tradeoff-card p {
+    margin: 0;
+    color: #c8cdd1;
+    font-size: .82rem;
+    line-height: 1.5;
+}
+
+.pp-tradeoff-diagram {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: stretch;
+    gap: 10px;
+}
+
+.pp-tradeoff-point {
+    display: grid;
+    align-content: start;
+    gap: 5px;
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid #394047;
+    border-radius: 8px;
+    background: #191c1f;
+}
+
+.pp-tradeoff-point strong {
+    color: #eef1f3;
+    font-size: .78rem;
+    line-height: 1.35;
+}
+
+.pp-tradeoff-rule {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    color: #d4b35b;
+    text-align: center;
+}
+
+.pp-tradeoff-rule strong {
+    max-width: 86px;
+    font-size: .72rem;
+    line-height: 1.25;
+}
+
+.pp-tradeoff-card .pp-tradeoff-footnote {
+    color: #969fa6;
+    font-size: .72rem;
+}
+
+@media (max-width: 520px) {
+    .pp-tradeoff-diagram {
+        grid-template-columns: 1fr;
+    }
+
+    .pp-tradeoff-rule {
+        flex-direction: row;
+    }
+
+    .pp-tradeoff-rule :deep(.mud-icon-root) {
+        transform: rotate(90deg);
+    }
+}

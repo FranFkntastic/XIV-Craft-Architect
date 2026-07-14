@@ -194,7 +194,7 @@ public partial class AppState
 
     // Procurement Planning Settings
     public bool ProcurementSearchEntireRegion { get; private set; } = false;
-    public bool ProcurementEnableSplitWorldPurchases { get; private set; } = false;
+    public bool ProcurementEnableSplitWorldPurchases { get; private set; } = true;
     public int ProcurementTravelTolerance { get; private set; } = 0; // 0 = shortest route, 11 = cheapest
     public bool ProcurementStartFromHomeDataCenter { get; private set; }
 

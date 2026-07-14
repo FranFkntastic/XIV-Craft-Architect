@@ -53,19 +53,6 @@
     margin-left: 0;
 }
 
-.pp-field-label {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    color: #c8cdd1;
-    font-size: .78rem;
-}
-
-.pp-field-label strong {
-    color: #90caf9;
-    font-size: .82rem;
-}
-
 .pp-full-width {
     width: 100%;
 }
@@ -83,6 +70,13 @@
     align-items: center;
     gap: 5px;
     color: #90caf9 !important;
+}
+
+.pp-route-policy-note {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: #aeb5bb !important;
 }
 
 .pp-exclusion-summary {

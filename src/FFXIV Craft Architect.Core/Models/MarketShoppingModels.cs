@@ -286,7 +286,7 @@ public static class MarketRouteScoring
         {
             0 => "Fewest stops",
             11 => "Lowest cost",
-            var value => $"Up to {GetMaximumPremiumRate(value)!.Value:P0} extra for less travel"
+            var value => $"Up to {GetMaximumPremiumRate(value)!.Value:P0} more gil for fewer stops"
         };
     }
 

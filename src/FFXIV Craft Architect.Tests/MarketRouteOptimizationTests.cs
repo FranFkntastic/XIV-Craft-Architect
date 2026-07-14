@@ -285,6 +285,57 @@ public class MarketRouteOptimizationTests
     }
 
     [Fact]
+    public void OptimizeProcurementRoute_SplitPolicyMateriallyChangesCostAndRouteShape()
+    {
+        var plan = Plan(1, "Split Policy Item", 10,
+            World("Aether", "Siren", 500, 100, Listing(5, 100, "Siren Split")),
+            World("Primal", "Leviathan", 600, 120, Listing(5, 120, "Leviathan Split")),
+            World("Crystal", "Balmung", 10_000, 1_000, Listing(10, 1_000, "Balmung Single")));
+
+        var splitEnabled = Assert.Single(Optimize([plan], travelTolerance: 11, includeSplitPurchases: true));
+        var splitDisabled = Assert.Single(Optimize([plan], travelTolerance: 11, includeSplitPurchases: false));
+
+        Assert.Equal(1_100, PurchaseRecommendationCost.GetRecommendedCost(splitEnabled));
+        Assert.Equal(10_000, PurchaseRecommendationCost.GetRecommendedCost(splitDisabled));
+        Assert.Equal(2, splitEnabled.RecommendedSplit?.Count);
+        Assert.Equal("Balmung", splitDisabled.RecommendedWorld?.WorldName);
+    }
+
+    [Fact]
+    public void OptimizeProcurementRoute_SplitDisabled_CanRemoveTheOnlyCompleteRecommendation()
+    {
+        var plan = Plan(1, "Coverage Required Item", 10,
+            World("Aether", "Siren", 500, 100, Listing(5, 100, "Siren Split")),
+            World("Primal", "Leviathan", 600, 120, Listing(5, 120, "Leviathan Split")));
+
+        var splitEnabled = Assert.Single(Optimize([plan], travelTolerance: 11, includeSplitPurchases: true));
+        var splitDisabled = Assert.Single(Optimize([plan], travelTolerance: 11, includeSplitPurchases: false));
+
+        Assert.Equal(1_100, PurchaseRecommendationCost.GetRecommendedCost(splitEnabled));
+        Assert.Equal(2, splitEnabled.RecommendedSplit?.Count);
+        Assert.Null(splitDisabled.RecommendedWorld);
+        Assert.Null(splitDisabled.RecommendedSplit);
+        Assert.Equal(0, PurchaseRecommendationCost.GetRecommendedCost(splitDisabled));
+    }
+
+    [Fact]
+    public void OptimizeProcurementRoute_SplitEnabled_StillRespectsTravelTolerancePremiumCeiling()
+    {
+        var plan = Plan(1, "Tolerance Split Item", 10,
+            World("Aether", "Siren", 500, 100, Listing(5, 100, "Siren Split")),
+            World("Primal", "Leviathan", 600, 120, Listing(5, 120, "Leviathan Split")),
+            World("Crystal", "Balmung", 1_500, 150, Listing(10, 150, "Balmung Single")));
+
+        var fiftyPercentCeiling = Assert.Single(Optimize([plan], travelTolerance: 3, includeSplitPurchases: true));
+        var thirtyFivePercentCeiling = Assert.Single(Optimize([plan], travelTolerance: 4, includeSplitPurchases: true));
+
+        Assert.Equal("Balmung", fiftyPercentCeiling.RecommendedWorld?.WorldName);
+        Assert.Equal(1_500, PurchaseRecommendationCost.GetRecommendedCost(fiftyPercentCeiling));
+        Assert.Equal(2, thirtyFivePercentCeiling.RecommendedSplit?.Count);
+        Assert.Equal(1_100, PurchaseRecommendationCost.GetRecommendedCost(thirtyFivePercentCeiling));
+    }
+
+    [Fact]
     public void OptimizeProcurementRoute_LowImpactItemDoesNotForceBadExtraRouteStop()
     {
         var plans = new[]

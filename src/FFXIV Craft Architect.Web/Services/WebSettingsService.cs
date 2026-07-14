@@ -23,7 +23,7 @@ public class WebSettingsService : ISettingsService
         ["market.include_cross_world"] = true,
         ["market.exclude_congested_worlds"] = true,
         ["procurement.search_entire_region"] = false,
-        ["procurement.enable_split_world_purchases"] = false,
+        ["procurement.enable_split_world_purchases"] = true,
         ["procurement.travel_tolerance"] = 0,
         ["procurement.world_exclusion_duration_minutes"] = 60,
         ["procurement.start_from_home_data_center"] = false,
