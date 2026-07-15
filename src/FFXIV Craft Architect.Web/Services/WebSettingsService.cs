@@ -129,9 +129,13 @@ public class WebSettingsService : ISettingsService
         catch
         {
             if (hadPrevious)
+            {
                 _cache[keyPath] = previous!;
+            }
             else
+            {
                 _cache.Remove(keyPath);
+            }
             throw;
         }
     }
@@ -158,7 +162,9 @@ public class WebSettingsService : ISettingsService
         {
             _logger?.LogError(ex, "[WebSettingsService] Failed to save setting '{Key}'", key);
             if (throwOnFailure)
+            {
                 throw;
+            }
         }
     }
 
@@ -175,7 +181,9 @@ public class WebSettingsService : ISettingsService
             {
                 var deserialized = jsonElement.Deserialize<T>();
                 if (deserialized is not null)
+                {
                     return deserialized;
+                }
             }
             catch (JsonException)
             {

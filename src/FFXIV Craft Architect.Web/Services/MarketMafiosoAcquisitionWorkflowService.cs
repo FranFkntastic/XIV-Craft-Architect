@@ -120,7 +120,9 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
         var pending = await _settings.GetAsync(PendingSubmissionSetting, MarketMafiosoPendingSubmission.Empty)
             ?? MarketMafiosoPendingSubmission.Empty;
         if (pending.Matches(expected))
+        {
             return pending;
+        }
 
         await _settings.SetAsync(PendingSubmissionSetting, expected);
         return expected;
