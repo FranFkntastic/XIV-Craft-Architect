@@ -20,6 +20,7 @@
 @inject BrowserFileExportService BrowserFileExportService
 @inject MarketEvidenceHydrationService MarketEvidenceHydration
 @inject IMarketCacheService MarketCache
+@inject GitHubIssueReportService GitHubIssueReportService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
@@ -800,6 +801,22 @@
                     </div>
                     <div class="diagnostics-hint">
                         Acquisition Evaluation also exposes an Item dump beside the selected item, containing only that item's demand, actionability calculation, and market evidence.
+                    </div>
+                    <div class="diagnostics-action-row diagnostics-report-row">
+                        <div>
+                            <strong>Report a problem</strong>
+                            <span>Open a prefilled GitHub issue for review. Diagnostic files stay local until you choose to attach them.</span>
+                        </div>
+                        <a class="mud-button-root mud-button mud-button-outlined mud-button-outlined-secondary mud-button-outlined-size-small mud-ripple"
+                           href="@CreateGitHubIssueUrl()"
+                           target="_blank"
+                           rel="noopener noreferrer">
+                            <span class="mud-button-label">
+                                <MudIcon Icon="@Icons.Material.Filled.BugReport"
+                                         Class="mud-button-icon-start mud-button-icon-size-small" />
+                                Draft GitHub issue
+                            </span>
+                        </a>
                     </div>
                 </section>
 
@@ -2001,6 +2018,18 @@
         }
 
         return $"{safePlanName}-{exportedAtUtc:yyyyMMdd-HHmmss}.ca-diagnostic.json";
+    }
+
+    private string CreateGitHubIssueUrl()
+    {
+        return GitHubIssueReportService.CreateIssueUrl(new GitHubIssueReportContext(
+            WebBuildInfo.BuildVersion,
+            WebBuildInfo.BranchName,
+            WebBuildInfo.CommitSha,
+            AppState.SearchEntireRegion ? AppState.SelectedRegion : AppState.SelectedDataCenter,
+            AppState.ShoppingPlans.Count,
+            AppState.MarketItemAnalyses.Count,
+            MarketEvidenceHydration.LastRun.Status));
     }
 
     private static string FormatBytes(long bytes)
