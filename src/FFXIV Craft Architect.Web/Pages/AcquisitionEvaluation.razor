@@ -116,7 +116,8 @@
         ActiveProcurementItems="@_snapshot.ActiveProcurementItems"
         UnavailableMarketItems="@AppState.UnavailableMarketItems"
         OnSourceChanged="OnNodeSourceChanged"
-        OnDiagnosticRequested="ExportSelectedItemDiagnosticAsync" />
+        DiagnosticReady="_itemDiagnosticReady"
+        DiagnosticSaveKey="@ItemDiagnosticSaveKey" />
 </div>
 
 @code {
@@ -143,6 +144,8 @@
     private string? _appliedRequestedNodeId;
     private int? _appliedRequestedItemId;
     private const string ItemDiagnosticSaveKey = "acquisition-item-diagnostic";
+    private long _itemDiagnosticPreparationRequestId;
+    private bool _itemDiagnosticReady;
 
     protected override async Task OnInitializedAsync()
     {
@@ -214,12 +217,13 @@
         await ApplyNodeSourceChangeAsync(request.Node, request.Source);
     }
 
-    private async Task ExportSelectedItemDiagnosticAsync()
+    private async Task PrepareSelectedItemDiagnosticAsync(CancellationToken cancellationToken = default)
     {
+        var preparationRequestId = Interlocked.Increment(ref _itemDiagnosticPreparationRequestId);
+        _itemDiagnosticReady = false;
         var row = GetSelectedRow();
         if (row == null)
         {
-            Snackbar.Add("Select an acquisition item before exporting diagnostics.", Severity.Warning);
             return;
         }
 
@@ -239,17 +243,24 @@
                 row.ItemId,
                 exportedAtUtc);
 
-            await BrowserFileExportService.SaveTextFileAsync(
+            await BrowserFileExportService.PrepareTextFileSaveAsync(
                 ItemDiagnosticSaveKey,
                 fileName,
                 json,
-                "application/json");
-            Snackbar.Add($"Exported diagnostics for {row.ItemName}.", Severity.Success);
+                "application/json",
+                cancellationToken);
+            if (preparationRequestId == _itemDiagnosticPreparationRequestId &&
+                GetSelectedRow()?.ItemId == row.ItemId)
+            {
+                _itemDiagnosticReady = true;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "Failed to export acquisition diagnostics for item {ItemId}", row.ItemId);
-            Snackbar.Add($"Could not export item diagnostics: {ex.Message}", Severity.Error);
+            Logger.LogWarning(ex, "Failed to prepare acquisition diagnostics for item {ItemId}", row.ItemId);
         }
     }
 
@@ -450,9 +461,10 @@
             row.HasSuppressedOccurrences && !row.IsFullySuppressed ? "partial" : null);
     }
 
-    private void SelectNodeFromRow(DecisionRow row)
+    private async Task SelectNodeFromRow(DecisionRow row)
     {
         SelectNode(row.Node);
+        await PrepareSelectedItemDiagnosticAsync();
     }
 
     private Task OnLedgerSortChanged(WebTableSortState<AcquisitionDecisionLedgerSortColumn> sortState)
@@ -569,6 +581,7 @@
         }
 
         EnsureSelectedNodeFromSnapshot();
+        await PrepareSelectedItemDiagnosticAsync(token);
         elapsed.Stop();
 
         if (elapsed.ElapsedMilliseconds > 100)

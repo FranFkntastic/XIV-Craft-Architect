@@ -65,6 +65,12 @@
     border-color: #777;
 }
 
+.rp-header-action:disabled {
+    color: #777;
+    cursor: wait;
+    opacity: 0.75;
+}
+
 .rp-details-wrap {
     padding: 8px;
 }

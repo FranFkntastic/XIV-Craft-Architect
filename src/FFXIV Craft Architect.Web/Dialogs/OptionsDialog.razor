@@ -787,14 +787,16 @@
                             <strong>Application snapshot</strong>
                             <span>Active plan, acquisition decisions, market evidence, procurement routes, refresh outcome, and cache decision.</span>
                         </div>
-                        <MudButton Variant="Variant.Filled"
-                                   Color="Color.Primary"
-                                   Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.Download"
-                                   Disabled="@(!AppState.HasPlanOrProjectItems || _diagnosticsBusy)"
-                                   OnClick="DownloadDiagnosticSnapshotAsync">
-                            Download snapshot
-                        </MudButton>
+                        <button type="button"
+                                class="mud-button-root mud-button mud-button-filled mud-button-filled-primary mud-button-filled-size-small mud-ripple"
+                                disabled="@(!_diagnosticSnapshotReady || _diagnosticsBusy)"
+                                onclick="window.CraftArchitectFileExport?.savePreparedFile('@DiagnosticSnapshotSaveKey')">
+                            <span class="mud-button-label">
+                                <MudIcon Icon="@Icons.Material.Filled.Download"
+                                         Class="mud-button-icon-start mud-button-icon-size-small" />
+                                @(_diagnosticSnapshotReady ? "Download snapshot" : "Preparing snapshot...")
+                            </span>
+                        </button>
                     </div>
                     <div class="diagnostics-hint">
                         Acquisition Evaluation also exposes an Item dump beside the selected item, containing only that item's demand, actionability calculation, and market evidence.
@@ -929,9 +931,13 @@
     private static string GetTabId(int index) => $"options-tab-{index}";
     private static string GetPanelId(int index) => $"options-panel-{index}";
 
-    private void SelectTab(int index)
+    private async Task SelectTab(int index)
     {
         _activePanelIndex = Math.Clamp(index, 0, OptionsTabs.Length - 1);
+        if (_activePanelIndex == 6)
+        {
+            await PrepareDiagnosticSnapshotAsync();
+        }
     }
 
     private async Task HandleTabKeyDown(KeyboardEventArgs args, int currentIndex)
@@ -950,7 +956,7 @@
             return;
         }
 
-        SelectTab(nextIndex);
+        await SelectTab(nextIndex);
         await InvokeAsync(StateHasChanged);
         await _tabElements[nextIndex].FocusAsync();
     }
@@ -1048,6 +1054,7 @@
     private string? _profileHostStatus;
     private Color _profileHostStatusColor = Color.Secondary;
     private bool _diagnosticsBusy;
+    private bool _diagnosticSnapshotReady;
     private TradeIndexedDbDiagnostics? _tradeStorageDiagnostics;
     private CacheStats? _marketCacheStats;
     private string? _diagnosticStorageError;
@@ -1093,6 +1100,10 @@
 
         await LoadCompanyProfileAsync();
         await LoadProfileHostSettingsAsync();
+        if (_activePanelIndex == 6)
+        {
+            await PrepareDiagnosticSnapshotAsync();
+        }
     }
 
     private async Task TestMarketMafiosoConnectionAsync()
@@ -1872,23 +1883,28 @@
         Snackbar.Add(enabled ? "Developer Mode enabled" : "Developer Mode disabled", Severity.Info);
     }
 
-    private async Task DownloadDiagnosticSnapshotAsync()
+    private async Task PrepareDiagnosticSnapshotAsync()
     {
+        if (_diagnosticSnapshotReady || !AppState.HasPlanOrProjectItems)
+        {
+            return;
+        }
+
         _diagnosticsBusy = true;
         try
         {
             var exportedAtUtc = DateTime.UtcNow;
             var bundle = DiagnosticSnapshotBundleService.BuildBundle(exportedAtUtc);
-            await BrowserFileExportService.SaveTextFileAsync(
+            await BrowserFileExportService.PrepareTextFileSaveAsync(
                 DiagnosticSnapshotSaveKey,
                 CreateDiagnosticSnapshotFileName(exportedAtUtc),
                 DiagnosticSnapshotBundleService.Serialize(bundle),
                 "application/json");
-            Snackbar.Add("Diagnostic snapshot downloaded.", Severity.Success);
+            _diagnosticSnapshotReady = true;
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Could not export diagnostics: {ex.Message}", Severity.Error);
+            Snackbar.Add($"Could not prepare diagnostics: {ex.Message}", Severity.Error);
         }
         finally
         {
