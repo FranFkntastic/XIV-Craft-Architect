@@ -24,7 +24,7 @@
                             class="rp-header-action"
                             title="@(DiagnosticReady ? "Download acquisition evidence and actionability diagnostics for this item" : "Preparing item diagnostics")"
                             disabled="@(!DiagnosticReady)"
-                            onclick="window.CraftArchitectFileExport?.savePreparedFile('@DiagnosticSaveKey')">
+                            onclick="window.CraftArchitectFileExport?.downloadPreparedFile('@DiagnosticSaveKey')">
                         Item dump
                     </button>
                     @if (CanOpenMarketAnalysis)

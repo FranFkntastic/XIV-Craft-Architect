@@ -19,7 +19,7 @@ public class BrowserFileExportServiceTests
             "application/json");
 
         Assert.Equal("import", jsRuntime.LastIdentifier);
-        Assert.Equal("./fileExport.js?v=save-picker-1", jsRuntime.LastArgs[0]);
+        Assert.Equal("./fileExport.js?v=diagnostic-download-2", jsRuntime.LastArgs[0]);
         Assert.Equal("prepareTextFileSave", module.LastIdentifier);
         Assert.Equal("diagnostic-snapshot", module.LastArgs[0]);
         Assert.Equal("diagnostic.json", module.LastArgs[1]);

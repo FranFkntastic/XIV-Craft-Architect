@@ -9,6 +9,7 @@ export function prepareTextFileSave(key, fileName, content, contentType) {
 
     window.CraftArchitectFileExport = window.CraftArchitectFileExport || {};
     window.CraftArchitectFileExport.savePreparedFile = savePreparedFile;
+    window.CraftArchitectFileExport.downloadPreparedFile = downloadPreparedFile;
 }
 
 export async function savePreparedFile(key) {
@@ -18,6 +19,18 @@ export async function savePreparedFile(key) {
     }
 
     return await saveBlobWithPickerOrDownload(
+        preparedFile.fileName,
+        preparedFile.content,
+        preparedFile.contentType);
+}
+
+export function downloadPreparedFile(key) {
+    const preparedFile = preparedFiles.get(key);
+    if (!preparedFile) {
+        throw new Error(`No prepared file exists for ${key}.`);
+    }
+
+    return downloadBlob(
         preparedFile.fileName,
         preparedFile.content,
         preparedFile.contentType);
@@ -63,7 +76,11 @@ async function saveBlobWithPickerOrDownload(fileName, content, contentType) {
         }
     }
 
-    const blob = new Blob([content], { type: resolvedContentType });
+    return downloadBlob(fileName, content, resolvedContentType);
+}
+
+function downloadBlob(fileName, content, contentType) {
+    const blob = new Blob([content], { type: contentType || 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;

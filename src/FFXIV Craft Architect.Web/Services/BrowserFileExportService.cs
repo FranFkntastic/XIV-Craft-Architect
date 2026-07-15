@@ -5,7 +5,7 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed class BrowserFileExportService
 {
-    private const string ModulePath = "./fileExport.js?v=save-picker-1";
+    private const string ModulePath = "./fileExport.js?v=diagnostic-download-2";
 
     private readonly IJSRuntime _jsRuntime;
     private Task<IJSObjectReference>? _moduleTask;
