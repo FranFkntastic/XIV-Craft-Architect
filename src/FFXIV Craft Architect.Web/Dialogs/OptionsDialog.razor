@@ -138,7 +138,7 @@
                         <div>
                             <MudText Typo="Typo.h6">MarketMafioso</MudText>
                             <MudText Typo="Typo.caption" Style="opacity: 0.72;">
-                                Connect this browser profile to a private Workshop Host acquisition queue.
+                                Connect this browser profile to a private Workshop Host work-order inbox.
                             </MudText>
                         </div>
                         <MudChip T="string"
@@ -155,7 +155,7 @@
                                Color="Color.Primary"
                                Class="mt-3" />
                     <MudText Typo="Typo.caption" Style="opacity: 0.72;">
-                        Adds MarketMafioso handoff and evidence-sync actions to Procurement Plan. Leave this off for the standard CA workflow.
+                        Adds durable MarketMafioso work-order handoff and evidence-sync actions to Procurement Plan. Leave this off for the standard CA workflow.
                     </MudText>
 
                     @if (_marketMafiosoEnabled)
@@ -245,7 +245,7 @@
                             }
                         </MudButton>
                         <MudText Typo="Typo.caption" Class="mt-2" Style="display: block; opacity: 0.72;">
-                            Checks authentication and the acquisition.queue v1 capability.
+                            Checks authentication and acquisition handoff capability. New hosts also advertise durable work orders.
                         </MudText>
                     </div>
 

@@ -9,12 +9,12 @@
         <MudNumericField T="uint" @bind-Value="_maxUnitPrice" Label="Maximum unit price" Variant="Variant.Outlined" Min="1" Adornment="Adornment.End" AdornmentText="gil" Class="mb-3" />
         <MudNumericField T="uint" @bind-Value="_gilCap" Label="Maximum total spend" Variant="Variant.Outlined" Min="1" Adornment="Adornment.End" AdornmentText="gil" />
         <MudAlert Severity="Severity.Info" Dense="true" Class="mt-4">
-            The request stops at either cap. In MarketMafioso, check the dashboard, claim and accept the request, then choose <strong>Refresh Evidence</strong> to update CA without purchasing. <strong>Start Route</strong> remains the purchase-authorized action.
+            The work order stops at either cap and remains in the MarketMafioso inbox until it is actioned. Add it to the in-game working set, then choose <strong>Refresh Evidence</strong> to update CA without purchasing. <strong>Start Route</strong> remains the purchase-authorized action.
         </MudAlert>
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
-        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Send to MarketMafioso</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Add to MMF Inbox</MudButton>
     </DialogActions>
 </MudDialog>
 
