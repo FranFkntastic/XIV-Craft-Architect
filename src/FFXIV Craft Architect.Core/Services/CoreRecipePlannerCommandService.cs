@@ -528,7 +528,6 @@ public sealed class CoreRecipePlannerCommandService
                 }
             }
 
-            AcquisitionPlanningService.ReconcileAcquisitionDecisions(currentPlan, Array.Empty<DetailedShoppingPlan>());
             var planSessionVersion = _session.PlanSessionVersion;
             var editPublished = false;
             var editCompleted = operation.CompleteIfCurrent(

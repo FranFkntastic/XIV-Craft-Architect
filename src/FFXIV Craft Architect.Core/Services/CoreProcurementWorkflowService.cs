@@ -113,7 +113,7 @@ public sealed class CoreProcurementWorkflowService
             }
 
             using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct, operation.Token);
-            var activeItems = await _recipeLayerWorkflow.BuildCurrentActiveProcurementItemsAsync(
+            var activeItems = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidatesAsync(
                 plan,
                 linkedCancellation.Token);
             if (activeItems == null || _session.PlanSessionVersion != planSessionVersion)
@@ -206,18 +206,24 @@ public sealed class CoreProcurementWorkflowService
             var routeCards = ProcurementWorldCardBuilder.BuildWorldCards(
                 shoppingPlans,
                 request.SelectedDataCenter);
+            var optimizedPlan = result.OptimizedPlan ?? plan;
+            var sessionPublished = false;
             var published = operation.CompleteIfCurrent(
-                () => _session.PublishProcurementOverlay(
+                () => sessionPublished = _session.TryPublishProcurementOptimization(
+                    capturedVersions,
+                    plan,
+                    planSessionVersion,
+                    optimizedPlan,
                     new CraftSessionProcurementOverlay(
                         DateTime.UtcNow,
-                        shoppingPlans.Select(plan => plan.ItemId).ToArray(),
-                        "procurement route analysis",
+                        shoppingPlans.Select(item => item.ItemId).ToArray(),
+                        "joint acquisition and procurement optimization",
                         shoppingPlans,
                         routeCards,
                         result.RouteDecision),
-                    "procurement route published"),
+                    "joint acquisition and procurement decisions published"),
                 "Procurement route published.");
-            if (!published)
+            if (!published || !sessionPublished)
             {
                 operation.Cancel();
                 return CoreProcurementWorkflowResult.Noop(CoreProcurementWorkflowStatus.Superseded);

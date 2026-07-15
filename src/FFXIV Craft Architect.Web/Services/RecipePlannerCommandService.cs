@@ -643,7 +643,6 @@ public sealed class RecipePlannerCommandService
             }
         }
 
-        AcquisitionPlanningService.ReconcileAcquisitionDecisions(_appState.CurrentPlan, _appState.ShoppingPlans);
         _appState.ApplyPlanDecisionChange(
             GetActiveProcurementItems(_appState.CurrentPlan),
             clearProcurementOverlay: true);

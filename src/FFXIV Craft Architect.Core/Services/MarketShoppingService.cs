@@ -40,8 +40,6 @@ namespace FFXIV_Craft_Architect.Core.Services;
 /// </summary>
 public class MarketShoppingService
 {
-    private const int MaxSplitPurchaseCandidateAlternatives = 8;
-    private const int MaxProcurementRouteBeamWidth = 64;
 
     private readonly IMarketCacheService _cacheService;
     private readonly IWorldStatusService? _worldStatusService;
@@ -221,7 +219,8 @@ public class MarketShoppingService
         bool includeSplitPurchases = false,
         MarketAnalysisExecutionOptions? executionOptions = null,
         IProgress<string>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        long? absoluteMaximumGilCost = null)
     {
         return OptimizeProcurementRouteCoreAsync(
             evidencePlans,
@@ -229,7 +228,8 @@ public class MarketShoppingService
             includeSplitPurchases,
             executionOptions ?? MarketAnalysisExecutionOptions.Interactive,
             progress,
-            ct);
+            ct,
+            absoluteMaximumGilCost);
     }
 
     private async Task<ProcurementRouteOptimizationResult> OptimizeProcurementRouteCoreAsync(
@@ -238,7 +238,8 @@ public class MarketShoppingService
         bool includeSplitPurchases,
         MarketAnalysisExecutionOptions executionOptions,
         IProgress<string>? progress,
-        CancellationToken ct)
+        CancellationToken ct,
+        long? absoluteMaximumGilCost = null)
     {
         ArgumentNullException.ThrowIfNull(evidencePlans);
 
@@ -313,7 +314,7 @@ public class MarketShoppingService
                 }
             }
 
-            beam = PruneRouteBeam(nextBeam, config);
+            beam = PruneRouteBeam(nextBeam);
 
             var completedItems = planIndex + 1;
             if (executionOptions.ShouldReportProgress(completedItems))
@@ -346,7 +347,7 @@ public class MarketShoppingService
             .ThenBy(state => state.TotalEvidencePenalty)
             .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
             .FirstOrDefault();
-        var bestState = OrderRouteStates(frontier, config).FirstOrDefault();
+        var bestState = OrderRouteStates(frontier, config, absoluteMaximumGilCost: absoluteMaximumGilCost).FirstOrDefault();
 
         if (bestState == null)
         {
@@ -1333,11 +1334,8 @@ public class MarketShoppingService
             return;
         }
 
-        if (alternatives.Count < MaxSplitPurchaseCandidateAlternatives)
-        {
-            alternatives[routeKey] = split;
-            routeKeyOrder.Add(routeKey);
-        }
+        alternatives[routeKey] = split;
+        routeKeyOrder.Add(routeKey);
     }
 
     private static string GetSplitRouteKey(IEnumerable<SplitWorldPurchase> split)
@@ -1756,34 +1754,35 @@ public class MarketShoppingService
     }
 
     private static List<ProcurementRouteSearchState> PruneRouteBeam(
-        IEnumerable<ProcurementRouteSearchState> states,
-        MarketAnalysisConfig config)
+        IEnumerable<ProcurementRouteSearchState> states)
     {
         var distinctStates = states
             .GroupBy(state => state.RouteShapeKey, StringComparer.Ordinal)
-            .Select(group => group
-                .OrderBy(state => state.TotalGilCost)
-                .ThenBy(state => state.TotalEvidencePenalty)
-                .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
-                .First())
+            .SelectMany(group =>
+            {
+                var values = group.ToList();
+                return values.Where(candidate => !values.Any(other =>
+                    !ReferenceEquals(candidate, other) &&
+                    other.TotalGilCost <= candidate.TotalGilCost &&
+                    other.TotalEvidencePenalty <= candidate.TotalEvidencePenalty &&
+                    (other.TotalGilCost < candidate.TotalGilCost ||
+                     other.TotalEvidencePenalty < candidate.TotalEvidencePenalty)));
+            })
             .ToList();
-        if (distinctStates.Count <= MaxProcurementRouteBeamWidth)
-        {
-            return OrderRouteStates(distinctStates, config).ToList();
-        }
+        var subsetFrontier = distinctStates
+            .Where(candidate => !distinctStates.Any(other =>
+                !ReferenceEquals(candidate, other) &&
+                string.Equals(candidate.MissingChoiceKey, other.MissingChoiceKey, StringComparison.Ordinal) &&
+                other.Route.Worlds.All(candidate.Route.ContainsWorld) &&
+                other.TotalGilCost <= candidate.TotalGilCost &&
+                other.TotalEvidencePenalty <= candidate.TotalEvidencePenalty &&
+                (other.Route.Worlds.Count < candidate.Route.Worlds.Count ||
+                 other.TotalGilCost < candidate.TotalGilCost ||
+                 other.TotalEvidencePenalty < candidate.TotalEvidencePenalty)))
+            .ToList();
 
-        var preferred = OrderRouteStates(distinctStates, config)
-            .Take(MaxProcurementRouteBeamWidth - 16);
-        var cheapest = distinctStates
-            .OrderBy(state => state.TotalGilCost)
-            .ThenBy(state => state.TotalEvidencePenalty)
-            .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
-            .Take(16);
-
-        return preferred
-            .Concat(cheapest)
-            .DistinctBy(state => state.RouteShapeKey, StringComparer.Ordinal)
-            .Take(MaxProcurementRouteBeamWidth)
+        return subsetFrontier
+            .OrderBy(state => state.RouteShapeKey, StringComparer.Ordinal)
             .ToList();
     }
 
@@ -1821,7 +1820,8 @@ public class MarketShoppingService
     private static IOrderedEnumerable<ProcurementRouteSearchState> OrderRouteStates(
         IEnumerable<ProcurementRouteSearchState> states,
         MarketAnalysisConfig config,
-        int? travelToleranceOverride = null)
+        int? travelToleranceOverride = null,
+        long? absoluteMaximumGilCost = null)
     {
         var materialized = states.ToList();
         var cheapestGilCost = materialized.Count == 0
@@ -1830,10 +1830,12 @@ public class MarketShoppingService
         var travelTolerance = travelToleranceOverride ?? config.TravelTolerance;
         var maximumPremiumRate = MarketRouteScoring.GetMaximumPremiumRate(travelTolerance);
         var eligible = materialized
-            .OrderBy(state => !MarketRouteScoring.IsWithinPremium(
-                state.TotalGilCost,
-                cheapestGilCost,
-                maximumPremiumRate));
+            .OrderBy(state => absoluteMaximumGilCost.HasValue
+                ? state.TotalGilCost > absoluteMaximumGilCost.Value
+                : !MarketRouteScoring.IsWithinPremium(
+                    state.TotalGilCost,
+                    cheapestGilCost,
+                    maximumPremiumRate));
         var travelOrdered = config.TravelPriority == MarketTravelPriority.WorldVisitsFirst
             ? eligible
                 .ThenBy(state => state.WorldStops)
@@ -1929,6 +1931,10 @@ public class MarketShoppingService
             Choices = choices;
             TieBreakKey = BuildTieBreakKey(choices);
             RouteShapeKey = BuildRouteShapeKey(route, choices);
+            MissingChoiceKey = string.Join(",", choices
+                .Where(choice => choice.Candidate == null)
+                .Select(choice => choice.PlanIndex)
+                .OrderBy(index => index));
         }
 
         public MarketRouteState Route { get; }
@@ -1938,6 +1944,7 @@ public class MarketShoppingService
         public IReadOnlyList<ProcurementRouteChoice> Choices { get; }
         public string TieBreakKey { get; }
         public string RouteShapeKey { get; }
+        public string MissingChoiceKey { get; }
 
         public int GetDataCenterTransfers(MarketAnalysisConfig config)
         {

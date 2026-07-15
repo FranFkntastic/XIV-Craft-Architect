@@ -141,6 +141,62 @@ public partial class AppState
         NotifyProcurementOverlayChanged();
     }
 
+    public bool ApplyProcurementOptimization(
+        CraftingPlan expectedPlan,
+        CraftingPlan optimizedPlan,
+        IReadOnlyList<MaterialAggregate> activeProcurementItems,
+        IEnumerable<DetailedShoppingPlan> shoppingPlans,
+        MarketRouteDecision? routeDecision)
+    {
+        ArgumentNullException.ThrowIfNull(expectedPlan);
+        ArgumentNullException.ThrowIfNull(optimizedPlan);
+        ArgumentNullException.ThrowIfNull(activeProcurementItems);
+        ArgumentNullException.ThrowIfNull(shoppingPlans);
+        if (!ReferenceEquals(CurrentPlan, expectedPlan))
+        {
+            return false;
+        }
+
+        using (BeginStateChangeBatch())
+        {
+            var decisionsChanged = !HaveSameAcquisitionDecisions(expectedPlan, optimizedPlan);
+            if (decisionsChanged)
+            {
+                CurrentPlan = optimizedPlan;
+            }
+            ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
+            ReplaceProcurementOverlay(shoppingPlans, routeDecision);
+            if (decisionsChanged)
+            {
+                NotifyPlanDecisionChanged();
+            }
+        }
+
+        return true;
+    }
+
+    private static bool HaveSameAcquisitionDecisions(CraftingPlan left, CraftingPlan right)
+    {
+        var leftDecisions = EnumerateNodes(left.RootItems)
+            .ToDictionary(node => node.NodeId, node => (node.Source, node.SourceReason), StringComparer.Ordinal);
+        var rightNodes = EnumerateNodes(right.RootItems).ToList();
+        return leftDecisions.Count == rightNodes.Count && rightNodes.All(node =>
+            leftDecisions.TryGetValue(node.NodeId, out var decision) &&
+            decision == (node.Source, node.SourceReason));
+    }
+
+    private static IEnumerable<PlanNode> EnumerateNodes(IEnumerable<PlanNode> roots)
+    {
+        foreach (var node in roots)
+        {
+            yield return node;
+            foreach (var child in EnumerateNodes(node.Children))
+            {
+                yield return child;
+            }
+        }
+    }
+
     public void InvalidateProcurementRoute(string reason)
     {
         if (!InvalidateProcurementRouteState(reason))

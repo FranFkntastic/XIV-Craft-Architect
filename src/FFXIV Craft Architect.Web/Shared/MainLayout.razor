@@ -244,6 +244,7 @@
     private MudThemeProvider _mudThemeProvider = null!;
     private string _activeTab = "market";
     private bool _disposed = false;
+    private bool _resetMainScrollAfterRender;
     private bool _debugToolsMenuOpen;
     private bool IsDevelopment => string.Equals(HostEnvironment.Environment, "Development", StringComparison.OrdinalIgnoreCase);
     private bool IsDebugToolsAvailable => IsDevelopment || AppState.SecretDebugToolsEnabled;
@@ -278,6 +279,17 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (_resetMainScrollAfterRender)
+        {
+            _resetMainScrollAfterRender = false;
+            await JSRuntime.InvokeVoidAsync(
+                "mudScrollManager.scrollTo",
+                ".ca-main-content",
+                0,
+                0,
+                "auto");
+        }
+
         if (firstRender)
         {
             await StartupInitialization.InitializeAsync(new StartupInitializationSteps(
@@ -431,7 +443,7 @@
         if (_disposed) return;
         
         UpdateActiveTab(e.Location);
-        _ = JSRuntime.InvokeVoidAsync("mudScrollManager.scrollTo", ".ca-main-content", 0, 0, "auto").AsTask();
+        _resetMainScrollAfterRender = true;
         _ = InvokeAsync(StateHasChanged);
     }
 

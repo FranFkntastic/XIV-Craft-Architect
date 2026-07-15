@@ -240,7 +240,7 @@ public sealed class CoreMarketAnalysisWorkflowService
         }
 
         var analysisList = analyses.ToList();
-        var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(plan, shoppingPlans);
+        const int changedDecisions = 0;
         _marketShoppingService.ApplyVendorPurchaseOverrides(plan, shoppingPlans);
         if (_session.CaptureVersionStamp().PlanSession != capturedVersions.PlanSession)
         {

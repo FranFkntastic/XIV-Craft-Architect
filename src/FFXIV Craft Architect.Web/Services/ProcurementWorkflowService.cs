@@ -35,13 +35,13 @@ public sealed class ProcurementWorkflowService
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.NoPlan);
         }
 
-        var activeItems = await _recipeLayerWorkflow.BuildCurrentActiveProcurementItemsAsync(plan, ct);
-        if (activeItems == null)
+        var marketCandidates = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidatesAsync(plan, ct);
+        if (marketCandidates == null)
         {
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.StalePlan);
         }
 
-        var activeItemsList = activeItems
+        var activeItemsList = marketCandidates
             .Where(item => item.TotalQuantity > 0)
             .ToList();
         if (activeItemsList.Count == 0)
@@ -116,7 +116,18 @@ public sealed class ProcurementWorkflowService
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.Superseded);
         }
 
-        _appState.ReplaceProcurementOverlay(result.ShoppingPlans, result.RouteDecision);
+        var optimizedPlan = result.OptimizedPlan ?? plan;
+        var optimizedActiveItems = result.ActiveProcurementItems
+            ?? AcquisitionPlanningService.GetActiveProcurementItems(optimizedPlan);
+        if (!_appState.ApplyProcurementOptimization(
+                plan,
+                optimizedPlan,
+                optimizedActiveItems,
+                result.ShoppingPlans,
+                result.RouteDecision))
+        {
+            return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.StalePlan);
+        }
         return new ProcurementWorkflowResult(ProcurementWorkflowStatus.Published, result.ShoppingPlans.Count);
     }
 

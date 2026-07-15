@@ -67,8 +67,6 @@ public sealed class AcquisitionDecisionService
             return;
         }
 
-        var costContext = AcquisitionPlanningService.CreateCostContext(_appState.ShoppingPlans);
-        AcquisitionPlanningService.ReconcileAcquisitionDecisions(_appState.CurrentPlan, costContext);
         _appState.ApplyPlanDecisionChange(GetActiveProcurementItems(), clearProcurementOverlay: true);
         ClearStaleProcurementStatus();
     }

@@ -12,6 +12,7 @@
 @inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
 @inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
 @inject ISettingsService Settings
+@inject IJSRuntime JSRuntime
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject BrowserFileExportService FileExportService
 @inject CraftAppraisalQuoteExportService CraftAppraisalQuoteExportService
@@ -67,6 +68,7 @@
     private string? _marketMafiosoActiveRequestId;
     private CancellationTokenSource? _marketMafiosoMonitorCancellation;
     private bool _marketMafiosoEnabled;
+    private bool _revealRouteAfterRender;
 
     protected override void OnInitialized()
     {
@@ -84,6 +86,22 @@
             return;
 
         await LoadActiveMarketMafiosoRequestAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_revealRouteAfterRender)
+        {
+            return;
+        }
+
+        _revealRouteAfterRender = false;
+        await JSRuntime.InvokeVoidAsync(
+            "mudScrollManager.scrollTo",
+            ".ca-main-content",
+            0,
+            0,
+            "auto");
     }
 
     private async Task LoadActiveMarketMafiosoRequestAsync()
@@ -271,6 +289,8 @@
 
             operation.Complete("Procurement route generated.");
             Snackbar.Add("Procurement route generated.", Severity.Success);
+            _revealRouteAfterRender = true;
+            await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
         {

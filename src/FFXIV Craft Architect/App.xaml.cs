@@ -177,6 +177,7 @@ public partial class App : Application
         services.AddSingleton<IArtisanService>(sp => sp.GetRequiredService<ArtisanService>());
         services.AddSingleton<PriceCheckService>();
         services.AddSingleton<MarketShoppingService>();
+        services.AddSingleton<JointAcquisitionRouteOptimizationService>();
         services.AddSingleton<Core.Services.IPurchaseSummaryService, Core.Services.PurchaseSummaryService>();
         services.AddSingleton<Core.Services.Interfaces.IVendorCacheService, Core.Services.VendorCacheService>();
         

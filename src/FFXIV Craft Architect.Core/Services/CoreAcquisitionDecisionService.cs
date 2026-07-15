@@ -57,9 +57,6 @@ public sealed class CoreAcquisitionDecisionService
         long planSessionVersion,
         int nodesUpdated)
     {
-        var costContext = AcquisitionPlanningService.CreateCostContext(
-            _session.MarketEvidence.ShoppingPlans ?? []);
-        AcquisitionPlanningService.ReconcileAcquisitionDecisions(plan, costContext);
         var published = _session.TryReplaceActivePlanDecisions(
             _session.CaptureVersionStamp(),
             plan,

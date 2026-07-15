@@ -7,13 +7,16 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
 {
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly MarketShoppingService _marketShoppingService;
+    private readonly JointAcquisitionRouteOptimizationService _jointOptimizer;
 
     public ProcurementRouteExecutionService(
         IMarketEvidenceReconciliationService marketEvidenceReconciliation,
-        MarketShoppingService marketShoppingService)
+        MarketShoppingService marketShoppingService,
+        JointAcquisitionRouteOptimizationService? jointOptimizer = null)
     {
         _marketEvidenceReconciliation = marketEvidenceReconciliation;
         _marketShoppingService = marketShoppingService;
+        _jointOptimizer = jointOptimizer ?? new JointAcquisitionRouteOptimizationService(marketShoppingService);
     }
 
     public async Task<ProcurementRouteExecutionResult> AnalyzeAsync(
@@ -50,18 +53,61 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         var refreshedEvidence = evidencePlans
             .Where(plan => reconciliation.RefreshedItemIds.Contains(plan.ItemId))
             .ToList();
-        _marketShoppingService.ApplyVendorPurchaseOverrides(request.Plan, evidencePlans);
-
         var scopedEvidence = PrepareProcurementEvidenceForScope(evidencePlans, request);
         progress?.Report($"Optimizing procurement route for {scopedEvidence.Count} items...");
         var procurementConfig = CopyProcurementConfig(request);
-        var optimization = await _marketShoppingService.OptimizeProcurementRouteWithDecisionAsync(
-            scopedEvidence,
-            procurementConfig,
-            request.IncludeSplitPurchases,
-            executionOptions,
-            progress,
-            ct);
+        JointAcquisitionRouteOptimizationResult? jointOptimization = null;
+        ProcurementRouteOptimizationResult optimization;
+        var planCandidateIds = AcquisitionPlanningService.GetMarketAnalysisCandidates(request.Plan)
+            .Select(item => item.ItemId)
+            .ToHashSet();
+        var requestedItemIds = activeProcurementItems.Select(item => item.ItemId).ToHashSet();
+        var canOptimizeJointly = request.Plan != null && planCandidateIds.SetEquals(requestedItemIds);
+        if (canOptimizeJointly && request.Plan is { } jointPlan)
+        {
+            jointOptimization = await _jointOptimizer.OptimizeAsync(
+                jointPlan,
+                scopedEvidence,
+                procurementConfig,
+                request.IncludeSplitPurchases,
+                executionOptions,
+                progress,
+                ct);
+            if (jointOptimization.FeasiblePlanCount > 0)
+            {
+                optimization = new ProcurementRouteOptimizationResult(
+                    jointOptimization.ShoppingPlans,
+                    jointOptimization.RouteDecision);
+            }
+            else if (request.Plan.RootItems.Count == 0)
+            {
+                jointOptimization = null;
+                _marketShoppingService.ApplyVendorPurchaseOverrides(request.Plan, scopedEvidence);
+                optimization = await _marketShoppingService.OptimizeProcurementRouteWithDecisionAsync(
+                    scopedEvidence,
+                    procurementConfig,
+                    request.IncludeSplitPurchases,
+                    executionOptions,
+                    progress,
+                    ct);
+            }
+            else
+            {
+                optimization = new ProcurementRouteOptimizationResult(
+                    jointOptimization.ShoppingPlans,
+                    jointOptimization.RouteDecision);
+            }
+        }
+        else
+        {
+            optimization = await _marketShoppingService.OptimizeProcurementRouteWithDecisionAsync(
+                scopedEvidence,
+                procurementConfig,
+                request.IncludeSplitPurchases,
+                executionOptions,
+                progress,
+                ct);
+        }
 
         return new ProcurementRouteExecutionResult(
             optimization.ShoppingPlans,
@@ -70,7 +116,9 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             refreshedEvidence,
             reconciliation.ReconciledItems,
             optimization.Decision,
-            reconciliation.Items);
+            reconciliation.Items,
+            jointOptimization?.OptimizedPlan,
+            jointOptimization?.ActiveProcurementItems);
     }
 
     private static MarketAnalysisConfig CopyProcurementConfig(ProcurementRouteExecutionRequest request)
@@ -93,7 +141,7 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
     {
         return request.ActiveProcurementItems.Count > 0
             ? request.ActiveProcurementItems
-            : AcquisitionPlanningService.GetActiveProcurementItems(request.Plan);
+            : AcquisitionPlanningService.GetMarketAnalysisCandidates(request.Plan);
     }
 
     private static List<DetailedShoppingPlan> PrepareProcurementEvidenceForScope(
