@@ -4,7 +4,9 @@ using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
-public sealed record MarketAnalysisWorkflowRequest(bool ForceRefreshData);
+public sealed record MarketAnalysisWorkflowRequest(
+    bool ForceRefreshData,
+    bool PreserveExistingEvidence = false);
 
 public sealed record MarketAnalysisWorkflowResult(
     bool Published,
@@ -18,7 +20,7 @@ public sealed class MarketAnalysisWorkflowService
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly MarketShoppingService _marketShoppingService;
     private readonly IMarketPriceLadderAnalysisService _marketPriceLadderAnalysis;
-    private readonly WebPlanPersistenceService _planPersistence;
+    private readonly IMarketAnalysisPersistence _marketAnalysisPersistence;
     private readonly IndexedDbService _indexedDb;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
 
@@ -27,7 +29,7 @@ public sealed class MarketAnalysisWorkflowService
         IMarketEvidenceReconciliationService marketEvidenceReconciliation,
         MarketShoppingService marketShoppingService,
         IMarketPriceLadderAnalysisService marketPriceLadderAnalysis,
-        WebPlanPersistenceService planPersistence,
+        IMarketAnalysisPersistence marketAnalysisPersistence,
         IndexedDbService indexedDb,
         IRecipeLayerWorkflowService recipeLayerWorkflow)
     {
@@ -35,7 +37,7 @@ public sealed class MarketAnalysisWorkflowService
         _marketEvidenceReconciliation = marketEvidenceReconciliation;
         _marketShoppingService = marketShoppingService;
         _marketPriceLadderAnalysis = marketPriceLadderAnalysis;
-        _planPersistence = planPersistence;
+        _marketAnalysisPersistence = marketAnalysisPersistence;
         _indexedDb = indexedDb;
         _recipeLayerWorkflow = recipeLayerWorkflow;
     }
@@ -62,7 +64,10 @@ public sealed class MarketAnalysisWorkflowService
             return new MarketAnalysisWorkflowResult(false, 0, 0, 0);
         }
 
-        _appState.ClearMarketAnalysisState();
+        if (!request.PreserveExistingEvidence)
+        {
+            _appState.ClearMarketAnalysisState();
+        }
 
         var scope = _appState.SearchEntireRegion
             ? MarketFetchScope.EntireRegion
@@ -201,7 +206,7 @@ public sealed class MarketAnalysisWorkflowService
             _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
             string.Equals(_appState.CurrentPlanId, planId, StringComparison.Ordinal))
         {
-            await _planPersistence.SaveMarketAnalysisAsync(
+            await _marketAnalysisPersistence.SaveAsync(
                 planId,
                 shoppingPlans,
                 analysisList,

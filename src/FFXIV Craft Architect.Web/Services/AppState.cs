@@ -93,6 +93,7 @@ public partial class AppState
     private Guid _marketIntelligenceId = Guid.Empty;
     private StoredRecipeOperationSnapshot? _marketAnalysisRecipeBasis;
     private PublishedMarketAnalysisScopeSnapshot? _publishedMarketAnalysisScope;
+    private bool _isMarketEvidenceHydrating;
     private readonly List<DetailedShoppingPlan> _procurementShoppingPlans = [];
     private readonly List<MarketShoppingItem> _shoppingItems = [];
     private readonly List<ProjectItem> _projectItems = [];
@@ -136,6 +137,7 @@ public partial class AppState
     public MarketIntelligencePublicationContext MarketIntelligencePublicationContext => MarketIntelligence.PublicationContext;
     public PublishedMarketAnalysisScopeSnapshot? PublishedMarketAnalysisScope => _publishedMarketAnalysisScope;
     public string? MarketAnalysisScopeWarning => GetMarketAnalysisScopeWarning();
+    public bool IsMarketEvidenceHydrating => _isMarketEvidenceHydrating;
 
     /// <summary>
     /// Mutable procurement overlay derived from ShoppingPlans and current acquisition choices.

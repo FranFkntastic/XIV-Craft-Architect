@@ -325,16 +325,12 @@ public class MarketAnalysisWorkflowServiceTests
         IRecipeLayerWorkflowService? recipeLayerWorkflow = null)
     {
         var indexedDb = new IndexedDbService(jsRuntime);
-        var persistence = new WebPlanPersistenceService(
-            indexedDb,
-            new StoredPlanSnapshotBuilder(appState),
-            new PlanSessionLoadService(appState));
         return new MarketAnalysisWorkflowService(
             appState,
             new MarketEvidenceReconciliationService(execution),
             new MarketShoppingService(Mock.Of<IMarketCacheService>()),
             new MarketPriceLadderAnalysisService(),
-            persistence,
+            new IndexedDbMarketAnalysisPersistence(indexedDb),
             indexedDb,
             recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService());
     }

@@ -259,6 +259,16 @@
             return marketPlan.Error;
         }
 
+        if (AppState.IsMarketEvidenceHydrating)
+        {
+            return "Restoring actionable market evidence...";
+        }
+
+        if ((hqOnly ? HqUnitPrice : UnitPrice) > 0)
+        {
+            return "Saved price only; market evidence needs to be refreshed.";
+        }
+
         return "Run Market Analysis for actionable market evidence.";
     }
 

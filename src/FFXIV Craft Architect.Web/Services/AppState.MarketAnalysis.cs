@@ -7,6 +7,17 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public partial class AppState
 {
+    public void SetMarketEvidenceHydrating(bool isHydrating)
+    {
+        if (_isMarketEvidenceHydrating == isHydrating)
+        {
+            return;
+        }
+
+        _isMarketEvidenceHydrating = isHydrating;
+        NotifyShoppingListChanged();
+    }
+
     public void ApplyMarketAnalysisPublication(
         IEnumerable<MarketItemAnalysis> analyses,
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
