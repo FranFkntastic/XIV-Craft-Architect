@@ -16,7 +16,9 @@
             @onchange="OnChanged">
         @foreach (var option in Options)
         {
-            <option value="@option.Value" disabled="@option.Disabled">@option.Label</option>
+            <option value="@option.Value"
+                    selected="@(string.Equals(option.Value, Value, StringComparison.Ordinal))"
+                    disabled="@option.Disabled">@option.Label</option>
         }
     </select>
 </div>

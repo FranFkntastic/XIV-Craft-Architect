@@ -52,7 +52,8 @@ public enum MarketEvidenceReconciliationReason
     ScopeChanged,
     ScopeIncomplete,
     FreshnessUnverifiable,
-    RecommendationExpired
+    RecommendationExpired,
+    RecentlyReconciled
 }
 
 public enum MarketEvidenceOrigin

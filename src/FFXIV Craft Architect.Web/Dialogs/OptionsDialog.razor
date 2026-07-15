@@ -19,10 +19,33 @@
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
-<MudDialog>
+<MudDialog Class="options-dialog" Style="width: min(800px, calc(100vw - 32px)); max-width: 800px;">
     <DialogContent>
-        <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-4" @bind-ActivePanelIndex="_activePanelIndex">
-            <MudTabPanel Text="General">
+        <div class="options-shell">
+            <div class="options-tab-list" role="tablist" aria-label="Options sections">
+                @for (var index = 0; index < OptionsTabs.Length; index++)
+                {
+                    var tabIndex = index;
+                    <button type="button"
+                            @ref="_tabElements[tabIndex]"
+                            id="@GetTabId(tabIndex)"
+                            class="options-tab @(tabIndex == _activePanelIndex ? "is-active" : null)"
+                            role="tab"
+                            aria-selected="@(tabIndex == _activePanelIndex ? "true" : "false")"
+                            aria-controls="@GetPanelId(tabIndex)"
+                            tabindex="@(tabIndex == _activePanelIndex ? 0 : -1)"
+                            @onclick="() => SelectTab(tabIndex)"
+                            @onkeydown="args => HandleTabKeyDown(args, tabIndex)">
+                        @OptionsTabs[tabIndex]
+                    </button>
+                }
+            </div>
+            <div class="options-tab-panel"
+                 id="@GetPanelId(_activePanelIndex)"
+                 role="tabpanel"
+                 aria-labelledby="@GetTabId(_activePanelIndex)">
+            @if (_activePanelIndex == 0)
+            {
                 <MudSwitch @bind-Value="_autoSaveEnabled" 
                            Label="Auto-save plans" 
                            Color="Color.Primary"
@@ -30,68 +53,35 @@
                 <MudText Typo="Typo.caption" Color="Color.Secondary">
                     Automatically save your work every 30 seconds
                 </MudText>
-            </MudTabPanel>
+            }
             
-            <MudTabPanel Text="Market">
+            else if (_activePanelIndex == 1)
+            {
                 <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
                     Configure your default market settings for price lookups.
                 </MudText>
                 
                 <!-- Region Selection -->
-                <MudSelect @bind-Value="_selectedRegion" 
-                           Label="Region"
-                           Variant="Variant.Outlined"
-                           Class="my-3"
-                           AdornmentIcon="@Icons.Material.Filled.Language">
-                    <MudSelectItem Value="@("North America")">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" />
-                            North America
-                        </div>
-                    </MudSelectItem>
-                    <MudSelectItem Value="@("Europe")">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" />
-                            Europe
-                        </div>
-                    </MudSelectItem>
-                    <MudSelectItem Value="@("Japan")">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" />
-                            Japan
-                        </div>
-                    </MudSelectItem>
-                    <MudSelectItem Value="@("Oceania")">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" />
-                            Oceania
-                        </div>
-                    </MudSelectItem>
-                </MudSelect>
+                <CompactSelectField Id="options-region"
+                                    Label="Region"
+                                    @bind-Value="_selectedRegion"
+                                    Options="RegionOptions"
+                                    Class="options-select my-3" />
                 
                 <!-- Data Center Selection -->
-                <MudSelect @bind-Value="_defaultDataCenter" 
-                           Label="Default Data Center"
-                           Variant="Variant.Outlined"
-                           Class="my-3"
-                           AdornmentIcon="@Icons.Material.Filled.DataUsage">
-                    @foreach (var dc in GetAvailableDataCenters())
-                    {
-                        <MudSelectItem Value="@dc">@dc</MudSelectItem>
-                    }
-                </MudSelect>
+                <CompactSelectField Id="options-data-center"
+                                    Label="Default data center"
+                                    @bind-Value="_defaultDataCenter"
+                                    Options="GetAvailableDataCenters().Select(ToSelectOption).ToList()"
+                                    Class="options-select my-3" />
                 
                 <MudDivider Class="my-4" />
 
-                <MudSelect T="MarketFetchScope"
-                           @bind-Value="_defaultMarketFetchScope"
-                           Label="Default Search Scope"
-                           Variant="Variant.Outlined"
-                           Class="my-3"
-                           AdornmentIcon="@Icons.Material.Filled.TravelExplore">
-                    <MudSelectItem Value="@MarketFetchScope.SelectedDataCenter">Selected data center</MudSelectItem>
-                    <MudSelectItem Value="@MarketFetchScope.EntireRegion">Entire region</MudSelectItem>
-                </MudSelect>
+                <CompactSelectField Id="options-market-scope"
+                                    Label="Default search scope"
+                                    @bind-Value="DefaultMarketFetchScopeValue"
+                                    Options="MarketFetchScopeOptions"
+                                    Class="options-select my-3" />
                 <MudText Typo="Typo.caption" Color="Color.Secondary">
                     Used when building plans and as the startup Market Analysis scope.
                 </MudText>
@@ -114,15 +104,11 @@
                     Counts leaving @_defaultDataCenter as a transfer when comparing region-wide routes. It doesn't require a purchase there.
                 </MudText>
 
-                <MudSelect T="MarketTravelPriority"
-                           @bind-Value="_procurementTravelPriority"
-                           Label="Route travel priority"
-                           Variant="Variant.Outlined"
-                           Dense="true"
-                           Class="mt-4">
-                    <MudSelectItem Value="@MarketTravelPriority.DataCenterTransfersFirst">Avoid data-center transfers first</MudSelectItem>
-                    <MudSelectItem Value="@MarketTravelPriority.WorldVisitsFirst">Avoid total world visits first</MudSelectItem>
-                </MudSelect>
+                <CompactSelectField Id="options-travel-priority"
+                                    Label="Route travel priority"
+                                    @bind-Value="ProcurementTravelPriorityValue"
+                                    Options="TravelPriorityOptions"
+                                    Class="options-select mt-4" />
                 <MudText Typo="Typo.caption" Color="Color.Secondary">
                     Applied after the selected gil ceiling. It decides whether CA removes transfers or individual world visits first.
                 </MudText>
@@ -130,9 +116,10 @@
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-4">
                     These settings determine which market board prices are shown by default.
                 </MudText>
-            </MudTabPanel>
+            }
 
-            <MudTabPanel Text="Integrations">
+            else if (_activePanelIndex == 2)
+            {
                 <MudPaper Variant="Variant.Outlined" Class="pa-4">
                     <div class="d-flex align-center justify-space-between gap-3 mb-1">
                         <div>
@@ -161,6 +148,7 @@
                     @if (_marketMafiosoEnabled)
                     {
                     <MudTextField @bind-Value="_marketMafiosoApiUrl"
+                                  id="market-mafioso-api-url"
                                   Label="Workshop Host API URL"
                                   Placeholder="https://host.example/marketmafioso/api/"
                                   HelperText="Use the API root ending in /api/. If the hosts differ, allow this CA origin in the receiver."
@@ -170,6 +158,7 @@
                                   Disabled="_marketMafiosoConnectionIsBusy"
                                   Class="mt-4" />
                     <MudTextField @bind-Value="_marketMafiosoApiKey"
+                                  id="market-mafioso-access-key"
                                   Label="Craft Architect access key"
                                   HelperText="Generate a Craft Architect key in the Workshop Host key manager. It is stored only in this browser profile and can be revoked independently."
                                   Variant="Variant.Outlined"
@@ -199,6 +188,7 @@
                     <MudGrid Spacing="2" Class="mt-2">
                         <MudItem xs="12" sm="7">
                             <MudTextField @bind-Value="_marketMafiosoTargetCharacter"
+                                          id="market-mafioso-target-character"
                                           Label="Claiming character"
                                           Placeholder="Eriana Ning"
                                           Variant="Variant.Outlined"
@@ -207,6 +197,7 @@
                         </MudItem>
                         <MudItem xs="12" sm="5">
                             <MudTextField @bind-Value="_marketMafiosoTargetWorld"
+                                          id="market-mafioso-target-world"
                                           Label="Home world"
                                           Placeholder="Siren"
                                           Variant="Variant.Outlined"
@@ -265,9 +256,10 @@
                     }
                     }
                 </MudPaper>
-            </MudTabPanel>
-            
-            <MudTabPanel Text="Company">
+            }
+
+            else if (_activePanelIndex == 3)
+            {
                 @if (!string.IsNullOrWhiteSpace(_companyLoadError))
                 {
                     <MudAlert Severity="Severity.Error" Dense="true" Class="mb-4">
@@ -291,12 +283,14 @@
                     </MudText>
 
                     <MudTextField @bind-Value="_companyName"
+                                  id="company-name"
                                   Label="Company name"
                                   Variant="Variant.Outlined"
                                   Margin="Margin.Dense"
                                   Immediate="true"
                                   Class="my-2" />
                     <MudTextField @bind-Value="_companyDescription"
+                                  id="company-description"
                                   Label="Description"
                                   Variant="Variant.Outlined"
                                   Margin="Margin.Dense"
@@ -305,28 +299,28 @@
 
                     <MudDivider Class="my-4" />
 
-                    <MudSelect T="TradePaymentContractMode"
-                               @bind-Value="_companyPaymentContract"
-                               Label="Default payment contract"
-                               Variant="Variant.Outlined"
-                               Margin="Margin.Dense"
-                               Class="my-2">
-                        <MudSelectItem Value="@TradePaymentContractMode.LegacyCommission">Legacy commission</MudSelectItem>
-                        <MudSelectItem Value="@TradePaymentContractMode.LaborStandard">Labor standard</MudSelectItem>
-                    </MudSelect>
+                    <CompactSelectField Id="options-payment-contract"
+                                        Label="Default payment contract"
+                                        @bind-Value="CompanyPaymentContractValue"
+                                        Options="PaymentContractOptions"
+                                        Class="options-select my-2" />
                     <MudNumericField T="decimal"
+                                     id="legacy-material-commission-percent"
                                      @bind-Value="_companyLegacyCommissionPercent"
                                      Label="Legacy material commission percent"
                                      Variant="Variant.Outlined"
                                      Margin="Margin.Dense"
+                                     HideSpinButtons="true"
                                      Min="0m"
                                      Max="100m"
                                      Class="my-2" />
                     <MudNumericField T="decimal"
+                                     id="labor-material-value-bonus-percent"
                                      @bind-Value="_companyLaborMaterialBonusPercent"
                                      Label="Labor material value bonus percent"
                                      Variant="Variant.Outlined"
                                      Margin="Margin.Dense"
+                                     HideSpinButtons="true"
                                      Min="0m"
                                      Max="100m"
                                      Class="my-2" />
@@ -376,12 +370,14 @@
                     @if (_useCustomLaborBenchmark)
                     {
                         <MudTextField @bind-Value="_laborStandardName"
+                                      id="labor-standard-name"
                                       Label="Benchmark name"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
                                       Class="my-2" />
                         <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end;">
                             <MudTextField @bind-Value="_laborBenchmarkItemSearchQuery"
+                                          id="labor-benchmark-item-search"
                                           Label="Find benchmark item"
                                           Variant="Variant.Outlined"
                                           Margin="Margin.Dense" />
@@ -426,29 +422,37 @@
                         }
                         <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
                             <MudTextField @bind-Value="_laborBenchmarkItemName"
+                                          id="labor-benchmark-item-name"
                                           Label="Selected benchmark item"
                                           Variant="Variant.Outlined"
                                           Margin="Margin.Dense"
                                           ReadOnly="true" />
                             <MudNumericField T="int"
+                                             id="labor-benchmark-quantity"
                                              @bind-Value="_laborBenchmarkQuantity"
                                              Label="Benchmark quantity"
                                              Variant="Variant.Outlined"
                                              Margin="Margin.Dense"
+                                             HideSpinButtons="true"
                                              Min="1" />
                             <MudNumericField T="int"
+                                             id="labor-benchmark-synths"
                                              @bind-Value="_laborBenchmarkSynthCount"
                                              Label="Benchmark synths"
                                              Variant="Variant.Outlined"
                                              Margin="Margin.Dense"
+                                             HideSpinButtons="true"
                                              Min="1" />
                             <MudNumericField T="decimal"
+                                             id="labor-benchmark-payout"
                                              @bind-Value="_laborBenchmarkPayout"
                                              Label="Benchmark payout"
                                              Variant="Variant.Outlined"
                                              Margin="Margin.Dense"
+                                             HideSpinButtons="true"
                                              Min="0m" />
                             <MudTextField Value="@FormatGilPerSynth()"
+                                          id="labor-benchmark-derived-rate"
                                           Label="Derived rate"
                                           Variant="Variant.Outlined"
                                           Margin="Margin.Dense"
@@ -544,9 +548,10 @@
                         <MudProgressLinear Indeterminate="true" Class="mt-4" />
                     }
                 }
-            </MudTabPanel>
+            }
 
-            <MudTabPanel Text="Hosting">
+            else if (_activePanelIndex == 4)
+            {
                 <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
                     Connect this browser profile to a private Craft Architect profile host.
                 </MudText>
@@ -554,6 +559,7 @@
                 <MudGrid Spacing="2">
                     <MudItem xs="12" md="7">
                         <MudTextField @bind-Value="_profileHostUrl"
+                                      id="profile-host-url"
                                       Label="Host URL"
                                       Placeholder="https://craft.example.com"
                                       Variant="Variant.Outlined"
@@ -563,6 +569,7 @@
                     </MudItem>
                     <MudItem xs="12" md="5">
                         <MudTextField @bind-Value="_profileHostAccessKey"
+                                      id="profile-host-access-key"
                                       Label="Access key"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
@@ -690,11 +697,12 @@
                         </tbody>
                     </MudSimpleTable>
                 }
-            </MudTabPanel>
+            }
 
-            <MudTabPanel Text="Storage">
+            else if (_activePanelIndex == 5)
+            {
                 <MudText Typo="Typo.body2" Class="mb-4">
-                    Manage your saved plans and application data.
+                    Manage the named plans stored in this browser.
                 </MudText>
                 
                 <MudButton Color="Color.Error" 
@@ -712,9 +720,10 @@
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
                     This will permanently delete all your saved plans. This action cannot be undone.
                 </MudText>
-            </MudTabPanel>
-            
-            <MudTabPanel Text="About">
+            }
+
+            else
+            {
                 <div class="d-flex flex-column align-center py-4" style="position: relative; min-height: 180px;">
                     <MudText Typo="Typo.h5" Class="mb-2">FFXIV Craft Architect</MudText>
                     <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
@@ -756,8 +765,9 @@
                                    aria-label="Toggle Developer Mode"
                                    Style="position: absolute; bottom: 8px; left: 8px; opacity: 0.35;" />
                 </div>
-            </MudTabPanel>
-        </MudTabs>
+            }
+            </div>
+        </div>
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
@@ -769,7 +779,61 @@
     [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
     [Parameter] public int InitialPanelIndex { get; set; }
 
+    private static readonly string[] OptionsTabs =
+        ["General", "Market", "Integrations", "Company", "Hosting", "Storage", "About"];
+    private static readonly IReadOnlyList<CompactSelectOption> RegionOptions =
+    [
+        new("North America", "North America"),
+        new("Europe", "Europe"),
+        new("Japan", "Japan"),
+        new("Oceania", "Oceania")
+    ];
+    private static readonly IReadOnlyList<CompactSelectOption> MarketFetchScopeOptions =
+    [
+        new(nameof(MarketFetchScope.SelectedDataCenter), "Selected data center"),
+        new(nameof(MarketFetchScope.EntireRegion), "Entire region")
+    ];
+    private static readonly IReadOnlyList<CompactSelectOption> TravelPriorityOptions =
+    [
+        new(nameof(MarketTravelPriority.DataCenterTransfersFirst), "Avoid data-center transfers first"),
+        new(nameof(MarketTravelPriority.WorldVisitsFirst), "Avoid total world visits first")
+    ];
+    private static readonly IReadOnlyList<CompactSelectOption> PaymentContractOptions =
+    [
+        new(nameof(TradePaymentContractMode.LegacyCommission), "Legacy commission"),
+        new(nameof(TradePaymentContractMode.LaborStandard), "Labor standard")
+    ];
+    private readonly ElementReference[] _tabElements = new ElementReference[OptionsTabs.Length];
     private int _activePanelIndex;
+
+    private static string GetTabId(int index) => $"options-tab-{index}";
+    private static string GetPanelId(int index) => $"options-panel-{index}";
+
+    private void SelectTab(int index)
+    {
+        _activePanelIndex = Math.Clamp(index, 0, OptionsTabs.Length - 1);
+    }
+
+    private async Task HandleTabKeyDown(KeyboardEventArgs args, int currentIndex)
+    {
+        var nextIndex = args.Key switch
+        {
+            "ArrowRight" => (currentIndex + 1) % OptionsTabs.Length,
+            "ArrowLeft" => (currentIndex - 1 + OptionsTabs.Length) % OptionsTabs.Length,
+            "Home" => 0,
+            "End" => OptionsTabs.Length - 1,
+            _ => currentIndex
+        };
+
+        if (nextIndex == currentIndex)
+        {
+            return;
+        }
+
+        SelectTab(nextIndex);
+        await InvokeAsync(StateHasChanged);
+        await _tabElements[nextIndex].FocusAsync();
+    }
     
     private bool _autoSaveEnabled = true;
     private string _defaultDataCenter = "Aether";
@@ -778,6 +842,44 @@
     private bool _procurementEnableSplitWorldPurchases = true;
     private bool _procurementStartFromHomeDataCenter;
     private MarketTravelPriority _procurementTravelPriority = MarketTravelPriority.DataCenterTransfersFirst;
+
+    private string DefaultMarketFetchScopeValue
+    {
+        get => _defaultMarketFetchScope.ToString();
+        set
+        {
+            if (Enum.TryParse<MarketFetchScope>(value, out var parsed))
+            {
+                _defaultMarketFetchScope = parsed;
+            }
+        }
+    }
+
+    private string ProcurementTravelPriorityValue
+    {
+        get => _procurementTravelPriority.ToString();
+        set
+        {
+            if (Enum.TryParse<MarketTravelPriority>(value, out var parsed))
+            {
+                _procurementTravelPriority = parsed;
+            }
+        }
+    }
+
+    private string CompanyPaymentContractValue
+    {
+        get => _companyPaymentContract.ToString();
+        set
+        {
+            if (Enum.TryParse<TradePaymentContractMode>(value, out var parsed))
+            {
+                _companyPaymentContract = parsed;
+            }
+        }
+    }
+
+    private static CompactSelectOption ToSelectOption(string value) => new(value, value);
     private string _marketMafiosoApiUrl = string.Empty;
     private string _marketMafiosoApiKey = string.Empty;
     private string _marketMafiosoTargetCharacter = string.Empty;
@@ -883,8 +985,8 @@
                 ? "Workshop Host"
                 : _marketMafiosoConnectionTest.Service;
             _marketMafiosoConnectionStatus = _marketMafiosoConnectionTest.AcquisitionQueueAvailable
-                ? $"Connected to {service}. Market acquisition queue v1 is ready."
-                : $"Connected to {service}, but acquisition.queue v1 is not available on this instance.";
+                ? $"Connected to {service}. Market acquisition handoff is ready."
+                : $"Connected to {service}, but this instance does not support market acquisition handoff.";
         }
         catch (Exception ex)
         {

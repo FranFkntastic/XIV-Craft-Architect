@@ -1,13 +1,21 @@
 .pp-controls-column {
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    padding: 20px;
+    gap: 10px;
+    padding: 16px;
     border-right: 1px solid #353b40;
-    overflow-y: auto;
-    min-width: 390px;
-    max-width: 390px;
+    overflow: hidden;
+    min-width: 360px;
+    max-width: 360px;
     background: #1b1e21;
+}
+
+.pp-settings {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding-right: 4px;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
 }
 
 .pp-page-title {
@@ -34,7 +42,7 @@
 
 .pp-setting-grid {
     display: grid;
-    gap: 12px;
+    gap: 9px;
 }
 
 .pp-field-block {
@@ -117,6 +125,7 @@
 }
 
 .pp-primary-action {
+    flex: 0 0 auto;
     min-height: 42px;
     font-weight: 700;
 }
@@ -127,8 +136,15 @@
 
 .pp-secondary-actions {
     display: grid;
-    justify-items: start;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 2px;
+}
+
+.pp-secondary-actions ::deep .mud-button-root {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 3px;
+    font-size: .67rem;
 }
 
 @media (max-width: 1100px) {
@@ -140,6 +156,10 @@
         border-bottom: 1px solid #353b40;
     }
 
+    .pp-settings {
+        overflow: visible;
+    }
+
     .pp-setting-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
         column-gap: 24px;
@@ -149,9 +169,6 @@
         width: min(320px, 100%);
     }
 
-    .pp-secondary-actions {
-        grid-template-columns: repeat(3, auto);
-    }
 }
 
 @media (max-width: 680px) {

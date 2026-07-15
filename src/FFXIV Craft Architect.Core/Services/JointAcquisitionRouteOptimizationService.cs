@@ -9,7 +9,6 @@ namespace FFXIV_Craft_Architect.Core.Services;
 /// </summary>
 public sealed class JointAcquisitionRouteOptimizationService
 {
-    private const int MaxAcquisitionFrontierPlans = 4_096;
     private readonly MarketShoppingService _marketShoppingService;
 
     public JointAcquisitionRouteOptimizationService(MarketShoppingService marketShoppingService)
@@ -41,10 +40,12 @@ public sealed class JointAcquisitionRouteOptimizationService
                 .Select(listing => listing.PricePerUnit)
                 .DefaultIfEmpty(long.MaxValue)
                 .Min());
-        var variants = BuildAcquisitionFrontier(plan, lowerBoundUnitCosts, ct);
+        var frontierSearch = AcquisitionVariantFrontierBuilder.Build(plan, lowerBoundUnitCosts, ct);
+        var variants = frontierSearch.Variants;
         progress?.Report($"Evaluating {variants.Count:N0} non-dominated acquisition plans...");
         var cheapestConfig = CopyConfig(config, travelTolerance: 11);
         var evaluated = new List<EvaluatedVariant>(variants.Count);
+        var routeSession = new ProcurementRouteOptimizationSession();
 
         for (var index = 0; index < variants.Count; index++)
         {
@@ -61,7 +62,7 @@ public sealed class JointAcquisitionRouteOptimizationService
                 cheapestConfig,
                 includeSplitPurchases,
                 executionOptions,
-                progress: null,
+                routeSession,
                 ct);
             if (variant.MarketDemand.Count > 0 && route.Decision == null)
             {
@@ -107,7 +108,7 @@ public sealed class JointAcquisitionRouteOptimizationService
                 config,
                 includeSplitPurchases,
                 executionOptions,
-                progress: null,
+                routeSession,
                 ct,
                 marketBudget);
             if (candidate.Variant.MarketDemand.Count > 0 && route.Decision == null)
@@ -161,7 +162,8 @@ public sealed class JointAcquisitionRouteOptimizationService
             selected.TotalGilCost,
             selected.Variant.FixedGilCost,
             cheapest.Route.Decision,
-            representativeRoutes);
+            representativeRoutes,
+            frontierSearch.WasTruncated);
 
         return new JointAcquisitionRouteOptimizationResult(
             optimizedPlan,
@@ -169,7 +171,8 @@ public sealed class JointAcquisitionRouteOptimizationService
             routeDecision,
             activeItems,
             variants.Count,
-            evaluated.Count);
+            evaluated.Count,
+            frontierSearch.WasTruncated);
     }
 
     private Task<ProcurementRouteOptimizationResult> OptimizeRouteAsync(
@@ -177,276 +180,18 @@ public sealed class JointAcquisitionRouteOptimizationService
         MarketAnalysisConfig config,
         bool includeSplitPurchases,
         MarketAnalysisExecutionOptions? executionOptions,
-        IProgress<string>? progress,
+        ProcurementRouteOptimizationSession session,
         CancellationToken ct,
         long? absoluteMaximumGilCost = null)
     {
-        return _marketShoppingService.OptimizeProcurementRouteWithDecisionAsync(
+        return _marketShoppingService.OptimizeProcurementRouteInSessionAsync(
             plans,
             config,
             includeSplitPurchases,
-            executionOptions,
-            progress,
+            executionOptions ?? MarketAnalysisExecutionOptions.Interactive,
+            session,
             ct,
             absoluteMaximumGilCost);
-    }
-
-    private static IReadOnlyList<AcquisitionVariant> BuildAcquisitionFrontier(
-        CraftingPlan plan,
-        IReadOnlyDictionary<int, long> lowerBoundUnitCosts,
-        CancellationToken ct)
-    {
-        var combined = new List<AcquisitionVariant> { AcquisitionVariant.Empty };
-        foreach (var root in plan.RootItems)
-        {
-            ct.ThrowIfCancellationRequested();
-            combined = Combine(combined, BuildNodeVariants(root, lowerBoundUnitCosts, ct), lowerBoundUnitCosts, ct);
-        }
-
-        var current = BuildCurrentPlanVariant(plan);
-        combined.Add(current);
-        var frontier = Prune(combined, lowerBoundUnitCosts);
-        if (frontier.All(candidate => !string.Equals(
-                candidate.EconomicKey,
-                current.EconomicKey,
-                StringComparison.Ordinal)))
-        {
-            frontier.Add(current);
-        }
-
-        return frontier;
-    }
-
-    private static List<AcquisitionVariant> BuildNodeVariants(
-        PlanNode node,
-        IReadOnlyDictionary<int, long> lowerBoundUnitCosts,
-        CancellationToken ct)
-    {
-        var variants = new List<AcquisitionVariant>();
-        foreach (var source in GetAllowedSources(node))
-        {
-            ct.ThrowIfCancellationRequested();
-            switch (source)
-            {
-                case AcquisitionSource.Craft:
-                    {
-                        var crafted = new List<AcquisitionVariant> { AcquisitionVariant.Empty };
-                        foreach (var child in node.Children)
-                        {
-                            crafted = Combine(
-                                crafted,
-                                BuildNodeVariants(child, lowerBoundUnitCosts, ct),
-                                lowerBoundUnitCosts,
-                                ct);
-                        }
-
-                        variants.AddRange(crafted.Select(value => value.WithDecision(node.NodeId, source)));
-                        break;
-                    }
-                case AcquisitionSource.MarketBuyNq:
-                case AcquisitionSource.MarketBuyHq:
-                    variants.Add(AcquisitionVariant.Empty
-                        .WithMarketDemand(node, source == AcquisitionSource.MarketBuyHq)
-                        .WithDecision(node.NodeId, source));
-                    break;
-                case AcquisitionSource.VendorBuy:
-                    variants.Add(AcquisitionVariant.Empty
-                        .WithFixedCost(GetVendorCost(node))
-                        .WithDecision(node.NodeId, source));
-                    break;
-                case AcquisitionSource.VendorSpecialCurrency:
-                case AcquisitionSource.UnknownSource:
-                    variants.Add(AcquisitionVariant.Empty.WithDecision(node.NodeId, source));
-                    break;
-            }
-        }
-
-        return Prune(variants, lowerBoundUnitCosts);
-    }
-
-    private static IReadOnlyList<AcquisitionSource> GetAllowedSources(PlanNode node)
-    {
-        if (node.SourceReason == AcquisitionSourceReason.UserSelected)
-        {
-            return [node.Source];
-        }
-
-        var sources = new List<AcquisitionSource>();
-        if (node.CanCraft && node.Children.Count > 0)
-        {
-            sources.Add(AcquisitionSource.Craft);
-        }
-
-        if (node.CanBuyFromMarket)
-        {
-            if (!node.MustBeHq)
-            {
-                sources.Add(AcquisitionSource.MarketBuyNq);
-            }
-
-            if (node.MustBeHq || node.CanBeHq)
-            {
-                sources.Add(AcquisitionSource.MarketBuyHq);
-            }
-        }
-
-        if (node.CanBuyFromVendor && !node.MustBeHq && GetVendorCost(node) > 0)
-        {
-            sources.Add(AcquisitionSource.VendorBuy);
-        }
-
-        if (sources.Count == 0)
-        {
-            sources.Add(node.Source is AcquisitionSource.UnknownSource or AcquisitionSource.VendorSpecialCurrency
-                ? node.Source
-                : AcquisitionSource.UnknownSource);
-        }
-
-        return sources;
-    }
-
-    private static long GetVendorCost(PlanNode node)
-    {
-        var unitPrice = node.SelectedVendor?.Price ?? node.VendorPrice;
-        if (unitPrice <= 0 || node.Quantity <= 0)
-        {
-            return 0;
-        }
-
-        return ToLong(decimal.Ceiling(unitPrice * node.Quantity));
-    }
-
-    private static List<AcquisitionVariant> Combine(
-        IReadOnlyList<AcquisitionVariant> left,
-        IReadOnlyList<AcquisitionVariant> right,
-        IReadOnlyDictionary<int, long> lowerBoundUnitCosts,
-        CancellationToken ct)
-    {
-        var product = (long)left.Count * right.Count;
-        var combined = new List<AcquisitionVariant>((int)Math.Min(product, MaxAcquisitionFrontierPlans * 2L));
-        foreach (var leftValue in left)
-        {
-            foreach (var rightValue in right)
-            {
-                ct.ThrowIfCancellationRequested();
-                combined.Add(leftValue.Combine(rightValue));
-                if (combined.Count >= MaxAcquisitionFrontierPlans * 2)
-                {
-                    combined = Prune(combined, lowerBoundUnitCosts);
-                }
-            }
-        }
-
-        return Prune(combined, lowerBoundUnitCosts);
-    }
-
-    private static List<AcquisitionVariant> Prune(
-        IEnumerable<AcquisitionVariant> source,
-        IReadOnlyDictionary<int, long> lowerBoundUnitCosts)
-    {
-        var distinct = source
-            .GroupBy(value => value.EconomicKey, StringComparer.Ordinal)
-            .Select(group => group.OrderBy(value => value.DecisionKey, StringComparer.Ordinal).First())
-            .ToList();
-
-        if (distinct.Count > MaxAcquisitionFrontierPlans)
-        {
-            var cheapest = distinct
-                .OrderBy(value => EstimateLowerBound(value, lowerBoundUnitCosts))
-                .ThenBy(value => value.DecisionKey, StringComparer.Ordinal)
-                .Take(3_072);
-            var leastComplex = distinct
-                .OrderBy(value => value.MarketDemand.Count)
-                .ThenBy(value => EstimateLowerBound(value, lowerBoundUnitCosts))
-                .ThenBy(value => value.DecisionKey, StringComparer.Ordinal)
-                .Take(512);
-            var smallestDemand = distinct
-                .OrderBy(value => value.MarketDemand.Values.Sum(demand => (long)demand.Quantity))
-                .ThenBy(value => EstimateLowerBound(value, lowerBoundUnitCosts))
-                .ThenBy(value => value.DecisionKey, StringComparer.Ordinal)
-                .Take(512);
-            distinct = cheapest
-                .Concat(leastComplex)
-                .Concat(smallestDemand)
-                .DistinctBy(value => value.EconomicKey, StringComparer.Ordinal)
-                .Take(MaxAcquisitionFrontierPlans)
-                .ToList();
-        }
-
-        if (distinct.Count > 1_024)
-        {
-            return distinct.OrderBy(value => value.DecisionKey, StringComparer.Ordinal).ToList();
-        }
-
-        return distinct
-            .Where(candidate => !distinct.Any(other =>
-                !ReferenceEquals(candidate, other) && Dominates(other, candidate)))
-            .OrderBy(value => value.DecisionKey, StringComparer.Ordinal)
-            .ToList();
-    }
-
-    private static long EstimateLowerBound(
-        AcquisitionVariant variant,
-        IReadOnlyDictionary<int, long> lowerBoundUnitCosts)
-    {
-        var total = variant.FixedGilCost;
-        foreach (var (itemId, demand) in variant.MarketDemand)
-        {
-            var unitCost = lowerBoundUnitCosts.GetValueOrDefault(itemId, long.MaxValue);
-            total = Add(total, SaturatingMultiply(demand.Quantity, unitCost));
-        }
-
-        return total;
-    }
-
-    private static AcquisitionVariant BuildCurrentPlanVariant(CraftingPlan plan)
-    {
-        var combined = AcquisitionVariant.Empty;
-        foreach (var root in plan.RootItems)
-        {
-            combined = combined.Combine(BuildCurrentNodeVariant(root));
-        }
-
-        return combined;
-    }
-
-    private static AcquisitionVariant BuildCurrentNodeVariant(PlanNode node)
-    {
-        var variant = AcquisitionVariant.Empty.WithDecision(node.NodeId, node.Source);
-        return node.Source switch
-        {
-            AcquisitionSource.Craft => node.Children.Aggregate(
-                variant,
-                (current, child) => current.Combine(BuildCurrentNodeVariant(child))),
-            AcquisitionSource.MarketBuyNq => variant.WithMarketDemand(node, hq: false),
-            AcquisitionSource.MarketBuyHq => variant.WithMarketDemand(node, hq: true),
-            AcquisitionSource.VendorBuy => variant.WithFixedCost(GetVendorCost(node)),
-            _ => variant
-        };
-    }
-
-    private static bool Dominates(AcquisitionVariant left, AcquisitionVariant right)
-    {
-        if (left.FixedGilCost > right.FixedGilCost)
-        {
-            return false;
-        }
-
-        var allItems = left.MarketDemand.Keys.Concat(right.MarketDemand.Keys).Distinct();
-        var strictlyBetter = left.FixedGilCost < right.FixedGilCost;
-        foreach (var itemId in allItems)
-        {
-            var leftDemand = left.MarketDemand.GetValueOrDefault(itemId);
-            var rightDemand = right.MarketDemand.GetValueOrDefault(itemId);
-            if (leftDemand.Quantity > rightDemand.Quantity || leftDemand.HqQuantity > rightDemand.HqQuantity)
-            {
-                return false;
-            }
-
-            strictlyBetter |= leftDemand.Quantity < rightDemand.Quantity || leftDemand.HqQuantity < rightDemand.HqQuantity;
-        }
-
-        return strictlyBetter;
     }
 
     private static List<DetailedShoppingPlan>? BuildDemandPlans(
@@ -475,9 +220,8 @@ public sealed class JointAcquisitionRouteOptimizationService
 
     private static DetailedShoppingPlan AdjustEvidence(DetailedShoppingPlan source, MarketDemand demand)
     {
-        var hqOnly = demand.HqQuantity > 0;
         var worlds = source.WorldOptions
-            .Select(world => AdjustWorld(world, demand.Quantity, hqOnly))
+            .Select(world => AdjustWorld(world, demand.Quantity, demand.HqQuantity))
             .Where(world => world.TotalQuantityPurchased > 0)
             .ToList();
 
@@ -487,6 +231,7 @@ public sealed class JointAcquisitionRouteOptimizationService
             Name = source.Name,
             IconId = source.IconId,
             QuantityNeeded = demand.Quantity,
+            HqQuantityNeeded = demand.HqQuantity,
             DCAveragePrice = source.DCAveragePrice,
             HQAveragePrice = source.HQAveragePrice,
             WorldOptions = worlds,
@@ -496,10 +241,12 @@ public sealed class JointAcquisitionRouteOptimizationService
         };
     }
 
-    private static WorldShoppingSummary AdjustWorld(WorldShoppingSummary source, int quantityNeeded, bool hqOnly)
+    private static WorldShoppingSummary AdjustWorld(
+        WorldShoppingSummary source,
+        int quantityNeeded,
+        int hqQuantityNeeded)
     {
         var listings = source.Listings
-            .Where(listing => !hqOnly || listing.IsHq)
             .Select(CloneListing)
             .OrderBy(listing => listing.PricePerUnit)
             .ThenBy(listing => listing.Quantity)
@@ -509,8 +256,11 @@ public sealed class JointAcquisitionRouteOptimizationService
                 return listing;
             })
             .ToList();
-        var selected = SelectListings(listings, quantityNeeded);
+        var selected = SelectListings(listings, quantityNeeded, hqQuantityNeeded);
         var totalAvailable = listings.Sum(listing => listing.Quantity);
+        var hqAvailable = listings.Where(listing => listing.IsHq).Sum(listing => listing.Quantity);
+        var qualityShortfall = Math.Max(0, hqQuantityNeeded - hqAvailable);
+        var usableQuantity = Math.Max(0, totalAvailable - qualityShortfall);
         var totalCost = selected.Sum(listing => SaturatingMultiply(listing.Quantity, listing.PricePerUnit));
         var purchased = selected.Sum(listing => listing.Quantity);
 
@@ -525,7 +275,7 @@ public sealed class JointAcquisitionRouteOptimizationService
             Listings = listings,
             ExcludedListings = source.ExcludedListings.Select(CloneListing).ToList(),
             IsFullyUnderAverage = source.IsFullyUnderAverage,
-            TotalQuantityPurchased = totalAvailable,
+            TotalQuantityPurchased = usableQuantity,
             ExcessQuantity = Math.Max(0, purchased - quantityNeeded),
             ModePricePerUnit = source.ModePricePerUnit,
             ValueScore = source.ValueScore,
@@ -538,8 +288,8 @@ public sealed class JointAcquisitionRouteOptimizationService
             LensScoreBucket = source.LensScoreBucket,
             ProcurementPriorityScore = source.ProcurementPriorityScore,
             VendorName = source.VendorName,
-            HasSufficientStock = totalAvailable >= quantityNeeded,
-            ShortfallQuantity = Math.Max(0, quantityNeeded - totalAvailable),
+            HasSufficientStock = usableQuantity >= quantityNeeded,
+            ShortfallQuantity = Math.Max(0, quantityNeeded - usableQuantity),
             BestSingleListing = listings.FirstOrDefault(),
             Classification = source.Classification,
             IsHomeWorld = source.IsHomeWorld,
@@ -551,17 +301,42 @@ public sealed class JointAcquisitionRouteOptimizationService
 
     private static List<ShoppingListingEntry> SelectListings(
         IReadOnlyList<ShoppingListingEntry> listings,
-        int quantityNeeded)
+        int quantityNeeded,
+        int hqQuantityNeeded)
     {
         var selected = new List<ShoppingListingEntry>();
-        var remaining = quantityNeeded;
-        foreach (var listing in listings)
+        var selectedSources = new HashSet<ShoppingListingEntry>();
+        var purchased = 0;
+        var hqPurchased = 0;
+
+        foreach (var listing in listings.Where(listing => listing.IsHq))
         {
-            if (remaining <= 0)
+            if (hqPurchased >= hqQuantityNeeded)
             {
                 break;
             }
 
+            selectedSources.Add(listing);
+            purchased += listing.Quantity;
+            hqPurchased += listing.Quantity;
+        }
+
+        foreach (var listing in listings)
+        {
+            if (purchased >= quantityNeeded)
+            {
+                break;
+            }
+
+            if (selectedSources.Add(listing))
+            {
+                purchased += listing.Quantity;
+            }
+        }
+
+        var remaining = quantityNeeded;
+        foreach (var listing in selectedSources.OrderBy(listing => listing.PricePerUnit))
+        {
             var clone = CloneListing(listing);
             clone.IsAdditionalOption = false;
             clone.NeededFromStack = Math.Min(remaining, clone.Quantity);
@@ -649,7 +424,8 @@ public sealed class JointAcquisitionRouteOptimizationService
         long selectedTotal,
         long fixedGilCost,
         MarketRouteDecision? cheapestRoute,
-        IReadOnlyList<MarketRouteFrontierOption> representativeRoutes)
+        IReadOnlyList<MarketRouteFrontierOption> representativeRoutes,
+        bool acquisitionSearchWasTruncated)
     {
         return new MarketRouteDecision(
             config.TravelTolerance,
@@ -667,7 +443,8 @@ public sealed class JointAcquisitionRouteOptimizationService
             representativeRoutes,
             route?.ItemDecisions)
         {
-            FixedAcquisitionGilCost = fixedGilCost
+            FixedAcquisitionGilCost = fixedGilCost,
+            AcquisitionSearchWasTruncated = acquisitionSearchWasTruncated
         };
     }
 
@@ -783,7 +560,7 @@ public sealed class JointAcquisitionRouteOptimizationService
 
     private static long ToLong(decimal value) => value >= long.MaxValue ? long.MaxValue : (long)value;
 
-    private readonly record struct MarketDemand(int Quantity, int HqQuantity, string Name, int IconId)
+    internal readonly record struct MarketDemand(int Quantity, int HqQuantity, string Name, int IconId)
     {
         public MarketDemand Add(PlanNode node, bool hq) => new(
             checked(Quantity + node.Quantity),
@@ -792,7 +569,7 @@ public sealed class JointAcquisitionRouteOptimizationService
             IconId == 0 ? node.IconId : IconId);
     }
 
-    private sealed record AcquisitionVariant(
+    internal sealed record AcquisitionVariant(
         IReadOnlyDictionary<int, MarketDemand> MarketDemand,
         long FixedGilCost,
         IReadOnlyDictionary<string, AcquisitionSource> Decisions)
@@ -851,6 +628,10 @@ public sealed class JointAcquisitionRouteOptimizationService
         long TotalGilCost);
 
     private sealed record JointRouteChoice(long GilCost, int WorldStops, int DataCenterTransfers, string Key);
+
+    internal sealed record AcquisitionFrontierBuildResult(
+        IReadOnlyList<AcquisitionVariant> Variants,
+        bool WasTruncated);
 }
 
 public sealed record JointAcquisitionRouteOptimizationResult(
@@ -859,8 +640,9 @@ public sealed record JointAcquisitionRouteOptimizationResult(
     MarketRouteDecision? RouteDecision,
     IReadOnlyList<MaterialAggregate> ActiveProcurementItems,
     int FrontierPlanCount,
-    int FeasiblePlanCount)
+    int FeasiblePlanCount,
+    bool SearchWasTruncated)
 {
     public static JointAcquisitionRouteOptimizationResult NoSolution(CraftingPlan plan) =>
-        new(plan, [], null, [], 0, 0);
+        new(plan, [], null, [], 0, 0, false);
 }

@@ -170,7 +170,7 @@ public class MarketAnalysisGridViewServiceTests
 
         Assert.Equal("~890g / unit", MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
         Assert.Equal("4,402", MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world));
-        Assert.Equal("deep", MarketAnalysisGridViewService.FormatWorldMarketDepthDescriptor(world));
+        Assert.Equal("strong", MarketAnalysisGridViewService.FormatWorldMarketDepthDescriptor(world));
         Assert.Equal("is-optimal", MarketAnalysisGridViewService.GetWorldUnitPriceScoreClass(world));
     }
 
@@ -205,13 +205,13 @@ public class MarketAnalysisGridViewServiceTests
         };
 
         Assert.Equal("200", MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world));
-        Assert.Equal("thin", MarketAnalysisGridViewService.FormatWorldMarketDepthDescriptor(world));
+        Assert.Equal("limited", MarketAnalysisGridViewService.FormatWorldMarketDepthDescriptor(world));
         Assert.Equal("~100g / unit", MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
         Assert.Equal("200/1,000", MarketAnalysisGridViewService.FormatCoverage(world));
         Assert.Equal(MarketCoverageBucket.PartialThin, MarketAnalysisGridViewService.GetDisplayCoverageBucket(world));
         Assert.Equal(MarketScoreBucket.PoorFit, MarketAnalysisGridViewService.GetDisplayScoreBucket(world, MarketAcquisitionLens.BulkValue));
         Assert.Equal("-9%", MarketAnalysisGridViewService.FormatCompetitiveValue(world));
-        Assert.Contains("procurement evidence", MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world));
+        Assert.Contains("best usable listing price", MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world));
     }
 
     [Fact]
@@ -284,8 +284,8 @@ public class MarketAnalysisGridViewServiceTests
         var third = MarketAnalysisGridViewService.GetListingDividersBefore(world, world.Listings[2]);
 
         Assert.Empty(first);
-        Assert.Equal(["Price band +100%", "Above market fallback"], second.Select(divider => divider.Label));
-        Assert.Equal(["Above avg"], third.Select(divider => divider.Label));
+        Assert.Equal(["Price band +100%", "Above best available average"], second.Select(divider => divider.Label));
+        Assert.Equal(["Above market average"], third.Select(divider => divider.Label));
     }
 
     [Fact]

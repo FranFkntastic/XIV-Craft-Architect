@@ -25,7 +25,9 @@
 
                 <div class="pb-search-row">
                     <input class="pb-input"
-                           placeholder="Search item name..."
+                           id="plan-builder-search"
+                           aria-label="Search item name"
+                           placeholder="Search item name"
                            value="@_searchQuery"
                            @oninput="OnSearchInput"
                            @onkeyup="OnSearchKeyUp" />
@@ -52,11 +54,11 @@
                 <div class="pb-panel-header">
                     <div>
                         <MudText Typo="Typo.subtitle1" Class="pb-title">Target Items</MudText>
-                        <MudText Typo="Typo.caption" Class="pb-muted">@_draftItems.Count items in this plan draft.</MudText>
+                        <MudText Typo="Typo.caption" Class="pb-muted">@FormatDraftItemCount()</MudText>
                     </div>
                     <div class="pb-action-row">
-                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Disabled="@(!_selectedTargetIds.Any())" OnClick="() => SetSelectedQuality(true)">HQ</MudButton>
-                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Disabled="@(!_selectedTargetIds.Any())" OnClick="() => SetSelectedQuality(false)">NQ</MudButton>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Disabled="@(!_selectedTargetIds.Any())" OnClick="() => SetSelectedQuality(true)">Selected HQ</MudButton>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Disabled="@(!_selectedTargetIds.Any())" OnClick="() => SetSelectedQuality(false)">Selected NQ</MudButton>
                         <MudButton Variant="Variant.Text" Size="Size.Small" Disabled="@(!_draftItems.Any())" OnClick="() => SetAllQuality(true)">All HQ</MudButton>
                         <MudButton Variant="Variant.Text" Size="Size.Small" Disabled="@(!_draftItems.Any())" OnClick="() => SetAllQuality(false)">All NQ</MudButton>
                     </div>
@@ -67,6 +69,7 @@
                               CssClass="pb-target-table"
                               Items="@_draftItems.OrderBy(item => item.Name).ToList()"
                               Columns="@GetTargetItemColumns()"
+                              FitToContainer="true"
                               GetRowKey="item => item.Id.ToString(CultureInfo.InvariantCulture)"
                               GetRowClass="GetTargetItemRowClass"
                               EmptyContent="RenderTargetEmptyContent" />
@@ -75,8 +78,8 @@
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
-        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!_draftItems.Any())" OnClick="Apply">Apply</MudButton>
-        <MudButton Color="Color.Success" Variant="Variant.Filled" Disabled="@(!_draftItems.Any())" OnClick="ApplyAndBuild">Apply & Build</MudButton>
+        <MudButton Color="Color.Secondary" Variant="Variant.Outlined" Disabled="@(!_draftItems.Any())" OnClick="Apply">Apply</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!_draftItems.Any())" OnClick="ApplyAndBuild">Apply & Build</MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -129,6 +132,7 @@
                     builder.AddAttribute(2, "checked", _selectedSearchIds.Contains(result.Id));
                     builder.AddAttribute(3, "disabled", alreadyAdded);
                     builder.AddAttribute(4, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, args => ToggleSearchSelection(result.Id, args)));
+                    builder.AddAttribute(5, "aria-label", $"Select {result.Object.Name}");
                     builder.CloseElement();
                 }
             },
@@ -163,6 +167,7 @@
                     builder.AddAttribute(5, "value", GetSearchQuantity(result.Id));
                     builder.AddAttribute(6, "disabled", alreadyAdded);
                     builder.AddAttribute(7, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, args => SetSearchQuantity(result.Id, args)));
+                    builder.AddAttribute(8, "aria-label", $"Quantity for {result.Object.Name}");
                     builder.CloseElement();
                 }
             },
@@ -206,6 +211,7 @@
                     builder.AddAttribute(1, "type", "checkbox");
                     builder.AddAttribute(2, "checked", _selectedTargetIds.Contains(item.Id));
                     builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, args => ToggleTargetSelection(item.Id, args)));
+                    builder.AddAttribute(4, "aria-label", $"Select {item.Name}");
                     builder.CloseElement();
                 }
             },
@@ -238,6 +244,7 @@
                     builder.AddAttribute(4, "max", "9999");
                     builder.AddAttribute(5, "value", item.Quantity);
                     builder.AddAttribute(6, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, args => SetQuantity(item, args)));
+                    builder.AddAttribute(7, "aria-label", $"Quantity for {item.Name}");
                     builder.CloseElement();
                 }
             },
@@ -253,7 +260,12 @@
                     builder.AddAttribute(1, "class", $"pb-hq-toggle{(item.MustBeHq ? " is-active" : string.Empty)}");
                     builder.AddAttribute(2, "type", "button");
                     builder.AddAttribute(3, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, () => ToggleQuality(item)));
-                    builder.AddContent(4, "HQ");
+                    builder.AddAttribute(4, "aria-label", item.MustBeHq
+                        ? $"Allow normal quality for {item.Name}"
+                        : $"Require high quality for {item.Name}");
+                    builder.AddAttribute(5, "aria-pressed", item.MustBeHq.ToString().ToLowerInvariant());
+                    builder.AddAttribute(6, "title", item.MustBeHq ? "High quality required" : "Normal quality allowed");
+                    builder.AddContent(7, "HQ");
                     builder.CloseElement();
                 }
             },
@@ -269,8 +281,9 @@
                     builder.AddAttribute(1, "Icon", Icons.Material.Filled.Delete);
                     builder.AddAttribute(2, "Size", Size.Small);
                     builder.AddAttribute(3, "Color", Color.Error);
-                    builder.AddAttribute(4, "Title", "Remove item");
-                    builder.AddAttribute(5, "OnClick", EventCallback.Factory.Create<MouseEventArgs>(this, () => RemoveItem(item)));
+                    builder.AddAttribute(4, "Title", $"Remove {item.Name}");
+                    builder.AddAttribute(5, "AriaLabel", $"Remove {item.Name}");
+                    builder.AddAttribute(6, "OnClick", EventCallback.Factory.Create<MouseEventArgs>(this, () => RemoveItem(item)));
                     builder.CloseComponent();
                 }
             }
@@ -284,6 +297,13 @@
         builder.AddContent(2, "Search for items to populate this list.");
         builder.CloseElement();
     };
+
+    private string FormatDraftItemCount()
+    {
+        return _draftItems.Count == 1
+            ? "1 item in this plan draft."
+            : $"{_draftItems.Count:N0} items in this plan draft.";
+    }
 
     private RenderFragment RenderTargetEmptyContent => builder =>
     {

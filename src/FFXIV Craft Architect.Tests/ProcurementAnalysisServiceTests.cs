@@ -8,6 +8,28 @@ namespace FFXIV_Craft_Architect.Tests;
 public class ProcurementRouteExecutionServiceTests
 {
     [Fact]
+    public void ProcurementRouteConfigFactory_PreservesRequestedTravelPriority()
+    {
+        var request = new ProcurementRouteExecutionRequest
+        {
+            SelectedDataCenter = "Aether",
+            ProcurementConfig = new MarketAnalysisConfig
+            {
+                TravelTolerance = 3,
+                TravelPriority = MarketTravelPriority.WorldVisitsFirst,
+                StartFromHomeDataCenter = true
+            }
+        };
+
+        var result = ProcurementRouteConfigFactory.Create(request);
+
+        Assert.Equal(3, result.TravelTolerance);
+        Assert.Equal(MarketTravelPriority.WorldVisitsFirst, result.TravelPriority);
+        Assert.True(result.StartFromHomeDataCenter);
+        Assert.Equal("Aether", result.HomeDataCenter);
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_WhenActiveEvidenceIsComplete_DoesNotFetchMissingItems()
     {
         var plan = CreatePlan();

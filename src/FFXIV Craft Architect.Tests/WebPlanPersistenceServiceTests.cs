@@ -255,6 +255,28 @@ public class WebPlanPersistenceServiceTests
         Assert.Single(result.ShoppingPlans);
     }
 
+    [Fact]
+    public void PlanSessionLoadService_ApplyPreparedSession_ReusesPreparedResult()
+    {
+        var storedPlan = new StoredPlan
+        {
+            Id = "autosave",
+            Name = "AutoSave",
+            ProjectItems = [new StoredProjectItem { Id = 100, Name = "Root", Quantity = 2 }]
+        };
+        var appState = new AppState();
+        var service = new PlanSessionLoadService(appState, new StubRecipeLayerWorkflowService());
+        var prepared = service.PrepareSession(storedPlan);
+
+        var applied = service.ApplyPreparedSession(prepared, trackStoredPlanIdentity: false);
+
+        Assert.Same(prepared, applied);
+        var restoredItem = Assert.Single(appState.ProjectItems);
+        Assert.Equal(100, restoredItem.Id);
+        Assert.Equal(2, restoredItem.Quantity);
+        Assert.Null(appState.CurrentPlanId);
+    }
+
     private static WebPlanPersistenceService CreateService(RecordingJsRuntime jsRuntime, AppState? appState = null)
     {
         appState ??= new AppState();

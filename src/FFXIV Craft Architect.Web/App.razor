@@ -1,19 +1,26 @@
 <Router AppAssembly="@typeof(App).Assembly">
     <Found Context="routeData">
-        <ErrorBoundary>
+        <ErrorBoundary @ref="_errorBoundary">
             <ChildContent>
                 <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
                 <FocusOnNavigate RouteData="@routeData" Selector="h1" />
             </ChildContent>
             <ErrorContent>
                 <MudContainer MaxWidth="MaxWidth.Medium" Class="pa-4">
-                    <MudAlert Severity="Severity.Error" Class="mb-4">
-                        <MudText Typo="Typo.h5">An error occurred</MudText>
-                        <MudText>@context.Message</MudText>
-                    </MudAlert>
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => StateHasChanged()">
-                        Retry
-                    </MudButton>
+                    <MudPaper Outlined="true" Class="pa-6 mt-4">
+                        <MudText Typo="Typo.h4" Class="mb-2">This screen could not be loaded</MudText>
+                        <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mb-4">
+                            Your saved plans are still on this device. Try the screen again, or return to the Recipe Planner.
+                        </MudText>
+                        <MudStack Row="true" Spacing="2">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="RecoverFromError">
+                                Try Again
+                            </MudButton>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Href="/">
+                                Recipe Planner
+                            </MudButton>
+                        </MudStack>
+                    </MudPaper>
                 </MudContainer>
             </ErrorContent>
         </ErrorBoundary>
@@ -22,10 +29,25 @@
         <PageTitle>Not found</PageTitle>
         <LayoutView Layout="@typeof(MainLayout)">
             <MudContainer MaxWidth="MaxWidth.Medium" Class="pa-4">
-                <MudAlert Severity="Severity.Warning">
-                    Sorry, there's nothing at this address.
-                </MudAlert>
+                <MudPaper Outlined="true" Class="pa-6 mt-4">
+                    <MudText Typo="Typo.h4" Class="mb-2">Page not found</MudText>
+                    <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mb-4">
+                        This address does not match a Craft Architect screen.
+                    </MudText>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Href="/">
+                        Return to Recipe Planner
+                    </MudButton>
+                </MudPaper>
             </MudContainer>
         </LayoutView>
     </NotFound>
 </Router>
+
+@code {
+    private ErrorBoundary? _errorBoundary;
+
+    private void RecoverFromError()
+    {
+        _errorBoundary?.Recover();
+    }
+}

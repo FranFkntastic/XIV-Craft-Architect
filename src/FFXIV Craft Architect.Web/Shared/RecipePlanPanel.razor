@@ -30,7 +30,7 @@
     {
         <div class="mp-empty-state">
             <div class="mp-empty-title">No Plan Built Yet</div>
-            <div class="mp-empty-subtitle">Add items to your project and click "Build Project Plan" to see the recipe tree.</div>
+            <div class="mp-empty-subtitle">Add items to your project, then build the recipe plan to see every required material.</div>
 
             @if (SavedPlans.Any())
             {
@@ -42,14 +42,17 @@
                             <div>
                                 <div class="mp-saved-plan-name">@plan.Name</div>
                                 <div class="mp-saved-plan-meta">
-                                    @plan.DataCenter • @plan.ItemCount items • @plan.SavedAt.ToString("MMM dd, HH:mm")
+                                    @plan.DataCenter • @FormatItemCount(plan.ItemCount) • @plan.SavedAt.ToString("MMM dd, HH:mm")
                                 </div>
                             </div>
                             <div class="mp-saved-actions">
                                 <button @onclick="() => OnLoadPlanRequested.InvokeAsync(plan.Id)" class="mp-load-btn">
                                     Load
                                 </button>
-                                <button @onclick="() => OnDeletePlanRequested.InvokeAsync(plan.Id)" class="mp-delete-btn">
+                                <button @onclick="() => OnDeletePlanRequested.InvokeAsync(plan.Id)"
+                                        aria-label="Delete saved plan @plan.Name"
+                                        title="Delete saved plan"
+                                        class="mp-delete-btn">
                                     ×
                                 </button>
                             </div>
@@ -91,6 +94,8 @@
     [Parameter] public PlanNode? SelectedNode { get; set; }
     [Parameter] public EventCallback<PlanNode> OnNodeSelected { get; set; }
     [Parameter] public EventCallback<PlanNodeHqChangeRequest> OnNodeHqChanged { get; set; }
+
+    private static string FormatItemCount(int count) => $"{count:N0} item{(count == 1 ? string.Empty : "s")}";
 
     private readonly RecipePlanTreeDisplayCache _displayCache = new();
     private IReadOnlyDictionary<string, RecipeNodeDisplayState> _displayStates =

@@ -93,6 +93,7 @@
     [Parameter] public WebTableSortState<TColumnId> SortState { get; set; } = WebTableSortState<TColumnId>.Unsorted;
     [Parameter] public EventCallback<WebTableSortState<TColumnId>> SortChanged { get; set; }
     [Parameter] public bool Resizable { get; set; }
+    [Parameter] public bool FitToContainer { get; set; }
     [Parameter] public int ColumnGapPx { get; set; } = 8;
     [Parameter] public int HorizontalPaddingPx { get; set; } = 14;
     [Parameter] public string? CssClass { get; set; }
@@ -103,7 +104,9 @@
 
     private string ColumnMinWidths => string.Join(",", Columns.Select(column => column.Size.MinWidthPx.ToString(System.Globalization.CultureInfo.InvariantCulture)));
 
-    private string GridTemplate => string.Join(" ", Columns.Select(column => column.Size.ToCssWidth()));
+    private string GridTemplate => FitToContainer
+        ? string.Join(" ", Columns.Select(column => $"minmax({column.Size.MinWidthPx}px, {column.Size.WidthPx}fr)"))
+        : string.Join(" ", Columns.Select(column => column.Size.ToCssWidth()));
 
     private int TableWidthPx => Columns.Sum(column => column.Size.WidthPx) +
         Math.Max(0, Columns.Count - 1) * ColumnGapPx +
@@ -113,7 +116,7 @@
         "; ",
         [
             $"--web-table-grid-template: {GridTemplate}",
-            $"--web-table-grid-width: {TableWidthPx.ToString(System.Globalization.CultureInfo.InvariantCulture)}px",
+            $"--web-table-grid-width: {(FitToContainer ? $"max(100%, {MinimumTableWidthPx}px)" : $"{TableWidthPx}px")}",
             $"--web-table-grid-gap: {ColumnGapPx.ToString(System.Globalization.CultureInfo.InvariantCulture)}px"
         ]);
 
@@ -128,6 +131,10 @@
             }
         }
     }
+
+    private int MinimumTableWidthPx => Columns.Sum(column => column.Size.MinWidthPx) +
+        Math.Max(0, Columns.Count - 1) * ColumnGapPx +
+        HorizontalPaddingPx;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {

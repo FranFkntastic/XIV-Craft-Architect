@@ -371,7 +371,8 @@
             }
 
             // Ensure the status message is properly set to completion
-            operation.Complete($"Analysis complete. {result.AnalyzedCount} items analyzed.");
+            var analyzedItemLabel = result.AnalyzedCount == 1 ? "item" : "items";
+            operation.Complete($"Analysis complete. {result.AnalyzedCount} {analyzedItemLabel} analyzed.");
             if (showCompletionSnackbar)
             {
                 Snackbar.Add("Market analysis complete!", Severity.Success);

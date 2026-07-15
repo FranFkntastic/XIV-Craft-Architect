@@ -29,19 +29,19 @@
         <div class="ae-stat-grid">
             <div class="ae-stat">
                 <span>@rows.Count</span>
-                <small>unique items</small>
+                <small>items in plan</small>
             </div>
             <div class="ae-stat">
                 <span>@marketCandidateCount</span>
-                <small>market candidates</small>
+                <small>items compared</small>
             </div>
             <div class="ae-stat">
                 <span>@activeProcurementCount</span>
-                <small>procurement items</small>
+                <small>items to obtain</small>
             </div>
             <div class="ae-stat">
                 <span>@AppState.ShoppingPlans.Count</span>
-                <small>analyzed</small>
+                <small>with prices</small>
             </div>
         </div>
 
@@ -49,12 +49,12 @@
             <button class="@GetFilterClass(AcquisitionFilter.All)" @onclick="() => SetFilter(AcquisitionFilter.All)">All</button>
             <button class="@GetFilterClass(AcquisitionFilter.Active)" @onclick="() => SetFilter(AcquisitionFilter.Active)">Active</button>
             <button class="@GetFilterClass(AcquisitionFilter.Market)" @onclick="() => SetFilter(AcquisitionFilter.Market)">Market</button>
-            <button class="@GetFilterClass(AcquisitionFilter.Suppressed)" @onclick="() => SetFilter(AcquisitionFilter.Suppressed)">Suppressed</button>
+            <button class="@GetFilterClass(AcquisitionFilter.Suppressed)" @onclick="() => SetFilter(AcquisitionFilter.Suppressed)">Skipped</button>
         </div>
 
         <div class="ae-info">
-            <div class="ae-info-title">Current Model</div>
-            <div>Market Analysis evaluates every purchasable candidate. Procurement jointly chooses automatic make/buy decisions and the route from your travel preference; choices you set manually stay locked. This ledger shows the resulting active and suppressed items.</div>
+            <div class="ae-info-title">How automatic choices work</div>
+            <div>CA compares every item you could buy, then chooses what to craft or purchase together with the route. Your manual choices stay locked. Items marked Skipped are already covered by a parent item you are buying.</div>
         </div>
 
         <div class="ae-actions">
@@ -75,12 +75,12 @@
         {
             <div class="ae-ledger-header">
                 <div>
-                    <div class="ae-ledger-title">Decision Ledger</div>
-                    <div class="ae-ledger-subtitle">@visibleRows.Count shown from @rows.Count unique items</div>
+                    <div class="ae-ledger-title">Acquisition decisions</div>
+                    <div class="ae-ledger-subtitle">@visibleRows.Count shown from @FormatUniqueItemCount(rows.Count)</div>
                 </div>
                 <div class="ae-legend">
                     <span><i class="is-active"></i>Active</span>
-                    <span><i class="is-suppressed"></i>Suppressed</span>
+                    <span><i class="is-suppressed"></i>Skipped</span>
                     <span><i class="is-market"></i>Market evidence</span>
                 </div>
             </div>
@@ -97,7 +97,8 @@
                           RowActivated="SelectNodeFromRow"
                           SortState="@_sortState"
                           SortChanged="OnLedgerSortChanged"
-                          Resizable="true" />
+                          Resizable="false"
+                          FitToContainer="true" />
         }
     </main>
 
@@ -328,7 +329,7 @@
             {
                 Id = AcquisitionDecisionLedgerSortColumn.Item,
                 Header = "Item",
-                Size = new WebTableColumnSize(300, 140),
+                Size = new WebTableColumnSize(260, 120),
                 HeaderCssClass = "ae-head-cell",
                 CellCssClass = "ae-item-cell",
                 CellTemplate = RenderItemCell
@@ -337,7 +338,7 @@
             {
                 Id = AcquisitionDecisionLedgerSortColumn.Source,
                 Header = "Source",
-                Size = new WebTableColumnSize(150, 120),
+                Size = new WebTableColumnSize(140, 105),
                 HeaderCssClass = "ae-head-cell",
                 CellCssClass = "ae-source-cell",
                 SuppressRowActivation = true,
@@ -347,7 +348,7 @@
             {
                 Id = AcquisitionDecisionLedgerSortColumn.UsedIn,
                 Header = "Used In",
-                Size = new WebTableColumnSize(260, 120),
+                Size = new WebTableColumnSize(210, 105),
                 HeaderCssClass = "ae-head-cell",
                 CellCssClass = "ae-used-cell",
                 CellTitleSelector = row => row.UsedIn,
@@ -357,26 +358,28 @@
             {
                 Id = AcquisitionDecisionLedgerSortColumn.Role,
                 Header = "Role",
-                Size = new WebTableColumnSize(150, 120),
+                Size = new WebTableColumnSize(155, 105),
                 HeaderCssClass = "ae-head-cell",
                 CellCssClass = "ae-role-cell",
+                CellTitleSelector = GetDecisionStatus,
                 CellTemplate = RenderRoleCell
             },
             new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
             {
                 Id = AcquisitionDecisionLedgerSortColumn.MarketEvidence,
                 Header = "Market Evidence",
-                Size = new WebTableColumnSize(170, 130),
+                Size = new WebTableColumnSize(170, 115),
                 HeaderCssClass = "ae-head-cell",
                 CellCssClass = "ae-market-cell",
+                CellTitleSelector = row => row.MarketEvidence,
                 CellTemplate = RenderMarketEvidenceCell
             },
             new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
             {
                 Id = AcquisitionDecisionLedgerSortColumn.CalculatedTotal,
-                Header = "Calculated Total",
+                Header = "Total",
                 HeaderTooltip = CalculatedTotalHeaderTooltip,
-                Size = new WebTableColumnSize(150, 120),
+                Size = new WebTableColumnSize(145, 100),
                 HeaderCssClass = "ae-head-cell",
                 CellCssClassSelector = GetCalculatedTotalClass,
                 CellTitleSelector = GetCalculatedTotalTooltip,
@@ -440,6 +443,7 @@
         var sequence = 0;
         builder.OpenElement(sequence++, "select");
         builder.AddAttribute(sequence++, "class", "ae-source-select");
+        builder.AddAttribute(sequence++, "aria-label", $"Acquisition source for {row.ItemName}");
         builder.AddAttribute(sequence++, "style", $"border-color: {RecipePlanDisplayHelpers.GetSourceHexColor(row.Source)}; color: {RecipePlanDisplayHelpers.GetSourceHexColor(row.Source)}");
         builder.AddAttribute(sequence++, "value", row.Source.ToString());
         builder.AddAttribute(sequence++, "disabled", !row.HasEditableOccurrences);
@@ -697,5 +701,8 @@
     {
         NavigationManager.NavigateTo("procurement");
     }
+
+    private static string FormatUniqueItemCount(int count) =>
+        $"{count:N0} unique item{(count == 1 ? string.Empty : "s")}";
 
 }

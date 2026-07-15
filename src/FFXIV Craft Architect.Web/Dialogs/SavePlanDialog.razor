@@ -4,13 +4,14 @@
 <MudDialog>
     <DialogContent>
         <MudTextField @bind-Value="_planName" 
-                      Label="Plan Name" 
+                      id="save-plan-name"
+                      Label="Plan name"
                       Variant="Variant.Outlined"
                       Placeholder="Enter plan name..."
                       AutoFocus="true"
                       @onkeyup="OnKeyUp" />
         <MudText Typo="Typo.caption" Class="mt-2 d-block">
-            Saving @AppState.ProjectItemCount items from @AppState.SelectedDataCenter
+            Saving @FormatProjectItemCount() for @AppState.SelectedDataCenter
         </MudText>
     </DialogContent>
     <DialogActions>
@@ -23,6 +24,13 @@
     [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
     
     private string _planName = "";
+
+    private string FormatProjectItemCount()
+    {
+        return AppState.ProjectItemCount == 1
+            ? "1 target item"
+            : $"{AppState.ProjectItemCount:N0} target items";
+    }
     
     protected override void OnInitialized()
     {

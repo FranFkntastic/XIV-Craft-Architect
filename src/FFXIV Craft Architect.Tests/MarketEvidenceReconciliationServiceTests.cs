@@ -56,6 +56,25 @@ public sealed class MarketEvidenceReconciliationServiceTests
     }
 
     [Fact]
+    public async Task ReconcileAsync_ExpiredEvidenceRecentlyRebuiltFromCache_IsReused()
+    {
+        var execution = new Mock<IMarketAnalysisExecutionService>(MockBehavior.Strict);
+        var service = new MarketEvidenceReconciliationService(execution.Object);
+        var analysis = PublishedAnalysis(
+            NowUtc - TimeSpan.FromHours(13),
+            MarketDataQualityBucket.VeryOld);
+        analysis.LastReconciledAtUtc = NowUtc - TimeSpan.FromMinutes(10);
+
+        var result = await service.ReconcileAsync(Request(analysis, PublishedPlan()));
+
+        var item = Assert.Single(result.Items);
+        Assert.Equal(MarketEvidenceReconciliationDisposition.ReusedPublished, item.Disposition);
+        Assert.Equal(MarketEvidenceReconciliationReason.RecentlyReconciled, item.Reason);
+        Assert.Equal(TimeSpan.FromHours(13), item.OldestEvidenceAge);
+        Assert.Empty(result.ReconciledItems);
+    }
+
+    [Fact]
     public async Task ReconcileAsync_ForcedRefresh_BypassesEligiblePublishedEvidence()
     {
         var execution = new Mock<IMarketAnalysisExecutionService>();

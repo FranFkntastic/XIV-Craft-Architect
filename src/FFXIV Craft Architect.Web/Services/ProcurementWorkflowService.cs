@@ -116,6 +116,14 @@ public sealed class ProcurementWorkflowService
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.Superseded);
         }
 
+        if (result.ShoppingPlans.Count == 0)
+        {
+            return new ProcurementWorkflowResult(
+                ProcurementWorkflowStatus.NoCompleteRoute,
+                0,
+                "No complete route could cover every purchase item with the current listings and exclusions. Refresh the affected items or clear temporary exclusions, then try again.");
+        }
+
         var optimizedPlan = result.OptimizedPlan ?? plan;
         var optimizedActiveItems = result.ActiveProcurementItems
             ?? AcquisitionPlanningService.GetActiveProcurementItems(optimizedPlan);
@@ -124,7 +132,10 @@ public sealed class ProcurementWorkflowService
                 optimizedPlan,
                 optimizedActiveItems,
                 result.ShoppingPlans,
-                result.RouteDecision))
+                result.RouteDecision,
+                result.EvidenceAnalyses,
+                result.EvidencePlans,
+                _appState.CreateMarketAnalysisScopeSnapshot(scope)))
         {
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.StalePlan);
         }
@@ -248,7 +259,8 @@ public sealed record ProcurementWorkflowRequest(
 
 public sealed record ProcurementWorkflowResult(
     ProcurementWorkflowStatus Status,
-    int ShoppingPlanCount)
+    int ShoppingPlanCount,
+    string? Message = null)
 {
     public static ProcurementWorkflowResult Noop(ProcurementWorkflowStatus status)
     {
@@ -261,6 +273,7 @@ public enum ProcurementWorkflowStatus
     NoPlan,
     NoActiveProcurementItems,
     MissingDataCenter,
+    NoCompleteRoute,
     Published,
     StaleDecision,
     StaleConfiguration,

@@ -20,8 +20,15 @@ public sealed class PlanSessionLoadService
     public PlanSessionLoadResult Load(StoredPlan storedPlan, bool trackStoredPlanIdentity = true)
     {
         var result = PrepareSession(storedPlan);
-        _appState.ApplyLoadedPlanSession(result, trackStoredPlanIdentity);
-        return result;
+        return ApplyPreparedSession(result, trackStoredPlanIdentity);
+    }
+
+    public PlanSessionLoadResult ApplyPreparedSession(
+        PlanSessionLoadResult preparedSession,
+        bool trackStoredPlanIdentity = true)
+    {
+        _appState.ApplyLoadedPlanSession(preparedSession, trackStoredPlanIdentity);
+        return preparedSession;
     }
 
     public PlanSessionLoadResult PrepareSession(StoredPlan storedPlan)

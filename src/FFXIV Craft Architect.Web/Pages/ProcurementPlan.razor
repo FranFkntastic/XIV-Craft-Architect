@@ -281,6 +281,15 @@
                 return;
             }
 
+            if (result.Status == ProcurementWorkflowStatus.NoCompleteRoute)
+            {
+                var message = result.Message ?? "No complete procurement route is available with the current market evidence.";
+                AppState.MarkProcurementRouteFailed(message);
+                operation.Complete(message);
+                Snackbar.Add(message, Severity.Warning);
+                return;
+            }
+
             if (result.Status != ProcurementWorkflowStatus.Published)
             {
                 operation.Cancel();

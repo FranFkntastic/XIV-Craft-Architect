@@ -46,14 +46,14 @@
         {
             <span class="status-badge">
                 <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" />
-                @AppState.ShoppingItems.Count items
+                @FormatCount(AppState.ShoppingItems.Count, "material")
             </span>
         }
         @if (AppState.HasProjectItems)
         {
             <span class="status-badge">
                 <MudIcon Icon="@Icons.Material.Filled.ListAlt" Size="Size.Small" />
-                @AppState.ProjectItemCount projects
+                @FormatCount(AppState.ProjectItemCount, "target")
             </span>
         }
     </div>
@@ -168,6 +168,9 @@
 
 @code {
     private string? _tradeCompanyName;
+    private static string FormatCount(int count, string noun) =>
+        $"{count:N0} {noun}{(count == 1 ? string.Empty : "s")}";
+
     private bool IsTradeRoute => NavigationManager
         .ToBaseRelativePath(NavigationManager.Uri)
         .TrimStart('/')

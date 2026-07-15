@@ -18,7 +18,7 @@ public static class AppTheme
             PaletteDark = new PaletteDark
             {
                 Primary = "#d4a73a",      // Gold accent (like WPF)
-                Secondary = "#9c27b0",    // Purple
+                Secondary = "#aeb7c0",    // Neutral secondary actions and supporting text
                 Success = "#4caf50",      // Green
                 Error = "#f44336",        // Red
                 Warning = "#ff9800",      // Orange

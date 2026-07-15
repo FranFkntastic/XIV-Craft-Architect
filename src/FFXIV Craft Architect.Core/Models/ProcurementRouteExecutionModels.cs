@@ -43,7 +43,8 @@ public sealed record ProcurementRouteExecutionResult(
     MarketRouteDecision? RouteDecision = null,
     IReadOnlyList<MarketEvidenceReconciliationItemResult>? ReconciliationItems = null,
     CraftingPlan? OptimizedPlan = null,
-    IReadOnlyList<MaterialAggregate>? ActiveProcurementItems = null);
+    IReadOnlyList<MaterialAggregate>? ActiveProcurementItems = null,
+    IReadOnlyList<MarketItemAnalysis>? EvidenceAnalyses = null);
 
 public sealed record ProcurementRouteOptimizationResult(
     List<DetailedShoppingPlan> ShoppingPlans,
@@ -66,6 +67,8 @@ public sealed record MarketRouteDecision(
     IReadOnlyList<MarketRouteItemDecision>? ItemDecisions = null)
 {
     public long FixedAcquisitionGilCost { get; init; }
+
+    public bool AcquisitionSearchWasTruncated { get; init; }
 
     public long PremiumGil => Math.Max(0, SelectedGilCost - CheapestGilCost);
 

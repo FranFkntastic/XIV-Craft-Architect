@@ -46,18 +46,12 @@
             </div>
 
             <div class="pp-field-block pp-duration-field">
-                <MudSelect T="int"
-                           Label="World exclusion duration"
-                           Value="AppState.TemporaryWorldBlacklistDurationMinutes"
-                           ValueChanged="OnTemporaryWorldBlacklistDurationChanged"
-                           Variant="Variant.Outlined"
-                           Dense="true"
-                           Class="pp-full-width">
-                    <MudSelectItem Value="15">15 minutes</MudSelectItem>
-                    <MudSelectItem Value="60">1 hour</MudSelectItem>
-                    <MudSelectItem Value="240">4 hours</MudSelectItem>
-                    <MudSelectItem Value="1440">1 day</MudSelectItem>
-                </MudSelect>
+                <CompactSelectField Id="procurement-world-exclusion-duration"
+                                    Label="World exclusion duration"
+                                    Value="@AppState.TemporaryWorldBlacklistDurationMinutes.ToString()"
+                                    ValueChanged="OnTemporaryWorldBlacklistDurationValueChanged"
+                                    Options="WorldExclusionDurationOptions"
+                                    Class="pp-full-width" />
             </div>
         </div>
     </section>
@@ -135,6 +129,13 @@
     [Parameter] public EventCallback OnExportCraftQuoteRequested { get; set; }
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
     [Parameter] public EventCallback OnGoToMarketAnalysisRequested { get; set; }
+    private static readonly IReadOnlyList<CompactSelectOption> WorldExclusionDurationOptions =
+    [
+        new("15", "15 minutes"),
+        new("60", "1 hour"),
+        new("240", "4 hours"),
+        new("1440", "1 day")
+    ];
 
     private string FormatExclusionCount()
     {
@@ -172,8 +173,10 @@
         _ => "Data-center transfers ranked before world visits"
     };
 
-    private Task OnTemporaryWorldBlacklistDurationChanged(int value) =>
-        ApplyProcurementSettingsAsync(temporaryWorldBlacklistDurationMinutes: value);
+    private Task OnTemporaryWorldBlacklistDurationValueChanged(string value) =>
+        int.TryParse(value, out var minutes)
+            ? ApplyProcurementSettingsAsync(temporaryWorldBlacklistDurationMinutes: minutes)
+            : Task.CompletedTask;
 
     private async Task ApplyProcurementSettingsAsync(
         bool? searchEntireRegion = null,

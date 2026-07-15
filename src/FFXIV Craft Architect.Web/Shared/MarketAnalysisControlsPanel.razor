@@ -11,30 +11,22 @@
     }
 
     <div class="ma-field-block">
-        <div class="ma-field-label">Lens</div>
-        <MudSelect T="MarketAcquisitionLens"
-                   Value="AppState.MarketAnalysisLens"
-                   ValueChanged="OnLensChangedRequested"
-                   Variant="Variant.Outlined"
-                   Dense="true"
-                   Title="@LensSelectorTooltip"
-                   Class="ma-full-width">
-            <MudSelectItem Value="@MarketAcquisitionLens.MinimumUpfrontCost" Title="@MinimumUpfrontCostLensTooltip">Minimum Upfront Cost</MudSelectItem>
-            <MudSelectItem Value="@MarketAcquisitionLens.BulkValue" Title="@BulkValueLensTooltip">Best Value / Bulk Acquisition</MudSelectItem>
-        </MudSelect>
+        <CompactSelectField Id="market-buying-strategy"
+                            Label="Buying strategy"
+                            Value="@AppState.MarketAnalysisLens.ToString()"
+                            ValueChanged="OnLensValueChanged"
+                            Options="LensOptions"
+                            Tooltip="@LensSelectorTooltip"
+                            Class="ma-full-width" />
     </div>
 
     <div class="ma-field-block">
-        <div class="ma-field-label">Evidence Overlay</div>
-        <MudSelect T="MarketAnalysisEvidenceOverlay"
-                   Value="AppState.MarketAnalysisEvidenceOverlay"
-                   ValueChanged="OnEvidenceOverlayChanged"
-                   Variant="Variant.Outlined"
-                   Dense="true"
-                   Class="ma-full-width">
-            <MudSelectItem Value="@MarketAnalysisEvidenceOverlay.CompetitivenessOverlay">Competitiveness Overlay</MudSelectItem>
-            <MudSelectItem Value="@MarketAnalysisEvidenceOverlay.PriceBandOverlay">Price Band Overlay</MudSelectItem>
-        </MudSelect>
+        <CompactSelectField Id="market-listing-colors"
+                            Label="Listing colors"
+                            Value="@AppState.MarketAnalysisEvidenceOverlay.ToString()"
+                            ValueChanged="OnEvidenceOverlayValueChanged"
+                            Options="EvidenceOverlayOptions"
+                            Class="ma-full-width" />
     </div>
 
     <div class="ma-region-toggle-block">
@@ -47,7 +39,7 @@
             <MudText Typo="Typo.body2" Class="ma-region-toggle-text">Search entire region</MudText>
         </MudCheckBox>
         <MudText Typo="Typo.caption" Class="ma-region-toggle-caption">
-            Slower but finds best prices across all data centers in @AppState.SelectedRegion
+            Slower, but finds the best prices across all data centers in @AppState.SelectedRegion.
         </MudText>
     </div>
 
@@ -123,9 +115,17 @@
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
     [Parameter] public EventCallback OnGoToProcurementRequested { get; set; }
 
-    private const string LensSelectorTooltip = "Acquisition lenses change how worlds are ranked for buying logistics; they do not change the underlying market evidence.";
-    private const string MinimumUpfrontCostLensTooltip = "Minimum upfront cost ranks worlds by needed-quantity coverage and primary shelf price.";
-    private const string BulkValueLensTooltip = "Best value / bulk acquisition favors deeper procurement-qualified stock that may still be useful.";
+    private const string LensSelectorTooltip = "Buying strategy changes how worlds are ranked without changing the listings CA found.";
+    private static readonly IReadOnlyList<CompactSelectOption> LensOptions =
+    [
+        new(nameof(MarketAcquisitionLens.MinimumUpfrontCost), "Lowest upfront cost"),
+        new(nameof(MarketAcquisitionLens.BulkValue), "Best bulk value")
+    ];
+    private static readonly IReadOnlyList<CompactSelectOption> EvidenceOverlayOptions =
+    [
+        new(nameof(MarketAnalysisEvidenceOverlay.CompetitivenessOverlay), "Deals vs typical price"),
+        new(nameof(MarketAnalysisEvidenceOverlay.PriceBandOverlay), "Price bands")
+    ];
 
     private void OnSearchEntireRegionChanged(bool searchEntireRegion)
     {
@@ -136,9 +136,20 @@
             searchEntireRegion);
     }
 
-    private void OnEvidenceOverlayChanged(MarketAnalysisEvidenceOverlay overlay)
+    private async Task OnLensValueChanged(string value)
     {
-        AppState.SetMarketAnalysisEvidenceOverlay(overlay);
+        if (Enum.TryParse<MarketAcquisitionLens>(value, out var lens))
+        {
+            await OnLensChangedRequested.InvokeAsync(lens);
+        }
+    }
+
+    private void OnEvidenceOverlayValueChanged(string value)
+    {
+        if (Enum.TryParse<MarketAnalysisEvidenceOverlay>(value, out var overlay))
+        {
+            AppState.SetMarketAnalysisEvidenceOverlay(overlay);
+        }
     }
 
     private string? BenchmarkHook(string id) => AppState.SecretDebugToolsEnabled ? id : null;

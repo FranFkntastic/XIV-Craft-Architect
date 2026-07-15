@@ -55,7 +55,7 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             .ToList();
         var scopedEvidence = PrepareProcurementEvidenceForScope(evidencePlans, request);
         progress?.Report($"Optimizing procurement route for {scopedEvidence.Count} items...");
-        var procurementConfig = CopyProcurementConfig(request);
+        var procurementConfig = ProcurementRouteConfigFactory.Create(request);
         JointAcquisitionRouteOptimizationResult? jointOptimization = null;
         ProcurementRouteOptimizationResult optimization;
         var planCandidateIds = AcquisitionPlanningService.GetMarketAnalysisCandidates(request.Plan)
@@ -118,23 +118,8 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             optimization.Decision,
             reconciliation.Items,
             jointOptimization?.OptimizedPlan,
-            jointOptimization?.ActiveProcurementItems);
-    }
-
-    private static MarketAnalysisConfig CopyProcurementConfig(ProcurementRouteExecutionRequest request)
-    {
-        var source = request.ProcurementConfig;
-        return new MarketAnalysisConfig
-        {
-            MaxWorldsPerItem = source.MaxWorldsPerItem,
-            TravelTolerance = source.TravelTolerance,
-            EnableSplitWorld = source.EnableSplitWorld,
-            MaxPriceMultiplier = source.MaxPriceMultiplier,
-            StartFromHomeDataCenter = source.StartFromHomeDataCenter,
-            HomeDataCenter = source.StartFromHomeDataCenter
-                ? request.SelectedDataCenter
-                : string.Empty
-        };
+            jointOptimization?.ActiveProcurementItems,
+            reconciliation.Analyses);
     }
 
     private static IReadOnlyList<MaterialAggregate> GetActiveProcurementItems(ProcurementRouteExecutionRequest request)

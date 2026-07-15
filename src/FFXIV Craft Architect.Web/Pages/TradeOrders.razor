@@ -44,6 +44,7 @@
                                        aria-label="New order" />
                     </div>
                     <MudTextField @bind-Value="_orderSearchText"
+                                  id="order-search"
                                   Placeholder="Search orders"
                                   Variant="Variant.Outlined"
                                   Margin="Margin.Dense"
@@ -140,21 +141,15 @@
                             </div>
                             <div class="trade-orders-editor-grid">
                                 <MudTextField @bind-Value="_newOrderTitle"
+                                              id="imported-order-title"
                                               Label="Order title"
                                               Variant="Variant.Outlined"
                                               Margin="Margin.Dense"
                                               Immediate="true" />
-                                <MudSelect T="Guid?"
-                                           @bind-Value="_newOrderCrafterId"
-                                           Label="Assigned crafter"
-                                           Variant="Variant.Outlined"
-                                           Margin="Margin.Dense"
-                                           Clearable="true">
-                                    @foreach (var crafter in _crafters)
-                                    {
-                                        <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
-                                    }
-                                </MudSelect>
+                                <CompactSelectField Id="imported-order-crafter"
+                                                    Label="Assigned crafter"
+                                                    @bind-Value="NewOrderCrafterValue"
+                                                    Options="GetCrafterOptions()" />
                             </div>
                             <section class="trade-orders-work-section">
                                 <MudText Typo="Typo.subtitle2">Requested Outputs</MudText>
@@ -207,24 +202,19 @@
                             </div>
                             <div class="trade-orders-editor-grid">
                                 <MudTextField T="string"
+                                              id="new-order-title"
                                               Value="@_newRequestedOrderTitle"
                                               ValueChanged="value => OnRequestedOrderTitleChanged(value)"
                                               Label="Order title"
                                               Variant="Variant.Outlined"
                                               Margin="Margin.Dense"
                                               Immediate="true" />
-                                <MudSelect T="Guid?"
-                                           @bind-Value="_newRequestedOrderCrafterId"
-                                           Label="Assigned crafter"
-                                           Variant="Variant.Outlined"
-                                           Margin="Margin.Dense"
-                                           Clearable="true">
-                                    @foreach (var crafter in _crafters)
-                                    {
-                                        <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
-                                    }
-                                </MudSelect>
+                                <CompactSelectField Id="new-order-crafter"
+                                                    Label="Assigned crafter"
+                                                    @bind-Value="NewRequestedOrderCrafterValue"
+                                                    Options="GetCrafterOptions()" />
                                 <MudTextField @bind-Value="_newRequestedOrderNotes"
+                                              id="new-order-notes"
                                               Label="Notes"
                                               Variant="Variant.Outlined"
                                               Margin="Margin.Dense"
@@ -233,6 +223,7 @@
                             <section class="trade-orders-work-section">
                                 <div class="trade-orders-search-row">
                                     <MudTextField @bind-Value="_requestedOrderSearchQuery"
+                                                  id="new-order-output-search"
                                                   Label="Add output item"
                                                   Variant="Variant.Outlined"
                                                   Margin="Margin.Dense"
@@ -277,10 +268,12 @@
                                             <div class="trade-orders-output-row">
                                                 <span>@output.Name</span>
                                                 <MudNumericField T="int"
+                                                                 id="@($"new-order-output-quantity-{output.ItemId}")"
                                                                  Value="@output.Quantity"
                                                                  ValueChanged="quantity => UpdateRequestedOrderOutputQuantity(output, quantity)"
                                                                  Min="1"
                                                                  Max="9999"
+                                                                 HideSpinButtons="true"
                                                                  Variant="Variant.Outlined"
                                                                  Margin="Margin.Dense" />
                                                 <MudCheckBox T="bool"
@@ -315,24 +308,19 @@
                             </div>
                             <div class="trade-orders-editor-grid">
                                 <MudTextField @bind-Value="_detailTitle"
+                                              id="selected-order-title"
                                               Label="Order title"
                                               Variant="Variant.Outlined"
                                               Margin="Margin.Dense"
                                               Immediate="true"
                                               Disabled="@IsSelectedOrderArchived" />
-                                <MudSelect T="Guid?"
-                                           @bind-Value="_detailCrafterId"
-                                           Label="Assigned crafter"
-                                           Variant="Variant.Outlined"
-                                           Margin="Margin.Dense"
-                                           Clearable="true"
-                                           Disabled="@IsSelectedOrderArchived">
-                                    @foreach (var crafter in _crafters)
-                                    {
-                                        <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
-                                    }
-                                </MudSelect>
+                                <CompactSelectField Id="selected-order-crafter"
+                                                    Label="Assigned crafter"
+                                                    @bind-Value="DetailCrafterValue"
+                                                    Options="GetCrafterOptions()"
+                                                    Disabled="@IsSelectedOrderArchived" />
                                 <MudTextField @bind-Value="_detailNotes"
+                                              id="selected-order-notes"
                                               Label="Notes"
                                               Variant="Variant.Outlined"
                                               Margin="Margin.Dense"
@@ -368,6 +356,7 @@
                                 {
                                     <div class="trade-orders-search-row">
                                         <MudTextField @bind-Value="_selectedOrderOutputSearchQuery"
+                                                      id="selected-order-output-search"
                                                       Label="Add output item"
                                                       Variant="Variant.Outlined"
                                                       Margin="Margin.Dense"
@@ -406,10 +395,12 @@
                                             <div class="trade-orders-output-row">
                                                 <span>@output.Name</span>
                                                 <MudNumericField T="int"
+                                                                 id="@($"selected-order-output-quantity-{output.ItemId}-{output.MustBeHq}")"
                                                                  Value="@output.Quantity"
                                                                  ValueChanged="quantity => UpdateSelectedOrderOutputQuantity(output, quantity)"
                                                                  Min="1"
                                                                  Max="9999"
+                                                                 HideSpinButtons="true"
                                                                  Variant="Variant.Outlined"
                                                                  Margin="Margin.Dense" />
                                                 <MudCheckBox T="bool"
@@ -572,16 +563,12 @@
                                                    Color="Color.Primary"
                                                    Dense="true"
                                                    Label="Use company default" />
-                                        <MudSelect T="TradePaymentContractMode"
-                                                   Value="@SelectedOrderPaymentContract"
-                                                   ValueChanged="SetSelectedOrderPaymentContractAsync"
-                                                   Variant="Variant.Outlined"
-                                                   Margin="Margin.Dense"
-                                                   Dense="true"
-                                                   Disabled="@SelectedOrderUsesCompanyPaymentPolicy">
-                                            <MudSelectItem Value="@TradePaymentContractMode.LegacyCommission">Legacy commission</MudSelectItem>
-                                            <MudSelectItem Value="@TradePaymentContractMode.LaborStandard">Labor standard</MudSelectItem>
-                                        </MudSelect>
+                                        <CompactSelectField Id="selected-order-payment-contract"
+                                                            Label="Payment contract"
+                                                            Value="@SelectedOrderPaymentContract.ToString()"
+                                                            ValueChanged="SetSelectedOrderPaymentContractValueAsync"
+                                                            Options="PaymentContractOptions"
+                                                            Disabled="@SelectedOrderUsesCompanyPaymentPolicy" />
                                     </div>
                                 </div>
                                 @if (paymentSummary.Materials.Count > 0)
@@ -690,17 +677,12 @@
                                                 <span>@TradeDisplayFormatter.FormatQuantity(material.Quantity)</span>
                                                 <span>@FormatMaterialUnitCost(material)</span>
                                                 <span>@FormatMaterialCost(material)</span>
-                                                <MudSelect T="CommissionMaterialResponsibility"
-                                                           Value="material.Responsibility"
-                                                           ValueChanged="value => SetOrderMaterialResponsibilityAsync(material, value)"
-                                                           Dense="true"
-                                                           Margin="Margin.Dense"
-                                                           Variant="Variant.Outlined"
-                                                           Disabled="@IsSelectedOrderArchived"
-                                                           aria-label="@($"{material.Name} material responsibility")">
-                                                    <MudSelectItem Value="@CommissionMaterialResponsibility.Crafter">Crafter</MudSelectItem>
-                                                    <MudSelectItem Value="@CommissionMaterialResponsibility.Provided">Provided</MudSelectItem>
-                                                </MudSelect>
+                                                <CompactSelectField Id="@($"order-material-responsibility-{material.ItemId}")"
+                                                                    Label="@($"{material.Name} responsibility")"
+                                                                    Value="@material.Responsibility.ToString()"
+                                                                    ValueChanged="value => SetOrderMaterialResponsibilityValueAsync(material, value)"
+                                                                    Options="MaterialResponsibilityOptions"
+                                                                    Disabled="@IsSelectedOrderArchived" />
                                                 <span>@FormatMaterialPaymentImpact(material)</span>
                                             </div>
                                         }
@@ -718,16 +700,10 @@
                                     }
                                     else
                                     {
-                                        <MudSelect T="TradeOrderStatus"
-                                                   @bind-Value="_detailStatus"
-                                                   Label="Order status"
-                                                   Variant="Variant.Outlined"
-                                                   Margin="Margin.Dense">
-                                            @foreach (var status in TradeOrderStatusWorkflow.ActiveStatuses.Where(status => status != TradeOrderStatus.Draft))
-                                            {
-                                                <MudSelectItem Value="@status">@FormatStatus(status)</MudSelectItem>
-                                            }
-                                        </MudSelect>
+                                        <CompactSelectField Id="selected-order-status"
+                                                            Label="Order status"
+                                                            @bind-Value="DetailStatusValue"
+                                                            Options="GetActiveStatusOptions()" />
                                         <MudButton Variant="Variant.Filled"
                                                    Color="Color.Primary"
                                                    FullWidth="true"
@@ -803,6 +779,7 @@
                             <MudTabPanel Text="History">
                                 <div class="trade-orders-note-row">
                                     <MudTextField @bind-Value="_manualNote"
+                                                  id="selected-order-history-note"
                                                   Label="Add Note"
                                                   Variant="Variant.Outlined"
                                                   Margin="Margin.Dense"

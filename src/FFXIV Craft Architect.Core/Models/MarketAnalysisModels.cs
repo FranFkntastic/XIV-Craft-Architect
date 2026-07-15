@@ -135,6 +135,7 @@ public sealed class MarketItemAnalysis
     public int QuantityNeeded { get; init; }
     public MarketFetchScope Scope { get; init; }
     public DateTime LoadedAtUtc { get; init; }
+    public DateTime? LastReconciledAtUtc { get; set; }
     public decimal AnalysisScopeBaselineUnitPrice { get; init; }
     public decimal AnalysisScopeAverageUnitPrice { get; init; }
     public decimal AnalysisCompetitiveAverageUnitPrice { get; init; }

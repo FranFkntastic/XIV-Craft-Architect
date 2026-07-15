@@ -110,6 +110,7 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
             var hasPlan = reconciledPlans.TryGetValue(item.ItemId, out var reconciledPlan);
             if (hasAnalysis)
             {
+                reconciledAnalysis!.LastReconciledAtUtc = evaluatedAtUtc;
                 finalAnalyses.Add(reconciledAnalysis!);
             }
 
@@ -246,11 +247,23 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
                 : oldestEvidenceAge;
         }
 
-        return MarketEvidenceFreshness.IsRecommendationEligible(
+        if (MarketEvidenceFreshness.IsRecommendationEligible(
                 oldestEvidenceAge,
-                request.Policy.MaximumRecommendationAge)
-            ? Reuse(item, oldestEvidenceAge)
-            : Reconcile(item, MarketEvidenceReconciliationReason.RecommendationExpired, oldestEvidenceAge);
+                request.Policy.MaximumRecommendationAge))
+        {
+            return Reuse(item, oldestEvidenceAge);
+        }
+
+        if (analysis.LastReconciledAtUtc.HasValue &&
+            GetElapsed(analysis.LastReconciledAtUtc.Value, evaluatedAtUtc) <= request.Policy.ReusableCacheMaxAge)
+        {
+            return Reuse(
+                item,
+                oldestEvidenceAge,
+                MarketEvidenceReconciliationReason.RecentlyReconciled);
+        }
+
+        return Reconcile(item, MarketEvidenceReconciliationReason.RecommendationExpired, oldestEvidenceAge);
     }
 
     private static bool HasCompleteScope(
@@ -290,12 +303,13 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
 
     private static MarketEvidenceReconciliationItemResult Reuse(
         MaterialAggregate item,
-        TimeSpan? oldestEvidenceAge = null) =>
+        TimeSpan? oldestEvidenceAge = null,
+        MarketEvidenceReconciliationReason reason = MarketEvidenceReconciliationReason.PublishedEvidenceEligible) =>
         new(
             item.ItemId,
             item.Name,
             MarketEvidenceReconciliationDisposition.ReusedPublished,
-            MarketEvidenceReconciliationReason.PublishedEvidenceEligible,
+            reason,
             oldestEvidenceAge);
 
     private static MarketEvidenceReconciliationItemResult Reconcile(

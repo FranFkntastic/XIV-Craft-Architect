@@ -17,7 +17,7 @@
                 {
                     <div style="padding: 24px; text-align: center;">
                         <MudText Typo="Typo.body2" Style="color: #666;">
-                            No saved plans found
+                            No named plans saved yet. Your current session is still saved automatically.
                         </MudText>
                     </div>
                 }
@@ -41,7 +41,7 @@
                                             }
                                         </MudText>
                                         <MudText Typo="Typo.caption" Style="color: #888;">
-                                            @plan.ItemCount items · @plan.DataCenter
+                                            @FormatPlanItemCount(plan.ItemCount) · @plan.DataCenter
                                         </MudText>
                                     </div>
                                     <MudText Typo="Typo.caption" Style="color: #666; font-size: 11px;">
@@ -59,7 +59,7 @@
         <div style="display: flex; gap: 8px; width: 100%; padding: 8px 16px;">
             <!-- Save: Enabled when there are items to save -->
             <MudButton OnClick="OnSaveCurrentPlan"
-                       Color="Color.Success"
+                       Color="Color.Primary"
                        Variant="Variant.Outlined"
                        Size="Size.Small"
                        Disabled="@(!AppState.HasProjectItems)"
@@ -108,6 +108,11 @@
     
     private List<StoredPlanSummary> _savedPlans = new();
     private StoredPlanSummary? _selectedPlan;
+
+    private static string FormatPlanItemCount(int count)
+    {
+        return count == 1 ? "1 item" : $"{count:N0} items";
+    }
     
     protected override async Task OnInitializedAsync()
     {

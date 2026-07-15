@@ -4,12 +4,13 @@
     <div class="lp-title">Project Items</div>
 
     <div class="lp-add-section">
-        <div class="lp-label">Item Name:</div>
+        <label class="lp-label" for="project-item-search">Item</label>
         <input type="text"
+               id="project-item-search"
                value="@SearchQuery"
                @oninput="OnSearchInput"
                @onkeyup="OnSearchKeyUp"
-               placeholder="Enter item..."
+               placeholder="Search for an item"
                class="lp-input" />
 
         <button type="button"
@@ -37,13 +38,12 @@
             <div class="lp-search-results">
                 @foreach (var result in SearchResults)
                 {
-                    <div @onclick="() => OnAddProjectItem.InvokeAsync(result)"
-                         class="lp-search-result-item"
-                         onmouseover="this.style.backgroundColor='#3d3d3d'"
-                         onmouseout="this.style.backgroundColor='transparent'">
+                    <button type="button"
+                            @onclick="() => OnAddProjectItem.InvokeAsync(result)"
+                            class="lp-search-result-item">
                         <div class="lp-search-result-name">@result.Object.Name</div>
                         <div class="lp-search-result-meta">ID: @result.Id</div>
-                    </div>
+                    </button>
                 }
             </div>
         }
@@ -65,7 +65,11 @@
                 @foreach (var item in ProjectItems)
                 {
                     <div class="lp-target-row">
-                        <button @onclick="() => OnToggleItemHq.InvokeAsync(item)"
+                        <button type="button"
+                                @onclick="() => OnToggleItemHq.InvokeAsync(item)"
+                                aria-label="@(item.MustBeHq ? $"Allow normal quality for {item.Name}" : $"Require high quality for {item.Name}")"
+                                aria-pressed="@item.MustBeHq.ToString().ToLowerInvariant()"
+                                title="@(item.MustBeHq ? "High quality required" : "Normal quality allowed")"
                                 class="lp-hq-toggle"
                                 style="color: @(item.MustBeHq ? "#d4a73a" : "#666");">
                             ★
@@ -74,12 +78,16 @@
                             @item.Name
                         </div>
                         <input type="number"
+                               aria-label="Quantity for @item.Name"
                                value="@item.Quantity"
                                @onchange="args => OnQuantityChanged(item, args)"
                                min="1"
                                max="9999"
                                class="lp-qty-input" />
-                        <button @onclick="() => OnRemoveProjectItem.InvokeAsync(item)"
+                        <button type="button"
+                                @onclick="() => OnRemoveProjectItem.InvokeAsync(item)"
+                                aria-label="Remove @item.Name from the project"
+                                title="Remove item"
                                 class="lp-remove-btn">
                             ×
                         </button>
@@ -98,7 +106,7 @@
                 }
                 else
                 {
-                    <span>Build Project Plan</span>
+                    <span>Build Recipe Plan</span>
                 }
             </button>
         </div>
@@ -118,7 +126,7 @@
         @if (LastAutoSave.HasValue)
         {
             <div class="lp-autosave-meta">
-                Auto-saved: @LastAutoSave.Value.ToString("HH:mm:ss")
+                Saved automatically at @LastAutoSave.Value.ToString("HH:mm:ss")
             </div>
         }
     }

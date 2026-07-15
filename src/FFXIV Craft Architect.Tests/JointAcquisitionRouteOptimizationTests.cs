@@ -130,6 +130,54 @@ public sealed class JointAcquisitionRouteOptimizationTests
         Assert.Equal(70, result.RouteDecision?.SelectedGilCost);
     }
 
+    [Fact]
+    public async Task MixedQualityDemandBuysOnlyTheRequiredHqQuantityAcrossWorlds()
+    {
+        var nq = new PlanNode
+        {
+            ItemId = 400,
+            Name = "Shared material",
+            Quantity = 3,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.UserSelected,
+            CanBuyFromMarket = true
+        };
+        var hq = new PlanNode
+        {
+            ItemId = 400,
+            Name = "Shared material",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyHq,
+            SourceReason = AcquisitionSourceReason.UserSelected,
+            CanBuyFromMarket = true,
+            CanBeHq = true,
+            MustBeHq = true
+        };
+        var evidence = new DetailedShoppingPlan
+        {
+            ItemId = 400,
+            Name = "Shared material",
+            QuantityNeeded = 5,
+            WorldOptions =
+            [
+                WorldWithListing("Aether", "Siren", 3, 10, isHq: false),
+                WorldWithListing("Aether", "Faerie", 2, 100, isHq: true)
+            ]
+        };
+
+        var result = await CreateService().OptimizeAsync(
+            new CraftingPlan { RootItems = [nq, hq] },
+            [evidence],
+            Config(11),
+            includeSplitPurchases: true,
+            MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.Equal(5, Assert.Single(result.ShoppingPlans).QuantityNeeded);
+        Assert.Equal(2, result.ShoppingPlans[0].HqQuantityNeeded);
+        Assert.Equal(230, result.RouteDecision?.SelectedGilCost);
+        Assert.Equal(2, result.RouteDecision?.SelectedWorldStops);
+    }
+
     [Theory]
     [InlineData(11, AcquisitionSource.Craft)]
     [InlineData(10, AcquisitionSource.Craft)]
@@ -243,6 +291,8 @@ public sealed class JointAcquisitionRouteOptimizationTests
             MarketAnalysisExecutionOptions.Synchronous);
 
         Assert.InRange(first.FrontierPlanCount, 1, 4_097);
+        Assert.True(first.SearchWasTruncated);
+        Assert.True(first.RouteDecision?.AcquisitionSearchWasTruncated);
         Assert.Equal(first.RouteDecision?.SelectedGilCost, second.RouteDecision?.SelectedGilCost);
         Assert.Equal(first.OptimizedPlan.RootItems.Select(root => root.Source),
             second.OptimizedPlan.RootItems.Select(root => root.Source));
@@ -356,5 +406,31 @@ public sealed class JointAcquisitionRouteOptimizationTests
                 PricePerUnit = unitPrice
             }
         ]
+        };
+
+    private static WorldShoppingSummary WorldWithListing(
+        string dataCenter,
+        string world,
+        int quantity,
+        long unitPrice,
+        bool isHq) => new()
+        {
+            DataCenter = dataCenter,
+            WorldName = world,
+            TotalCost = quantity * unitPrice,
+            TotalQuantityPurchased = quantity,
+            HasSufficientStock = true,
+            MarketDataQualityBucket = MarketDataQualityBucket.Current,
+            MarketDataQualityScore = 100,
+            Listings =
+            [
+                new ShoppingListingEntry
+                {
+                    Quantity = quantity,
+                    NeededFromStack = quantity,
+                    PricePerUnit = unitPrice,
+                    IsHq = isHq
+                }
+            ]
         };
 }

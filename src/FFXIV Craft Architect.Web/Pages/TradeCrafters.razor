@@ -30,6 +30,7 @@
                     <MudText Typo="Typo.subtitle1">Import from Lodestone</MudText>
                     <div class="trade-crafters-lodestone-search-row">
                         <MudTextField @bind-Value="_lodestoneSearchName"
+                                      id="lodestone-character-name"
                                       Label="Character name"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
@@ -121,6 +122,7 @@
                     <MudText Typo="Typo.subtitle1">Create Crafter</MudText>
                     <div class="trade-crafters-create-row">
                         <MudTextField @bind-Value="_newCrafterName"
+                                      id="new-crafter-name"
                                       Label="Display name"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
@@ -178,23 +180,28 @@
                     <section class="trade-crafters-panel">
                         <MudText Typo="Typo.subtitle1">Crafter Details</MudText>
                         <MudTextField @bind-Value="_detailName"
+                                      id="crafter-detail-name"
                                       Label="Display name"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
                                       Immediate="true" />
                         <MudTextField @bind-Value="_detailAlias"
+                                      id="crafter-detail-alias"
                                       Label="Alias"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense" />
                         <MudTextField @bind-Value="_detailContact"
+                                      id="crafter-detail-contact"
                                       Label="General contact"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense" />
                         <MudTextField @bind-Value="_detailDiscordHandle"
+                                      id="crafter-detail-discord"
                                       Label="Discord"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense" />
                         <MudTextField @bind-Value="_detailSocialProfileUrl"
+                                      id="crafter-detail-social-profile"
                                       Label="Social/profile URL"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense" />
@@ -251,11 +258,13 @@
                             </div>
                         }
                         <MudTextField @bind-Value="_detailPaymentNotes"
+                                      id="crafter-detail-payment-notes"
                                       Label="Payment notes"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
                                       Lines="2" />
                         <MudTextField @bind-Value="_detailOperatorNotes"
+                                      id="crafter-detail-operator-notes"
                                       Label="Operator notes"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
@@ -268,11 +277,13 @@
                             @foreach (var job in Enum.GetValues<TradeCraftingJob>())
                             {
                                 <MudNumericField T="int"
+                                                 id="@($"crafter-job-level-{job}")"
                                                  Value="@GetJobLevel(job)"
                                                  ValueChanged="value => SetJobLevel(job, value)"
                                                  Label="@FormatJob(job)"
                                                  Min="0"
                                                  Max="100"
+                                                 HideSpinButtons="true"
                                                  Variant="Variant.Outlined"
                                                  Margin="Margin.Dense" />
                             }

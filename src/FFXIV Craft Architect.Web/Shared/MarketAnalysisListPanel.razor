@@ -650,8 +650,8 @@
         {
             PriceBandCompetitiveness.LowOutlier => "Deal",
             PriceBandCompetitiveness.Competitive => "Acceptable",
-            PriceBandCompetitiveness.Uncompetitive => "Pricy",
-            PriceBandCompetitiveness.Insane => "Insane",
+            PriceBandCompetitiveness.Uncompetitive => "Pricey",
+            PriceBandCompetitiveness.Insane => "Extreme outlier",
             _ => "Unclassified"
         };
     }
@@ -739,7 +739,7 @@
     {
         if (listing.PriceSanity == MarketListingPriceSanity.Insane)
         {
-            return "insane";
+            return "extreme outlier";
         }
 
         if (listing.PriceSanity == MarketListingPriceSanity.Outlier)

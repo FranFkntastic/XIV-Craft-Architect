@@ -49,14 +49,14 @@
                     <div>
                         <MudText Typo="Typo.h5">Payroll Calculator</MudText>
                         <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @_source.SourcePlanName - @_source.SelectedDataCenter / @_source.SelectedRegion - imported @_source.ImportedAtUtc.ToLocalTime():g
+                            @_source.SourcePlanName - @_source.SelectedDataCenter / @_source.SelectedRegion - imported @(_source.ImportedAtUtc.ToLocalTime().ToString("g"))
                         </MudText>
                     </div>
                     <MudButton Variant="Variant.Outlined"
                                Color="Color.Secondary"
                                StartIcon="@Icons.Material.Filled.Refresh"
                                OnClick="CreateDraftAsync">
-                        Re-import Craft Evidence
+                        Refresh from active plan
                     </MudButton>
                 </div>
 
@@ -87,17 +87,12 @@
                                 <div class="trade-evidence">@line.EvidenceSource</div>
                             </div>
                             <span>@line.Quantity.ToString("N0")</span>
-                            <MudSelect T="CommissionMaterialResponsibility"
-                                       Value="line.Responsibility"
-                                       ValueChanged="value => SetResponsibilityAsync(line, value)"
-                                       Dense="true"
-                                       Margin="Margin.Dense"
-                                       Variant="Variant.Outlined"
-                                       Class="trade-responsibility-select"
-                                       aria-label="@($"{line.Name} material responsibility")">
-                                <MudSelectItem Value="@CommissionMaterialResponsibility.Crafter">Crafter</MudSelectItem>
-                                <MudSelectItem Value="@CommissionMaterialResponsibility.Provided">Provided</MudSelectItem>
-                            </MudSelect>
+                            <CompactSelectField Id="@($"payroll-material-responsibility-{line.ItemId}")"
+                                                Label="@($"{line.Name} responsibility")"
+                                                Value="@line.Responsibility.ToString()"
+                                                ValueChanged="value => SetResponsibilityValueAsync(line, value)"
+                                                Options="MaterialResponsibilityOptions"
+                                                Class="trade-responsibility-select" />
                             <span title="@line.UnitCostExplanation">@FormatGil(line.UnitCost)</span>
                             <span title="@line.ResponsibilityExplanation">@FormatGil(line.MaterialBasis)</span>
                         </div>
@@ -108,19 +103,12 @@
             <aside class="trade-side">
                 <section class="trade-panel">
                     <MudText Typo="Typo.subtitle1" Class="mb-3">Payroll Details</MudText>
-                    <MudSelect T="Guid?"
-                               Value="_assignedCrafterId"
-                               ValueChanged="SetAssignedCrafterAsync"
-                               Label="Assigned Crafter"
-                               Variant="Variant.Outlined"
-                               Margin="Margin.Dense"
-                               Clearable="true"
-                               Class="trade-assigned-crafter-select">
-                        @foreach (var crafter in _crafters)
-                        {
-                            <MudSelectItem T="Guid?" Value="@((Guid?)crafter.Id)">@crafter.DisplayName</MudSelectItem>
-                        }
-                    </MudSelect>
+                    <CompactSelectField Id="payroll-assigned-crafter"
+                                        Label="Assigned crafter"
+                                        Value="@(_assignedCrafterId?.ToString() ?? string.Empty)"
+                                        ValueChanged="SetAssignedCrafterValueAsync"
+                                        Options="GetCrafterOptions()"
+                                        Class="trade-assigned-crafter-select" />
                     <div class="trade-assignment-actions">
                         <MudButton Variant="Variant.Filled"
                                    Color="Color.Primary"
@@ -220,6 +208,17 @@
     private List<TradeOrder> _orders = [];
     private Guid? _assignedCrafterId;
     private bool _hasLoaded;
+    private static readonly IReadOnlyList<CompactSelectOption> MaterialResponsibilityOptions =
+    [
+        new(nameof(CommissionMaterialResponsibility.Crafter), "Crafter"),
+        new(nameof(CommissionMaterialResponsibility.Provided), "Provided")
+    ];
+
+    private IReadOnlyList<CompactSelectOption> GetCrafterOptions() =>
+    [
+        new(string.Empty, "Unassigned"),
+        .. _crafters.Select(crafter => new CompactSelectOption(crafter.Id.ToString(), crafter.DisplayName))
+    ];
 
     protected override async Task OnInitializedAsync()
     {
@@ -361,6 +360,9 @@
         await SaveWorkflowDraftAsync();
     }
 
+    private Task SetAssignedCrafterValueAsync(string value) =>
+        SetAssignedCrafterAsync(Guid.TryParse(value, out var crafterId) ? crafterId : null);
+
     private async Task AssignCraftJobAsync()
     {
         if (_source == null || _companyProfile == null || _workflowDraft == null)
@@ -444,6 +446,11 @@
         Recalculate();
         await SaveWorkflowDraftAsync();
     }
+
+    private Task SetResponsibilityValueAsync(TradePayrollLineEditor line, string value) =>
+        Enum.TryParse<CommissionMaterialResponsibility>(value, out var responsibility)
+            ? SetResponsibilityAsync(line, responsibility)
+            : Task.CompletedTask;
 
     private async Task SaveWorkflowDraftAsync()
     {

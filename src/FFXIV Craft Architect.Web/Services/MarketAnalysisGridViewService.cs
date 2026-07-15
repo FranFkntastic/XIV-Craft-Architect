@@ -166,7 +166,7 @@ public static class MarketAnalysisGridViewService
         var unitPrice = GetProcurementEvidenceUnitPrice(world);
         return unitPrice > 0
             ? $"~{unitPrice:N0}g / unit"
-            : "No procurement signal";
+            : "No usable listings";
     }
 
     public static string FormatWorldStockDepth(WorldMarketAnalysis world)
@@ -186,7 +186,7 @@ public static class MarketAnalysisGridViewService
         var quantity = GetProcurementEvidenceQuantity(world);
         return quantity > 0
             ? $"{quantity:N0}"
-            : "No procurement signal";
+            : "No usable listings";
     }
 
     public static string FormatWorldMarketDepthDescriptor(WorldMarketAnalysis world)
@@ -212,21 +212,21 @@ public static class MarketAnalysisGridViewService
         var parts = new List<string>();
         if (analysis.PrimaryProcurementShelfAverageUnitPrice > 0)
         {
-            parts.Add($"primary shelf ~{analysis.PrimaryProcurementShelfAverageUnitPrice:N0}g");
+            parts.Add($"best listings average ~{analysis.PrimaryProcurementShelfAverageUnitPrice:N0}g");
         }
 
         if (analysis.PrimaryProcurementShelfAverageUnitPrice <= 0 &&
             analysis.AnalysisCompetitiveAverageUnitPrice > 0)
         {
-            parts.Add($"market fallback ~{analysis.AnalysisCompetitiveAverageUnitPrice:N0}g");
+            parts.Add($"best available average ~{analysis.AnalysisCompetitiveAverageUnitPrice:N0}g");
         }
 
         if (analysis.PriceEvaluation is { } evaluation &&
             evaluation.Thresholds.InsaneFloorUnitPrice > 0)
         {
-            parts.Add($"avg ~{evaluation.CentralRegion.WeightedAverageUnitPrice:N0}g");
-            parts.Add($"acceptable <= {evaluation.Thresholds.CompetitiveCeilingUnitPrice:N0}g");
-            parts.Add($"insane >= {evaluation.Thresholds.InsaneFloorUnitPrice:N0}g");
+            parts.Add($"market average ~{evaluation.CentralRegion.WeightedAverageUnitPrice:N0}g");
+            parts.Add($"competitive through ~{evaluation.Thresholds.CompetitiveCeilingUnitPrice:N0}g");
+            parts.Add($"extreme outliers from ~{evaluation.Thresholds.InsaneFloorUnitPrice:N0}g");
             return string.Join("; ", parts);
         }
 
@@ -235,10 +235,10 @@ public static class MarketAnalysisGridViewService
             return string.Join("; ", parts);
         }
 
-        parts.Add($"base ~{analysis.AnalysisScopeBaselineUnitPrice:N0}g");
-        parts.Add($"avg ~{analysis.AnalysisScopeAverageUnitPrice:N0}g");
-        parts.Add($"acceptable <= {analysis.CompetitiveThresholdUnitPrice:N0}g");
-        parts.Add($"insane >= {analysis.SaneThresholdUnitPrice:N0}g");
+        parts.Add($"typical price ~{analysis.AnalysisScopeBaselineUnitPrice:N0}g");
+        parts.Add($"market average ~{analysis.AnalysisScopeAverageUnitPrice:N0}g");
+        parts.Add($"competitive through ~{analysis.CompetitiveThresholdUnitPrice:N0}g");
+        parts.Add($"extreme outliers from ~{analysis.SaneThresholdUnitPrice:N0}g");
         return string.Join("; ", parts);
     }
 
@@ -348,8 +348,8 @@ public static class MarketAnalysisGridViewService
         return bucket switch
         {
             MarketCoverageBucket.Full => "full",
-            MarketCoverageBucket.PartialDeep => "partial deep",
-            MarketCoverageBucket.PartialThin => "partial thin",
+            MarketCoverageBucket.PartialDeep => "partial, strong supply",
+            MarketCoverageBucket.PartialThin => "partial, limited supply",
             _ => "none"
         };
     }
@@ -358,9 +358,9 @@ public static class MarketAnalysisGridViewService
     {
         return depth switch
         {
-            PriceBandDepth.Deep => "deep",
+            PriceBandDepth.Deep => "strong",
             PriceBandDepth.Usable => "moderate",
-            PriceBandDepth.Thin => "thin",
+            PriceBandDepth.Thin => "limited",
             _ => "no stock"
         };
     }
@@ -370,7 +370,7 @@ public static class MarketAnalysisGridViewService
         ArgumentNullException.ThrowIfNull(world);
 
         return world.ScopeInsaneQuantity > 0
-            ? $"{world.ScopeInsaneQuantity:N0} insane"
+            ? $"{world.ScopeInsaneQuantity:N0} extreme outlier"
             : string.Empty;
     }
 
@@ -398,7 +398,7 @@ public static class MarketAnalysisGridViewService
         var procurementPrice = GetProcurementEvidenceUnitPrice(world);
         if (referencePrice <= 0 || procurementPrice <= 0)
         {
-            return "No procurement signal is available for comparison.";
+            return "No usable listing price is available for comparison.";
         }
 
         var percent = (procurementPrice - referencePrice) / referencePrice * 100m;
@@ -409,7 +409,7 @@ public static class MarketAnalysisGridViewService
                 ? "greater than"
                 : "equal to";
 
-        return $"{world.WorldName}'s procurement evidence is {rounded:N0}% {relationship} the regional {referenceLabel}: {procurementPrice:N0}g vs {referencePrice:N0}g.";
+        return $"{world.WorldName}'s best usable listing price is {rounded:N0}% {relationship} the regional {referenceLabel}: {procurementPrice:N0}g vs {referencePrice:N0}g.";
     }
 
     public static IReadOnlyList<MarketListingDivider> GetListingDividersBefore(
@@ -432,15 +432,15 @@ public static class MarketAnalysisGridViewService
         if (CrossesThresholdBefore(world, listing, primaryShelfAverage))
         {
             var label = world.PrimaryUsableAverageUnitPrice > 0
-                ? "Above primary shelf"
-                : "Above market fallback";
+                ? "Above best listings average"
+                : "Above best available average";
             dividers.Add(new MarketListingDivider(label));
         }
 
         var average = world.AnalysisScopeAverageUnitPrice;
         if (average > 0 && average != primaryShelfAverage && CrossesThresholdBefore(world, listing, average))
         {
-            dividers.Add(new MarketListingDivider("Above avg"));
+            dividers.Add(new MarketListingDivider("Above market average"));
         }
 
         return dividers;
@@ -480,10 +480,10 @@ public static class MarketAnalysisGridViewService
         return GetListingPriceBandSignal(world, listing) switch
         {
             ListingPriceBandSignal.LowOutlier => "Deal price band: cheap evidence is visible but does not drive procurement pricing by itself.",
-            ListingPriceBandSignal.Thin => "Thin deal price band: low market depth is visible but does not drive procurement pricing by itself.",
-            ListingPriceBandSignal.Competitive => "Good price band: this listing belongs to the primary procurement shelf or acceptable market evidence.",
-            ListingPriceBandSignal.Uncompetitive => "Pricy price band: this listing is visible market evidence above the useful procurement range.",
-            ListingPriceBandSignal.Insane => "Insane price band: this listing is visible but excluded from accepted market evidence.",
+            ListingPriceBandSignal.Thin => "Limited-supply deal: this low price is visible but does not establish a reliable buying price by itself.",
+            ListingPriceBandSignal.Competitive => "Competitive listing: this price is supported by enough useful market evidence.",
+            ListingPriceBandSignal.Uncompetitive => "High-priced listing: visible in the market, but above the useful buying range.",
+            ListingPriceBandSignal.Insane => "Extreme outlier: visible in the market, but excluded from accepted buying evidence.",
             _ => "Price band signal could not be classified from the loaded listing evidence."
         };
     }
@@ -976,20 +976,20 @@ public static class MarketAnalysisGridViewService
     {
         if (world.AnalysisCompetitiveAverageUnitPrice > 0)
         {
-            return (world.AnalysisCompetitiveAverageUnitPrice, "market evidence fallback");
+            return (world.AnalysisCompetitiveAverageUnitPrice, "best available average");
         }
 
         if (world.PrimaryUsableAverageUnitPrice > 0)
         {
-            return (world.PrimaryUsableAverageUnitPrice, "primary shelf");
+            return (world.PrimaryUsableAverageUnitPrice, "best listings average");
         }
 
         if (world.AnalysisScopeBaselineUnitPrice > 0)
         {
-            return (world.AnalysisScopeBaselineUnitPrice, "base");
+            return (world.AnalysisScopeBaselineUnitPrice, "typical price");
         }
 
-        return (0, "primary shelf");
+        return (0, "best listings average");
     }
 
     private readonly record struct ProcurementEvidence(int Quantity, decimal UnitPrice);

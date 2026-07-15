@@ -46,6 +46,7 @@
                     Or paste JSON directly:
                 </MudText>
                 <MudTextField @bind-Value="_nativeJson"
+                              id="import-native-plan-json"
                               Label="Plan JSON"
                               Variant="Variant.Outlined"
                               Lines="6"
@@ -57,6 +58,7 @@
                     Paste Teamcraft "Copy as Text" output. Only the "Items :" section will be imported (other sections like Crystals, Pre crafts, etc. are materials).
                 </MudText>
                 <MudTextField @bind-Value="_teamcraftText"
+                              id="import-teamcraft-text"
                               Label="Teamcraft List"
                               Variant="Variant.Outlined"
                               Lines="10"
@@ -68,6 +70,7 @@
                     Paste an Artisan crafting list JSON export
                 </MudText>
                 <MudTextField @bind-Value="_artisanJson"
+                              id="import-artisan-json"
                               Label="Artisan JSON"
                               Variant="Variant.Outlined"
                               Lines="10"
@@ -205,7 +208,7 @@
                     });
                 }
                 
-                Snackbar.Add($"Imported native plan with {items.Count} items", Severity.Success);
+                Snackbar.Add($"Imported native plan with {FormatItemCount(items.Count)}", Severity.Success);
             }
         }
         catch (Exception ex)
@@ -408,6 +411,9 @@
         return (items, null);
     }
     
+    private static string FormatItemCount(int count) =>
+        $"{count:N0} item{(count == 1 ? string.Empty : "s")}";
+
     private void Cancel()
     {
         MudDialog.Cancel();

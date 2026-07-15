@@ -47,7 +47,7 @@
                 <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Large" Class="ma-state-icon" />
                 <MudText Typo="Typo.h6" Class="ma-state-title">Ready to Analyze</MudText>
                 <MudText Typo="Typo.body2" Class="ma-state-body">
-                    Found @BuyItems.Count items to analyze. Click "Run Analysis" to compare prices across worlds.
+                    Found @FormatItemCount(BuyItems.Count) to analyze. Select "Analyze Market" to compare prices across worlds.
                 </MudText>
 
                 <MudButton OnClick="OnRunAnalysisRequested"
@@ -95,4 +95,6 @@
     [Parameter] public EventCallback<MarketAnalysisExpandedWorldKey> OnWorldExpansionToggled { get; set; }
     [Parameter] public EventCallback<MarketAnalysisGridSortState> OnSortChanged { get; set; }
     [Parameter] public EventCallback<MarketAnalysisWorldGridSortState> OnWorldSortChanged { get; set; }
+
+    private static string FormatItemCount(int count) => $"{count:N0} item{(count == 1 ? string.Empty : "s")}";
 }

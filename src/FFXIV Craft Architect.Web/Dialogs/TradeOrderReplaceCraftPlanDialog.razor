@@ -53,11 +53,15 @@
         ? Assessment.ExistingPlanSavedAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
         : "Unknown";
 
-    private string OutputLabel => $"{Assessment.OutputLineCount:N0} lines / {Assessment.OutputQuantity:N0} items";
+    private string OutputLabel =>
+        $"{FormatCount(Assessment.OutputLineCount, "line")} / {FormatCount(Assessment.OutputQuantity, "item")}";
 
     private string MaterialLabel => Assessment.MaterialLineCount == 0
         ? "No captured material evidence"
         : $"{Assessment.PricedMaterialLineCount:N0} of {Assessment.MaterialLineCount:N0} lines priced";
+
+    private static string FormatCount(int count, string noun) =>
+        $"{count:N0} {noun}{(count == 1 ? string.Empty : "s")}";
 
     private void Confirm()
     {

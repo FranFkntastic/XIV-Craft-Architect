@@ -16,6 +16,7 @@
 }
 
 .lp-label {
+    display: block;
     color: #cccccc;
     font-size: 14px;
     margin-bottom: 4px;
@@ -69,9 +70,21 @@
 }
 
 .lp-search-result-item {
+    display: block;
+    width: 100%;
     padding: 8px;
     cursor: pointer;
+    color: inherit;
+    background: transparent;
+    border: 0;
     border-bottom: 1px solid #444;
+    text-align: left;
+}
+
+.lp-search-result-item:hover,
+.lp-search-result-item:focus-visible {
+    background: #3d3d3d;
+    outline: none;
 }
 
 .lp-search-result-name {
@@ -126,8 +139,16 @@
     border: none;
     cursor: pointer;
     font-size: 14px;
-    padding: 0;
-    width: 20px;
+    padding: 4px;
+    width: 28px;
+    min-height: 28px;
+    border-radius: 4px;
+}
+
+.lp-hq-toggle:focus-visible,
+.lp-remove-btn:focus-visible {
+    outline: 2px solid #90caf9;
+    outline-offset: 2px;
 }
 
 .lp-item-name {
@@ -149,7 +170,10 @@
     border: none;
     color: #ff6b6b;
     cursor: pointer;
-    font-size: 12px;
+    min-width: 28px;
+    min-height: 28px;
+    border-radius: 4px;
+    font-size: 14px;
 }
 
 .lp-build-wrap {
@@ -177,19 +201,23 @@
 .lp-plan-btn {
     flex: 1;
     padding: 8px;
-    color: white;
-    border: none;
+    min-height: 38px;
+    border: 1px solid;
     border-radius: 4px;
     cursor: pointer;
     font-size: 12px;
 }
 
 .lp-plan-btn-save {
-    background: #4caf50;
+    border-color: #d4a73a;
+    color: #d4a73a;
+    background: #2d291f;
 }
 
 .lp-plan-btn-export {
-    background: #2196f3;
+    border-color: #4b5a66;
+    color: #c7d6e2;
+    background: transparent;
 }
 
 .lp-autosave-meta {

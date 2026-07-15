@@ -459,6 +459,7 @@ public class DetailedShoppingPlan
     public string Name { get; set; } = string.Empty;
     public int IconId { get; set; }
     public int QuantityNeeded { get; set; }
+    public int HqQuantityNeeded { get; set; }
     public decimal DCAveragePrice { get; set; }
     public List<WorldShoppingSummary> WorldOptions { get; set; } = new();
     public WorldShoppingSummary? RecommendedWorld { get; set; }

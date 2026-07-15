@@ -128,8 +128,18 @@
     cursor: pointer;
 }
 
-.ma-world-toggle span:first-of-type,
-::deep .ma-world-toggle span:first-of-type {
+.ma-world-label,
+::deep .ma-world-label {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    line-height: 1.25;
+}
+
+.ma-world-name,
+::deep .ma-world-name {
+    display: block;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

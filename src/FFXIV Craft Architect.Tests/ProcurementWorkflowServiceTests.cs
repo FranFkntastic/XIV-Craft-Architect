@@ -52,6 +52,47 @@ public class ProcurementWorkflowServiceTests
             It.IsAny<CancellationToken>(),
             It.IsAny<MarketAnalysisExecutionOptions?>()));
     }
+
+    [Fact]
+    public async Task RunAnalysisAsync_PublishesReconciledEvidenceForTheNextRouteRun()
+    {
+        var appState = CreateAppState(101);
+        var evidencePlan = ShoppingPlan(101, "Faerie");
+        var evidenceAnalysis = new MarketItemAnalysis
+        {
+            ItemId = 101,
+            Name = "Item 101",
+            QuantityNeeded = 5,
+            Scope = MarketFetchScope.SelectedDataCenter,
+            RequestedDataCenters = ["Aether"],
+            PresentDataCenters = ["Aether"],
+            LoadedAtUtc = DateTime.UtcNow
+        };
+        var execution = new Mock<IProcurementRouteExecutionService>();
+        execution.Setup(e => e.AnalyzeAsync(
+                It.IsAny<ProcurementRouteExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(new ProcurementRouteExecutionResult(
+                [ShoppingPlan(101, "Faerie")],
+                [evidencePlan],
+                [],
+                [],
+                [],
+                EvidenceAnalyses: [evidenceAnalysis]));
+        var service = CreateService(appState, procurementExecution: execution.Object);
+
+        var result = await service.RunAnalysisAsync(
+            new ProcurementWorkflowRequest(() => true, MarketAnalysisExecutionOptions.Synchronous));
+
+        Assert.Equal(ProcurementWorkflowStatus.Published, result.Status);
+        Assert.Same(evidenceAnalysis, Assert.Single(appState.MarketItemAnalyses));
+        Assert.Same(evidencePlan, Assert.Single(appState.ShoppingPlans));
+        Assert.Equal(MarketFetchScope.SelectedDataCenter, appState.PublishedMarketAnalysisScope?.Scope);
+        Assert.Equal("Faerie", Assert.Single(appState.ProcurementShoppingPlans).RecommendedWorld?.WorldName);
+    }
+
     [Fact]
     public async Task RunAnalysisAsync_DisplayOnlyScopeFields_DoNotChangeRealRouteOutput()
     {
@@ -130,6 +171,28 @@ public class ProcurementWorkflowServiceTests
 
         Assert.Equal(ProcurementWorkflowStatus.Superseded, result.Status);
         Assert.Empty(appState.ProcurementShoppingPlans);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_WhenNoCompleteRouteExists_PreservesPublishedOverlayAndExplainsRecovery()
+    {
+        var appState = CreateAppState();
+        appState.ReplaceProcurementOverlay([ShoppingPlan(101, "Siren")]);
+        var execution = new Mock<IProcurementRouteExecutionService>();
+        execution.Setup(e => e.AnalyzeAsync(
+                It.IsAny<ProcurementRouteExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(new ProcurementRouteExecutionResult([], [], [], [], []));
+        var service = CreateService(appState, procurementExecution: execution.Object);
+
+        var result = await service.RunAnalysisAsync(
+            new ProcurementWorkflowRequest(() => true, MarketAnalysisExecutionOptions.Synchronous));
+
+        Assert.Equal(ProcurementWorkflowStatus.NoCompleteRoute, result.Status);
+        Assert.Contains("Refresh", result.Message);
+        Assert.Equal("Siren", Assert.Single(appState.ProcurementShoppingPlans).RecommendedWorld?.WorldName);
     }
 
     [Fact]

@@ -10,6 +10,7 @@
 .web-grid-table-head,
 .web-grid-table-row {
     display: grid;
+    box-sizing: border-box;
     grid-template-columns: var(--web-table-grid-template);
     align-items: center;
     gap: var(--web-table-grid-gap);

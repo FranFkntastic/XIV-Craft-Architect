@@ -6,6 +6,7 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Dialogs;
 using FFXIV_Craft_Architect.Web.Services;
+using FFXIV_Craft_Architect.Web.Shared;
 using FFXIV_Craft_Architect.Web.Shared.TablePrimitives;
 
 using Microsoft.AspNetCore.Components;
@@ -61,6 +62,74 @@ public partial class TradeOrders
     private AcquisitionEvaluationSnapshot? _liveProcurementSnapshot;
     private LiveProcurementKey? _liveProcurementKey;
     private int _liveProcurementRefreshRequestId;
+
+    private static readonly IReadOnlyList<CompactSelectOption> PaymentContractOptions =
+    [
+        new(nameof(TradePaymentContractMode.LegacyCommission), "Legacy commission"),
+        new(nameof(TradePaymentContractMode.LaborStandard), "Labor standard")
+    ];
+    private static readonly IReadOnlyList<CompactSelectOption> MaterialResponsibilityOptions =
+    [
+        new(nameof(CommissionMaterialResponsibility.Crafter), "Crafter"),
+        new(nameof(CommissionMaterialResponsibility.Provided), "Provided")
+    ];
+
+    private string NewOrderCrafterValue
+    {
+        get => _newOrderCrafterId?.ToString() ?? string.Empty;
+        set => _newOrderCrafterId = ParseNullableGuid(value);
+    }
+
+    private string NewRequestedOrderCrafterValue
+    {
+        get => _newRequestedOrderCrafterId?.ToString() ?? string.Empty;
+        set => _newRequestedOrderCrafterId = ParseNullableGuid(value);
+    }
+
+    private string DetailCrafterValue
+    {
+        get => _detailCrafterId?.ToString() ?? string.Empty;
+        set => _detailCrafterId = ParseNullableGuid(value);
+    }
+
+    private string DetailStatusValue
+    {
+        get => _detailStatus.ToString();
+        set
+        {
+            if (Enum.TryParse<TradeOrderStatus>(value, out var status))
+            {
+                _detailStatus = status;
+            }
+        }
+    }
+
+    private IReadOnlyList<CompactSelectOption> GetCrafterOptions() =>
+    [
+        new(string.Empty, "Unassigned"),
+        .. _crafters.Select(crafter => new CompactSelectOption(crafter.Id.ToString(), crafter.DisplayName))
+    ];
+
+    private IReadOnlyList<CompactSelectOption> GetActiveStatusOptions() =>
+        TradeOrderStatusWorkflow.ActiveStatuses
+            .Where(status => status != TradeOrderStatus.Draft)
+            .Select(status => new CompactSelectOption(status.ToString(), FormatStatus(status)))
+            .ToArray();
+
+    private static Guid? ParseNullableGuid(string value) =>
+        Guid.TryParse(value, out var parsed) ? parsed : null;
+
+    private Task SetSelectedOrderPaymentContractValueAsync(string value) =>
+        Enum.TryParse<TradePaymentContractMode>(value, out var contract)
+            ? SetSelectedOrderPaymentContractAsync(contract)
+            : Task.CompletedTask;
+
+    private Task SetOrderMaterialResponsibilityValueAsync(
+        TradeCommissionPaymentMaterial material,
+        string value) =>
+        Enum.TryParse<CommissionMaterialResponsibility>(value, out var responsibility)
+            ? SetOrderMaterialResponsibilityAsync(material, responsibility)
+            : Task.CompletedTask;
 
     private bool CanCreateRequestedOrder =>
         !string.IsNullOrWhiteSpace(_newRequestedOrderTitle) &&

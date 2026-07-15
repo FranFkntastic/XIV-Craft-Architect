@@ -111,7 +111,7 @@
                     <MudMenuItem OnClick="OnNewPlan" Icon="@Icons.Material.Filled.Add">New Plan</MudMenuItem>
                     <MudMenuItem OnClick="OnOpenPlanBrowser" Icon="@Icons.Material.Filled.FolderOpen">Plan Browser...</MudMenuItem>
                     <MudDivider />
-                    <MudMenuItem OnClick="OnViewLogs" Icon="@Icons.Material.Filled.Article">View Logs</MudMenuItem>
+                    <MudMenuItem OnClick="OnViewLogs" Icon="@Icons.Material.Filled.Info">Session Status</MudMenuItem>
                 </ChildContent>
             </MudMenu>
             
@@ -415,7 +415,7 @@
 
             // Load the plan into AppState
             var stateLoadElapsed = System.Diagnostics.Stopwatch.StartNew();
-            PlanSessionLoad.Load(autoSave, trackStoredPlanIdentity: false);
+            PlanSessionLoad.ApplyPreparedSession(loadResult, trackStoredPlanIdentity: false);
             stateLoadElapsed.Stop();
             totalElapsed.Stop();
             
@@ -579,7 +579,7 @@
     private async Task OnViewLogs()
     {
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
-        DialogService.Show<LogsDialog>("Logs", options);
+        DialogService.Show<LogsDialog>("Session Status", options);
     }
 
     // ==================== IMPORT MENU ====================
@@ -600,7 +600,7 @@
             {
                 await LoadNativePlanAsync(
                     importResult.NativePlan,
-                    $"Imported native plan '{importResult.NativePlan.Name}' with {items.Count} items",
+                    $"Imported native plan '{importResult.NativePlan.Name}' with {items.Count} {(items.Count == 1 ? "item" : "items")}",
                     refreshPrices: true,
                     clearCurrentPlanId: true);
             }
@@ -623,7 +623,7 @@
                         AppState.SelectedRegion,
                         AppState.DefaultMarketFetchScope));
 
-                Snackbar.Add($"Imported {items.Count} items", Severity.Success);
+                Snackbar.Add($"Imported {items.Count} {(items.Count == 1 ? "item" : "items")}", Severity.Success);
                 if (items.Count > 0)
                 {
                     if (importCommandResult.BuildResult.Built)

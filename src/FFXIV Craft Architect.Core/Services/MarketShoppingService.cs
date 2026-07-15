@@ -232,6 +232,26 @@ public class MarketShoppingService
             absoluteMaximumGilCost);
     }
 
+    internal Task<ProcurementRouteOptimizationResult> OptimizeProcurementRouteInSessionAsync(
+        IEnumerable<DetailedShoppingPlan> evidencePlans,
+        MarketAnalysisConfig config,
+        bool includeSplitPurchases,
+        MarketAnalysisExecutionOptions executionOptions,
+        ProcurementRouteOptimizationSession session,
+        CancellationToken ct,
+        long? absoluteMaximumGilCost = null)
+    {
+        return OptimizeProcurementRouteCoreAsync(
+            evidencePlans,
+            config,
+            includeSplitPurchases,
+            executionOptions,
+            progress: null,
+            ct,
+            absoluteMaximumGilCost,
+            session);
+    }
+
     private async Task<ProcurementRouteOptimizationResult> OptimizeProcurementRouteCoreAsync(
         IEnumerable<DetailedShoppingPlan> evidencePlans,
         MarketAnalysisConfig? config,
@@ -239,7 +259,8 @@ public class MarketShoppingService
         MarketAnalysisExecutionOptions executionOptions,
         IProgress<string>? progress,
         CancellationToken ct,
-        long? absoluteMaximumGilCost = null)
+        long? absoluteMaximumGilCost = null,
+        ProcurementRouteOptimizationSession? session = null)
     {
         ArgumentNullException.ThrowIfNull(evidencePlans);
 
@@ -258,7 +279,8 @@ public class MarketShoppingService
             .ToList();
         var standaloneCandidatesByPlan = candidatePlanIndexes.ToDictionary(
             entry => entry.Index,
-            entry => GeneratePurchaseCandidates(entry.Plan)
+            entry => (session?.GetOrAddCandidates(entry.Plan, plan => GeneratePurchaseCandidates(plan)) ??
+                    GeneratePurchaseCandidates(entry.Plan))
                 .Where(candidate => candidate.IsFullyFulfilled)
                 .Where(candidate => includeSplitPurchases || !candidate.IsSplitPurchase)
                 .ToList());
@@ -275,6 +297,7 @@ public class MarketShoppingService
         {
             new()
         };
+        var lowestCostOnly = config.TravelTolerance == 11;
 
         for (var planIndex = 0; planIndex < candidatePlanIndexes.Count; planIndex++)
         {
@@ -286,10 +309,22 @@ public class MarketShoppingService
             {
                 ct.ThrowIfCancellationRequested();
                 var state = beam[stateIndex];
-                var candidates = GeneratePurchaseCandidates(planEntry.Plan, state.Route)
+                var candidates = (lowestCostOnly
+                        ? standaloneCandidatesByPlan.GetValueOrDefault(planEntry.Index) ?? []
+                        : GeneratePurchaseCandidates(planEntry.Plan, state.Route))
                     .Where(c => c.IsFullyFulfilled)
                     .Where(c => includeSplitPurchases || !c.IsSplitPurchase)
                     .Where(c => c.HasTrustworthyEvidence)
+                    .ToList();
+                if (lowestCostOnly && candidates.Count > 0)
+                {
+                    var minimumGilCost = candidates.Min(candidate => candidate.GilCost);
+                    candidates = candidates
+                        .Where(candidate => candidate.GilCost == minimumGilCost)
+                        .ToList();
+                }
+
+                candidates = candidates
                     .OrderBy(c => c, Comparer<MarketPurchaseCandidate>.Create(
                         (left, right) => MarketRouteScoring.CompareCandidates(left, right, state.Route, config)))
                     .ThenBy(c => c.ItemId)
@@ -1105,6 +1140,11 @@ public class MarketShoppingService
             return candidates;
         }
 
+        if (plan.HqQuantityNeeded > 0)
+        {
+            return GenerateQualityAwarePurchaseCandidates(plan, currentRoute);
+        }
+
         var coverageCandidates = MarketCoverageSelection.GetCandidates(plan.CoverageSet)
             .Where(coverage => coverage.Kind == MarketCoverageKind.SupportedListings)
             .Where(coverage => coverage.QualityPolicy == MarketCoverageQualityPolicy.NqOrHq)
@@ -1180,6 +1220,192 @@ public class MarketShoppingService
         }
 
         return candidates;
+    }
+
+    private static List<MarketPurchaseCandidate> GenerateQualityAwarePurchaseCandidates(
+        DetailedShoppingPlan plan,
+        MarketRouteState? currentRoute)
+    {
+        var worlds = plan.WorldOptions
+            .Where(world => !string.Equals(
+                world.WorldName,
+                MarketShoppingConstants.VendorWorldName,
+                StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var worldSets = new Dictionary<string, IReadOnlyList<WorldShoppingSummary>>(StringComparer.Ordinal);
+
+        void AddWorldSet(IEnumerable<WorldShoppingSummary> source)
+        {
+            var set = source
+                .DistinctBy(world => new MarketWorldKey(world.DataCenter, world.WorldName))
+                .OrderBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (set.Count == 0)
+            {
+                return;
+            }
+
+            var key = string.Join('|', set.Select(world => $"{world.DataCenter}:{world.WorldName}"));
+            worldSets.TryAdd(key, set);
+        }
+
+        foreach (var world in worlds)
+        {
+            AddWorldSet([world]);
+        }
+
+        for (var left = 0; left < worlds.Count; left++)
+        {
+            for (var right = left + 1; right < worlds.Count; right++)
+            {
+                AddWorldSet([worlds[left], worlds[right]]);
+            }
+        }
+
+        AddWorldSet(worlds);
+        if (currentRoute?.Worlds.Count > 0)
+        {
+            var routeWorlds = worlds.Where(world => currentRoute.ContainsWorld(
+                new MarketWorldKey(world.DataCenter, world.WorldName))).ToList();
+            AddWorldSet(routeWorlds);
+            foreach (var world in worlds)
+            {
+                AddWorldSet(routeWorlds.Append(world));
+            }
+        }
+
+        var candidates = new List<MarketPurchaseCandidate>();
+        foreach (var worldSet in worldSets.Values)
+        {
+            var available = worldSet
+                .SelectMany(world => world.Listings
+                    .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
+                    .Select(listing => new QualityAwareListingCoverageOptimizer.Listing(world, listing)))
+                .OrderBy(entry => entry.MarketListing.PricePerUnit)
+                .ThenBy(entry => entry.World.DataCenter, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(entry => entry.World.WorldName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var selected = QualityAwareListingCoverageOptimizer.Select(
+                available,
+                plan.QuantityNeeded,
+                plan.HqQuantityNeeded);
+            if (selected == null)
+            {
+                continue;
+            }
+
+            var coverage = CreateQualityAwareCoverage(plan, selected);
+            var keys = coverage.Worlds
+                .Select(world => new MarketWorldKey(world.DataCenter, world.WorldName))
+                .ToList();
+            var evidencePenalty = 0L;
+            foreach (var coverageWorld in coverage.Worlds)
+            {
+                var world = worldSet.First(option =>
+                    string.Equals(option.DataCenter, coverageWorld.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(option.WorldName, coverageWorld.WorldName, StringComparison.OrdinalIgnoreCase));
+                evidencePenalty = SaturatingAddCost(
+                    evidencePenalty,
+                    MarketWorldRecommendationScoring.CalculateEvidencePenalty(
+                        ToLongSaturating(coverageWorld.CashOutCost),
+                        world));
+            }
+
+            candidates.Add(new MarketPurchaseCandidate(ToLongSaturating(coverage.CashOutCost), keys)
+            {
+                ItemId = plan.ItemId,
+                ItemName = plan.Name,
+                QuantityNeeded = plan.QuantityNeeded,
+                QuantityFulfilled = plan.QuantityNeeded,
+                MarketEvidencePenalty = evidencePenalty,
+                HasTrustworthyEvidence = HasTrustworthyEvidence(plan, keys),
+                Coverage = coverage
+            });
+        }
+
+        return candidates
+            .GroupBy(candidate => string.Join('|', candidate.Worlds
+                .OrderBy(world => world.DataCenter)
+                .ThenBy(world => world.WorldName)
+                .Select(world => $"{world.DataCenter}:{world.WorldName}")), StringComparer.Ordinal)
+            .Select(group => group.OrderBy(candidate => candidate.GilCost).First())
+            .OrderBy(candidate => candidate.GilCost)
+            .ThenBy(candidate => candidate.Worlds.Count)
+            .ToList();
+    }
+
+    private static MarketCoverageOption CreateQualityAwareCoverage(
+        DetailedShoppingPlan plan,
+        IReadOnlyList<QualityAwareListingCoverageOptimizer.Listing> selected)
+    {
+        var remaining = plan.QuantityNeeded;
+        var listings = selected
+            .OrderByDescending(entry => entry.MarketListing.IsHq)
+            .ThenBy(entry => entry.MarketListing.PricePerUnit)
+            .Select(entry =>
+            {
+                var used = Math.Min(remaining, entry.MarketListing.Quantity);
+                remaining -= used;
+                return new MarketCoverageListing(
+                    entry.World.DataCenter,
+                    entry.World.WorldName,
+                    entry.MarketListing.Quantity,
+                    used,
+                    entry.MarketListing.Quantity,
+                    entry.MarketListing.PricePerUnit,
+                    entry.MarketListing.IsHq);
+            })
+            .ToList();
+        var worlds = listings
+            .GroupBy(listing => new MarketWorldKey(listing.DataCenter, listing.WorldName))
+            .Select(group => new MarketCoverageWorld(
+                group.Key.DataCenter,
+                group.Key.WorldName,
+                group.Sum(listing => listing.QuantityUsed),
+                group.Sum(listing => listing.QuantityPurchased),
+                group.Sum(listing => listing.QuantityUsed * listing.PricePerUnit),
+                group.Sum(listing => listing.QuantityPurchased * listing.PricePerUnit)))
+            .OrderBy(world => world.DataCenter)
+            .ThenBy(world => world.WorldName)
+            .ToList();
+        var quantityToPurchase = worlds.Sum(world => world.QuantityToPurchase);
+        var exactNeededCost = worlds.Sum(world => world.ExactNeededCost);
+        var cashOutCost = worlds.Sum(world => world.CashOutCost);
+        var tier = worlds.Count switch
+        {
+            1 => MarketCoverageTier.SingleWorld,
+            2 => MarketCoverageTier.CompactSplit,
+            <= 5 => MarketCoverageTier.WideSplit,
+            _ => MarketCoverageTier.CheapestObserved
+        };
+        var candidateId = $"{plan.ItemId}-{plan.QuantityNeeded}-{plan.HqQuantityNeeded}-quality-{string.Join('_', worlds.Select(world => $"{world.DataCenter}.{world.WorldName}"))}";
+
+        return new MarketCoverageOption(
+            candidateId,
+            tier,
+            MarketCoverageKind.SupportedListings,
+            plan.HqQuantityNeeded >= plan.QuantityNeeded
+                ? MarketCoverageQualityPolicy.HqOnly
+                : MarketCoverageQualityPolicy.NqOrHq,
+            plan.QuantityNeeded,
+            quantityToPurchase,
+            Math.Max(0, quantityToPurchase - plan.QuantityNeeded),
+            exactNeededCost,
+            cashOutCost,
+            plan.QuantityNeeded > 0 ? exactNeededCost / plan.QuantityNeeded : 0,
+            MarketCoveragePriceBand.Unknown,
+            worlds,
+            listings,
+            new MarketCoverageFriction(
+                worlds.Count,
+                worlds.Select(world => world.DataCenter).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                worlds.Count == 0 ? 0 : worlds.Min(world => world.QuantityCovered),
+                worlds.Count == 0 ? 0 : worlds.Max(world => world.QuantityCovered),
+                Math.Max(0, quantityToPurchase - plan.QuantityNeeded)),
+            MarketCoverageSavings.None,
+            IsDefaultEligible: true,
+            DegradedReason: null);
     }
 
     private static MarketPurchaseCandidate CreateCoveragePurchaseCandidate(
@@ -1900,6 +2126,7 @@ public class MarketShoppingService
             Name = plan.Name,
             IconId = plan.IconId,
             QuantityNeeded = plan.QuantityNeeded,
+            HqQuantityNeeded = plan.HqQuantityNeeded,
             DCAveragePrice = plan.DCAveragePrice,
             WorldOptions = plan.WorldOptions.ToList(),
             RecommendedWorld = plan.RecommendedWorld,

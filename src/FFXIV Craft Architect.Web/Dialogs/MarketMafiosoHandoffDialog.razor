@@ -5,9 +5,9 @@
         <MudText Typo="Typo.body2" Class="mb-4">
             MarketMafioso will visit <strong>@Draft.PurchaseWorld</strong> for @Draft.ItemName. These are hard authorization caps, not estimates.
         </MudText>
-        <MudNumericField T="uint" @bind-Value="_quantity" Label="Exact quantity" Variant="Variant.Outlined" Min="1" Class="mb-3" />
-        <MudNumericField T="uint" @bind-Value="_maxUnitPrice" Label="Maximum unit price" Variant="Variant.Outlined" Min="1" Adornment="Adornment.End" AdornmentText="gil" Class="mb-3" />
-        <MudNumericField T="uint" @bind-Value="_gilCap" Label="Maximum total spend" Variant="Variant.Outlined" Min="1" Adornment="Adornment.End" AdornmentText="gil" />
+        <MudNumericField T="uint" @bind-Value="_quantity" id="handoff-quantity" Label="Exact quantity" Variant="Variant.Outlined" Min="1" HideSpinButtons="true" Class="mb-3" />
+        <MudNumericField T="uint" @bind-Value="_maxUnitPrice" id="handoff-maximum-unit-price" Label="Maximum unit price" Variant="Variant.Outlined" Min="1" HideSpinButtons="true" Adornment="Adornment.End" AdornmentText="gil" Class="mb-3" />
+        <MudNumericField T="uint" @bind-Value="_gilCap" id="handoff-maximum-total-spend" Label="Maximum total spend" Variant="Variant.Outlined" Min="1" HideSpinButtons="true" Adornment="Adornment.End" AdornmentText="gil" />
         <MudAlert Severity="Severity.Info" Dense="true" Class="mt-4">
             The work order stops at either cap and remains in the MarketMafioso inbox until it is actioned. Add it to the in-game working set, then choose <strong>Refresh Evidence</strong> to update CA without purchasing. <strong>Start Route</strong> remains the purchase-authorized action.
         </MudAlert>

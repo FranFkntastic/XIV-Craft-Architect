@@ -379,7 +379,7 @@ public sealed class TradeOrderPricingWorkflowService
 
         if (procurementResult.Status != ProcurementWorkflowStatus.Published)
         {
-            warnings.Add($"Procurement route was not published: {procurementResult.Status}.");
+            warnings.Add(procurementResult.Message ?? $"Procurement route was not published: {procurementResult.Status}.");
         }
 
         operation.ReportStatus("Updating order payment evidence...", progress: 90);

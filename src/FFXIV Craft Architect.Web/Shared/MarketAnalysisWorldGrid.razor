@@ -57,7 +57,7 @@
             {
                 Id = MarketAnalysisWorldGridSortColumn.World,
                 Header = "World",
-                Size = WebTableColumnSize.Percent(22m),
+                Size = WebTableColumnSize.Percent(21m),
                 HeaderCssClass = "ma-world-column",
                 CellCssClass = "ma-world-cell",
                 CellTemplate = RenderWorldCell
@@ -65,7 +65,8 @@
             new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
             {
                 Id = MarketAnalysisWorldGridSortColumn.StockDepth,
-                Header = "Market Depth",
+                Header = "Stock",
+                HeaderTooltip = "Total quantity currently listed on this world",
                 Size = WebTableColumnSize.Percent(15m),
                 HeaderCssClass = "ma-world-column",
                 CellCssClass = "ma-world-cell",
@@ -74,7 +75,8 @@
             new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
             {
                 Id = MarketAnalysisWorldGridSortColumn.Coverage,
-                Header = "Viable Stock",
+                Header = "Fill",
+                HeaderTooltip = "How much of the requested quantity this world can fill",
                 Size = WebTableColumnSize.Percent(14m),
                 HeaderCssClass = "ma-world-column",
                 CellCssClass = "ma-world-cell",
@@ -83,8 +85,9 @@
             new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
             {
                 Id = MarketAnalysisWorldGridSortColumn.PriceValue,
-                Header = "Unit Price",
-                Size = WebTableColumnSize.Percent(24m),
+                Header = "Price",
+                HeaderTooltip = "Best applicable unit price on this world",
+                Size = WebTableColumnSize.Percent(23m),
                 HeaderCssClass = "ma-world-column",
                 CellCssClass = "ma-world-cell",
                 CellTemplate = RenderPriceValueCell
@@ -92,8 +95,9 @@
             new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
             {
                 Id = MarketAnalysisWorldGridSortColumn.Value,
-                Header = "% Diff",
-                Size = WebTableColumnSize.Percent(10m),
+                Header = "Vs",
+                HeaderTooltip = "Price difference from the typical price in this search",
+                Size = WebTableColumnSize.Percent(12m),
                 HeaderCssClass = "ma-world-column ma-world-value-column",
                 CellCssClass = "ma-world-cell ma-world-value-column",
                 CellTitleSelector = MarketAnalysisGridViewService.FormatCompetitiveValueTooltip,
@@ -102,7 +106,8 @@
             new WebTableColumn<WorldMarketAnalysis, MarketAnalysisWorldGridSortColumn>
             {
                 Id = MarketAnalysisWorldGridSortColumn.Data,
-                Header = "Data",
+                Header = "Age",
+                HeaderTooltip = "Age and source of the market data",
                 Size = WebTableColumnSize.Percent(15m),
                 HeaderCssClass = "ma-world-column ma-world-data-column",
                 CellCssClass = "ma-world-cell ma-world-data-column",
@@ -140,6 +145,9 @@
         builder.AddAttribute(sequence++, "Size", Size.Small);
         builder.CloseComponent();
         builder.OpenElement(sequence++, "span");
+        builder.AddAttribute(sequence++, "class", "ma-world-label");
+        builder.OpenElement(sequence++, "span");
+        builder.AddAttribute(sequence++, "class", "ma-world-name");
         builder.AddContent(sequence++, world.WorldName);
         builder.CloseElement();
         if (!string.IsNullOrWhiteSpace(world.DataCenter))
@@ -149,6 +157,8 @@
             builder.AddContent(sequence++, world.DataCenter);
             builder.CloseElement();
         }
+
+        builder.CloseElement();
 
         builder.CloseElement();
     };

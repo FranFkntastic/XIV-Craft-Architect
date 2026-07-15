@@ -146,7 +146,10 @@ public partial class AppState
         CraftingPlan optimizedPlan,
         IReadOnlyList<MaterialAggregate> activeProcurementItems,
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
-        MarketRouteDecision? routeDecision)
+        MarketRouteDecision? routeDecision,
+        IEnumerable<MarketItemAnalysis>? evidenceAnalyses = null,
+        IEnumerable<DetailedShoppingPlan>? evidencePlans = null,
+        PublishedMarketAnalysisScopeSnapshot? evidenceScope = null)
     {
         ArgumentNullException.ThrowIfNull(expectedPlan);
         ArgumentNullException.ThrowIfNull(optimizedPlan);
@@ -159,6 +162,15 @@ public partial class AppState
 
         using (BeginStateChangeBatch())
         {
+            if (evidenceAnalyses != null && evidencePlans != null)
+            {
+                ReplaceMarketAnalysis(
+                    evidenceAnalyses,
+                    evidencePlans,
+                    MarketAnalysisRecipeBasis,
+                    evidenceScope ?? CreateCurrentMarketAnalysisScopeSnapshot());
+            }
+
             var decisionsChanged = !HaveSameAcquisitionDecisions(expectedPlan, optimizedPlan);
             if (decisionsChanged)
             {
@@ -739,6 +751,13 @@ public partial class AppState
         var scope = SearchEntireRegion
             ? MarketFetchScope.EntireRegion
             : MarketFetchScope.SelectedDataCenter;
+        return CreateMarketAnalysisScopeSnapshot(scope, publishedAtUtc);
+    }
+
+    public PublishedMarketAnalysisScopeSnapshot CreateMarketAnalysisScopeSnapshot(
+        MarketFetchScope scope,
+        DateTime? publishedAtUtc = null)
+    {
         var dataCenters = MarketFetchScopeResolver.GetDataCenters(
             scope,
             SelectedDataCenter,

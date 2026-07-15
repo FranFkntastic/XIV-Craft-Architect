@@ -1,10 +1,16 @@
 .ae-page {
     display: grid;
-    grid-template-columns: 280px minmax(0, 1fr) 350px;
+    grid-template-columns: 250px minmax(0, 1fr) 310px;
     gap: 0;
     height: calc(100vh - 64px);
     min-height: 0;
     background: #1e1e1e;
+}
+
+@media (max-width: 1400px) {
+    .ae-page {
+        grid-template-columns: 230px minmax(0, 1fr) 290px;
+    }
 }
 
 .ae-controls {
