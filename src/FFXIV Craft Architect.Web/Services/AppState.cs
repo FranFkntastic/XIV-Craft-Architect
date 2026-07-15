@@ -95,6 +95,7 @@ public partial class AppState
     private PublishedMarketAnalysisScopeSnapshot? _publishedMarketAnalysisScope;
     private bool _isMarketEvidenceHydrating;
     private readonly List<DetailedShoppingPlan> _procurementShoppingPlans = [];
+    private ProcurementRoutePublicationBasis? _procurementRoutePublicationBasis;
     private readonly List<MarketShoppingItem> _shoppingItems = [];
     private readonly List<ProjectItem> _projectItems = [];
     private HashSet<string> _temporarilyBlacklistedWorlds = new(StringComparer.OrdinalIgnoreCase);
@@ -145,7 +146,12 @@ public partial class AppState
     /// </summary>
     public IReadOnlyList<DetailedShoppingPlan> ProcurementShoppingPlans => _procurementShoppingPlans.AsReadOnly();
     public MarketRouteDecision? ProcurementRouteDecision { get; private set; }
-    public bool IsProcurementRouteStale { get; private set; }
+    public ProcurementRoutePublicationBasis? ProcurementRoutePublicationBasis => _procurementRoutePublicationBasis;
+    public ProcurementRoutePublicationValidity ProcurementRouteValidity => GetProcurementRouteValidity();
+    public bool IsProcurementRouteStale =>
+        ProcurementRouteValidity is ProcurementRoutePublicationValidity.SelectionChanged or
+            ProcurementRoutePublicationValidity.InputsChanged ||
+        !string.IsNullOrWhiteSpace(ProcurementRouteFailure);
     public string? ProcurementRouteStaleReason { get; private set; }
     public string? ProcurementRouteFailure { get; private set; }
     public IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems { get; private set; } = Array.Empty<CoreMarketDataUnavailableItem>();

@@ -460,6 +460,49 @@ public class AppStatePerformanceStateTests
         Assert.True(change.HasScope(AppStateChangeScope.ProcurementOverlay));
     }
 
+    [Fact]
+    public void ProcurementRouteValidity_DistinguishesPendingClutchSelectionFromChangedInputs()
+    {
+        var appState = new AppState();
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 100, Name = "Route Item" }]);
+
+        Assert.Equal(ProcurementRoutePublicationValidity.Current, appState.ProcurementRouteValidity);
+
+        appState.SetProcurementSettings(
+            appState.ProcurementSearchEntireRegion,
+            appState.ProcurementEnableSplitWorldPurchases,
+            travelTolerance: 5,
+            appState.TemporaryWorldBlacklistDurationMinutes);
+
+        Assert.Equal(ProcurementRoutePublicationValidity.SelectionChanged, appState.ProcurementRouteValidity);
+
+        appState.SetProcurementTravelPriority(MarketTravelPriority.WorldVisitsFirst);
+
+        Assert.Equal(ProcurementRoutePublicationValidity.InputsChanged, appState.ProcurementRouteValidity);
+    }
+
+    [Fact]
+    public void ReplaceProcurementOverlay_RecordsCurrentPublicationBasis()
+    {
+        var appState = new AppState();
+        appState.NotifyPlanDecisionChanged();
+        appState.SetProcurementSettings(
+            searchEntireRegion: true,
+            enableSplitWorldPurchases: false,
+            travelTolerance: 8,
+            temporaryWorldBlacklistDurationMinutes: 60);
+
+        appState.ReplaceProcurementOverlay([new DetailedShoppingPlan { ItemId = 100, Name = "Route Item" }]);
+
+        var basis = Assert.IsType<ProcurementRoutePublicationBasis>(appState.ProcurementRoutePublicationBasis);
+        Assert.Equal(appState.PlanSessionVersion, basis.PlanSessionVersion);
+        Assert.Equal(appState.CurrentVersions.PlanDecisionVersion, basis.PlanDecisionVersion);
+        Assert.Equal(appState.MarketIntelligence.MarketIntelligenceId, basis.MarketIntelligenceId);
+        Assert.Equal(8, basis.TravelTolerance);
+        Assert.Equal(MarketFetchScope.EntireRegion, basis.Scope);
+        Assert.Equal(ProcurementRoutePublicationValidity.Current, appState.ProcurementRouteValidity);
+    }
+
 
 
 

@@ -127,6 +127,14 @@
     font-weight: 700;
 }
 
+.ae-route-state {
+    padding: 8px 16px;
+    border-bottom: 1px solid #725c26;
+    background: #302a1d;
+    color: #e4c36d;
+    font-size: 12px;
+}
+
 .ae-ledger-subtitle,
 .ae-legend {
     color: #9aa0a6;

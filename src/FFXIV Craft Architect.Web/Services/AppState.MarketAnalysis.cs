@@ -82,10 +82,7 @@ public partial class AppState
         ReplaceListContents(
             _shoppingPlans,
             MarketEvidenceCollectionMerger.MergeShoppingPlans(_shoppingPlans, [shoppingPlan]));
-        if (_marketIntelligenceId == Guid.Empty)
-        {
-            _marketIntelligenceId = Guid.NewGuid();
-        }
+        _marketIntelligenceId = Guid.NewGuid();
 
         _publishedMarketAnalysisScope ??= CreateCurrentMarketAnalysisScopeSnapshot();
         InvalidateProcurementRouteState("Market evidence changed.");
@@ -114,10 +111,7 @@ public partial class AppState
 
         ReplaceListContents(_marketItemAnalyses, updatedAnalyses);
         ReplaceListContents(_shoppingPlans, updatedShoppingPlans);
-        if (_marketIntelligenceId == Guid.Empty)
-        {
-            _marketIntelligenceId = Guid.NewGuid();
-        }
+        _marketIntelligenceId = Guid.NewGuid();
 
         _publishedMarketAnalysisScope ??= CreateCurrentMarketAnalysisScopeSnapshot();
         InvalidateProcurementRouteState("Market evidence changed.");
@@ -146,7 +140,9 @@ public partial class AppState
     {
         ReplaceListContents(_procurementShoppingPlans, shoppingPlans);
         ProcurementRouteDecision = routeDecision;
-        IsProcurementRouteStale = false;
+        _procurementRoutePublicationBasis = _procurementShoppingPlans.Count == 0
+            ? null
+            : CreateCurrentProcurementRouteBasis();
         ProcurementRouteStaleReason = null;
         ProcurementRouteFailure = null;
         NotifyProcurementOverlayChanged();
@@ -186,13 +182,10 @@ public partial class AppState
             if (decisionsChanged)
             {
                 CurrentPlan = optimizedPlan;
+                NotifyPlanDecisionChanged();
             }
             ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
             ReplaceProcurementOverlay(shoppingPlans, routeDecision);
-            if (decisionsChanged)
-            {
-                NotifyPlanDecisionChanged();
-            }
         }
 
         return true;
@@ -237,7 +230,6 @@ public partial class AppState
             return false;
         }
 
-        IsProcurementRouteStale = true;
         ProcurementRouteStaleReason = reason;
         ProcurementRouteFailure = null;
         return true;
@@ -246,10 +238,6 @@ public partial class AppState
     public void MarkProcurementRouteFailed(string message)
     {
         ProcurementRouteFailure = message;
-        if (_procurementShoppingPlans.Count > 0)
-        {
-            IsProcurementRouteStale = true;
-        }
         NotifyProcurementOverlayChanged();
     }
 
@@ -257,9 +245,50 @@ public partial class AppState
     {
         _procurementShoppingPlans.Clear();
         ProcurementRouteDecision = null;
-        IsProcurementRouteStale = false;
+        _procurementRoutePublicationBasis = null;
         ProcurementRouteStaleReason = null;
         ProcurementRouteFailure = null;
+    }
+
+    public ProcurementRoutePublicationBasis CreateCurrentProcurementRouteBasis()
+    {
+        var scope = ProcurementSearchEntireRegion
+            ? MarketFetchScope.EntireRegion
+            : MarketFetchScope.SelectedDataCenter;
+
+        return new ProcurementRoutePublicationBasis(
+            PlanSessionVersion,
+            CurrentVersions.PlanDecisionVersion,
+            _marketIntelligenceId,
+            scope,
+            SelectedDataCenter,
+            SelectedRegion,
+            MarketAnalysisLens,
+            ProcurementEnableSplitWorldPurchases,
+            ProcurementTravelTolerance,
+            ProcurementTravelPriority,
+            ProcurementStartFromHomeDataCenter,
+            GetActiveBlacklistedMarketWorlds(),
+            TemporarilyExcludedItemWorlds.ToHashSet());
+    }
+
+    public ProcurementRoutePublicationValidity GetProcurementRouteValidity()
+    {
+        var published = _procurementRoutePublicationBasis;
+        if (published == null || _procurementShoppingPlans.Count == 0)
+        {
+            return ProcurementRoutePublicationValidity.None;
+        }
+
+        var current = CreateCurrentProcurementRouteBasis();
+        if (!published.HasSameRouteInputsAs(current))
+        {
+            return ProcurementRoutePublicationValidity.InputsChanged;
+        }
+
+        return published.TravelTolerance == current.TravelTolerance
+            ? ProcurementRoutePublicationValidity.Current
+            : ProcurementRoutePublicationValidity.SelectionChanged;
     }
 
     public void SetMarketEvidenceSettings(
@@ -378,7 +407,10 @@ public partial class AppState
         }
 
         MarketAnalysisLens = lens;
-        NotifySettingsChanged();
+        InvalidateProcurementRouteState("The market acquisition lens changed.");
+        PublishChange(
+            AppStateChangeScope.Settings | AppStateChangeScope.ProcurementOverlay,
+            raiseShoppingListChanged: true);
         return true;
     }
 
@@ -405,10 +437,7 @@ public partial class AppState
 
         EnableMultiWorldSplits = enableMultiWorldSplits;
         MaxWorldsPerItem = normalizedMaxWorlds;
-        InvalidateProcurementRouteState("Market split settings changed.");
-        PublishChange(
-            AppStateChangeScope.Settings | AppStateChangeScope.ProcurementOverlay,
-            raiseShoppingListChanged: true);
+        NotifySettingsChanged();
         return true;
     }
 

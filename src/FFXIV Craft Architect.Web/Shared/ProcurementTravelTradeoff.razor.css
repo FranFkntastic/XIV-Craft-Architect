@@ -289,6 +289,13 @@
     text-align: center;
 }
 
+.pp-clutch-pending {
+    margin-top: 5px;
+    color: #d4ae51;
+    font-size: .65rem;
+    line-height: 1.3;
+}
+
 .pp-tradeoff-anchor {
     position: relative;
     margin-top: -7px;

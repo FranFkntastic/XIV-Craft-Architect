@@ -50,11 +50,17 @@ public sealed class MarketAnalysisWorkflowService
     {
         var plan = _appState.CurrentPlan;
         var planSessionVersion = _appState.PlanSessionVersion;
+        var planDecisionVersion = _appState.CurrentVersions.PlanDecisionVersion;
         var planId = _appState.CurrentPlanId;
         var candidateResult = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidateResultAsync(plan, ct);
         var materials = candidateResult?.Candidates.ToList() ?? [];
         var recipeBasis = candidateResult?.RecipeBasis;
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        {
+            return new MarketAnalysisWorkflowResult(false, 0, 0, 0);
+        }
+
+        if (_appState.CurrentVersions.PlanDecisionVersion != planDecisionVersion)
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, 0);
         }
@@ -101,6 +107,12 @@ public sealed class MarketAnalysisWorkflowService
             return new MarketAnalysisWorkflowResult(false, 0, 0, reconciliation.FetchedCount);
         }
 
+
+        if (_appState.CurrentVersions.PlanDecisionVersion != planDecisionVersion)
+        {
+            return new MarketAnalysisWorkflowResult(false, 0, 0, reconciliation.FetchedCount);
+        }
+
         if (!IsCurrentRequest(requestSnapshot))
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, reconciliation.FetchedCount);
@@ -109,6 +121,7 @@ public sealed class MarketAnalysisWorkflowService
         var published = await PublishMarketAnalysisAsync(
             plan,
             planSessionVersion,
+            planDecisionVersion,
             planId,
             reconciliation.Analyses,
             reconciliation.ShoppingPlans.ToList(),
@@ -144,6 +157,7 @@ public sealed class MarketAnalysisWorkflowService
 
         var plan = _appState.CurrentPlan;
         var planSessionVersion = _appState.PlanSessionVersion;
+        var planDecisionVersion = _appState.CurrentVersions.PlanDecisionVersion;
         var planId = _appState.CurrentPlanId;
         var shoppingPlans = _appState.MarketItemAnalyses
             .Select(analysis => _marketPriceLadderAnalysis.ProjectToShoppingPlan(analysis, lens))
@@ -151,6 +165,7 @@ public sealed class MarketAnalysisWorkflowService
         var published = await PublishMarketAnalysisAsync(
             plan,
             planSessionVersion,
+            planDecisionVersion,
             planId,
             _appState.MarketItemAnalyses,
             shoppingPlans,
@@ -172,6 +187,7 @@ public sealed class MarketAnalysisWorkflowService
     private async Task<PublishMarketAnalysisResult?> PublishMarketAnalysisAsync(
         CraftingPlan? plan,
         long planSessionVersion,
+        long planDecisionVersion,
         string? planId,
         IEnumerable<MarketItemAnalysis> analyses,
         List<DetailedShoppingPlan> shoppingPlans,
@@ -179,7 +195,9 @@ public sealed class MarketAnalysisWorkflowService
         PublishedMarketAnalysisScopeSnapshot publishedScope,
         CancellationToken ct)
     {
-        if (plan == null || !_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        if (plan == null ||
+            !_appState.IsCurrentPlanSession(plan, planSessionVersion) ||
+            _appState.CurrentVersions.PlanDecisionVersion != planDecisionVersion)
         {
             return null;
         }
@@ -191,7 +209,8 @@ public sealed class MarketAnalysisWorkflowService
             shoppingPlans);
         _marketShoppingService.ApplyVendorPurchaseOverrides(plan, shoppingPlans);
 
-        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion) ||
+            _appState.CurrentVersions.PlanDecisionVersion != planDecisionVersion)
         {
             return null;
         }

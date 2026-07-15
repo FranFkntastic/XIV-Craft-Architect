@@ -59,7 +59,7 @@ public sealed class ProcurementWorkflowService
         var scope = _appState.ProcurementSearchEntireRegion
             ? MarketFetchScope.EntireRegion
             : MarketFetchScope.SelectedDataCenter;
-        var requestSnapshot = CreateRequestSnapshot(scope);
+        var requestSnapshot = _appState.CreateCurrentProcurementRouteBasis();
         var guardedProgress = progress == null
             ? null
             : new Progress<string>(message =>
@@ -150,7 +150,7 @@ public sealed class ProcurementWorkflowService
         var scope = _appState.ProcurementSearchEntireRegion
             ? MarketFetchScope.EntireRegion
             : MarketFetchScope.SelectedDataCenter;
-        var requestSnapshot = CreateRequestSnapshot(scope);
+        var requestSnapshot = _appState.CreateCurrentProcurementRouteBasis();
         var result = await _itemRefreshService.RefreshItemMarketDataAsync(
             new MarketAnalysisItemRefreshWorkflowRequest(
                 request.ItemId,
@@ -186,7 +186,7 @@ public sealed class ProcurementWorkflowService
         CraftingPlan plan,
         long planSessionVersion,
         long capturedDecisionVersion,
-        ProcurementRequestSnapshot requestSnapshot,
+        ProcurementRoutePublicationBasis requestSnapshot,
         Func<bool>? isCurrentOperation)
     {
         return _appState.CurrentVersions.PlanDecisionVersion == capturedDecisionVersion &&
@@ -195,37 +195,10 @@ public sealed class ProcurementWorkflowService
                (isCurrentOperation?.Invoke() ?? true);
     }
 
-    private ProcurementRequestSnapshot CreateRequestSnapshot(MarketFetchScope scope)
+    private bool IsCurrentRequest(ProcurementRoutePublicationBasis snapshot)
     {
-        return new ProcurementRequestSnapshot(
-            scope,
-            _appState.SelectedDataCenter,
-            _appState.SelectedRegion,
-            _appState.MarketAnalysisLens,
-            _appState.ProcurementEnableSplitWorldPurchases,
-            _appState.ProcurementTravelTolerance,
-            _appState.ProcurementTravelPriority,
-            _appState.ProcurementStartFromHomeDataCenter,
-            _appState.GetActiveBlacklistedMarketWorlds(),
-            _appState.TemporarilyExcludedItemWorlds.ToHashSet());
-    }
-
-    private bool IsCurrentRequest(ProcurementRequestSnapshot snapshot)
-    {
-        var currentScope = _appState.ProcurementSearchEntireRegion
-            ? MarketFetchScope.EntireRegion
-            : MarketFetchScope.SelectedDataCenter;
-
-        return snapshot.Scope == currentScope &&
-               string.Equals(snapshot.SelectedDataCenter, _appState.SelectedDataCenter, StringComparison.Ordinal) &&
-               string.Equals(snapshot.SelectedRegion, _appState.SelectedRegion, StringComparison.Ordinal) &&
-               snapshot.Lens == _appState.MarketAnalysisLens &&
-               snapshot.IncludeSplitPurchases == _appState.ProcurementEnableSplitWorldPurchases &&
-               snapshot.TravelTolerance == _appState.ProcurementTravelTolerance &&
-               snapshot.TravelPriority == _appState.ProcurementTravelPriority &&
-               snapshot.StartFromHomeDataCenter == _appState.ProcurementStartFromHomeDataCenter &&
-               snapshot.BlacklistedWorlds.SetEquals(_appState.GetActiveBlacklistedMarketWorlds()) &&
-               snapshot.ExcludedItemWorlds.SetEquals(_appState.TemporarilyExcludedItemWorlds);
+        var current = _appState.CreateCurrentProcurementRouteBasis();
+        return snapshot.Matches(current);
     }
 
     private MarketAnalysisConfig CreateProcurementMarketConfig()
@@ -240,17 +213,6 @@ public sealed class ProcurementWorkflowService
         };
     }
 
-    private sealed record ProcurementRequestSnapshot(
-        MarketFetchScope Scope,
-        string SelectedDataCenter,
-        string SelectedRegion,
-        MarketAcquisitionLens Lens,
-        bool IncludeSplitPurchases,
-        int TravelTolerance,
-        MarketTravelPriority TravelPriority,
-        bool StartFromHomeDataCenter,
-        HashSet<MarketWorldKey> BlacklistedWorlds,
-        HashSet<MarketItemWorldKey> ExcludedItemWorlds);
 }
 
 public sealed record ProcurementWorkflowRequest(

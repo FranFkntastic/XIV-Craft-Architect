@@ -10,7 +10,7 @@ public class AcquisitionEvaluationLedgerCacheTests
     public void GetOrBuild_SameKey_ReusesSnapshot()
     {
         var cache = new AcquisitionEvaluationLedgerCache();
-        var key = new AcquisitionEvaluationLedgerKey(1, 1, 1, 1);
+        var key = new AcquisitionEvaluationLedgerKey(1, 1, 1, 1, 1);
         var buildCalls = 0;
 
         var first = cache.GetOrBuild(key, AcquisitionFilter.All, () => CreateSnapshot(++buildCalls));
@@ -27,8 +27,8 @@ public class AcquisitionEvaluationLedgerCacheTests
         var cache = new AcquisitionEvaluationLedgerCache();
         var buildCalls = 0;
 
-        cache.GetOrBuild(new AcquisitionEvaluationLedgerKey(1, 1, 1, 1), AcquisitionFilter.All, () => CreateSnapshot(++buildCalls));
-        cache.GetOrBuild(new AcquisitionEvaluationLedgerKey(1, 2, 1, 1), AcquisitionFilter.All, () => CreateSnapshot(++buildCalls));
+        cache.GetOrBuild(new AcquisitionEvaluationLedgerKey(1, 1, 1, 1, 1), AcquisitionFilter.All, () => CreateSnapshot(++buildCalls));
+        cache.GetOrBuild(new AcquisitionEvaluationLedgerKey(1, 2, 1, 1, 1), AcquisitionFilter.All, () => CreateSnapshot(++buildCalls));
 
         Assert.Equal(2, buildCalls);
         Assert.Equal(2, cache.BuildCount);
@@ -38,7 +38,7 @@ public class AcquisitionEvaluationLedgerCacheTests
     public void GetOrBuild_FilterOnlyChange_ReusesRowsAndUpdatesVisibleRows()
     {
         var cache = new AcquisitionEvaluationLedgerCache();
-        var key = new AcquisitionEvaluationLedgerKey(1, 1, 1, 1);
+        var key = new AcquisitionEvaluationLedgerKey(1, 1, 1, 1, 1);
         var buildCalls = 0;
 
         var all = cache.GetOrBuild(key, AcquisitionFilter.All, () => CreateSnapshot(++buildCalls));
@@ -54,7 +54,7 @@ public class AcquisitionEvaluationLedgerCacheTests
     public void Invalidate_ForcesNextRebuild()
     {
         var cache = new AcquisitionEvaluationLedgerCache();
-        var key = new AcquisitionEvaluationLedgerKey(1, 1, 1, 1);
+        var key = new AcquisitionEvaluationLedgerKey(1, 1, 1, 1, 1);
         var buildCalls = 0;
 
         cache.GetOrBuild(key, AcquisitionFilter.All, () => CreateSnapshot(++buildCalls));
@@ -70,7 +70,7 @@ public class AcquisitionEvaluationLedgerCacheTests
     [InlineData(AppStateChangeScope.PlanDecision, true)]
     [InlineData(AppStateChangeScope.PlanPrice, true)]
     [InlineData(AppStateChangeScope.MarketAnalysis, true)]
-    [InlineData(AppStateChangeScope.ProcurementOverlay, false)]
+    [InlineData(AppStateChangeScope.ProcurementOverlay, true)]
     [InlineData(AppStateChangeScope.ShoppingItems, false)]
     [InlineData(AppStateChangeScope.Status, false)]
     [InlineData(AppStateChangeScope.Settings, false)]

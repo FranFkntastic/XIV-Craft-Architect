@@ -97,7 +97,12 @@ public partial class AppState
 
     public void NotifyPlanDecisionChanged()
     {
-        PublishChange(AppStateChangeScope.PlanDecision, raisePlanChanged: true);
+        var routeInvalidated = InvalidateProcurementRouteState("Acquisition decisions changed.");
+        PublishChange(
+            AppStateChangeScope.PlanDecision |
+            (routeInvalidated ? AppStateChangeScope.ProcurementOverlay : AppStateChangeScope.None),
+            raisePlanChanged: true,
+            raiseShoppingListChanged: routeInvalidated);
     }
 
     public void NotifyPlanPriceChanged()

@@ -298,10 +298,8 @@
             return;
         }
 
-        if (_selectedNode == null || AppState.CurrentPlan.FindNode(_selectedNode.ItemId) == null)
-        {
-            _selectedNode = AppState.CurrentPlan.RootItems.FirstOrDefault();
-        }
+        _selectedNode = AppState.CurrentPlan.FindNodeByNodeId(_selectedNode?.NodeId)
+            ?? AppState.CurrentPlan.RootItems.FirstOrDefault();
     }
 
     private void OnNodeHqChanged(PlanNodeHqChangeRequest request)

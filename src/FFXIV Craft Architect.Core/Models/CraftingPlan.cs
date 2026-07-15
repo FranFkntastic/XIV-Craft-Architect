@@ -172,6 +172,47 @@ public class CraftingPlan
         return null;
     }
 
+    /// <summary>
+    /// Recursively find the exact plan occurrence identified by its stable node ID.
+    /// </summary>
+    public PlanNode? FindNodeByNodeId(string? nodeId)
+    {
+        if (string.IsNullOrWhiteSpace(nodeId))
+        {
+            return null;
+        }
+
+        foreach (var root in RootItems)
+        {
+            var found = FindNodeByNodeIdRecursive(root, nodeId);
+            if (found != null)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    private static PlanNode? FindNodeByNodeIdRecursive(PlanNode node, string nodeId)
+    {
+        if (string.Equals(node.NodeId, nodeId, StringComparison.Ordinal))
+        {
+            return node;
+        }
+
+        foreach (var child in node.Children)
+        {
+            var found = FindNodeByNodeIdRecursive(child, nodeId);
+            if (found != null)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
     private PlanNode? FindNodeRecursive(PlanNode node, int itemId)
     {
         if (node.ItemId == itemId)

@@ -87,6 +87,19 @@
                 </div>
             </div>
 
+            @if (AppState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.SelectionChanged)
+            {
+                <div class="ae-route-state" role="status">
+                    The travel preference changed. Regenerate the procurement route before relying on its automatic choices.
+                </div>
+            }
+            else if (AppState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.InputsChanged)
+            {
+                <div class="ae-route-state" role="status">
+                    The procurement inputs changed. Regenerate the route before relying on its automatic choices.
+                </div>
+            }
+
             <WebGridTable TItem="DecisionRow"
                           TColumnId="AcquisitionDecisionLedgerSortColumn"
                           CssClass="ae-table"
@@ -560,7 +573,8 @@
             versions.PlanStructureVersion,
             versions.PlanDecisionVersion,
             versions.PlanPriceVersion,
-            versions.MarketAnalysisVersion);
+            versions.MarketAnalysisVersion,
+            versions.ProcurementOverlayVersion);
     }
 
     private void InvalidateLedgerSnapshot()
@@ -568,7 +582,7 @@
         _ledgerCache.Invalidate();
     }
 
-    private static string GetDecisionStatus(DecisionRow row)
+    private string GetDecisionStatus(DecisionRow row)
     {
         if (row.IsFullySuppressed)
         {
@@ -587,6 +601,11 @@
 
         if (row.IsActiveProcurement)
         {
+            if (AppState.IsProcurementRouteStale)
+            {
+                return "Route needs regeneration";
+            }
+
             return row.HasSuppressedOccurrences
                 ? "Partially active"
                 : "Ready for procurement";
@@ -661,10 +680,9 @@
             return;
         }
 
-        if (_selectedNode == null || !_snapshot.Rows.Any(row => row.Node.NodeId == _selectedNode.NodeId))
-        {
-            _selectedNode = _snapshot.Rows.FirstOrDefault()?.Node;
-        }
+        _selectedNode = _snapshot.Rows
+            .FirstOrDefault(row => string.Equals(row.NodeId, _selectedNode?.NodeId, StringComparison.Ordinal))
+            ?.Node ?? _snapshot.Rows.FirstOrDefault()?.Node;
     }
 
     private bool SelectRequestedNodeFromSnapshot()

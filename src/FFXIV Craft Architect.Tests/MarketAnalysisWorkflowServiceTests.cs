@@ -178,6 +178,31 @@ public class MarketAnalysisWorkflowServiceTests
     }
 
     [Fact]
+    public async Task RunAnalysisAsync_WhenAcquisitionDecisionChangesDuringExecution_DoesNotPublishStaleResults()
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        var jsRuntime = new RecordingJsRuntime();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(appState.NotifyPlanDecisionChanged)
+            .ReturnsAsync(CreateExecutionResult());
+        var service = CreateService(appState, execution.Object, jsRuntime);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.False(result.Published);
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Empty(appState.ShoppingPlans);
+        Assert.Equal(0, jsRuntime.PatchMarketAnalysisCallCount);
+        Assert.Equal(0, jsRuntime.SavePlanCallCount);
+    }
+
+    [Fact]
     public async Task RunAnalysisAsync_WhenMarketScopeChangesDuringExecution_DoesNotPublishStaleResults()
     {
         var appState = new AppState();

@@ -4,7 +4,8 @@ public sealed record AcquisitionEvaluationLedgerKey(
     long PlanStructureVersion,
     long PlanDecisionVersion,
     long PlanPriceVersion,
-    long MarketAnalysisVersion);
+    long MarketAnalysisVersion,
+    long ProcurementOverlayVersion);
 
 public sealed class AcquisitionEvaluationLedgerCache
 {
@@ -12,7 +13,8 @@ public sealed class AcquisitionEvaluationLedgerCache
         AppStateChangeScope.PlanStructure |
         AppStateChangeScope.PlanDecision |
         AppStateChangeScope.PlanPrice |
-        AppStateChangeScope.MarketAnalysis;
+        AppStateChangeScope.MarketAnalysis |
+        AppStateChangeScope.ProcurementOverlay;
 
     private AcquisitionEvaluationSnapshot? _snapshot;
     private AcquisitionEvaluationLedgerKey? _key;
