@@ -386,7 +386,7 @@ public class MarketShoppingService
 
         if (bestState == null)
         {
-            return new ProcurementRouteOptimizationResult(plans, null);
+            return new ProcurementRouteOptimizationResult(plans, null, IsComplete: false);
         }
 
         foreach (var choice in bestState.Choices)
@@ -458,7 +458,8 @@ public class MarketShoppingService
                 representativeRoutes,
                 itemDecisions);
 
-        return new ProcurementRouteOptimizationResult(plans, decision);
+        var isComplete = bestState.Choices.All(choice => choice.Candidate != null);
+        return new ProcurementRouteOptimizationResult(plans, decision, isComplete);
     }
 
     private static MarketCoverageSet CreateSelectedCoverageSet(

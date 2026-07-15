@@ -9,7 +9,7 @@ namespace FFXIV_Craft_Architect.Tests;
 public class IndexedDbMarketCacheServiceTests
 {
     [Fact]
-    public async Task EnsurePopulatedAsync_MissingRegionalData_FetchesDataCentersTwoAtATime()
+    public async Task EnsurePopulatedAsync_MissingRegionalData_FetchesAllRegionalDataCentersConcurrently()
     {
         var jsRuntime = new RecordingMarketCacheJsRuntime();
         var handler = new ConcurrentMarketFetchHandler();
@@ -28,7 +28,7 @@ public class IndexedDbMarketCacheServiceTests
 
         Assert.Equal(4, fetchedCount);
         Assert.Equal(4, handler.MarketRequestCount);
-        Assert.Equal(2, handler.MaximumConcurrentMarketRequests);
+        Assert.Equal(4, handler.MaximumConcurrentMarketRequests);
         Assert.NotNull(cache.LastDecisionSnapshot);
         Assert.Equal(4, cache.LastDecisionSnapshot!.MissingEntryCount);
         Assert.Equal(4, cache.LastDecisionSnapshot.OrdinaryFetchedPairCount);
@@ -116,7 +116,7 @@ public class IndexedDbMarketCacheServiceTests
 
         Assert.Equal(4, fetchedCounts.Sum());
         Assert.Equal(4, handler.MarketRequestCount);
-        Assert.Equal(2, handler.MaximumConcurrentMarketRequests);
+        Assert.Equal(4, handler.MaximumConcurrentMarketRequests);
         Assert.NotNull(cache.LastDecisionSnapshot);
         Assert.Equal(4, cache.LastDecisionSnapshot!.FreshHitCount);
         Assert.Equal(0, cache.LastDecisionSnapshot.MissingEntryCount);

@@ -186,7 +186,9 @@ public sealed class MarketAnalysisWorkflowService
 
         ct.ThrowIfCancellationRequested();
         var analysisList = analyses.ToList();
-        const int changedDecisions = 0;
+        var changedDecisions = AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
+            plan,
+            shoppingPlans);
         _marketShoppingService.ApplyVendorPurchaseOverrides(plan, shoppingPlans);
 
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))

@@ -48,7 +48,8 @@ public sealed record ProcurementRouteExecutionResult(
 
 public sealed record ProcurementRouteOptimizationResult(
     List<DetailedShoppingPlan> ShoppingPlans,
-    MarketRouteDecision? Decision);
+    MarketRouteDecision? Decision,
+    bool IsComplete = true);
 
 public sealed record MarketRouteDecision(
     int TravelTolerance,

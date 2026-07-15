@@ -178,6 +178,44 @@ public sealed class JointAcquisitionRouteOptimizationTests
         Assert.Equal(2, result.RouteDecision?.SelectedWorldStops);
     }
 
+    [Fact]
+    public async Task PartiallyRoutedVariantIsNotAFeasibleAcquisitionPlan()
+    {
+        var hqOnly = new PlanNode
+        {
+            ItemId = 500,
+            Name = "Unfillable HQ purchase",
+            Quantity = 4_995,
+            Source = AcquisitionSource.MarketBuyHq,
+            SourceReason = AcquisitionSourceReason.UserSelected,
+            CanBuyFromMarket = true,
+            CanBeHq = true,
+            MustBeHq = true
+        };
+        var ordinary = Leaf(501, "Fillable purchase");
+        var evidence = new[]
+        {
+            new DetailedShoppingPlan
+            {
+                ItemId = 500,
+                Name = hqOnly.Name,
+                QuantityNeeded = hqOnly.Quantity,
+                WorldOptions = [WorldWithListing("Aether", "Siren", 6_000, 100, isHq: false)]
+            },
+            Evidence(501, ordinary.Name, 1, ("Aether", "Faerie", 10L))
+        };
+
+        var result = await CreateService().OptimizeAsync(
+            new CraftingPlan { RootItems = [hqOnly, ordinary] },
+            evidence,
+            Config(11),
+            includeSplitPurchases: true,
+            MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.Equal(0, result.FeasiblePlanCount);
+        Assert.Null(result.RouteDecision);
+    }
+
     [Theory]
     [InlineData(11, AcquisitionSource.Craft)]
     [InlineData(10, AcquisitionSource.Craft)]

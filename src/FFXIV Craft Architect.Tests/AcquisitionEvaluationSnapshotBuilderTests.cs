@@ -391,7 +391,7 @@ public class AcquisitionEvaluationSnapshotBuilderTests
 
 
     [Fact]
-    public void Build_SuppressedCraftRowUsesCheapestRepresentativeSource()
+    public void Build_SuppressedCraftRowPreservesSelectedSource()
     {
         var root = CreateRoot(100, "Suppressing Parent");
         root.Source = AcquisitionSource.MarketBuyNq;
@@ -461,8 +461,8 @@ public class AcquisitionEvaluationSnapshotBuilderTests
         var row = snapshot.Rows.Single(row => row.ItemId == 200);
 
         Assert.True(row.IsFullySuppressed);
-        Assert.Equal(AcquisitionSource.MarketBuyNq, row.Source);
-        Assert.Equal("10,000g", row.EstimatedCost);
+        Assert.Equal(AcquisitionSource.Craft, row.Source);
+        Assert.Equal("100,000g", row.EstimatedCost);
     }
 
 

@@ -19,7 +19,8 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
     private readonly SemaphoreSlim _populateSemaphore = new(1, 1);
     private const long MaxCacheSizeBytes = 500 * 1024 * 1024; // 500MB max
     private const int MaxCacheEntries = 10000; // Max 10k items
-    private const int MaxDataCenterFetchConcurrency = 2;
+    private const int MaxDataCenterFetchConcurrency = 4;
+    private static readonly TimeSpan WorldMetadataEnrichmentBudget = TimeSpan.FromSeconds(3);
 
     public MarketCacheDecisionSnapshot? LastDecisionSnapshot { get; private set; }
 
@@ -460,10 +461,15 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
         int fetchedCount = 0;
         int verifiedCount = 0;
 
+        // World metadata enriches upload timestamps, but the listings already carry
+        // world names. Keep it off the critical path so a slow metadata endpoint
+        // cannot hold a usable price refresh hostage.
+        var worldDataTask = GetWorldDataForCachingAsync(ct);
         var fetchResults = await FetchDataCentersAsync(byDataCenter, progress, ct);
+        var loadedWorldData = await worldDataTask;
         var shouldLoadWorldData = fetchResults.Any(result => result.FetchedData.Count > 0);
         var worldData = shouldLoadWorldData
-            ? await GetWorldDataForCachingAsync(ct)
+            ? loadedWorldData
             : null;
 
         foreach (var result in fetchResults)
@@ -670,9 +676,23 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
 
     private async Task<WorldData?> GetWorldDataForCachingAsync(CancellationToken ct)
     {
+        if (_universalisService.GetCachedWorldData() is { } cached)
+        {
+            return cached;
+        }
+
+        using var enrichmentCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        enrichmentCts.CancelAfter(WorldMetadataEnrichmentBudget);
         try
         {
-            return await _universalisService.GetWorldDataAsync(ct);
+            return await _universalisService.GetWorldDataAsync(enrichmentCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger?.LogInformation(
+                "[IndexedDbMarketCache] World metadata exceeded the {BudgetMs}ms enrichment budget; continuing with listing world names",
+                WorldMetadataEnrichmentBudget.TotalMilliseconds);
+            return null;
         }
         catch (Exception ex)
         {

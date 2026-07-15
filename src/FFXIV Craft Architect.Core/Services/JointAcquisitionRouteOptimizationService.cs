@@ -64,7 +64,7 @@ public sealed class JointAcquisitionRouteOptimizationService
                 executionOptions,
                 routeSession,
                 ct);
-            if (variant.MarketDemand.Count > 0 && route.Decision == null)
+            if (variant.MarketDemand.Count > 0 && (!route.IsComplete || route.Decision == null))
             {
                 continue;
             }
@@ -111,7 +111,7 @@ public sealed class JointAcquisitionRouteOptimizationService
                 routeSession,
                 ct,
                 marketBudget);
-            if (candidate.Variant.MarketDemand.Count > 0 && route.Decision == null)
+            if (candidate.Variant.MarketDemand.Count > 0 && (!route.IsComplete || route.Decision == null))
             {
                 continue;
             }

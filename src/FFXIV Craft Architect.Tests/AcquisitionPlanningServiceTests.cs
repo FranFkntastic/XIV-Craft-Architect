@@ -402,6 +402,163 @@ public class AcquisitionPlanningServiceTests
         Assert.Equal(AcquisitionSourceReason.UserSelected, root.SourceReason);
     }
 
+    [Fact]
+    public void EnsureAutomaticMarketSourcesAreActionable_ReplacesUnfillableHqWithSupportedNq()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Large market purchase",
+            Quantity = 4_995,
+            Source = AcquisitionSource.MarketBuyHq,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanBuyFromMarket = true,
+            CanBeHq = true
+        };
+        var evidence = new DetailedShoppingPlan
+        {
+            ItemId = 100,
+            Name = root.Name,
+            QuantityNeeded = root.Quantity,
+            WorldOptions =
+            [
+                new WorldShoppingSummary
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Adamantoise",
+                    TotalQuantityPurchased = 5_019,
+                    TotalCost = 4_820_411,
+                    HasSufficientStock = true,
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 5_019,
+                            NeededFromStack = 4_995,
+                            PricePerUnit = 960,
+                            IsHq = false
+                        }
+                    ]
+                }
+            ]
+        };
+        evidence.CoverageSet = MarketCoverageBuilder.Build(evidence);
+
+        var changed = AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
+            new CraftingPlan { RootItems = [root] },
+            [evidence]);
+
+        Assert.Equal(1, changed);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, root.Source);
+        Assert.Equal(AcquisitionSourceReason.SystemDefault, root.SourceReason);
+    }
+
+    [Fact]
+    public void EnsureAutomaticMarketSourcesAreActionable_RepairsLegacyUserReasonWithoutHqConstraint()
+    {
+        var root = CreateUnfillableHqNode(AcquisitionSourceReason.UserSelected, mustBeHq: false);
+        var evidence = CreateNqOnlyEvidence(root);
+
+        var changed = AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
+            new CraftingPlan { RootItems = [root] },
+            [evidence]);
+
+        Assert.Equal(1, changed);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, root.Source);
+        Assert.Equal(AcquisitionSourceReason.SystemDefault, root.SourceReason);
+        Assert.False(root.MustBeHq);
+    }
+
+    [Fact]
+    public void EnsureAutomaticMarketSourcesAreActionable_PreservesExplicitHqConstraint()
+    {
+        var root = CreateUnfillableHqNode(AcquisitionSourceReason.UserSelected, mustBeHq: true);
+        var evidence = CreateNqOnlyEvidence(root);
+
+        var changed = AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
+            new CraftingPlan { RootItems = [root] },
+            [evidence]);
+
+        Assert.Equal(0, changed);
+        Assert.Equal(AcquisitionSource.MarketBuyHq, root.Source);
+        Assert.Equal(AcquisitionSourceReason.UserSelected, root.SourceReason);
+        Assert.True(root.MustBeHq);
+    }
+
+    [Fact]
+    public void EnsureAutomaticMarketSourcesAreActionable_UsesAggregatedDemandInsteadOfTreeNodeQuantity()
+    {
+        var root = CreateUnfillableHqNode(AcquisitionSourceReason.SystemDefault, mustBeHq: false);
+        root.Quantity = 1;
+        var evidence = CreateNqOnlyEvidence(root);
+        evidence.QuantityNeeded = 4_995;
+        evidence.WorldOptions[0].Listings.Add(new ShoppingListingEntry
+        {
+            Quantity = 1,
+            NeededFromStack = 1,
+            PricePerUnit = 100,
+            IsHq = true
+        });
+        evidence.CoverageSet = MarketCoverageBuilder.Build(evidence);
+
+        var changed = AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
+            new CraftingPlan { RootItems = [root] },
+            [evidence]);
+
+        Assert.Equal(1, changed);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, root.Source);
+    }
+
+    private static PlanNode CreateUnfillableHqNode(
+        AcquisitionSourceReason sourceReason,
+        bool mustBeHq)
+    {
+        return new PlanNode
+        {
+            ItemId = 100,
+            Name = "Large market purchase",
+            Quantity = 4_995,
+            Source = AcquisitionSource.MarketBuyHq,
+            SourceReason = sourceReason,
+            MustBeHq = mustBeHq,
+            CanBuyFromMarket = true,
+            CanBeHq = true
+        };
+    }
+
+    private static DetailedShoppingPlan CreateNqOnlyEvidence(PlanNode node)
+    {
+        var evidence = new DetailedShoppingPlan
+        {
+            ItemId = node.ItemId,
+            Name = node.Name,
+            QuantityNeeded = node.Quantity,
+            WorldOptions =
+            [
+                new WorldShoppingSummary
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Adamantoise",
+                    TotalQuantityPurchased = 5_019,
+                    TotalCost = 4_820_411,
+                    HasSufficientStock = true,
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 5_019,
+                            NeededFromStack = 4_995,
+                            PricePerUnit = 960,
+                            IsHq = false
+                        }
+                    ]
+                }
+            ]
+        };
+        evidence.CoverageSet = MarketCoverageBuilder.Build(evidence);
+        return evidence;
+    }
+
 
 
     [Fact]

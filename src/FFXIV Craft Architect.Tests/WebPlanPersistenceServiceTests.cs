@@ -223,6 +223,68 @@ public class WebPlanPersistenceServiceTests
     }
 
     [Fact]
+    public void PlanSessionLoadService_Prepare_RepairsRestoredUnfillableAutomaticHqChoice()
+    {
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Cobalt Ingot",
+            NodeId = "root",
+            Quantity = 4_995,
+            Source = AcquisitionSource.MarketBuyHq,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanBuyFromMarket = true,
+            CanBeHq = true
+        };
+        var evidence = new DetailedShoppingPlan
+        {
+            ItemId = root.ItemId,
+            Name = root.Name,
+            QuantityNeeded = root.Quantity,
+            WorldOptions =
+            [
+                new WorldShoppingSummary
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Adamantoise",
+                    TotalQuantityPurchased = 5_019,
+                    TotalCost = 4_820_411,
+                    HasSufficientStock = true,
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = 5_019,
+                            NeededFromStack = 4_995,
+                            PricePerUnit = 960,
+                            IsHq = false
+                        }
+                    ]
+                }
+            ]
+        };
+        evidence.CoverageSet = MarketCoverageBuilder.Build(evidence);
+        var storedPlan = new StoredPlan
+        {
+            Id = "autosave",
+            Name = "AutoSave",
+            PlanJson = System.Text.Json.JsonSerializer.Serialize(
+                new CraftingPlan { RootItems = [root] }),
+            ProjectItems =
+            [
+                new StoredProjectItem { Id = root.ItemId, Name = root.Name, Quantity = root.Quantity }
+            ],
+            MarketItemAnalysesJson = System.Text.Json.JsonSerializer.Serialize(
+                new[] { new MarketItemAnalysis { ItemId = root.ItemId, Name = root.Name, QuantityNeeded = root.Quantity } }),
+            MarketPlansJson = System.Text.Json.JsonSerializer.Serialize(new[] { evidence })
+        };
+
+        var result = PlanSessionLoadService.Prepare(storedPlan);
+
+        Assert.Equal(AcquisitionSource.MarketBuyNq, Assert.Single(result.Plan!.RootItems).Source);
+    }
+
+    [Fact]
     public void PlanSessionLoadService_PrepareSession_UsesRecipeLayerWorkflowForMarketAnalysisValidation()
     {
         var plan = CreateSimplePlan();

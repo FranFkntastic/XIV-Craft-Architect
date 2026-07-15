@@ -280,11 +280,7 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
             .ToList();
 
         costContext.TryGetShoppingPlan(node.ItemId, out var marketPlan);
-        var readState = SelectCheapestRepresentativeReadState(
-            aggregate,
-            effectiveOccurrences,
-            totalQuantity,
-            costContext);
+        var readState = aggregate.ReadState;
 
         return new CoreDecisionRow(
             node,
@@ -320,93 +316,6 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
                 unavailableMarketItemIds,
                 readState.Source == AcquisitionSource.MarketBuyHq),
             GetEstimatedCost(readState, effectiveOccurrences, totalQuantity, costContext));
-    }
-
-    private static CoreDecisionRowReadState SelectCheapestRepresentativeReadState(
-        CoreDecisionAggregate aggregate,
-        IReadOnlyList<CoreDecisionOccurrence> effectiveOccurrences,
-        int quantity,
-        AcquisitionCostContext costContext)
-    {
-        var readState = aggregate.ReadState;
-        var candidates = GetRepresentativeSourceCandidates(readState)
-            .Select(source => (
-                Source: source,
-                HasCost: TryGetRepresentativeCost(readState, effectiveOccurrences, quantity, costContext, source, out var cost),
-                Cost: cost))
-            .Where(candidate => candidate.HasCost)
-            .OrderBy(candidate => candidate.Cost)
-            .ThenBy(candidate => GetRepresentativeSourceTieBreak(candidate.Source))
-            .ToList();
-
-        return candidates.Count == 0
-            ? readState
-            : readState with { Source = candidates[0].Source };
-    }
-
-    private static IEnumerable<AcquisitionSource> GetRepresentativeSourceCandidates(CoreDecisionRowReadState readState)
-    {
-        if (readState.HasChildren && readState.CanCraft)
-        {
-            yield return AcquisitionSource.Craft;
-        }
-
-        if (readState.CanBuyFromMarket && !readState.MustBeHq)
-        {
-            yield return AcquisitionSource.MarketBuyNq;
-        }
-
-        if (readState.CanBuyFromMarket && readState.CanBeHq)
-        {
-            yield return AcquisitionSource.MarketBuyHq;
-        }
-
-        if (readState.CanBuyFromVendor)
-        {
-            yield return AcquisitionSource.VendorBuy;
-        }
-    }
-
-    private static bool TryGetRepresentativeCost(
-        CoreDecisionRowReadState readState,
-        IReadOnlyList<CoreDecisionOccurrence> effectiveOccurrences,
-        int quantity,
-        AcquisitionCostContext costContext,
-        AcquisitionSource source,
-        out decimal cost)
-    {
-        if (source != AcquisitionSource.Craft)
-        {
-            return CoreAcquisitionEvaluationCostCalculator.TryGetCost(readState, quantity, source, costContext, out cost);
-        }
-
-        cost = 0;
-        foreach (var occurrence in effectiveOccurrences)
-        {
-            if (AcquisitionPlanningService.TryGetAcquisitionCost(
-                occurrence.Node,
-                AcquisitionSource.Craft,
-                costContext,
-                occurrence.Quantity,
-                out var occurrenceCost))
-            {
-                cost += occurrenceCost;
-            }
-        }
-
-        return cost > 0;
-    }
-
-    private static int GetRepresentativeSourceTieBreak(AcquisitionSource source)
-    {
-        return source switch
-        {
-            AcquisitionSource.VendorBuy => 0,
-            AcquisitionSource.MarketBuyNq => 1,
-            AcquisitionSource.MarketBuyHq => 2,
-            AcquisitionSource.Craft => 3,
-            _ => 4
-        };
     }
 
     private static string GetEstimatedCost(

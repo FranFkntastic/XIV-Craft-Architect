@@ -2,6 +2,7 @@ using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.JSInterop;
 using Moq;
 
@@ -9,6 +10,85 @@ namespace FFXIV_Craft_Architect.Tests;
 
 public class MarketAnalysisWorkflowServiceTests
 {
+    [Fact]
+    public async Task PlanReload_WithStaleEvidence_ForceRefreshesReplacesAndPersistsPrice()
+    {
+        var plan = CreatePlan();
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(plan);
+        appState.TrackCurrentPlanIdentity("saved-plan", null);
+        var staleScope = new PublishedMarketAnalysisScopeSnapshot(
+            MarketFetchScope.SelectedDataCenter,
+            "Aether",
+            "North America",
+            ["Aether"],
+            MarketAcquisitionLens.MinimumUpfrontCost,
+            1,
+            DateTime.UtcNow - TimeSpan.FromHours(2));
+        var staleAnalysis = new MarketItemAnalysis
+        {
+            ItemId = 1,
+            Name = "Material",
+            QuantityNeeded = 2
+        };
+        var staleShoppingPlan = new DetailedShoppingPlan
+        {
+            ItemId = 1,
+            Name = "Material",
+            QuantityNeeded = 2,
+            RecommendedWorld = new WorldShoppingSummary
+            {
+                WorldName = "Old World",
+                TotalQuantityPurchased = 2,
+                TotalCost = 999
+            }
+        };
+        appState.ReplaceMarketAnalysis(
+            [staleAnalysis],
+            [staleShoppingPlan],
+            publishedScope: staleScope);
+
+        var staleSession = new PlanSessionLoadResult(
+            new StoredPlan(),
+            plan,
+            [],
+            [staleAnalysis],
+            [staleShoppingPlan],
+            null,
+            null,
+            staleScope,
+            null);
+        var jsRuntime = new RecordingJsRuntime();
+        MarketAnalysisExecutionRequest? capturedRequest = null;
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback<MarketAnalysisExecutionRequest, IProgress<string>?, CancellationToken, MarketAnalysisExecutionOptions?>(
+                (request, _, _, _) => capturedRequest = request)
+            .ReturnsAsync(CreateExecutionResult());
+        var workflow = CreateService(appState, execution.Object, jsRuntime);
+        using var hydration = new MarketEvidenceHydrationService(
+            appState,
+            workflow,
+            NullLogger<MarketEvidenceHydrationService>.Instance);
+
+        hydration.ScheduleAfterPlanLoad(staleSession);
+        await WaitForAsync(
+            () => !appState.IsMarketEvidenceHydrating && jsRuntime.PatchMarketAnalysisCallCount == 1,
+            TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(capturedRequest);
+        Assert.True(capturedRequest.ForceRefreshData);
+        Assert.Null(capturedRequest.MaxAge);
+        Assert.Equal("Siren", Assert.Single(appState.ShoppingPlans).RecommendedWorld?.WorldName);
+        Assert.Equal(20, Assert.Single(appState.ShoppingPlans).RecommendedWorld?.TotalCost);
+        Assert.Equal(1, jsRuntime.PatchMarketAnalysisCallCount);
+        Assert.Equal(1, jsRuntime.SavePlanCallCount);
+    }
+
     [Fact]
     public async Task RunAnalysisAsync_PublishesAnalysisPersistsAndAutosaves()
     {
@@ -333,6 +413,17 @@ public class MarketAnalysisWorkflowServiceTests
             new IndexedDbMarketAnalysisPersistence(indexedDb),
             indexedDb,
             recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService());
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.True(condition(), $"Condition was not met within {timeout}.");
     }
 
     private static CraftingPlan CreatePlan(int itemId = 1)
