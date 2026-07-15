@@ -58,7 +58,7 @@
     </div>
 </div>
 
-<div class="pp-clutch-shell @(RouteDecision?.RepresentativeRoutes.Count > 0 ? "has-routes" : "is-empty")">
+<div class="pp-clutch-shell @(HasCurrentRouteFrontier() ? "has-routes" : "is-empty")">
     <div class="pp-clutch-axis" aria-hidden="true">
         <span><strong>Travel</strong><small>Fewer stops</small></span>
         <span><strong>Price</strong><small>Lower cost</small></span>
@@ -94,9 +94,9 @@
     </div>
 
     <div class="pp-frontier-lane" aria-label="Representative route choices">
-        @if (RouteDecision?.RepresentativeRoutes.Count > 0)
+        @if (HasCurrentRouteFrontier())
         {
-            @foreach (var option in RouteDecision.RepresentativeRoutes)
+            @foreach (var option in RouteDecision!.RepresentativeRoutes)
             {
                 var selected = ContainsTolerance(option, TravelTolerance);
                 <button type="button"
@@ -115,6 +115,13 @@
                 </button>
             }
         }
+        else if (RouteDecision?.RepresentativeRoutes.Count > 0)
+        {
+            <div class="pp-frontier-empty" role="status">
+                <MudIcon Icon="@Icons.Material.Outlined.Sync" Size="Size.Small" />
+                <span>Regenerate the route to recalculate tradeoffs for the new travel priority.</span>
+            </div>
+        }
         else
         {
             <div class="pp-frontier-empty">
@@ -128,6 +135,7 @@
 @code {
     [Parameter] public int TravelTolerance { get; set; }
     [Parameter] public MarketRouteDecision? RouteDecision { get; set; }
+    [Parameter] public MarketTravelPriority TravelPriority { get; set; }
     [Parameter] public EventCallback<int> TravelToleranceChanged { get; set; }
 
     private bool _open;
@@ -182,11 +190,14 @@
         };
     }
 
-    private string GetPriorityExplanation() => RouteDecision?.TravelPriority switch
+    private string GetPriorityExplanation() => TravelPriority switch
     {
         MarketTravelPriority.WorldVisitsFirst => "World visits are compared before data-center transfers.",
         _ => "Data-center transfers are compared before individual world visits."
     };
+
+    private bool HasCurrentRouteFrontier() =>
+        RouteDecision?.TravelPriority == TravelPriority && RouteDecision.RepresentativeRoutes.Count > 0;
 
     private string GetPremiumText(MarketRouteFrontierOption option)
     {

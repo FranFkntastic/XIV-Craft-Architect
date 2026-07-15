@@ -129,7 +129,14 @@ public sealed class JointAcquisitionRouteOptimizationService
             .OrderBy(candidate => candidate.Route.Decision?.SelectedEvidencePenalty ?? 0)
             .ThenBy(candidate => candidate.Variant.DecisionKey, StringComparer.Ordinal)
             .First();
-        var representativeRoutes = BuildJointRepresentativeRoutes(evaluated, config, cheapestTotal);
+        // The cheapest pass deliberately trims each item's candidates to its minimum-cost
+        // purchase. The tolerance pass expands those candidates again so it can discover
+        // consolidated routes. Feed both passes into the displayed frontier; otherwise the
+        // selected route can be absent from the clutch even though the recommendation is valid.
+        var representativeRoutes = BuildJointRepresentativeRoutes(
+            evaluated.Concat(finalists).ToList(),
+            config,
+            cheapestTotal);
         var optimizedPlan = ApplyVariant(plan, selected.Variant);
         var activeItems = AcquisitionPlanningService.GetActiveProcurementItems(optimizedPlan);
         var selectedPlans = selected.Route.ShoppingPlans.ToList();

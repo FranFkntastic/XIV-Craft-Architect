@@ -46,6 +46,47 @@ public sealed class JointAcquisitionRouteOptimizationTests
     }
 
     [Fact]
+    public async Task RepresentativeRoutesIncludeConsolidatedRouteDiscoveredDuringTolerancePass()
+    {
+        var first = Leaf(301, "First material");
+        first.SourceReason = AcquisitionSourceReason.UserSelected;
+        var second = Leaf(302, "Second material");
+        second.SourceReason = AcquisitionSourceReason.UserSelected;
+        var plan = new CraftingPlan { RootItems = [first, second] };
+        var evidence = new[]
+        {
+            Evidence(301, first.Name, 1,
+                ("Primal", "Excalibur", 230L),
+                ("Aether", "Mateus", 300L)),
+            Evidence(302, second.Name, 1,
+                ("Crystal", "Goblin", 240L),
+                ("Aether", "Mateus", 300L))
+        };
+
+        var result = await CreateService().OptimizeAsync(
+            plan,
+            evidence,
+            Config(tolerance: 4),
+            includeSplitPurchases: true,
+            MarketAnalysisExecutionOptions.Synchronous);
+
+        var decision = Assert.IsType<MarketRouteDecision>(result.RouteDecision);
+        Assert.Equal(600, decision.SelectedGilCost);
+        Assert.Equal(1, decision.SelectedWorldStops);
+        Assert.Equal(0, decision.SelectedDataCenterTransfers);
+        Assert.Contains(decision.RepresentativeRoutes,
+            route => route.GilCost == 470 && route.WorldStops == 2 && route.DataCenterTransfers == 1);
+        Assert.Contains(decision.RepresentativeRoutes,
+            route => route.GilCost == 600 && route.WorldStops == 1 && route.DataCenterTransfers == 0);
+        Assert.Contains(decision.RepresentativeRoutes,
+            route => route.MinimumTolerance <= decision.TravelTolerance &&
+                     route.MaximumTolerance >= decision.TravelTolerance &&
+                     route.GilCost == decision.SelectedGilCost &&
+                     route.WorldStops == decision.SelectedWorldStops &&
+                     route.DataCenterTransfers == decision.SelectedDataCenterTransfers);
+    }
+
+    [Fact]
     public async Task UserSelectedSourceIsAHardConstraint()
     {
         var plan = CreateMakeOrBuyPlan();
