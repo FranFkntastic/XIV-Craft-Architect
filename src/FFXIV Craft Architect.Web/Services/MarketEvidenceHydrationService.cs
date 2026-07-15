@@ -4,6 +4,9 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed class MarketEvidenceHydrationService : IDisposable
 {
+    private const int RefreshAttempts = 2;
+    private static readonly TimeSpan RefreshRetryDelay = TimeSpan.FromSeconds(1);
+
     private readonly AppState _appState;
     private readonly MarketAnalysisWorkflowService _workflow;
     private readonly ILogger<MarketEvidenceHydrationService> _logger;
@@ -61,6 +64,13 @@ public sealed class MarketEvidenceHydrationService : IDisposable
                nowUtc - publishedAtUtc.Value > MarketEvidencePolicyDefaults.ReusableCacheMaxAge;
     }
 
+    public static MarketAnalysisWorkflowRequest CreateRefreshRequest()
+    {
+        return new MarketAnalysisWorkflowRequest(
+            ForceRefreshData: true,
+            PreserveExistingEvidence: true);
+    }
+
     private static bool HasMarketCandidate(CraftingPlan plan)
     {
         return plan.RootItems.Any(HasMarketCandidate);
@@ -85,22 +95,38 @@ public sealed class MarketEvidenceHydrationService : IDisposable
                 return;
             }
 
-            var result = await _workflow.RunAnalysisAsync(
-                new MarketAnalysisWorkflowRequest(
-                    ForceRefreshData: false,
-                    PreserveExistingEvidence: true),
-                ct: ct);
-            if (!result.Published && !ct.IsCancellationRequested)
+            for (var attempt = 1; attempt <= RefreshAttempts; attempt++)
             {
-                _logger.LogWarning("Background market evidence hydration did not publish a result");
+                var result = await _workflow.RunAnalysisAsync(CreateRefreshRequest(), ct: ct);
+                if (result.Published)
+                {
+                    return;
+                }
+
+                if (attempt < RefreshAttempts)
+                {
+                    _logger.LogWarning(
+                        "Automatic market price refresh did not publish a result; retrying ({Attempt}/{Attempts})",
+                        attempt,
+                        RefreshAttempts);
+                    await Task.Delay(RefreshRetryDelay, ct);
+                    if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+                    {
+                        return;
+                    }
+                }
             }
+
+            _logger.LogWarning(
+                "Automatic market price refresh did not publish a result after {Attempts} attempts",
+                RefreshAttempts);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Background market evidence hydration failed");
+            _logger.LogWarning(ex, "Automatic market price refresh failed");
         }
         finally
         {

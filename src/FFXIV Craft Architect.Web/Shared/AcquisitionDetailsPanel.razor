@@ -261,12 +261,12 @@
 
         if (AppState.IsMarketEvidenceHydrating)
         {
-            return "Restoring actionable market evidence...";
+            return "Refreshing current market price...";
         }
 
         if ((hqOnly ? HqUnitPrice : UnitPrice) > 0)
         {
-            return "Saved price only; market evidence needs to be refreshed.";
+            return "Current market price was unavailable after automatic refresh.";
         }
 
         return "Run Market Analysis for actionable market evidence.";

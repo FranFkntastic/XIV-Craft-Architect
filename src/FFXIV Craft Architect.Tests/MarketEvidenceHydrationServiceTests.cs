@@ -39,6 +39,15 @@ public sealed class MarketEvidenceHydrationServiceTests
     }
 
     [Fact]
+    public void CreateRefreshRequest_ForcesCurrentMarketDataAndPreservesVisibleEvidence()
+    {
+        var request = MarketEvidenceHydrationService.CreateRefreshRequest();
+
+        Assert.True(request.ForceRefreshData);
+        Assert.True(request.PreserveExistingEvidence);
+    }
+
+    [Fact]
     public void NeedsHydration_PlanWithoutMarketCandidates_ReturnsFalse()
     {
         var plan = new CraftingPlan
