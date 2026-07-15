@@ -158,14 +158,31 @@
                                   Disabled="_marketMafiosoConnectionIsBusy"
                                   Class="mt-4" />
                     <MudTextField @bind-Value="_marketMafiosoApiKey"
-                                  Label="Client API key"
-                                  HelperText="Use the same client key configured in the MarketMafioso receiver and plugin. It is stored in this browser profile."
+                                  Label="Craft Architect access key"
+                                  HelperText="Generate a Craft Architect key in MarketMafioso Dashboard > Settings > Authentication. It is stored only in this browser profile and can be revoked independently."
                                   Variant="Variant.Outlined"
                                   Margin="Margin.Dense"
                                   Immediate="true"
                                   InputType="InputType.Password"
                                   Disabled="_marketMafiosoConnectionIsBusy"
                                   Class="mt-3" />
+                    <MudStack Row="true" Spacing="1" Class="mt-1">
+                        <MudButton Variant="Variant.Text"
+                                   Color="Color.Primary"
+                                   Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.OpenInNew"
+                                   Disabled="@string.IsNullOrWhiteSpace(_marketMafiosoApiUrl)"
+                                   OnClick="OpenMarketMafiosoKeyManagerAsync">
+                            Open key manager
+                        </MudButton>
+                        <MudButton Variant="Variant.Text"
+                                   Color="Color.Default"
+                                   Size="Size.Small"
+                                   Disabled="@string.IsNullOrWhiteSpace(_marketMafiosoApiKey)"
+                                   OnClick="ForgetMarketMafiosoKey">
+                            Forget saved key
+                        </MudButton>
+                    </MudStack>
 
                     <MudGrid Spacing="2" Class="mt-2">
                         <MudItem xs="12" sm="7">
@@ -870,6 +887,38 @@
     private int GetMarketMafiosoConfigurationHash() => HashCode.Combine(
         _marketMafiosoApiUrl.Trim().ToUpperInvariant(),
         _marketMafiosoApiKey.Trim());
+
+    private async Task ForgetMarketMafiosoKey()
+    {
+        _marketMafiosoApiKey = string.Empty;
+        _marketMafiosoConnectionTest = null;
+        _marketMafiosoConnectionStatus = string.Empty;
+        _marketMafiosoTestedConfigurationHash = null;
+        await Settings.SetAsync("marketmafioso.api_key", string.Empty);
+        Snackbar.Add("Craft Architect access key forgotten", Severity.Info);
+    }
+
+    private async Task OpenMarketMafiosoKeyManagerAsync()
+    {
+        if (!Uri.TryCreate(_marketMafiosoApiUrl.Trim(), UriKind.Absolute, out var apiUri))
+        {
+            Snackbar.Add("Enter a valid Workshop Host API URL first", Severity.Warning);
+            return;
+        }
+
+        var apiSegment = apiUri.AbsolutePath.IndexOf("/api", StringComparison.OrdinalIgnoreCase);
+        var dashboardPath = apiSegment < 0
+            ? "/settings"
+            : $"{apiUri.AbsolutePath[..apiSegment].TrimEnd('/')}/settings";
+        var dashboardUri = new UriBuilder(apiUri)
+        {
+            Path = dashboardPath,
+            Query = string.Empty,
+            Fragment = string.Empty,
+        }.Uri;
+
+        await JSRuntime.InvokeVoidAsync("open", dashboardUri.ToString(), "_blank", "noopener,noreferrer");
+    }
 
     private string GetMarketMafiosoConnectionLabel()
     {
