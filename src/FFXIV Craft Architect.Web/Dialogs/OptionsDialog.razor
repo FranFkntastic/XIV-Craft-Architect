@@ -159,7 +159,7 @@
                                   Class="mt-4" />
                     <MudTextField @bind-Value="_marketMafiosoApiKey"
                                   Label="Craft Architect access key"
-                                  HelperText="Generate a Craft Architect key in MarketMafioso Dashboard > Settings > Authentication. It is stored only in this browser profile and can be revoked independently."
+                                  HelperText="Generate a Craft Architect key in the Workshop Host key manager. It is stored only in this browser profile and can be revoked independently."
                                   Variant="Variant.Outlined"
                                   Margin="Margin.Dense"
                                   Immediate="true"
@@ -913,7 +913,7 @@
         var dashboardUri = new UriBuilder(apiUri)
         {
             Path = dashboardPath,
-            Query = string.Empty,
+            Query = "tab=authentication",
             Fragment = string.Empty,
         }.Uri;
 
