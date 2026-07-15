@@ -17,6 +17,8 @@
 @inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
 @inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
 @inject DiagnosticSnapshotBundleService DiagnosticSnapshotBundleService
+@inject AcquisitionEvaluationItemDiagnosticDumpService AcquisitionItemDiagnosticDumpService
+@inject AcquisitionDiagnosticSelectionService AcquisitionDiagnosticSelection
 @inject BrowserFileExportService BrowserFileExportService
 @inject MarketEvidenceHydrationService MarketEvidenceHydration
 @inject IMarketCacheService MarketCache
@@ -28,28 +30,29 @@
     <DialogContent>
         <div class="options-shell">
             <div class="options-tab-list" role="tablist" aria-label="Options sections">
-                @for (var index = 0; index < OptionsTabs.Length; index++)
+                @for (var index = 0; index < VisibleOptionsTabs.Count; index++)
                 {
                     var tabIndex = index;
+                    var tab = VisibleOptionsTabs[tabIndex];
                     <button type="button"
                             @ref="_tabElements[tabIndex]"
-                            id="@GetTabId(tabIndex)"
-                            class="options-tab @(tabIndex == _activePanelIndex ? "is-active" : null)"
+                            id="@GetTabId(tab.Panel)"
+                            class="options-tab @(tab.Panel == _activePanel ? "is-active" : null)"
                             role="tab"
-                            aria-selected="@(tabIndex == _activePanelIndex ? "true" : "false")"
-                            aria-controls="@GetPanelId(tabIndex)"
-                            tabindex="@(tabIndex == _activePanelIndex ? 0 : -1)"
-                            @onclick="() => SelectTab(tabIndex)"
+                            aria-selected="@(tab.Panel == _activePanel ? "true" : "false")"
+                            aria-controls="@GetPanelId(tab.Panel)"
+                            tabindex="@(tab.Panel == _activePanel ? 0 : -1)"
+                            @onclick="() => SelectTab(tab.Panel)"
                             @onkeydown="args => HandleTabKeyDown(args, tabIndex)">
-                        @OptionsTabs[tabIndex]
+                        @tab.Label
                     </button>
                 }
             </div>
             <div class="options-tab-panel"
-                 id="@GetPanelId(_activePanelIndex)"
+                 id="@GetPanelId(_activePanel)"
                  role="tabpanel"
-                 aria-labelledby="@GetTabId(_activePanelIndex)">
-            @if (_activePanelIndex == 0)
+                 aria-labelledby="@GetTabId(_activePanel)">
+            @if (_activePanel == OptionsPanel.General)
             {
                 <MudSwitch @bind-Value="_autoSaveEnabled" 
                            Label="Auto-save plans" 
@@ -60,7 +63,7 @@
                 </MudText>
             }
             
-            else if (_activePanelIndex == 1)
+            else if (_activePanel == OptionsPanel.Market)
             {
                 <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
                     Configure your default market settings for price lookups.
@@ -123,7 +126,7 @@
                 </MudText>
             }
 
-            else if (_activePanelIndex == 2)
+            else if (_activePanel == OptionsPanel.Integrations)
             {
                 <MudPaper Variant="Variant.Outlined" Class="pa-4">
                     <div class="d-flex align-center justify-space-between gap-3 mb-1">
@@ -263,7 +266,7 @@
                 </MudPaper>
             }
 
-            else if (_activePanelIndex == 3)
+            else if (_activePanel == OptionsPanel.Company)
             {
                 @if (!string.IsNullOrWhiteSpace(_companyLoadError))
                 {
@@ -555,7 +558,7 @@
                 }
             }
 
-            else if (_activePanelIndex == 4)
+            else if (_activePanel == OptionsPanel.Hosting)
             {
                 <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
                     Connect this browser profile to a private Craft Architect profile host.
@@ -704,7 +707,7 @@
                 }
             }
 
-            else if (_activePanelIndex == 5)
+            else if (_activePanel == OptionsPanel.Storage)
             {
                 <MudText Typo="Typo.body2" Class="mb-4">
                     Manage the named plans stored in this browser.
@@ -727,7 +730,7 @@
                 </MudText>
             }
 
-            else if (_activePanelIndex == 6)
+            else if (_activePanel == OptionsPanel.Diagnostics)
             {
                 <div class="diagnostics-heading">
                     <div>
@@ -799,8 +802,21 @@
                             </span>
                         </button>
                     </div>
-                    <div class="diagnostics-hint">
-                        Acquisition Evaluation also exposes an Item dump beside the selected item, containing only that item's demand, actionability calculation, and market evidence.
+                    <div class="diagnostics-action-row diagnostics-context-row">
+                        <div>
+                            <strong>Selected acquisition item</strong>
+                            <span>@(_acquisitionItemDiagnosticDescription ?? "Select an item in Acquisition Evaluation to make a contextual snapshot available here.")</span>
+                        </div>
+                        <button type="button"
+                                class="mud-button-root mud-button mud-button-outlined mud-button-outlined-secondary mud-button-outlined-size-small mud-ripple"
+                                disabled="@(!_acquisitionItemDiagnosticReady || _diagnosticsBusy)"
+                                onclick="window.CraftArchitectFileExport?.downloadPreparedFile('@AcquisitionItemDiagnosticSaveKey')">
+                            <span class="mud-button-label">
+                                <MudIcon Icon="@Icons.Material.Filled.Download"
+                                         Class="mud-button-icon-start mud-button-icon-size-small" />
+                                Download item snapshot
+                            </span>
+                        </button>
                     </div>
                     <div class="diagnostics-action-row diagnostics-report-row">
                         <div>
@@ -873,7 +889,7 @@
                 </section>
             }
 
-            else
+            else if (_activePanel == OptionsPanel.About)
             {
                 <div class="d-flex flex-column align-center py-4" style="position: relative; min-height: 180px;">
                     <MudText Typo="Typo.h5" Class="mb-2">FFXIV Craft Architect</MudText>
@@ -912,7 +928,7 @@
                                    OnClick="ToggleSecretDebugToolsAsync"
                                    Size="Size.Small"
                                    Color="@(AppState.SecretDebugToolsEnabled ? Color.Warning : Color.Default)"
-                                   title="Developer Mode enables experimental work-in-progress features. These tools may change, break, or lose draft data."
+                                   title="Developer Mode reveals diagnostics and experimental work-in-progress features. These tools may change, break, or lose draft data."
                                    aria-label="Toggle Developer Mode"
                                    Style="position: absolute; bottom: 8px; left: 8px; opacity: 0.35;" />
                 </div>
@@ -930,8 +946,35 @@
     [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
     [Parameter] public int InitialPanelIndex { get; set; }
 
-    private static readonly string[] OptionsTabs =
-        ["General", "Market", "Integrations", "Company", "Hosting", "Storage", "Diagnostics", "About"];
+    private static readonly IReadOnlyList<OptionsTab> AllOptionsTabs =
+    [
+        new(OptionsPanel.General, "General"),
+        new(OptionsPanel.Market, "Market"),
+        new(OptionsPanel.Integrations, "Integrations"),
+        new(OptionsPanel.Company, "Company"),
+        new(OptionsPanel.Hosting, "Hosting"),
+        new(OptionsPanel.Storage, "Storage"),
+        new(OptionsPanel.Diagnostics, "Diagnostics", DeveloperOnly: true),
+        new(OptionsPanel.About, "About")
+    ];
+
+    private IReadOnlyList<OptionsTab> VisibleOptionsTabs => AllOptionsTabs
+        .Where(tab => !tab.DeveloperOnly || AppState.SecretDebugToolsEnabled)
+        .ToList();
+
+    private enum OptionsPanel
+    {
+        General,
+        Market,
+        Integrations,
+        Company,
+        Hosting,
+        Storage,
+        Diagnostics,
+        About
+    }
+
+    private sealed record OptionsTab(OptionsPanel Panel, string Label, bool DeveloperOnly = false);
     private static readonly IReadOnlyList<CompactSelectOption> RegionOptions =
     [
         new("North America", "North America"),
@@ -954,29 +997,35 @@
         new(nameof(TradePaymentContractMode.LegacyCommission), "Legacy commission"),
         new(nameof(TradePaymentContractMode.LaborStandard), "Labor standard")
     ];
-    private readonly ElementReference[] _tabElements = new ElementReference[OptionsTabs.Length];
-    private int _activePanelIndex;
+    private readonly ElementReference[] _tabElements = new ElementReference[AllOptionsTabs.Count];
+    private OptionsPanel _activePanel = OptionsPanel.General;
 
-    private static string GetTabId(int index) => $"options-tab-{index}";
-    private static string GetPanelId(int index) => $"options-panel-{index}";
+    private static string GetTabId(OptionsPanel panel) => $"options-tab-{panel.ToString().ToLowerInvariant()}";
+    private static string GetPanelId(OptionsPanel panel) => $"options-panel-{panel.ToString().ToLowerInvariant()}";
 
-    private async Task SelectTab(int index)
+    private async Task SelectTab(OptionsPanel panel)
     {
-        _activePanelIndex = Math.Clamp(index, 0, OptionsTabs.Length - 1);
-        if (_activePanelIndex == 6)
+        if (!VisibleOptionsTabs.Any(tab => tab.Panel == panel))
         {
-            await PrepareDiagnosticSnapshotAsync();
+            panel = OptionsPanel.General;
+        }
+
+        _activePanel = panel;
+        if (_activePanel == OptionsPanel.Diagnostics)
+        {
+            await PrepareDiagnosticsAsync();
         }
     }
 
     private async Task HandleTabKeyDown(KeyboardEventArgs args, int currentIndex)
     {
+        var visibleTabs = VisibleOptionsTabs;
         var nextIndex = args.Key switch
         {
-            "ArrowRight" => (currentIndex + 1) % OptionsTabs.Length,
-            "ArrowLeft" => (currentIndex - 1 + OptionsTabs.Length) % OptionsTabs.Length,
+            "ArrowRight" => (currentIndex + 1) % visibleTabs.Count,
+            "ArrowLeft" => (currentIndex - 1 + visibleTabs.Count) % visibleTabs.Count,
             "Home" => 0,
-            "End" => OptionsTabs.Length - 1,
+            "End" => visibleTabs.Count - 1,
             _ => currentIndex
         };
 
@@ -985,7 +1034,7 @@
             return;
         }
 
-        await SelectTab(nextIndex);
+        await SelectTab(visibleTabs[nextIndex].Panel);
         await InvokeAsync(StateHasChanged);
         await _tabElements[nextIndex].FocusAsync();
     }
@@ -1084,12 +1133,15 @@
     private Color _profileHostStatusColor = Color.Secondary;
     private bool _diagnosticsBusy;
     private bool _diagnosticSnapshotReady;
+    private bool _acquisitionItemDiagnosticReady;
     private bool _prepareDiagnosticAttachment;
     private string? _diagnosticSnapshotFileName;
+    private string? _acquisitionItemDiagnosticDescription;
     private TradeIndexedDbDiagnostics? _tradeStorageDiagnostics;
     private CacheStats? _marketCacheStats;
     private string? _diagnosticStorageError;
     private const string DiagnosticSnapshotSaveKey = "options-diagnostic-snapshot";
+    private const string AcquisitionItemDiagnosticSaveKey = "acquisition-item-diagnostic";
 
     private static readonly JsonSerializerOptions CompanyPackageJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -1108,7 +1160,10 @@
     
     protected override async Task OnInitializedAsync()
     {
-        _activePanelIndex = InitialPanelIndex;
+        var initialTab = AllOptionsTabs[Math.Clamp(InitialPanelIndex, 0, AllOptionsTabs.Count - 1)];
+        _activePanel = initialTab.DeveloperOnly && !AppState.SecretDebugToolsEnabled
+            ? OptionsPanel.General
+            : initialTab.Panel;
         _autoSaveEnabled = await Settings.GetAsync("ui.auto_save_enabled", true);
         _defaultDataCenter = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
         _selectedRegion = await Settings.GetAsync("market.region", "North America") ?? "North America";
@@ -1131,9 +1186,9 @@
 
         await LoadCompanyProfileAsync();
         await LoadProfileHostSettingsAsync();
-        if (_activePanelIndex == 6)
+        if (_activePanel == OptionsPanel.Diagnostics)
         {
-            await PrepareDiagnosticSnapshotAsync();
+            await PrepareDiagnosticsAsync();
         }
     }
 
@@ -1914,6 +1969,17 @@
         Snackbar.Add(enabled ? "Developer Mode enabled" : "Developer Mode disabled", Severity.Info);
     }
 
+    private async Task PrepareDiagnosticsAsync()
+    {
+        if (!AppState.SecretDebugToolsEnabled)
+        {
+            return;
+        }
+
+        await PrepareDiagnosticSnapshotAsync();
+        await PrepareSelectedAcquisitionItemDiagnosticAsync();
+    }
+
     private async Task PrepareDiagnosticSnapshotAsync()
     {
         if (_diagnosticSnapshotReady || !AppState.HasPlanOrProjectItems)
@@ -1941,6 +2007,50 @@
         finally
         {
             _diagnosticsBusy = false;
+        }
+    }
+
+    private async Task PrepareSelectedAcquisitionItemDiagnosticAsync()
+    {
+        _acquisitionItemDiagnosticReady = false;
+        _acquisitionItemDiagnosticDescription = null;
+
+        if (!AcquisitionDiagnosticSelection.TryGetCurrent(
+                AppState.PlanSessionVersion,
+                out var selection))
+        {
+            return;
+        }
+
+        try
+        {
+            var exportedAtUtc = DateTime.UtcNow;
+            var row = selection.Row;
+            var dump = AcquisitionItemDiagnosticDumpService.BuildDump(
+                AppState,
+                row,
+                selection.ResolvedMarketPlan,
+                MarketEvidenceHydration.LastRun,
+                (MarketCache as IMarketCacheDiagnosticsProvider)?.LastDecisionSnapshot,
+                exportedAtUtc);
+            var fileName = AcquisitionEvaluationItemDiagnosticDumpService.CreateFileName(
+                row.ItemName,
+                row.ItemId,
+                exportedAtUtc);
+            await BrowserFileExportService.PrepareTextFileSaveAsync(
+                AcquisitionItemDiagnosticSaveKey,
+                fileName,
+                AcquisitionItemDiagnosticDumpService.Serialize(dump),
+                "application/json");
+
+            var quantity = AcquisitionEvaluationCostCalculator.GetCostQuantity(row);
+            _acquisitionItemDiagnosticDescription =
+                $"{row.ItemName} · {quantity:N0} needed · {row.MarketEvidence}";
+            _acquisitionItemDiagnosticReady = true;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Could not prepare acquisition diagnostics: {ex.Message}", Severity.Error);
         }
     }
 

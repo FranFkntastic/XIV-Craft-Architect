@@ -20,13 +20,6 @@
             <div class="rp-panel-header">
                 <div class="rp-header-title">Acquisition Details</div>
                 <div class="rp-header-actions">
-                    <button type="button"
-                            class="rp-header-action"
-                            title="@(DiagnosticReady ? "Download acquisition evidence and actionability diagnostics for this item" : "Preparing item diagnostics")"
-                            disabled="@(!DiagnosticReady)"
-                            onclick="window.CraftArchitectFileExport?.downloadPreparedFile('@DiagnosticSaveKey')">
-                        Item dump
-                    </button>
                     @if (CanOpenMarketAnalysis)
                     {
                         <button type="button"
@@ -100,8 +93,6 @@
     [Parameter] public IReadOnlyList<MaterialAggregate>? ActiveProcurementItems { get; set; }
     [Parameter] public IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<CoreMarketDataUnavailableItem>();
     [Parameter] public EventCallback<AcquisitionSourceChangeRequest> OnSourceChanged { get; set; }
-    [Parameter] public bool DiagnosticReady { get; set; }
-    [Parameter] public string DiagnosticSaveKey { get; set; } = "acquisition-item-diagnostic";
 
     private int ItemId => Row?.ItemId ?? Node?.ItemId ?? 0;
     private string ItemName => Row?.ItemName ?? Node?.Name ?? string.Empty;

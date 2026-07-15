@@ -23,7 +23,6 @@
 @inject MarketAnalysisDiagnosticDumpService MarketAnalysisDiagnosticDumpService
 @inject RecipeBuildDiagnosticService RecipeBuildDiagnosticService
 @inject ILogger<MainLayout> Logger
-@inject Microsoft.AspNetCore.Components.WebAssembly.Hosting.IWebAssemblyHostEnvironment HostEnvironment
 @implements IDisposable
 
 <MudThemeProvider @ref="_mudThemeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
@@ -247,8 +246,7 @@
     private bool _disposed = false;
     private bool _resetMainScrollAfterRender;
     private bool _debugToolsMenuOpen;
-    private bool IsDevelopment => string.Equals(HostEnvironment.Environment, "Development", StringComparison.OrdinalIgnoreCase);
-    private bool IsDebugToolsAvailable => IsDevelopment || AppState.SecretDebugToolsEnabled;
+    private bool IsDebugToolsAvailable => AppState.SecretDebugToolsEnabled;
     private bool IsTradeMode => IsTradeRoute(NavigationManager.Uri);
     private bool CanDumpSelectedMarketAnalysisItem =>
         AppState.SelectedMarketAnalysisItemId.HasValue &&

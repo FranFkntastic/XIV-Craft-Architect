@@ -80,6 +80,7 @@ builder.Services.AddScoped<IMarketAnalysisAutoRunner, MarketAnalysisAutoRunner>(
 builder.Services.AddScoped<MarketAnalysisDiagnosticDumpService>();
 builder.Services.AddScoped<DiagnosticSnapshotBundleService>();
 builder.Services.AddScoped<AcquisitionEvaluationItemDiagnosticDumpService>();
+builder.Services.AddScoped<AcquisitionDiagnosticSelectionService>();
 builder.Services.AddScoped<GitHubIssueReportService>();
 builder.Services.AddScoped<BrowserFileExportService>();
 builder.Services.AddScoped<ProcurementWorkflowService>();

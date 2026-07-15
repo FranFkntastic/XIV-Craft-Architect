@@ -10,10 +10,8 @@
 @inject AcquisitionDecisionService AcquisitionDecisionService
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject AcquisitionEvaluationWorkflowService AcquisitionEvaluationWorkflow
-@inject AcquisitionEvaluationItemDiagnosticDumpService ItemDiagnosticDumpService
+@inject AcquisitionDiagnosticSelectionService DiagnosticSelection
 @inject MarketEvidenceHydrationService MarketEvidenceHydration
-@inject IMarketCacheService MarketCache
-@inject BrowserFileExportService BrowserFileExportService
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
 @inject ILogger<AcquisitionEvaluation> Logger
@@ -115,9 +113,7 @@
         CostContext="@_snapshot.CostContext"
         ActiveProcurementItems="@_snapshot.ActiveProcurementItems"
         UnavailableMarketItems="@AppState.UnavailableMarketItems"
-        OnSourceChanged="OnNodeSourceChanged"
-        DiagnosticReady="_itemDiagnosticReady"
-        DiagnosticSaveKey="@ItemDiagnosticSaveKey" />
+        OnSourceChanged="OnNodeSourceChanged" />
 </div>
 
 @code {
@@ -143,9 +139,6 @@
     private long _refreshRequestId;
     private string? _appliedRequestedNodeId;
     private int? _appliedRequestedItemId;
-    private const string ItemDiagnosticSaveKey = "acquisition-item-diagnostic";
-    private long _itemDiagnosticPreparationRequestId;
-    private bool _itemDiagnosticReady;
 
     protected override async Task OnInitializedAsync()
     {
@@ -210,6 +203,7 @@
     private void SelectNode(PlanNode node)
     {
         _selectedNode = node;
+        UpdateDiagnosticSelection();
     }
 
     private async Task OnNodeSourceChanged(AcquisitionSourceChangeRequest request)
@@ -217,51 +211,16 @@
         await ApplyNodeSourceChangeAsync(request.Node, request.Source);
     }
 
-    private async Task PrepareSelectedItemDiagnosticAsync(CancellationToken cancellationToken = default)
+    private void UpdateDiagnosticSelection()
     {
-        var preparationRequestId = Interlocked.Increment(ref _itemDiagnosticPreparationRequestId);
-        _itemDiagnosticReady = false;
         var row = GetSelectedRow();
         if (row == null)
         {
+            DiagnosticSelection.Clear();
             return;
         }
 
-        try
-        {
-            var exportedAtUtc = DateTime.UtcNow;
-            var dump = ItemDiagnosticDumpService.BuildDump(
-                AppState,
-                row,
-                GetMarketPlan(row),
-                MarketEvidenceHydration.LastRun,
-                (MarketCache as IMarketCacheDiagnosticsProvider)?.LastDecisionSnapshot,
-                exportedAtUtc);
-            var json = ItemDiagnosticDumpService.Serialize(dump);
-            var fileName = AcquisitionEvaluationItemDiagnosticDumpService.CreateFileName(
-                row.ItemName,
-                row.ItemId,
-                exportedAtUtc);
-
-            await BrowserFileExportService.PrepareTextFileSaveAsync(
-                ItemDiagnosticSaveKey,
-                fileName,
-                json,
-                "application/json",
-                cancellationToken);
-            if (preparationRequestId == _itemDiagnosticPreparationRequestId &&
-                GetSelectedRow()?.ItemId == row.ItemId)
-            {
-                _itemDiagnosticReady = true;
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Failed to prepare acquisition diagnostics for item {ItemId}", row.ItemId);
-        }
+        DiagnosticSelection.SetSelection(row, GetMarketPlan(row), AppState.PlanSessionVersion);
     }
 
     private async Task OnNodeSourceSelected(PlanNode node, ChangeEventArgs args)
@@ -464,7 +423,7 @@
     private async Task SelectNodeFromRow(DecisionRow row)
     {
         SelectNode(row.Node);
-        await PrepareSelectedItemDiagnosticAsync();
+        await Task.CompletedTask;
     }
 
     private Task OnLedgerSortChanged(WebTableSortState<AcquisitionDecisionLedgerSortColumn> sortState)
@@ -581,7 +540,7 @@
         }
 
         EnsureSelectedNodeFromSnapshot();
-        await PrepareSelectedItemDiagnosticAsync(token);
+        UpdateDiagnosticSelection();
         elapsed.Stop();
 
         if (elapsed.ElapsedMilliseconds > 100)
@@ -722,7 +681,7 @@
             return false;
         }
 
-        _selectedNode = row.Node;
+        SelectNode(row.Node);
         _appliedRequestedNodeId = RequestedNodeId;
         return true;
     }
@@ -745,7 +704,7 @@
             return false;
         }
 
-        _selectedNode = row.Node;
+        SelectNode(row.Node);
         _appliedRequestedItemId = RequestedItemId;
         return true;
     }
