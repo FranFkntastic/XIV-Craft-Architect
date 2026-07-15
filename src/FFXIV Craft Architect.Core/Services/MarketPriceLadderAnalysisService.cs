@@ -944,16 +944,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
     private static IEnumerable<AnalyzedMarketListing> GetProcurementListings(WorldMarketAnalysis world)
     {
-        var listings = HasScopePriceContext(world)
-            ? world.Listings.Where(listing => listing.PriceSanity is MarketListingPriceSanity.Sane or MarketListingPriceSanity.Outlier)
-            : world.Listings.Where(listing => listing.PriceSanity is MarketListingPriceSanity.Sane or MarketListingPriceSanity.LowOutlier);
-
-        return listings.OrderBy(listing => listing.SortIndex);
-    }
-
-    private static bool HasScopePriceContext(WorldMarketAnalysis world)
-    {
-        return world.CompetitiveThresholdUnitPrice > 0 && world.SaneThresholdUnitPrice > 0;
+        return MarketProcurementEvidencePolicy.GetEligibleListings(world);
     }
 
     private static WorldShoppingSummary CreateWorldSummary(
