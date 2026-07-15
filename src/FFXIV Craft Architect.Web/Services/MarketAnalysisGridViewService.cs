@@ -149,12 +149,12 @@ public static class MarketAnalysisGridViewService
     {
         ArgumentNullException.ThrowIfNull(world);
 
-        if (!HasPriceSignal(world))
+        if (!HasProcurementEvidence(world))
         {
             return "is-unavailable";
         }
 
-        return world.PriceSignalDepth == PriceBandDepth.Thin
+        return GetProcurementEvidenceDepth(world) == PriceBandDepth.Thin
             ? "is-competitive"
             : "is-optimal";
     }
@@ -163,8 +163,9 @@ public static class MarketAnalysisGridViewService
     {
         ArgumentNullException.ThrowIfNull(world);
 
-        return HasPriceSignal(world)
-            ? $"~{world.PriceSignalAverageUnitPrice:N0}g / unit"
+        var unitPrice = GetProcurementEvidenceUnitPrice(world);
+        return unitPrice > 0
+            ? $"~{unitPrice:N0}g / unit"
             : "No procurement signal";
     }
 
@@ -172,8 +173,9 @@ public static class MarketAnalysisGridViewService
     {
         ArgumentNullException.ThrowIfNull(world);
 
-        return HasPriceSignal(world)
-            ? $"{world.PriceSignalQuantity:N0} {FormatPriceBandDepth(world.PriceSignalDepth)}"
+        var quantity = GetProcurementEvidenceQuantity(world);
+        return quantity > 0
+            ? $"{quantity:N0} {FormatPriceBandDepth(GetProcurementEvidenceDepth(world))}"
             : "No procurement signal";
     }
 
@@ -181,8 +183,9 @@ public static class MarketAnalysisGridViewService
     {
         ArgumentNullException.ThrowIfNull(world);
 
-        return HasPriceSignal(world)
-            ? $"{world.PriceSignalQuantity:N0}"
+        var quantity = GetProcurementEvidenceQuantity(world);
+        return quantity > 0
+            ? $"{quantity:N0}"
             : "No procurement signal";
     }
 
@@ -190,8 +193,8 @@ public static class MarketAnalysisGridViewService
     {
         ArgumentNullException.ThrowIfNull(world);
 
-        return HasPriceSignal(world)
-            ? FormatPriceBandDepth(world.PriceSignalDepth)
+        return HasProcurementEvidence(world)
+            ? FormatPriceBandDepth(GetProcurementEvidenceDepth(world))
             : string.Empty;
     }
 
@@ -375,13 +378,14 @@ public static class MarketAnalysisGridViewService
     {
         ArgumentNullException.ThrowIfNull(world);
 
-        var (referencePrice, referenceLabel) = GetCompetitiveValueReference(world);
-        if (referencePrice <= 0 || world.PriceSignalAverageUnitPrice <= 0)
+        var (referencePrice, _) = GetCompetitiveValueReference(world);
+        var procurementPrice = GetProcurementEvidenceUnitPrice(world);
+        if (referencePrice <= 0 || procurementPrice <= 0)
         {
             return "-";
         }
 
-        var percent = (world.PriceSignalAverageUnitPrice - referencePrice) / referencePrice * 100m;
+        var percent = (procurementPrice - referencePrice) / referencePrice * 100m;
         var rounded = Math.Round(percent, 0, MidpointRounding.AwayFromZero);
         return $"{rounded:+0;-0;0}%";
     }
@@ -391,12 +395,13 @@ public static class MarketAnalysisGridViewService
         ArgumentNullException.ThrowIfNull(world);
 
         var (referencePrice, referenceLabel) = GetCompetitiveValueReference(world);
-        if (referencePrice <= 0 || world.PriceSignalAverageUnitPrice <= 0)
+        var procurementPrice = GetProcurementEvidenceUnitPrice(world);
+        if (referencePrice <= 0 || procurementPrice <= 0)
         {
             return "No procurement signal is available for comparison.";
         }
 
-        var percent = (world.PriceSignalAverageUnitPrice - referencePrice) / referencePrice * 100m;
+        var percent = (procurementPrice - referencePrice) / referencePrice * 100m;
         var rounded = Math.Round(Math.Abs(percent), 0, MidpointRounding.AwayFromZero);
         var relationship = percent < 0
             ? "less than"
@@ -404,7 +409,7 @@ public static class MarketAnalysisGridViewService
                 ? "greater than"
                 : "equal to";
 
-        return $"{world.WorldName}'s procurement signal is {rounded:N0}% {relationship} the regional {referenceLabel}: {world.PriceSignalAverageUnitPrice:N0}g vs {referencePrice:N0}g.";
+        return $"{world.WorldName}'s procurement evidence is {rounded:N0}% {relationship} the regional {referenceLabel}: {procurementPrice:N0}g vs {referencePrice:N0}g.";
     }
 
     public static IReadOnlyList<MarketListingDivider> GetListingDividersBefore(
@@ -490,13 +495,6 @@ public static class MarketAnalysisGridViewService
         return IsUncompetitive(listing);
     }
 
-    public static int GetPrimaryUsableQuantity(WorldMarketAnalysis world)
-    {
-        ArgumentNullException.ThrowIfNull(world);
-
-        return world.PrimaryUsableQuantity;
-    }
-
     public static MarketCoverageBucket GetDisplayCoverageBucket(WorldMarketAnalysis world)
     {
         ArgumentNullException.ThrowIfNull(world);
@@ -512,7 +510,7 @@ public static class MarketAnalysisGridViewService
             return MarketCoverageBucket.Full;
         }
 
-        return GetPrimaryUsableQuantity(world) >= Math.Max(world.QuantityNeeded / 2, 1)
+        return coverageQuantity >= Math.Max(world.QuantityNeeded / 2, 1)
             ? MarketCoverageBucket.PartialDeep
             : MarketCoverageBucket.PartialThin;
     }
@@ -541,7 +539,7 @@ public static class MarketAnalysisGridViewService
             return MarketScoreBucket.Competitive;
         }
 
-        return world.PrimaryUsableQuantity > 0
+        return world.PrimaryUsableQuantity > 0 || HasProcurementEvidence(world)
             ? MarketScoreBucket.PoorFit
             : MarketScoreBucket.Unavailable;
     }
@@ -651,12 +649,12 @@ public static class MarketAnalysisGridViewService
     {
         return descending
             ? worlds
-                .OrderBy(world => !HasPriceSignal(world))
-                .ThenByDescending(world => world.PriceSignalQuantity)
+                .OrderBy(world => !HasProcurementEvidence(world))
+                .ThenByDescending(GetProcurementEvidenceQuantity)
                 .ThenBy(world => GetWorldUnitPriceSortValue(world))
             : worlds
-                .OrderBy(world => !HasPriceSignal(world))
-                .ThenBy(world => world.PriceSignalQuantity == 0 ? int.MaxValue : world.PriceSignalQuantity)
+                .OrderBy(world => !HasProcurementEvidence(world))
+                .ThenBy(world => GetProcurementEvidenceQuantity(world) == 0 ? int.MaxValue : GetProcurementEvidenceQuantity(world))
                 .ThenBy(world => GetWorldUnitPriceSortValue(world));
     }
 
@@ -666,30 +664,27 @@ public static class MarketAnalysisGridViewService
     {
         return descending
             ? worlds
-                .OrderBy(world => !HasPriceSignal(world))
+                .OrderBy(world => !HasProcurementEvidence(world))
                 .ThenByDescending(world => GetWorldUnitPriceSortValue(world))
-                .ThenByDescending(world => world.PriceSignalQuantity)
+                .ThenByDescending(GetProcurementEvidenceQuantity)
             : worlds
-                .OrderBy(world => !HasPriceSignal(world))
+                .OrderBy(world => !HasProcurementEvidence(world))
                 .ThenBy(world => GetWorldUnitPriceSortValue(world))
-                .ThenByDescending(world => world.PriceSignalQuantity);
+                .ThenByDescending(GetProcurementEvidenceQuantity);
     }
 
     private static decimal GetWorldUnitPriceSortValue(WorldMarketAnalysis world)
     {
-        if (!HasPriceSignal(world))
-        {
-            return decimal.MaxValue;
-        }
-
-        return world.PriceSignalAverageUnitPrice;
+        var price = GetProcurementEvidenceUnitPrice(world);
+        return price > 0 ? price : decimal.MaxValue;
     }
 
     private static decimal GetCompetitiveValueSortValue(WorldMarketAnalysis world)
     {
         var (referencePrice, _) = GetCompetitiveValueReference(world);
-        return referencePrice > 0 && world.PriceSignalAverageUnitPrice > 0
-            ? (world.PriceSignalAverageUnitPrice - referencePrice) / referencePrice
+        var procurementPrice = GetProcurementEvidenceUnitPrice(world);
+        return referencePrice > 0 && procurementPrice > 0
+            ? (procurementPrice - referencePrice) / referencePrice
             : decimal.MaxValue;
     }
 
@@ -883,12 +878,6 @@ public static class MarketAnalysisGridViewService
             world.PriceSignalAverageUnitPrice > 0;
     }
 
-    private static bool HasPriceSignal(WorldMarketAnalysis world)
-    {
-        return world.PriceSignalQuantity > 0 &&
-            world.PriceSignalAverageUnitPrice > 0;
-    }
-
     private static int GetSaneQuantity(WorldMarketAnalysis world)
     {
         return HasScopePriceContext(world)
@@ -898,9 +887,77 @@ public static class MarketAnalysisGridViewService
 
     private static int GetCoverageQuantity(WorldMarketAnalysis world)
     {
-        return HasScopePriceContext(world)
-            ? GetPrimaryUsableQuantity(world)
-            : GetSaneQuantity(world);
+        return GetProcurementEvidenceQuantity(world);
+    }
+
+    private static bool HasProcurementEvidence(WorldMarketAnalysis world)
+    {
+        var evidence = GetProcurementEvidence(world);
+        return evidence.Quantity > 0 && evidence.UnitPrice > 0;
+    }
+
+    private static int GetProcurementEvidenceQuantity(WorldMarketAnalysis world)
+    {
+        return GetProcurementEvidence(world).Quantity;
+    }
+
+    private static decimal GetProcurementEvidenceUnitPrice(WorldMarketAnalysis world)
+    {
+        return GetProcurementEvidence(world).UnitPrice;
+    }
+
+    private static ProcurementEvidence GetProcurementEvidence(WorldMarketAnalysis world)
+    {
+        if (world.Listings.Count > 0)
+        {
+            var eligibleListings = MarketProcurementEvidencePolicy.GetEligibleListings(world);
+            var availableQuantity = eligibleListings.Sum(listing => listing.Quantity);
+            var quotedQuantity = 0;
+            long totalCost = 0;
+            foreach (var listing in eligibleListings)
+            {
+                quotedQuantity += listing.Quantity;
+                totalCost += listing.PricePerUnit * listing.Quantity;
+                if (quotedQuantity >= world.QuantityNeeded)
+                {
+                    break;
+                }
+            }
+
+            return new ProcurementEvidence(
+                availableQuantity,
+                quotedQuantity > 0 ? totalCost / (decimal)quotedQuantity : 0);
+        }
+
+        if (world.PriceSignalAverageUnitPrice > 0)
+        {
+            return new ProcurementEvidence(GetSaneQuantity(world), world.PriceSignalAverageUnitPrice);
+        }
+
+        if (world.PrimaryUsableAverageUnitPrice > 0)
+        {
+            return new ProcurementEvidence(GetSaneQuantity(world), world.PrimaryUsableAverageUnitPrice);
+        }
+
+        return new ProcurementEvidence(GetSaneQuantity(world), world.AnalysisCompetitiveAverageUnitPrice);
+    }
+
+    private static PriceBandDepth GetProcurementEvidenceDepth(WorldMarketAnalysis world)
+    {
+        var quantity = GetProcurementEvidenceQuantity(world);
+        if (quantity <= 0 || world.QuantityNeeded <= 0)
+        {
+            return PriceBandDepth.None;
+        }
+
+        if (quantity >= Math.Max(world.QuantityNeeded / 2, 1))
+        {
+            return PriceBandDepth.Deep;
+        }
+
+        return quantity >= Math.Max(world.QuantityNeeded / 4, 1)
+            ? PriceBandDepth.Usable
+            : PriceBandDepth.Thin;
     }
 
     private static int GetDisplayScoreRank(WorldMarketAnalysis world, MarketAcquisitionLens lens)
@@ -934,6 +991,8 @@ public static class MarketAnalysisGridViewService
 
         return (0, "primary shelf");
     }
+
+    private readonly record struct ProcurementEvidence(int Quantity, decimal UnitPrice);
 
     private static decimal? GetBandBreakBefore(WorldMarketAnalysis world, AnalyzedMarketListing listing)
     {

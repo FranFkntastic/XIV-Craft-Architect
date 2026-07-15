@@ -61,12 +61,12 @@ public class MarketAnalysisGridViewServiceTests
         Assert.Equal([200, 100], descending.Select(plan => plan.ItemId));
     }
     [Fact]
-    public void FormatCoverage_UsesCompetitiveStockWhenScopeContextExists()
+    public void FormatCoverage_UsesAllProcurementEvidenceWhenScopeContextExists()
     {
         var world = ScopeWorld("Uncompetitive Full", scopeSaneQuantity: 100, scopePrimaryUsableQuantity: 25);
 
-        Assert.Equal("25/100", MarketAnalysisGridViewService.FormatCoverage(world));
-        Assert.Equal(MarketCoverageBucket.PartialThin, MarketAnalysisGridViewService.GetDisplayCoverageBucket(world));
+        Assert.Equal("100/100", MarketAnalysisGridViewService.FormatCoverage(world));
+        Assert.Equal(MarketCoverageBucket.Full, MarketAnalysisGridViewService.GetDisplayCoverageBucket(world));
     }
     [Fact]
     public void GetOrderedWorlds_UsesScopeAwareDisplayScoreBeforeStoredLensRank()
@@ -172,6 +172,46 @@ public class MarketAnalysisGridViewServiceTests
         Assert.Equal("4,402", MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world));
         Assert.Equal("deep", MarketAnalysisGridViewService.FormatWorldMarketDepthDescriptor(world));
         Assert.Equal("is-optimal", MarketAnalysisGridViewService.GetWorldUnitPriceScoreClass(world));
+    }
+
+    [Fact]
+    public void ThinCredibleListings_DisplayAsProcurementEvidenceWithoutPrimaryShelf()
+    {
+        var world = new WorldMarketAnalysis
+        {
+            DataCenter = "Primal",
+            WorldName = "Excalibur",
+            QuantityNeeded = 1_000,
+            CompetitiveThresholdUnitPrice = 150,
+            SaneThresholdUnitPrice = 300,
+            ScopeSaneQuantity = 200,
+            DataQualityBucket = MarketDataQualityBucket.Current,
+            AnalysisCompetitiveAverageUnitPrice = 110,
+            Listings =
+            [
+                Listing(0, 10, 1, MarketListingPriceSanity.LowOutlier, MarketListingCompetitiveness.Deal),
+                Listing(1, 200, 100, MarketListingPriceSanity.Sane, MarketListingCompetitiveness.Competitive),
+                Listing(2, 2, 10_000, MarketListingPriceSanity.Insane, MarketListingCompetitiveness.Excluded)
+            ],
+            Scores =
+            [
+                new WorldLensScore
+                {
+                    Lens = MarketAcquisitionLens.BulkValue,
+                    Rank = 10,
+                    ScoreBucket = MarketScoreBucket.Unavailable
+                }
+            ]
+        };
+
+        Assert.Equal("200", MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world));
+        Assert.Equal("thin", MarketAnalysisGridViewService.FormatWorldMarketDepthDescriptor(world));
+        Assert.Equal("~100g / unit", MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
+        Assert.Equal("200/1,000", MarketAnalysisGridViewService.FormatCoverage(world));
+        Assert.Equal(MarketCoverageBucket.PartialThin, MarketAnalysisGridViewService.GetDisplayCoverageBucket(world));
+        Assert.Equal(MarketScoreBucket.PoorFit, MarketAnalysisGridViewService.GetDisplayScoreBucket(world, MarketAcquisitionLens.BulkValue));
+        Assert.Equal("-9%", MarketAnalysisGridViewService.FormatCompetitiveValue(world));
+        Assert.Contains("procurement evidence", MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world));
     }
 
     [Fact]
