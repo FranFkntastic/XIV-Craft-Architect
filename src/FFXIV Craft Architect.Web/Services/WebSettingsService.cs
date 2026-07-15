@@ -27,11 +27,13 @@ public class WebSettingsService : ISettingsService
         ["procurement.travel_tolerance"] = 0,
         ["procurement.world_exclusion_duration_minutes"] = 60,
         ["procurement.start_from_home_data_center"] = false,
-        ["marketmafioso.workshop_host_url"] = "https://dev.xivcraftarchitect.com/marketmafioso/api/",
+        ["marketmafioso.workshop_host_url"] = "",
         ["marketmafioso.api_key"] = "",
         ["marketmafioso.target_character"] = "",
         ["marketmafioso.target_world"] = "",
         ["marketmafioso.auto_sync_evidence"] = true,
+        ["marketmafioso.pending_submission"] = MarketMafiosoPendingSubmission.Empty,
+        ["marketmafioso.active_handoff"] = new MarketMafiosoActiveHandoffState(),
         ["marketmafioso.active_request_id"] = "",
         ["marketmafioso.active_item_id"] = 0,
         ["marketmafioso.active_data_center"] = "",
@@ -101,7 +103,7 @@ public class WebSettingsService : ISettingsService
     {
         // Sync wrapper - updates cache, fire-and-forget save
         _cache[keyPath] = value!;
-        _ = SaveToIndexedDb(keyPath, value);
+        _ = SaveToIndexedDb(keyPath, value, throwOnFailure: false);
     }
 
     public async Task<T?> GetAsync<T>(string keyPath, T? defaultValue = default)
@@ -118,8 +120,20 @@ public class WebSettingsService : ISettingsService
     public async Task SetAsync<T>(string keyPath, T value)
     {
         await EnsureLoadedAsync();
+        var hadPrevious = _cache.TryGetValue(keyPath, out var previous);
         _cache[keyPath] = value!;
-        await SaveToIndexedDb(keyPath, value);
+        try
+        {
+            await SaveToIndexedDb(keyPath, value, throwOnFailure: true);
+        }
+        catch
+        {
+            if (hadPrevious)
+                _cache[keyPath] = previous!;
+            else
+                _cache.Remove(keyPath);
+            throw;
+        }
     }
 
     public async Task ResetToDefaultsAsync()
@@ -128,12 +142,12 @@ public class WebSettingsService : ISettingsService
         foreach (var kvp in DefaultSettings)
         {
             _cache[kvp.Key] = kvp.Value;
-            await SaveToIndexedDb(kvp.Key, kvp.Value);
+            await SaveToIndexedDb(kvp.Key, kvp.Value, throwOnFailure: true);
         }
         _logger?.LogInformation("[WebSettingsService] Reset all settings to defaults");
     }
 
-    private async Task SaveToIndexedDb<T>(string key, T value)
+    private async Task SaveToIndexedDb<T>(string key, T value, bool throwOnFailure)
     {
         try
         {
@@ -143,6 +157,8 @@ public class WebSettingsService : ISettingsService
         catch (Exception ex)
         {
             _logger?.LogError(ex, "[WebSettingsService] Failed to save setting '{Key}'", key);
+            if (throwOnFailure)
+                throw;
         }
     }
 
@@ -155,6 +171,17 @@ public class WebSettingsService : ISettingsService
 
         if (value is JsonElement jsonElement)
         {
+            try
+            {
+                var deserialized = jsonElement.Deserialize<T>();
+                if (deserialized is not null)
+                    return deserialized;
+            }
+            catch (JsonException)
+            {
+                // Fall through to the primitive compatibility conversions below.
+            }
+
             var targetType = typeof(T);
             var underlyingType = Nullable.GetUnderlyingType(targetType) ?? targetType;
 

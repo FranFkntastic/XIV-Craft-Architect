@@ -41,6 +41,38 @@ public sealed class MarketMafiosoAcquisitionWorkflowServiceTests
         Assert.Equal(2_000u, line.GilCap);
     }
 
+    [Fact]
+    public async Task CreateSingleWorldHandoffAsync_ReusesPersistedIdempotencyKeyAfterLostResponse()
+    {
+        var client = new RecordingClient { FailNextCreate = true };
+        var settings = ConfiguredSettings();
+        var service = new MarketMafiosoAcquisitionWorkflowService(client, settings);
+        var handoff = Handoff();
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => service.CreateSingleWorldHandoffAsync(handoff));
+        var firstKey = Assert.IsType<WorkshopHostAcquisitionBatchCreateRequest>(client.CreateRequests[0]).IdempotencyKey;
+
+        await service.CreateSingleWorldHandoffAsync(handoff);
+
+        Assert.Equal(firstKey, client.CreateRequests[1].IdempotencyKey);
+        var pending = Assert.IsType<MarketMafiosoPendingSubmission>(settings[MarketMafiosoAcquisitionWorkflowService.PendingSubmissionSetting]);
+        Assert.Empty(pending.IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task CreateSingleWorldHandoffAsync_UsesNewIdempotencyKeyWhenDraftChanges()
+    {
+        var client = new RecordingClient { FailNextCreate = true };
+        var settings = ConfiguredSettings();
+        var service = new MarketMafiosoAcquisitionWorkflowService(client, settings);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => service.CreateSingleWorldHandoffAsync(Handoff()));
+        client.FailNextCreate = true;
+        await Assert.ThrowsAsync<HttpRequestException>(() => service.CreateSingleWorldHandoffAsync(Handoff() with { Quantity = 21 }));
+
+        Assert.NotEqual(client.CreateRequests[0].IdempotencyKey, client.CreateRequests[1].IdempotencyKey);
+    }
+
     [Theory]
     [InlineData("PendingPickup", "check the dashboard")]
     [InlineData("Claimed", "Accept the claimed request")]
@@ -109,9 +141,21 @@ public sealed class MarketMafiosoAcquisitionWorkflowServiceTests
         ["marketmafioso.target_world"] = "Siren",
     };
 
+    private static MarketMafiosoSingleWorldHandoff Handoff() => new(
+        2,
+        "Fire Shard",
+        "North America",
+        "Aether",
+        "Faerie",
+        20,
+        100,
+        2_000);
+
     private sealed class RecordingClient : IWorkshopHostAcquisitionClient
     {
         public WorkshopHostAcquisitionBatchCreateRequest? CreateRequest { get; private set; }
+        public List<WorkshopHostAcquisitionBatchCreateRequest> CreateRequests { get; } = [];
+        public bool FailNextCreate { get; set; }
         public WorkshopHostConnectionOptions? LastConnection { get; private set; }
         public Queue<WorkshopHostAcquisitionTimeline> Timelines { get; } = new();
         public int TimelineCalls { get; private set; }
@@ -143,6 +187,12 @@ public sealed class MarketMafiosoAcquisitionWorkflowServiceTests
             CancellationToken cancellationToken = default)
         {
             CreateRequest = request;
+            CreateRequests.Add(request);
+            if (FailNextCreate)
+            {
+                FailNextCreate = false;
+                throw new HttpRequestException("Response was lost after the server accepted the request.");
+            }
             return Task.FromResult(new WorkshopHostAcquisitionRequestView { Id = "request-1" });
         }
 

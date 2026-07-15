@@ -778,7 +778,7 @@
     private bool _procurementEnableSplitWorldPurchases = true;
     private bool _procurementStartFromHomeDataCenter;
     private MarketTravelPriority _procurementTravelPriority = MarketTravelPriority.DataCenterTransfersFirst;
-    private string _marketMafiosoApiUrl = "https://dev.xivcraftarchitect.com/marketmafioso/api/";
+    private string _marketMafiosoApiUrl = string.Empty;
     private string _marketMafiosoApiKey = string.Empty;
     private string _marketMafiosoTargetCharacter = string.Empty;
     private string _marketMafiosoTargetWorld = string.Empty;
@@ -858,7 +858,7 @@
         _marketMafiosoEnabled = await Settings.GetAsync("marketmafioso.enabled", false);
         _marketMafiosoApiUrl = await Settings.GetAsync(
             "marketmafioso.workshop_host_url",
-            "https://dev.xivcraftarchitect.com/marketmafioso/api/") ?? string.Empty;
+            string.Empty) ?? string.Empty;
         _marketMafiosoApiKey = await Settings.GetAsync("marketmafioso.api_key", string.Empty) ?? string.Empty;
         _marketMafiosoTargetCharacter = await Settings.GetAsync("marketmafioso.target_character", string.Empty) ?? string.Empty;
         _marketMafiosoTargetWorld = await Settings.GetAsync("marketmafioso.target_world", string.Empty) ?? string.Empty;

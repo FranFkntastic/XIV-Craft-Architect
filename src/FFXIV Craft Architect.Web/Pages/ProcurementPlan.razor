@@ -88,18 +88,28 @@
 
     private async Task LoadActiveMarketMafiosoRequestAsync()
     {
-        _marketMafiosoActiveRequestId = await Settings.GetAsync("marketmafioso.active_request_id", string.Empty);
-        var itemId = await Settings.GetAsync("marketmafioso.active_item_id", 0);
-        var dataCenter = await Settings.GetAsync("marketmafioso.active_data_center", string.Empty) ?? string.Empty;
-        var purchaseWorld = await Settings.GetAsync("marketmafioso.active_purchase_world", string.Empty) ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(_marketMafiosoActiveRequestId) &&
-            itemId > 0 &&
-            !string.IsNullOrWhiteSpace(dataCenter) &&
-            !string.IsNullOrWhiteSpace(purchaseWorld))
+        var active = await Settings.GetAsync(
+            "marketmafioso.active_handoff",
+            new MarketMafiosoActiveHandoffState()) ?? new MarketMafiosoActiveHandoffState();
+        if (active.StateVersion == 0)
         {
+            active = new MarketMafiosoActiveHandoffState
+            {
+                StateVersion = 1,
+                RequestId = await Settings.GetAsync("marketmafioso.active_request_id", string.Empty) ?? string.Empty,
+                ItemId = await Settings.GetAsync("marketmafioso.active_item_id", 0),
+                DataCenter = await Settings.GetAsync("marketmafioso.active_data_center", string.Empty) ?? string.Empty,
+                PurchaseWorld = await Settings.GetAsync("marketmafioso.active_purchase_world", string.Empty) ?? string.Empty,
+            };
+            await Settings.SetAsync("marketmafioso.active_handoff", active);
+        }
+
+        if (active.IsActive)
+        {
+            _marketMafiosoActiveRequestId = active.RequestId;
             _marketMafiosoActiveItemWorld = new MarketItemWorldKey(
-                itemId,
-                new MarketWorldKey(dataCenter, purchaseWorld));
+                active.ItemId,
+                new MarketWorldKey(active.DataCenter, active.PurchaseWorld));
             if (await Settings.GetAsync("marketmafioso.auto_sync_evidence", true))
             {
                 StartMarketMafiosoMonitor(_marketMafiosoActiveRequestId, _marketMafiosoActiveItemWorld.Value);
@@ -651,10 +661,14 @@
 
     private async Task PersistActiveMarketMafiosoRequestAsync(MarketItemWorldKey key, string requestId)
     {
-        await Settings.SetAsync("marketmafioso.active_request_id", requestId);
-        await Settings.SetAsync("marketmafioso.active_item_id", key.ItemId);
-        await Settings.SetAsync("marketmafioso.active_data_center", key.World.DataCenter);
-        await Settings.SetAsync("marketmafioso.active_purchase_world", key.World.WorldName);
+        await Settings.SetAsync("marketmafioso.active_handoff", new MarketMafiosoActiveHandoffState
+        {
+            StateVersion = 1,
+            RequestId = requestId,
+            ItemId = key.ItemId,
+            DataCenter = key.World.DataCenter,
+            PurchaseWorld = key.World.WorldName,
+        });
     }
 
     private async Task<bool> EnsureMarketMafiosoConfiguredAsync()
@@ -767,10 +781,10 @@
         _marketMafiosoActiveRequestId = null;
         _marketMafiosoActiveItemWorld = null;
         _marketMafiosoMonitorCancellation?.Cancel();
-        await Settings.SetAsync("marketmafioso.active_request_id", string.Empty);
-        await Settings.SetAsync("marketmafioso.active_item_id", 0);
-        await Settings.SetAsync("marketmafioso.active_data_center", string.Empty);
-        await Settings.SetAsync("marketmafioso.active_purchase_world", string.Empty);
+        await Settings.SetAsync("marketmafioso.active_handoff", new MarketMafiosoActiveHandoffState
+        {
+            StateVersion = 1,
+        });
     }
 
     private async Task<bool> ReleaseTerminalMarketMafiosoRequestAsync()

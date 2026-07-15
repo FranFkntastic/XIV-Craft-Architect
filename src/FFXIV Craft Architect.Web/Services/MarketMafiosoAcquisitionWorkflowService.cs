@@ -6,6 +6,8 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed class MarketMafiosoAcquisitionWorkflowService
 {
+    public const string PendingSubmissionSetting = "marketmafioso.pending_submission";
+
     private readonly IWorkshopHostAcquisitionClient _client;
     private readonly ISettingsService _settings;
 
@@ -20,7 +22,7 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
     public async Task<MarketMafiosoHandoffConfiguration> GetConfigurationAsync()
     {
         return new MarketMafiosoHandoffConfiguration(
-            await _settings.GetAsync("marketmafioso.workshop_host_url", "https://dev.xivcraftarchitect.com/marketmafioso/api/") ?? string.Empty,
+            await _settings.GetAsync("marketmafioso.workshop_host_url", string.Empty) ?? string.Empty,
             await _settings.GetAsync("marketmafioso.api_key", string.Empty) ?? string.Empty,
             await _settings.GetAsync("marketmafioso.target_character", string.Empty) ?? string.Empty,
             await _settings.GetAsync("marketmafioso.target_world", string.Empty) ?? string.Empty);
@@ -70,11 +72,13 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
             throw new InvalidOperationException("Workshop Host doesn't advertise the acquisition.queue v1 capability.");
         }
 
-        return await _client.CreateBatchAsync(
+        var pendingSubmission = await GetOrCreatePendingSubmissionAsync(configuration, handoff);
+
+        var created = await _client.CreateBatchAsync(
             connection,
             new WorkshopHostAcquisitionBatchCreateRequest
             {
-                IdempotencyKey = $"ca-{Guid.NewGuid():N}",
+                IdempotencyKey = pendingSubmission.IdempotencyKey,
                 TargetCharacterName = configuration.TargetCharacter,
                 TargetWorld = configuration.TargetWorld,
                 Region = handoff.Region,
@@ -96,6 +100,30 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
                 ],
             },
             cancellationToken);
+        try
+        {
+            await _settings.SetAsync(PendingSubmissionSetting, MarketMafiosoPendingSubmission.Empty);
+        }
+        catch
+        {
+            // The server response is authoritative. Retaining the submitted key is safer than
+            // reporting a false failure and inviting a duplicate retry.
+        }
+        return created;
+    }
+
+    private async Task<MarketMafiosoPendingSubmission> GetOrCreatePendingSubmissionAsync(
+        MarketMafiosoHandoffConfiguration configuration,
+        MarketMafiosoSingleWorldHandoff handoff)
+    {
+        var expected = MarketMafiosoPendingSubmission.Create(configuration, handoff);
+        var pending = await _settings.GetAsync(PendingSubmissionSetting, MarketMafiosoPendingSubmission.Empty)
+            ?? MarketMafiosoPendingSubmission.Empty;
+        if (pending.Matches(expected))
+            return pending;
+
+        await _settings.SetAsync(PendingSubmissionSetting, expected);
+        return expected;
     }
 
     public async Task<WorkshopHostAcquisitionTimeline> GetTimelineAsync(
@@ -176,6 +204,11 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
             return "MarketMafioso is still working; sync again after the evidence refresh finishes.";
         }
 
+        if (normalized.Equals("RecoveryRequired", StringComparison.OrdinalIgnoreCase))
+        {
+            return "The MarketMafioso execution lease expired; resend it from Workshop Host after reviewing any reported purchases.";
+        }
+
         return $"No {worldName} observation is available yet; review the request in MarketMafioso.";
     }
 
@@ -200,7 +233,7 @@ public sealed class MarketMafiosoAcquisitionWorkflowService
     }
 
     public static bool IsTerminalStatus(string? status) =>
-        status?.Trim().ToUpperInvariant() is "COMPLETED" or "FAILED" or "REJECTED" or "CANCELLED" or "EXPIRED";
+        status?.Trim().ToUpperInvariant() is "COMPLETED" or "FAILED" or "REJECTED" or "CANCELLED" or "EXPIRED" or "RECOVERYREQUIRED";
 }
 
 public sealed record MarketMafiosoHandoffConfiguration(
@@ -235,3 +268,70 @@ public sealed record MarketMafiosoSingleWorldHandoff(
     uint Quantity,
     uint MaxUnitPrice,
     uint GilCap);
+
+public sealed record MarketMafiosoPendingSubmission
+{
+    public static MarketMafiosoPendingSubmission Empty { get; } = new();
+
+    public string IdempotencyKey { get; init; } = string.Empty;
+    public string ApiUrl { get; init; } = string.Empty;
+    public string TargetCharacter { get; init; } = string.Empty;
+    public string TargetWorld { get; init; } = string.Empty;
+    public int ItemId { get; init; }
+    public string ItemName { get; init; } = string.Empty;
+    public string Region { get; init; } = string.Empty;
+    public string DataCenter { get; init; } = string.Empty;
+    public string PurchaseWorld { get; init; } = string.Empty;
+    public uint Quantity { get; init; }
+    public uint MaxUnitPrice { get; init; }
+    public uint GilCap { get; init; }
+
+    public static MarketMafiosoPendingSubmission Create(
+        MarketMafiosoHandoffConfiguration configuration,
+        MarketMafiosoSingleWorldHandoff handoff) =>
+        new()
+        {
+            IdempotencyKey = $"ca-{Guid.NewGuid():N}",
+            ApiUrl = configuration.ApiUrl.Trim().TrimEnd('/'),
+            TargetCharacter = configuration.TargetCharacter.Trim(),
+            TargetWorld = configuration.TargetWorld.Trim(),
+            ItemId = handoff.ItemId,
+            ItemName = handoff.ItemName.Trim(),
+            Region = handoff.Region.Trim(),
+            DataCenter = handoff.DataCenter.Trim(),
+            PurchaseWorld = handoff.PurchaseWorld.Trim(),
+            Quantity = handoff.Quantity,
+            MaxUnitPrice = handoff.MaxUnitPrice,
+            GilCap = handoff.GilCap,
+        };
+
+    public bool Matches(MarketMafiosoPendingSubmission other) =>
+        !string.IsNullOrWhiteSpace(IdempotencyKey) &&
+        ApiUrl.Equals(other.ApiUrl, StringComparison.OrdinalIgnoreCase) &&
+        TargetCharacter.Equals(other.TargetCharacter, StringComparison.Ordinal) &&
+        TargetWorld.Equals(other.TargetWorld, StringComparison.OrdinalIgnoreCase) &&
+        ItemId == other.ItemId &&
+        ItemName.Equals(other.ItemName, StringComparison.Ordinal) &&
+        Region.Equals(other.Region, StringComparison.OrdinalIgnoreCase) &&
+        DataCenter.Equals(other.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+        PurchaseWorld.Equals(other.PurchaseWorld, StringComparison.OrdinalIgnoreCase) &&
+        Quantity == other.Quantity &&
+        MaxUnitPrice == other.MaxUnitPrice &&
+        GilCap == other.GilCap;
+}
+
+public sealed record MarketMafiosoActiveHandoffState
+{
+    public int StateVersion { get; init; }
+    public string RequestId { get; init; } = string.Empty;
+    public int ItemId { get; init; }
+    public string DataCenter { get; init; } = string.Empty;
+    public string PurchaseWorld { get; init; } = string.Empty;
+
+    public bool IsActive =>
+        StateVersion > 0 &&
+        !string.IsNullOrWhiteSpace(RequestId) &&
+        ItemId > 0 &&
+        !string.IsNullOrWhiteSpace(DataCenter) &&
+        !string.IsNullOrWhiteSpace(PurchaseWorld);
+}
