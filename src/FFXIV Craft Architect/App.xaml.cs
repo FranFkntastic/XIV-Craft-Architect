@@ -192,6 +192,7 @@ public partial class App : Application
         // WaitingwayTravelService - DISABLED pending re-implementation
         // services.AddSingleton<Core.Services.WaitingwayTravelService>();
         
+        services.AddSingleton<PackagedWorldDirectoryService>();
         services.AddSingleton<WorldDataCoordinator>();
         services.AddSingleton<CoreWorldBlacklistService>();
         services.AddSingleton<DialogServiceFactory>();

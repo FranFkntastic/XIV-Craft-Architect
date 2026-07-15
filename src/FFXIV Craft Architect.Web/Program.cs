@@ -68,6 +68,7 @@ builder.Services.AddScoped<PlanSessionLoadService>();
 builder.Services.AddScoped<WebPlanPersistenceService>();
 builder.Services.AddScoped<IMarketAnalysisPersistence, IndexedDbMarketAnalysisPersistence>();
 builder.Services.AddScoped<MarketEvidenceHydrationService>();
+builder.Services.AddScoped<PackagedWorldDirectoryService>();
 builder.Services.AddScoped<StartupInitializationService>();
 builder.Services.AddScoped<CancellableOperationService>();
 builder.Services.AddScoped<RecipePlannerCommandService>();

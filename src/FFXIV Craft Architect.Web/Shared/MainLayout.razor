@@ -11,6 +11,7 @@
 @inject WebPlanPersistenceService PlanPersistence
 @inject PlanSessionLoadService PlanSessionLoad
 @inject MarketEvidenceHydrationService MarketEvidenceHydration
+@inject PackagedWorldDirectoryService PackagedWorldDirectory
 @inject StartupInitializationService StartupInitialization
 @inject IJSRuntime JSRuntime
 @inject HttpClient Http
@@ -293,7 +294,9 @@
         {
             await StartupInitialization.InitializeAsync(new StartupInitializationSteps(
                 LoadSettingsAsync: _ => LoadSettingsAsync(),
-                InitializeWorldDataAsync: _ => AppState.InitializeWorldDataAsync(UniversalisService),
+                InitializeWorldDataAsync: _ => AppState.InitializeWorldDataAsync(
+                    PackagedWorldDirectory,
+                    UniversalisService),
                 StartAutoSave: () => AppState.StartAutoSaveTimer(AutoSaveCallback),
                 RestoreAutoSaveAsync: _ => RestoreAutoSaveAsync()));
         }

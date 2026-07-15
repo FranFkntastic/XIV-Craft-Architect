@@ -10,13 +10,16 @@ public class WorldDataCoordinator
 {
     private readonly UniversalisService _universalisService;
     private readonly MarketShoppingService _marketShoppingService;
+    private readonly PackagedWorldDirectoryService _packagedWorldDirectory;
 
     public WorldDataCoordinator(
         UniversalisService universalisService,
-        MarketShoppingService marketShoppingService)
+        MarketShoppingService marketShoppingService,
+        PackagedWorldDirectoryService packagedWorldDirectory)
     {
         _universalisService = universalisService;
         _marketShoppingService = marketShoppingService;
+        _packagedWorldDirectory = packagedWorldDirectory;
     }
 
     /// <summary>
@@ -25,9 +28,10 @@ public class WorldDataCoordinator
     /// </summary>
     /// <returns>World data containing DCs, worlds, and mappings.</returns>
     /// <exception cref="InvalidOperationException">Thrown when world data cannot be loaded.</exception>
-    public async Task<WorldData> InitializeWorldDataAsync()
+    public Task<WorldData> InitializeWorldDataAsync()
     {
-        var worldData = await _universalisService.GetWorldDataAsync();
+        var worldData = _packagedWorldDirectory.LoadWorldData();
+        _universalisService.SeedWorldData(worldData);
 
         var worldNameToId = worldData.WorldIdToName.ToDictionary(
             kvp => kvp.Value,
@@ -36,7 +40,7 @@ public class WorldDataCoordinator
 
         _marketShoppingService.SetWorldNameToIdMapping(worldNameToId);
 
-        return worldData;
+        return Task.FromResult(worldData);
     }
 
     /// <summary>

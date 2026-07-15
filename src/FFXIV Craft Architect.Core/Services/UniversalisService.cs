@@ -18,21 +18,33 @@ public class UniversalisService : IUniversalisService
 
     private const string UniversalisApiUrl = "https://universalis.app/api/v2/{0}/{1}";
     private const string UniversalisMarketUrl = "https://universalis.app/market/{0}";
-    private const string WorldsUrl = "https://universalis.app/api/v2/worlds";
-    private const string DataCentersUrl = "https://universalis.app/api/v2/data-centers";
-
     // Cache for world data
     private WorldData? _worldDataCache;
+    private readonly PackagedWorldDirectoryService _packagedWorldDirectory;
 
     /// <summary>
     /// Get cached world data (returns null if not loaded yet).
     /// </summary>
     public WorldData? GetCachedWorldData() => _worldDataCache;
 
-    public UniversalisService(HttpClient httpClient, ILogger<UniversalisService>? logger = null)
+    /// <summary>
+    /// Seeds release-owned world metadata so market responses can be mapped without
+    /// querying the Universalis directory endpoints at runtime.
+    /// </summary>
+    public void SeedWorldData(WorldData worldData)
+    {
+        ArgumentNullException.ThrowIfNull(worldData);
+        _worldDataCache = worldData;
+    }
+
+    public UniversalisService(
+        HttpClient httpClient,
+        ILogger<UniversalisService>? logger = null,
+        PackagedWorldDirectoryService? packagedWorldDirectory = null)
     {
         _httpClient = httpClient;
         _logger = logger;
+        _packagedWorldDirectory = packagedWorldDirectory ?? new PackagedWorldDirectoryService();
     }
 
     /// <summary>
@@ -560,44 +572,17 @@ public class UniversalisService : IUniversalisService
     /// <summary>
     /// Get world and data center information.
     /// </summary>
-    public async Task<WorldData> GetWorldDataAsync(CancellationToken ct = default)
+    public Task<WorldData> GetWorldDataAsync(CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         if (_worldDataCache != null)
         {
-            return _worldDataCache;
+            return Task.FromResult(_worldDataCache);
         }
 
-        _logger?.LogDebug("Fetching world data from Universalis");
-
-        // Fetch worlds and data centers in parallel
-        var worldsTask = _httpClient.GetFromJsonAsync<List<WorldInfo>>(WorldsUrl, ct);
-        var dataCentersTask = _httpClient.GetFromJsonAsync<List<DataCenterInfo>>(DataCentersUrl, ct);
-
-        await Task.WhenAll(worldsTask, dataCentersTask);
-
-        var worlds = await worldsTask ?? new List<WorldInfo>();
-        var dataCenters = await dataCentersTask ?? new List<DataCenterInfo>();
-
-        // Build lookup dictionaries
-        var worldIdToName = worlds.ToDictionary(w => w.Id, w => w.Name);
-        var worldNameToId = worlds.ToDictionary(w => w.Name, w => w.Id);
-
-        var dcToWorlds = dataCenters.ToDictionary(
-            dc => dc.Name,
-            dc => dc.WorldIds
-                .Where(id => worldIdToName.ContainsKey(id))
-                .Select(id => worldIdToName[id])
-                .OrderBy(name => name)
-                .ToList()
-        );
-
-        _worldDataCache = new WorldData
-        {
-            WorldIdToName = worldIdToName,
-            DataCenterToWorlds = dcToWorlds
-        };
-
-        return _worldDataCache;
+        _logger?.LogDebug("Loading packaged world directory");
+        _worldDataCache = _packagedWorldDirectory.LoadWorldData();
+        return Task.FromResult(_worldDataCache);
     }
 
     /// <summary>

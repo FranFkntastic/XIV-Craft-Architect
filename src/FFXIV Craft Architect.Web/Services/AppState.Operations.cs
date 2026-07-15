@@ -119,16 +119,19 @@ public partial class AppState
     /// <summary>
     /// Initialize the world data cache.
     /// </summary>
-    public async Task InitializeWorldDataAsync(UniversalisService universalisService)
+    public Task InitializeWorldDataAsync(
+        PackagedWorldDirectoryService packagedWorldDirectory,
+        UniversalisService universalisService)
     {
         if (WorldData != null)
         {
-            return;
+            universalisService.SeedWorldData(WorldData);
+            return Task.CompletedTask;
         }
 
         try
         {
-            WorldData = await universalisService.GetWorldDataAsync();
+            WorldData = packagedWorldDirectory.LoadWorldData();
 
             if (string.IsNullOrEmpty(SelectedDataCenter))
             {
@@ -150,6 +153,9 @@ public partial class AppState
             };
             SelectedDataCenter = "Aether";
         }
+
+        universalisService.SeedWorldData(WorldData);
+        return Task.CompletedTask;
     }
 
     /// <summary>
