@@ -120,7 +120,7 @@
         {
             <div class="pp-frontier-empty" role="status">
                 <MudIcon Icon="@Icons.Material.Outlined.Sync" Size="Size.Small" />
-                <span>Regenerate the route to recalculate these tradeoffs.</span>
+                <span>@GetUnavailableFrontierMessage()</span>
             </div>
         }
         else
@@ -135,7 +135,7 @@
 @if (RouteValidity == ProcurementRoutePublicationValidity.SelectionChanged)
 {
     <div class="pp-clutch-pending" role="status">
-        Position @TravelTolerance selected; regenerate the route to apply it.
+        @GetPendingSelectionMessage()
     </div>
 }
 
@@ -143,6 +143,8 @@
     [Parameter] public int TravelTolerance { get; set; }
     [Parameter] public MarketRouteDecision? RouteDecision { get; set; }
     [Parameter] public ProcurementRoutePublicationValidity RouteValidity { get; set; }
+    [Parameter] public bool IsReconciling { get; set; }
+    [Parameter] public string? RouteFailure { get; set; }
     [Parameter] public MarketTravelPriority TravelPriority { get; set; }
     [Parameter] public EventCallback<int> TravelToleranceChanged { get; set; }
 
@@ -209,6 +211,18 @@
         RouteDecision?.RepresentativeRoutes.Count > 0;
 
     private int GetPublishedTolerance() => RouteDecision?.TravelTolerance ?? TravelTolerance;
+
+    private string GetUnavailableFrontierMessage() => IsReconciling
+        ? "Recalculating route tradeoffs…"
+        : !string.IsNullOrWhiteSpace(RouteFailure)
+            ? "Route tradeoffs are unavailable because the automatic update failed."
+            : "Recalculating route tradeoffs…";
+
+    private string GetPendingSelectionMessage() => IsReconciling
+        ? $"Applying position {TravelTolerance}…"
+        : !string.IsNullOrWhiteSpace(RouteFailure)
+            ? $"Position {TravelTolerance} could not be applied because the route update failed."
+            : $"Applying position {TravelTolerance}…";
 
     private string GetPremiumText(MarketRouteFrontierOption option)
     {

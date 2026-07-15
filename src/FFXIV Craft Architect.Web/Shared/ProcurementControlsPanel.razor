@@ -26,6 +26,8 @@
                 <ProcurementTravelTradeoff TravelTolerance="AppState.ProcurementTravelTolerance"
                                             RouteDecision="AppState.ProcurementRouteDecision"
                                             RouteValidity="AppState.ProcurementRouteValidity"
+                                            IsReconciling="AppState.IsProcurementRouteReconciling"
+                                            RouteFailure="AppState.ProcurementRouteFailure"
                                             TravelPriority="AppState.ProcurementTravelPriority"
                                             TravelToleranceChanged="OnProcurementTravelToleranceChanged" />
                 <p id="procurement-travel-help">@GetTravelPreferenceHelp()</p>

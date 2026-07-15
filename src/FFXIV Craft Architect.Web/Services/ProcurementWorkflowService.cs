@@ -4,7 +4,15 @@ using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
-public sealed class ProcurementWorkflowService
+public interface IProcurementWorkflowService
+{
+    Task<ProcurementWorkflowResult> RunAnalysisAsync(
+        ProcurementWorkflowRequest request,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default);
+}
+
+public sealed class ProcurementWorkflowService : IProcurementWorkflowService
 {
     private readonly AppState _appState;
     private readonly IProcurementRouteExecutionService _procurementRouteExecutionService;

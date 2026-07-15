@@ -135,6 +135,18 @@
     font-size: 12px;
 }
 
+.ae-route-state.is-working {
+    border-color: #31566a;
+    background: #1d2c33;
+    color: #8fcbea;
+}
+
+.ae-route-state.is-error {
+    border-color: #743c37;
+    background: #321f1d;
+    color: #efaaa2;
+}
+
 .ae-ledger-subtitle,
 .ae-legend {
     color: #9aa0a6;

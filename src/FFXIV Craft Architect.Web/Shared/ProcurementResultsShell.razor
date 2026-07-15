@@ -17,7 +17,7 @@
                 }
                 else
                 {
-                    <strong>Route needs regeneration.</strong> <text>@StaleReason</text>
+                    <strong>Updating the route.</strong> <text>The previous route remains usable until the replacement is ready.</text>
                 }
             </span>
         </div>
@@ -61,7 +61,6 @@
     [Parameter] public bool IsStale { get; set; }
     [Parameter] public bool IsAnalyzing { get; set; }
     [Parameter] public string? FailureMessage { get; set; }
-    [Parameter] public string? StaleReason { get; set; }
     [Parameter] public string? ExclusionOutcome { get; set; }
     [Parameter] public string EmptyTitle { get; set; } = "Route ready to generate";
     [Parameter] public string EmptyMessage { get; set; } = "Choose route settings and generate a route.";

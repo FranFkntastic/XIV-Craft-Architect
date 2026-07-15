@@ -85,6 +85,9 @@ builder.Services.AddScoped<AcquisitionDiagnosticSelectionService>();
 builder.Services.AddScoped<GitHubIssueReportService>();
 builder.Services.AddScoped<BrowserFileExportService>();
 builder.Services.AddScoped<ProcurementWorkflowService>();
+builder.Services.AddScoped<IProcurementWorkflowService>(provider =>
+    provider.GetRequiredService<ProcurementWorkflowService>());
+builder.Services.AddScoped<ProcurementRouteReconciliationService>();
 builder.Services.AddScoped<MarketMafiosoAcquisitionWorkflowService>();
 builder.Services.AddScoped<MarketMafiosoIntegrationState>();
 builder.Services.AddScoped<AcquisitionEvaluationWorkflowService>();

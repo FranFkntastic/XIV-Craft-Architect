@@ -241,6 +241,17 @@ public partial class AppState
         NotifyProcurementOverlayChanged();
     }
 
+    public void SetProcurementRouteReconciling(bool isReconciling)
+    {
+        if (IsProcurementRouteReconciling == isReconciling)
+        {
+            return;
+        }
+
+        IsProcurementRouteReconciling = isReconciling;
+        NotifyProcurementOverlayChanged();
+    }
+
     private void ResetProcurementOverlayState()
     {
         _procurementShoppingPlans.Clear();

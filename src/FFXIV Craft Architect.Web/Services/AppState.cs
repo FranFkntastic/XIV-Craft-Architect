@@ -146,6 +146,7 @@ public partial class AppState
     /// </summary>
     public IReadOnlyList<DetailedShoppingPlan> ProcurementShoppingPlans => _procurementShoppingPlans.AsReadOnly();
     public MarketRouteDecision? ProcurementRouteDecision { get; private set; }
+    public bool IsProcurementRouteReconciling { get; private set; }
     public ProcurementRoutePublicationBasis? ProcurementRoutePublicationBasis => _procurementRoutePublicationBasis;
     public ProcurementRoutePublicationValidity ProcurementRouteValidity => GetProcurementRouteValidity();
     public bool IsProcurementRouteStale =>

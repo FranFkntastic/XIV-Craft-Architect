@@ -87,16 +87,17 @@
                 </div>
             </div>
 
-            @if (AppState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.SelectionChanged)
+            @if (AppState.IsProcurementRouteReconciling ||
+                AppState.IsProcurementRouteStale && string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
             {
-                <div class="ae-route-state" role="status">
-                    The travel preference changed. Regenerate the procurement route before relying on its automatic choices.
+                <div class="ae-route-state is-working" role="status">
+                    Updating the route and its automatic acquisition choices…
                 </div>
             }
-            else if (AppState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.InputsChanged)
+            else if (!string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
             {
-                <div class="ae-route-state" role="status">
-                    The procurement inputs changed. Regenerate the route before relying on its automatic choices.
+                <div class="ae-route-state is-error" role="alert">
+                    Automatic route update failed. @AppState.ProcurementRouteFailure
                 </div>
             }
 
@@ -601,9 +602,15 @@
 
         if (row.IsActiveProcurement)
         {
+            if (AppState.IsProcurementRouteReconciling ||
+                AppState.IsProcurementRouteStale && string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
+            {
+                return "Updating route";
+            }
+
             if (AppState.IsProcurementRouteStale)
             {
-                return "Route needs regeneration";
+                return "Route unavailable";
             }
 
             return row.HasSuppressedOccurrences

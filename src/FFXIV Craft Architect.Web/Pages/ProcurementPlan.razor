@@ -22,7 +22,7 @@
     <div class="pp-grid-layout">
         <ProcurementControlsPanel
             AppState="AppState"
-            IsAnalyzing="_isAnalyzing"
+            IsAnalyzing="IsRouteAnalyzing"
             CanAnalyze="CanAnalyze()"
             PrimaryActionLabel="@GetPrimaryActionLabel()"
             ShowNotice="@ShouldShowControlNotice()"
@@ -39,9 +39,8 @@
             ShoppingPlans="AppState.ProcurementShoppingPlans"
             RouteDecision="AppState.ProcurementRouteDecision"
             IsStale="AppState.IsProcurementRouteStale"
-            IsAnalyzing="_isAnalyzing"
+            IsAnalyzing="IsRouteAnalyzing"
             FailureMessage="@AppState.ProcurementRouteFailure"
-            StaleReason="@AppState.ProcurementRouteStaleReason"
             ExclusionOutcome="@_exclusionOutcome"
             ReconcilingItemWorld="@_reconcilingItemWorld"
             MarketMafiosoEnabled="@_marketMafiosoEnabled"
@@ -59,6 +58,7 @@
 
 @code {
     private bool _isAnalyzing;
+    private bool IsRouteAnalyzing => _isAnalyzing || AppState.IsProcurementRouteReconciling;
     private CancellableOperationLease? _procurementAnalysisOperation;
     private PendingExclusion? _lastExclusion;
     private string? _exclusionOutcome;
@@ -164,7 +164,9 @@
             .ToList();
 
     private string GetPrimaryActionLabel() =>
-        AppState.ProcurementShoppingPlans.Count > 0 ? "Regenerate Route" : "Generate Route";
+        AppState.IsProcurementRouteReconciling
+            ? "Updating Route"
+            : AppState.ProcurementShoppingPlans.Count > 0 ? "Regenerate Route" : "Generate Route";
 
     private bool ShouldShowControlNotice() => AppState.ProcurementShoppingPlans.Count == 0;
 
@@ -205,16 +207,11 @@
             return $"The latest regeneration failed. The previous route remains visible: {AppState.ProcurementRouteFailure}";
         }
 
-        if (_isAnalyzing)
+        if (IsRouteAnalyzing)
         {
             return AppState.ProcurementShoppingPlans.Count > 0
                 ? "Generating a new route. The previous route remains visible until the replacement is ready."
                 : "Fetching prices and comparing complete routes.";
-        }
-
-        if (AppState.IsProcurementRouteStale)
-        {
-            return $"The route is out of date. {AppState.ProcurementRouteStaleReason} Regenerate it when ready.";
         }
 
         if (AppState.ProcurementShoppingPlans.Count > 0)
@@ -326,7 +323,7 @@
 
     private void FinishStaleProcurementAnalysis(AppStateOperation operation)
     {
-        const string message = "Acquisition choices changed; regenerate the route when ready.";
+        const string message = "Acquisition choices changed; updating the route automatically.";
         if (!AppState.EndOperation(operation, message) && !AppState.IsBusy)
         {
             AppState.SetStatus(message, busy: false);
@@ -536,8 +533,8 @@
             else
             {
                 Snackbar.Add(
-                    $"Updated {action.Item.ItemName} on {action.World.WorldName}, but the route still needs regeneration.",
-                    Severity.Warning);
+                    $"Updated {action.Item.ItemName} on {action.World.WorldName}; CA is applying the latest acquisition choices.",
+                    Severity.Info);
             }
         }
         catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))

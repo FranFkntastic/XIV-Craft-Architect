@@ -11,6 +11,7 @@
 @inject WebPlanPersistenceService PlanPersistence
 @inject PlanSessionLoadService PlanSessionLoad
 @inject MarketEvidenceHydrationService MarketEvidenceHydration
+@inject ProcurementRouteReconciliationService ProcurementRouteReconciliation
 @inject PackagedWorldDirectoryService PackagedWorldDirectory
 @inject StartupInitializationService StartupInitialization
 @inject IJSRuntime JSRuntime
@@ -267,6 +268,7 @@
         NavigationManager.LocationChanged += OnLocationChanged;
         StartupInitialization.StatusChanged += OnStartupStatusChanged;
         AppState.OnStateChanged += OnAppStateChanged;
+        ProcurementRouteReconciliation.Start();
     }
     
     protected override void OnAfterRender(bool firstRender)
@@ -978,6 +980,7 @@
             NavigationManager.LocationChanged -= OnLocationChanged;
             StartupInitialization.StatusChanged -= OnStartupStatusChanged;
             AppState.OnStateChanged -= OnAppStateChanged;
+            ProcurementRouteReconciliation.Dispose();
             
             // Stop auto-save timer
             AppState.StopAutoSaveTimer();
