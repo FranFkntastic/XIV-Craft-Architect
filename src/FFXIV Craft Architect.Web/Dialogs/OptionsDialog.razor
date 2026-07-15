@@ -805,10 +805,22 @@
                     <div class="diagnostics-action-row diagnostics-report-row">
                         <div>
                             <strong>Report a problem</strong>
-                            <span>Open a prefilled GitHub issue for review. Diagnostic files stay local until you choose to attach them.</span>
+                            <span>Open a prefilled GitHub issue for review. Diagnostic files stay local unless you prepare one below.</span>
+                            <MudSwitch @bind-Value="_prepareDiagnosticAttachment"
+                                       Label="Prepare diagnostic attachment"
+                                       Color="Color.Primary"
+                                       Dense="true"
+                                       Disabled="@(!_diagnosticSnapshotReady)"
+                                       Class="diagnostics-attachment-toggle" />
+                            <span class="diagnostics-attachment-note">
+                                @(_prepareDiagnosticAttachment
+                                    ? "The snapshot downloads with the draft; drag it into GitHub before submitting."
+                                    : "Off by default. The issue draft contains context only.")
+                            </span>
                         </div>
                         <a class="mud-button-root mud-button mud-button-outlined mud-button-outlined-secondary mud-button-outlined-size-small mud-ripple"
                            href="@CreateGitHubIssueUrl()"
+                           onclick="@GetGitHubIssueClickScript()"
                            target="_blank"
                            rel="noopener noreferrer">
                             <span class="mud-button-label">
@@ -1072,6 +1084,8 @@
     private Color _profileHostStatusColor = Color.Secondary;
     private bool _diagnosticsBusy;
     private bool _diagnosticSnapshotReady;
+    private bool _prepareDiagnosticAttachment;
+    private string? _diagnosticSnapshotFileName;
     private TradeIndexedDbDiagnostics? _tradeStorageDiagnostics;
     private CacheStats? _marketCacheStats;
     private string? _diagnosticStorageError;
@@ -1912,9 +1926,10 @@
         {
             var exportedAtUtc = DateTime.UtcNow;
             var bundle = DiagnosticSnapshotBundleService.BuildBundle(exportedAtUtc);
+            _diagnosticSnapshotFileName = CreateDiagnosticSnapshotFileName(exportedAtUtc);
             await BrowserFileExportService.PrepareTextFileSaveAsync(
                 DiagnosticSnapshotSaveKey,
-                CreateDiagnosticSnapshotFileName(exportedAtUtc),
+                _diagnosticSnapshotFileName,
                 DiagnosticSnapshotBundleService.Serialize(bundle),
                 "application/json");
             _diagnosticSnapshotReady = true;
@@ -2029,7 +2044,16 @@
             AppState.SearchEntireRegion ? AppState.SelectedRegion : AppState.SelectedDataCenter,
             AppState.ShoppingPlans.Count,
             AppState.MarketItemAnalyses.Count,
-            MarketEvidenceHydration.LastRun.Status));
+            MarketEvidenceHydration.LastRun.Status,
+            _prepareDiagnosticAttachment,
+            _prepareDiagnosticAttachment ? _diagnosticSnapshotFileName : null));
+    }
+
+    private string? GetGitHubIssueClickScript()
+    {
+        return _prepareDiagnosticAttachment && _diagnosticSnapshotReady
+            ? $"window.CraftArchitectFileExport?.downloadPreparedFile('{DiagnosticSnapshotSaveKey}')"
+            : null;
     }
 
     private static string FormatBytes(long bytes)

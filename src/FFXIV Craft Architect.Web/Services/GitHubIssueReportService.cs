@@ -29,13 +29,23 @@ public sealed class GitHubIssueReportService
             .AppendLine($"- Loaded evidence: {context.ShoppingPlanCount:N0} shopping plans, {context.MarketAnalysisCount:N0} analyses")
             .AppendLine($"- Automatic refresh: `{context.AutomaticRefreshStatus}`")
             .AppendLine()
-            .AppendLine("## Diagnostic attachment")
-            .AppendLine("- [ ] I reviewed and attached the downloaded `.ca-diagnostic.json` or acquisition item dump if it is relevant.")
-            .AppendLine()
-            .AppendLine("> Diagnostic files remain local until you explicitly attach them. Review them before publishing.")
-            .ToString();
+            .AppendLine("## Diagnostic attachment");
 
-        return $"{NewIssueUrl}?title={Uri.EscapeDataString(title)}&body={Uri.EscapeDataString(body)}";
+        if (context.PrepareDiagnosticAttachment)
+        {
+            body
+                .AppendLine($"Craft Architect prepared `{context.DiagnosticFileName}` alongside this draft.")
+                .AppendLine()
+                .AppendLine("- [ ] I reviewed and attached that file before submitting this issue.")
+                .AppendLine()
+                .AppendLine("> GitHub does not allow another site to insert a local file into its editor. Drag the downloaded file into this issue before submitting.");
+        }
+        else
+        {
+            body.AppendLine("> No diagnostic file was prepared for this report.");
+        }
+
+        return $"{NewIssueUrl}?title={Uri.EscapeDataString(title)}&body={Uri.EscapeDataString(body.ToString())}";
     }
 }
 
@@ -46,4 +56,6 @@ public sealed record GitHubIssueReportContext(
     string MarketScope,
     int ShoppingPlanCount,
     int MarketAnalysisCount,
-    MarketEvidenceHydrationStatus AutomaticRefreshStatus);
+    MarketEvidenceHydrationStatus AutomaticRefreshStatus,
+    bool PrepareDiagnosticAttachment = false,
+    string? DiagnosticFileName = null);

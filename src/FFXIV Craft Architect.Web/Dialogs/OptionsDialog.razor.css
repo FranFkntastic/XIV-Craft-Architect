@@ -214,6 +214,15 @@
     text-decoration: none;
 }
 
+.diagnostics-attachment-toggle {
+    margin-top: 3px;
+}
+
+.diagnostics-action-row .diagnostics-attachment-note {
+    color: #879199;
+    font-size: 10px;
+}
+
 .diagnostics-error {
     color: #f08e85;
     font-size: 11px;
