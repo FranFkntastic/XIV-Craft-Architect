@@ -479,6 +479,67 @@ public class MarketPriceLadderAnalysisServiceTests
         Assert.Equal(["FirstWorld", "SecondWorld"], plan.RecommendedSplit.Select(split => split.WorldName).ToArray());
     }
 
+    [Fact]
+    public async Task ProjectToShoppingPlan_ThinSaneShelf_RemainsAvailableForProcurementCoverage()
+    {
+        var service = CreateService();
+        var analysis = Assert.Single(await service.AnalyzeAsync(CreateRequest(
+            quantityNeeded: 1_000,
+            worlds:
+            [
+                World("Excalibur", [Listing(200, 100, "Thin Seller")]),
+                World("Jenova", [Listing(800, 110, "Deep Seller")])
+            ])));
+
+        var excaliburAnalysis = analysis.Worlds.Single(world => world.WorldName == "Excalibur");
+        Assert.Equal(PriceBandDepth.Thin, Assert.Single(excaliburAnalysis.PriceBands).Depth);
+        Assert.Equal(0, excaliburAnalysis.PrimaryUsableQuantity);
+
+        var plan = service.ProjectToShoppingPlan(analysis, MarketAcquisitionLens.BulkValue);
+
+        var excaliburPlan = plan.WorldOptions.Single(world => world.WorldName == "Excalibur");
+        Assert.Equal(200, excaliburPlan.TotalQuantityPurchased);
+        Assert.Equal(200, Assert.Single(excaliburPlan.Listings).Quantity);
+        Assert.NotNull(plan.RecommendedSplit);
+        Assert.Contains(plan.RecommendedSplit!, purchase => purchase.WorldName == "Excalibur");
+        Assert.NotNull(plan.CoverageSet);
+        Assert.Contains(
+            plan.CoverageSet!.AllCandidates,
+            candidate => candidate.Worlds.Any(world => world.WorldName == "Excalibur"));
+    }
+
+    [Fact]
+    public async Task ProjectToShoppingPlan_ScopePolicy_ExcludesBaitAndInsaneButKeepsCredibleLocalOutlier()
+    {
+        var service = CreateService();
+        var analysis = Assert.Single(await service.AnalyzeAsync(CreateRequest(
+            quantityNeeded: 100,
+            worlds:
+            [
+                World("Excalibur",
+                [
+                    Listing(25, 1, "Bait Seller A"),
+                    Listing(25, 1, "Bait Seller B"),
+                    Listing(100, 100, "Sane Seller"),
+                    Listing(2, 10_000, "Wild Seller")
+                ]),
+                World("Jenova", [Listing(100, 110, "Deep Seller")])
+            ])));
+        var excaliburAnalysis = analysis.Worlds.Single(world => world.WorldName == "Excalibur");
+        Assert.Contains(excaliburAnalysis.Listings, listing => listing.PriceSanity == MarketListingPriceSanity.LowOutlier);
+        Assert.Contains(excaliburAnalysis.Listings, listing =>
+            listing.RetainerName == "Sane Seller" &&
+            listing.PriceSanity == MarketListingPriceSanity.Outlier &&
+            listing.Competitiveness == MarketListingCompetitiveness.Deal);
+        Assert.Contains(excaliburAnalysis.Listings, listing => listing.PriceSanity == MarketListingPriceSanity.Insane);
+
+        var plan = service.ProjectToShoppingPlan(analysis, MarketAcquisitionLens.BulkValue);
+
+        var listing = Assert.Single(plan.WorldOptions.Single(world => world.WorldName == "Excalibur").Listings);
+        Assert.Equal("Sane Seller", listing.RetainerName);
+        Assert.Equal(100, listing.Quantity);
+    }
+
 
 
 
@@ -499,7 +560,7 @@ public class MarketPriceLadderAnalysisServiceTests
 
         var world = Assert.Single(plan.WorldOptions);
         Assert.False(world.HasSufficientStock);
-        Assert.Equal(80, world.ShortfallQuantity);
+        Assert.Equal(60, world.ShortfallQuantity);
         Assert.Null(plan.RecommendedWorld);
     }
 
