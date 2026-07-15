@@ -78,6 +78,7 @@ builder.Services.AddScoped<DiagnosticSnapshotBundleService>();
 builder.Services.AddScoped<BrowserFileExportService>();
 builder.Services.AddScoped<ProcurementWorkflowService>();
 builder.Services.AddScoped<MarketMafiosoAcquisitionWorkflowService>();
+builder.Services.AddScoped<MarketMafiosoIntegrationState>();
 builder.Services.AddScoped<AcquisitionEvaluationWorkflowService>();
 builder.Services.AddScoped<AcquisitionSourceChangeImpactService>();
 builder.Services.AddScoped<TradePayrollDraftFactory>();

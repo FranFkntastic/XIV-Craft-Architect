@@ -10,6 +10,7 @@
 @inject CancellableOperationService CancellableOperations
 @inject ProcurementWorkflowService ProcurementWorkflow
 @inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
+@inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
 @inject ISettingsService Settings
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject BrowserFileExportService FileExportService
@@ -42,6 +43,7 @@
             StaleReason="@AppState.ProcurementRouteStaleReason"
             ExclusionOutcome="@_exclusionOutcome"
             ReconcilingItemWorld="@_reconcilingItemWorld"
+            MarketMafiosoEnabled="@_marketMafiosoEnabled"
             MarketMafiosoActiveItemWorld="@_marketMafiosoActiveItemWorld"
             MarketMafiosoBusyItemWorld="@_marketMafiosoBusyItemWorld"
             OnUndoExclusionRequested="UndoLastExclusionAsync"
@@ -64,6 +66,7 @@
     private MarketItemWorldKey? _marketMafiosoBusyItemWorld;
     private string? _marketMafiosoActiveRequestId;
     private CancellationTokenSource? _marketMafiosoMonitorCancellation;
+    private bool _marketMafiosoEnabled;
 
     protected override void OnInitialized()
     {
@@ -73,6 +76,17 @@
     }
 
     protected override async Task OnInitializedAsync()
+    {
+        _marketMafiosoEnabled = await Settings.GetAsync("marketmafioso.enabled", false);
+        MarketMafiosoIntegrationState.SetEnabled(_marketMafiosoEnabled);
+        MarketMafiosoIntegrationState.Changed += OnMarketMafiosoIntegrationChanged;
+        if (!_marketMafiosoEnabled)
+            return;
+
+        await LoadActiveMarketMafiosoRequestAsync();
+    }
+
+    private async Task LoadActiveMarketMafiosoRequestAsync()
     {
         _marketMafiosoActiveRequestId = await Settings.GetAsync("marketmafioso.active_request_id", string.Empty);
         var itemId = await Settings.GetAsync("marketmafioso.active_item_id", 0);
@@ -102,6 +116,7 @@
         _procurementAnalysisOperation = null;
         _marketMafiosoMonitorCancellation?.Cancel();
         _marketMafiosoMonitorCancellation?.Dispose();
+        MarketMafiosoIntegrationState.Changed -= OnMarketMafiosoIntegrationChanged;
         AppState.OnPlanChanged -= OnStateChanged;
         AppState.OnShoppingListChanged -= OnStateChanged;
     }
@@ -514,6 +529,9 @@
 
     private async Task HandleMarketMafiosoAsync(WorldItemProcurementAction action)
     {
+        if (!_marketMafiosoEnabled)
+            return;
+
         var key = new MarketItemWorldKey(
             action.Item.ItemId,
             new MarketWorldKey(action.World.DataCenter, action.World.WorldName));
@@ -774,6 +792,30 @@
         await ClearActiveMarketMafiosoRequestAsync(requestId);
         return true;
     }
+
+    private void OnMarketMafiosoIntegrationChanged() => _ = InvokeAsync(async () =>
+    {
+        var enabled = MarketMafiosoIntegrationState.Enabled;
+        if (_marketMafiosoEnabled == enabled)
+            return;
+
+        _marketMafiosoEnabled = enabled;
+        if (enabled)
+        {
+            await LoadActiveMarketMafiosoRequestAsync();
+        }
+        else
+        {
+            _marketMafiosoMonitorCancellation?.Cancel();
+            _marketMafiosoMonitorCancellation?.Dispose();
+            _marketMafiosoMonitorCancellation = null;
+            _marketMafiosoActiveRequestId = null;
+            _marketMafiosoActiveItemWorld = null;
+            _marketMafiosoBusyItemWorld = null;
+        }
+
+        StateHasChanged();
+    });
 
     private enum ExclusionKind
     {
