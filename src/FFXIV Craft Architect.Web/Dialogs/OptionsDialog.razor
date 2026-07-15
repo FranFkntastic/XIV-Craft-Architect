@@ -16,6 +16,10 @@
 @inject ProfileSyncService ProfileSync
 @inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
 @inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
+@inject DiagnosticSnapshotBundleService DiagnosticSnapshotBundleService
+@inject BrowserFileExportService BrowserFileExportService
+@inject MarketEvidenceHydrationService MarketEvidenceHydration
+@inject IMarketCacheService MarketCache
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
@@ -722,6 +726,122 @@
                 </MudText>
             }
 
+            else if (_activePanelIndex == 6)
+            {
+                <div class="diagnostics-heading">
+                    <div>
+                        <MudText Typo="Typo.h6">Diagnostics</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            Inspect the active session and export the evidence needed to reproduce a problem.
+                        </MudText>
+                    </div>
+                    <span class="diagnostics-build">@WebBuildInfo.BuildVersion · @WebBuildInfo.CommitSha</span>
+                </div>
+
+                <div class="diagnostics-grid">
+                    <section class="diagnostics-card">
+                        <div class="diagnostics-card-title">Current session</div>
+                        <div class="diagnostics-row">
+                            <span>Plan</span>
+                            <strong>@(AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name ?? "No plan loaded")</strong>
+                        </div>
+                        <div class="diagnostics-row">
+                            <span>Market evidence</span>
+                            <strong>@AppState.ShoppingPlans.Count.ToString("N0") plans · @AppState.MarketItemAnalyses.Count.ToString("N0") analyses</strong>
+                        </div>
+                        <div class="diagnostics-row">
+                            <span>Published</span>
+                            <strong>@FormatPublishedEvidenceAge()</strong>
+                        </div>
+                        <div class="diagnostics-row">
+                            <span>Scope</span>
+                            <strong>@(AppState.SearchEntireRegion ? AppState.SelectedRegion : AppState.SelectedDataCenter)</strong>
+                        </div>
+                    </section>
+
+                    <section class="diagnostics-card">
+                        <div class="diagnostics-card-heading">
+                            <div class="diagnostics-card-title">Automatic market refresh</div>
+                            <span class="diagnostics-status @GetHydrationStatusClass()">@GetHydrationStatusLabel()</span>
+                        </div>
+                        <div class="diagnostics-message">@MarketEvidenceHydration.LastRun.Message</div>
+                        <div class="diagnostics-row">
+                            <span>Attempts</span>
+                            <strong>@MarketEvidenceHydration.LastRun.AttemptCount.ToString("N0")</strong>
+                        </div>
+                        <div class="diagnostics-row">
+                            <span>Result</span>
+                            <strong>@FormatHydrationResult()</strong>
+                        </div>
+                        <div class="diagnostics-row">
+                            <span>Timing</span>
+                            <strong>@FormatHydrationTiming()</strong>
+                        </div>
+                    </section>
+                </div>
+
+                <section class="diagnostics-card diagnostics-card-wide">
+                    <div class="diagnostics-card-title">Diagnostic exports</div>
+                    <div class="diagnostics-action-row">
+                        <div>
+                            <strong>Application snapshot</strong>
+                            <span>Active plan, acquisition decisions, market evidence, procurement routes, refresh outcome, and cache decision.</span>
+                        </div>
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Download"
+                                   Disabled="@(!AppState.HasPlanOrProjectItems || _diagnosticsBusy)"
+                                   OnClick="DownloadDiagnosticSnapshotAsync">
+                            Download snapshot
+                        </MudButton>
+                    </div>
+                    <div class="diagnostics-hint">
+                        Acquisition Evaluation also exposes an Item dump beside the selected item, containing only that item's demand, actionability calculation, and market evidence.
+                    </div>
+                </section>
+
+                <section class="diagnostics-card diagnostics-card-wide">
+                    <div class="diagnostics-action-row">
+                        <div>
+                            <strong>Browser storage</strong>
+                            <span>Check the IndexedDB schema and market-cache inventory without deleting or changing anything.</span>
+                        </div>
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Secondary"
+                                   Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.HealthAndSafety"
+                                   Disabled="_diagnosticsBusy"
+                                   OnClick="RunBrowserStorageChecksAsync">
+                            @(_diagnosticsBusy ? "Checking..." : "Run checks")
+                        </MudButton>
+                    </div>
+                    @if (_tradeStorageDiagnostics != null && _marketCacheStats != null)
+                    {
+                        <div class="diagnostics-storage-results">
+                            <div class="diagnostics-row">
+                                <span>Trade stores</span>
+                                <strong class="@(_tradeStorageDiagnostics.IsReady ? "is-good" : "is-bad")">
+                                    @(_tradeStorageDiagnostics.IsReady ? "Ready" : "Needs attention")
+                                </strong>
+                            </div>
+                            <div class="diagnostics-row">
+                                <span>Market cache</span>
+                                <strong>@_marketCacheStats.ValidEntries.ToString("N0") valid · @_marketCacheStats.StaleEntries.ToString("N0") stale</strong>
+                            </div>
+                            <div class="diagnostics-row">
+                                <span>Cache size</span>
+                                <strong>@FormatBytes(_marketCacheStats.ApproximateSizeBytes)</strong>
+                            </div>
+                        </div>
+                    }
+                    else if (!string.IsNullOrWhiteSpace(_diagnosticStorageError))
+                    {
+                        <div class="diagnostics-error">@_diagnosticStorageError</div>
+                    }
+                </section>
+            }
+
             else
             {
                 <div class="d-flex flex-column align-center py-4" style="position: relative; min-height: 180px;">
@@ -780,7 +900,7 @@
     [Parameter] public int InitialPanelIndex { get; set; }
 
     private static readonly string[] OptionsTabs =
-        ["General", "Market", "Integrations", "Company", "Hosting", "Storage", "About"];
+        ["General", "Market", "Integrations", "Company", "Hosting", "Storage", "Diagnostics", "About"];
     private static readonly IReadOnlyList<CompactSelectOption> RegionOptions =
     [
         new("North America", "North America"),
@@ -927,6 +1047,11 @@
     private FirstConnectMode _profileHostFirstConnectMode = FirstConnectMode.UploadLocal;
     private string? _profileHostStatus;
     private Color _profileHostStatusColor = Color.Secondary;
+    private bool _diagnosticsBusy;
+    private TradeIndexedDbDiagnostics? _tradeStorageDiagnostics;
+    private CacheStats? _marketCacheStats;
+    private string? _diagnosticStorageError;
+    private const string DiagnosticSnapshotSaveKey = "options-diagnostic-snapshot";
 
     private static readonly JsonSerializerOptions CompanyPackageJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -1745,6 +1870,128 @@
         AppState.SetSecretDebugToolsEnabled(enabled);
         await Settings.SetAsync("debug.secret_tools_enabled", enabled);
         Snackbar.Add(enabled ? "Developer Mode enabled" : "Developer Mode disabled", Severity.Info);
+    }
+
+    private async Task DownloadDiagnosticSnapshotAsync()
+    {
+        _diagnosticsBusy = true;
+        try
+        {
+            var exportedAtUtc = DateTime.UtcNow;
+            var bundle = DiagnosticSnapshotBundleService.BuildBundle(exportedAtUtc);
+            await BrowserFileExportService.SaveTextFileAsync(
+                DiagnosticSnapshotSaveKey,
+                CreateDiagnosticSnapshotFileName(exportedAtUtc),
+                DiagnosticSnapshotBundleService.Serialize(bundle),
+                "application/json");
+            Snackbar.Add("Diagnostic snapshot downloaded.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Could not export diagnostics: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _diagnosticsBusy = false;
+        }
+    }
+
+    private async Task RunBrowserStorageChecksAsync()
+    {
+        _diagnosticsBusy = true;
+        _diagnosticStorageError = null;
+        try
+        {
+            var tradeTask = IndexedDb.GetTradeStoreDiagnosticsAsync();
+            var marketTask = MarketCache.GetStatsAsync();
+            await Task.WhenAll(tradeTask, marketTask);
+            _tradeStorageDiagnostics = await tradeTask;
+            _marketCacheStats = await marketTask;
+        }
+        catch (Exception ex)
+        {
+            _tradeStorageDiagnostics = null;
+            _marketCacheStats = null;
+            _diagnosticStorageError = $"Storage checks failed: {ex.Message}";
+        }
+        finally
+        {
+            _diagnosticsBusy = false;
+        }
+    }
+
+    private string FormatPublishedEvidenceAge()
+    {
+        var publishedAtUtc = AppState.PublishedMarketAnalysisScope?.PublishedAtUtc;
+        if (!publishedAtUtc.HasValue)
+        {
+            return "Not published";
+        }
+
+        var age = DateTime.UtcNow - publishedAtUtc.Value;
+        return age.TotalMinutes < 1
+            ? "Just now"
+            : age.TotalHours < 1
+                ? $"{Math.Floor(age.TotalMinutes):N0}m ago"
+                : $"{age.TotalHours:F1}h ago";
+    }
+
+    private string GetHydrationStatusLabel() => MarketEvidenceHydration.LastRun.Status switch
+    {
+        MarketEvidenceHydrationStatus.NotNeeded => "Reusable",
+        MarketEvidenceHydrationStatus.Running => "Running",
+        MarketEvidenceHydrationStatus.Published => "Published",
+        MarketEvidenceHydrationStatus.NotPublished => "No publication",
+        MarketEvidenceHydrationStatus.Failed => "Failed",
+        MarketEvidenceHydrationStatus.Canceled => "Canceled",
+        MarketEvidenceHydrationStatus.Superseded => "Superseded",
+        _ => "Not run"
+    };
+
+    private string GetHydrationStatusClass() => MarketEvidenceHydration.LastRun.Status switch
+    {
+        MarketEvidenceHydrationStatus.NotNeeded or MarketEvidenceHydrationStatus.Published => "is-good",
+        MarketEvidenceHydrationStatus.Running => "is-running",
+        MarketEvidenceHydrationStatus.NotPublished or MarketEvidenceHydrationStatus.Failed => "is-bad",
+        _ => "is-neutral"
+    };
+
+    private string FormatHydrationResult()
+    {
+        var result = MarketEvidenceHydration.LastRun.Result;
+        return result == null
+            ? "No result"
+            : $"{result.AnalyzedCount:N0} analyzed · {result.FetchedCount:N0} fetched";
+    }
+
+    private string FormatHydrationTiming()
+    {
+        var run = MarketEvidenceHydration.LastRun;
+        if (run.Status == MarketEvidenceHydrationStatus.Running && run.StartedAtUtc.HasValue)
+        {
+            return $"Running {(DateTime.UtcNow - run.StartedAtUtc.Value).TotalSeconds:F1}s";
+        }
+
+        return run.Duration.HasValue ? $"{run.Duration.Value.TotalSeconds:F1}s" : "—";
+    }
+
+    private string CreateDiagnosticSnapshotFileName(DateTime exportedAtUtc)
+    {
+        var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name ?? "plan";
+        var safePlanName = string.Join("_", planName.Split(Path.GetInvalidFileNameChars()));
+        if (safePlanName.Length > 60)
+        {
+            safePlanName = safePlanName[..60];
+        }
+
+        return $"{safePlanName}-{exportedAtUtc:yyyyMMdd-HHmmss}.ca-diagnostic.json";
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        return bytes >= 1024 * 1024
+            ? $"{bytes / (1024d * 1024d):F1} MB"
+            : $"{bytes / 1024d:F1} KB";
     }
     
     private void Cancel()

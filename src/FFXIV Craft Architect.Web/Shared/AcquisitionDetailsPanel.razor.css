@@ -43,6 +43,12 @@
     font-weight: 500;
 }
 
+.rp-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .rp-header-action {
     background: #1e1e1e;
     border: 1px solid #555;

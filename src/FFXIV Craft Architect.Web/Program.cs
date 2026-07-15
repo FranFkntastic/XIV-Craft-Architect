@@ -38,7 +38,9 @@ builder.Services.AddScoped<IRecipeDemandProjectionService, RecipeDemandProjectio
 builder.Services.AddScoped<IRecipeDemandProjectionParityService, RecipeDemandProjectionParityService>();
 builder.Services.AddScoped<IRecipeLayerWorkflowService, RecipeLayerWorkflowService>();
 builder.Services.AddScoped<IArtisanService, ArtisanService>();
-builder.Services.AddScoped<IMarketCacheService, IndexedDbMarketCacheService>();
+builder.Services.AddScoped<IndexedDbMarketCacheService>();
+builder.Services.AddScoped<IMarketCacheService>(provider =>
+    provider.GetRequiredService<IndexedDbMarketCacheService>());
 builder.Services.AddScoped<MarketShoppingService>();
 builder.Services.AddScoped<JointAcquisitionRouteOptimizationService>();
 builder.Services.AddScoped<IMarketPriceEvaluationService, MarketPriceEvaluationService>();
@@ -46,7 +48,6 @@ builder.Services.AddScoped<IMarketPriceLadderAnalysisService, MarketPriceLadderA
 builder.Services.AddScoped<IMarketAnalysisExecutionService, MarketAnalysisExecutionService>();
 builder.Services.AddScoped<IMarketEvidenceReconciliationService, MarketEvidenceReconciliationService>();
 builder.Services.AddScoped<IProcurementRouteExecutionService, ProcurementRouteExecutionService>();
-builder.Services.AddScoped<IndexedDbMarketCacheService>();
 builder.Services.AddScoped<CommissionCostBasisResolver>();
 builder.Services.AddScoped<CommissionPayrollService>();
 builder.Services.AddScoped<TradeLaborStandardCalibrationService>();
@@ -78,6 +79,7 @@ builder.Services.AddScoped<MarketAnalysisItemRefreshService>();
 builder.Services.AddScoped<IMarketAnalysisAutoRunner, MarketAnalysisAutoRunner>();
 builder.Services.AddScoped<MarketAnalysisDiagnosticDumpService>();
 builder.Services.AddScoped<DiagnosticSnapshotBundleService>();
+builder.Services.AddScoped<AcquisitionEvaluationItemDiagnosticDumpService>();
 builder.Services.AddScoped<BrowserFileExportService>();
 builder.Services.AddScoped<ProcurementWorkflowService>();
 builder.Services.AddScoped<MarketMafiosoAcquisitionWorkflowService>();

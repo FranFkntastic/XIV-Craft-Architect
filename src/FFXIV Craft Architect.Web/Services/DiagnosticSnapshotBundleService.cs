@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -16,6 +17,8 @@ public sealed class DiagnosticSnapshotBundleService
     private readonly AppState _appState;
     private readonly StoredPlanSnapshotBuilder _storedPlanSnapshotBuilder;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
+    private readonly MarketEvidenceHydrationService? _marketEvidenceHydration;
+    private readonly IMarketCacheService? _marketCache;
 
     static DiagnosticSnapshotBundleService()
     {
@@ -25,11 +28,15 @@ public sealed class DiagnosticSnapshotBundleService
     public DiagnosticSnapshotBundleService(
         AppState appState,
         StoredPlanSnapshotBuilder storedPlanSnapshotBuilder,
-        IRecipeLayerWorkflowService recipeLayerWorkflow)
+        IRecipeLayerWorkflowService recipeLayerWorkflow,
+        MarketEvidenceHydrationService? marketEvidenceHydration = null,
+        IMarketCacheService? marketCache = null)
     {
         _appState = appState;
         _storedPlanSnapshotBuilder = storedPlanSnapshotBuilder;
         _recipeLayerWorkflow = recipeLayerWorkflow;
+        _marketEvidenceHydration = marketEvidenceHydration;
+        _marketCache = marketCache;
     }
 
     public DiagnosticSnapshotBundle BuildBundle(DateTime exportedAtUtc)
@@ -65,7 +72,9 @@ public sealed class DiagnosticSnapshotBundleService
             ActiveProcurementItems: acquisitionSnapshot.ActiveProcurementItems,
             ShoppingPlans: _appState.ShoppingPlans.ToList(),
             ProcurementShoppingPlans: _appState.ProcurementShoppingPlans.ToList(),
-            MarketItemAnalyses: _appState.MarketItemAnalyses.ToList());
+            MarketItemAnalyses: _appState.MarketItemAnalyses.ToList(),
+            AutomaticMarketRefresh: _marketEvidenceHydration?.LastRun,
+            MarketCacheDecision: (_marketCache as IMarketCacheDiagnosticsProvider)?.LastDecisionSnapshot);
     }
 
     public string Serialize(DiagnosticSnapshotBundle bundle)
@@ -117,7 +126,9 @@ public sealed record DiagnosticSnapshotBundle(
     IReadOnlyList<MaterialAggregate> ActiveProcurementItems,
     IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
     IReadOnlyList<DetailedShoppingPlan> ProcurementShoppingPlans,
-    IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses);
+    IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses,
+    MarketEvidenceHydrationRunSnapshot? AutomaticMarketRefresh,
+    MarketCacheDecisionSnapshot? MarketCacheDecision);
 
 public sealed record DiagnosticSnapshotBuildInfo(
     string BuildVersion,

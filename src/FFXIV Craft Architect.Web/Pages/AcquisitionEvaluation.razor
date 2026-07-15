@@ -10,6 +10,10 @@
 @inject AcquisitionDecisionService AcquisitionDecisionService
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject AcquisitionEvaluationWorkflowService AcquisitionEvaluationWorkflow
+@inject AcquisitionEvaluationItemDiagnosticDumpService ItemDiagnosticDumpService
+@inject MarketEvidenceHydrationService MarketEvidenceHydration
+@inject IMarketCacheService MarketCache
+@inject BrowserFileExportService BrowserFileExportService
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
 @inject ILogger<AcquisitionEvaluation> Logger
@@ -111,7 +115,8 @@
         CostContext="@_snapshot.CostContext"
         ActiveProcurementItems="@_snapshot.ActiveProcurementItems"
         UnavailableMarketItems="@AppState.UnavailableMarketItems"
-        OnSourceChanged="OnNodeSourceChanged" />
+        OnSourceChanged="OnNodeSourceChanged"
+        OnDiagnosticRequested="ExportSelectedItemDiagnosticAsync" />
 </div>
 
 @code {
@@ -137,6 +142,7 @@
     private long _refreshRequestId;
     private string? _appliedRequestedNodeId;
     private int? _appliedRequestedItemId;
+    private const string ItemDiagnosticSaveKey = "acquisition-item-diagnostic";
 
     protected override async Task OnInitializedAsync()
     {
@@ -206,6 +212,45 @@
     private async Task OnNodeSourceChanged(AcquisitionSourceChangeRequest request)
     {
         await ApplyNodeSourceChangeAsync(request.Node, request.Source);
+    }
+
+    private async Task ExportSelectedItemDiagnosticAsync()
+    {
+        var row = GetSelectedRow();
+        if (row == null)
+        {
+            Snackbar.Add("Select an acquisition item before exporting diagnostics.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var exportedAtUtc = DateTime.UtcNow;
+            var dump = ItemDiagnosticDumpService.BuildDump(
+                AppState,
+                row,
+                GetMarketPlan(row),
+                MarketEvidenceHydration.LastRun,
+                (MarketCache as IMarketCacheDiagnosticsProvider)?.LastDecisionSnapshot,
+                exportedAtUtc);
+            var json = ItemDiagnosticDumpService.Serialize(dump);
+            var fileName = AcquisitionEvaluationItemDiagnosticDumpService.CreateFileName(
+                row.ItemName,
+                row.ItemId,
+                exportedAtUtc);
+
+            await BrowserFileExportService.SaveTextFileAsync(
+                ItemDiagnosticSaveKey,
+                fileName,
+                json,
+                "application/json");
+            Snackbar.Add($"Exported diagnostics for {row.ItemName}.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to export acquisition diagnostics for item {ItemId}", row.ItemId);
+            Snackbar.Add($"Could not export item diagnostics: {ex.Message}", Severity.Error);
+        }
     }
 
     private async Task OnNodeSourceSelected(PlanNode node, ChangeEventArgs args)
