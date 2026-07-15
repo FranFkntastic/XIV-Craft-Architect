@@ -10,6 +10,7 @@
 @inject IndexedDbService IndexedDb
 @inject WebPlanPersistenceService PlanPersistence
 @inject PlanSessionLoadService PlanSessionLoad
+@inject MarketEvidenceHydrationService MarketEvidenceHydration
 @inject StartupInitializationService StartupInitialization
 @inject IJSRuntime JSRuntime
 @inject HttpClient Http
@@ -416,6 +417,7 @@
             // Load the plan into AppState
             var stateLoadElapsed = System.Diagnostics.Stopwatch.StartNew();
             PlanSessionLoad.ApplyPreparedSession(loadResult, trackStoredPlanIdentity: false);
+            MarketEvidenceHydration.ScheduleAfterPlanLoad(loadResult);
             stateLoadElapsed.Stop();
             totalElapsed.Stop();
             
