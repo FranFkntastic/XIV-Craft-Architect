@@ -84,7 +84,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             ApplyLensRanks(worlds, MarketAcquisitionLens.MinimumUpfrontCost);
             ApplyLensRanks(worlds, MarketAcquisitionLens.BulkValue);
             var scopePriceBands = BuildScopePriceBands(worlds, item.TotalQuantity, scopePriceContext);
-            var procurementSignalWorld = SelectBestProcurementSignalWorld(worlds);
+            var procurementSignalWorld = SelectBestActionableWorld(worlds);
 
             analyses.Add(new MarketItemAnalysis
             {
@@ -96,11 +96,11 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 AnalysisScopeBaselineUnitPrice = scopePriceContext.BaselineUnitPrice,
                 AnalysisScopeAverageUnitPrice = scopePriceContext.AverageUnitPrice,
                 AnalysisCompetitiveAverageUnitPrice = scopePriceContext.CompetitiveAverageUnitPrice,
-                ProcurementSignalQuantity = procurementSignalWorld?.PrimaryUsableQuantity ?? 0,
-                PrimaryProcurementShelfAverageUnitPrice = procurementSignalWorld?.PrimaryUsableAverageUnitPrice ?? 0,
-                CostToCoverTotalGil = procurementSignalWorld?.CostToCoverTotalGil ?? 0,
-                CostToCoverUnitPrice = procurementSignalWorld?.CostToCoverUnitPrice ?? 0,
-                CostToCoverMaxUnitPrice = procurementSignalWorld?.CostToCoverMaxUnitPrice ?? 0,
+                ProcurementSignalQuantity = procurementSignalWorld?.ActionableQuantity ?? 0,
+                PrimaryProcurementShelfAverageUnitPrice = procurementSignalWorld?.ActionableAverageUnitPrice ?? 0,
+                CostToCoverTotalGil = procurementSignalWorld?.ActionableCostToCoverTotalGil ?? 0,
+                CostToCoverUnitPrice = procurementSignalWorld?.ActionableCostToCoverUnitPrice ?? 0,
+                CostToCoverMaxUnitPrice = procurementSignalWorld?.ActionableCostToCoverMaxUnitPrice ?? 0,
                 AnalysisScopeMedianUnitPrice = scopePriceContext.MedianUnitPrice,
                 CompetitiveThresholdUnitPrice = scopePriceContext.CompetitiveThresholdUnitPrice,
                 SaneThresholdUnitPrice = scopePriceContext.SaneThresholdUnitPrice,
@@ -398,18 +398,26 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
         var totalSaneQuantity = saneListings.Sum(listing => listing.Quantity);
         var totalListingQuantity = analyzedListings.Sum(listing => listing.Quantity);
-        var coverageBucket = GetCoverageBucket(primaryUsableQuantity, quantityNeeded);
+        var actionableListings = listings
+            .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
+            .OrderBy(listing => listing.PricePerUnit)
+            .ThenBy(listing => listing.SortIndex)
+            .ToList();
+        var actionableQuantity = actionableListings.Sum(listing => listing.Quantity);
+        var actionableCostToCover = CalculateCostToCover(actionableListings, quantityNeeded);
+        var actionableAverageUnitPrice = actionableCostToCover?.QuotedAverageUnitPrice ?? CalculateWeightedAverage(actionableListings);
+        var worldAverageUnitPrice = CalculateWeightedAverage(actionableListings);
+        var coverageBucket = GetCoverageBucket(actionableQuantity, quantityNeeded);
         var primaryUsableListings = listings
             .Where(listing => listing.IsInPrimaryUsableBand)
             .ToList();
         var costToCover = CalculateCostToCover(primaryUsableListings, quantityNeeded);
         var scores = CreateScores(
             quantityNeeded,
-            primaryUsableQuantity,
-            primaryUsableListings,
-            costToCover,
+            actionableQuantity,
+            actionableCostToCover,
             coverageBucket,
-            primaryUsableAverageUnitPrice,
+            actionableAverageUnitPrice,
             dataQualityScore);
 
         return new WorldMarketAnalysis
@@ -424,6 +432,14 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             ScopeInsaneQuantity = scopeInsaneQuantity,
             TotalSaneQuantity = totalSaneQuantity,
             TotalListingQuantity = totalListingQuantity,
+            ActionableQuantity = actionableQuantity,
+            ActionableAverageUnitPrice = actionableAverageUnitPrice,
+            ActionableCostToCoverTotalGil = actionableCostToCover?.TotalCost ?? 0,
+            ActionableCostToCoverUnitPrice = actionableCostToCover?.UnitPrice ?? 0,
+            ActionableCostToCoverMaxUnitPrice = actionableCostToCover?.MaxUnitPrice ?? 0,
+            WorldAverageUnitPrice = worldAverageUnitPrice,
+            ReferenceSupportScore = scopePriceContext.PriceEvaluation.CentralRegion.SupportScore,
+            ReferencePriceCredibility = scopePriceContext.PriceEvaluation.CentralRegion.Credibility,
             CostToCoverTotalGil = costToCover?.TotalCost ?? 0,
             CostToCoverUnitPrice = costToCover?.UnitPrice ?? 0,
             CostToCoverMaxUnitPrice = costToCover?.MaxUnitPrice ?? 0,
@@ -822,27 +838,25 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
     private static List<WorldLensScore> CreateScores(
         int quantityNeeded,
-        int primaryUsableQuantity,
-        IReadOnlyList<AnalyzedMarketListing> primaryUsableListings,
+        int actionableQuantity,
         CostToCoverResult? costToCover,
         MarketCoverageBucket coverageBucket,
-        decimal primaryUsableAverageUnitPrice,
+        decimal actionableAverageUnitPrice,
         decimal dataQualityScore)
     {
-        var coverageRatio = CalculateCoverageRatio(primaryUsableQuantity, quantityNeeded);
-        var primaryUsableRatio = CalculateCoverageRatio(primaryUsableQuantity, quantityNeeded);
-        var primaryUsablePrice = primaryUsableAverageUnitPrice;
+        var coverageRatio = CalculateCoverageRatio(actionableQuantity, quantityNeeded);
+        var actionableRatio = CalculateCoverageRatio(actionableQuantity, quantityNeeded);
         var minimumScore = costToCover.HasValue
             ? 1_000_000_000m / Math.Max(costToCover.Value.TotalCost, 1)
             : coverageRatio * 100;
         minimumScore += coverageBucket == MarketCoverageBucket.Full ? 10_000 : coverageRatio * 100;
         minimumScore *= dataQualityScore / 100m;
 
-        var bulkScore = primaryUsableRatio * 10_000m
-            + Math.Min(primaryUsableQuantity, quantityNeeded) * 10m;
-        if (primaryUsablePrice > 0)
+        var bulkScore = actionableRatio * 10_000m
+            + Math.Min(actionableQuantity, quantityNeeded) * 10m;
+        if (actionableAverageUnitPrice > 0)
         {
-            bulkScore += 1_000m / primaryUsablePrice;
+            bulkScore += 1_000m / actionableAverageUnitPrice;
         }
 
         bulkScore *= dataQualityScore / 100m;
@@ -856,16 +870,16 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 ScoreBucket = ScoreBucketForMinimumUpfront(coverageBucket, dataQualityScore),
                 Summary = costToCover.HasValue
                     ? $"{costToCover.Value.TotalCost:N0}g to cover need"
-                    : $"{primaryUsableQuantity:N0}/{quantityNeeded:N0} procurement-qualified"
+                    : $"{actionableQuantity:N0}/{quantityNeeded:N0} listed"
             },
             new WorldLensScore
             {
                 Lens = MarketAcquisitionLens.BulkValue,
                 Score = bulkScore,
-                ScoreBucket = ScoreBucketForBulkValue(primaryUsableQuantity, quantityNeeded, dataQualityScore),
-                Summary = primaryUsablePrice > 0
-                    ? $"{primaryUsableQuantity:N0} procurement-qualified at ~{primaryUsablePrice:N0}g"
-                    : $"{primaryUsableQuantity:N0} procurement-qualified"
+                ScoreBucket = ScoreBucketForBulkValue(actionableQuantity, quantityNeeded, dataQualityScore),
+                Summary = actionableAverageUnitPrice > 0
+                    ? $"{actionableQuantity:N0} listed at ~{actionableAverageUnitPrice:N0}g actionable average"
+                    : $"{actionableQuantity:N0} listed"
             }
         ];
     }
@@ -1149,10 +1163,12 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         var remaining = quantityNeeded;
         long total = 0;
         long maxUnitPrice = 0;
+        var quotedQuantity = 0;
 
         foreach (var listing in listings)
         {
             total += listing.Quantity * listing.PricePerUnit;
+            quotedQuantity += listing.Quantity;
             maxUnitPrice = Math.Max(maxUnitPrice, listing.PricePerUnit);
             remaining -= listing.Quantity;
             if (remaining <= 0)
@@ -1160,6 +1176,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 return new CostToCoverResult(
                     total,
                     quantityNeeded > 0 ? total / (decimal)quantityNeeded : 0,
+                    quotedQuantity > 0 ? total / (decimal)quotedQuantity : 0,
                     maxUnitPrice);
             }
         }
@@ -1167,12 +1184,12 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         return null;
     }
 
-    private static WorldMarketAnalysis? SelectBestProcurementSignalWorld(IEnumerable<WorldMarketAnalysis> worlds)
+    private static WorldMarketAnalysis? SelectBestActionableWorld(IEnumerable<WorldMarketAnalysis> worlds)
     {
         return worlds
-            .Where(world => world.CostToCoverTotalGil > 0 && world.CostToCoverUnitPrice > 0)
-            .OrderBy(world => world.CostToCoverTotalGil)
-            .ThenBy(world => world.CostToCoverMaxUnitPrice)
+            .Where(world => world.ActionableCostToCoverTotalGil > 0 && world.ActionableCostToCoverUnitPrice > 0)
+            .OrderBy(world => world.ActionableCostToCoverTotalGil)
+            .ThenBy(world => world.ActionableCostToCoverMaxUnitPrice)
             .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
             .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
@@ -1180,5 +1197,9 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
     private sealed record ScopeBandListing(string WorldName, AnalyzedMarketListing Listing);
 
-    private readonly record struct CostToCoverResult(long TotalCost, decimal UnitPrice, long MaxUnitPrice);
+    private readonly record struct CostToCoverResult(
+        long TotalCost,
+        decimal UnitPrice,
+        decimal QuotedAverageUnitPrice,
+        long MaxUnitPrice);
 }

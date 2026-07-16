@@ -86,7 +86,7 @@
             {
                 Id = MarketAnalysisWorldGridSortColumn.PriceValue,
                 Header = "Price",
-                HeaderTooltip = "Best applicable unit price on this world",
+                HeaderTooltip = "Actionable average for the requested quantity; the second line averages all loaded listings on this world",
                 Size = WebTableColumnSize.Percent(23m),
                 HeaderCssClass = "ma-world-column",
                 CellCssClass = "ma-world-cell",
@@ -205,6 +205,14 @@
         builder.AddAttribute(1, "class", $"ma-world-score {MarketAnalysisGridViewService.GetWorldUnitPriceScoreClass(world)}");
         builder.AddContent(2, MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
         builder.CloseElement();
+        var worldAverage = MarketAnalysisGridViewService.FormatWorldAverageUnitPrice(world);
+        if (!string.IsNullOrWhiteSpace(worldAverage))
+        {
+            builder.OpenElement(3, "span");
+            builder.AddAttribute(4, "class", "ma-world-muted");
+            builder.AddContent(5, worldAverage);
+            builder.CloseElement();
+        }
     };
 
     private RenderFragment<WorldMarketAnalysis> RenderCompetitiveValueCell => world => builder =>

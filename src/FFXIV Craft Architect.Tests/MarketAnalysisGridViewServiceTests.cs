@@ -187,6 +187,7 @@ public class MarketAnalysisGridViewServiceTests
             ScopeSaneQuantity = 200,
             DataQualityBucket = MarketDataQualityBucket.Current,
             AnalysisCompetitiveAverageUnitPrice = 110,
+            WorldAverageUnitPrice = 189,
             Listings =
             [
                 Listing(0, 10, 1, MarketListingPriceSanity.LowOutlier, MarketListingCompetitiveness.Deal),
@@ -204,14 +205,36 @@ public class MarketAnalysisGridViewServiceTests
             ]
         };
 
-        Assert.Equal("200", MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world));
+        Assert.Equal("212", MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world));
         Assert.Equal("limited", MarketAnalysisGridViewService.FormatWorldMarketDepthDescriptor(world));
-        Assert.Equal("~100g / unit", MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
-        Assert.Equal("200/1,000", MarketAnalysisGridViewService.FormatCoverage(world));
+        Assert.Equal("~189g / unit", MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
+        Assert.Equal("world avg ~189g", MarketAnalysisGridViewService.FormatWorldAverageUnitPrice(world));
+        Assert.Equal("212/1,000", MarketAnalysisGridViewService.FormatCoverage(world));
         Assert.Equal(MarketCoverageBucket.PartialThin, MarketAnalysisGridViewService.GetDisplayCoverageBucket(world));
         Assert.Equal(MarketScoreBucket.PoorFit, MarketAnalysisGridViewService.GetDisplayScoreBucket(world, MarketAcquisitionLens.BulkValue));
-        Assert.Equal("-9%", MarketAnalysisGridViewService.FormatCompetitiveValue(world));
-        Assert.Contains("best usable listing price", MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world));
+        Assert.Equal("+72%", MarketAnalysisGridViewService.FormatCompetitiveValue(world));
+        Assert.Contains("actionable average", MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world));
+    }
+
+    [Fact]
+    public void EmptyWorld_DoesNotBorrowRegionalReferencePrice()
+    {
+        var world = new WorldMarketAnalysis
+        {
+            DataCenter = "Primal",
+            WorldName = "Exodus",
+            QuantityNeeded = 10,
+            AnalysisScopeBaselineUnitPrice = 1_086_826,
+            AnalysisScopeAverageUnitPrice = 1_400_961,
+            AnalysisCompetitiveAverageUnitPrice = 1_086_826,
+            PriceSignalAverageUnitPrice = 1_086_826,
+            PrimaryUsableAverageUnitPrice = 1_086_826
+        };
+
+        Assert.Equal("No listings", MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
+        Assert.Equal(string.Empty, MarketAnalysisGridViewService.FormatWorldAverageUnitPrice(world));
+        Assert.Equal("No listings", MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world));
+        Assert.Equal("is-unavailable", MarketAnalysisGridViewService.GetWorldUnitPriceScoreClass(world));
     }
 
     [Fact]

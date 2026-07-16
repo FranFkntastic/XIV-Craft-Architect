@@ -193,6 +193,10 @@ public sealed class MarketCentralPriceRegion
     public int TotalQuantity { get; init; }
     public int DistinctRetainerCount { get; init; }
     public int DistinctWorldCount { get; init; }
+    public decimal SupportScore { get; init; }
+    public decimal ListingShare { get; init; }
+    public decimal SourceShare { get; init; }
+    public decimal WorldShare { get; init; }
     public MarketDataQualityBucket DataQualityBucket { get; init; } = MarketDataQualityBucket.Missing;
     public MarketPriceRegionCredibility Credibility { get; init; }
 }
@@ -255,6 +259,14 @@ public sealed class WorldMarketAnalysis
     public int ScopeInsaneQuantity { get; init; }
     public int TotalSaneQuantity { get; init; }
     public int TotalListingQuantity { get; init; }
+    public int ActionableQuantity { get; init; }
+    public decimal ActionableAverageUnitPrice { get; init; }
+    public long ActionableCostToCoverTotalGil { get; init; }
+    public decimal ActionableCostToCoverUnitPrice { get; init; }
+    public long ActionableCostToCoverMaxUnitPrice { get; init; }
+    public decimal WorldAverageUnitPrice { get; init; }
+    public decimal ReferenceSupportScore { get; init; }
+    public MarketPriceRegionCredibility ReferencePriceCredibility { get; init; }
     public long CostToCoverTotalGil { get; init; }
     public decimal CostToCoverUnitPrice { get; init; }
     public long CostToCoverMaxUnitPrice { get; init; }

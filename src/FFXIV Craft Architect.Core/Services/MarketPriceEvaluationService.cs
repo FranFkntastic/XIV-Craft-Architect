@@ -6,17 +6,9 @@ namespace FFXIV_Craft_Architect.Core.Services;
 public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
 {
     private const decimal BandTolerance = 0.10m;
-    private const decimal OutlierMultiplier = 2.5m;
-    private const decimal ScopeSaneMultiplier = 2.0m;
-    private const decimal ScopeCompetitiveMultiplier = 1.5m;
-    private const decimal LowOutlierBreakPercent = 400m;
-    private const int FullStackQuantity = 99;
-    private const int SingleSourceCredibleLowRegionQuantity = 500;
-    private const int MinimumCredibleLowRegionQuantity = 80;
-    private const int MinimumSubstantialLowListingQuantity = 40;
-    private const int ElementalCommodityCredibleLowRegionQuantity = 1_000;
-    private const int ElementalCommodityMinimumCredibleLowRegionQuantity = 500;
-    private const int ElementalCommodityMinimumSubstantialLowListingQuantity = 100;
+    private const double TukeyFenceMultiplier = 1.5d;
+    private const double MadScale = 1.4826d;
+    private const double MadFenceSigma = 3d;
 
     public MarketPriceEvaluationContext Evaluate(
         int itemId,
@@ -49,18 +41,9 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
                 lowOutlierMaxUnitPrice: 0);
         }
 
-        var lowOutlierMaxUnitPrice = CalculateLowOutlierMaxUnitPrice(itemId, listings);
-        var baselineListings = lowOutlierMaxUnitPrice.HasValue
-            ? listings.Where(listing => listing.PricePerUnit > lowOutlierMaxUnitPrice.Value).ToList()
-            : listings;
-        if (baselineListings.Count == 0)
-        {
-            baselineListings = listings;
-        }
-
-        baselineListings = TrimHighOutlierTail(itemId, baselineListings);
-
-        var median = CalculateWeightedMedian(baselineListings);
+        var distribution = BuildReferenceDistribution(listings);
+        var baselineListings = distribution.CentralListings;
+        var median = distribution.MedianUnitPrice;
         if (median <= 0)
         {
             return CreateContext(
@@ -76,20 +59,26 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
                 median: 0,
                 competitiveThreshold: 0,
                 saneThreshold: 0,
-                lowOutlierMaxUnitPrice: lowOutlierMaxUnitPrice ?? 0);
+                lowOutlierMaxUnitPrice: 0,
+                support: MarketRegionSupport.Empty);
         }
 
-        var broadThreshold = median * OutlierMultiplier;
-        var averageListings = baselineListings
-            .Where(listing => listing.PricePerUnit <= broadThreshold)
-            .ToList();
-        var average = CalculateWeightedAveragePrice(averageListings);
+        var averageListings = baselineListings;
+        var average = CalculateSupportWeightedAveragePrice(distribution.CentralWeightedListings);
         var baseline = average > 0 ? Math.Max(average, median) : median;
-        var competitiveThreshold = baseline * ScopeCompetitiveMultiplier;
-        var competitiveAverage = CalculateWeightedAveragePrice(averageListings
-            .Where(listing => listing.PricePerUnit <= competitiveThreshold)
-            .ToList());
-        var qualityPolicy = DetermineQualityPolicy(averageListings);
+        var competitiveThreshold = Math.Max(baseline, distribution.UpperQuartileUnitPrice);
+        var saneThreshold = Math.Max(competitiveThreshold, distribution.UpperFenceUnitPrice);
+        var competitiveWeightedListings = distribution.CentralWeightedListings
+            .Where(entry => entry.Listing.PricePerUnit <= competitiveThreshold)
+            .ToList();
+        var competitiveAverage = CalculateSupportWeightedAveragePrice(competitiveWeightedListings);
+        var qualityPolicy = DetermineQualityPolicy(listings);
+        var lowOutlierMaxUnitPrice = listings
+            .Where(listing => listing.PricePerUnit < distribution.LowerFenceUnitPrice)
+            .Select(listing => listing.PricePerUnit)
+            .DefaultIfEmpty(0)
+            .Max();
+        var support = CalculateSupport(listings, averageListings);
 
         return CreateContext(
             itemId,
@@ -103,8 +92,9 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
             competitiveAverage,
             median,
             competitiveThreshold,
-            baseline * ScopeSaneMultiplier,
-            lowOutlierMaxUnitPrice ?? 0);
+            saneThreshold,
+            lowOutlierMaxUnitPrice,
+            support);
     }
 
     private static MarketPriceEvaluationContext CreateContext(
@@ -120,16 +110,18 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
         decimal median,
         decimal competitiveThreshold,
         decimal saneThreshold,
-        long lowOutlierMaxUnitPrice)
+        long lowOutlierMaxUnitPrice,
+        MarketRegionSupport? support = null)
     {
-        var credibility = CalculateCredibility(centralListings);
+        support ??= CalculateSupport(allListings, centralListings);
+        var credibility = support.Credibility;
         var priceEvaluation = new MarketPriceEvaluation
         {
             ItemId = itemId,
             Scope = scope,
             QualityPolicy = qualityPolicy,
             EvaluatedAtUtc = evaluatedAtUtc,
-            CentralRegion = CreateCentralRegion(centralListings, median, average, credibility),
+            CentralRegion = CreateCentralRegion(centralListings, median, average, support),
             Thresholds = new MarketPriceThresholds
             {
                 DealCeilingUnitPrice = baseline,
@@ -140,6 +132,7 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
             ListingClassCounts = CreateListingClassCounts(
                 allListings,
                 centralListings,
+                baseline,
                 competitiveThreshold,
                 saneThreshold,
                 lowOutlierMaxUnitPrice),
@@ -170,7 +163,7 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
         IReadOnlyList<ScopeListing> centralListings,
         decimal median,
         decimal average,
-        MarketPriceRegionCredibility credibility)
+        MarketRegionSupport support)
     {
         return new MarketCentralPriceRegion
         {
@@ -190,10 +183,14 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
                 .Where(world => !string.IsNullOrWhiteSpace(world))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Count(),
+            SupportScore = support.Score,
+            ListingShare = support.ListingShare,
+            SourceShare = support.SourceShare,
+            WorldShare = support.WorldShare,
             DataQualityBucket = centralListings.Count > 0
                 ? centralListings.Max(listing => listing.DataQualityBucket)
                 : MarketDataQualityBucket.Missing,
-            Credibility = credibility
+            Credibility = support.Credibility
         };
     }
 
@@ -218,13 +215,14 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
     private static MarketListingClassCounts CreateListingClassCounts(
         IReadOnlyList<ScopeListing> allListings,
         IReadOnlyList<ScopeListing> centralListings,
+        decimal dealThreshold,
         decimal competitiveThreshold,
         decimal saneThreshold,
         long lowOutlierMaxUnitPrice)
     {
         var thresholds = new MarketPriceThresholds
         {
-            DealCeilingUnitPrice = competitiveThreshold > 0 ? competitiveThreshold / ScopeCompetitiveMultiplier : 0,
+            DealCeilingUnitPrice = dealThreshold,
             CompetitiveCeilingUnitPrice = competitiveThreshold,
             SaneCeilingUnitPrice = saneThreshold,
             InsaneFloorUnitPrice = saneThreshold
@@ -282,7 +280,7 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
         {
             DebugDetailAvailable = false
         };
-        if (centralListings.Any(listing => listing.IsHq) && centralListings.Any(listing => !listing.IsHq))
+        if (allListings.Any(listing => listing.IsHq) && allListings.Any(listing => !listing.IsHq))
         {
             diagnostics.CompactReasonCodes.Add(MarketPriceEvaluationReasonCode.QualityChannelFallbackToCombined);
         }
@@ -312,109 +310,253 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
         return diagnostics;
     }
 
-    private static MarketPriceRegionCredibility CalculateCredibility(IReadOnlyList<ScopeListing> listings)
+    private static ReferenceDistribution BuildReferenceDistribution(IReadOnlyList<ScopeListing> listings)
     {
-        if (listings.Count == 0)
+        var weightedListings = CreateSourceWeightedListings(listings);
+        var dominantListings = SelectDominantPriceRegion(weightedListings);
+        var lowerQuartileLog = WeightedQuantileLog(dominantListings, 0.25m);
+        var medianLog = WeightedQuantileLog(dominantListings, 0.50m);
+        var upperQuartileLog = WeightedQuantileLog(dominantListings, 0.75m);
+        var interquartileRange = Math.Max(0d, upperQuartileLog - lowerQuartileLog);
+
+        double lowerFenceLog;
+        double upperFenceLog;
+        if (interquartileRange > double.Epsilon)
         {
-            return MarketPriceRegionCredibility.Unknown;
+            lowerFenceLog = lowerQuartileLog - TukeyFenceMultiplier * interquartileRange;
+            upperFenceLog = upperQuartileLog + TukeyFenceMultiplier * interquartileRange;
+        }
+        else
+        {
+            var deviations = dominantListings
+                .Select(entry => new WeightedScalar(Math.Abs(Math.Log(entry.Listing.PricePerUnit) - medianLog), entry.Weight))
+                .ToList();
+            var medianAbsoluteDeviation = WeightedQuantile(deviations, 0.50m);
+            var fence = MadFenceSigma * MadScale * medianAbsoluteDeviation;
+            lowerFenceLog = medianLog - fence;
+            upperFenceLog = medianLog + fence;
         }
 
-        var totalQuantity = listings.Sum(listing => listing.Quantity);
-        var distinctWorlds = listings
-            .Select(listing => listing.WorldName)
-            .Where(world => !string.IsNullOrWhiteSpace(world))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
-
-        if (listings.Count >= 3 && distinctWorlds >= 2)
+        var centralWeightedListings = dominantListings
+            .Where(entry =>
+            {
+                var logPrice = Math.Log(entry.Listing.PricePerUnit);
+                return logPrice >= lowerFenceLog && logPrice <= upperFenceLog;
+            })
+            .ToList();
+        if (centralWeightedListings.Count == 0)
         {
-            return MarketPriceRegionCredibility.Strong;
+            centralWeightedListings =
+            [
+                dominantListings
+                    .OrderBy(entry => Math.Abs(Math.Log(entry.Listing.PricePerUnit) - medianLog))
+                    .First()
+            ];
         }
 
-        return listings.Count >= 2 || totalQuantity >= FullStackQuantity
-            ? MarketPriceRegionCredibility.Credible
-            : MarketPriceRegionCredibility.Thin;
+        return new ReferenceDistribution(
+            centralWeightedListings.Select(entry => entry.Listing).ToList(),
+            centralWeightedListings,
+            ToUnitPrice(medianLog),
+            ToUnitPrice(upperQuartileLog),
+            ToUnitPrice(lowerFenceLog),
+            ToUnitPrice(upperFenceLog));
     }
 
-    private static decimal CalculateWeightedMedian(IReadOnlyList<ScopeListing> listings)
+    private static List<WeightedScopeListing> CreateSourceWeightedListings(IReadOnlyList<ScopeListing> listings)
     {
-        var totalQuantity = listings.Sum(listing => (long)listing.Quantity);
-        if (totalQuantity <= 0)
-        {
-            return 0;
-        }
-
-        var midpoint = (totalQuantity + 1) / 2;
-        long cumulativeQuantity = 0;
-        foreach (var listing in listings.OrderBy(listing => listing.PricePerUnit))
-        {
-            cumulativeQuantity += listing.Quantity;
-            if (cumulativeQuantity >= midpoint)
+        return listings
+            .Select((listing, index) => new IndexedScopeListing(listing, index, CreateSourceKey(listing, index)))
+            .GroupBy(entry => entry.SourceKey, StringComparer.OrdinalIgnoreCase)
+            .SelectMany(group =>
             {
-                return listing.PricePerUnit;
-            }
+                var entries = group.ToList();
+                var sourceFreshnessWeight = entries.Average(entry => GetFreshnessWeight(entry.Listing.DataQualityBucket));
+                var listingWeight = sourceFreshnessWeight / entries.Count;
+                return entries.Select(entry => new WeightedScopeListing(entry.Listing, listingWeight));
+            })
+            .OrderBy(entry => entry.Listing.PricePerUnit)
+            .ToList();
+    }
+
+    private static List<WeightedScopeListing> SelectDominantPriceRegion(IReadOnlyList<WeightedScopeListing> listings)
+    {
+        if (listings.Count <= 1)
+        {
+            return listings.ToList();
         }
 
-        return listings[^1].PricePerUnit;
+        var ordered = listings.OrderBy(entry => entry.Listing.PricePerUnit).ToList();
+        var gaps = new List<PriceGap>();
+        for (var index = 0; index < ordered.Count - 1; index++)
+        {
+            var current = ordered[index].Listing.PricePerUnit;
+            var next = ordered[index + 1].Listing.PricePerUnit;
+            if (next <= current)
+            {
+                continue;
+            }
+
+            gaps.Add(new PriceGap(index, Math.Log((double)next / current)));
+        }
+
+        if (gaps.Count == 0)
+        {
+            return ordered;
+        }
+
+        var largestGap = gaps.OrderByDescending(gap => gap.LogDistance).First();
+        var shouldSplit = gaps.Count == 1 || IsDominantGap(largestGap, gaps);
+        if (!shouldSplit)
+        {
+            return ordered;
+        }
+
+        var left = ordered.Take(largestGap.Index + 1).ToList();
+        var right = ordered.Skip(largestGap.Index + 1).ToList();
+        var leftSupport = left.Sum(entry => entry.Weight);
+        var rightSupport = right.Sum(entry => entry.Weight);
+
+        // Equal support is genuinely ambiguous. Prefer the lower executable price
+        // as the reference while preserving every region in the price-band view.
+        return leftSupport >= rightSupport ? left : right;
+    }
+
+    private static bool IsDominantGap(PriceGap candidate, IReadOnlyList<PriceGap> gaps)
+    {
+        var scalars = gaps
+            .Select(gap => new WeightedScalar(gap.LogDistance, 1m))
+            .ToList();
+        var median = WeightedQuantile(scalars, 0.50m);
+        var deviations = scalars
+            .Select(value => new WeightedScalar(Math.Abs(value.Value - median), value.Weight))
+            .ToList();
+        var mad = WeightedQuantile(deviations, 0.50m);
+        var robustUpperFence = median + MadFenceSigma * MadScale * mad;
+        return candidate.LogDistance > robustUpperFence;
+    }
+
+    private static decimal CalculateSupportWeightedAveragePrice(IReadOnlyList<WeightedScopeListing> listings)
+    {
+        var totalWeight = listings.Sum(entry => entry.Weight);
+        return totalWeight <= 0
+            ? 0
+            : listings.Sum(entry => entry.Listing.PricePerUnit * entry.Weight) / totalWeight;
     }
 
     private static decimal CalculateWeightedAveragePrice(IReadOnlyList<ScopeListing> listings)
     {
         var totalQuantity = listings.Sum(listing => (long)listing.Quantity);
-        if (totalQuantity <= 0)
+        return totalQuantity <= 0
+            ? 0
+            : listings.Sum(listing => (decimal)listing.PricePerUnit * listing.Quantity) / totalQuantity;
+    }
+
+    private static MarketRegionSupport CalculateSupport(
+        IReadOnlyList<ScopeListing> allListings,
+        IReadOnlyList<ScopeListing> centralListings)
+    {
+        if (centralListings.Count == 0 || allListings.Count == 0)
+        {
+            return MarketRegionSupport.Empty;
+        }
+
+        var allSourceCount = CountSources(allListings);
+        var centralSourceCount = CountSources(centralListings);
+        var allWorldCount = CountWorlds(allListings);
+        var centralWorldCount = CountWorlds(centralListings);
+        var listingShare = centralListings.Count / (decimal)allListings.Count;
+        var sourceShare = allSourceCount > 0 ? centralSourceCount / (decimal)allSourceCount : 0;
+        var worldShare = allWorldCount > 0 ? centralWorldCount / (decimal)allWorldCount : 0;
+        var sourceStrength = SmoothIndependentStrength(centralSourceCount);
+        var worldStrength = SmoothIndependentStrength(centralWorldCount);
+        var independentStrength = sourceStrength * 0.60m + worldStrength * 0.40m;
+        var relativeSupport = listingShare * 0.30m + sourceShare * 0.45m + worldShare * 0.25m;
+        var freshness = centralListings.Average(listing => GetFreshnessWeight(listing.DataQualityBucket));
+        var score = Math.Clamp(independentStrength * 0.65m + relativeSupport * 0.25m + freshness * 0.10m, 0, 1);
+        var credibility = score switch
+        {
+            >= 0.70m => MarketPriceRegionCredibility.Strong,
+            >= 0.40m => MarketPriceRegionCredibility.Credible,
+            _ => MarketPriceRegionCredibility.Thin
+        };
+
+        return new MarketRegionSupport(score, listingShare, sourceShare, worldShare, credibility);
+    }
+
+    private static decimal SmoothIndependentStrength(int independentCount)
+    {
+        return independentCount <= 0
+            ? 0
+            : 1m - (decimal)(1d / Math.Sqrt(independentCount));
+    }
+
+    private static int CountSources(IEnumerable<ScopeListing> listings)
+    {
+        return listings
+            .Select((listing, index) => CreateSourceKey(listing, index))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+    }
+
+    private static int CountWorlds(IEnumerable<ScopeListing> listings)
+    {
+        return listings
+            .Select(listing => listing.WorldName)
+            .Where(world => !string.IsNullOrWhiteSpace(world))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+    }
+
+    private static string CreateSourceKey(ScopeListing listing, int index)
+    {
+        var retainer = string.IsNullOrWhiteSpace(listing.RetainerName)
+            ? $"missing-{index}"
+            : listing.RetainerName.Trim();
+        return $"{listing.WorldName.Trim()}\u001f{retainer}\u001f{listing.IsHq}";
+    }
+
+    private static decimal GetFreshnessWeight(MarketDataQualityBucket bucket)
+    {
+        return 1m / (1m + (int)bucket);
+    }
+
+    private static double WeightedQuantileLog(IReadOnlyList<WeightedScopeListing> listings, decimal quantile)
+    {
+        return WeightedQuantile(
+            listings.Select(entry => new WeightedScalar(Math.Log(entry.Listing.PricePerUnit), entry.Weight)).ToList(),
+            quantile);
+    }
+
+    private static double WeightedQuantile(IReadOnlyList<WeightedScalar> values, decimal quantile)
+    {
+        if (values.Count == 0)
         {
             return 0;
         }
 
-        var totalCost = listings.Sum(listing => (decimal)listing.PricePerUnit * listing.Quantity);
-        return totalCost / totalQuantity;
+        var ordered = values.OrderBy(value => value.Value).ToList();
+        var totalWeight = ordered.Sum(value => value.Weight);
+        var target = totalWeight * Math.Clamp(quantile, 0, 1);
+        decimal cumulative = 0;
+        foreach (var value in ordered)
+        {
+            cumulative += value.Weight;
+            if (cumulative >= target)
+            {
+                return value.Value;
+            }
+        }
+
+        return ordered[^1].Value;
     }
 
-    private static long? CalculateLowOutlierMaxUnitPrice(int itemId, IReadOnlyList<ScopeListing> listings)
+    private static decimal ToUnitPrice(double logPrice)
     {
-        var bands = BuildCachedPriceBands(listings);
-        var lowOutlierBand = bands
-            .OrderBy(band => band.MinUnitPrice)
-            .FirstOrDefault(band => band.NextBreakPercent >= LowOutlierBreakPercent);
-
-        if (lowOutlierBand == null)
-        {
-            return null;
-        }
-
-        var lowRegionBands = bands
-            .Where(band => band.MinUnitPrice <= lowOutlierBand.MaxUnitPrice)
-            .ToList();
-        if (IsCrediblePriceRegion(itemId, lowRegionBands))
-        {
-            return null;
-        }
-
-        return lowOutlierBand.MaxUnitPrice;
-    }
-
-    private static List<ScopeListing> TrimHighOutlierTail(int itemId, IReadOnlyList<ScopeListing> listings)
-    {
-        var bands = BuildCachedPriceBands(listings);
-        var lastBaselineBand = bands.FirstOrDefault(band => band.NextBreakPercent >= LowOutlierBreakPercent);
-        if (lastBaselineBand == null)
-        {
-            return listings.ToList();
-        }
-
-        var baselineBands = bands
-            .Where(band => band.MinUnitPrice <= lastBaselineBand.MaxUnitPrice)
-            .ToList();
-        if (!IsCrediblePriceRegion(itemId, baselineBands))
-        {
-            return listings.ToList();
-        }
-
-        var trimmed = listings
-            .Where(listing => listing.PricePerUnit <= lastBaselineBand.MaxUnitPrice)
-            .ToList();
-
-        return trimmed.Count > 0 ? trimmed : listings.ToList();
+        var value = Math.Exp(logPrice);
+        return !double.IsFinite(value) || value >= (double)decimal.MaxValue
+            ? decimal.MaxValue
+            : Math.Max(0, (decimal)value);
     }
 
     private static List<CachedPriceBand> BuildCachedPriceBands(IReadOnlyList<ScopeListing> listings)
@@ -467,36 +609,6 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
             })
             .ToList();
     }
-
-    private static bool IsCrediblePriceRegion(int itemId, IReadOnlyList<CachedPriceBand> bands)
-    {
-        var quantity = bands.Sum(band => band.Quantity);
-        var listingCount = bands.Sum(band => band.ListingCount);
-        var isElementalCommodity = IsElementalCommodity(itemId);
-
-        // TODO: Replace this eyeballed shard/crystal/cluster rule with item-family metadata when available.
-        var singleSourceCredibleQuantity = isElementalCommodity
-            ? ElementalCommodityCredibleLowRegionQuantity
-            : SingleSourceCredibleLowRegionQuantity;
-        var singleListingCredibleQuantity = isElementalCommodity
-            ? ElementalCommodityCredibleLowRegionQuantity
-            : FullStackQuantity;
-        var minimumCredibleQuantity = isElementalCommodity
-            ? ElementalCommodityMinimumCredibleLowRegionQuantity
-            : MinimumCredibleLowRegionQuantity;
-        var minimumSubstantialListingQuantity = isElementalCommodity
-            ? ElementalCommodityMinimumSubstantialLowListingQuantity
-            : MinimumSubstantialLowListingQuantity;
-
-        return quantity >= singleSourceCredibleQuantity ||
-            (listingCount == 1 && quantity >= singleListingCredibleQuantity) ||
-            (quantity >= minimumCredibleQuantity &&
-                bands.Max(band => band.MaxListingQuantity) >= minimumSubstantialListingQuantity &&
-                (bands.Sum(band => band.DistinctRetainerCount) >= 2 ||
-                    bands.Sum(band => band.DistinctWorldCount) >= 2));
-    }
-
-    private static bool IsElementalCommodity(int itemId) => itemId is >= 2 and <= 19;
 
     private static decimal CalculateBreakPercent(decimal currentAverage, long nextMinimum)
     {
@@ -560,6 +672,37 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
         bool IsHq,
         string WorldName,
         MarketDataQualityBucket DataQualityBucket);
+
+    private sealed record IndexedScopeListing(ScopeListing Listing, int Index, string SourceKey);
+
+    private sealed record WeightedScopeListing(ScopeListing Listing, decimal Weight);
+
+    private readonly record struct WeightedScalar(double Value, decimal Weight);
+
+    private readonly record struct PriceGap(int Index, double LogDistance);
+
+    private sealed record ReferenceDistribution(
+        IReadOnlyList<ScopeListing> CentralListings,
+        IReadOnlyList<WeightedScopeListing> CentralWeightedListings,
+        decimal MedianUnitPrice,
+        decimal UpperQuartileUnitPrice,
+        decimal LowerFenceUnitPrice,
+        decimal UpperFenceUnitPrice);
+
+    private sealed record MarketRegionSupport(
+        decimal Score,
+        decimal ListingShare,
+        decimal SourceShare,
+        decimal WorldShare,
+        MarketPriceRegionCredibility Credibility)
+    {
+        public static MarketRegionSupport Empty { get; } = new(
+            0,
+            0,
+            0,
+            0,
+            MarketPriceRegionCredibility.Unknown);
+    }
 
     private sealed record CachedPriceBand(
         long MinUnitPrice,

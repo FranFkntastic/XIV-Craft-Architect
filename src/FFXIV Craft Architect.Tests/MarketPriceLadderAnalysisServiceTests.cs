@@ -20,11 +20,11 @@ public class MarketPriceLadderAnalysisServiceTests
         var analyses = await service.AnalyzeAsync(request);
 
         var world = Assert.Single(Assert.Single(analyses).Worlds);
-        Assert.Equal(99, world.PrimaryUsableQuantity);
-        Assert.Equal(MarketCoverageBucket.PartialDeep, world.CoverageBucket);
+        Assert.Equal(100, world.ActionableQuantity);
+        Assert.Equal(MarketCoverageBucket.Full, world.CoverageBucket);
         Assert.DoesNotContain(world.Listings, listing => listing.RetainerName == "Bait" && listing.IsInPrimaryUsableBand);
-        Assert.Equal(MarketScoreBucket.Competitive, world.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).ScoreBucket);
-        Assert.Equal("99 procurement-qualified at ~100g", world.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).Summary);
+        Assert.Equal(MarketScoreBucket.Optimal, world.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).ScoreBucket);
+        Assert.Equal("100 listed at ~99g actionable average", world.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).Summary);
     }
 
     [Fact]
@@ -77,13 +77,13 @@ public class MarketPriceLadderAnalysisServiceTests
 
         Assert.Equal(5_544, world.PriceSignalQuantity);
         Assert.Equal(754m, world.CostToCoverUnitPrice);
-        Assert.Equal(754m, analysis.CostToCoverUnitPrice);
+        Assert.Equal(world.ActionableCostToCoverUnitPrice, analysis.CostToCoverUnitPrice);
+        Assert.True(analysis.CostToCoverUnitPrice > world.CostToCoverUnitPrice);
         Assert.Equal(world.PrimaryUsableAverageUnitPrice, world.PriceSignalAverageUnitPrice);
-        Assert.True(world.PriceSignalAverageUnitPrice < analysis.AnalysisCompetitiveAverageUnitPrice);
         Assert.DoesNotContain(world.PriceBands, band => band.MinUnitPrice >= 900 && band.IsPriceSignalBand);
     }
     [Fact]
-    public async Task AnalyzeAsync_ManyTinyBaitListings_UsesWeightedScopeBaseline()
+    public async Task AnalyzeAsync_ManyIndependentLowListingsRemainActionableAlongsideHigherStack()
     {
         var service = CreateService();
         var baitListings = Enumerable.Range(1, 25)
@@ -96,10 +96,10 @@ public class MarketPriceLadderAnalysisServiceTests
         var analysis = Assert.Single(await service.AnalyzeAsync(request));
 
         var world = Assert.Single(analysis.Worlds);
-        Assert.Equal(124, world.ScopeSaneQuantity);
-        Assert.Equal(99, world.PrimaryUsableQuantity);
-        Assert.Equal(100, analysis.AnalysisScopeMedianUnitPrice);
-        Assert.True(world.AnalysisScopeBaselineUnitPrice > 80);
+        Assert.Equal(124, world.ActionableQuantity);
+        Assert.Equal(10, analysis.AnalysisScopeMedianUnitPrice);
+        Assert.Equal(MarketCoverageBucket.Full, world.CoverageBucket);
+        Assert.True(service.ProjectToShoppingPlan(analysis, MarketAcquisitionLens.BulkValue).HasSufficientStock);
     }
 
     [Fact]
@@ -185,10 +185,8 @@ public class MarketPriceLadderAnalysisServiceTests
         var plan = service.ProjectToShoppingPlan(analysis, MarketAcquisitionLens.BulkValue);
 
         Assert.True(analysis.AnalysisScopeBaselineUnitPrice > 100);
-        Assert.Equal(2, analysis.PriceEvaluation?.ListingClassCounts.LowOutlierCount);
-        Assert.Equal(176, analysis.Worlds.Single(world => world.WorldName == "Coeurl").Listings
-            .Where(listing => listing.PriceSanity == MarketListingPriceSanity.LowOutlier)
-            .Sum(listing => listing.Quantity));
+        Assert.Equal(0, analysis.PriceEvaluation?.ListingClassCounts.LowOutlierCount);
+        Assert.Equal(176, analysis.Worlds.Single(world => world.WorldName == "Coeurl").ActionableQuantity);
         Assert.True(analysis.Worlds.Single(world => world.WorldName == "Jenova").ScopeSaneQuantity >= 2_997);
         Assert.True(plan.WorldOptions.Sum(world => world.TotalQuantityPurchased) > 176);
         Assert.NotNull(plan.RecommendedWorld);
@@ -243,10 +241,10 @@ public class MarketPriceLadderAnalysisServiceTests
         Assert.Equal(smallNeed.AnalysisScopeAverageUnitPrice, largeNeed.AnalysisScopeAverageUnitPrice);
         Assert.Equal(smallNeed.AnalysisScopeBaselineUnitPrice, largeNeed.AnalysisScopeBaselineUnitPrice);
         Assert.Equal(smallNeed.CompetitiveThresholdUnitPrice, largeNeed.CompetitiveThresholdUnitPrice);
-        Assert.Equal(100, smallNeed.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(MarketPriceRegionCredibility.Thin, smallNeed.PriceEvaluation?.CentralRegion.Credibility);
     }
     [Fact]
-    public async Task AnalyzeAsync_ElementalCommoditySingleSmallStackLowRegion_DoesNotDefineRegionalAverage()
+    public async Task AnalyzeAsync_ItemIdDoesNotChangePriceRegionCredibilityRules()
     {
         var service = CreateService();
         var request = CreateRequest(
@@ -258,10 +256,18 @@ public class MarketPriceLadderAnalysisServiceTests
                 Listing(quantity: 999, price: 100, retainer: "Higher Crystal Seller")
             ]);
 
-        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+        var elementalAnalysis = Assert.Single(await service.AnalyzeAsync(request));
+        var ordinaryAnalysis = Assert.Single(await service.AnalyzeAsync(CreateRequest(
+            quantityNeeded: 999,
+            itemId: 123,
+            listings:
+            [
+                Listing(quantity: 99, price: 10, retainer: "Small Crystal Stack"),
+                Listing(quantity: 999, price: 100, retainer: "Higher Crystal Seller")
+            ])));
 
-        Assert.Equal(100, analysis.AnalysisScopeBaselineUnitPrice);
-        Assert.Equal(100, analysis.PriceEvaluation?.CentralRegion.MinUnitPrice);
+        Assert.Equal(ordinaryAnalysis.AnalysisScopeBaselineUnitPrice, elementalAnalysis.AnalysisScopeBaselineUnitPrice);
+        Assert.Equal(ordinaryAnalysis.PriceEvaluation?.CentralRegion.Credibility, elementalAnalysis.PriceEvaluation?.CentralRegion.Credibility);
     }
 
     [Fact]
@@ -509,7 +515,7 @@ public class MarketPriceLadderAnalysisServiceTests
     }
 
     [Fact]
-    public async Task ProjectToShoppingPlan_ScopePolicy_ExcludesBaitAndInsaneButKeepsCredibleLocalOutlier()
+    public async Task ProjectToShoppingPlan_PriceContextDoesNotEraseActionableListings()
     {
         var service = CreateService();
         var analysis = Assert.Single(await service.AnalyzeAsync(CreateRequest(
@@ -526,18 +532,15 @@ public class MarketPriceLadderAnalysisServiceTests
                 World("Jenova", [Listing(100, 110, "Deep Seller")])
             ])));
         var excaliburAnalysis = analysis.Worlds.Single(world => world.WorldName == "Excalibur");
-        Assert.Contains(excaliburAnalysis.Listings, listing => listing.PriceSanity == MarketListingPriceSanity.LowOutlier);
-        Assert.Contains(excaliburAnalysis.Listings, listing =>
-            listing.RetainerName == "Sane Seller" &&
-            listing.PriceSanity == MarketListingPriceSanity.Outlier &&
-            listing.Competitiveness == MarketListingCompetitiveness.Deal);
-        Assert.Contains(excaliburAnalysis.Listings, listing => listing.PriceSanity == MarketListingPriceSanity.Insane);
+        Assert.Equal(152, excaliburAnalysis.ActionableQuantity);
 
         var plan = service.ProjectToShoppingPlan(analysis, MarketAcquisitionLens.BulkValue);
 
-        var listing = Assert.Single(plan.WorldOptions.Single(world => world.WorldName == "Excalibur").Listings);
-        Assert.Equal("Sane Seller", listing.RetainerName);
-        Assert.Equal(100, listing.Quantity);
+        var purchase = plan.WorldOptions.Single(world => world.WorldName == "Excalibur");
+        Assert.True(purchase.HasSufficientStock);
+        Assert.Equal(150, purchase.TotalQuantityPurchased);
+        Assert.Contains(purchase.Listings, listing => listing.RetainerName == "Bait Seller A");
+        Assert.Contains(purchase.Listings, listing => listing.RetainerName == "Sane Seller");
     }
 
 
@@ -562,6 +565,69 @@ public class MarketPriceLadderAnalysisServiceTests
         Assert.False(world.HasSufficientStock);
         Assert.Equal(60, world.ShortfallQuantity);
         Assert.Null(plan.RecommendedWorld);
+    }
+
+    [Fact]
+    [Trait(TestTraits.Surface, TestTraits.DeployWeb)]
+    public async Task AnalyzeAsync_DistributedSingleItemMarketBeatsOneExtremeAskAndRemainsActionable()
+    {
+        var service = CreateService();
+        var worlds = Enumerable.Range(0, 25)
+            .Select(index => World($"World {index + 1}", []))
+            .ToList();
+        var observedBands = new (int Count, long Min, long Max)[]
+        {
+            (79, 649_000, 650_000),
+            (21, 777_000, 850_000),
+            (5, 890_000, 900_000),
+            (41, 988_000, 1_000_000),
+            (22, 1_099_997, 1_200_000),
+            (40, 1_250_000, 1_399_999),
+            (10, 1_600_000, 1_750_000),
+            (4, 1_899_998, 2_000_000),
+            (13, 2_339_981, 2_499_999),
+            (15, 2_699_999, 3_000_001),
+            (1, 3_500_000, 3_500_000)
+        };
+        var listingIndex = 0;
+        foreach (var band in observedBands)
+        {
+            for (var offset = 0; offset < band.Count; offset++)
+            {
+                var price = band.Count == 1
+                    ? band.Min
+                    : band.Min + (band.Max - band.Min) * offset / (band.Count - 1);
+                worlds[listingIndex % worlds.Count].Listings.Add(Listing(
+                    quantity: 1,
+                    price: price,
+                    retainer: $"Seller {listingIndex % 58 + 1}"));
+                listingIndex++;
+            }
+        }
+
+        worlds[0].Listings.Add(Listing(1, 165_000_000, "Extreme Seller"));
+        var analysis = Assert.Single(await service.AnalyzeAsync(CreateRequest(
+            quantityNeeded: 10,
+            itemId: 21_796,
+            worlds: worlds)));
+
+        Assert.InRange(analysis.AnalysisScopeMedianUnitPrice, 900_000m, 1_100_000m);
+        Assert.InRange(analysis.AnalysisScopeAverageUnitPrice, 700_000m, 2_000_000m);
+        Assert.Equal(MarketPriceRegionCredibility.Strong, analysis.PriceEvaluation?.CentralRegion.Credibility);
+        Assert.True(analysis.PriceEvaluation?.CentralRegion.SupportScore > 0.75m);
+        Assert.Equal(252, analysis.Worlds.Sum(world => world.ActionableQuantity));
+        Assert.Contains(analysis.Worlds.SelectMany(world => world.Listings), listing =>
+            listing.PricePerUnit == 165_000_000 && listing.PriceSanity == MarketListingPriceSanity.Insane);
+
+        var plan = service.ProjectToShoppingPlan(analysis, MarketAcquisitionLens.BulkValue);
+        Assert.True(plan.HasSufficientStock);
+        Assert.NotNull(plan.RecommendedWorld);
+        Assert.NotNull(plan.CoverageSet);
+        Assert.NotEmpty(plan.CoverageSet!.AllCandidates);
+
+        var estimate = MarketPurchaseCostProjectionService.Estimate(plan, 10, hqOnly: false);
+        Assert.True(estimate.IsDefaultEligible);
+        Assert.InRange(estimate.Cost, 6_000_000m, 20_000_000m);
     }
 
 

@@ -19,9 +19,10 @@ public static class MarketProcurementEvidencePolicy
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(listing);
 
-        return HasScopePriceContext(world)
-            ? listing.PriceSanity is MarketListingPriceSanity.Sane or MarketListingPriceSanity.Outlier
-            : listing.PriceSanity is MarketListingPriceSanity.Sane or MarketListingPriceSanity.LowOutlier;
+        // Price interpretation is descriptive. A listing CA actually loaded remains
+        // actionable even when its relationship to the wider market is uncertain.
+        // Procurement may rank fringe evidence poorly, but it must not rewrite stock.
+        return listing.Quantity > 0 && listing.PricePerUnit > 0;
     }
 
     public static bool HasScopePriceContext(WorldMarketAnalysis world)

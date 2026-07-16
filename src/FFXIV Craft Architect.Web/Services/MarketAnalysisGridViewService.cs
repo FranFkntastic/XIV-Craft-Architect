@@ -204,9 +204,18 @@ public static class MarketAnalysisGridViewService
         ArgumentNullException.ThrowIfNull(world);
 
         var unitPrice = GetProcurementEvidenceUnitPrice(world);
-        return unitPrice > 0
+        return HasProcurementEvidence(world) && unitPrice > 0
             ? $"~{unitPrice:N0}g / unit"
-            : "No usable listings";
+            : "No listings";
+    }
+
+    public static string FormatWorldAverageUnitPrice(WorldMarketAnalysis world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+
+        return world.WorldAverageUnitPrice > 0
+            ? $"world avg ~{world.WorldAverageUnitPrice:N0}g"
+            : string.Empty;
     }
 
     public static string FormatWorldStockDepth(WorldMarketAnalysis world)
@@ -216,7 +225,7 @@ public static class MarketAnalysisGridViewService
         var quantity = GetProcurementEvidenceQuantity(world);
         return quantity > 0
             ? $"{quantity:N0} {FormatPriceBandDepth(GetProcurementEvidenceDepth(world))}"
-            : "No procurement signal";
+            : "No listings";
     }
 
     public static string FormatWorldMarketDepthQuantity(WorldMarketAnalysis world)
@@ -226,7 +235,7 @@ public static class MarketAnalysisGridViewService
         var quantity = GetProcurementEvidenceQuantity(world);
         return quantity > 0
             ? $"{quantity:N0}"
-            : "No usable listings";
+            : "No listings";
     }
 
     public static string FormatWorldMarketDepthDescriptor(WorldMarketAnalysis world)
@@ -261,10 +270,17 @@ public static class MarketAnalysisGridViewService
             parts.Add($"best available average ~{analysis.AnalysisCompetitiveAverageUnitPrice:N0}g");
         }
 
+        if (analysis.PriceEvaluation?.CentralRegion.Credibility is
+            MarketPriceRegionCredibility.Thin or MarketPriceRegionCredibility.Unknown)
+        {
+            parts.Add("regional price reference uncertain");
+            return string.Join("; ", parts);
+        }
+
         if (analysis.PriceEvaluation is { } evaluation &&
             evaluation.Thresholds.InsaneFloorUnitPrice > 0)
         {
-            parts.Add($"market average ~{evaluation.CentralRegion.WeightedAverageUnitPrice:N0}g");
+            parts.Add($"reference average ~{evaluation.CentralRegion.WeightedAverageUnitPrice:N0}g ({FormatCredibility(evaluation.CentralRegion.Credibility)})");
             parts.Add($"competitive through ~{evaluation.Thresholds.CompetitiveCeilingUnitPrice:N0}g");
             parts.Add($"extreme outliers from ~{evaluation.Thresholds.InsaneFloorUnitPrice:N0}g");
             return string.Join("; ", parts);
@@ -405,6 +421,17 @@ public static class MarketAnalysisGridViewService
         };
     }
 
+    public static string FormatCredibility(MarketPriceRegionCredibility credibility)
+    {
+        return credibility switch
+        {
+            MarketPriceRegionCredibility.Strong => "strong support",
+            MarketPriceRegionCredibility.Credible => "moderate support",
+            MarketPriceRegionCredibility.Thin => "thin support",
+            _ => "uncertain support"
+        };
+    }
+
     public static string FormatCompetitiveStockDetail(WorldMarketAnalysis world)
     {
         ArgumentNullException.ThrowIfNull(world);
@@ -438,7 +465,7 @@ public static class MarketAnalysisGridViewService
         var procurementPrice = GetProcurementEvidenceUnitPrice(world);
         if (referencePrice <= 0 || procurementPrice <= 0)
         {
-            return "No usable listing price is available for comparison.";
+            return "No listing price is available for comparison.";
         }
 
         var percent = (procurementPrice - referencePrice) / referencePrice * 100m;
@@ -449,7 +476,7 @@ public static class MarketAnalysisGridViewService
                 ? "greater than"
                 : "equal to";
 
-        return $"{world.WorldName}'s best usable listing price is {rounded:N0}% {relationship} the regional {referenceLabel}: {procurementPrice:N0}g vs {referencePrice:N0}g.";
+        return $"{world.WorldName}'s actionable average is {rounded:N0}% {relationship} the regional {referenceLabel}: {procurementPrice:N0}g vs {referencePrice:N0}g.";
     }
 
     public static IReadOnlyList<MarketListingDivider> GetListingDividersBefore(
@@ -519,11 +546,11 @@ public static class MarketAnalysisGridViewService
 
         return GetListingPriceBandSignal(world, listing) switch
         {
-            ListingPriceBandSignal.LowOutlier => "Deal price band: cheap evidence is visible but does not drive procurement pricing by itself.",
-            ListingPriceBandSignal.Thin => "Limited-supply deal: this low price is visible but does not establish a reliable buying price by itself.",
+            ListingPriceBandSignal.LowOutlier => "Low price region: unusual relative to the reference market, but still actionable.",
+            ListingPriceBandSignal.Thin => "Limited-supply price region: weak reference-price support, but the listing remains actionable.",
             ListingPriceBandSignal.Competitive => "Competitive listing: this price is supported by enough useful market evidence.",
             ListingPriceBandSignal.Uncompetitive => "High-priced listing: visible in the market, but above the useful buying range.",
-            ListingPriceBandSignal.Insane => "Extreme outlier: visible in the market, but excluded from accepted buying evidence.",
+            ListingPriceBandSignal.Insane => "Extreme price region: far from the reference market, but still actionable at its listed price.",
             _ => "Price band signal could not be classified from the loaded listing evidence."
         };
     }
@@ -569,17 +596,18 @@ public static class MarketAnalysisGridViewService
             return MarketScoreBucket.Unavailable;
         }
 
-        if (world.QuantityNeeded <= 0 || world.PrimaryUsableQuantity >= world.QuantityNeeded)
+        var coverageQuantity = GetCoverageQuantity(world);
+        if (world.QuantityNeeded <= 0 || coverageQuantity >= world.QuantityNeeded)
         {
             return MarketScoreBucket.Optimal;
         }
 
-        if (world.PrimaryUsableQuantity >= Math.Max(world.QuantityNeeded / 2, 1))
+        if (coverageQuantity >= Math.Max(world.QuantityNeeded / 2, 1))
         {
             return MarketScoreBucket.Competitive;
         }
 
-        return world.PrimaryUsableQuantity > 0 || HasProcurementEvidence(world)
+        return coverageQuantity > 0 || HasProcurementEvidence(world)
             ? MarketScoreBucket.PoorFit
             : MarketScoreBucket.Unavailable;
     }
@@ -948,6 +976,11 @@ public static class MarketAnalysisGridViewService
 
     private static ProcurementEvidence GetProcurementEvidence(WorldMarketAnalysis world)
     {
+        if (world.ActionableQuantity > 0 && world.ActionableAverageUnitPrice > 0)
+        {
+            return new ProcurementEvidence(world.ActionableQuantity, world.ActionableAverageUnitPrice);
+        }
+
         if (world.Listings.Count > 0)
         {
             var eligibleListings = MarketProcurementEvidencePolicy.GetEligibleListings(world);
@@ -969,17 +1002,23 @@ public static class MarketAnalysisGridViewService
                 quotedQuantity > 0 ? totalCost / (decimal)quotedQuantity : 0);
         }
 
+        var legacyQuantity = GetSaneQuantity(world);
+        if (legacyQuantity <= 0)
+        {
+            return new ProcurementEvidence(0, 0);
+        }
+
         if (world.PriceSignalAverageUnitPrice > 0)
         {
-            return new ProcurementEvidence(GetSaneQuantity(world), world.PriceSignalAverageUnitPrice);
+            return new ProcurementEvidence(legacyQuantity, world.PriceSignalAverageUnitPrice);
         }
 
         if (world.PrimaryUsableAverageUnitPrice > 0)
         {
-            return new ProcurementEvidence(GetSaneQuantity(world), world.PrimaryUsableAverageUnitPrice);
+            return new ProcurementEvidence(legacyQuantity, world.PrimaryUsableAverageUnitPrice);
         }
 
-        return new ProcurementEvidence(GetSaneQuantity(world), world.AnalysisCompetitiveAverageUnitPrice);
+        return new ProcurementEvidence(legacyQuantity, world.AnalysisCompetitiveAverageUnitPrice);
     }
 
     private static PriceBandDepth GetProcurementEvidenceDepth(WorldMarketAnalysis world)
@@ -1014,6 +1053,13 @@ public static class MarketAnalysisGridViewService
 
     private static (decimal Price, string Label) GetCompetitiveValueReference(WorldMarketAnalysis world)
     {
+        if (world.ReferenceSupportScore > 0 &&
+            world.ReferencePriceCredibility is
+                MarketPriceRegionCredibility.Thin or MarketPriceRegionCredibility.Unknown)
+        {
+            return (0, "uncertain regional reference");
+        }
+
         if (world.AnalysisCompetitiveAverageUnitPrice > 0)
         {
             return (world.AnalysisCompetitiveAverageUnitPrice, "best available average");
