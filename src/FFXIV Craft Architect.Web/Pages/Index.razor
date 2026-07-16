@@ -15,6 +15,7 @@
 @inject IndexedDbService IndexedDb
 @inject WebPlanPersistenceService PlanPersistence
 @inject AcquisitionDecisionService AcquisitionDecisionService
+@inject MarketEvidenceHydrationService MarketEvidenceHydration
 @inject ILogger<Index> Logger
 @implements IDisposable
 
@@ -70,6 +71,7 @@
     {
         // Subscribe to state changes
         AppState.OnPlanChanged += OnPlanChanged;
+        AppState.OnShoppingListChanged += OnShoppingListChanged;
 
         // Load saved plans list
         await RefreshSavedPlansListAsync();
@@ -87,8 +89,14 @@
     public void Dispose()
     {
         AppState.OnPlanChanged -= OnPlanChanged;
+        AppState.OnShoppingListChanged -= OnShoppingListChanged;
 
         // Note: Auto-save timer is now managed centrally in MainLayout.razor
+    }
+
+    private void OnShoppingListChanged()
+    {
+        InvokeAsync(StateHasChanged);
     }
 
     private async Task RefreshSavedPlansListAsync()
@@ -257,6 +265,10 @@
                     AppState.SelectedRegion,
                     AppState.DefaultMarketFetchScope));
             _selectedNode = result.SelectedNode;
+            if (result.Built)
+            {
+                MarketEvidenceHydration.ScheduleForCurrentPlan();
+            }
             Snackbar.Add(
                 result.Message,
                 result.MessageLevel switch

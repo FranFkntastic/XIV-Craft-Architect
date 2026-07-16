@@ -5,48 +5,101 @@
 
 @if (Node != null)
 {
-    <div style="margin-left: @(Depth * 20)px;">
-        @if (HasChildren)
-        {
-            <!-- Parent Node: Expander -->
-            <div style="border: 1px solid @(IsSelected ? "#90caf9" : "#444"); border-radius: 4px; margin-bottom: 4px; overflow: hidden;">
-                <div style="background: @(IsSelected ? "#33404a" : "#363636"); padding: 8px 12px; display: flex; align-items: center; gap: 8px;">
-                    <!-- Toggle button - only this should expand/collapse -->
-                    <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;">
-                        <button type="button"
-                                @onclick="ToggleExpanded"
-                                @onclick:stopPropagation
-                                aria-expanded="@_isExpanded.ToString().ToLowerInvariant()"
-                                aria-label="@($"{(_isExpanded ? "Collapse" : "Expand")} {Node.Name}")"
-                                title="@(_isExpanded ? "Collapse materials" : "Expand materials")"
-                                style="width: 28px; min-width: 28px; height: 28px; padding: 0; border: 0; border-radius: 4px; color: #aeb7c0; background: transparent; cursor: pointer;">
-                            <span aria-hidden="true">@(_isExpanded ? "▼" : "▶")</span>
-                        </button>
-                        @RenderNodeContentCore()
-                    </div>
-                </div>
-                @if (_isExpanded)
+    var display = GetDisplayState();
+    <div class="rp-node-branch @(Depth == 0 ? "rp-node-root" : null)">
+        <div class="rp-node-row @(IsSelected ? "selected" : null)"
+             style="--rp-node-depth: @Depth"
+             @onclick="SelectNode">
+            @if (HasChildren)
+            {
+                <button type="button"
+                        class="rp-node-expander"
+                        @onclick="ToggleExpanded"
+                        @onclick:stopPropagation
+                        aria-expanded="@_isExpanded.ToString().ToLowerInvariant()"
+                        aria-label="@($"{(_isExpanded ? "Collapse" : "Expand")} {Node.Name}")"
+                        title="@(_isExpanded ? "Collapse materials" : "Expand materials")">
+                    <span aria-hidden="true">@(_isExpanded ? "▼" : "▶")</span>
+                </button>
+            }
+            else
+            {
+                <span class="rp-node-expander-spacer" aria-hidden="true"></span>
+            }
+
+            @if (Node.CanBeHq)
+            {
+                <button type="button"
+                        class="rp-node-quality @(Node.MustBeHq ? "required" : null)"
+                        @onclick="OnHqToggle"
+                        @onclick:stopPropagation
+                        aria-label="@(Node.MustBeHq ? $"Allow normal quality for {Node.Name}" : $"Require high quality for {Node.Name}")"
+                        aria-pressed="@Node.MustBeHq.ToString().ToLowerInvariant()"
+                        title="@(Node.MustBeHq ? "High quality required" : "Normal quality allowed")">
+                    <span aria-hidden="true">★</span>
+                </button>
+            }
+            else
+            {
+                <span class="rp-node-quality-spacer" aria-hidden="true"></span>
+            }
+
+            <span class="rp-node-item" style="--rp-source-color: @display.SourceColor">
+                @display.HqPrefix@Node.Name <span class="rp-node-quantity">×@Node.Quantity.ToString("N0")</span>
+                @if (Node.IsCircularReference)
                 {
-                    <div style="padding: 8px; background: #2d2d2d;">
-                        @foreach (var child in Node.Children)
-                        {
-                            <RecipeNodeView Node="child" 
-                                            Depth="Depth + 1"
-                                            IsSelected="@(SelectedNodeId == child.NodeId)"
-                                            SelectedNodeId="@SelectedNodeId"
-                                            DisplayStates="DisplayStates"
-                                            OnNodeSelected="OnNodeSelected"
-                                            OnHqChanged="OnHqChanged" />
-                        }
-                    </div>
+                    <span class="rp-node-circular" title="This item is already being crafted higher in the recipe chain, so CA prevents recursive expansion.">↻</span>
                 }
-            </div>
-        }
-        else
+            </span>
+
+            <span class="rp-node-recipe">@display.RecipeInfo</span>
+
+            <a href="market"
+               class="rp-node-quote @display.QuoteStatusClass @GetMethodClass()"
+               @onclick="OpenMarketAnalysis"
+               @onclick:stopPropagation
+               aria-label="@GetQuoteAriaLabel(display)">
+                <span class="rp-node-quote-method">@display.QuoteMethodText</span>
+                <span class="rp-node-quote-amount">@display.PriceText</span>
+                <span class="rp-node-quote-open" aria-hidden="true">›</span>
+
+                <span class="rp-node-quote-card" role="tooltip">
+                    <span class="rp-node-quote-card-header">
+                        <strong>@GetQuoteHeading(display)</strong>
+                        @if (display.QuoteStatusClass == "actionable")
+                        {
+                            <b>@display.PriceText</b>
+                        }
+                    </span>
+                    @if (!string.IsNullOrWhiteSpace(display.QuoteUnitText))
+                    {
+                        <span class="rp-node-quote-card-line"><em>Unit cost</em><span>@display.QuoteUnitText</span></span>
+                    }
+                    <span class="rp-node-quote-card-line"><em>Coverage</em><span>@display.QuoteCoverageText</span></span>
+                    @if (!string.IsNullOrWhiteSpace(display.QuoteLocationText))
+                    {
+                        <span class="rp-node-quote-card-line"><em>Route</em><span>@display.QuoteLocationText</span></span>
+                    }
+                    <span class="rp-node-quote-card-footer">
+                        @display.QuoteBasisText@if (!string.IsNullOrWhiteSpace(display.QuoteEvidenceText)){<text> · @display.QuoteEvidenceText</text>}
+                    </span>
+                </span>
+            </a>
+        </div>
+
+        @if (HasChildren && _isExpanded)
         {
-            <!-- Leaf Node: Simple row with details selector -->
-            <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid @(IsSelected ? "#90caf9" : "transparent"); border-radius: 4px; background: @(IsSelected ? "#33404a" : "transparent");">
-                @RenderNodeContentCore()
+            <div class="rp-node-children">
+                @foreach (var child in Node.Children)
+                {
+                    <RecipeNodeView Node="child"
+                                    Depth="Depth + 1"
+                                    IsSelected="@(SelectedNodeId == child.NodeId)"
+                                    SelectedNodeId="@SelectedNodeId"
+                                    DisplayStates="DisplayStates"
+                                    OnNodeSelected="OnNodeSelected"
+                                    OnHqChanged="OnHqChanged" />
+                }
             </div>
         }
     </div>
@@ -61,17 +114,25 @@
         new Dictionary<string, RecipeNodeDisplayState>();
     [Parameter] public EventCallback<PlanNode> OnNodeSelected { get; set; }
     [Parameter] public EventCallback<PlanNodeHqChangeRequest> OnHqChanged { get; set; }
-    
+
     private bool _isExpanded = true;
     private int _lastExpandVersion = -1;
-    private int? _lastPricesVersion = -1;
-    private bool _isDisposed = false;
+    private bool _isDisposed;
 
     private bool HasChildren => Node?.Children.Any() == true;
 
     protected override void OnInitialized()
     {
         AppState.OnRecipeTreeExpandChanged += OnRecipeTreeExpandChanged;
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (_lastExpandVersion != AppState.RecipeTreeExpandVersion)
+        {
+            _isExpanded = AppState.RecipeTreeAllExpanded;
+            _lastExpandVersion = AppState.RecipeTreeExpandVersion;
+        }
     }
 
     public void Dispose()
@@ -82,41 +143,14 @@
 
     private void OnRecipeTreeExpandChanged()
     {
-        if (_isDisposed)
+        if (_isDisposed || _lastExpandVersion == AppState.RecipeTreeExpandVersion)
         {
             return;
         }
 
-        var shouldRender = false;
-
-        if (_lastExpandVersion != AppState.RecipeTreeExpandVersion)
-        {
-            _isExpanded = AppState.RecipeTreeAllExpanded;
-            _lastExpandVersion = AppState.RecipeTreeExpandVersion;
-            shouldRender = true;
-        }
-        
-        // Prices version changed - force re-render
-        if (_lastPricesVersion != AppState.CurrentPlan?.PriceVersion)
-        {
-            _lastPricesVersion = AppState.CurrentPlan?.PriceVersion;
-            shouldRender = true;
-        }
-
-        if (shouldRender)
-        {
-            InvokeAsync(StateHasChanged);
-        }
-    }
-
-    protected override void OnParametersSet()
-    {
-        // Sync with global expand state on initial render or when version changes
-        if (_lastExpandVersion != AppState.RecipeTreeExpandVersion)
-        {
-            _isExpanded = AppState.RecipeTreeAllExpanded;
-            _lastExpandVersion = AppState.RecipeTreeExpandVersion;
-        }
+        _isExpanded = AppState.RecipeTreeAllExpanded;
+        _lastExpandVersion = AppState.RecipeTreeExpandVersion;
+        InvokeAsync(StateHasChanged);
     }
 
     private void ToggleExpanded()
@@ -124,102 +158,63 @@
         _isExpanded = !_isExpanded;
     }
 
+    private Task SelectNode()
+    {
+        return Node == null ? Task.CompletedTask : OnNodeSelected.InvokeAsync(Node);
+    }
+
     private void OpenMarketAnalysis()
     {
-        if (Node == null)
+        if (Node != null)
         {
-            return;
+            AppState.RequestMarketItemAutoExpand(Node.ItemId);
         }
-
-        AppState.RequestMarketItemAutoExpand(Node.ItemId);
     }
 
     private async Task OnHqToggle()
     {
-        if (Node != null && Node.CanBeHq)
+        if (Node?.CanBeHq == true)
         {
             await OnHqChanged.InvokeAsync(new PlanNodeHqChangeRequest(Node, !Node.MustBeHq));
         }
     }
 
-    private RenderFragment RenderNodeContentCore() => __builder =>
+    private string GetMethodClass()
     {
-        if (Node == null) return;
-
-        var display = GetDisplayState();
-        
-        // HQ Toggle button (if item can be HQ)
-        if (Node.CanBeHq)
+        return Node?.Source switch
         {
-            __builder.OpenElement(0, "button");
-            __builder.AddAttribute(1, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, OnHqToggle));
-            __builder.AddEventStopPropagationAttribute(2, "onclick", true);
-            __builder.AddMultipleAttributes(3, new Dictionary<string, object>
-            {
-                ["style"] = $"background: transparent; border: none; cursor: pointer; color: {(Node.MustBeHq ? "#d4a73a" : "#666")}; font-size: 14px; padding: 0; width: 28px; height: 28px; border-radius: 4px;",
-                ["type"] = "button",
-                ["aria-label"] = Node.MustBeHq
-                    ? $"Allow normal quality for {Node.Name}"
-                    : $"Require high quality for {Node.Name}",
-                ["aria-pressed"] = Node.MustBeHq.ToString().ToLowerInvariant(),
-                ["title"] = Node.MustBeHq ? "High quality required" : "Normal quality allowed"
-            });
-            __builder.AddContent(4, "★");
-            __builder.CloseElement();
-        }
-        else
-        {
-            __builder.OpenElement(4, "span");
-            __builder.AddAttribute(5, "style", "width: 20px;");
-            __builder.CloseElement();
-        }
-        
-        // Item name and quantity
-        __builder.OpenElement(6, "span");
-        __builder.AddAttribute(7, "style", $"color: {display.SourceColor}; flex: 1;");
-        __builder.AddContent(8, $"{display.HqPrefix}{Node.Name} x{Node.Quantity}");
-        // Circular reference indicator
-        if (Node.IsCircularReference)
-        {
-            __builder.OpenElement(9, "span");
-            __builder.AddAttribute(10, "style", "color: #ff9800; margin-left: 6px; font-size: 12px; cursor: help;");
-            __builder.AddAttribute(11, "title", "This item is already being crafted higher up in the recipe chain. To avoid infinite loops, purchase this from the market instead.");
-            __builder.AddContent(12, "↻ circular");
-            __builder.CloseElement();
-        }
-        __builder.CloseElement();
-        
-        // Recipe info (if craftable)
-        if (!string.IsNullOrEmpty(display.RecipeInfo))
-        {
-            __builder.OpenElement(9, "span");
-            __builder.AddAttribute(10, "style", "color: #888; font-size: 12px;");
-            __builder.AddContent(11, display.RecipeInfo);
-            __builder.CloseElement();
-        }
-        
-        // Price display and Market Analysis selector. Acquisition source edits now live in the right-hand panel.
-        __builder.OpenElement(19, "a");
-        __builder.AddAttribute(20, "href", "market");
-        __builder.AddAttribute(21, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, OpenMarketAnalysis));
-        __builder.AddEventStopPropagationAttribute(22, "onclick", true);
-        __builder.AddAttribute(23, "title", "Open in Market Analysis");
-        __builder.AddAttribute(24, "aria-label", $"Open Market Analysis for {Node.Name}");
-        __builder.AddAttribute(25, "style", "margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: 132px; min-width: 132px; height: 24px; background: transparent; border: none; padding: 0 0 0 10px; cursor: pointer; text-decoration: none;");
+            AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq => "market",
+            AcquisitionSource.VendorBuy => "vendor",
+            _ => "craft"
+        };
+    }
 
-        __builder.OpenElement(26, "span");
-        __builder.AddAttribute(27, "style", "color: #4caf50; font-size: 12px; min-width: 92px; text-align: right;");
-        __builder.AddContent(28, display.PriceText);
-        __builder.CloseElement();
+    private string GetQuoteAriaLabel(RecipeNodeDisplayState display)
+    {
+        return $"{display.QuoteMethodText} {Node?.Name}: {display.PriceText}. Open in Market Analysis";
+    }
 
-        __builder.OpenElement(29, "span");
-        __builder.AddAttribute(30, "aria-hidden", "true");
-        __builder.AddAttribute(31, "style", "color: #888; font-size: 16px; line-height: 1; width: 10px;");
-        __builder.AddContent(32, "›");
-        __builder.CloseElement();
+    private string GetQuoteHeading(RecipeNodeDisplayState display)
+    {
+        return display.QuoteStatusClass switch
+        {
+            "refreshing" => $"Pricing {Node?.Name}",
+            "unavailable" => "No actionable quote",
+            _ => $"{GetMethodHeading()} {Node?.Quantity:N0}"
+        };
+    }
 
-        __builder.CloseElement();
-    };
+    private string GetMethodHeading()
+    {
+        return Node?.Source switch
+        {
+            AcquisitionSource.Craft => "Craft",
+            AcquisitionSource.MarketBuyNq => "Buy",
+            AcquisitionSource.MarketBuyHq => "Buy HQ",
+            AcquisitionSource.VendorBuy => "Vendor buy",
+            _ => "Acquire"
+        };
+    }
 
     private RecipeNodeDisplayState GetDisplayState()
     {
@@ -230,6 +225,18 @@
 
         return Node != null
             ? RecipePlanTreeDisplayBuilder.BuildWithoutCost(Node)
-            : new RecipeNodeDisplayState(string.Empty, "#ccc", string.Empty, string.Empty, null);
+            : new RecipeNodeDisplayState(
+                string.Empty,
+                "#ccc",
+                "Unavailable",
+                "—",
+                "unavailable",
+                "Acquisition quote",
+                string.Empty,
+                "No acquisition quote is available.",
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                null);
     }
 }

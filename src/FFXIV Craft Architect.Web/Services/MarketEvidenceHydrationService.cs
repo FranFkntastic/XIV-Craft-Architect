@@ -24,6 +24,7 @@ public sealed class MarketEvidenceHydrationService : IDisposable
         _appState = appState;
         _workflow = workflow;
         _logger = logger;
+        _appState.OnStateChanged += OnAppStateChanged;
     }
 
     public void ScheduleAfterPlanLoad(PlanSessionLoadResult session)
@@ -50,6 +51,7 @@ public sealed class MarketEvidenceHydrationService : IDisposable
         var plan = session.Plan!;
         var planSessionVersion = _appState.PlanSessionVersion;
         var startedAtUtc = DateTime.UtcNow;
+        var forceRefreshData = HasReusablePublishedEvidence(session);
         _cancellation = new CancellationTokenSource();
         LastRun = CreateSnapshot(
             session,
@@ -57,7 +59,66 @@ public sealed class MarketEvidenceHydrationService : IDisposable
             startedAtUtc,
             message: "Refreshing market evidence after plan load.");
         _appState.SetMarketEvidenceHydrating(true);
-        _ = HydrateAsync(plan, planSessionVersion, generation, startedAtUtc, _cancellation.Token);
+        _ = HydrateAsync(
+            plan,
+            planSessionVersion,
+            generation,
+            startedAtUtc,
+            forceRefreshData,
+            _cancellation.Token);
+    }
+
+    public void ScheduleForCurrentPlan()
+    {
+        _cancellation?.Cancel();
+        _cancellation?.Dispose();
+        _cancellation = null;
+        var generation = ++_generation;
+        var plan = _appState.CurrentPlan;
+        var nowUtc = DateTime.UtcNow;
+        if (plan == null || !HasMarketCandidate(plan))
+        {
+            _appState.SetMarketEvidenceHydrating(false);
+            LastRun = CreateCurrentSnapshot(
+                MarketEvidenceHydrationStatus.NotNeeded,
+                nowUtc,
+                nowUtc,
+                "The active plan has no market candidates.");
+            return;
+        }
+
+        var hasPublishedEvidence = _appState.ShoppingPlans.Count > 0 &&
+                                   _appState.MarketItemAnalyses.Count > 0;
+        var publishedAtUtc = _appState.PublishedMarketAnalysisScope?.PublishedAtUtc;
+        var isStale = publishedAtUtc == null ||
+                      nowUtc - publishedAtUtc.Value > MarketEvidencePolicyDefaults.ReusableCacheMaxAge;
+        if (hasPublishedEvidence && !isStale)
+        {
+            _appState.SetMarketEvidenceHydrating(false);
+            LastRun = CreateCurrentSnapshot(
+                MarketEvidenceHydrationStatus.NotNeeded,
+                nowUtc,
+                nowUtc,
+                "Current market evidence is already reusable.");
+            return;
+        }
+
+        var startedAtUtc = DateTime.UtcNow;
+        _cancellation = new CancellationTokenSource();
+        LastRun = CreateCurrentSnapshot(
+            MarketEvidenceHydrationStatus.Running,
+            startedAtUtc,
+            message: hasPublishedEvidence
+                ? "Refreshing stale market evidence for the active plan."
+                : "Building actionable market evidence for the active plan.");
+        _appState.SetMarketEvidenceHydrating(true);
+        _ = HydrateAsync(
+            plan,
+            _appState.PlanSessionVersion,
+            generation,
+            startedAtUtc,
+            forceRefreshData: hasPublishedEvidence,
+            _cancellation.Token);
     }
 
     public static bool NeedsHydration(PlanSessionLoadResult session, DateTime nowUtc)
@@ -81,9 +142,19 @@ public sealed class MarketEvidenceHydrationService : IDisposable
 
     public static MarketAnalysisWorkflowRequest CreateRefreshRequest()
     {
+        return CreateRefreshRequest(forceRefreshData: true);
+    }
+
+    public static MarketAnalysisWorkflowRequest CreateRefreshRequest(bool forceRefreshData)
+    {
         return new MarketAnalysisWorkflowRequest(
-            ForceRefreshData: true,
+            ForceRefreshData: forceRefreshData,
             PreserveExistingEvidence: true);
+    }
+
+    private static bool HasReusablePublishedEvidence(PlanSessionLoadResult session)
+    {
+        return session.ShoppingPlans.Count > 0 && session.MarketItemAnalyses.Count > 0;
     }
 
     private static bool HasMarketCandidate(CraftingPlan plan)
@@ -101,6 +172,7 @@ public sealed class MarketEvidenceHydrationService : IDisposable
         long planSessionVersion,
         long generation,
         DateTime startedAtUtc,
+        bool forceRefreshData,
         CancellationToken ct)
     {
         try
@@ -120,7 +192,9 @@ public sealed class MarketEvidenceHydrationService : IDisposable
 
             for (var attempt = 1; attempt <= RefreshAttempts; attempt++)
             {
-                var result = await _workflow.RunAnalysisAsync(CreateRefreshRequest(), ct: ct);
+                var result = await _workflow.RunAnalysisAsync(
+                    CreateRefreshRequest(forceRefreshData || attempt > 1),
+                    ct: ct);
                 UpdateRunningAttempt(generation, startedAtUtc, attempt, result);
                 if (result.Published)
                 {
@@ -199,8 +273,20 @@ public sealed class MarketEvidenceHydrationService : IDisposable
 
     public void Dispose()
     {
+        _appState.OnStateChanged -= OnAppStateChanged;
         _cancellation?.Cancel();
         _cancellation?.Dispose();
+    }
+
+    private void OnAppStateChanged(AppStateChange change)
+    {
+        if (!change.HasScope(AppStateChangeScope.Settings) ||
+            string.IsNullOrWhiteSpace(_appState.MarketAnalysisScopeWarning))
+        {
+            return;
+        }
+
+        ScheduleForCurrentPlan();
     }
 
     private void UpdateRunningAttempt(
@@ -264,6 +350,25 @@ public sealed class MarketEvidenceHydrationService : IDisposable
             _appState.PlanSessionVersion,
             _appState.CurrentPlanId,
             _appState.CurrentPlanName ?? session.Plan?.Name,
+            startedAtUtc,
+            completedAtUtc,
+            0,
+            null,
+            message,
+            null);
+    }
+
+    private MarketEvidenceHydrationRunSnapshot CreateCurrentSnapshot(
+        MarketEvidenceHydrationStatus status,
+        DateTime startedAtUtc,
+        DateTime? completedAtUtc = null,
+        string? message = null)
+    {
+        return new MarketEvidenceHydrationRunSnapshot(
+            status,
+            _appState.PlanSessionVersion,
+            _appState.CurrentPlanId,
+            _appState.CurrentPlanName ?? _appState.CurrentPlan?.Name,
             startedAtUtc,
             completedAtUtc,
             0,

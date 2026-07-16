@@ -25,7 +25,7 @@
                                 </th>
                             }
                             <th style="@TotalColumnStyle" class="ma-total-column">
-                                @SortHeader("Calculated Total", MarketAnalysisGridSortColumn.Total, MarketAnalysisGridViewService.CalculatedTotalHeaderTooltip)
+                                @SortHeader("Cash Out", MarketAnalysisGridSortColumn.Total, MarketAnalysisGridViewService.CalculatedTotalHeaderTooltip)
                             </th>
                         </tr>
                     </thead>
@@ -64,7 +64,7 @@
                                 <td style="@TotalColumnStyle" class="ma-total-column">
                                     <span class="@MarketAnalysisGridViewService.GetTotalCostClass(plan)"
                                           title="@MarketAnalysisGridViewService.GetTotalCostTooltip(plan)">
-                                        @MarketAnalysisGridViewService.GetTotalCost(plan).ToString("N0")g
+                                        @MarketAnalysisGridViewService.FormatTotalCost(plan)
                                     </span>
                                 </td>
                             </tr>
@@ -117,7 +117,7 @@
                     <MudText Typo="Typo.subtitle1" Class="ma-detail-total">
                         <span class="@MarketAnalysisGridViewService.GetTotalCostClass(_selectedPlan)"
                               title="@MarketAnalysisGridViewService.GetTotalCostTooltip(_selectedPlan)">
-                            @MarketAnalysisGridViewService.GetTotalCost(_selectedPlan).ToString("N0")g
+                            @MarketAnalysisGridViewService.FormatTotalCost(_selectedPlan)
                         </span>
                     </MudText>
                 </div>

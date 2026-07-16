@@ -15,6 +15,7 @@
                     Plan Editor
                 </button>
             }
+            <span class="mp-price-basis">@GetPriceBasisText()</span>
             <div class="mp-tree-actions">
                 <button @onclick="OnExpandAllRequested" title="Expand All" class="mp-tree-action-btn">
                     + Expand All
@@ -97,15 +98,41 @@
 
     private static string FormatItemCount(int count) => $"{count:N0} item{(count == 1 ? string.Empty : "s")}";
 
+    private string GetPriceBasisText()
+    {
+        if (AppState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.Current &&
+            AppState.ProcurementShoppingPlans.Count > 0)
+        {
+            return "Current route prices";
+        }
+
+        return AppState.IsMarketEvidenceHydrating
+            ? "Building actionable prices"
+            : "Current acquisition prices";
+    }
+
     private readonly RecipePlanTreeDisplayCache _displayCache = new();
     private IReadOnlyDictionary<string, RecipeNodeDisplayState> _displayStates =
         new Dictionary<string, RecipeNodeDisplayState>();
 
     protected override void OnParametersSet()
     {
+        var useProcurementRoute = AppState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.Current &&
+                                  AppState.ProcurementShoppingPlans.Count > 0;
+        var quotePlans = useProcurementRoute
+            ? AppState.ProcurementShoppingPlans
+            : ShoppingPlans;
+        var marketBasis = useProcurementRoute
+            ? RecipePlanAcquisitionQuoteBasis.ProcurementRoute
+            : RecipePlanAcquisitionQuoteBasis.MarketAnalysis;
         _displayStates = _displayCache.GetOrBuild(
             CreateDisplayKey(),
-            () => RecipePlanTreeDisplayBuilder.Build(CurrentPlan, ShoppingPlans));
+            () => RecipePlanTreeDisplayBuilder.Build(
+                CurrentPlan,
+                quotePlans,
+                marketBasis,
+                AppState.IsMarketEvidenceHydrating,
+                AppState.PublishedMarketAnalysisScope?.PublishedAtUtc));
     }
 
     private RecipePlanTreeDisplayKey CreateDisplayKey()
@@ -115,6 +142,8 @@
             versions.PlanStructureVersion,
             versions.PlanDecisionVersion,
             versions.PlanPriceVersion,
-            versions.MarketAnalysisVersion);
+            versions.MarketAnalysisVersion,
+            versions.ProcurementOverlayVersion,
+            AppState.IsMarketEvidenceHydrating);
     }
 }

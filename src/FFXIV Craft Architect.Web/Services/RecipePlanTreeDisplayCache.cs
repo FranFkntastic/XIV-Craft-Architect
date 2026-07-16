@@ -4,7 +4,9 @@ public sealed record RecipePlanTreeDisplayKey(
     long PlanStructureVersion,
     long PlanDecisionVersion,
     long PlanPriceVersion,
-    long MarketAnalysisVersion);
+    long MarketAnalysisVersion,
+    long ProcurementOverlayVersion,
+    bool IsMarketEvidenceRefreshing);
 
 public sealed class RecipePlanTreeDisplayCache
 {
@@ -12,7 +14,8 @@ public sealed class RecipePlanTreeDisplayCache
         AppStateChangeScope.PlanStructure |
         AppStateChangeScope.PlanDecision |
         AppStateChangeScope.PlanPrice |
-        AppStateChangeScope.MarketAnalysis;
+        AppStateChangeScope.MarketAnalysis |
+        AppStateChangeScope.ProcurementOverlay;
 
     private IReadOnlyDictionary<string, RecipeNodeDisplayState>? _states;
     private RecipePlanTreeDisplayKey? _key;

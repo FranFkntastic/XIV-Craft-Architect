@@ -306,8 +306,8 @@ public class MarketAnalysisGridViewServiceTests
         Assert.False(MarketAnalysisGridViewService.IsUnsupportedProjectedCost(plan));
         Assert.Equal("ma-total-value", MarketAnalysisGridViewService.GetTotalCostClass(plan));
         var tooltip = MarketAnalysisGridViewService.GetTotalCostTooltip(plan);
-        Assert.Contains("Calculated Total", tooltip);
-        Assert.Contains("recommended split", tooltip);
+        Assert.Contains("Cash Out", tooltip);
+        Assert.Contains("selected split", tooltip);
     }
 
 

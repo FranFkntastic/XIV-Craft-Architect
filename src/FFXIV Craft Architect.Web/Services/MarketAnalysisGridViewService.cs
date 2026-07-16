@@ -6,8 +6,8 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public static class MarketAnalysisGridViewService
 {
-    public const string CalculatedTotalHeaderTooltip = "Calculated Total is the gil cost computed for the needed quantity from the current recommendation. Market totals use loaded listing evidence, split totals add the recommended route, and vendor totals use loaded gil vendor prices.";
-    public const string UnsupportedProjectedCostTooltip = "Calculated Total is projected because the current search scope cannot support this purchase. It scales from available market evidence or data-center average pricing, so it is highlighted as unsupported.";
+    public const string CalculatedTotalHeaderTooltip = "Cash Out is the gil actually required to buy the selected listing stacks or vendor quantity. It is never extrapolated from averages or incomplete stock.";
+    public const string UnsupportedProjectedCostTooltip = "No actionable cash-out total is available because the current search scope cannot cover this purchase.";
 
     public static IReadOnlyList<DetailedShoppingPlan> GetOrderedPlans(
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
@@ -83,16 +83,42 @@ public static class MarketAnalysisGridViewService
     {
         ArgumentNullException.ThrowIfNull(plan);
 
-        var estimate = MarketPurchaseCostProjectionService.Estimate(
-            plan,
-            plan.QuantityNeeded,
-            hqOnly: false);
-        if (estimate.HasCost)
+        var coverage = PurchaseRecommendationCost.GetDefaultCoverageOption(plan);
+        if (coverage is
+            {
+                Kind: MarketCoverageKind.SupportedListings,
+                IsDefaultEligible: true,
+                CashOutCost: > 0
+            } && coverage.QuantityCovered >= plan.QuantityNeeded)
         {
-            return (long)estimate.Cost;
+            return ToLongSaturating(coverage.CashOutCost);
+        }
+
+        if (plan.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName &&
+            plan.RecommendedWorld.TotalCost > 0)
+        {
+            return plan.RecommendedWorld.TotalCost;
+        }
+
+        if (plan.RecommendedSplit?.Sum(split => split.QuantityToBuy) >= plan.QuantityNeeded &&
+            plan.SplitTotalCost is > 0)
+        {
+            return plan.SplitTotalCost.Value;
+        }
+
+        if (plan.RecommendedWorld is { TotalCost: > 0 } world &&
+            world.TotalQuantityPurchased >= plan.QuantityNeeded)
+        {
+            return world.TotalCost;
         }
 
         return 0;
+    }
+
+    public static string FormatTotalCost(DetailedShoppingPlan plan)
+    {
+        var total = GetTotalCost(plan);
+        return total > 0 ? $"{total:N0}g" : "Unavailable";
     }
 
     public static bool IsUnsupportedProjectedCost(DetailedShoppingPlan plan)
@@ -106,7 +132,9 @@ public static class MarketAnalysisGridViewService
     {
         return IsUnsupportedProjectedCost(plan)
             ? "ma-total-value is-projected-unsupported"
-            : "ma-total-value";
+            : GetTotalCost(plan) > 0
+                ? "ma-total-value"
+                : "ma-total-value is-unavailable";
     }
 
     public static string GetTotalCostTooltip(DetailedShoppingPlan plan)
@@ -117,8 +145,8 @@ public static class MarketAnalysisGridViewService
         if (coverage != null)
         {
             return coverage.CashOutCost == coverage.ExactNeededCost
-                ? $"Calculated Total uses {coverage.Tier} coverage evidence. Exact needed: {coverage.ExactNeededCost:N0}g."
-                : $"Calculated Total uses {coverage.Tier} coverage evidence. Exact needed: {coverage.ExactNeededCost:N0}g. Cash out: {coverage.CashOutCost:N0}g.";
+                ? $"Cash Out uses the selected {coverage.Tier} listing coverage: {coverage.CashOutCost:N0}g."
+                : $"Cash Out is {coverage.CashOutCost:N0}g for the selected stacks; {coverage.ExactNeededCost:N0}g of their value covers the exact quantity needed.";
         }
 
         if (IsUnsupportedProjectedCost(plan))
@@ -129,20 +157,32 @@ public static class MarketAnalysisGridViewService
         if (plan.RecommendedSplit?.Any() == true)
         {
             var splitQuantity = plan.RecommendedSplit.Sum(split => split.QuantityToBuy);
-            return $"Calculated Total is the sum of the recommended split purchase: {splitQuantity:N0}/{plan.QuantityNeeded:N0} items across {plan.RecommendedSplit.Count:N0} worlds.";
+            return $"Cash Out is the sum of the selected split purchase: {splitQuantity:N0}/{plan.QuantityNeeded:N0} items across {plan.RecommendedSplit.Count:N0} worlds.";
         }
 
         if (plan.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName || plan.Vendors.Any())
         {
-            return $"Calculated Total uses loaded gil vendor pricing for {plan.QuantityNeeded:N0} needed.";
+            return $"Cash Out uses loaded gil vendor pricing for {plan.QuantityNeeded:N0} needed.";
         }
 
         if (plan.RecommendedWorld != null)
         {
-            return $"Calculated Total uses the recommended world's market listings for {plan.RecommendedWorld.TotalQuantityPurchased:N0}/{plan.QuantityNeeded:N0} needed.";
+            return $"Cash Out uses the selected world's listing stacks for {plan.RecommendedWorld.TotalQuantityPurchased:N0}/{plan.QuantityNeeded:N0} needed.";
         }
 
-        return "Calculated Total is the computed gil cost for the needed quantity. Run Market Analysis again if this row lacks current recommendation evidence.";
+        return "No actionable cash-out total is available from the current recommendation evidence.";
+    }
+
+    private static long ToLongSaturating(decimal value)
+    {
+        if (value <= 0)
+        {
+            return 0;
+        }
+
+        return value >= long.MaxValue
+            ? long.MaxValue
+            : (long)Math.Ceiling(value);
     }
 
     public static string GetWorldPriceBandScoreClass(WorldMarketAnalysis world)

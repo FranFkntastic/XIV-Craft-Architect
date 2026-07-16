@@ -185,6 +185,10 @@
     text-underline-offset: 2px;
 }
 
+.ma-total-value.is-unavailable {
+    color: #d27a72;
+}
+
 .ma-stock-ok {
     color: #90ee90;
 }

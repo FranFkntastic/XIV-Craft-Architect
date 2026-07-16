@@ -22,6 +22,16 @@
     gap: 4px;
 }
 
+.mp-price-basis {
+    margin-left: 12px;
+    color: #8f969b;
+    font-size: 11px;
+}
+
+.mp-tree-actions {
+    margin-left: auto;
+}
+
 .mp-control-bar {
     display: flex;
     justify-content: space-between;
