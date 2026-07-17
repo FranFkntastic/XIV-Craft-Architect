@@ -280,6 +280,12 @@
     text-transform: uppercase;
 }
 
+.pp-item-table tr.is-focused > th,
+.pp-item-table tr.is-focused > td {
+    background: rgba(144, 202, 249, .09);
+    box-shadow: inset 0 1px rgba(144, 202, 249, .22), inset 0 -1px rgba(144, 202, 249, .22);
+}
+
 .pp-item-table th:first-child {
     width: 100%;
     min-width: 180px;

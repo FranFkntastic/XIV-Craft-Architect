@@ -46,6 +46,7 @@
             MarketMafiosoEnabled="@_marketMafiosoEnabled"
             MarketMafiosoActiveItemWorld="@_marketMafiosoActiveItemWorld"
             MarketMafiosoBusyItemWorld="@_marketMafiosoBusyItemWorld"
+            FocusItemId="RequestedItemId"
             OnUndoExclusionRequested="UndoLastExclusionAsync"
             EmptyTitle="@GetEmptyTitle()"
             EmptyMessage="@GetEmptyMessage()"
@@ -57,6 +58,9 @@
 </MudContainer>
 
 @code {
+    [SupplyParameterFromQuery(Name = "itemId")]
+    public int? RequestedItemId { get; set; }
+
     private bool _isAnalyzing;
     private bool IsRouteAnalyzing => _isAnalyzing || AppState.IsProcurementRouteReconciling;
     private CancellableOperationLease? _procurementAnalysisOperation;

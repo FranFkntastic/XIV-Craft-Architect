@@ -84,9 +84,7 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
     private void ScheduleRepairIfNeeded()
     {
         if (!_started ||
-            _appState.ProcurementRouteValidity is not (
-                ProcurementRoutePublicationValidity.SelectionChanged or
-                ProcurementRoutePublicationValidity.InputsChanged) ||
+            !NeedsRouteReconciliation() ||
             !string.IsNullOrWhiteSpace(_appState.ProcurementRouteFailure))
         {
             return;
@@ -110,18 +108,16 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
                 await Task.Delay(TimeSpan.FromMilliseconds(100), cancellation.Token);
             }
 
-            if (generation != _generation ||
-                _appState.ProcurementRouteValidity is not (
-                    ProcurementRoutePublicationValidity.SelectionChanged or
-                    ProcurementRoutePublicationValidity.InputsChanged))
+            if (generation != _generation || !NeedsRouteReconciliation())
             {
                 return;
             }
 
+            var isInitialRoute = _appState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.None;
             using var operation = _cancellableOperations.Start(
                 CancellableOperationWorkflow.ProcurementAnalysis,
                 "Procurement Analysis",
-                "Updating procurement route...",
+                isInitialRoute ? "Generating procurement route..." : "Updating procurement route...",
                 cancellation.Token);
             ProcurementWorkflowResult result;
             try
@@ -147,7 +143,7 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
 
             if (result.Status == ProcurementWorkflowStatus.Published)
             {
-                operation.Complete("Procurement route updated.");
+                operation.Complete(isInitialRoute ? "Procurement route generated." : "Procurement route updated.");
                 return;
             }
 
@@ -180,6 +176,25 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
                 SetRepairState(false);
             }
         }
+    }
+
+    private bool NeedsRouteReconciliation()
+    {
+        return _appState.ProcurementRouteValidity switch
+        {
+            ProcurementRoutePublicationValidity.SelectionChanged or
+                ProcurementRoutePublicationValidity.InputsChanged => true,
+            ProcurementRoutePublicationValidity.None => CanGenerateInitialRoute(),
+            _ => false
+        };
+    }
+
+    private bool CanGenerateInitialRoute()
+    {
+        return _appState.CurrentPlan != null &&
+            _appState.ShoppingPlans.Count > 0 &&
+            !_appState.IsMarketEvidenceHydrating &&
+            !string.IsNullOrWhiteSpace(_appState.SelectedDataCenter);
     }
 
     private void SetRepairState(bool isReconciling)

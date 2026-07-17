@@ -12,7 +12,7 @@
 .rp-node-row {
     position: relative;
     display: grid;
-    grid-template-columns: 24px 24px minmax(180px, 1fr) minmax(110px, 185px) 190px;
+    grid-template-columns: 24px 24px minmax(180px, 1fr) minmax(90px, 150px) 280px;
     align-items: center;
     min-height: 38px;
     padding: 0 8px 0 calc(8px + var(--rp-node-depth) * 24px);
@@ -98,13 +98,24 @@
 .rp-node-quote {
     position: relative;
     display: grid;
-    grid-template-columns: 58px minmax(86px, 1fr) 10px;
+    grid-template-columns: 58px minmax(86px, 1fr) minmax(82px, 108px);
     align-items: center;
-    width: 190px;
+    width: 280px;
     height: 28px;
     color: inherit;
     text-decoration: none;
-    cursor: help;
+    cursor: default;
+}
+
+.rp-node-quote-method,
+.rp-node-quote-amount,
+.rp-node-quote-route {
+    min-width: 0;
+    overflow: hidden;
+    padding: 5px 4px;
+    border-radius: 3px;
+    text-decoration: none;
+    text-overflow: ellipsis;
 }
 
 .rp-node-quote-method {
@@ -132,6 +143,25 @@
     white-space: nowrap;
 }
 
+.rp-node-quote-route {
+    color: #90caf9;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.rp-node-quote-method:hover,
+.rp-node-quote-amount:hover,
+.rp-node-quote-route:hover,
+.rp-node-quote-method:focus-visible,
+.rp-node-quote-amount:focus-visible,
+.rp-node-quote-route:focus-visible {
+    background: rgba(255, 255, 255, .07);
+    outline: none;
+}
+
 .rp-node-quote.refreshing .rp-node-quote-method,
 .rp-node-quote.refreshing .rp-node-quote-amount {
     color: #90979c;
@@ -155,12 +185,6 @@
     font-weight: 600;
 }
 
-.rp-node-quote-open {
-    color: #747b80;
-    font-size: 15px;
-    text-align: right;
-}
-
 .rp-node-quote-card {
     position: absolute;
     z-index: 50;
@@ -181,7 +205,7 @@
 }
 
 .rp-node-quote:hover .rp-node-quote-card,
-.rp-node-quote:focus-visible .rp-node-quote-card {
+.rp-node-quote:focus-within .rp-node-quote-card {
     opacity: 1;
     transform: translateY(0);
 }
@@ -231,7 +255,7 @@
 
 @media (max-width: 1000px) {
     .rp-node-row {
-        grid-template-columns: 24px 24px minmax(150px, 1fr) 170px;
+        grid-template-columns: 24px 24px minmax(150px, 1fr) 230px;
     }
 
     .rp-node-recipe {
@@ -240,6 +264,10 @@
 
     .rp-node-quote,
     .rp-node-quote-card {
-        width: 170px;
+        width: 230px;
+    }
+
+    .rp-node-quote {
+        grid-template-columns: 50px minmax(76px, 1fr) minmax(72px, 92px);
     }
 }

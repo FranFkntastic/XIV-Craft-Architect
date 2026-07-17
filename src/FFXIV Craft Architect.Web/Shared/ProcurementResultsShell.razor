@@ -46,6 +46,7 @@
                                MarketMafiosoEnabled="MarketMafiosoEnabled"
                                MarketMafiosoActiveItemWorld="MarketMafiosoActiveItemWorld"
                                MarketMafiosoBusyItemWorld="MarketMafiosoBusyItemWorld"
+                               FocusItemId="FocusItemId"
                                OnReanalyzeWithoutWorldRequested="OnReanalyzeWithoutWorldRequested"
                                OnExcludeWorldForItemRequested="OnExcludeWorldForItemRequested"
                                OnRefreshItemRequested="OnRefreshItemRequested"
@@ -68,6 +69,7 @@
     [Parameter] public bool MarketMafiosoEnabled { get; set; }
     [Parameter] public MarketItemWorldKey? MarketMafiosoActiveItemWorld { get; set; }
     [Parameter] public MarketItemWorldKey? MarketMafiosoBusyItemWorld { get; set; }
+    [Parameter] public int? FocusItemId { get; set; }
     [Parameter] public EventCallback OnUndoExclusionRequested { get; set; }
     [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnExcludeWorldForItemRequested { get; set; }

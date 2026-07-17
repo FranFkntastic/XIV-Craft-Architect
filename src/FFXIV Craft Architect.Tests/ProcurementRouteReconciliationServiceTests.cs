@@ -8,6 +8,53 @@ namespace FFXIV_Craft_Architect.Tests;
 public class ProcurementRouteReconciliationServiceTests
 {
     [Fact]
+    [Trait(TestTraits.Surface, TestTraits.DeployWeb)]
+    public async Task PublishedMarketEvidence_GeneratesInitialRouteAutomatically()
+    {
+        var appState = new AppState();
+        var plan = new CraftingPlan
+        {
+            RootItems =
+            [
+                new PlanNode
+                {
+                    NodeId = "darksteel-ore",
+                    ItemId = 5_121,
+                    Name = "Darksteel Ore",
+                    Quantity = 10,
+                    Source = AcquisitionSource.MarketBuyNq
+                }
+            ]
+        };
+        appState.ApplyBuiltRecipePlanWithActiveItems(plan);
+        var workflow = new RecordingProcurementWorkflow(() =>
+        {
+            appState.ReplaceProcurementOverlay(
+                [new DetailedShoppingPlan { ItemId = 5_121, Name = "Darksteel Ore" }]);
+            return new ProcurementWorkflowResult(ProcurementWorkflowStatus.Published, 1);
+        });
+        using var operations = new CancellableOperationService(appState);
+        using var reconciliation = new ProcurementRouteReconciliationService(
+            appState,
+            workflow,
+            operations,
+            NullLogger<ProcurementRouteReconciliationService>.Instance,
+            TimeSpan.FromMilliseconds(10));
+        reconciliation.Start();
+
+        Assert.Equal(0, workflow.CallCount);
+
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 5_121, Name = "Darksteel Ore" }],
+            [new DetailedShoppingPlan { ItemId = 5_121, Name = "Darksteel Ore" }]);
+
+        await WaitUntilAsync(() => workflow.CallCount == 1 && !appState.IsProcurementRouteReconciling);
+
+        Assert.Equal(ProcurementRoutePublicationValidity.Current, appState.ProcurementRouteValidity);
+        Assert.Null(appState.ProcurementRouteFailure);
+    }
+
+    [Fact]
     public async Task ChangedRouteInputs_AreReconciledAutomatically()
     {
         var appState = CreateStateWithPublishedRoute();

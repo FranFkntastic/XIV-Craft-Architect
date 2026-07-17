@@ -55,14 +55,34 @@
 
             <span class="rp-node-recipe">@display.RecipeInfo</span>
 
-            <a href="market"
-               class="rp-node-quote @display.QuoteStatusClass @GetMethodClass()"
-               @onclick="OpenMarketAnalysis"
-               @onclick:stopPropagation
-               aria-label="@GetQuoteAriaLabel(display)">
-                <span class="rp-node-quote-method">@display.QuoteMethodText</span>
-                <span class="rp-node-quote-amount">@display.PriceText</span>
-                <span class="rp-node-quote-open" aria-hidden="true">›</span>
+            <div class="rp-node-quote @display.QuoteStatusClass @GetMethodClass()">
+                <a href="@GetAcquisitionEvaluationUrl()"
+                   class="rp-node-quote-method"
+                   @onclick:stopPropagation
+                   aria-label="@($"Review {Node.Name}'s {display.QuoteMethodText} decision in Acquisition Evaluation")">
+                    @display.QuoteMethodText
+                </a>
+                <a href="market"
+                   class="rp-node-quote-amount"
+                   @onclick="OpenMarketAnalysis"
+                   @onclick:preventDefault
+                   @onclick:stopPropagation
+                   aria-label="@GetQuoteAriaLabel(display)">
+                    @display.PriceText
+                </a>
+                @if (GetProcurementRoute() is { } route)
+                {
+                    <a href="@GetProcurementUrl(route)"
+                       class="rp-node-quote-route"
+                       @onclick:stopPropagation
+                       aria-label="@($"Open {route.DestinationCount:N0} procurement destinations for {Node.Name}")">
+                        @route.Label
+                    </a>
+                }
+                else
+                {
+                    <span class="rp-node-quote-route-spacer" aria-hidden="true"></span>
+                }
 
                 <span class="rp-node-quote-card" role="tooltip">
                     <span class="rp-node-quote-card-header">
@@ -85,7 +105,7 @@
                         @display.QuoteBasisText@if (!string.IsNullOrWhiteSpace(display.QuoteEvidenceText)){<text> · @display.QuoteEvidenceText</text>}
                     </span>
                 </span>
-            </a>
+            </div>
         </div>
 
         @if (HasChildren && _isExpanded)
@@ -98,6 +118,7 @@
                                     IsSelected="@(SelectedNodeId == child.NodeId)"
                                     SelectedNodeId="@SelectedNodeId"
                                     DisplayStates="DisplayStates"
+                                    ProcurementRoutes="ProcurementRoutes"
                                     OnNodeSelected="OnNodeSelected"
                                     OnHqChanged="OnHqChanged" />
                 }
@@ -113,6 +134,8 @@
     [Parameter] public string? SelectedNodeId { get; set; }
     [Parameter] public IReadOnlyDictionary<string, RecipeNodeDisplayState> DisplayStates { get; set; } =
         new Dictionary<string, RecipeNodeDisplayState>();
+    [Parameter] public IReadOnlyDictionary<int, RecipePlanProcurementRouteSummary> ProcurementRoutes { get; set; } =
+        new Dictionary<int, RecipePlanProcurementRouteSummary>();
     [Parameter] public EventCallback<PlanNode> OnNodeSelected { get; set; }
     [Parameter] public EventCallback<PlanNodeHqChangeRequest> OnHqChanged { get; set; }
 
@@ -172,6 +195,26 @@
             Navigation.NavigateTo("/market");
         }
     }
+
+    private RecipePlanProcurementRouteSummary? GetProcurementRoute()
+    {
+        return Node != null && ProcurementRoutes.TryGetValue(Node.ItemId, out var route)
+            ? route
+            : null;
+    }
+
+    private string GetAcquisitionEvaluationUrl()
+    {
+        if (!string.IsNullOrWhiteSpace(Node?.NodeId))
+        {
+            return $"/acquisition?nodeId={Uri.EscapeDataString(Node.NodeId)}";
+        }
+
+        return $"/acquisition?itemId={Node?.ItemId ?? 0}";
+    }
+
+    private static string GetProcurementUrl(RecipePlanProcurementRouteSummary route) =>
+        $"/procurement?itemId={route.ItemId}";
 
     private async Task OnHqToggle()
     {

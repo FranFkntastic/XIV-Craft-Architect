@@ -150,6 +150,7 @@
     [Parameter] public bool MarketMafiosoEnabled { get; set; }
     [Parameter] public MarketItemWorldKey? MarketMafiosoActiveItemWorld { get; set; }
     [Parameter] public MarketItemWorldKey? MarketMafiosoBusyItemWorld { get; set; }
+    [Parameter] public int? FocusItemId { get; set; }
     [Parameter] public EventCallback<WorldProcurementCardModel> OnReanalyzeWithoutWorldRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnExcludeWorldForItemRequested { get; set; }
     [Parameter] public EventCallback<WorldItemProcurementAction> OnRefreshItemRequested { get; set; }
@@ -158,6 +159,8 @@
     private readonly HashSet<string> _expandedWorlds = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<WorldProcurementCardModel> _routeCards = Array.Empty<WorldProcurementCardModel>();
     private bool _hasInitializedExpansion;
+    private string? _appliedFocusSignature;
+    private bool _scrollToFocusedItemAfterRender;
 
     protected override void OnParametersSet()
     {
@@ -176,6 +179,8 @@
 
             _hasInitializedExpansion = true;
         }
+
+        ApplyRequestedItemFocus();
     }
 
     private RenderFragment RenderWorldNode(WorldProcurementCardModel world) => @<article class="pp-world-node @(world.IsVendor ? "is-vendor" : null) @(world.IsCongested ? "is-congested" : null)">
@@ -231,7 +236,8 @@
                             var isReconciling = ReconcilingItemWorld == itemWorldKey;
                             var isMarketMafiosoActive = MarketMafiosoActiveItemWorld == itemWorldKey;
                             var isMarketMafiosoBusy = MarketMafiosoBusyItemWorld == itemWorldKey;
-                            <tr>
+                            <tr class="@(FocusItemId == item.ItemId ? "is-focused" : null)"
+                                data-procurement-item-id="@item.ItemId">
                                 <th scope="row" data-label="Item">
                                     <div class="pp-item-main">
                                         @if (item.IsSplitPurchase)
@@ -327,6 +333,51 @@
         {
             _expandedWorlds.Remove(key);
         }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_scrollToFocusedItemAfterRender || !FocusItemId.HasValue)
+        {
+            return;
+        }
+
+        _scrollToFocusedItemAfterRender = false;
+        await JSRuntime.InvokeVoidAsync(
+            "mudScrollManager.scrollIntoView",
+            $"[data-procurement-item-id='{FocusItemId.Value}']",
+            "smooth");
+    }
+
+    private void ApplyRequestedItemFocus()
+    {
+        if (!FocusItemId.HasValue)
+        {
+            _appliedFocusSignature = null;
+            return;
+        }
+
+        var matchingCards = _routeCards
+            .Where(card => card.Items.Any(item => item.ItemId == FocusItemId.Value))
+            .ToList();
+        if (matchingCards.Count == 0)
+        {
+            return;
+        }
+
+        var signature = $"{FocusItemId.Value}:{string.Join(';', matchingCards.Select(GetWorldKey).Order(StringComparer.OrdinalIgnoreCase))}";
+        if (string.Equals(signature, _appliedFocusSignature, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        foreach (var card in matchingCards)
+        {
+            _expandedWorlds.Add(GetWorldKey(card));
+        }
+
+        _appliedFocusSignature = signature;
+        _scrollToFocusedItemAfterRender = true;
     }
 
     private bool IsGroupFullyExpanded(IEnumerable<WorldProcurementCardModel> worlds)
