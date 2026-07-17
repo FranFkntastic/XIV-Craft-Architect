@@ -418,6 +418,8 @@ public class AppStatePersistenceTests
                             PrimaryUsableQuantity = 8,
                             ScopeSaneQuantity = 10,
                             ScopeInsaneQuantity = 3,
+                            ComparableQuantity = 10,
+                            ComparableAverageUnitPrice = 645m,
                             PrimaryUsableCoverageRatio = 0.8m,
                             ScopeSaneCoverageRatio = 1.0m
                         }
@@ -451,6 +453,8 @@ public class AppStatePersistenceTests
         Assert.Equal(8, world.PrimaryUsableQuantity);
         Assert.Equal(10, world.ScopeSaneQuantity);
         Assert.Equal(3, world.ScopeInsaneQuantity);
+        Assert.Equal(10, world.ComparableQuantity);
+        Assert.Equal(645m, world.ComparableAverageUnitPrice);
         Assert.Equal(0.8m, world.PrimaryUsableCoverageRatio);
         Assert.Equal(1.0m, world.ScopeSaneCoverageRatio);
         Assert.Single(restored.ShoppingPlans);

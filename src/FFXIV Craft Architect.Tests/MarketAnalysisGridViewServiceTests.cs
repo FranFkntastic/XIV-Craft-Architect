@@ -187,6 +187,7 @@ public class MarketAnalysisGridViewServiceTests
             ScopeSaneQuantity = 200,
             DataQualityBucket = MarketDataQualityBucket.Current,
             AnalysisCompetitiveAverageUnitPrice = 110,
+            ReferencePriceCredibility = MarketPriceRegionCredibility.Strong,
             WorldAverageUnitPrice = 189,
             Listings =
             [
@@ -207,13 +208,41 @@ public class MarketAnalysisGridViewServiceTests
 
         Assert.Equal("212", MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world));
         Assert.Equal("limited", MarketAnalysisGridViewService.FormatWorldMarketDepthDescriptor(world));
-        Assert.Equal("~189g / unit", MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
-        Assert.Equal("world avg ~189g", MarketAnalysisGridViewService.FormatWorldAverageUnitPrice(world));
+        Assert.Equal("~95g / unit", MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
+        Assert.Equal("all asks ~189g", MarketAnalysisGridViewService.FormatWorldAverageUnitPrice(world));
         Assert.Equal("212/1,000", MarketAnalysisGridViewService.FormatCoverage(world));
         Assert.Equal(MarketCoverageBucket.PartialThin, MarketAnalysisGridViewService.GetDisplayCoverageBucket(world));
         Assert.Equal(MarketScoreBucket.PoorFit, MarketAnalysisGridViewService.GetDisplayScoreBucket(world, MarketAcquisitionLens.BulkValue));
-        Assert.Equal("+72%", MarketAnalysisGridViewService.FormatCompetitiveValue(world));
-        Assert.Contains("actionable average", MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world));
+        Assert.Equal("-13%", MarketAnalysisGridViewService.FormatCompetitiveValue(world));
+        Assert.Contains("comparable average", MarketAnalysisGridViewService.FormatCompetitiveValueTooltip(world));
+    }
+
+    [Fact]
+    [Trait(TestTraits.Surface, TestTraits.DeployWeb)]
+    public void SargatanasExtremeAsks_DoNotPoisonCompactPriceOrDifferential()
+    {
+        var world = new WorldMarketAnalysis
+        {
+            DataCenter = "Aether",
+            WorldName = "Sargatanas",
+            QuantityNeeded = 14_985,
+            ActionableQuantity = 1_060,
+            ActionableAverageUnitPrice = 1_088_902.7688679245m,
+            ComparableQuantity = 891,
+            ComparableAverageUnitPrice = 1_388.4444444444444444m,
+            WorldAverageUnitPrice = 1_088_902.7688679245m,
+            ScopeInsaneQuantity = 169,
+            AnalysisCompetitiveAverageUnitPrice = 782.8304637m,
+            ReferenceSupportScore = 1m,
+            ReferencePriceCredibility = MarketPriceRegionCredibility.Strong,
+            DataQualityBucket = MarketDataQualityBucket.Current
+        };
+
+        Assert.Equal("1,060", MarketAnalysisGridViewService.FormatWorldMarketDepthQuantity(world));
+        Assert.Equal("169 extreme outlier", MarketAnalysisGridViewService.FormatCompetitiveStockDetail(world));
+        Assert.Equal("~1,388g / unit", MarketAnalysisGridViewService.FormatWorldUnitPrice(world));
+        Assert.Equal("all asks ~1,088,903g", MarketAnalysisGridViewService.FormatWorldAverageUnitPrice(world));
+        Assert.Equal("+77%", MarketAnalysisGridViewService.FormatCompetitiveValue(world));
     }
 
     [Fact]

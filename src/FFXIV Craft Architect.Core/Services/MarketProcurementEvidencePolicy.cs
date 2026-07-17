@@ -25,6 +25,14 @@ public static class MarketProcurementEvidencePolicy
         return listing.Quantity > 0 && listing.PricePerUnit > 0;
     }
 
+    public static bool IsComparableListing(AnalyzedMarketListing listing)
+    {
+        ArgumentNullException.ThrowIfNull(listing);
+
+        return listing.Quantity > 0 && listing.PricePerUnit > 0 &&
+            listing.PriceSanity is MarketListingPriceSanity.Sane or MarketListingPriceSanity.LowOutlier;
+    }
+
     public static bool HasScopePriceContext(WorldMarketAnalysis world)
     {
         ArgumentNullException.ThrowIfNull(world);

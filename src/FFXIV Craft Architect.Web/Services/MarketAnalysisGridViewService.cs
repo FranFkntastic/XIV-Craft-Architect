@@ -203,9 +203,14 @@ public static class MarketAnalysisGridViewService
     {
         ArgumentNullException.ThrowIfNull(world);
 
-        var unitPrice = GetProcurementEvidenceUnitPrice(world);
-        return HasProcurementEvidence(world) && unitPrice > 0
-            ? $"~{unitPrice:N0}g / unit"
+        var unitPrice = GetComparableUnitPrice(world);
+        if (unitPrice > 0)
+        {
+            return $"~{unitPrice:N0}g / unit";
+        }
+
+        return GetProcurementEvidenceQuantity(world) > 0
+            ? "Outliers only"
             : "No listings";
     }
 
@@ -213,8 +218,14 @@ public static class MarketAnalysisGridViewService
     {
         ArgumentNullException.ThrowIfNull(world);
 
-        return world.WorldAverageUnitPrice > 0
-            ? $"world avg ~{world.WorldAverageUnitPrice:N0}g"
+        if (world.WorldAverageUnitPrice <= 0)
+        {
+            return string.Empty;
+        }
+
+        var comparablePrice = GetComparableUnitPrice(world);
+        return comparablePrice <= 0 || Math.Round(world.WorldAverageUnitPrice) != Math.Round(comparablePrice)
+            ? $"all asks ~{world.WorldAverageUnitPrice:N0}g"
             : string.Empty;
     }
 
@@ -446,13 +457,13 @@ public static class MarketAnalysisGridViewService
         ArgumentNullException.ThrowIfNull(world);
 
         var (referencePrice, _) = GetCompetitiveValueReference(world);
-        var procurementPrice = GetProcurementEvidenceUnitPrice(world);
-        if (referencePrice <= 0 || procurementPrice <= 0)
+        var comparablePrice = GetComparableUnitPrice(world);
+        if (referencePrice <= 0 || comparablePrice <= 0)
         {
             return "-";
         }
 
-        var percent = (procurementPrice - referencePrice) / referencePrice * 100m;
+        var percent = (comparablePrice - referencePrice) / referencePrice * 100m;
         var rounded = Math.Round(percent, 0, MidpointRounding.AwayFromZero);
         return $"{rounded:+0;-0;0}%";
     }
@@ -462,13 +473,15 @@ public static class MarketAnalysisGridViewService
         ArgumentNullException.ThrowIfNull(world);
 
         var (referencePrice, referenceLabel) = GetCompetitiveValueReference(world);
-        var procurementPrice = GetProcurementEvidenceUnitPrice(world);
-        if (referencePrice <= 0 || procurementPrice <= 0)
+        var comparablePrice = GetComparableUnitPrice(world);
+        if (referencePrice <= 0 || comparablePrice <= 0)
         {
-            return "No listing price is available for comparison.";
+            return GetProcurementEvidenceQuantity(world) > 0
+                ? "Only extreme outlier listings are available, so this world has no representative price comparison."
+                : "No listing price is available for comparison.";
         }
 
-        var percent = (procurementPrice - referencePrice) / referencePrice * 100m;
+        var percent = (comparablePrice - referencePrice) / referencePrice * 100m;
         var rounded = Math.Round(Math.Abs(percent), 0, MidpointRounding.AwayFromZero);
         var relationship = percent < 0
             ? "less than"
@@ -476,7 +489,7 @@ public static class MarketAnalysisGridViewService
                 ? "greater than"
                 : "equal to";
 
-        return $"{world.WorldName}'s actionable average is {rounded:N0}% {relationship} the regional {referenceLabel}: {procurementPrice:N0}g vs {referencePrice:N0}g.";
+        return $"{world.WorldName}'s comparable average is {rounded:N0}% {relationship} the regional {referenceLabel}: {comparablePrice:N0}g vs {referencePrice:N0}g.";
     }
 
     public static IReadOnlyList<MarketListingDivider> GetListingDividersBefore(
@@ -743,16 +756,16 @@ public static class MarketAnalysisGridViewService
 
     private static decimal GetWorldUnitPriceSortValue(WorldMarketAnalysis world)
     {
-        var price = GetProcurementEvidenceUnitPrice(world);
+        var price = GetComparableUnitPrice(world);
         return price > 0 ? price : decimal.MaxValue;
     }
 
     private static decimal GetCompetitiveValueSortValue(WorldMarketAnalysis world)
     {
         var (referencePrice, _) = GetCompetitiveValueReference(world);
-        var procurementPrice = GetProcurementEvidenceUnitPrice(world);
-        return referencePrice > 0 && procurementPrice > 0
-            ? (procurementPrice - referencePrice) / referencePrice
+        var comparablePrice = GetComparableUnitPrice(world);
+        return referencePrice > 0 && comparablePrice > 0
+            ? (comparablePrice - referencePrice) / referencePrice
             : decimal.MaxValue;
     }
 
@@ -972,6 +985,35 @@ public static class MarketAnalysisGridViewService
     private static decimal GetProcurementEvidenceUnitPrice(WorldMarketAnalysis world)
     {
         return GetProcurementEvidence(world).UnitPrice;
+    }
+
+    private static decimal GetComparableUnitPrice(WorldMarketAnalysis world)
+    {
+        if (world.ComparableQuantity > 0 && world.ComparableAverageUnitPrice > 0)
+        {
+            return world.ComparableAverageUnitPrice;
+        }
+
+        if (world.Listings.Count > 0)
+        {
+            var eligibleListings = MarketProcurementEvidencePolicy.GetEligibleListings(world);
+            var comparableListings = world.ReferencePriceCredibility is
+                MarketPriceRegionCredibility.Credible or MarketPriceRegionCredibility.Strong
+                ? eligibleListings.Where(MarketProcurementEvidencePolicy.IsComparableListing).ToList()
+                : eligibleListings;
+            var comparableQuantity = comparableListings.Sum(listing => listing.Quantity);
+            if (comparableQuantity > 0)
+            {
+                return comparableListings.Sum(listing => (decimal)listing.PricePerUnit * listing.Quantity) /
+                    comparableQuantity;
+            }
+
+            return 0;
+        }
+
+        // Persisted analyses from before comparable pricing existed have no listing
+        // projection to rebuild. Preserve their former display until refreshed.
+        return GetProcurementEvidenceUnitPrice(world);
     }
 
     private static ProcurementEvidence GetProcurementEvidence(WorldMarketAnalysis world)

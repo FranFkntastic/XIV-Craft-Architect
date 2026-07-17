@@ -406,6 +406,13 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         var actionableQuantity = actionableListings.Sum(listing => listing.Quantity);
         var actionableCostToCover = CalculateCostToCover(actionableListings, quantityNeeded);
         var actionableAverageUnitPrice = actionableCostToCover?.QuotedAverageUnitPrice ?? CalculateWeightedAverage(actionableListings);
+        var hasCredibleReference = scopePriceContext.PriceEvaluation.CentralRegion.Credibility is
+            MarketPriceRegionCredibility.Credible or MarketPriceRegionCredibility.Strong;
+        var comparableListings = hasCredibleReference
+            ? listings.Where(MarketProcurementEvidencePolicy.IsComparableListing).ToList()
+            : actionableListings;
+        var comparableQuantity = comparableListings.Sum(listing => listing.Quantity);
+        var comparableAverageUnitPrice = CalculateWeightedAverage(comparableListings);
         var worldAverageUnitPrice = CalculateWeightedAverage(actionableListings);
         var coverageBucket = GetCoverageBucket(actionableQuantity, quantityNeeded);
         var primaryUsableListings = listings
@@ -417,7 +424,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             actionableQuantity,
             actionableCostToCover,
             coverageBucket,
-            actionableAverageUnitPrice,
+            comparableAverageUnitPrice,
             dataQualityScore);
 
         return new WorldMarketAnalysis
@@ -434,6 +441,8 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             TotalListingQuantity = totalListingQuantity,
             ActionableQuantity = actionableQuantity,
             ActionableAverageUnitPrice = actionableAverageUnitPrice,
+            ComparableQuantity = comparableQuantity,
+            ComparableAverageUnitPrice = comparableAverageUnitPrice,
             ActionableCostToCoverTotalGil = actionableCostToCover?.TotalCost ?? 0,
             ActionableCostToCoverUnitPrice = actionableCostToCover?.UnitPrice ?? 0,
             ActionableCostToCoverMaxUnitPrice = actionableCostToCover?.MaxUnitPrice ?? 0,
@@ -841,7 +850,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         int actionableQuantity,
         CostToCoverResult? costToCover,
         MarketCoverageBucket coverageBucket,
-        decimal actionableAverageUnitPrice,
+        decimal comparableAverageUnitPrice,
         decimal dataQualityScore)
     {
         var coverageRatio = CalculateCoverageRatio(actionableQuantity, quantityNeeded);
@@ -854,9 +863,9 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
         var bulkScore = actionableRatio * 10_000m
             + Math.Min(actionableQuantity, quantityNeeded) * 10m;
-        if (actionableAverageUnitPrice > 0)
+        if (comparableAverageUnitPrice > 0)
         {
-            bulkScore += 1_000m / actionableAverageUnitPrice;
+            bulkScore += 1_000m / comparableAverageUnitPrice;
         }
 
         bulkScore *= dataQualityScore / 100m;
@@ -877,8 +886,8 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 Lens = MarketAcquisitionLens.BulkValue,
                 Score = bulkScore,
                 ScoreBucket = ScoreBucketForBulkValue(actionableQuantity, quantityNeeded, dataQualityScore),
-                Summary = actionableAverageUnitPrice > 0
-                    ? $"{actionableQuantity:N0} listed at ~{actionableAverageUnitPrice:N0}g actionable average"
+                Summary = comparableAverageUnitPrice > 0
+                    ? $"{actionableQuantity:N0} listed at ~{comparableAverageUnitPrice:N0}g comparable average"
                     : $"{actionableQuantity:N0} listed"
             }
         ];

@@ -261,6 +261,8 @@ public sealed class WorldMarketAnalysis
     public int TotalListingQuantity { get; init; }
     public int ActionableQuantity { get; init; }
     public decimal ActionableAverageUnitPrice { get; init; }
+    public int ComparableQuantity { get; init; }
+    public decimal ComparableAverageUnitPrice { get; init; }
     public long ActionableCostToCoverTotalGil { get; init; }
     public decimal ActionableCostToCoverUnitPrice { get; init; }
     public long ActionableCostToCoverMaxUnitPrice { get; init; }

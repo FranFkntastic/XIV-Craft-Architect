@@ -24,7 +24,7 @@ public class MarketPriceLadderAnalysisServiceTests
         Assert.Equal(MarketCoverageBucket.Full, world.CoverageBucket);
         Assert.DoesNotContain(world.Listings, listing => listing.RetainerName == "Bait" && listing.IsInPrimaryUsableBand);
         Assert.Equal(MarketScoreBucket.Optimal, world.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).ScoreBucket);
-        Assert.Equal("100 listed at ~99g actionable average", world.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).Summary);
+        Assert.Equal("100 listed at ~99g comparable average", world.Scores.Single(score => score.Lens == MarketAcquisitionLens.BulkValue).Summary);
     }
 
     [Fact]
@@ -121,6 +121,35 @@ public class MarketPriceLadderAnalysisServiceTests
         Assert.Equal(10, world.ScopeInsaneQuantity);
         Assert.True(world.SaneThresholdUnitPrice < 250);
         Assert.Equal(1.0m, world.ScopeSaneCoverageRatio);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ExtremeAsksRemainActionableButDoNotEnterComparableAverage()
+    {
+        var service = CreateService();
+        var request = CreateRequest(
+            quantityNeeded: 200,
+            worlds:
+            [
+                World("Sargatanas",
+                [
+                    Listing(quantity: 100, price: 100, retainer: "Fair Stack"),
+                    Listing(quantity: 10, price: 250, retainer: "Wild Ask")
+                ]),
+                World("Faerie", [Listing(quantity: 100, price: 110, retainer: "Regional Seller")]),
+                World("Jenova", [Listing(quantity: 100, price: 105, retainer: "Regional Seller")])
+            ]);
+
+        var analysis = Assert.Single(await service.AnalyzeAsync(request));
+        var world = analysis.Worlds.Single(candidate => candidate.WorldName == "Sargatanas");
+
+        Assert.Equal(110, world.ActionableQuantity);
+        Assert.Equal(100, world.ComparableQuantity);
+        Assert.Equal(100m, world.ComparableAverageUnitPrice);
+        Assert.True(world.ReferencePriceCredibility is MarketPriceRegionCredibility.Credible or MarketPriceRegionCredibility.Strong);
+        Assert.True(world.ActionableAverageUnitPrice > world.ComparableAverageUnitPrice);
+        Assert.True(world.WorldAverageUnitPrice > world.ComparableAverageUnitPrice);
+        Assert.Equal(10, world.ScopeInsaneQuantity);
     }
 
 
