@@ -437,7 +437,8 @@ public class MarketAnalysisWorkflowServiceTests
             new MarketPriceLadderAnalysisService(),
             new IndexedDbMarketAnalysisPersistence(indexedDb),
             indexedDb,
-            recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService());
+            recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService(),
+            NullLogger<MarketAnalysisWorkflowService>.Instance);
     }
 
     private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)

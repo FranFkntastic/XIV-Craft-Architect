@@ -25,7 +25,7 @@ public class GarlandService : IGarlandService
 
     // Cache for zone names to avoid repeated API calls
     private static readonly ConcurrentDictionary<int, string> _zoneNameCache = new();
-    private static readonly ConcurrentDictionary<int, Task<GarlandItem?>> _itemCache = new();
+    private readonly ConcurrentDictionary<int, Task<GarlandItem?>> _itemCache = new();
 
     public GarlandService(HttpClient httpClient, ILogger<GarlandService>? logger = null)
     {
