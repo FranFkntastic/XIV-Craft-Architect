@@ -1,11 +1,8 @@
 using FFXIV_Craft_Architect.Core.Services;
-using FFXIV_Craft_Architect.Desktop.Services;
 
 namespace FFXIV_Craft_Architect.Tests;
 
-[Collection(DesktopTestCollection.Name)]
-[Trait(TestTraits.Surface, TestTraits.Desktop)]
-public sealed class DesktopJsonMarketCacheServiceTests : IDisposable
+public sealed class JsonFileMarketCacheServiceTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"craft-architect-market-cache-{Guid.NewGuid():N}");
 
@@ -87,7 +84,7 @@ public sealed class DesktopJsonMarketCacheServiceTests : IDisposable
         }
     }
 
-    private DesktopJsonMarketCacheService CreateService() =>
+    private JsonFileMarketCacheService CreateService() =>
         new(new UniversalisService(new HttpClient()), _root);
 
     private static CachedMarketData CreateMarketData(int itemId, DateTime fetchedAtUtc) =>

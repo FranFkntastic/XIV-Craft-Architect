@@ -1,6 +1,11 @@
 # FFXIV Craft Architect
 Yet another crafting cost calculator for Final Fantasy XIV.
 
+The canonical app is the hosted Blazor web app — no installation required:
+
+- Production: <https://xivcraftarchitect.com>
+- Development slot: <https://dev.xivcraftarchitect.com>
+
 ## Features
 
 - **Market Data Integration** - Real-time prices from Universalis
@@ -9,9 +14,8 @@ Yet another crafting cost calculator for Final Fantasy XIV.
 
 ## Requirements
 
-- Windows 10/11 (x64)
-- .NET 8 Runtime (if not using self-contained build)
-- .NET 10 SDK for development (pinned by `global.json`)
+- A modern browser, to use the hosted app
+- .NET 10 SDK for development (pinned by `global.json`; application projects target .NET 8)
 - a usecase, ideally
 
 ## Development verification

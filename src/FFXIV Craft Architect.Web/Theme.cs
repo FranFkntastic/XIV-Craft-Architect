@@ -4,7 +4,7 @@ namespace FFXIV_Craft_Architect.Web;
 
 /// <summary>
 /// Application theme configuration for FFXIV Craft Architect.
-/// Provides a custom dark theme with gold accent colors matching the WPF desktop application.
+/// Provides the product's custom dark theme with gold accent colors.
 /// </summary>
 public static class AppTheme
 {
@@ -17,7 +17,7 @@ public static class AppTheme
         {
             PaletteDark = new PaletteDark
             {
-                Primary = "#d4a73a",      // Gold accent (like WPF)
+                Primary = "#d4a73a",      // Gold accent
                 Secondary = "#aeb7c0",    // Neutral secondary actions and supporting text
                 Success = "#4caf50",      // Green
                 Error = "#f44336",        // Red

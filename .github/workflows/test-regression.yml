@@ -54,7 +54,6 @@ jobs:
           --configuration Release
           --no-build
           --no-restore
-          --filter "Surface!=Desktop"
           --blame-hang
           --blame-hang-timeout 5m
           --blame-hang-dump-type mini

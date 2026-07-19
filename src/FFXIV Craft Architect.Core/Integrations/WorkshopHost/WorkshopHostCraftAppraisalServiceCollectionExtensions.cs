@@ -34,7 +34,7 @@ public static class WorkshopHostCraftAppraisalServiceCollectionExtensions
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "FFXIV_Craft_Architect",
                 "WorkshopHostCache");
-            return new FFXIV_Craft_Architect.Desktop.Services.DesktopJsonMarketCacheService(universalis, cacheRoot);
+            return new JsonFileMarketCacheService(universalis, cacheRoot);
         });
         services.TryAddScoped<ICoreRecipePlanBuilder, CoreRecipeCalculationPlanBuilder>();
         services.TryAddScoped<ICraftAppraisalPriceEvidenceService, CraftAppraisalPriceEvidenceService>();

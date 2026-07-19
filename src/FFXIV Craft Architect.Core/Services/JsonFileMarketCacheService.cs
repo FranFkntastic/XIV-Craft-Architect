@@ -1,10 +1,13 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
-using FFXIV_Craft_Architect.Core.Services;
 
-namespace FFXIV_Craft_Architect.Desktop.Services;
+namespace FFXIV_Craft_Architect.Core.Services;
 
-public sealed class DesktopJsonMarketCacheService : IMarketCacheService
+/// <summary>
+/// JSON file-backed <see cref="IMarketCacheService"/> for local processes
+/// (e.g. Workshop Host appraisal) that need a persistent market cache on disk.
+/// </summary>
+public sealed class JsonFileMarketCacheService : IMarketCacheService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -16,7 +19,7 @@ public sealed class DesktopJsonMarketCacheService : IMarketCacheService
     private readonly TimeSpan _defaultMaxAge = MarketEvidencePolicyDefaults.ReusableCacheMaxAge;
     private Dictionary<string, CachedMarketData>? _cache;
 
-    public DesktopJsonMarketCacheService(UniversalisService universalis)
+    public JsonFileMarketCacheService(UniversalisService universalis)
         : this(
             universalis,
             Path.Combine(
@@ -26,13 +29,13 @@ public sealed class DesktopJsonMarketCacheService : IMarketCacheService
     {
     }
 
-    public DesktopJsonMarketCacheService(UniversalisService universalis, string rootDirectory)
+    public JsonFileMarketCacheService(UniversalisService universalis, string rootDirectory)
     {
         _universalis = universalis ?? throw new ArgumentNullException(nameof(universalis));
         RootDirectory = string.IsNullOrWhiteSpace(rootDirectory)
             ? throw new ArgumentException("Market cache root is required.", nameof(rootDirectory))
             : rootDirectory;
-        CachePath = Path.Combine(RootDirectory, "desktop-market-cache.json");
+        CachePath = Path.Combine(RootDirectory, "market-cache.json");
     }
 
     public string RootDirectory { get; }
