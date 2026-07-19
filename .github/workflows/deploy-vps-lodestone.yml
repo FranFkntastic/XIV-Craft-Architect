@@ -60,6 +60,7 @@ jobs:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+      VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
       VPS_SSH_PORT: 22
     steps:
       - name: Checkout source
@@ -158,11 +159,14 @@ jobs:
           test -n "$VPS_HOST"
           test -n "$VPS_USER"
           test -n "$VPS_SSH_PRIVATE_KEY"
+          test -n "$VPS_SSH_HOST_KEY"
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/craftarchitect_vps
           chmod 600 ~/.ssh/craftarchitect_vps
-          ssh-keyscan -p "$VPS_SSH_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
+          # Pin the VPS host key from secrets instead of trusting a live scan.
+          printf '%s\n' "$VPS_SSH_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Upload helper archive and deploy script
         run: >
@@ -179,11 +183,15 @@ jobs:
           "$VPS_USER@$VPS_HOST"
           "bash /tmp/deploy-lodestone-remote.sh '${{ steps.package.outputs.release }}'"
 
-      - name: Verify public helper route
+      - name: Verify public helper routes on both domains
         run: |
-          curl --fail --silent --show-error \
-            "https://dev.xivcraftarchitect.com/api/lodestone/crafters/search?name=Level%20Checker&world=Behemoth" \
-            > /dev/null
-          curl --fail --silent --show-error \
-            "https://dev.xivcraftarchitect.com/api/xivdata/items/search?q=Varn&limit=12" \
-            > /dev/null
+          set -euo pipefail
+          for domain in xivcraftarchitect.com dev.xivcraftarchitect.com; do
+            # Known-good Lodestone probe: Level Checker on Behemoth is character 16331040.
+            curl --fail --silent --show-error \
+              "https://$domain/api/lodestone/crafters/search?name=Level%20Checker&world=Behemoth" \
+              | grep -q 16331040
+            curl --fail --silent --show-error \
+              "https://$domain/api/xivdata/items/search?q=Varn&limit=12" \
+              | grep -qi varn
+          done
