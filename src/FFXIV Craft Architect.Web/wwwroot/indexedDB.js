@@ -1249,4 +1249,4 @@ window.IndexedDB = {
     getTradeStoreDiagnostics
 };
 
-console.log('[IndexedDB] Module loaded (v8 with Trade order craft snapshots)');
+console.log('[IndexedDB] Module loaded (v9 with market data freshness probe)');
