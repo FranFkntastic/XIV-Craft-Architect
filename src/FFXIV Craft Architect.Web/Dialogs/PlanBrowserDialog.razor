@@ -16,7 +16,7 @@
                 @if (_savedPlans?.Any() != true)
                 {
                     <div style="padding: 24px; text-align: center;">
-                        <MudText Typo="Typo.body2" Style="color: #666;">
+                        <MudText Typo="Typo.body2" Style="color: var(--ca-text-muted);">
                             No named plans saved yet. Your current session is still saved automatically.
                         </MudText>
                     </div>
@@ -40,11 +40,11 @@
                                                 <span style="color: #4caf50; font-size: 11px; margin-left: 8px;">(current)</span>
                                             }
                                         </MudText>
-                                        <MudText Typo="Typo.caption" Style="color: #888;">
+                                        <MudText Typo="Typo.caption" Style="color: var(--ca-text-muted);">
                                             @FormatPlanItemCount(plan.ItemCount) · @plan.DataCenter
                                         </MudText>
                                     </div>
-                                    <MudText Typo="Typo.caption" Style="color: #666; font-size: 11px;">
+                                    <MudText Typo="Typo.caption" Style="color: var(--ca-text-muted); font-size: 11px;">
                                         @plan.ModifiedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
                                     </MudText>
                                 </div>

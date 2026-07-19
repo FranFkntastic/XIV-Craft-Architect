@@ -261,6 +261,11 @@ public partial class TradeOrders
         }
     }
 
+    private void CloseNewOrderWorkspace()
+    {
+        _showNewOrderPanel = false;
+    }
+
     private void ResetNewOrderDraft()
     {
         _newRequestedOrderTitle = string.Empty;

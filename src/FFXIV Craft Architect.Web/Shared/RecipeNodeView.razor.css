@@ -58,7 +58,7 @@
 }
 
 .rp-node-quality {
-    color: #696f73;
+    color: var(--ca-text-muted);
     font-size: 13px;
 }
 
@@ -88,7 +88,7 @@
     min-width: 0;
     overflow: hidden;
     padding-right: 16px;
-    color: #898f94;
+    color: var(--ca-text-muted);
     font-size: 11px;
     text-align: right;
     text-overflow: ellipsis;
@@ -236,7 +236,7 @@
 }
 
 .rp-node-quote-card-line em {
-    color: #7f878c;
+    color: var(--ca-text-muted);
     font-style: normal;
 }
 
@@ -245,7 +245,7 @@
     margin-top: 7px;
     padding-top: 7px;
     border-top: 1px solid #303438;
-    color: #7d858a;
+    color: var(--ca-text-muted);
     font-size: 10px;
 }
 

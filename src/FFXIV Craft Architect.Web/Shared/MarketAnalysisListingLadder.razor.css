@@ -20,7 +20,7 @@
 }
 
 .ma-ladder-table th {
-    color: #8d949c;
+    color: var(--ca-text-muted);
     font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;

@@ -32,7 +32,6 @@
             OnClearExclusionsRequested="ClearExclusionsAsync"
             CanExportCraftQuote="CanExportCraftQuote()"
             OnExportCraftQuoteRequested="ExportCraftQuoteAsync"
-            OnGoToPlannerRequested="GoToPlanner"
             OnGoToMarketAnalysisRequested="GoToMarketAnalysis" />
 
         <ProcurementResultsShell
@@ -333,8 +332,6 @@
             AppState.SetStatus(message, busy: false);
         }
     }
-
-    private void GoToPlanner() => NavigationManager.NavigateTo("./");
 
     private void GoToMarketAnalysis() => NavigationManager.NavigateTo("market");
 

@@ -11,7 +11,7 @@
 }
 
 .ma-field-label {
-    color: #888;
+    color: var(--ca-text-muted);
     font-size: 12px;
     margin-bottom: 4px;
 }
@@ -36,7 +36,7 @@
 }
 
 .ma-region-toggle-caption {
-    color: #666;
+    color: var(--ca-text-muted);
     display: block;
     margin-top: 4px;
     margin-left: 32px;

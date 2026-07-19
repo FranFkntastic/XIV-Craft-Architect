@@ -31,7 +31,7 @@ public static class AppTheme
                 DrawerBackground = "#1e1e1e",
                 DrawerText = "#cccccc",
                 ActionDefault = "#cccccc",
-                ActionDisabled = "#666666",
+                ActionDisabled = "#949494",
                 Divider = "#444444",
                 TableLines = "#444444",
                 LinesDefault = "#444444",

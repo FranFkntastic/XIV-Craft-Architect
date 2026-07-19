@@ -50,7 +50,7 @@
 
 .ma-world-grid-table th,
 ::deep .ma-world-grid-table th {
-    color: #8d949c;
+    color: var(--ca-text-muted);
     font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
@@ -150,7 +150,7 @@
 ::deep .ma-world-dc,
 ::deep .ma-world-muted {
     display: block;
-    color: #8d949c;
+    color: var(--ca-text-muted);
     font-size: 11px;
     line-height: 1.3;
 }
@@ -190,4 +190,19 @@
 ::deep .ma-world-grid-table .web-data-table-expanded-cell {
     padding: 0 6px 8px 24px;
     background: #1a1d20;
+}
+
+.ma-world-value,
+::deep .ma-world-value {
+    font-variant-numeric: tabular-nums;
+}
+
+.ma-world-value.is-below,
+::deep .ma-world-value.is-below {
+    color: #81c784;
+}
+
+.ma-world-value.is-above,
+::deep .ma-world-value.is-above {
+    color: #e57373;
 }

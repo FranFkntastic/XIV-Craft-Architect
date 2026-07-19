@@ -468,6 +468,26 @@ public static class MarketAnalysisGridViewService
         return $"{rounded:+0;-0;0}%";
     }
 
+    public static string GetCompetitiveValueClass(WorldMarketAnalysis world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+
+        var (referencePrice, _) = GetCompetitiveValueReference(world);
+        var comparablePrice = GetComparableUnitPrice(world);
+        if (referencePrice <= 0 || comparablePrice <= 0)
+        {
+            return "ma-world-value";
+        }
+
+        var percent = (comparablePrice - referencePrice) / referencePrice * 100m;
+        var rounded = Math.Round(percent, 0, MidpointRounding.AwayFromZero);
+        return rounded < 0
+            ? "ma-world-value is-below"
+            : rounded > 0
+                ? "ma-world-value is-above"
+                : "ma-world-value";
+    }
+
     public static string FormatCompetitiveValueTooltip(WorldMarketAnalysis world)
     {
         ArgumentNullException.ThrowIfNull(world);

@@ -30,8 +30,11 @@
     @if (CurrentPlan == null)
     {
         <div class="mp-empty-state">
-            <div class="mp-empty-title">No Plan Built Yet</div>
-            <div class="mp-empty-subtitle">Add items to your project, then build the recipe plan to see every required material.</div>
+            <div class="mp-empty-card">
+                <MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Large" Class="mp-empty-icon" />
+                <div class="mp-empty-title">No Plan Built Yet</div>
+                <div class="mp-empty-subtitle">Search for items on the left to add them to your project, then build the recipe plan to see every required material.</div>
+            </div>
 
             @if (SavedPlans.Any())
             {

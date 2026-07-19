@@ -355,12 +355,22 @@
 }
 
 .ae-empty {
-    margin: 32px;
+    margin: 32px auto;
+    max-width: 440px;
     border: 1px solid #3a3a3a;
     border-radius: 8px;
     background: #252525;
-    padding: 28px;
+    padding: 40px 32px;
     color: #cfd7df;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.ae-empty-icon {
+    color: #555;
+    margin-bottom: 12px;
 }
 
 .ae-empty-title {
@@ -372,6 +382,7 @@
 
 .ae-empty-body {
     color: #9aa0a6;
+    margin-bottom: 20px;
 }
 
 ::deep .ae-table {

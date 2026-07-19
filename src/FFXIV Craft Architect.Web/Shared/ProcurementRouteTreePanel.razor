@@ -38,7 +38,7 @@
                 <span><strong>@RouteDecision.SelectedDataCenterTransfers</strong> DC @Pluralize(RouteDecision.SelectedDataCenterTransfers, "transfer", "transfers")</span>
             </div>
         </div>
-        @if (RouteDecision.PremiumRate >= 1m)
+        @if (RouteDecision.PremiumRate >= 1m && RouteDecision.PremiumGil >= 1_000m)
         {
             <div class="pp-decision-warning" role="status">
                 <MudIcon Icon="@Icons.Material.Filled.PriceChange" Size="Size.Small" />
@@ -447,7 +447,11 @@
         }
 
         var benefit = avoided.Count > 0 ? $" and avoids {string.Join(" and ", avoided)}" : string.Empty;
-        return $"This route costs {decision.PremiumGil:N0}g ({decision.PremiumRate:P1}) more than the cheapest route{benefit}.{origin}";
+        // Percentages are noise when the absolute delta is pocket change; show gil only.
+        var premium = decision.PremiumGil >= 1_000m
+            ? $" ({decision.PremiumRate:P0})"
+            : string.Empty;
+        return $"This route costs {decision.PremiumGil:N0}g{premium} more than the cheapest route{benefit}.{origin}";
     }
 
     private MarketRouteItemDecision? GetItemDecision(WorldItemPurchase item) =>

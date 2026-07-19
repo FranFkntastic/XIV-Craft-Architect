@@ -69,8 +69,15 @@
         @if (AppState.CurrentPlan == null)
         {
             <div class="ae-empty">
-                <div class="ae-empty-title">No plan loaded</div>
+                <MudIcon Icon="@Icons.Material.Filled.FactCheck" Size="Size.Large" Class="ae-empty-icon" />
+                <div class="ae-empty-title">No Plan Loaded</div>
                 <div class="ae-empty-body">Build or load a recipe plan first, then return here to choose acquisition sources.</div>
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.ArrowBack"
+                           OnClick="GoToPlanner">
+                    Go to Recipe Planner
+                </MudButton>
             </div>
         }
         else
@@ -390,7 +397,6 @@
                 Size = new WebTableColumnSize(155, 105),
                 HeaderCssClass = "ae-head-cell",
                 CellCssClass = "ae-role-cell",
-                CellTitleSelector = GetDecisionStatus,
                 CellTemplate = RenderRoleCell
             },
             new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
@@ -497,7 +503,11 @@
 
     private RenderFragment<DecisionRow> RenderRoleCell => row => builder =>
     {
-        builder.AddContent(0, GetDecisionStatus(row));
+        // The column truncates long statuses, so surface the full text on hover.
+        builder.OpenComponent<MudTooltip>(0);
+        builder.AddAttribute(1, "Text", GetDecisionStatus(row));
+        builder.AddAttribute(2, "ChildContent", (RenderFragment)(content => content.AddContent(0, GetDecisionStatus(row))));
+        builder.CloseComponent();
     };
 
     private RenderFragment<DecisionRow> RenderMarketEvidenceCell => row => builder =>
@@ -737,6 +747,11 @@
     private void GoToMarket()
     {
         NavigationManager.NavigateTo("market");
+    }
+
+    private void GoToPlanner()
+    {
+        NavigationManager.NavigateTo("");
     }
 
     private void GoToProcurement()

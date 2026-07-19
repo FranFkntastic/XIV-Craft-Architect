@@ -171,7 +171,7 @@
                             </section>
                         </section>
                     }
-                    else if (_showNewOrderPanel || _selectedOrder == null)
+                    else if (_showNewOrderPanel)
                     {
                         <section class="trade-orders-workspace-card is-new">
                             <div class="trade-orders-workspace-header">
@@ -180,6 +180,12 @@
                                     <MudText Typo="Typo.h6">Requested Outputs</MudText>
                                 </div>
                                 <div class="trade-orders-workspace-actions">
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Secondary"
+                                               StartIcon="@Icons.Material.Filled.Close"
+                                               OnClick="CloseNewOrderWorkspace">
+                                        Cancel
+                                    </MudButton>
                                     <MudButton Variant="Variant.Outlined"
                                                Color="Color.Secondary"
                                                StartIcon="@Icons.Material.Filled.Clear"
@@ -291,7 +297,7 @@
                             </section>
                         </section>
                     }
-                    else
+                    else if (_selectedOrder != null)
                     {
                         <section class="trade-orders-workspace-card">
                             <div class="trade-orders-workspace-header">
@@ -502,6 +508,26 @@
                                     </div>
                                 </div>
                             </section>
+                        </section>
+                    }
+                    else
+                    {
+                        <section class="trade-orders-workspace-card">
+                            <div class="trade-orders-workspace-empty">
+                                <MudIcon Icon="@Icons.Material.Filled.Assignment"
+                                         Size="Size.Large"
+                                         Class="trade-orders-workspace-empty-icon" />
+                                <MudText Typo="Typo.h6">No Order Selected</MudText>
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                    Select an order from the list, or start a new one.
+                                </MudText>
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.Add"
+                                           OnClick="StartNewOrderWorkspace">
+                                    New Order
+                                </MudButton>
+                            </div>
                         </section>
                     }
                 </main>

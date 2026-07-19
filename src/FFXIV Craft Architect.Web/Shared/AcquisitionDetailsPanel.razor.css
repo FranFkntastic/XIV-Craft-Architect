@@ -4,7 +4,7 @@
 }
 
 .rp-empty-state {
-    color: #888;
+    color: var(--ca-text-muted);
     text-align: center;
     padding: 24px;
 }
@@ -17,7 +17,7 @@
 }
 
 .rp-empty-subtitle {
-    color: #888;
+    color: var(--ca-text-muted);
     font-size: 12px;
 }
 
@@ -66,7 +66,7 @@
 }
 
 .rp-header-action:disabled {
-    color: #777;
+    color: var(--ca-text-muted);
     cursor: wait;
     opacity: 0.75;
 }
@@ -83,7 +83,7 @@
 }
 
 .rp-item-meta {
-    color: #888;
+    color: var(--ca-text-muted);
     font-size: 12px;
     margin: 0 8px 8px;
 }
@@ -168,7 +168,7 @@
 }
 
 .rp-method-row:disabled {
-    color: #666;
+    color: var(--ca-text-muted);
     cursor: not-allowed;
     opacity: 0.8;
 }
@@ -191,7 +191,7 @@
 }
 
 .rp-method-detail {
-    color: #888;
+    color: var(--ca-text-muted);
     font-size: 12px;
     line-height: 1.35;
     margin-top: 2px;

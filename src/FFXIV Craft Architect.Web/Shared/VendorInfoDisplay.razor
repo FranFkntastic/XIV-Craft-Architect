@@ -14,7 +14,7 @@
                 @primaryVendor?.Name
                 @if (primaryVendor?.Price > 0)
                 {
-                    <span style="color: #888;"> (@primaryVendor.Price.ToString("N0")g)</span>
+                    <span style="color: var(--ca-text-muted);"> (@primaryVendor.Price.ToString("N0")g)</span>
                 }
             </MudText>
 
@@ -54,7 +54,7 @@
                         {
                             <div style="display: flex; align-items: center; gap: 4px; margin-top: 2px;">
                                 <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Style="color: #666;" />
-                                <MudText Typo="Typo.caption" Style="color: #888;">
+                                <MudText Typo="Typo.caption" Style="color: var(--ca-text-muted);">
                                     @location
                                 </MudText>
                             </div>
@@ -67,7 +67,7 @@
                 {
                     <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 2px;">
                         <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Style="color: #666;" />
-                        <MudText Typo="Typo.caption" Style="color: #888;">
+                        <MudText Typo="Typo.caption" Style="color: var(--ca-text-muted);">
                             @vendor.Name
                             @if (!string.IsNullOrEmpty(vendor.Location))
                             {
@@ -75,7 +75,7 @@
                             }
                             @if (vendor.Price > 0 && vendor.Price != primaryVendor?.Price)
                             {
-                                <span style="color: #666;"> (@vendor.Price.ToString("N0")g)</span>
+                                <span style="color: var(--ca-text-muted);"> (@vendor.Price.ToString("N0")g)</span>
                             }
                         </MudText>
                     </div>
@@ -87,7 +87,7 @@
                         {
                             <div style="display: flex; align-items: center; gap: 4px; margin-left: 20px; margin-bottom: 2px;">
                                 <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" Style="color: #444;" />
-                                <MudText Typo="Typo.caption" Style="color: #666;">
+                                <MudText Typo="Typo.caption" Style="color: var(--ca-text-muted);">
                                     @location
                                 </MudText>
                             </div>

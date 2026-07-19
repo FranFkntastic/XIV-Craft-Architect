@@ -86,7 +86,7 @@
 }
 
 .pe-text-btn:disabled {
-    color: #6b7280;
+    color: var(--ca-text-muted);
     border-color: #374151;
     cursor: default;
 }

@@ -84,7 +84,7 @@
 }
 
 .diagnostics-build {
-    color: #8e989f;
+    color: var(--ca-text-muted);
     font-size: 11px;
     white-space: nowrap;
 }
@@ -225,7 +225,7 @@
 }
 
 .diagnostics-action-row .diagnostics-attachment-note {
-    color: #879199;
+    color: var(--ca-text-muted);
     font-size: 10px;
 }
 

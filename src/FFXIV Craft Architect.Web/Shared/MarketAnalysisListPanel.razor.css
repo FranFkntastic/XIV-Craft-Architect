@@ -59,7 +59,7 @@
 }
 
 .ma-item-kind {
-    color: #888;
+    color: var(--ca-text-muted);
     font-size: 11px;
 }
 
@@ -98,7 +98,7 @@
 .ma-ledger-table th {
     padding: 4px 5px;
     border-bottom-color: #343a40;
-    color: #888;
+    color: var(--ca-text-muted);
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
@@ -243,12 +243,12 @@
 .ma-detail-copy-button,
 .ma-detail-refresh-button {
     flex-shrink: 0;
-    color: #8d949c;
+    color: var(--ca-text-muted);
     padding: 2px;
 }
 
 .ma-detail-subtitle {
-    color: #888;
+    color: var(--ca-text-muted);
     line-height: 1.3;
 }
 
@@ -318,7 +318,7 @@
 
 .ma-price-band-grid th,
 ::deep .ma-price-band-grid th {
-    color: #8f98a0;
+    color: var(--ca-text-muted);
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
@@ -400,7 +400,7 @@
 
 .ma-price-band-average {
     grid-area: avg;
-    color: #8f98a0;
+    color: var(--ca-text-muted);
     font-size: 11px;
 }
 
@@ -414,7 +414,7 @@
 
 .ma-price-band-signal-secondary,
 ::deep .ma-price-band-signal-secondary {
-    color: #8f98a0;
+    color: var(--ca-text-muted);
     font-size: 11px;
     font-weight: 600;
     text-transform: capitalize;
@@ -462,7 +462,7 @@
 }
 
 ::deep .ma-price-band-listing-grid th {
-    color: #8d949c;
+    color: var(--ca-text-muted);
     font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
@@ -502,7 +502,7 @@
 
 .ma-price-band-empty {
     padding: 8px;
-    color: #8d949c;
+    color: var(--ca-text-muted);
     font-size: 12px;
 }
 
@@ -513,7 +513,7 @@
     justify-content: center;
     flex-direction: column;
     gap: 10px;
-    color: #777;
+    color: var(--ca-text-muted);
     text-align: center;
 }
 
@@ -525,6 +525,6 @@
     flex-direction: column;
     gap: 10px;
     padding: 20px;
-    color: #8d949c;
+    color: var(--ca-text-muted);
     text-align: center;
 }

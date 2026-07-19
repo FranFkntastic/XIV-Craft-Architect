@@ -100,11 +100,6 @@
     }
 
     <nav class="pp-secondary-actions" aria-label="Procurement navigation">
-        <MudButton OnClick="OnGoToPlannerRequested"
-                   Variant="Variant.Text"
-                   StartIcon="@Icons.Material.Filled.ArrowBack">
-            Planner
-        </MudButton>
         <MudButton OnClick="OnGoToMarketAnalysisRequested"
                    Variant="Variant.Text"
                    StartIcon="@Icons.Material.Filled.Analytics">
@@ -131,7 +126,6 @@
     [Parameter] public EventCallback OnClearExclusionsRequested { get; set; }
     [Parameter] public bool CanExportCraftQuote { get; set; }
     [Parameter] public EventCallback OnExportCraftQuoteRequested { get; set; }
-    [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
     [Parameter] public EventCallback OnGoToMarketAnalysisRequested { get; set; }
     private static readonly IReadOnlyList<CompactSelectOption> WorldExclusionDurationOptions =
     [
