@@ -62,14 +62,15 @@ public sealed class JointAcquisitionRouteOptimizationService
             .ThenBy(entry => entry.Variant.DecisionKey, StringComparer.Ordinal)
             .ToList();
 
-        // Branch-and-bound: a variant's lower bound is a strict floor on what its
-        // route can cost. The cull bound uses the widest premium any tolerance tier
-        // can allow (tolerance 1 = 100%), so every variant that could ever win the
-        // decision at ANY travel tolerance is always evaluated; only variants that
-        // cannot land within double the incumbent's total are skipped. Those could
-        // still have appeared in the fully-unbounded "fewest stops" display slot,
-        // so the tradeoff slider can lose >2x-cost travel options - accepted as
-        // display-only noise in exchange for bounded evaluation.
+        // Decomposed cost gate: variant demand is binary per item (crafted or bought
+        // at plan quantity), so each item's minimum route cost is a per-(item, demand)
+        // constant that can be memoized. A variant's total is the sum of per-item
+        // minima plus its fixed cost, which is exactly what the tolerance-11 beam
+        // minimizes. Compute that sum for every variant up front and only run the
+        // full route search for variants within the widest premium tier of the
+        // incumbent; far variants cannot win at any travel tolerance, and skipping
+        // their route searches is where the time went.
+        var minCostByItem = new Dictionary<(int itemId, int quantity, int hqQuantity), (long cost, bool complete)>();
         var incumbentTotal = long.MaxValue;
         var skippedByBound = 0;
 
@@ -77,17 +78,24 @@ public sealed class JointAcquisitionRouteOptimizationService
         {
             ct.ThrowIfCancellationRequested();
             var entry = orderedVariants[index];
-            if (incumbentTotal < long.MaxValue)
+            var variant = entry.Variant;
+            var (decomposedCost, decomposedComplete) = EvaluateDecomposedCost(
+                variant,
+                evidenceByItem,
+                minCostByItem);
+            if (!decomposedComplete)
             {
-                var cullBound = GetMaximumTotal(incumbentTotal, MarketRouteScoring.GetMaximumPremiumRate(1));
-                if (entry.LowerBound > cullBound)
-                {
-                    skippedByBound = orderedVariants.Count - index;
-                    break;
-                }
+                continue;
             }
 
-            var variant = entry.Variant;
+            var estimatedTotal = Add(variant.FixedGilCost, decomposedCost);
+            incumbentTotal = Math.Min(incumbentTotal, estimatedTotal);
+            if (estimatedTotal > GetMaximumTotal(incumbentTotal, MarketRouteScoring.GetMaximumPremiumRate(1)))
+            {
+                skippedByBound++;
+                continue;
+            }
+
             var marketPlans = BuildDemandPlans(variant, evidenceByItem, routeSession);
             if (marketPlans == null)
             {
@@ -108,7 +116,6 @@ public sealed class JointAcquisitionRouteOptimizationService
 
             var marketCost = route.Decision?.SelectedGilCost ?? 0;
             evaluated.Add(new EvaluatedVariant(variant, marketPlans, route, Add(variant.FixedGilCost, marketCost)));
-            incumbentTotal = Math.Min(incumbentTotal, evaluated[^1].TotalGilCost);
 
             if ((index + 1) % 25 == 0)
             {
@@ -243,6 +250,65 @@ public sealed class JointAcquisitionRouteOptimizationService
             session,
             ct,
             absoluteMaximumGilCost);
+    }
+
+    private static (long Cost, bool Complete) EvaluateDecomposedCost(
+        AcquisitionVariant variant,
+        IReadOnlyDictionary<int, DetailedShoppingPlan> evidenceByItem,
+        Dictionary<(int itemId, int quantity, int hqQuantity), (long cost, bool complete)> minCostByItem)
+    {
+        long total = 0;
+        foreach (var (itemId, demand) in variant.MarketDemand)
+        {
+            var key = (itemId, demand.Quantity, demand.HqQuantity);
+            if (!minCostByItem.TryGetValue(key, out var itemCost))
+            {
+                if (!evidenceByItem.TryGetValue(itemId, out var evidence))
+                {
+                    return (0, false);
+                }
+
+                // Variant demand is binary per item (crafted or bought at plan
+                // quantity), so the evidence plan's per-world costs and split
+                // recommendation apply at exactly this demand.
+                itemCost = GetMinimumItemCost(evidence);
+                minCostByItem[key] = itemCost;
+            }
+
+            if (!itemCost.complete)
+            {
+                return (0, false);
+            }
+
+            total = Add(total, itemCost.cost);
+        }
+
+        return (total, true);
+    }
+
+    private static (long Cost, bool Complete) GetMinimumItemCost(DetailedShoppingPlan plan)
+    {
+        var bestWorldCost = long.MaxValue;
+        foreach (var world in plan.WorldOptions)
+        {
+            if (world.HasSufficientStock && world.TotalCost < bestWorldCost)
+            {
+                bestWorldCost = world.TotalCost;
+            }
+        }
+
+        if (bestWorldCost < long.MaxValue)
+        {
+            return (bestWorldCost, true);
+        }
+
+        if (plan.RecommendedSplit is { Count: > 0 } split &&
+            split.Sum(part => part.QuantityToBuy) >= plan.QuantityNeeded)
+        {
+            return (split.Sum(part => part.TotalCost), true);
+        }
+
+        return (0, false);
     }
 
     private static List<DetailedShoppingPlan>? BuildDemandPlans(
