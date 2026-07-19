@@ -25,6 +25,7 @@ public class GarlandService : IGarlandService
 
     // Cache for zone names to avoid repeated API calls
     private static readonly ConcurrentDictionary<int, string> _zoneNameCache = new();
+    private static readonly ConcurrentDictionary<int, Task<GarlandItem?>> _itemCache = new();
 
     public GarlandService(HttpClient httpClient, ILogger<GarlandService>? logger = null)
     {
@@ -134,6 +135,33 @@ public class GarlandService : IGarlandService
     /// Get full item data including recipe information.
     /// </summary>
     public async Task<GarlandItem?> GetItemAsync(int itemId, CancellationToken ct = default)
+    {
+        // Item data is static per game patch. Fetch once per process and share
+        // in-flight tasks so concurrent and repeat callers never duplicate fetches.
+        if (_itemCache.TryGetValue(itemId, out var cached))
+        {
+            return await cached;
+        }
+
+        var fetchTask = FetchItemAsync(itemId, ct);
+        if (!_itemCache.TryAdd(itemId, fetchTask))
+        {
+            return await _itemCache[itemId];
+        }
+
+        try
+        {
+            return await fetchTask;
+        }
+        catch
+        {
+            // Never cache a failed fetch; the next caller should get a fresh attempt.
+            _itemCache.TryRemove(itemId, out _);
+            throw;
+        }
+    }
+
+    private async Task<GarlandItem?> FetchItemAsync(int itemId, CancellationToken ct)
     {
         var url = string.Format(GarlandItemUrl, itemId);
         _logger?.LogInformation("[GarlandService] Fetching item data: {ItemId}", itemId);

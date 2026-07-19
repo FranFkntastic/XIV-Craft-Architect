@@ -114,6 +114,7 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
             }
 
             var isInitialRoute = _appState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.None;
+            _logger.LogInformation("[stage] route reconciliation starting (initial={IsInitial})", isInitialRoute);
             using var operation = _cancellableOperations.Start(
                 CancellableOperationWorkflow.ProcurementAnalysis,
                 "Procurement Analysis",
@@ -129,6 +130,7 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
                         ExecutionOptions: MarketAnalysisExecutionOptions.Interactive),
                     progress,
                     operation.Token);
+                _logger.LogInformation("[stage] route workflow returned (status={Status}, plans={Count})", result.Status, result.ShoppingPlanCount);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
             {

@@ -32,6 +32,7 @@ public sealed class JointAcquisitionRouteOptimizationService
         var evidenceByItem = evidencePlans
             .GroupBy(item => item.ItemId)
             .ToDictionary(group => group.Key, group => group.First());
+        progress?.Report($"[stage] joint route optimization starting ({evidencePlans.Count} evidence plans)...");
         var lowerBoundUnitCosts = evidenceByItem.ToDictionary(
             pair => pair.Key,
             pair => pair.Value.WorldOptions
@@ -42,6 +43,7 @@ public sealed class JointAcquisitionRouteOptimizationService
                 .Min());
         var frontierSearch = AcquisitionVariantFrontierBuilder.Build(plan, lowerBoundUnitCosts, ct);
         var variants = frontierSearch.Variants;
+        progress?.Report($"[stage] acquisition frontier built ({variants.Count:N0} variants), evaluating...");
         progress?.Report($"Evaluating {variants.Count:N0} non-dominated acquisition plans...");
         var cheapestConfig = CopyConfig(config, travelTolerance: 11);
         var evaluated = new List<EvaluatedVariant>(variants.Count);
@@ -119,6 +121,7 @@ public sealed class JointAcquisitionRouteOptimizationService
             progress?.Report($"Skipped {skippedByBound:N0} acquisition plans that cannot beat the best route found.");
         }
 
+        progress?.Report($"[stage] variant evaluation complete ({evaluated.Count:N0} evaluated, {skippedByBound:N0} skipped), applying travel tolerance...");
         if (evaluated.Count == 0)
         {
             return JointAcquisitionRouteOptimizationResult.NoSolution(ClonePlan(plan));

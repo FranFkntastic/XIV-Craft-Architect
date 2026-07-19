@@ -23,6 +23,7 @@ public sealed class MarketAnalysisWorkflowService
     private readonly IMarketAnalysisPersistence _marketAnalysisPersistence;
     private readonly IndexedDbService _indexedDb;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
+    private readonly ILogger<MarketAnalysisWorkflowService> _logger;
 
     public MarketAnalysisWorkflowService(
         AppState appState,
@@ -31,7 +32,8 @@ public sealed class MarketAnalysisWorkflowService
         IMarketPriceLadderAnalysisService marketPriceLadderAnalysis,
         IMarketAnalysisPersistence marketAnalysisPersistence,
         IndexedDbService indexedDb,
-        IRecipeLayerWorkflowService recipeLayerWorkflow)
+        IRecipeLayerWorkflowService recipeLayerWorkflow,
+        ILogger<MarketAnalysisWorkflowService> logger)
     {
         _appState = appState;
         _marketEvidenceReconciliation = marketEvidenceReconciliation;
@@ -40,6 +42,7 @@ public sealed class MarketAnalysisWorkflowService
         _marketAnalysisPersistence = marketAnalysisPersistence;
         _indexedDb = indexedDb;
         _recipeLayerWorkflow = recipeLayerWorkflow;
+        _logger = logger;
     }
 
     public async Task<MarketAnalysisWorkflowResult> RunAnalysisAsync(
@@ -222,11 +225,13 @@ public sealed class MarketAnalysisWorkflowService
             changedDecisions > 0,
             recipeBasis,
             publishedScope);
+        _logger.LogInformation("[stage] hot-state publication applied ({Count} analyses, {PlanCount} plans)", analysisList.Count, shoppingPlans.Count);
 
         if (!string.IsNullOrEmpty(planId) &&
             _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
             string.Equals(_appState.CurrentPlanId, planId, StringComparison.Ordinal))
         {
+            _logger.LogInformation("[stage] analysis persistence starting (plan {PlanId})", planId);
             await _marketAnalysisPersistence.SaveAsync(
                 planId,
                 shoppingPlans,
@@ -236,6 +241,7 @@ public sealed class MarketAnalysisWorkflowService
                 recipeBasis,
                 publishedScope,
                 _appState.MarketIntelligence);
+            _logger.LogInformation("[stage] analysis persistence complete");
         }
 
         ct.ThrowIfCancellationRequested();
@@ -244,7 +250,9 @@ public sealed class MarketAnalysisWorkflowService
             return null;
         }
 
+        _logger.LogInformation("[stage] autosave starting");
         await _indexedDb.AutoSaveStateAsync(_appState);
+        _logger.LogInformation("[stage] autosave complete");
         ct.ThrowIfCancellationRequested();
         return _appState.IsCurrentPlanSession(plan, planSessionVersion)
             ? new PublishMarketAnalysisResult(changedDecisions)

@@ -47,6 +47,7 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
             ct);
         fetchStopwatch.Stop();
 
+        progress?.Report($"[stage] evidence loaded ({items.Count} items), ladder analysis starting...");
         var ladderAnalysisStopwatch = Stopwatch.StartNew();
         var analyses = await _marketPriceLadderAnalysisService.AnalyzeAsync(
             new MarketAnalysisRequest
@@ -62,6 +63,7 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
             executionOptions);
         ladderAnalysisStopwatch.Stop();
 
+        progress?.Report($"[stage] ladder analysis complete ({analyses.Count} analyses), projecting recommendations...");
         progress?.Report($"Projecting market recommendations for {analyses.Count} items...");
         var shoppingPlanProjectionStopwatch = Stopwatch.StartNew();
         var shoppingPlans = analyses
