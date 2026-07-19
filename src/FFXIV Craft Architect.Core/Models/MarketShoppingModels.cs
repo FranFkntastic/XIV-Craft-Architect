@@ -442,9 +442,8 @@ public static class MarketRouteScoring
 /// - Vendor alternative (Vendors - if available from gil vendor)
 /// 
 /// USAGE IN UI:
-/// WPF: Bound to MarketCardViewModel for display in MarketAnalysisView
-/// Web: Passed to MarketCard.razor component for display
-/// Both: Grouped by world in procurement planner views
+/// Passed to MarketCard.razor component for display
+/// Grouped by world in procurement planner views
 /// 
 /// KEY DECISIONS:
 /// - RecommendedWorld is null if no world has sufficient stock

@@ -4,7 +4,7 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 /// <summary>
 /// Coordinates world data loading and mapping initialization.
-/// Shared between WPF and Web applications to ensure consistent world data handling.
+/// Shared across app surfaces to ensure consistent world data handling.
 /// </summary>
 public class WorldDataCoordinator
 {
@@ -24,7 +24,7 @@ public class WorldDataCoordinator
 
     /// <summary>
     /// Loads world data and initializes the world name to ID mapping for market operations.
-    /// This is the shared initialization logic used by both WPF and Web applications.
+    /// This is the shared initialization logic used at app startup.
     /// </summary>
     /// <returns>World data containing DCs, worlds, and mappings.</returns>
     /// <exception cref="InvalidOperationException">Thrown when world data cannot be loaded.</exception>

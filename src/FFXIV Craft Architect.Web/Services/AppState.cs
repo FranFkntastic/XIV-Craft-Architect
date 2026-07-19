@@ -7,11 +7,10 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 /// <summary>
 /// Singleton application state service for the Blazor WebAssembly app.
-/// Replaces WPF's ViewModel-based state management with a centralized state container.
+/// Centralized state container shared by all UI surfaces.
 ///
 /// PURPOSE:
-/// Unlike WPF where each ViewModel manages its own state, Blazor uses a singleton
-/// AppState that persists across page navigations. This ensures:
+/// A singleton AppState persists across page navigations. This ensures:
 /// 1. State survives when switching between Recipe Planner, Market Analysis, and Procurement Plan tabs
 /// 2. Components can subscribe to changes via events
 /// 3. Auto-save functionality can access complete application state
@@ -59,12 +58,6 @@ namespace FFXIV_Craft_Architect.Web.Services;
 /// - Session restore: Auto-loads on app startup
 /// - What persists: Plan data, project items, shopping plans, settings
 /// - What doesn't persist: Blacklisted worlds, temporary UI state
-///
-/// WPF EQUIVALENT:
-/// This replaces multiple WPF ViewModels:
-/// - RecipePlannerViewModel → CurrentPlan, ProjectItems, OnPlanChanged
-/// - MarketAnalysisViewModel → ShoppingPlans, OnShoppingListChanged
-/// - Status is centralized here instead of separate StatusBarViewModel
 /// </summary>
 public partial class AppState
 {

@@ -6,7 +6,7 @@ namespace FFXIV_Craft_Architect.Core.Models;
 
 /// <summary>
 /// Static helper methods for recipe plan display and formatting.
-/// Shared between WPF and Web applications to ensure consistent UI rendering.
+/// Shared across UI surfaces to ensure consistent rendering.
 /// </summary>
 public static class RecipePlanDisplayHelpers
 {
@@ -48,7 +48,7 @@ public static class RecipePlanDisplayHelpers
 
     /// <summary>
     /// Gets the color code/brush name for an acquisition source.
-    /// Returns platform-agnostic color identifiers that can be mapped to WPF Brushes or CSS colors.
+    /// Returns platform-agnostic color identifiers that UI layers map to their own color system (e.g. CSS colors).
     /// </summary>
     public static string GetSourceColorName(AcquisitionSource source)
     {

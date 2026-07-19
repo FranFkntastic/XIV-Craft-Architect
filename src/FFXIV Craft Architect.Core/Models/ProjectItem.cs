@@ -6,7 +6,7 @@ namespace FFXIV_Craft_Architect.Core.Models;
 
 /// <summary>
 /// Represents a target item in a crafting project.
-/// Shared between WPF and Web applications.
+/// Shared across app surfaces.
 /// </summary>
 public class ProjectItem
 {
@@ -36,7 +36,7 @@ public class ProjectItem
     public bool MustBeHq { get; set; }
 
     /// <summary>
-    /// Legacy property for WPF compatibility.
+    /// Legacy alias for <see cref="MustBeHq"/> kept for serialization compatibility.
     /// </summary>
     public bool IsHqRequired
     {
