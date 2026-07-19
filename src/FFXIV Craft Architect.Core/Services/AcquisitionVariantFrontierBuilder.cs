@@ -235,7 +235,7 @@ internal static class AcquisitionVariantFrontierBuilder
             .ToList();
     }
 
-    private static long EstimateLowerBound(
+    internal static long EstimateLowerBound(
         AcquisitionVariant variant,
         IReadOnlyDictionary<int, long> lowerBoundUnitCosts)
     {

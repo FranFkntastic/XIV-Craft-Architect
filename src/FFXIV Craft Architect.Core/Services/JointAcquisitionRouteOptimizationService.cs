@@ -47,11 +47,46 @@ public sealed class JointAcquisitionRouteOptimizationService
         var evaluated = new List<EvaluatedVariant>(variants.Count);
         var routeSession = new ProcurementRouteOptimizationSession();
 
-        for (var index = 0; index < variants.Count; index++)
+        // Evaluate cheapest-lower-bound first so the incumbent converges early.
+        // Output is order-independent (winners/frontier use deterministic tiebreaks),
+        // so reordering evaluation cannot change the result.
+        var orderedVariants = variants
+            .Select(variant => new
+            {
+                Variant = variant,
+                LowerBound = AcquisitionVariantFrontierBuilder.EstimateLowerBound(variant, lowerBoundUnitCosts)
+            })
+            .OrderBy(entry => entry.LowerBound)
+            .ThenBy(entry => entry.Variant.DecisionKey, StringComparer.Ordinal)
+            .ToList();
+
+        // Branch-and-bound: a variant's lower bound is a strict floor on what its
+        // route can cost. The cull bound uses the widest premium any tolerance tier
+        // can allow (tolerance 1 = 100%), so every variant that could ever win the
+        // decision at ANY travel tolerance is always evaluated; only variants that
+        // cannot land within double the incumbent's total are skipped. Those could
+        // still have appeared in the fully-unbounded "fewest stops" display slot,
+        // so the tradeoff slider can lose >2x-cost travel options - accepted as
+        // display-only noise in exchange for bounded evaluation.
+        var incumbentTotal = long.MaxValue;
+        var skippedByBound = 0;
+
+        for (var index = 0; index < orderedVariants.Count; index++)
         {
             ct.ThrowIfCancellationRequested();
-            var variant = variants[index];
-            var marketPlans = BuildDemandPlans(variant, evidenceByItem);
+            var entry = orderedVariants[index];
+            if (incumbentTotal < long.MaxValue)
+            {
+                var cullBound = GetMaximumTotal(incumbentTotal, MarketRouteScoring.GetMaximumPremiumRate(1));
+                if (entry.LowerBound > cullBound)
+                {
+                    skippedByBound = orderedVariants.Count - index;
+                    break;
+                }
+            }
+
+            var variant = entry.Variant;
+            var marketPlans = BuildDemandPlans(variant, evidenceByItem, routeSession);
             if (marketPlans == null)
             {
                 continue;
@@ -71,11 +106,17 @@ public sealed class JointAcquisitionRouteOptimizationService
 
             var marketCost = route.Decision?.SelectedGilCost ?? 0;
             evaluated.Add(new EvaluatedVariant(variant, marketPlans, route, Add(variant.FixedGilCost, marketCost)));
+            incumbentTotal = Math.Min(incumbentTotal, evaluated[^1].TotalGilCost);
 
             if ((index + 1) % 25 == 0)
             {
-                progress?.Report($"Evaluating acquisition plans {index + 1:N0}/{variants.Count:N0}...");
+                progress?.Report($"Evaluating acquisition plans {index + 1:N0}/{orderedVariants.Count:N0}...");
             }
+        }
+
+        if (skippedByBound > 0)
+        {
+            progress?.Report($"Skipped {skippedByBound:N0} acquisition plans that cannot beat the best route found.");
         }
 
         if (evaluated.Count == 0)
@@ -203,7 +244,8 @@ public sealed class JointAcquisitionRouteOptimizationService
 
     private static List<DetailedShoppingPlan>? BuildDemandPlans(
         AcquisitionVariant variant,
-        IReadOnlyDictionary<int, DetailedShoppingPlan> evidenceByItem)
+        IReadOnlyDictionary<int, DetailedShoppingPlan> evidenceByItem,
+        ProcurementRouteOptimizationSession session)
     {
         var plans = new List<DetailedShoppingPlan>();
         foreach (var (itemId, demand) in variant.MarketDemand.OrderBy(pair => pair.Key))
@@ -213,7 +255,11 @@ public sealed class JointAcquisitionRouteOptimizationService
                 return null;
             }
 
-            var adjusted = AdjustEvidence(evidence, demand);
+            var adjusted = session.GetOrAddAdjustedPlan(
+                evidence,
+                demand.Quantity,
+                demand.HqQuantity,
+                () => AdjustEvidence(evidence, demand));
             if (adjusted.WorldOptions.Count == 0)
             {
                 return null;

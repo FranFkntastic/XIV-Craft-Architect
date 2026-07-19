@@ -9,6 +9,7 @@ namespace FFXIV_Craft_Architect.Core.Services;
 internal sealed class ProcurementRouteOptimizationSession
 {
     private readonly Dictionary<PurchaseCandidateCacheKey, IReadOnlyList<MarketPurchaseCandidate>> _standaloneCandidates = [];
+    private readonly Dictionary<AdjustedPlanCacheKey, DetailedShoppingPlan> _adjustedPlans = [];
 
     public IReadOnlyList<MarketPurchaseCandidate> GetOrAddCandidates(
         DetailedShoppingPlan plan,
@@ -25,7 +26,34 @@ internal sealed class ProcurementRouteOptimizationSession
         return candidates;
     }
 
+    /// <summary>
+    /// Reuses demand-adjusted shopping plans across variants. Many acquisition variants
+    /// share the same per-item demand, so adjusting evidence per (item, demand) once
+    /// avoids recloning every world's listings for every variant.
+    /// </summary>
+    public DetailedShoppingPlan GetOrAddAdjustedPlan(
+        DetailedShoppingPlan evidence,
+        int quantityNeeded,
+        int hqQuantityNeeded,
+        Func<DetailedShoppingPlan> planFactory)
+    {
+        var key = new AdjustedPlanCacheKey(evidence.ItemId, quantityNeeded, hqQuantityNeeded);
+        if (_adjustedPlans.TryGetValue(key, out var plan))
+        {
+            return plan;
+        }
+
+        plan = planFactory();
+        _adjustedPlans.Add(key, plan);
+        return plan;
+    }
+
     private readonly record struct PurchaseCandidateCacheKey(
+        int ItemId,
+        int QuantityNeeded,
+        int HqQuantityNeeded);
+
+    private readonly record struct AdjustedPlanCacheKey(
         int ItemId,
         int QuantityNeeded,
         int HqQuantityNeeded);
