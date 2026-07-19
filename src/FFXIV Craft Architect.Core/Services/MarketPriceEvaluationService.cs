@@ -227,32 +227,71 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
             SaneCeilingUnitPrice = saneThreshold,
             InsaneFloorUnitPrice = saneThreshold
         };
-        var classified = allListings
-            .Select(listing =>
+
+        // One fused pass replaces separate Count passes for each bucket; the
+        // per-bucket predicates below match the original LINQ queries exactly.
+        var dealCount = 0;
+        var competitiveCount = 0;
+        var fairCount = 0;
+        var uncompetitiveCount = 0;
+        var excludedCount = 0;
+        var lowOutlierCount = 0;
+        var saneCount = 0;
+        var insaneCount = 0;
+        foreach (var listing in allListings)
+        {
+            var sanity = ClassifyPriceSanity(listing.PricePerUnit, lowOutlierMaxUnitPrice, saneThreshold);
+            var competitiveness = MarketListingClassification.ClassifyCompetitiveness(
+                listing.PricePerUnit,
+                sanity,
+                thresholds,
+                excludeOutliers: true);
+
+            switch (competitiveness)
             {
-                var sanity = ClassifyPriceSanity(listing.PricePerUnit, lowOutlierMaxUnitPrice, saneThreshold);
-                return MarketListingClassification.ClassifyCompetitiveness(
-                    listing.PricePerUnit,
-                    sanity,
-                    thresholds,
-                    excludeOutliers: true);
-            })
-            .ToList();
+                case MarketListingCompetitiveness.Deal:
+                    dealCount++;
+                    break;
+                case MarketListingCompetitiveness.Competitive:
+                    competitiveCount++;
+                    break;
+                case MarketListingCompetitiveness.Fair:
+                    fairCount++;
+                    break;
+                case MarketListingCompetitiveness.Uncompetitive:
+                    uncompetitiveCount++;
+                    break;
+                case MarketListingCompetitiveness.Excluded:
+                    excludedCount++;
+                    break;
+            }
+
+            if (lowOutlierMaxUnitPrice > 0 && listing.PricePerUnit <= lowOutlierMaxUnitPrice)
+            {
+                lowOutlierCount++;
+            }
+
+            if (sanity == MarketListingPriceSanity.Sane)
+            {
+                saneCount++;
+            }
+
+            if (saneThreshold > 0 && listing.PricePerUnit > saneThreshold)
+            {
+                insaneCount++;
+            }
+        }
 
         return new MarketListingClassCounts
         {
-            DealCount = classified.Count(competitiveness => competitiveness == MarketListingCompetitiveness.Deal),
-            CompetitiveCount = classified.Count(competitiveness => competitiveness == MarketListingCompetitiveness.Competitive),
-            FairCount = classified.Count(competitiveness => competitiveness == MarketListingCompetitiveness.Fair),
-            UncompetitiveCount = classified.Count(competitiveness => competitiveness == MarketListingCompetitiveness.Uncompetitive),
-            ExcludedCount = classified.Count(competitiveness => competitiveness == MarketListingCompetitiveness.Excluded),
-            LowOutlierCount = lowOutlierMaxUnitPrice > 0
-                ? allListings.Count(listing => listing.PricePerUnit <= lowOutlierMaxUnitPrice)
-                : 0,
-            SaneCount = allListings.Count(listing => ClassifyPriceSanity(listing.PricePerUnit, lowOutlierMaxUnitPrice, saneThreshold) == MarketListingPriceSanity.Sane),
-            InsaneCount = saneThreshold > 0
-                ? allListings.Count(listing => listing.PricePerUnit > saneThreshold)
-                : 0
+            DealCount = dealCount,
+            CompetitiveCount = competitiveCount,
+            FairCount = fairCount,
+            UncompetitiveCount = uncompetitiveCount,
+            ExcludedCount = excludedCount,
+            LowOutlierCount = lowOutlierCount,
+            SaneCount = saneCount,
+            InsaneCount = insaneCount
         };
     }
 
@@ -379,14 +418,16 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
             .ToList();
     }
 
-    private static List<WeightedScopeListing> SelectDominantPriceRegion(IReadOnlyList<WeightedScopeListing> listings)
+    private static List<WeightedScopeListing> SelectDominantPriceRegion(List<WeightedScopeListing> listings)
     {
         if (listings.Count <= 1)
         {
-            return listings.ToList();
+            return listings;
         }
 
-        var ordered = listings.OrderBy(entry => entry.Listing.PricePerUnit).ToList();
+        // Input arrives price-ordered from CreateSourceWeightedListings; a stable
+        // re-sort would be an identical-but-costlier no-op.
+        var ordered = listings;
         var gaps = new List<PriceGap>();
         for (var index = 0; index < ordered.Count - 1; index++)
         {
@@ -523,19 +564,22 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
 
     private static double WeightedQuantileLog(IReadOnlyList<WeightedScopeListing> listings, decimal quantile)
     {
+        // `listings` is price-ordered, so the log-priced scalars are already
+        // non-decreasing and the quantile walk can skip its defensive sort.
         return WeightedQuantile(
             listings.Select(entry => new WeightedScalar(Math.Log(entry.Listing.PricePerUnit), entry.Weight)).ToList(),
-            quantile);
+            quantile,
+            valuesAreOrdered: true);
     }
 
-    private static double WeightedQuantile(IReadOnlyList<WeightedScalar> values, decimal quantile)
+    private static double WeightedQuantile(IReadOnlyList<WeightedScalar> values, decimal quantile, bool valuesAreOrdered = false)
     {
         if (values.Count == 0)
         {
             return 0;
         }
 
-        var ordered = values.OrderBy(value => value.Value).ToList();
+        var ordered = valuesAreOrdered ? values : values.OrderBy(value => value.Value).ToList();
         var totalWeight = ordered.Sum(value => value.Weight);
         var target = totalWeight * Math.Clamp(quantile, 0, 1);
         decimal cumulative = 0;
@@ -564,15 +608,26 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
         var bands = new List<List<ScopeListing>>();
         var current = new List<ScopeListing>();
 
-        foreach (var listing in listings.OrderBy(listing => listing.PricePerUnit))
+        // Callers pass listings already ordered by unit price (Evaluate sorts once),
+        // so no re-sort is needed here. Running totals mirror
+        // CalculateWeightedAveragePrice(current) exactly (same decimal accumulation
+        // order) while keeping band construction O(n) instead of O(n²).
+        long currentQuantity = 0;
+        var currentValue = 0m;
+
+        foreach (var listing in listings)
         {
-            if (current.Count > 0 && listing.PricePerUnit > CalculateWeightedAveragePrice(current) * (1 + BandTolerance))
+            if (current.Count > 0 && listing.PricePerUnit > currentValue / currentQuantity * (1 + BandTolerance))
             {
                 bands.Add(current);
                 current = [];
+                currentQuantity = 0;
+                currentValue = 0m;
             }
 
             current.Add(listing);
+            currentQuantity += listing.Quantity;
+            currentValue += listing.PricePerUnit * (decimal)listing.Quantity;
         }
 
         if (current.Count > 0)
@@ -673,9 +728,9 @@ public sealed class MarketPriceEvaluationService : IMarketPriceEvaluationService
         string WorldName,
         MarketDataQualityBucket DataQualityBucket);
 
-    private sealed record IndexedScopeListing(ScopeListing Listing, int Index, string SourceKey);
+    private readonly record struct IndexedScopeListing(ScopeListing Listing, int Index, string SourceKey);
 
-    private sealed record WeightedScopeListing(ScopeListing Listing, decimal Weight);
+    private readonly record struct WeightedScopeListing(ScopeListing Listing, decimal Weight);
 
     private readonly record struct WeightedScalar(double Value, decimal Weight);
 

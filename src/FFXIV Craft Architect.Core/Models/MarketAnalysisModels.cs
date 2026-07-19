@@ -334,10 +334,10 @@ public sealed class AnalyzedMarketListing
     public long PricePerUnit { get; init; }
     public string RetainerName { get; init; } = string.Empty;
     public bool IsHq { get; init; }
-    public MarketListingPriceSanity PriceSanity { get; init; }
-    public MarketListingCompetitiveness Competitiveness { get; init; }
-    public bool IsInPriceSignalBand { get; init; }
-    public bool IsInPrimaryUsableBand { get; init; }
+    public MarketListingPriceSanity PriceSanity { get; set; }
+    public MarketListingCompetitiveness Competitiveness { get; set; }
+    public bool IsInPriceSignalBand { get; set; }
+    public bool IsInPrimaryUsableBand { get; set; }
     public DateTime? LastReviewTimeUtc { get; init; }
 }
 

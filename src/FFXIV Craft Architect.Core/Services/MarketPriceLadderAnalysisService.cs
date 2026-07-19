@@ -308,9 +308,6 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             })
             .ToList();
 
-        var saneListings = analyzedListings
-            .Where(listing => listing.PriceSanity is MarketListingPriceSanity.Sane or MarketListingPriceSanity.LowOutlier)
-            .ToList();
         var bands = BuildPriceBands(analyzedListings, quantityNeeded, scopePriceContext);
         var primaryBandIndex = SelectPrimaryUsableBand(bands);
         var primaryUsableBand = primaryBandIndex.HasValue
@@ -326,19 +323,40 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         var priceSignalAverageUnitPrice = CalculateWeightedAverage(priceSignalBands);
         var priceSignalDepth = ClassifyPriceBandDepth(priceSignalQuantity, quantityNeeded);
         var saneThreshold = scopePriceContext.SaneThresholdUnitPrice;
-        var scopeSaneListings = saneThreshold > 0
-            ? analyzedListings.Where(listing => listing.PricePerUnit <= saneThreshold).ToList()
-            : saneListings;
-        var scopeSaneQuantity = scopeSaneListings.Sum(listing => listing.Quantity);
-        var scopeInsaneQuantity = saneThreshold > 0
-            ? analyzedListings.Where(listing => listing.PricePerUnit > saneThreshold).Sum(listing => listing.Quantity)
-            : 0;
         var scopeCompetitiveThreshold = scopePriceContext.CompetitiveThresholdUnitPrice;
-        var scopeUncompetitiveQuantity = scopeCompetitiveThreshold > 0
-            ? scopeSaneListings
-                .Where(listing => listing.PricePerUnit > scopeCompetitiveThreshold)
-                .Sum(listing => listing.Quantity)
-            : 0;
+
+        // One fused pass for every quantity aggregate, computed against the initial
+        // (outlier-based) sanity classification before the scope-sane override below.
+        var totalListingQuantity = 0;
+        var totalSaneQuantity = 0;
+        var scopeSaneQuantity = 0;
+        var scopeInsaneQuantity = 0;
+        var scopeUncompetitiveQuantity = 0;
+        foreach (var listing in analyzedListings)
+        {
+            totalListingQuantity += listing.Quantity;
+            var isSane = listing.PriceSanity is MarketListingPriceSanity.Sane or MarketListingPriceSanity.LowOutlier;
+            if (isSane)
+            {
+                totalSaneQuantity += listing.Quantity;
+            }
+
+            var isScopeSane = saneThreshold > 0
+                ? listing.PricePerUnit <= saneThreshold
+                : isSane;
+            if (isScopeSane)
+            {
+                scopeSaneQuantity += listing.Quantity;
+                if (scopeCompetitiveThreshold > 0 && listing.PricePerUnit > scopeCompetitiveThreshold)
+                {
+                    scopeUncompetitiveQuantity += listing.Quantity;
+                }
+            }
+            else if (saneThreshold > 0)
+            {
+                scopeInsaneQuantity += listing.Quantity;
+            }
+        }
         var primaryUsableSortIndexes = primaryBandIndex.HasValue
             ? Enumerable.Range(
                     bands[primaryBandIndex.Value].FirstListingIndex,
@@ -351,33 +369,23 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 bands[index].LastListingIndex - bands[index].FirstListingIndex + 1))
             .ToHashSet();
         var thresholds = scopePriceContext.PriceEvaluation.Thresholds;
-        var listings = analyzedListings
-            .Select(listing =>
+        foreach (var listing in analyzedListings)
+        {
+            if (saneThreshold > 0 && listing.PricePerUnit > saneThreshold)
             {
-                var priceSanity = saneThreshold > 0 && listing.PricePerUnit > saneThreshold
-                    ? MarketListingPriceSanity.Insane
-                    : listing.PriceSanity;
-                var competitiveness = MarketListingClassification.ClassifyCompetitiveness(
-                    listing.PricePerUnit,
-                    priceSanity,
-                    thresholds,
-                    excludeOutliers: false);
+                listing.PriceSanity = MarketListingPriceSanity.Insane;
+            }
 
-                return new AnalyzedMarketListing
-                {
-                    SortIndex = listing.SortIndex,
-                    Quantity = listing.Quantity,
-                    PricePerUnit = listing.PricePerUnit,
-                    RetainerName = listing.RetainerName,
-                    IsHq = listing.IsHq,
-                    PriceSanity = priceSanity,
-                    Competitiveness = competitiveness,
-                    LastReviewTimeUtc = listing.LastReviewTimeUtc,
-                    IsInPriceSignalBand = priceSignalSortIndexes.Contains(listing.SortIndex),
-                    IsInPrimaryUsableBand = primaryUsableSortIndexes.Contains(listing.SortIndex)
-                };
-            })
-            .ToList();
+            listing.Competitiveness = MarketListingClassification.ClassifyCompetitiveness(
+                listing.PricePerUnit,
+                listing.PriceSanity,
+                thresholds,
+                excludeOutliers: false);
+            listing.IsInPriceSignalBand = priceSignalSortIndexes.Contains(listing.SortIndex);
+            listing.IsInPrimaryUsableBand = primaryUsableSortIndexes.Contains(listing.SortIndex);
+        }
+
+        var listings = analyzedListings;
         bands = bands
             .Select((band, index) => new MarketPriceBand
             {
@@ -396,16 +404,15 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             })
             .ToList();
 
-        var totalSaneQuantity = saneListings.Sum(listing => listing.Quantity);
-        var totalListingQuantity = analyzedListings.Sum(listing => listing.Quantity);
+        // `listings` is already in price order from the initial sort, so filtering
+        // preserves the actionable ordering without a redundant re-sort.
         var actionableListings = listings
             .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
-            .OrderBy(listing => listing.PricePerUnit)
-            .ThenBy(listing => listing.SortIndex)
             .ToList();
         var actionableQuantity = actionableListings.Sum(listing => listing.Quantity);
         var actionableCostToCover = CalculateCostToCover(actionableListings, quantityNeeded);
-        var actionableAverageUnitPrice = actionableCostToCover?.QuotedAverageUnitPrice ?? CalculateWeightedAverage(actionableListings);
+        var worldAverageUnitPrice = CalculateWeightedAverage(actionableListings);
+        var actionableAverageUnitPrice = actionableCostToCover?.QuotedAverageUnitPrice ?? worldAverageUnitPrice;
         var hasCredibleReference = scopePriceContext.PriceEvaluation.CentralRegion.Credibility is
             MarketPriceRegionCredibility.Credible or MarketPriceRegionCredibility.Strong;
         var comparableListings = hasCredibleReference
@@ -413,7 +420,6 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             : actionableListings;
         var comparableQuantity = comparableListings.Sum(listing => listing.Quantity);
         var comparableAverageUnitPrice = CalculateWeightedAverage(comparableListings);
-        var worldAverageUnitPrice = CalculateWeightedAverage(actionableListings);
         var coverageBucket = GetCoverageBucket(actionableQuantity, quantityNeeded);
         var primaryUsableListings = listings
             .Where(listing => listing.IsInPrimaryUsableBand)
@@ -582,15 +588,24 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         var bands = new List<MarketPriceBand>();
         var current = new List<AnalyzedMarketListing>();
 
+        // Running totals mirror CalculateWeightedAverage(current) exactly (same
+        // accumulation order), but keep band construction O(n) instead of O(n²).
+        long currentQuantity = 0;
+        long currentValue = 0;
+
         foreach (var listing in listings)
         {
-            if (current.Count > 0 && listing.PricePerUnit > CalculateWeightedAverage(current) * (1 + BandTolerance))
+            if (current.Count > 0 && listing.PricePerUnit > currentValue / (decimal)currentQuantity * (1 + BandTolerance))
             {
                 bands.Add(CreateBand(current));
                 current.Clear();
+                currentQuantity = 0;
+                currentValue = 0;
             }
 
             current.Add(listing);
+            currentQuantity += listing.Quantity;
+            currentValue += listing.PricePerUnit * listing.Quantity;
         }
 
         if (current.Count > 0)
@@ -619,15 +634,32 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
     private static MarketPriceBand CreateBand(IReadOnlyList<AnalyzedMarketListing> listings)
     {
+        var firstIndex = int.MaxValue;
+        var lastIndex = int.MinValue;
+        long minPrice = long.MaxValue;
+        long maxPrice = long.MinValue;
+        var totalQuantity = 0;
+        long totalValue = 0;
+
+        foreach (var listing in listings)
+        {
+            firstIndex = Math.Min(firstIndex, listing.SortIndex);
+            lastIndex = Math.Max(lastIndex, listing.SortIndex);
+            minPrice = Math.Min(minPrice, listing.PricePerUnit);
+            maxPrice = Math.Max(maxPrice, listing.PricePerUnit);
+            totalQuantity += listing.Quantity;
+            totalValue += listing.PricePerUnit * listing.Quantity;
+        }
+
         return new MarketPriceBand
         {
-            FirstListingIndex = listings.Min(listing => listing.SortIndex),
-            LastListingIndex = listings.Max(listing => listing.SortIndex),
-            MinUnitPrice = listings.Min(listing => listing.PricePerUnit),
-            MaxUnitPrice = listings.Max(listing => listing.PricePerUnit),
-            WeightedAverageUnitPrice = CalculateWeightedAverage(listings),
+            FirstListingIndex = firstIndex,
+            LastListingIndex = lastIndex,
+            MinUnitPrice = minPrice,
+            MaxUnitPrice = maxPrice,
+            WeightedAverageUnitPrice = totalQuantity > 0 ? totalValue / (decimal)totalQuantity : 0,
             ListingCount = listings.Count,
-            Quantity = listings.Sum(listing => listing.Quantity)
+            Quantity = totalQuantity
         };
     }
 
@@ -647,15 +679,24 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
         var grouped = new List<List<ScopeBandListing>>();
         var current = new List<ScopeBandListing>();
 
+        // Running totals mirror CalculateWeightedAverage(current) exactly (same
+        // accumulation order), but keep band construction O(n) instead of O(n²).
+        long currentQuantity = 0;
+        long currentValue = 0;
+
         foreach (var listing in listings)
         {
-            if (current.Count > 0 && listing.Listing.PricePerUnit > CalculateWeightedAverage(current) * (1 + BandTolerance))
+            if (current.Count > 0 && listing.Listing.PricePerUnit > currentValue / (decimal)currentQuantity * (1 + BandTolerance))
             {
                 grouped.Add(current);
                 current = [];
+                currentQuantity = 0;
+                currentValue = 0;
             }
 
             current.Add(listing);
+            currentQuantity += listing.Listing.Quantity;
+            currentValue += listing.Listing.PricePerUnit * listing.Listing.Quantity;
         }
 
         if (current.Count > 0)
@@ -1204,7 +1245,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             .FirstOrDefault();
     }
 
-    private sealed record ScopeBandListing(string WorldName, AnalyzedMarketListing Listing);
+    private readonly record struct ScopeBandListing(string WorldName, AnalyzedMarketListing Listing);
 
     private readonly record struct CostToCoverResult(
         long TotalCost,
