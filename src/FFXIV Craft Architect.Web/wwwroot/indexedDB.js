@@ -923,6 +923,57 @@ async function loadMarketData(key) {
 }
 
 /**
+ * Load freshness metadata (key + fetchedAtUnix) for market cache entries.
+ * Freshness probes only need timestamps; this keeps full world/listing payloads
+ * off the JS interop boundary when no market data has to be deserialized.
+ * @param {string[]} keys - Market cache keys in itemId@dataCenter format
+ */
+async function getMarketDataFreshness(keys) {
+    const database = await initDB();
+    const uniqueKeys = Array.from(new Set(keys || []));
+
+    if (uniqueKeys.length === 0) {
+        return [];
+    }
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_MARKET_CACHE], 'readonly');
+        const store = transaction.objectStore(STORE_MARKET_CACHE);
+        const results = [];
+
+        transaction.oncomplete = () => {
+            resolve(results);
+        };
+        transaction.onerror = () => {
+            console.error('[IndexedDB] Failed to load market data freshness:', transaction.error);
+            reject(transaction.error);
+        };
+        transaction.onabort = () => {
+            console.error('[IndexedDB] Freshness load transaction aborted:', transaction.error);
+            reject(transaction.error);
+        };
+
+        for (const key of uniqueKeys) {
+            const request = store.get(key);
+
+            request.onsuccess = () => {
+                const result = request.result;
+                if (!result) {
+                    return;
+                }
+
+                results.push({ key, fetchedAtUnix: getFetchedAtUnix(result) });
+            };
+            request.onerror = () => {
+                console.error('[IndexedDB] Failed to load freshness for', key, request.error);
+                reject(request.error);
+            };
+        }
+    });
+}
+
+
+/**
  * Load multiple fresh market cache entries in one IndexedDB transaction.
  * Missing or stale entries are omitted from the returned array.
  * @param {string[]} keys - Market cache keys in itemId@dataCenter format
@@ -1174,6 +1225,7 @@ window.IndexedDB = {
     saveMarketDataBatch,
     loadMarketData,
     loadMarketDataBulk,
+    getMarketDataFreshness,
     deleteStaleMarketData,
     deleteOldestEntries,
     getMarketCacheStats,

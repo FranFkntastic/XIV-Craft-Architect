@@ -261,6 +261,20 @@ public class IndexedDbMarketCacheServiceTests
                 return (TValue)(object)entries;
             }
 
+            if (identifier == "IndexedDB.getMarketDataFreshness")
+            {
+                var keys = (string[])args![0]!;
+                var entries = keys
+                    .Where(_entries.ContainsKey)
+                    .Select(key => new IndexedDbMarketCacheFreshness
+                    {
+                        Key = key,
+                        FetchedAtUnix = _entries[key].FetchedAtUnix
+                    })
+                    .ToList();
+                return (TValue)(object)entries;
+            }
+
             if (identifier == "IndexedDB.getMarketCacheStats")
             {
                 return (TValue)(object)new IndexedDbCacheStats();

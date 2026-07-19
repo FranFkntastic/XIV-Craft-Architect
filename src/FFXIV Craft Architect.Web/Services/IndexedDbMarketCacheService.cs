@@ -272,27 +272,24 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
 
         try
         {
-            var entries = await _jsRuntime.InvokeAsync<List<IndexedDbMarketCacheEntry>>(
-                "IndexedDB.loadMarketDataBulk",
-                requestsByKey.Keys.ToArray(),
-                cutoffUnix);
+            var entries = await _jsRuntime.InvokeAsync<List<IndexedDbMarketCacheFreshness>>(
+                "IndexedDB.getMarketDataFreshness",
+                // Cast to object so the keys are passed as one argument; a bare
+                // string[] would covariantly bind as the params array itself.
+                (object)requestsByKey.Keys.ToArray());
 
             var freshKeys = new HashSet<string>();
 
-            foreach (var entry in entries ?? new List<IndexedDbMarketCacheEntry>())
+            foreach (var entry in entries ?? new List<IndexedDbMarketCacheFreshness>())
             {
                 if (entry.FetchedAtUnix <= cutoffUnix)
                 {
                     continue;
                 }
 
-                var key = string.IsNullOrWhiteSpace(entry.Key)
-                    ? GetKey(entry.ItemId, entry.DataCenter)
-                    : entry.Key;
-
-                if (requestsByKey.ContainsKey(key))
+                if (requestsByKey.ContainsKey(entry.Key))
                 {
-                    freshKeys.Add(key);
+                    freshKeys.Add(entry.Key);
                 }
             }
 
@@ -520,17 +517,60 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
             return;
         }
 
+        // One bulk read fetches every retained entry up front; merging per entry
+        // with single reads would cost one JS interop round trip per pair.
+        var requestsByKey = new Dictionary<string, (int itemId, string dataCenter)>();
+        foreach (var entry in entries)
+        {
+            requestsByKey.TryAdd(GetKey(entry.itemId, entry.dataCenter), (entry.itemId, entry.dataCenter));
+        }
+
+        var retainedByKey = new Dictionary<string, IndexedDbMarketCacheEntry>();
+        try
+        {
+            var retainedEntries = await _jsRuntime.InvokeAsync<List<IndexedDbMarketCacheEntry>>(
+                "IndexedDB.loadMarketDataBulk",
+                requestsByKey.Keys.ToArray(),
+                long.MinValue);
+            foreach (var retained in retainedEntries ?? new List<IndexedDbMarketCacheEntry>())
+            {
+                var key = string.IsNullOrWhiteSpace(retained.Key)
+                    ? GetKey(retained.ItemId, retained.DataCenter)
+                    : retained.Key;
+                retainedByKey[key] = retained;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[IndexedDbMarketCache] Error loading retained entries before batch store");
+        }
+
         var batchEntries = new List<IndexedDbMarketCacheBatchEntry>(entries.Count);
         foreach (var entry in entries)
         {
-            var (retained, _) = await GetWithStaleAsync(entry.itemId, entry.dataCenter);
+            var key = GetKey(entry.itemId, entry.dataCenter);
+            CachedMarketData? retained = null;
+            if (retainedByKey.TryGetValue(key, out var retainedEntry))
+            {
+                retained = new CachedMarketData
+                {
+                    ItemId = entry.itemId,
+                    DataCenter = entry.dataCenter,
+                    FetchedAtUnix = retainedEntry.FetchedAtUnix,
+                    LastUploadTimeUnixMilliseconds = retainedEntry.LastUploadTimeUnixMilliseconds,
+                    DCAveragePrice = retainedEntry.DcAvgPrice,
+                    HQAveragePrice = retainedEntry.HqAvgPrice,
+                    Worlds = retainedEntry.Worlds ?? new List<CachedWorldData>()
+                };
+            }
+
             var data = MarketEvidenceCacheMerger.PreferNewestWorldEvidence(retained, entry.data);
             batchEntries.Add(new IndexedDbMarketCacheBatchEntry
             {
-                Key = GetKey(entry.itemId, entry.dataCenter),
+                Key = key,
                 Data = new IndexedDbMarketCacheEntry
                 {
-                    Key = GetKey(entry.itemId, entry.dataCenter),
+                    Key = key,
                     ItemId = entry.itemId,
                     DataCenter = entry.dataCenter,
                     FetchedAtUnix = data.FetchedAtUnix,
@@ -567,34 +607,31 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
 
         try
         {
-            var entries = await _jsRuntime.InvokeAsync<List<IndexedDbMarketCacheEntry>>(
-                "IndexedDB.loadMarketDataBulk",
-                requestsByKey.Keys.ToArray(),
-                long.MinValue);
+            var entries = await _jsRuntime.InvokeAsync<List<IndexedDbMarketCacheFreshness>>(
+                "IndexedDB.getMarketDataFreshness",
+                // Cast to object so the keys are passed as one argument; a bare
+                // string[] would covariantly bind as the params array itself.
+                (object)requestsByKey.Keys.ToArray());
 
             var presentKeys = new HashSet<string>(StringComparer.Ordinal);
             var freshKeys = new HashSet<string>(StringComparer.Ordinal);
             var staleKeys = new HashSet<string>(StringComparer.Ordinal);
 
-            foreach (var entry in entries ?? new List<IndexedDbMarketCacheEntry>())
+            foreach (var entry in entries ?? new List<IndexedDbMarketCacheFreshness>())
             {
-                var key = string.IsNullOrWhiteSpace(entry.Key)
-                    ? GetKey(entry.ItemId, entry.DataCenter)
-                    : entry.Key;
-
-                if (!requestsByKey.ContainsKey(key))
+                if (!requestsByKey.ContainsKey(entry.Key))
                 {
                     continue;
                 }
 
-                presentKeys.Add(key);
+                presentKeys.Add(entry.Key);
                 if (entry.FetchedAtUnix <= cutoffUnix)
                 {
-                    staleKeys.Add(key);
+                    staleKeys.Add(entry.Key);
                 }
                 else
                 {
-                    freshKeys.Add(key);
+                    freshKeys.Add(entry.Key);
                 }
             }
 
@@ -916,6 +953,16 @@ public class IndexedDbMarketCacheBatchEntry
 {
     public string Key { get; set; } = string.Empty;
     public IndexedDbMarketCacheEntry Data { get; set; } = new();
+}
+
+/// <summary>
+/// Freshness metadata for a market cache entry, without world/listing payloads.
+/// Used by cache-state probes that only need timestamps.
+/// </summary>
+public class IndexedDbMarketCacheFreshness
+{
+    public string Key { get; set; } = string.Empty;
+    public long FetchedAtUnix { get; set; }
 }
 
 /// <summary>
