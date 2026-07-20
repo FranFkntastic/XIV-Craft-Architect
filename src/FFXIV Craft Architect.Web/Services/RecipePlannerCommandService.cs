@@ -478,7 +478,8 @@ public sealed class RecipePlannerCommandService
         IRecipeBuildDiagnosticRecorder? diagnostics,
         CancellationToken ct)
     {
-        if (_marketAnalysisAutoRunner == null ||
+        if (_appState.DeferAutomaticMarketAnalysisForBenchmark ||
+            _marketAnalysisAutoRunner == null ||
             !_appState.IsCurrentPlanSession(builtPlan, builtPlanSessionVersion))
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, 0);

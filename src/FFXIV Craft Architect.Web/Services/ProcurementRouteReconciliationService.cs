@@ -18,6 +18,8 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
     private readonly ILogger<ProcurementRouteReconciliationService> _logger;
     private readonly TimeSpan _debounce;
     private CancellationTokenSource? _scheduledRepair;
+
+    public bool IsScheduled => _scheduledRepair is not null;
     private int _generation;
     private bool _started;
     private bool _publishingRepairState;
@@ -84,6 +86,7 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
     private void ScheduleRepairIfNeeded()
     {
         if (!_started ||
+            _appState.DeferAutomaticProcurementReconciliationForBenchmark ||
             !NeedsRouteReconciliation() ||
             !string.IsNullOrWhiteSpace(_appState.ProcurementRouteFailure))
         {

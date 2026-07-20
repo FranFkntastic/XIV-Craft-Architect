@@ -7,6 +7,25 @@ The tool is intentionally outside production code. It records machine and browse
 around a supervised browser run, then writes a JSON report that can be compared across
 cache states and branches.
 
+## Historical limitation: not a product completion oracle
+
+The current native-import helper waits a fixed five seconds and does not classify a flat
+transport plan or prove that a required recipe-graph rebuild completed. The
+`--wait-market-analysis-completion` signal proves only persisted/visible market analyses,
+top-level result markup, and the absence of visible `ANALYZING`. It does **not** prove that
+those analyses used the complete imported graph or that projection, publication, route
+reconciliation, route-overlay publication, autosave durability, operation gates, rendering,
+post-completion interaction, or reload restoration completed.
+
+Do not make product-level completion claims from that historical signal. A full workflow
+claim requires a graph fingerprint/import classification and a same-basis structured oracle:
+matching plan-session, market-publication, and route-basis identities; cache-lane counters;
+analysis/publication and autosave durability; no scheduled/running reconciliation; a current
+published route or explicit terminal failure; no active operation or progress; a settled
+render window; clean console/page/network diagnostics; bounded post-action interaction; and,
+preferably, reload restoration. The harness remains useful for subsystem, process, DOM, and
+cache instrumentation.
+
 ## Build
 
 ```powershell

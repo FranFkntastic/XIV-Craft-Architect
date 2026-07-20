@@ -16,6 +16,8 @@
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject BrowserFileExportService FileExportService
 @inject CraftAppraisalQuoteExportService CraftAppraisalQuoteExportService
+@inject ILogger<ProcurementPlan> Logger
+@inject IndexedDbService IndexedDb
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 pp-page-container">
@@ -263,6 +265,7 @@
             "Procurement Analysis",
             "Generating procurement route...");
         _procurementAnalysisOperation = operation;
+        Logger.LogInformation("[stage] explicit route generation starting");
 
         try
         {
@@ -273,6 +276,10 @@
                     ExecutionOptions: MarketAnalysisExecutionOptions.Interactive),
                 progress,
                 operation.Token);
+            Logger.LogInformation(
+                "[stage] explicit route workflow returned (status={Status}, plans={Count})",
+                result.Status,
+                result.ShoppingPlanCount);
 
             if (result.Status == ProcurementWorkflowStatus.StaleDecision)
             {
@@ -297,6 +304,16 @@
             }
 
             operation.Complete("Procurement route generated.");
+            Logger.LogInformation("[stage] route overlay autosave starting");
+            var routeSaved = await IndexedDb.AutoSaveStateAsync(AppState, skipIfInFlight: false);
+            if (routeSaved)
+            {
+                AppState.RecordAutoSaveCompleted(DateTime.Now);
+            }
+            Logger.LogInformation(
+                "[stage] route overlay autosave complete (success={Success}, dirty={DirtyBuckets})",
+                routeSaved,
+                AppState.GetDirtyPersistedBuckets());
             Snackbar.Add("Procurement route generated.", Severity.Success);
             _revealRouteAfterRender = true;
             await InvokeAsync(StateHasChanged);

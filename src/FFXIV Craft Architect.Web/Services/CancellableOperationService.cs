@@ -14,6 +14,17 @@ public sealed class CancellableOperationService : IDisposable
 
     internal AppState AppState => _appState;
 
+    public IReadOnlyList<CancellableOperationWorkflow> ActiveWorkflows
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _activeLeases.Keys.OrderBy(workflow => workflow).ToArray();
+            }
+        }
+    }
+
     public CancellableOperationLease Start(
         CancellableOperationWorkflow workflow,
         string operationName,

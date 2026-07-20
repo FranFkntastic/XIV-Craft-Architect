@@ -29,6 +29,31 @@ public class CancellableOperationServiceTests
     }
 
     [Fact]
+    public void ActiveWorkflows_TracksOnlyCurrentLeases()
+    {
+        var appState = new AppState();
+        using var service = new CancellableOperationService(appState);
+        using var market = service.Start(
+            CancellableOperationWorkflow.MarketAnalysis,
+            "Market Analysis",
+            "Analyzing");
+        using var route = service.Start(
+            CancellableOperationWorkflow.ProcurementAnalysis,
+            "Procurement Analysis",
+            "Routing");
+
+        Assert.Equal(
+            [CancellableOperationWorkflow.MarketAnalysis, CancellableOperationWorkflow.ProcurementAnalysis],
+            service.ActiveWorkflows);
+
+        Assert.True(route.Complete("Route complete"));
+        Assert.Equal([CancellableOperationWorkflow.MarketAnalysis], service.ActiveWorkflows);
+
+        service.Cancel(CancellableOperationWorkflow.MarketAnalysis);
+        Assert.Empty(service.ActiveWorkflows);
+    }
+
+    [Fact]
     public void Cancel_ActiveLeaseUsesNeutralStatusWithoutFailure()
     {
         var appState = new AppState();

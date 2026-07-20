@@ -476,6 +476,12 @@ public partial class AppState
         return true;
     }
 
+    public void SetBenchmarkWorkflowDeferral(bool enabled)
+    {
+        DeferAutomaticProcurementReconciliationForBenchmark = enabled;
+        DeferAutomaticMarketAnalysisForBenchmark = enabled;
+    }
+
     public bool SetMarketSortPreference(MarketSortOption preference)
     {
         if (MarketSortPreference == preference)

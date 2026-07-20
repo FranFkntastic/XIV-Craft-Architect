@@ -54,6 +54,49 @@ public class ProcurementWorkflowServiceTests
     }
 
     [Fact]
+    public async Task RunAnalysisAsync_PublishesRouteDecisionWithCurrentBasis()
+    {
+        var appState = CreateAppState(101);
+        appState.ReplaceMarketAnalysis([], [ShoppingPlan(101)]);
+        var decision = new MarketRouteDecision(
+            TravelTolerance: 0,
+            MaximumPremiumRate: null,
+            CheapestGilCost: 500,
+            SelectedGilCost: 500,
+            SelectedEvidencePenalty: 0,
+            CheapestWorldStops: 1,
+            SelectedWorldStops: 1,
+            CheapestDataCenterTransfers: 0,
+            SelectedDataCenterTransfers: 0,
+            StartsFromHomeDataCenter: false,
+            HomeDataCenter: null);
+        var execution = new Mock<IProcurementRouteExecutionService>();
+        execution.Setup(e => e.AnalyzeAsync(
+                It.IsAny<ProcurementRouteExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(new ProcurementRouteExecutionResult(
+                [ShoppingPlan(101, "Siren")],
+                [],
+                [],
+                [],
+                [],
+                RouteDecision: decision));
+        var service = CreateService(appState, procurementExecution: execution.Object);
+
+        var result = await service.RunAnalysisAsync(
+            new ProcurementWorkflowRequest(() => true, MarketAnalysisExecutionOptions.Synchronous));
+
+        Assert.Equal(ProcurementWorkflowStatus.Published, result.Status);
+        Assert.Same(decision, appState.ProcurementRouteDecision);
+        Assert.NotNull(appState.ProcurementRoutePublicationBasis);
+        Assert.Equal(ProcurementRoutePublicationValidity.Current, appState.ProcurementRouteValidity);
+        Assert.Equal(appState.PlanSessionVersion, appState.ProcurementRoutePublicationBasis!.PlanSessionVersion);
+        Assert.Equal(appState.MarketIntelligenceId, appState.ProcurementRoutePublicationBasis.MarketIntelligenceId);
+    }
+
+    [Fact]
     public async Task RunAnalysisAsync_PublishesReconciledEvidenceForTheNextRouteRun()
     {
         var appState = CreateAppState(101);

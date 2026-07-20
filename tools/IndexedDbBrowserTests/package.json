@@ -2,7 +2,7 @@
   "name": "craft-architect-indexeddb-browser-tests",
   "private": true,
   "scripts": {
-    "test": "node --test indexeddb.test.mjs"
+    "test": "node --test indexeddb.test.mjs workflow-oracle.test.mjs"
   },
   "devDependencies": {
     "playwright": "1.61.1"

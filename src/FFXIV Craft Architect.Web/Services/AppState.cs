@@ -125,6 +125,7 @@ public partial class AppState
     public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses => _marketItemAnalyses.AsReadOnly();
 
     public MarketIntelligence MarketIntelligence => CreateMarketIntelligence();
+    public Guid MarketIntelligenceId => _marketIntelligenceId;
     public IReadOnlyList<DetailedShoppingPlan> MarketRecommendations => ShoppingPlans;
     public StoredRecipeOperationSnapshot? MarketAnalysisRecipeBasis => CloneRecipeBasis(_marketAnalysisRecipeBasis);
     public StoredRecipeOperationSnapshot? MarketIntelligenceRecipeBasis => MarketAnalysisRecipeBasis;
@@ -183,6 +184,8 @@ public partial class AppState
     // Persistence state
     public bool IsAutoSaveEnabled { get; private set; } = true;
     public bool SecretDebugToolsEnabled { get; private set; }
+    public bool DeferAutomaticProcurementReconciliationForBenchmark { get; private set; }
+    public bool DeferAutomaticMarketAnalysisForBenchmark { get; private set; }
     public MarketFetchScope DefaultMarketFetchScope { get; private set; } = MarketFetchScope.EntireRegion;
     public DateTime? LastAutoSave { get; private set; }
     public IReadOnlyList<StoredPlanSummary> SavedPlans { get; private set; } = Array.AsReadOnly(Array.Empty<StoredPlanSummary>());

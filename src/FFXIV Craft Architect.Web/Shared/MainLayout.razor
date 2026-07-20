@@ -12,6 +12,8 @@
 @inject PlanSessionLoadService PlanSessionLoad
 @inject MarketEvidenceHydrationService MarketEvidenceHydration
 @inject ProcurementRouteReconciliationService ProcurementRouteReconciliation
+@inject CancellableOperationService CancellableOperations
+@inject IndexedDbMarketCacheService MarketCache
 @inject PackagedWorldDirectoryService PackagedWorldDirectory
 @inject StartupInitializationService StartupInitialization
 @inject IJSRuntime JSRuntime
@@ -21,6 +23,7 @@
 @inject RecipeCalculationService RecipeService
 @inject UniversalisService UniversalisService
 @inject RecipePlannerCommandService RecipePlannerCommandService
+@inject NativePlanImportClassifier NativePlanImportClassifier
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject MarketAnalysisDiagnosticDumpService MarketAnalysisDiagnosticDumpService
 @inject RecipeBuildDiagnosticService RecipeBuildDiagnosticService
@@ -28,6 +31,46 @@
 @implements IDisposable
 
 <MudThemeProvider @ref="_mudThemeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
+@if (AppState.SecretDebugToolsEnabled)
+{
+    var publication = AppState.MarketIntelligencePublicationContext;
+    var routeBasis = AppState.ProcurementRoutePublicationBasis;
+    var cacheDecision = MarketCache.LastDecisionSnapshot;
+    <div data-benchmark-id="operation-lifecycle"
+         hidden
+         data-plan-session-version="@AppState.PlanSessionVersion"
+         data-plan-root-count="@(AppState.CurrentPlan?.RootItems.Count ?? 0)"
+         data-plan-node-count="@CountPlanNodes(AppState.CurrentPlan)"
+         data-plan-leaf-item-ids="@string.Join(",", GetPlanLeafItemIds(AppState.CurrentPlan))"
+         data-market-analysis-count="@AppState.MarketItemAnalyses.Count"
+         data-market-intelligence-id="@AppState.MarketIntelligenceId"
+         data-publication-plan-session-version="@publication.WebPlanSessionVersion"
+         data-publication-market-version="@publication.WebMarketAnalysisVersion"
+         data-publication-kind="@publication.Kind"
+         data-route-validity="@AppState.ProcurementRouteValidity"
+         data-route-has-decision="@BoolText(AppState.ProcurementRouteDecision is not null)"
+         data-route-failure="@AppState.ProcurementRouteFailure"
+         data-route-basis-plan-session-version="@routeBasis?.PlanSessionVersion"
+         data-route-basis-market-intelligence-id="@routeBasis?.MarketIntelligenceId"
+         data-route-reconciling="@BoolText(AppState.IsProcurementRouteReconciling)"
+         data-route-reconciliation-scheduled="@BoolText(ProcurementRouteReconciliation.IsScheduled)"
+         data-is-busy="@BoolText(AppState.IsBusy)"
+         data-progress-percent="@AppState.ProgressPercent"
+         data-current-operation="@AppState.CurrentOperation"
+         data-active-workflows="@string.Join(",", CancellableOperations.ActiveWorkflows)"
+         data-dirty-persisted-buckets="@AppState.GetDirtyPersistedBuckets()"
+         data-last-autosave="@AppState.LastAutoSave?.ToString("O")"
+         data-cache-fresh-hits="@cacheDecision?.FreshHitCount"
+         data-cache-stale-entries="@cacheDecision?.StaleExistingEntryCount"
+         data-cache-missing-entries="@cacheDecision?.MissingEntryCount"
+         data-cache-fetched-pairs="@((cacheDecision?.OrdinaryFetchedPairCount ?? 0) + (cacheDecision?.ForcedRefreshPairCount ?? 0))"
+         data-cache-cleaned-entries="@cacheDecision?.CleanupStaleDeletionCount">
+    </div>
+    <button data-benchmark-id="lock-current-acquisition-decisions"
+            hidden
+            @onclick="LockCurrentAcquisitionDecisionsForBenchmark">
+    </button>
+}
 <MudDialogProvider />
 <MudSnackbarProvider MaxDisplayedSnackbars="3" 
                      SnackbarDefaults="new SnackbarOptions { ShowCloseIcon = false, HideIcon = true }" />
@@ -261,6 +304,10 @@
     {
         Console.WriteLine("[DIAG] MainLayout.OnInitialized()");
         
+        // Benchmark runs may defer automatic reconciliation so they can lock a
+        // deterministic acquisition fixture before explicitly exercising the route.
+        AppState.SetBenchmarkWorkflowDeferral(IsLocalBenchmarkWorkflowRequest());
+
         // Set initial active tab based on current URL
         UpdateActiveTab(NavigationManager.Uri);
         
@@ -311,8 +358,12 @@
 
     private void OnAppStateChanged(AppStateChange change)
     {
-        if (change.HasScope(AppStateChangeScope.Settings))
+        if (change.HasScope(AppStateChangeScope.Settings) ||
+            AppState.SecretDebugToolsEnabled && change.Scopes != AppStateChangeScope.None)
         {
+            // The hidden lifecycle probe is hosted by the layout. In developer mode it
+            // must follow the same plan/market/procurement/status publications as the
+            // feature pages rather than remaining frozen at its last settings render.
             _ = InvokeAsync(StateHasChanged);
         }
     }
@@ -351,6 +402,7 @@
             var defaultDc = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
             var region = await Settings.GetAsync("market.region", "North America") ?? "North America";
             var secretDebugToolsEnabled = await Settings.GetAsync("debug.secret_tools_enabled", false);
+            var deferAutomaticRoute = await Settings.GetAsync("debug.defer_automatic_route_reconciliation", false);
             var defaultScope = ParseMarketFetchScope(
                 await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
             var selectedDataCenter = string.IsNullOrEmpty(AppState.SelectedDataCenter)
@@ -368,6 +420,8 @@
 
             AppState.SetAutoSaveEnabled(autoSave);
             AppState.SetSecretDebugToolsEnabled(secretDebugToolsEnabled);
+            AppState.SetBenchmarkWorkflowDeferral(
+                secretDebugToolsEnabled && deferAutomaticRoute || IsLocalBenchmarkWorkflowRequest());
             AppState.SetMarketEvidenceSettings(
                 selectedDataCenter,
                 region,
@@ -601,7 +655,9 @@
             var items = importResult.Items;
             
             // If we have a native plan, restore it fully
-            if (importResult.NativePlan != null)
+            var rebuildNativePlan = importResult.NativePlan != null &&
+                await NativePlanImportClassifier.RequiresRecipeGraphBuildAsync(importResult.NativePlan);
+            if (importResult.NativePlan != null && !rebuildNativePlan)
             {
                 await LoadNativePlanAsync(
                     importResult.NativePlan,
@@ -611,16 +667,18 @@
             }
             else
             {
-                var projectItems = items
-                    .Select(item => new ProjectItem
-                    {
-                        Id = item.Id,
-                        Name = item.Name,
-                        IconId = item.IconId,
-                        Quantity = item.Quantity,
-                        MustBeHq = item.MustBeHq
-                    })
-                    .ToList();
+                var projectItems = importResult.NativePlan != null
+                    ? CraftPlanStateMapper.GetRootProjectItems(importResult.NativePlan)
+                    : items
+                        .Select(item => new ProjectItem
+                        {
+                            Id = item.Id,
+                            Name = item.Name,
+                            IconId = item.IconId,
+                            Quantity = item.Quantity,
+                            MustBeHq = item.MustBeHq
+                        })
+                        .ToList();
                 var importCommandResult = await RecipePlannerCommandService.ImportProjectItemsAsync(
                     new ImportProjectItemsRequest(
                         projectItems,
@@ -825,6 +883,60 @@
             Snackbar.Add($"Failed to rebuild plan: {ex.Message}", Severity.Warning);
         }
     }
+
+    private void LockCurrentAcquisitionDecisionsForBenchmark()
+    {
+        if (!AppState.SecretDebugToolsEnabled || AppState.CurrentPlan is null)
+        {
+            return;
+        }
+
+        foreach (var root in AppState.CurrentPlan.RootItems)
+        {
+            LockMarketAcquisitionDecision(root);
+        }
+
+        AppState.ApplyPlanDecisionChange(
+            AcquisitionPlanningService.GetActiveProcurementItems(AppState.CurrentPlan),
+            clearProcurementOverlay: true);
+    }
+
+    private static void LockMarketAcquisitionDecision(PlanNode node)
+    {
+        node.Source = node.MustBeHq
+            ? AcquisitionSource.MarketBuyHq
+            : AcquisitionSource.MarketBuyNq;
+        node.SourceReason = AcquisitionSourceReason.UserSelected;
+        foreach (var child in node.Children)
+        {
+            LockMarketAcquisitionDecision(child);
+        }
+    }
+
+    private bool IsLocalBenchmarkWorkflowRequest()
+    {
+        var uri = new Uri(NavigationManager.Uri);
+        return (uri.IsLoopback || string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase)) &&
+            uri.Query.Contains("benchmark-defer-route=1", StringComparison.Ordinal);
+    }
+
+    private static string BoolText(bool value) => value ? "true" : "false";
+
+    private static int CountPlanNodes(CraftingPlan? plan) =>
+        plan?.RootItems.Sum(CountPlanNodes) ?? 0;
+
+    private static int CountPlanNodes(PlanNode node) =>
+        1 + node.Children.Sum(CountPlanNodes);
+
+    private static IEnumerable<int> GetPlanLeafItemIds(CraftingPlan? plan) =>
+        plan is null
+            ? []
+            : plan.RootItems.SelectMany(GetPlanLeafItemIds).Distinct().Order();
+
+    private static IEnumerable<int> GetPlanLeafItemIds(PlanNode node) =>
+        node.Children.Count == 0
+            ? [node.ItemId]
+            : node.Children.SelectMany(GetPlanLeafItemIds);
 
     private static string NormalizeDevPlanPath(string input)
     {

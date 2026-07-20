@@ -72,6 +72,7 @@ builder.Services.AddScoped<PackagedWorldDirectoryService>();
 builder.Services.AddScoped<StartupInitializationService>();
 builder.Services.AddScoped<CancellableOperationService>();
 builder.Services.AddScoped<RecipePlannerCommandService>();
+builder.Services.AddScoped<NativePlanImportClassifier>();
 builder.Services.AddScoped<IRecipeBuildDiagnosticCommandRunner, RecipePlannerDiagnosticCommandRunner>();
 builder.Services.AddScoped<RecipeBuildDiagnosticService>();
 builder.Services.AddScoped<MarketAnalysisWorkflowService>();
