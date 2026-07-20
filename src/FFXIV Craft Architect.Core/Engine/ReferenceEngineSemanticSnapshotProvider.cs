@@ -6,7 +6,7 @@ namespace FFXIV_Craft_Architect.Core.Engine;
 public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSemanticSnapshotProvider
 {
     private const string SchemaVersion = "1";
-    private static readonly JsonSerializerOptions InputJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions InputJsonOptions = EngineJsonSerializerOptions.CreateWire();
 
     public ReferenceEnginePreparedInput PrepareInput(EngineRequestEnvelope request)
     {

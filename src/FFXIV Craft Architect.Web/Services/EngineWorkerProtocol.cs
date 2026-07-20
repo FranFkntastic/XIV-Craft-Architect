@@ -41,7 +41,7 @@ public interface IEngineWorkerTransport : IAsyncDisposable
 public sealed class EngineWorkerClient : IAsyncDisposable
 {
     public const string ProtocolVersion = "1";
-    private static readonly JsonSerializerOptions WireJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions WireJsonOptions = EngineJsonSerializerOptions.CreateWire();
     private readonly IEngineWorkerTransport _transport;
     private readonly object _sync = new();
     private TaskCompletionSource<EngineResultEnvelope>? _completion;
@@ -423,7 +423,13 @@ public sealed class EngineWorkerClient : IAsyncDisposable
             {
                 throw new InvalidOperationException("Successful worker results require completed settlement evidence.");
             }
-            foreach (var requiredPhase in GetRequiredSuccessPhases(request))
+            var input = request.Input.Deserialize<ReferenceEngineInput>(WireJsonOptions)
+                ?? throw new InvalidOperationException("Cannot determine required phase evidence for the engine request.");
+            var successPhases = EngineSuccessPhasePolicy.Resolve(
+                request.InputKind,
+                input.MarketAnalysis is not null,
+                input.ProcurementRoute is not null);
+            foreach (var requiredPhase in successPhases.RequiredEvidencePhases)
             {
                 if (!result.Completion.TerminalEvidence.TryGetValue($"phase:{requiredPhase}", out var phaseEvidence) ||
                     string.IsNullOrWhiteSpace(phaseEvidence))
@@ -448,34 +454,6 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         {
             throw new InvalidOperationException("Worker final transaction hash validation failed.");
         }
-    }
-
-    private static IReadOnlyList<EnginePhase> GetRequiredSuccessPhases(EngineRequestEnvelope request)
-    {
-        var input = request.Input.Deserialize<ReferenceEngineInput>(WireJsonOptions)
-            ?? throw new InvalidOperationException("Cannot determine required phase evidence for the engine request.");
-        var phases = new List<EnginePhase>
-        {
-            EnginePhase.Publishing,
-            EnginePhase.Persisting,
-            EnginePhase.ReleasingGate,
-            EnginePhase.SettlingUi,
-            EnginePhase.CapturingPostActionEvidence
-        };
-        if (input.MarketAnalysis is not null)
-        {
-            phases.Add(EnginePhase.Analyzing);
-        }
-        if (input.ProcurementRoute is not null)
-        {
-            phases.Add(EnginePhase.Reconciling);
-            phases.Add(EnginePhase.SettlingRoute);
-        }
-        if (request.InputKind == EngineInputKind.RestoredSession)
-        {
-            phases.Add(EnginePhase.CapturingRestorationEvidence);
-        }
-        return phases;
     }
 
     private void NotifyProgress(EngineProgress progress)

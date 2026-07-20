@@ -156,6 +156,113 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
+    public void ProductionSnapshotProvider_CanonicalizesCombinedDemandInput()
+    {
+        var input = new ReferenceEngineInput(
+            new MarketAnalysisExecutionRequest
+            {
+                Items =
+                [
+                    new MaterialAggregate { ItemId = 2, TotalQuantity = 3 },
+                    new MaterialAggregate { ItemId = 1, TotalQuantity = 2 }
+                ]
+            },
+            new ProcurementRouteExecutionRequest
+            {
+                ActiveProcurementItems =
+                [
+                    new MaterialAggregate { ItemId = 2, TotalQuantity = 4, RequiresHq = true },
+                    new MaterialAggregate { ItemId = 3, TotalQuantity = 1 }
+                ],
+                BlacklistedWorlds = new HashSet<MarketWorldKey>
+                {
+                    new("Aether", "Alpha")
+                },
+                ExcludedItemWorlds = new HashSet<MarketItemWorldKey>
+                {
+                    new(2, new MarketWorldKey("Aether", "Beta"))
+                }
+            });
+        var inputJson = JsonSerializer.SerializeToElement(
+            input,
+            EngineJsonSerializerOptions.CreateWire());
+        var settings = new EngineDeterministicSettings(
+            "projection-test",
+            new Dictionary<string, string> { ["mode"] = "deterministic" });
+        var request = CreateRequest(inputJson) with { Settings = settings };
+
+        var prepared = new ReferenceEngineSemanticSnapshotProvider().PrepareInput(request);
+
+        Assert.Equal("1", prepared.RootIntent.SchemaVersion);
+        Assert.Equal(EngineInputKind.RootIntent, prepared.RootIntent.InputKind);
+        Assert.Equal(EngineCanonicalHash.Compute(settings), prepared.RootIntent.DeterministicSettingsHash);
+        Assert.Collection(
+            prepared.RootIntent.Demands,
+            demand => Assert.Equal(new EngineDemandSnapshot(1, 2, false), demand),
+            demand => Assert.Equal(new EngineDemandSnapshot(2, 7, true), demand),
+            demand => Assert.Equal(new EngineDemandSnapshot(3, 1, false), demand));
+        Assert.Collection(
+            prepared.ExpandedGraph.Nodes,
+            node => Assert.Equal(new EngineGraphNodeSnapshot("item:1", 1, 2, 1001, "market"), node),
+            node => Assert.Equal(new EngineGraphNodeSnapshot("item:2", 2, 7, 1002, "market"), node),
+            node => Assert.Equal(new EngineGraphNodeSnapshot("item:3", 3, 1, 1003, "market"), node));
+        Assert.Empty(prepared.ExpandedGraph.Edges);
+        Assert.Equal(2, prepared.Input.MarketAnalysis!.Items.Count);
+        Assert.Equal(2, prepared.Input.ProcurementRoute!.ActiveProcurementItems.Count);
+        Assert.Contains(new MarketWorldKey("Aether", "Alpha"), prepared.Input.ProcurementRoute.BlacklistedWorlds);
+        Assert.Contains(
+            new MarketItemWorldKey(2, new MarketWorldKey("Aether", "Beta")),
+            prepared.Input.ProcurementRoute.ExcludedItemWorlds);
+    }
+
+    [Theory]
+    [InlineData(
+        EngineInputKind.RootIntent,
+        true,
+        false,
+        "Analyzing,Publishing,Persisting,ReleasingGate,SettlingUi,CapturingPostActionEvidence",
+        "Publishing,Persisting,ReleasingGate,SettlingUi,CapturingPostActionEvidence")]
+    [InlineData(
+        EngineInputKind.RootIntent,
+        false,
+        true,
+        "Reconciling,Publishing,SettlingRoute,Persisting,ReleasingGate,SettlingUi,CapturingPostActionEvidence",
+        "Publishing,SettlingRoute,Persisting,ReleasingGate,SettlingUi,CapturingPostActionEvidence")]
+    [InlineData(
+        EngineInputKind.RootIntent,
+        true,
+        true,
+        "Analyzing,Reconciling,Publishing,SettlingRoute,Persisting,ReleasingGate,SettlingUi,CapturingPostActionEvidence",
+        "Publishing,SettlingRoute,Persisting,ReleasingGate,SettlingUi,CapturingPostActionEvidence")]
+    [InlineData(
+        EngineInputKind.RestoredSession,
+        true,
+        false,
+        "Analyzing,Publishing,Persisting,ReleasingGate,SettlingUi,CapturingPostActionEvidence,CapturingRestorationEvidence",
+        "Publishing,Persisting,ReleasingGate,SettlingUi,CapturingPostActionEvidence,CapturingRestorationEvidence")]
+    [InlineData(
+        EngineInputKind.RestoredSession,
+        false,
+        true,
+        "Reconciling,Publishing,SettlingRoute,Persisting,ReleasingGate,SettlingUi,CapturingPostActionEvidence,CapturingRestorationEvidence",
+        "Publishing,SettlingRoute,Persisting,ReleasingGate,SettlingUi,CapturingPostActionEvidence,CapturingRestorationEvidence")]
+    public void SuccessPhasePolicy_IsOperationAndInputKindSpecific(
+        EngineInputKind inputKind,
+        bool includesMarketAnalysis,
+        bool includesProcurementRoute,
+        string expectedRequiredEvidence,
+        string expectedSettlement)
+    {
+        var requirements = EngineSuccessPhasePolicy.Resolve(
+            inputKind,
+            includesMarketAnalysis,
+            includesProcurementRoute);
+
+        Assert.Equal(expectedRequiredEvidence, string.Join(',', requirements.RequiredEvidencePhases));
+        Assert.Equal(expectedSettlement, string.Join(',', requirements.SettlementPhases));
+    }
+
+    [Fact]
     public void AnalysisSemanticHash_ExcludesTimingsButBindsFreshnessEvidence()
     {
         var fast = CreateAnalysisResult(TimeSpan.FromMilliseconds(1), DateTime.UnixEpoch);
@@ -293,6 +400,81 @@ public sealed class EngineArchitectureTests
         Assert.Contains("phase:Publishing", result.Completion.TerminalEvidence.Keys);
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ReferenceExecutor_AndWorkerValidatorShareSuccessPolicy(
+        bool includesMarketAnalysis,
+        bool includesProcurementRoute)
+    {
+        var provider = new ReferenceEngineSemanticSnapshotProvider();
+        var settlement = new RecordingSettlement();
+        var analysisResult = CreateAnalysisResult();
+        var routeResult = CreateRouteResult(DateTime.UnixEpoch, 100);
+        var analysisService = new Mock<IMarketAnalysisExecutionService>();
+        analysisService
+            .Setup(service => service.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(analysisResult);
+        var routeService = new Mock<IProcurementRouteExecutionService>();
+        routeService
+            .Setup(service => service.AnalyzeAsync(
+                It.IsAny<ProcurementRouteExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(routeResult);
+        var input = new ReferenceEngineInput(
+            includesMarketAnalysis ? new MarketAnalysisExecutionRequest() : null,
+            includesProcurementRoute ? new ProcurementRouteExecutionRequest() : null);
+        var request = CreateRequest(JsonSerializer.SerializeToElement(input));
+        var engine = new ReferenceMarketProcurementEngine(
+            analysisService.Object,
+            routeService.Object,
+            settlement,
+            provider);
+
+        var result = await engine.ExecuteAsync(request);
+
+        Assert.Equal(EngineTerminalStatus.Succeeded, result.Status);
+        var requirements = EngineSuccessPhasePolicy.Resolve(
+            request.InputKind,
+            includesMarketAnalysis,
+            includesProcurementRoute);
+        Assert.Equal(requirements.SettlementPhases, settlement.Phases);
+        Assert.All(
+            requirements.RequiredEvidencePhases,
+            phase => Assert.False(string.IsNullOrWhiteSpace(result.Completion.TerminalEvidence[$"phase:{phase}"])));
+        Assert.Equal(
+            includesMarketAnalysis ? ComputeAnalysisHash(analysisResult) : string.Empty,
+            result.Completion.AnalysisResultHash);
+        Assert.Equal(
+            includesProcurementRoute ? ComputeRouteHash(routeResult) : string.Empty,
+            result.Completion.ProcurementRouteResultHash);
+        if (!includesProcurementRoute)
+        {
+            Assert.DoesNotContain("phase:SettlingRoute", result.Completion.TerminalEvidence.Keys);
+        }
+        Assert.DoesNotContain("phase:CapturingRestorationEvidence", result.Completion.TerminalEvidence.Keys);
+
+        var transport = new FakeWorkerTransport();
+        await using var client = new EngineWorkerClient(transport);
+        await client.StartAsync();
+        var execution = client.ExecuteAsync(request);
+        transport.Emit(new EngineWorkerMessage(
+            EngineWorkerClient.ProtocolVersion,
+            "result",
+            request.TransactionId,
+            JsonSerializer.SerializeToElement(result)));
+
+        Assert.Equal(EngineTerminalStatus.Succeeded, (await execution).Status);
+        Assert.Equal(EngineWorkerLifecycleState.Ready, client.State);
+    }
+
     [Fact]
     public async Task WorkerClient_SupportsStartProgressCancelAndValidatedCompletion()
     {
@@ -400,6 +582,49 @@ public sealed class EngineArchitectureTests
                 }
             };
         });
+    }
+
+    [Theory]
+    [InlineData(EngineInputKind.RootIntent, true, EnginePhase.SettlingRoute)]
+    [InlineData(EngineInputKind.RestoredSession, false, EnginePhase.CapturingRestorationEvidence)]
+    public async Task WorkerClient_RejectsMissingConditionalSuccessEvidence(
+        EngineInputKind inputKind,
+        bool includesProcurementRoute,
+        EnginePhase missingPhase)
+    {
+        var input = new ReferenceEngineInput(
+            includesProcurementRoute ? null : new MarketAnalysisExecutionRequest(),
+            includesProcurementRoute ? new ProcurementRouteExecutionRequest() : null);
+        var request = CreateRequest(JsonSerializer.SerializeToElement(input)) with { InputKind = inputKind };
+        var result = CreateSuccessfulResult(request);
+        var evidence = result.Completion.TerminalEvidence
+            .Where(pair => pair.Key != $"phase:{missingPhase}")
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        result = result with
+        {
+            Completion = result.Completion with
+            {
+                TerminalEvidence = evidence,
+                FinalTransactionHash = EngineCanonicalHash.ComputeFinalTransactionHash(
+                    request,
+                    result.Status,
+                    result.Completion.AnalysisResultHash,
+                    result.Completion.ProcurementRouteResultHash,
+                    evidence)
+            }
+        };
+        var transport = new FakeWorkerTransport();
+        await using var client = new EngineWorkerClient(transport);
+        await client.StartAsync();
+
+        var execution = client.ExecuteAsync(request);
+        transport.Emit(new EngineWorkerMessage(
+            EngineWorkerClient.ProtocolVersion,
+            "result",
+            request.TransactionId,
+            JsonSerializer.SerializeToElement(result)));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => execution);
     }
 
     [Fact]
@@ -650,13 +875,19 @@ public sealed class EngineArchitectureTests
         var evidence = new Dictionary<string, string>
         {
             ["resultPayloadHash"] = EngineCanonicalHash.Compute(payload),
-            ["settlement"] = "complete",
-            ["phase:Publishing"] = "complete",
-            ["phase:Persisting"] = "complete",
-            ["phase:ReleasingGate"] = "complete",
-            ["phase:SettlingUi"] = "complete",
-            ["phase:CapturingPostActionEvidence"] = "complete"
+            ["settlement"] = "complete"
         };
+        var input = request.Input.Deserialize<ReferenceEngineInput>(
+            EngineJsonSerializerOptions.CreateWire())
+            ?? throw new InvalidOperationException("Cannot create successful fixture evidence for the engine request.");
+        var requirements = EngineSuccessPhasePolicy.Resolve(
+            request.InputKind,
+            input.MarketAnalysis is not null,
+            input.ProcurementRoute is not null);
+        foreach (var phase in requirements.RequiredEvidencePhases)
+        {
+            evidence[$"phase:{phase}"] = "complete";
+        }
         var hash = EngineCanonicalHash.ComputeFinalTransactionHash(
             request,
             EngineTerminalStatus.Succeeded,

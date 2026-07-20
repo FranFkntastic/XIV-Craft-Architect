@@ -115,6 +115,10 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
                 throw new InvalidOperationException("The reference engine requires at least one analysis or procurement operation.");
             }
             ValidateBudgets(request.Budgets, input);
+            var successPhases = EngineSuccessPhasePolicy.Resolve(
+                request.InputKind,
+                input.MarketAnalysis is not null,
+                input.ProcurementRoute is not null);
 
             phase = EnginePhase.ConstructingOrRestoringGraph;
             Report(progress, request, phase, 2, 12, "Preparing graph basis.");
@@ -157,7 +161,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             }
             var settlementContext = new EngineSettlementContext(request, output, analysisHash, routeHash);
 
-            foreach (var settlementPhase in SettlementPhases)
+            foreach (var settlementPhase in successPhases.SettlementPhases)
             {
                 phase = settlementPhase;
                 Report(progress, request, phase, ProgressIndex(phase), 12, PhaseMessage(phase));
@@ -168,6 +172,15 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
                 }
                 settlementEvidence[$"phase:{phase}"] = evidence.Evidence;
                 settledPhases.Add(phase);
+            }
+
+            foreach (var requiredPhase in successPhases.RequiredEvidencePhases)
+            {
+                if (!settlementEvidence.TryGetValue($"phase:{requiredPhase}", out var evidence) ||
+                    string.IsNullOrWhiteSpace(evidence))
+                {
+                    throw new InvalidOperationException($"Successful engine result is missing required phase evidence for '{requiredPhase}'.");
+                }
             }
 
             var terminalEvidence = new Dictionary<string, string>(settlementEvidence, StringComparer.Ordinal)
@@ -264,17 +277,6 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
 
     private static readonly EnginePhase[] TerminalSettlementPhases =
     [
-        EnginePhase.ReleasingGate,
-        EnginePhase.SettlingUi,
-        EnginePhase.CapturingPostActionEvidence,
-        EnginePhase.CapturingRestorationEvidence
-    ];
-
-    private static readonly EnginePhase[] SettlementPhases =
-    [
-        EnginePhase.Publishing,
-        EnginePhase.SettlingRoute,
-        EnginePhase.Persisting,
         EnginePhase.ReleasingGate,
         EnginePhase.SettlingUi,
         EnginePhase.CapturingPostActionEvidence,
