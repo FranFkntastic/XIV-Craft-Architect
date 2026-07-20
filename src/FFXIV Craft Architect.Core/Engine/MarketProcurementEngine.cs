@@ -20,17 +20,31 @@ public sealed record ReferenceEngineOutput(
     MarketAnalysisExecutionResult? MarketAnalysis,
     ProcurementRouteExecutionResult? ProcurementRoute);
 
+public sealed record EngineSettlementContext(
+    EngineRequestEnvelope Request,
+    ReferenceEngineOutput Output,
+    string AnalysisResultHash,
+    string ProcurementRouteResultHash);
+
+public sealed record EngineSettlementEvidence(bool Completed, string Evidence);
+
 public interface IEngineTransactionSettlement
 {
-    Task SettleAsync(EnginePhase phase, EngineRequestEnvelope request, CancellationToken cancellationToken);
+    Task<EngineSettlementEvidence> SettleAsync(
+        EnginePhase phase,
+        EngineSettlementContext context,
+        CancellationToken cancellationToken);
 }
 
 public sealed class NoOpEngineTransactionSettlement : IEngineTransactionSettlement
 {
-    public Task SettleAsync(EnginePhase phase, EngineRequestEnvelope request, CancellationToken cancellationToken)
+    public Task<EngineSettlementEvidence> SettleAsync(
+        EnginePhase phase,
+        EngineSettlementContext context,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.CompletedTask;
+        return Task.FromResult(new EngineSettlementEvidence(false, "unsupported"));
     }
 }
 
@@ -64,6 +78,10 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
 
         var phase = EnginePhase.Accepted;
         var settledPhases = new HashSet<EnginePhase>();
+        var settlementEvidence = new Dictionary<string, string>(StringComparer.Ordinal);
+        var output = new ReferenceEngineOutput(null, null);
+        var analysisHash = string.Empty;
+        var routeHash = string.Empty;
         try
         {
             Report(progress, request, phase, 0, 12, "Transaction accepted.");
@@ -71,10 +89,17 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
 
             phase = EnginePhase.InterpretingInput;
             Report(progress, request, phase, 1, 12, "Interpreting engine input.");
-            var input = request.Input.Deserialize<ReferenceEngineInput>(new JsonSerializerOptions
+            if (request.InputKind != EngineInputKind.RootIntent)
             {
-                PropertyNameCaseInsensitive = true
-            }) ?? throw new InvalidOperationException("The reference engine input is empty.");
+                throw new NotSupportedException($"Input kind '{request.InputKind}' is not supported by the reference executor yet.");
+            }
+
+            var input = request.Input.Deserialize<ReferenceEngineInput>()
+                ?? throw new InvalidOperationException("The reference engine input is empty.");
+            if (input.MarketAnalysis is null && input.ProcurementRoute is null)
+            {
+                throw new InvalidOperationException("The reference engine requires at least one analysis or procurement operation.");
+            }
             ValidateBudgets(request.Budgets, input);
 
             phase = EnginePhase.ConstructingOrRestoringGraph;
@@ -98,20 +123,30 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
                 route = await _procurementRoute.AnalyzeAsync(input.ProcurementRoute, ct: cancellationToken);
             }
 
-            var analysisHash = analysis is null ? string.Empty : EngineCanonicalHash.Compute(analysis);
-            var routeHash = route is null ? string.Empty : EngineCanonicalHash.Compute(route);
-            var output = new ReferenceEngineOutput(analysis, route);
-            var resultElement = JsonSerializer.SerializeToElement(output);
+            analysisHash = analysis is null ? string.Empty : ComputeAnalysisSemanticHash(analysis);
+            routeHash = route is null ? string.Empty : EngineCanonicalHash.Compute(route);
+            output = new ReferenceEngineOutput(analysis, route);
+            var resultElement = JsonSerializer.SerializeToElement(new
+            {
+                MarketAnalysis = analysis is null ? null : CreateAnalysisSemanticProjection(analysis),
+                ProcurementRoute = route
+            });
+            var settlementContext = new EngineSettlementContext(request, output, analysisHash, routeHash);
 
             foreach (var settlementPhase in SettlementPhases)
             {
                 phase = settlementPhase;
                 Report(progress, request, phase, ProgressIndex(phase), 12, PhaseMessage(phase));
-                await _settlement.SettleAsync(phase, request, cancellationToken);
+                var evidence = await _settlement.SettleAsync(phase, settlementContext, cancellationToken);
+                if (!evidence.Completed)
+                {
+                    throw new InvalidOperationException($"Settlement phase '{phase}' did not complete: {evidence.Evidence}");
+                }
+                settlementEvidence[$"phase:{phase}"] = evidence.Evidence;
                 settledPhases.Add(phase);
             }
 
-            var terminalEvidence = new Dictionary<string, string>(StringComparer.Ordinal)
+            var terminalEvidence = new Dictionary<string, string>(settlementEvidence, StringComparer.Ordinal)
             {
                 ["resultPayloadHash"] = EngineCanonicalHash.Compute(resultElement),
                 ["settlement"] = "complete"
@@ -139,19 +174,20 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await RunTerminalSettlementAsync(request, settledPhases);
-            return CreateTerminal(request, EngineTerminalStatus.Cancelled, EnginePhase.Cancelled, phase, "cancelled", "The transaction was cancelled.");
+            await RunTerminalSettlementAsync(new EngineSettlementContext(request, output, analysisHash, routeHash), settledPhases, settlementEvidence);
+            return CreateTerminal(request, EngineTerminalStatus.Cancelled, EnginePhase.Cancelled, phase, "cancelled", "The transaction was cancelled.", nameof(OperationCanceledException), analysisHash, routeHash, settlementEvidence);
         }
         catch (Exception ex)
         {
-            await RunTerminalSettlementAsync(request, settledPhases);
-            return CreateTerminal(request, EngineTerminalStatus.Failed, EnginePhase.Failed, phase, "unhandled", ex.Message);
+            await RunTerminalSettlementAsync(new EngineSettlementContext(request, output, analysisHash, routeHash), settledPhases, settlementEvidence);
+            return CreateTerminal(request, EngineTerminalStatus.Failed, EnginePhase.Failed, phase, "unhandled", ex.Message, ex.GetType().FullName ?? ex.GetType().Name, analysisHash, routeHash, settlementEvidence);
         }
     }
 
     private async Task RunTerminalSettlementAsync(
-        EngineRequestEnvelope request,
-        IReadOnlySet<EnginePhase> settledPhases)
+        EngineSettlementContext context,
+        IReadOnlySet<EnginePhase> settledPhases,
+        IDictionary<string, string> settlementEvidence)
     {
         foreach (var terminalPhase in TerminalSettlementPhases)
         {
@@ -162,11 +198,14 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
 
             try
             {
-                await _settlement.SettleAsync(terminalPhase, request, CancellationToken.None);
+                var evidence = await _settlement.SettleAsync(terminalPhase, context, CancellationToken.None);
+                settlementEvidence[$"cleanup:{terminalPhase}"] = evidence.Completed
+                    ? evidence.Evidence
+                    : $"failed:{evidence.Evidence}";
             }
-            catch
+            catch (Exception ex)
             {
-                // Preserve the original terminal outcome; settlement failures are reflected by missing evidence.
+                settlementEvidence[$"cleanup:{terminalPhase}"] = $"failed:{ex.GetType().Name}";
             }
         }
     }
@@ -177,6 +216,12 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             budgets.MaxCandidateEvaluations <= 0 || budgets.CooperativeCancellationInterval <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(budgets), "Engine budgets must be positive (evidence requests may be zero).");
+        }
+
+        if (budgets.MaxCandidateEvaluations != EngineExecutionBudgets.Default.MaxCandidateEvaluations ||
+            budgets.CooperativeCancellationInterval != EngineExecutionBudgets.Default.CooperativeCancellationInterval)
+        {
+            throw new NotSupportedException("Candidate-evaluation and cooperative-cancellation budgets are not supported by the reference executor yet; use their default values.");
         }
 
         var operationCount = (input.MarketAnalysis is null ? 0 : 1) + (input.ProcurementRoute is null ? 0 : 1);
@@ -192,6 +237,54 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             throw new InvalidOperationException("The request exceeds its market-evidence request budget.");
         }
     }
+
+    public static string ComputeAnalysisSemanticHash(MarketAnalysisExecutionResult analysis) =>
+        EngineCanonicalHash.Compute(CreateAnalysisSemanticProjection(analysis));
+
+    private static object CreateAnalysisSemanticProjection(MarketAnalysisExecutionResult analysis) =>
+        new
+        {
+            Evidence = analysis.Evidence.Entries
+                .OrderBy(entry => entry.Key.itemId)
+                .ThenBy(entry => entry.Key.dataCenter, StringComparer.Ordinal)
+                .Select(entry => new
+                {
+                    ItemId = entry.Key.itemId,
+                    DataCenter = entry.Key.dataCenter,
+                    entry.Value.DCAveragePrice,
+                    entry.Value.HQAveragePrice,
+                    Worlds = entry.Value.Worlds
+                        .OrderBy(world => world.WorldId)
+                        .ThenBy(world => world.WorldName, StringComparer.Ordinal)
+                        .Select(world => new
+                        {
+                            world.WorldId,
+                            world.WorldName,
+                            world.EvidenceOrigin,
+                            world.EvidenceCompleteness,
+                            world.ReportedListingCount,
+                            world.ListingCapacity,
+                            world.IsTruncated,
+                            world.IsCongested,
+                            Listings = world.Listings
+                                .OrderBy(listing => listing.PricePerUnit)
+                                .ThenBy(listing => listing.Quantity)
+                                .ThenBy(listing => listing.IsHq)
+                                .ThenBy(listing => listing.ListingId, StringComparer.Ordinal)
+                                .Select(listing => new
+                                {
+                                    listing.Quantity,
+                                    listing.PricePerUnit,
+                                    listing.RetainerName,
+                                    listing.ListingId,
+                                    listing.RetainerId,
+                                    listing.IsHq
+                                })
+                        })
+                }),
+            Analyses = analysis.Analyses.OrderBy(item => item.ItemId),
+            ShoppingPlans = analysis.ShoppingPlans.OrderBy(item => item.ItemId)
+        };
 
     private static readonly EnginePhase[] TerminalSettlementPhases =
     [
@@ -218,10 +311,20 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
         EnginePhase terminalPhase,
         EnginePhase failedPhase,
         string code,
-        string message)
+        string message,
+        string failureType,
+        string analysisResultHash,
+        string routeResultHash,
+        IReadOnlyDictionary<string, string> settlementEvidence)
     {
-        var evidence = new Dictionary<string, string>(StringComparer.Ordinal) { ["terminalCode"] = code };
-        var finalHash = EngineCanonicalHash.ComputeFinalTransactionHash(request, status, string.Empty, string.Empty, evidence);
+        var evidence = new Dictionary<string, string>(settlementEvidence, StringComparer.Ordinal)
+        {
+            ["terminalCode"] = code,
+            ["failedPhase"] = failedPhase.ToString(),
+            ["failureType"] = failureType,
+            ["failureMessageHash"] = EngineCanonicalHash.Compute(message.Trim())
+        };
+        var finalHash = EngineCanonicalHash.ComputeFinalTransactionHash(request, status, analysisResultHash, routeResultHash, evidence);
         var completion = new EngineCompletionEvidence(
             ContractVersion,
             request.TransactionId,
@@ -230,8 +333,8 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             request.Basis,
             request.RootIntentHash,
             request.ExpandedGraphHash,
-            string.Empty,
-            string.Empty,
+            analysisResultHash,
+            routeResultHash,
             finalHash,
             evidence);
         var failure = status == EngineTerminalStatus.Failed

@@ -22,6 +22,16 @@ public static class EngineCanonicalHash
         return Convert.ToHexString(SHA256.HashData(stream.ToArray())).ToLowerInvariant();
     }
 
+    public static string ComputeEngineInput(JsonElement value)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            WriteCanonical(writer, value);
+        }
+        return Convert.ToHexString(SHA256.HashData(stream.ToArray())).ToLowerInvariant();
+    }
+
     public static string ComputeUnordered<T>(IEnumerable<T> values, JsonSerializerOptions? options = null)
     {
         var elementHashes = values
@@ -46,7 +56,7 @@ public static class EngineCanonicalHash
             request.Basis,
             request.Settings,
             request.Budgets,
-            InputHash = Compute(request.Input),
+            InputHash = ComputeEngineInput(request.Input),
             request.RootIntentHash,
             request.ExpandedGraphHash,
             request.AnalysisBasisHash,
@@ -59,22 +69,52 @@ public static class EngineCanonicalHash
         return Compute(stableResult);
     }
 
-    private static void WriteCanonical(Utf8JsonWriter writer, JsonElement element)
+    private static int CountSignificantDigits(string token)
+    {
+        var exponentIndex = token.IndexOfAny(['e', 'E']);
+        var mantissa = exponentIndex >= 0 ? token[..exponentIndex] : token;
+        var digits = mantissa.Where(char.IsDigit).SkipWhile(character => character == '0').Count();
+        return Math.Max(1, digits);
+    }
+
+    private static void WriteCanonical(
+        Utf8JsonWriter writer,
+        JsonElement element,
+        bool sortArray = false)
     {
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
+                var properties = element.EnumerateObject()
+                    .OrderBy(property => property.Name, StringComparer.Ordinal)
+                    .ToArray();
+                for (var index = 1; index < properties.Length; index++)
+                {
+                    if (string.Equals(properties[index - 1].Name, properties[index].Name, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException($"Duplicate JSON property '{properties[index].Name}' cannot be canonically hashed.");
+                    }
+                }
+
                 writer.WriteStartObject();
-                foreach (var property in element.EnumerateObject().OrderBy(property => property.Name, StringComparer.Ordinal))
+                foreach (var property in properties)
                 {
                     writer.WritePropertyName(property.Name);
-                    WriteCanonical(writer, property.Value);
+                    WriteCanonical(
+                        writer,
+                        property.Value,
+                        property.Name is "BlacklistedWorlds" or "ExcludedItemWorlds" or "blacklistedWorlds" or "excludedItemWorlds");
                 }
                 writer.WriteEndObject();
                 break;
             case JsonValueKind.Array:
                 writer.WriteStartArray();
-                foreach (var item in element.EnumerateArray())
+                var items = element.EnumerateArray().ToArray();
+                if (sortArray)
+                {
+                    items = items.OrderBy(Compute, StringComparer.Ordinal).ToArray();
+                }
+                foreach (var item in items)
                 {
                     WriteCanonical(writer, item);
                 }
@@ -90,11 +130,15 @@ public static class EngineCanonicalHash
                 }
                 else if (element.TryGetDecimal(out var decimalValue))
                 {
+                    if (CountSignificantDigits(element.GetRawText()) > 29)
+                    {
+                        throw new NotSupportedException($"JSON number '{element.GetRawText()}' exceeds the canonical decimal precision.");
+                    }
                     writer.WriteRawValue(decimalValue.ToString("G29", System.Globalization.CultureInfo.InvariantCulture));
                 }
                 else
                 {
-                    writer.WriteNumberValue(element.GetDouble());
+                    throw new NotSupportedException($"JSON number '{element.GetRawText()}' exceeds the canonical decimal domain.");
                 }
                 break;
             case JsonValueKind.True:

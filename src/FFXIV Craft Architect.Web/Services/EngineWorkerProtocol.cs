@@ -43,39 +43,91 @@ public sealed class EngineWorkerClient : IAsyncDisposable
     public const string ProtocolVersion = "1";
     private static readonly JsonSerializerOptions WireJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly IEngineWorkerTransport _transport;
+    private readonly object _sync = new();
     private TaskCompletionSource<EngineResultEnvelope>? _completion;
     private EngineRequestEnvelope? _request;
+    private Task<EngineWorkerCapability>? _startTask;
+    private EngineWorkerLifecycleState _state = EngineWorkerLifecycleState.Stopped;
+    private bool _disposed;
+    private CancellationTokenSource? _cancelTimeout;
+    private readonly TimeSpan _cancellationTimeout;
 
-    public EngineWorkerClient(IEngineWorkerTransport transport)
+    public EngineWorkerClient(IEngineWorkerTransport transport, TimeSpan? cancellationTimeout = null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _cancellationTimeout = cancellationTimeout ?? TimeSpan.FromSeconds(10);
+        if (_cancellationTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(cancellationTimeout));
+        }
         _transport.MessageReceived += OnMessageReceived;
     }
 
-    public EngineWorkerLifecycleState State { get; private set; } = EngineWorkerLifecycleState.Stopped;
+    public EngineWorkerLifecycleState State
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _state;
+            }
+        }
+        private set
+        {
+            lock (_sync)
+            {
+                _state = value;
+            }
+        }
+    }
 
     public EngineWorkerCapability? Capability { get; private set; }
 
     public event EventHandler<EngineProgress>? ProgressChanged;
 
-    public async Task<EngineWorkerCapability> StartAsync(CancellationToken cancellationToken = default)
+    public Task<EngineWorkerCapability> StartAsync(CancellationToken cancellationToken = default)
     {
-        EnsureState(EngineWorkerLifecycleState.Stopped, EngineWorkerLifecycleState.Faulted);
-        State = EngineWorkerLifecycleState.Starting;
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_startTask is not null)
+            {
+                return _startTask;
+            }
+
+            EnsureStateLocked(EngineWorkerLifecycleState.Stopped, EngineWorkerLifecycleState.Faulted);
+            _state = EngineWorkerLifecycleState.Starting;
+            _startTask = StartCoreAsync(cancellationToken);
+            return _startTask;
+        }
+    }
+
+    private async Task<EngineWorkerCapability> StartCoreAsync(CancellationToken cancellationToken)
+    {
+        await Task.Yield();
         try
         {
-            Capability = await _transport.StartAsync(cancellationToken);
-            if (!Capability.DedicatedWorker || !string.Equals(Capability.ProtocolVersion, ProtocolVersion, StringComparison.Ordinal))
+            var capability = await _transport.StartAsync(cancellationToken);
+            if (!capability.DedicatedWorker || !string.Equals(capability.ProtocolVersion, ProtocolVersion, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("The engine worker did not prove the required dedicated-worker protocol.");
             }
 
-            State = EngineWorkerLifecycleState.Ready;
-            return Capability;
+            lock (_sync)
+            {
+                Capability = capability;
+                _state = EngineWorkerLifecycleState.Ready;
+                _startTask = null;
+            }
+            return capability;
         }
         catch
         {
-            State = EngineWorkerLifecycleState.Faulted;
+            lock (_sync)
+            {
+                _state = EngineWorkerLifecycleState.Faulted;
+                _startTask = null;
+            }
             throw;
         }
     }
@@ -85,11 +137,16 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        EnsureState(EngineWorkerLifecycleState.Ready);
-        _request = request;
-        var completion = new TaskCompletionSource<EngineResultEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _completion = completion;
-        State = EngineWorkerLifecycleState.Running;
+        TaskCompletionSource<EngineResultEnvelope> completion;
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            EnsureStateLocked(EngineWorkerLifecycleState.Ready);
+            _request = request;
+            completion = new TaskCompletionSource<EngineResultEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _completion = completion;
+            _state = EngineWorkerLifecycleState.Running;
+        }
         try
         {
             await _transport.SendAsync(
@@ -116,53 +173,114 @@ public sealed class EngineWorkerClient : IAsyncDisposable
 
     public async Task CancelAsync(string reason, CancellationToken cancellationToken = default)
     {
-        EnsureState(EngineWorkerLifecycleState.Running);
-        State = EngineWorkerLifecycleState.Cancelling;
-        var transactionId = _request!.TransactionId;
-        await _transport.SendAsync(
-            new EngineWorkerMessage(
-                ProtocolVersion,
-                "cancel",
-                transactionId,
-                JsonSerializer.SerializeToElement(new EngineCancelRequest(ProtocolVersion, transactionId, reason), WireJsonOptions)),
-            cancellationToken);
+        Guid transactionId;
+        lock (_sync)
+        {
+            EnsureStateLocked(EngineWorkerLifecycleState.Running);
+            _state = EngineWorkerLifecycleState.Cancelling;
+            transactionId = _request!.TransactionId;
+            _cancelTimeout?.Cancel();
+            _cancelTimeout?.Dispose();
+            _cancelTimeout = new CancellationTokenSource();
+        }
+        try
+        {
+            await _transport.SendAsync(
+                new EngineWorkerMessage(
+                    ProtocolVersion,
+                    "cancel",
+                    transactionId,
+                    JsonSerializer.SerializeToElement(new EngineCancelRequest(ProtocolVersion, transactionId, reason), WireJsonOptions)),
+                cancellationToken);
+            _ = EnforceCancellationTimeoutAsync(transactionId, _cancelTimeout.Token);
+        }
+        catch (Exception ex)
+        {
+            FailExecution(ex);
+            throw;
+        }
     }
 
     public async Task ForceTerminateAndRestartAsync(CancellationToken cancellationToken = default)
     {
-        if (State == EngineWorkerLifecycleState.Stopped)
+        TaskCompletionSource<EngineResultEnvelope>? completion;
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_state == EngineWorkerLifecycleState.Stopped)
+            {
+                completion = null;
+            }
+            else
+            {
+                _state = EngineWorkerLifecycleState.Terminating;
+                completion = _completion;
+                ClearExecutionLocked();
+            }
+        }
+
+        if (completion is null && State == EngineWorkerLifecycleState.Stopped)
         {
             await StartAsync(cancellationToken);
             return;
         }
 
-        State = EngineWorkerLifecycleState.Terminating;
-        await _transport.TerminateAsync(cancellationToken);
-        _completion?.TrySetCanceled(cancellationToken);
-        ClearExecution();
-        State = EngineWorkerLifecycleState.Stopped;
-        await StartAsync(cancellationToken);
+        try
+        {
+            await _transport.TerminateAsync(cancellationToken);
+            completion?.TrySetCanceled(cancellationToken);
+            lock (_sync)
+            {
+                _state = EngineWorkerLifecycleState.Stopped;
+                _startTask = null;
+            }
+            await StartAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            completion?.TrySetException(ex);
+            FailExecution(ex);
+            throw;
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
+        TaskCompletionSource<EngineResultEnvelope>? completion;
+        lock (_sync)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            completion = _completion;
+            ClearExecutionLocked();
+            _state = EngineWorkerLifecycleState.Stopped;
+        }
         _transport.MessageReceived -= OnMessageReceived;
-        _completion?.TrySetCanceled();
-        ClearExecution();
+        completion?.TrySetCanceled();
         await _transport.DisposeAsync();
-        State = EngineWorkerLifecycleState.Stopped;
     }
 
     private void OnMessageReceived(object? sender, EngineWorkerMessage message)
     {
-        if (!string.Equals(message.ProtocolVersion, ProtocolVersion, StringComparison.Ordinal))
+        EngineRequestEnvelope request;
+        lock (_sync)
         {
-            FailExecution(new InvalidOperationException("Worker protocol version mismatch."));
-            return;
+            if (_request is null || message.TransactionId != _request.TransactionId ||
+                _state is not (EngineWorkerLifecycleState.Running or EngineWorkerLifecycleState.Cancelling))
+            {
+                return;
+            }
+
+            request = _request;
         }
 
-        if (message.TransactionId != _request?.TransactionId)
+        if (!string.Equals(message.ProtocolVersion, ProtocolVersion, StringComparison.Ordinal))
         {
+            FailExecution(new InvalidOperationException("Worker protocol version mismatch."), request.TransactionId);
             return;
         }
 
@@ -189,16 +307,26 @@ public sealed class EngineWorkerClient : IAsyncDisposable
 
             var result = resultPayload.Deserialize<EngineResultEnvelope>(WireJsonOptions)
                 ?? throw new InvalidOperationException("Worker result payload is empty.");
-            ValidateCompletion(_request!, result);
-            State = result.Status == EngineTerminalStatus.Failed
-                ? EngineWorkerLifecycleState.Faulted
-                : EngineWorkerLifecycleState.Ready;
-            _completion?.TrySetResult(result);
-            ClearExecution();
+            ValidateCompletion(request, result);
+            TaskCompletionSource<EngineResultEnvelope>? completion;
+            lock (_sync)
+            {
+                if (_request?.TransactionId != request.TransactionId)
+                {
+                    return;
+                }
+
+                _state = result.Status == EngineTerminalStatus.Failed
+                    ? EngineWorkerLifecycleState.Faulted
+                    : EngineWorkerLifecycleState.Ready;
+                completion = _completion;
+                ClearExecutionLocked();
+            }
+            completion?.TrySetResult(result);
         }
         catch (Exception ex)
         {
-            FailExecution(ex);
+            FailExecution(ex, request.TransactionId);
         }
     }
 
@@ -213,16 +341,27 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         if (request.TransactionId != result.TransactionId ||
             result.TransactionId != result.Completion.TransactionId ||
             result.Status != result.Completion.Status ||
-            result.Completion.Basis != request.Basis)
+            result.Completion.Basis != request.Basis ||
+            !string.Equals(result.Completion.RootIntentHash, request.RootIntentHash, StringComparison.Ordinal) ||
+            !string.Equals(result.Completion.ExpandedGraphHash, request.ExpandedGraphHash, StringComparison.Ordinal) ||
+            result.Completion.TerminalPhase != ExpectedTerminalPhase(result.Status))
         {
             throw new InvalidOperationException("Worker completion evidence does not match its request and result envelopes.");
         }
 
-        if (result.Result is { } payload &&
-            result.Completion.TerminalEvidence.TryGetValue("resultPayloadHash", out var payloadHash) &&
-            !string.Equals(payloadHash, EngineCanonicalHash.Compute(payload), StringComparison.Ordinal))
+        if (result.Status == EngineTerminalStatus.Succeeded)
         {
-            throw new InvalidOperationException("Worker result payload hash validation failed.");
+            if (result.Result is not { } payload ||
+                !result.Completion.TerminalEvidence.TryGetValue("resultPayloadHash", out var payloadHash) ||
+                string.IsNullOrWhiteSpace(payloadHash))
+            {
+                throw new InvalidOperationException("Successful worker results require a result payload hash.");
+            }
+
+            if (!string.Equals(payloadHash, EngineCanonicalHash.Compute(payload), StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Worker result payload hash validation failed.");
+            }
         }
 
         var expectedHash = EngineCanonicalHash.ComputeFinalTransactionHash(
@@ -237,24 +376,80 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         }
     }
 
-    private void FailExecution(Exception exception)
+    private async Task EnforceCancellationTimeoutAsync(Guid transactionId, CancellationToken cancellationToken)
     {
-        State = EngineWorkerLifecycleState.Faulted;
-        _completion?.TrySetException(exception);
-        ClearExecution();
+        try
+        {
+            await Task.Delay(_cancellationTimeout, cancellationToken);
+            lock (_sync)
+            {
+                if (_request?.TransactionId != transactionId || _state != EngineWorkerLifecycleState.Cancelling)
+                {
+                    return;
+                }
+            }
+            FailExecution(new TimeoutException("The engine worker did not acknowledge cancellation before the timeout."), transactionId);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private static EnginePhase ExpectedTerminalPhase(EngineTerminalStatus status) => status switch
+    {
+        EngineTerminalStatus.Succeeded => EnginePhase.Completed,
+        EngineTerminalStatus.Cancelled => EnginePhase.Cancelled,
+        EngineTerminalStatus.Failed => EnginePhase.Failed,
+        _ => throw new ArgumentOutOfRangeException(nameof(status))
+    };
+
+    private void FailExecution(Exception exception, Guid? expectedTransactionId = null)
+    {
+        TaskCompletionSource<EngineResultEnvelope>? completion;
+        lock (_sync)
+        {
+            if (expectedTransactionId is not null && _request?.TransactionId != expectedTransactionId)
+            {
+                return;
+            }
+
+            _state = EngineWorkerLifecycleState.Faulted;
+            completion = _completion;
+            ClearExecutionLocked();
+        }
+        completion?.TrySetException(exception);
     }
 
     private void ClearExecution()
     {
+        lock (_sync)
+        {
+            ClearExecutionLocked();
+        }
+    }
+
+    private void ClearExecutionLocked()
+    {
+        _cancelTimeout?.Cancel();
+        _cancelTimeout?.Dispose();
+        _cancelTimeout = null;
         _completion = null;
         _request = null;
     }
 
     private void EnsureState(params EngineWorkerLifecycleState[] allowed)
     {
-        if (!allowed.Contains(State))
+        lock (_sync)
         {
-            throw new InvalidOperationException($"Engine worker cannot perform this operation while {State}.");
+            EnsureStateLocked(allowed);
+        }
+    }
+
+    private void EnsureStateLocked(params EngineWorkerLifecycleState[] allowed)
+    {
+        if (!allowed.Contains(_state))
+        {
+            throw new InvalidOperationException($"Engine worker cannot perform this operation while {_state}.");
         }
     }
 

@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text.Json;
 
 namespace FFXIV_Craft_Architect.Core.Engine;
@@ -56,12 +57,23 @@ public sealed record EngineExecutionBudgets(
     public static EngineExecutionBudgets Default { get; } = new(10_000, 10_000, 5_000_000, 64);
 }
 
-public sealed record EngineDeterministicSettings(
-    string AlgorithmVersion,
-    IReadOnlyDictionary<string, string> Values)
+public sealed record EngineDeterministicSettings
 {
-    public static EngineDeterministicSettings Default { get; } =
-        new("1", new Dictionary<string, string>(StringComparer.Ordinal));
+    public EngineDeterministicSettings(string algorithmVersion, IReadOnlyDictionary<string, string> values)
+    {
+        AlgorithmVersion = string.IsNullOrWhiteSpace(algorithmVersion)
+            ? throw new ArgumentException("An algorithm version is required.", nameof(algorithmVersion))
+            : algorithmVersion;
+        Values = values
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .ToFrozenDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+    }
+
+    public string AlgorithmVersion { get; }
+
+    public IReadOnlyDictionary<string, string> Values { get; }
+
+    public static EngineDeterministicSettings Default { get; } = new("1", new Dictionary<string, string>(StringComparer.Ordinal));
 }
 
 public sealed record EngineRequestEnvelope(

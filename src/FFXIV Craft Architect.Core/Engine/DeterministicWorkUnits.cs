@@ -28,6 +28,34 @@ public static class DeterministicWorkUnits
         return results;
     }
 
+    public static async Task<IReadOnlyList<EngineWorkUnitResult<TOutput>>> ExecuteBoundedParallelAsync<TInput, TOutput>(
+        IEnumerable<EngineWorkUnit<TInput>> units,
+        int degreeOfParallelism,
+        Func<TInput, CancellationToken, Task<TOutput>> execute,
+        CancellationToken cancellationToken = default)
+    {
+        if (degreeOfParallelism <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(degreeOfParallelism));
+        }
+
+        var ordered = Order(units);
+        using var gate = new SemaphoreSlim(degreeOfParallelism, degreeOfParallelism);
+        var tasks = ordered.Select(async unit =>
+        {
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                return new EngineWorkUnitResult<TOutput>(unit.StableKey, await execute(unit.Input, cancellationToken));
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+        return Merge(await Task.WhenAll(tasks));
+    }
+
     public static IReadOnlyList<EngineWorkUnitResult<TOutput>> Merge<TOutput>(
         IEnumerable<EngineWorkUnitResult<TOutput>> results)
     {

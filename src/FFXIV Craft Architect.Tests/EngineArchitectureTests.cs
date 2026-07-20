@@ -1,5 +1,7 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Engine;
+using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Services;
 using Moq;
@@ -18,6 +20,17 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
+    public void CanonicalHash_NormalizesKnownSetValuedArraysOnly()
+    {
+        using var left = JsonDocument.Parse("""{"BlacklistedWorlds":[{"world":2},{"world":1}],"Items":[2,1]}""");
+        using var right = JsonDocument.Parse("""{"Items":[2,1],"BlacklistedWorlds":[{"world":1},{"world":2}]}""");
+        using var reorderedList = JsonDocument.Parse("""{"Items":[1,2],"BlacklistedWorlds":[{"world":1},{"world":2}]}""");
+
+        Assert.Equal(EngineCanonicalHash.ComputeEngineInput(left.RootElement), EngineCanonicalHash.ComputeEngineInput(right.RootElement));
+        Assert.NotEqual(EngineCanonicalHash.ComputeEngineInput(left.RootElement), EngineCanonicalHash.ComputeEngineInput(reorderedList.RootElement));
+    }
+
+    [Fact]
     public void CanonicalHash_NormalizesEquivalentNumberSpellings()
     {
         using var integer = JsonDocument.Parse("1");
@@ -26,6 +39,37 @@ public sealed class EngineArchitectureTests
 
         Assert.Equal(EngineCanonicalHash.Compute(integer.RootElement), EngineCanonicalHash.Compute(decimalValue.RootElement));
         Assert.Equal(EngineCanonicalHash.Compute(integer.RootElement), EngineCanonicalHash.Compute(exponent.RootElement));
+    }
+
+    [Fact]
+    public void CanonicalHash_RejectsDuplicatePropertiesAndUnsupportedNumbers()
+    {
+        using var duplicateA = JsonDocument.Parse("""{"x":1,"x":2}""");
+        using var duplicateB = JsonDocument.Parse("""{"x":2,"x":1}""");
+        using var huge = JsonDocument.Parse("1e400");
+        using var precise = JsonDocument.Parse("0.123456789012345678901234567890123456789");
+
+        Assert.Throws<InvalidOperationException>(() => EngineCanonicalHash.Compute(duplicateA.RootElement));
+        Assert.Throws<InvalidOperationException>(() => EngineCanonicalHash.Compute(duplicateB.RootElement));
+        Assert.Throws<NotSupportedException>(() => EngineCanonicalHash.Compute(huge.RootElement));
+        Assert.Throws<NotSupportedException>(() => EngineCanonicalHash.Compute(precise.RootElement));
+    }
+
+    [Fact]
+    public void DeterministicSettings_DefensivelyCopyAndCannotBeMutated()
+    {
+        var source = new Dictionary<string, string> { ["mode"] = "one" };
+        var settings = new EngineDeterministicSettings("1", source);
+        source["mode"] = "two";
+        source["other"] = "value";
+
+        Assert.Equal("one", settings.Values["mode"]);
+        Assert.False(settings.Values.ContainsKey("other"));
+        var dictionaryView = Assert.IsAssignableFrom<IDictionary<string, string>>(settings.Values);
+        Assert.Throws<NotSupportedException>(() => dictionaryView.Add("mutate", "blocked"));
+        Assert.Empty(EngineDeterministicSettings.Default.Values);
+        var roundTrip = JsonSerializer.Deserialize<EngineDeterministicSettings>(JsonSerializer.Serialize(settings));
+        Assert.Equal("one", roundTrip!.Values["mode"]);
     }
 
     [Fact]
@@ -88,14 +132,94 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
-    public async Task ReferenceExecutor_MeasuresSettlementThroughTerminalEvidence()
+    public void AnalysisSemanticHash_ExcludesTimingsAndHandlesNonEmptyEvidence()
     {
-        var settlement = new RecordingSettlement();
+        var fast = CreateAnalysisResult(TimeSpan.FromMilliseconds(1));
+        var slow = CreateAnalysisResult(TimeSpan.FromSeconds(8));
+
+        Assert.Equal(
+            ReferenceMarketProcurementEngine.ComputeAnalysisSemanticHash(fast),
+            ReferenceMarketProcurementEngine.ComputeAnalysisSemanticHash(slow));
+    }
+
+    [Fact]
+    public async Task ReferenceExecutor_RejectsUnsupportedBudgetsInputKindsAndEmptyOperations()
+    {
         var engine = new ReferenceMarketProcurementEngine(
             Mock.Of<IMarketAnalysisExecutionService>(),
             Mock.Of<IProcurementRouteExecutionService>(),
-            settlement);
+            new RecordingSettlement());
+        var operation = JsonSerializer.SerializeToElement(new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null));
+        var unsupportedBudget = CreateRequest(operation) with
+        {
+            Budgets = EngineExecutionBudgets.Default with { MaxCandidateEvaluations = 12 }
+        };
+        var unsupportedKind = CreateRequest(operation) with { InputKind = EngineInputKind.StructuredGraph };
+        var empty = CreateRequest(JsonSerializer.SerializeToElement(new ReferenceEngineInput(null, null)));
+
+        Assert.Equal(EngineTerminalStatus.Failed, (await engine.ExecuteAsync(unsupportedBudget)).Status);
+        Assert.Equal(EngineTerminalStatus.Failed, (await engine.ExecuteAsync(unsupportedKind)).Status);
+        Assert.Equal(EngineTerminalStatus.Failed, (await engine.ExecuteAsync(empty)).Status);
+    }
+
+    [Fact]
+    public async Task ReferenceExecutor_NoOpSettlementCannotAttestSuccess()
+    {
+        var analysis = new Mock<IMarketAnalysisExecutionService>();
+        analysis.Setup(service => service.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateAnalysisResult());
+        var engine = new ReferenceMarketProcurementEngine(
+            analysis.Object,
+            Mock.Of<IProcurementRouteExecutionService>(),
+            new NoOpEngineTransactionSettlement());
+        var request = CreateRequest(JsonSerializer.SerializeToElement(
+            new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
+
+        var result = await engine.ExecuteAsync(request);
+
+        Assert.Equal(EngineTerminalStatus.Failed, result.Status);
+        Assert.Contains("Publishing", result.Failure!.Message, StringComparison.Ordinal);
+        Assert.Equal(EnginePhase.Publishing.ToString(), result.Completion.TerminalEvidence["failedPhase"]);
+    }
+
+    [Fact]
+    public async Task ReferenceExecutor_RecordsTerminalCleanupFailures()
+    {
+        var engine = new ReferenceMarketProcurementEngine(
+            Mock.Of<IMarketAnalysisExecutionService>(),
+            Mock.Of<IProcurementRouteExecutionService>(),
+            new FailingCleanupSettlement());
         var request = CreateRequest(JsonSerializer.SerializeToElement(new ReferenceEngineInput(null, null)));
+
+        var result = await engine.ExecuteAsync(request);
+
+        Assert.Equal(EngineTerminalStatus.Failed, result.Status);
+        Assert.StartsWith("failed:", result.Completion.TerminalEvidence["cleanup:ReleasingGate"], StringComparison.Ordinal);
+        Assert.True(result.Completion.TerminalEvidence.ContainsKey("failureMessageHash"));
+    }
+
+    [Fact]
+    public async Task ReferenceExecutor_MeasuresSettlementThroughTerminalEvidence()
+    {
+        var settlement = new RecordingSettlement();
+        var analysisService = new Mock<IMarketAnalysisExecutionService>();
+        analysisService
+            .Setup(service => service.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateAnalysisResult());
+        var engine = new ReferenceMarketProcurementEngine(
+            analysisService.Object,
+            Mock.Of<IProcurementRouteExecutionService>(),
+            settlement);
+        var request = CreateRequest(JsonSerializer.SerializeToElement(
+            new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
 
         var result = await engine.ExecuteAsync(request);
 
@@ -106,6 +230,9 @@ public sealed class EngineArchitectureTests
         Assert.Contains(EnginePhase.Persisting, settlement.Phases);
         Assert.Contains(EnginePhase.SettlingUi, settlement.Phases);
         Assert.Contains(EnginePhase.CapturingPostActionEvidence, settlement.Phases);
+        Assert.All(settlement.Contexts, context => Assert.NotNull(context.Output.MarketAnalysis));
+        Assert.All(settlement.Contexts, context => Assert.False(string.IsNullOrWhiteSpace(context.AnalysisResultHash)));
+        Assert.Contains("phase:Publishing", result.Completion.TerminalEvidence.Keys);
     }
 
     [Fact]
@@ -161,6 +288,81 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
+    public async Task WorkerClient_RejectsContradictoryOrUnboundCompletionEvidence()
+    {
+        await AssertWorkerResultRejected((request, result) => result with
+        {
+            Completion = result.Completion with { RootIntentHash = "wrong" }
+        });
+        await AssertWorkerResultRejected((request, result) => result with
+        {
+            Completion = result.Completion with { ExpandedGraphHash = "wrong" }
+        });
+        await AssertWorkerResultRejected((request, result) => result with
+        {
+            Status = EngineTerminalStatus.Failed
+        });
+        await AssertWorkerResultRejected((request, result) => result with
+        {
+            Completion = result.Completion with { TerminalPhase = EnginePhase.Failed }
+        });
+        await AssertWorkerResultRejected((request, result) => result with
+        {
+            Completion = result.Completion with
+            {
+                TerminalEvidence = new Dictionary<string, string> { ["settlement"] = "complete" },
+                FinalTransactionHash = EngineCanonicalHash.ComputeFinalTransactionHash(
+                    request,
+                    EngineTerminalStatus.Succeeded,
+                    result.Completion.AnalysisResultHash,
+                    result.Completion.ProcurementRouteResultHash,
+                    new Dictionary<string, string> { ["settlement"] = "complete" })
+            }
+        });
+        await AssertWorkerResultRejected((request, result) => result with
+        {
+            Completion = result.Completion with { FinalTransactionHash = "wrong" }
+        });
+    }
+
+    [Fact]
+    public async Task WorkerClient_SerializesConcurrentStartAndIgnoresStaleMessages()
+    {
+        var transport = new FakeWorkerTransport { StartGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var client = new EngineWorkerClient(transport);
+        var first = client.StartAsync();
+        var second = client.StartAsync();
+        transport.StartGate.SetResult();
+
+        await Task.WhenAll(first, second);
+        Assert.Equal(1, transport.StartCount);
+
+        var request = CreateRequest(JsonSerializer.SerializeToElement(new { demand = "current" }));
+        var execution = client.ExecuteAsync(request);
+        var stale = CreateSuccessfulResult(request with { TransactionId = Guid.NewGuid() });
+        transport.Emit(new EngineWorkerMessage("1", "result", stale.TransactionId, JsonSerializer.SerializeToElement(stale)));
+        Assert.False(execution.IsCompleted);
+        var current = CreateSuccessfulResult(request);
+        transport.Emit(new EngineWorkerMessage("1", "result", request.TransactionId, JsonSerializer.SerializeToElement(current)));
+        Assert.Equal(EngineTerminalStatus.Succeeded, (await execution).Status);
+    }
+
+    [Fact]
+    public async Task WorkerClient_CancellationTimeoutFaultsAndReleasesPendingOwnership()
+    {
+        var transport = new FakeWorkerTransport();
+        await using var client = new EngineWorkerClient(transport, TimeSpan.FromMilliseconds(20));
+        await client.StartAsync();
+        var request = CreateRequest(JsonSerializer.SerializeToElement(new { demand = "fixture" }));
+        var execution = client.ExecuteAsync(request);
+
+        await client.CancelAsync("timeout probe");
+
+        await Assert.ThrowsAsync<TimeoutException>(() => execution);
+        Assert.Equal(EngineWorkerLifecycleState.Faulted, client.State);
+    }
+
+    [Fact]
     public async Task WorkerClient_ForceTerminateRestartsDedicatedWorker()
     {
         var transport = new FakeWorkerTransport();
@@ -175,7 +377,7 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
-    public void StaticWorkerAssets_ProveDedicatedWorkerWithoutIsolationRequirement()
+    public void StaticWorkerAssets_DeclareCapabilityProbeWithoutIsolationRequirement()
     {
         var root = LocateRepositoryRoot();
         var worker = File.ReadAllText(Path.Combine(root, "src", "FFXIV Craft Architect.Web", "wwwroot", "engine-worker.js"));
@@ -209,6 +411,48 @@ public sealed class EngineArchitectureTests
             "route-basis-hash");
     }
 
+    private static async Task AssertWorkerResultRejected(
+        Func<EngineRequestEnvelope, EngineResultEnvelope, EngineResultEnvelope> mutate)
+    {
+        var transport = new FakeWorkerTransport();
+        await using var client = new EngineWorkerClient(transport);
+        await client.StartAsync();
+        var request = CreateRequest(JsonSerializer.SerializeToElement(new { demand = "fixture" }));
+        var execution = client.ExecuteAsync(request);
+        var result = mutate(request, CreateSuccessfulResult(request));
+        transport.Emit(new EngineWorkerMessage("1", "result", request.TransactionId, JsonSerializer.SerializeToElement(result)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => execution);
+    }
+
+    private static EngineResultEnvelope CreateSuccessfulResult(EngineRequestEnvelope request)
+    {
+        var payload = JsonSerializer.SerializeToElement(new { route = "success" });
+        var evidence = new Dictionary<string, string>
+        {
+            ["resultPayloadHash"] = EngineCanonicalHash.Compute(payload),
+            ["settlement"] = "complete"
+        };
+        var hash = EngineCanonicalHash.ComputeFinalTransactionHash(
+            request,
+            EngineTerminalStatus.Succeeded,
+            "analysis-result",
+            "route-result",
+            evidence);
+        var completion = new EngineCompletionEvidence(
+            "1",
+            request.TransactionId,
+            EngineTerminalStatus.Succeeded,
+            EnginePhase.Completed,
+            request.Basis,
+            request.RootIntentHash,
+            request.ExpandedGraphHash,
+            "analysis-result",
+            "route-result",
+            hash,
+            evidence);
+        return new EngineResultEnvelope("1", request.TransactionId, EngineTerminalStatus.Succeeded, payload, completion);
+    }
+
     private static EngineResultEnvelope CreateCancelledResult(EngineRequestEnvelope request)
     {
         var evidence = new Dictionary<string, string> { ["terminalCode"] = "cancelled" };
@@ -233,6 +477,41 @@ public sealed class EngineArchitectureTests
         return new EngineResultEnvelope("1", request.TransactionId, EngineTerminalStatus.Cancelled, null, completion);
     }
 
+    private static MarketAnalysisExecutionResult CreateAnalysisResult(TimeSpan? duration = null)
+    {
+        var cached = new CachedMarketData
+        {
+            ItemId = 1,
+            DataCenter = "Aether",
+            FetchedAtUnix = 100,
+            DCAveragePrice = 123,
+            Worlds =
+            [
+                new CachedWorldData
+                {
+                    WorldId = 10,
+                    WorldName = "Alpha",
+                    Listings = [new CachedListing { Quantity = 2, PricePerUnit = 50, ListingId = "listing-1" }]
+                }
+            ]
+        };
+        var evidence = new MarketEvidenceSet(
+            new Dictionary<(int itemId, string dataCenter), CachedMarketData> { [(1, "Aether")] = cached },
+            [(1, "Aether")],
+            MarketFetchScope.SelectedDataCenter,
+            ["Aether"],
+            "Aether",
+            "North-America",
+            TimeSpan.FromMinutes(10),
+            1,
+            DateTime.UtcNow);
+        return new MarketAnalysisExecutionResult(
+            evidence,
+            [],
+            [],
+            new MarketAnalysisExecutionTimings(duration ?? TimeSpan.Zero, duration ?? TimeSpan.Zero));
+    }
+
     private static string LocateRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -251,19 +530,38 @@ public sealed class EngineArchitectureTests
             int degreeOfParallelism,
             CancellationToken cancellationToken = default)
         {
-            var graphNodes = new[]
+            var demands = fixture.Input.GetProperty("demands").EnumerateArray()
+                .Select(item => new
+                {
+                    ItemId = item.GetProperty("itemId").GetInt32(),
+                    Quantity = item.GetProperty("quantity").GetInt32()
+                })
+                .ToArray();
+            var graphNodes = demands.Select(demand => new
             {
-                new { ItemId = 1, Quantity = 2, RecipeId = 101 },
-                new { ItemId = 2, Quantity = 3, RecipeId = 202 }
-            };
+                demand.ItemId,
+                demand.Quantity,
+                RecipeId = demand.ItemId * 101
+            }).ToArray();
             var expandedGraphHash = EngineCanonicalHash.ComputeUnordered(graphNodes);
-            var units = new[]
-            {
-                new EngineWorkUnit<(int ItemId, int Quantity, int UnitPrice)>("item:2", (2, 3, 80)),
-                new EngineWorkUnit<(int ItemId, int Quantity, int UnitPrice)>("item:1", (1, 2, 100))
-            };
-            var results = await DeterministicWorkUnits.ExecuteSequentialAsync(
-                degreeOfParallelism == 1 ? units : units.Reverse(),
+            var units = demands.Select(demand =>
+                new EngineWorkUnit<(int ItemId, int Quantity, int UnitPrice)>(
+                    $"item:{demand.ItemId}",
+                    (demand.ItemId, demand.Quantity, demand.ItemId == 1 ? 100 : 80))).ToArray();
+            var results = degreeOfParallelism == 1
+                ? await DeterministicWorkUnits.ExecuteSequentialAsync(
+                    units,
+                    static (input, _) => Task.FromResult(new
+                    {
+                        input.ItemId,
+                        input.Quantity,
+                        Total = input.Quantity * input.UnitPrice,
+                        World = input.ItemId == 1 ? "Alpha" : "Beta"
+                    }),
+                    cancellationToken)
+                : await DeterministicWorkUnits.ExecuteBoundedParallelAsync(
+                    units.Reverse(),
+                    degreeOfParallelism,
                 static (input, _) => Task.FromResult(new
                 {
                     input.ItemId,
@@ -274,7 +572,7 @@ public sealed class EngineArchitectureTests
                 cancellationToken);
             var resultHash = DeterministicWorkUnits.ComputeResultHash(
                 degreeOfParallelism == 1 ? results : results.Reverse());
-            return (expandedGraphHash, resultHash, true);
+            return (expandedGraphHash, resultHash, demands.All(demand => demand.Quantity > 0));
         }
     }
 
@@ -282,11 +580,28 @@ public sealed class EngineArchitectureTests
     {
         public List<EnginePhase> Phases { get; } = [];
 
-        public Task SettleAsync(EnginePhase phase, EngineRequestEnvelope request, CancellationToken cancellationToken)
+        public List<EngineSettlementContext> Contexts { get; } = [];
+
+        public Task<EngineSettlementEvidence> SettleAsync(
+            EnginePhase phase,
+            EngineSettlementContext context,
+            CancellationToken cancellationToken)
         {
             Phases.Add(phase);
-            return Task.CompletedTask;
+            Contexts.Add(context);
+            return Task.FromResult(new EngineSettlementEvidence(true, $"{phase}:complete"));
         }
+    }
+
+    private sealed class FailingCleanupSettlement : IEngineTransactionSettlement
+    {
+        public Task<EngineSettlementEvidence> SettleAsync(
+            EnginePhase phase,
+            EngineSettlementContext context,
+            CancellationToken cancellationToken) =>
+            phase == EnginePhase.ReleasingGate
+                ? throw new InvalidOperationException("gate release failed")
+                : Task.FromResult(new EngineSettlementEvidence(true, "complete"));
     }
 
     private sealed class FakeWorkerTransport : IEngineWorkerTransport
@@ -299,10 +614,16 @@ public sealed class EngineArchitectureTests
 
         public int TerminateCount { get; private set; }
 
-        public Task<EngineWorkerCapability> StartAsync(CancellationToken cancellationToken)
+        public TaskCompletionSource? StartGate { get; init; }
+
+        public async Task<EngineWorkerCapability> StartAsync(CancellationToken cancellationToken)
         {
             StartCount++;
-            return Task.FromResult(new EngineWorkerCapability("1", true, false, false, false));
+            if (StartGate is not null)
+            {
+                await StartGate.Task.WaitAsync(cancellationToken);
+            }
+            return new EngineWorkerCapability("1", true, false, false, false);
         }
 
         public Task SendAsync(EngineWorkerMessage message, CancellationToken cancellationToken)
