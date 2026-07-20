@@ -24,9 +24,11 @@ public sealed class EngineArchitectureTests
     {
         using var left = JsonDocument.Parse("""{"BlacklistedWorlds":[{"world":2},{"world":1}],"Items":[2,1]}""");
         using var right = JsonDocument.Parse("""{"Items":[2,1],"BlacklistedWorlds":[{"world":1},{"world":2}]}""");
+        using var duplicateSetMember = JsonDocument.Parse("""{"Items":[2,1],"BlacklistedWorlds":[{"world":1},{"world":2},{"world":1}]}""");
         using var reorderedList = JsonDocument.Parse("""{"Items":[1,2],"BlacklistedWorlds":[{"world":1},{"world":2}]}""");
 
         Assert.Equal(EngineCanonicalHash.ComputeEngineInput(left.RootElement), EngineCanonicalHash.ComputeEngineInput(right.RootElement));
+        Assert.Equal(EngineCanonicalHash.ComputeEngineInput(left.RootElement), EngineCanonicalHash.ComputeEngineInput(duplicateSetMember.RootElement));
         Assert.NotEqual(EngineCanonicalHash.ComputeEngineInput(left.RootElement), EngineCanonicalHash.ComputeEngineInput(reorderedList.RootElement));
     }
 
@@ -129,17 +131,47 @@ public sealed class EngineArchitectureTests
         Assert.Equal(fixture.ExpectedResultHash, degreeOne.ResultHash);
         Assert.True(degreeOne.RouteSucceeded);
         Assert.Equal(degreeOne, degreeMany);
+        Assert.InRange(runner.MaxObservedConcurrency, 2, 4);
     }
 
     [Fact]
     public void AnalysisSemanticHash_ExcludesTimingsAndHandlesNonEmptyEvidence()
     {
-        var fast = CreateAnalysisResult(TimeSpan.FromMilliseconds(1));
-        var slow = CreateAnalysisResult(TimeSpan.FromSeconds(8));
+        var fast = CreateAnalysisResult(TimeSpan.FromMilliseconds(1), DateTime.UnixEpoch);
+        var slow = CreateAnalysisResult(TimeSpan.FromSeconds(8), DateTime.UnixEpoch.AddYears(20));
 
         Assert.Equal(
             ReferenceMarketProcurementEngine.ComputeAnalysisSemanticHash(fast),
             ReferenceMarketProcurementEngine.ComputeAnalysisSemanticHash(slow));
+    }
+
+    [Fact]
+    public void RouteSemanticHash_ExcludesOperationalTimestampsButBindsDecisions()
+    {
+        var early = CreateRouteResult(DateTime.UnixEpoch, 100);
+        var late = CreateRouteResult(DateTime.UnixEpoch.AddYears(20), 100);
+        var changed = CreateRouteResult(DateTime.UnixEpoch.AddYears(20), 101);
+
+        Assert.Equal(
+            ReferenceMarketProcurementEngine.ComputeRouteSemanticHash(early),
+            ReferenceMarketProcurementEngine.ComputeRouteSemanticHash(late));
+        Assert.NotEqual(
+            ReferenceMarketProcurementEngine.ComputeRouteSemanticHash(early),
+            ReferenceMarketProcurementEngine.ComputeRouteSemanticHash(changed));
+    }
+
+    [Fact]
+    public async Task ReferenceExecutor_RejectsStaleInputAndGraphBasis()
+    {
+        var engine = new ReferenceMarketProcurementEngine(
+            Mock.Of<IMarketAnalysisExecutionService>(),
+            Mock.Of<IProcurementRouteExecutionService>(),
+            new RecordingSettlement());
+        var input = JsonSerializer.SerializeToElement(new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null));
+        var request = CreateRequest(input);
+
+        Assert.Equal(EngineTerminalStatus.Failed, (await engine.ExecuteAsync(request with { RootIntentHash = "stale" })).Status);
+        Assert.Equal(EngineTerminalStatus.Failed, (await engine.ExecuteAsync(request with { ExpandedGraphHash = "stale" })).Status);
     }
 
     [Fact]
@@ -360,6 +392,90 @@ public sealed class EngineArchitectureTests
 
         await Assert.ThrowsAsync<TimeoutException>(() => execution);
         Assert.Equal(EngineWorkerLifecycleState.Faulted, client.State);
+        Assert.Equal(1, transport.TerminateCount);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.ExecuteAsync(
+            CreateRequest(JsonSerializer.SerializeToElement(new { demand = "overlap" }))));
+    }
+
+    [Fact]
+    public async Task WorkerClient_ThrowingProgressSubscriberDoesNotFaultExecution()
+    {
+        var transport = new FakeWorkerTransport();
+        await using var client = new EngineWorkerClient(transport);
+        await client.StartAsync();
+        client.ProgressChanged += (_, _) => throw new InvalidOperationException("observer failure");
+        var request = CreateRequest(JsonSerializer.SerializeToElement(new { demand = "fixture" }));
+        var execution = client.ExecuteAsync(request);
+        transport.Emit(new EngineWorkerMessage("1", "progress", request.TransactionId,
+            JsonSerializer.SerializeToElement(new EngineProgress(request.TransactionId, EnginePhase.Analyzing, 1, 2, "working"))));
+        transport.Emit(new EngineWorkerMessage("1", "result", request.TransactionId,
+            JsonSerializer.SerializeToElement(CreateSuccessfulResult(request))));
+
+        Assert.Equal(EngineTerminalStatus.Succeeded, (await execution).Status);
+    }
+
+    [Theory]
+    [InlineData("unknown", false)]
+    [InlineData("result", true)]
+    [InlineData("progress", true)]
+    [InlineData("protocol-error", true)]
+    public async Task WorkerClient_MalformedCorrelatedMessagesFaultExecution(string kind, bool nullPayload)
+    {
+        var transport = new FakeWorkerTransport();
+        await using var client = new EngineWorkerClient(transport);
+        await client.StartAsync();
+        var request = CreateRequest(JsonSerializer.SerializeToElement(new { demand = "fixture" }));
+        var execution = client.ExecuteAsync(request);
+        var payload = nullPayload ? (JsonElement?)null : JsonSerializer.SerializeToElement(new { value = 1 });
+        transport.Emit(new EngineWorkerMessage("1", kind, request.TransactionId, payload));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => execution);
+    }
+
+    [Fact]
+    public async Task WorkerClient_ResponseTimeoutFaultsPendingExecution()
+    {
+        var transport = new FakeWorkerTransport();
+        await using var client = new EngineWorkerClient(transport, responseTimeout: TimeSpan.FromMilliseconds(20));
+        await client.StartAsync();
+        var request = CreateRequest(JsonSerializer.SerializeToElement(new { demand = "fixture" }));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.ExecuteAsync(request));
+        Assert.Equal(EngineWorkerLifecycleState.Faulted, client.State);
+    }
+
+    [Fact]
+    public async Task WorkerClient_ObsoleteStartupCannotResurrectAfterDispose()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new FakeWorkerTransport { StartGate = gate };
+        var client = new EngineWorkerClient(transport);
+        var startup = client.StartAsync();
+        await client.DisposeAsync();
+        gate.SetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => startup);
+        Assert.Equal(EngineWorkerLifecycleState.Stopped, client.State);
+    }
+
+    [Fact]
+    public async Task WorkerClient_ForceRestartInvalidatesPendingStartupGeneration()
+    {
+        var transport = new FakeWorkerTransport
+        {
+            StartGates = new Queue<TaskCompletionSource>(
+            [new(TaskCreationOptions.RunContinuationsAsynchronously), new(TaskCreationOptions.RunContinuationsAsynchronously)])
+        };
+        await using var client = new EngineWorkerClient(transport);
+        var staleStartup = client.StartAsync();
+        var restart = client.ForceTerminateAndRestartAsync();
+        transport.StartGates.Dequeue().SetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => staleStartup);
+        transport.StartGates.Dequeue().SetResult();
+        await restart;
+
+        Assert.Equal(EngineWorkerLifecycleState.Ready, client.State);
+        Assert.Equal(2, transport.StartCount);
     }
 
     [Fact]
@@ -397,6 +513,7 @@ public sealed class EngineArchitectureTests
             new EngineBasisIdentity("session", "1", "session-hash"),
             new EngineBasisIdentity("publication", "1", "publication-hash"),
             new EngineBasisIdentity("route", "1", "route-hash"));
+        var parsed = input.Deserialize<ReferenceEngineInput>();
         return new EngineRequestEnvelope(
             "1",
             Guid.NewGuid(),
@@ -405,8 +522,8 @@ public sealed class EngineArchitectureTests
             basis,
             EngineDeterministicSettings.Default,
             EngineExecutionBudgets.Default,
-            "root-hash",
-            "graph-hash",
+            ReferenceMarketProcurementEngine.ComputeReferenceRootIntentHash(input),
+            parsed is null ? "unsupported-graph" : ReferenceMarketProcurementEngine.ComputeReferenceGraphHash(parsed),
             "analysis-basis-hash",
             "route-basis-hash");
     }
@@ -477,7 +594,34 @@ public sealed class EngineArchitectureTests
         return new EngineResultEnvelope("1", request.TransactionId, EngineTerminalStatus.Cancelled, null, completion);
     }
 
-    private static MarketAnalysisExecutionResult CreateAnalysisResult(TimeSpan? duration = null)
+    private static ProcurementRouteExecutionResult CreateRouteResult(DateTime timestamp, long selectedCost)
+    {
+        var world = new WorldShoppingSummary
+        {
+            DataCenter = "Aether",
+            WorldName = "Alpha",
+            TotalCost = selectedCost,
+            MarketUploadedAtUtc = timestamp,
+            MarketDataAge = TimeSpan.FromMinutes(5)
+        };
+        var shopping = new DetailedShoppingPlan
+        {
+            ItemId = 1,
+            Name = "Item",
+            QuantityNeeded = 1,
+            WorldOptions = [world],
+            RecommendedWorld = world
+        };
+        return new ProcurementRouteExecutionResult(
+            [shopping],
+            [shopping],
+            [],
+            [],
+            [],
+            new MarketRouteDecision(0, null, 100, selectedCost, 0, 1, 1, 0, 0, true, "Aether"));
+    }
+
+    private static MarketAnalysisExecutionResult CreateAnalysisResult(TimeSpan? duration = null, DateTime? timestamp = null)
     {
         var cached = new CachedMarketData
         {
@@ -505,10 +649,33 @@ public sealed class EngineArchitectureTests
             TimeSpan.FromMinutes(10),
             1,
             DateTime.UtcNow);
+        var observed = timestamp ?? DateTime.UnixEpoch;
+        var analysis = new MarketItemAnalysis
+        {
+            ItemId = 1,
+            Name = "Item",
+            QuantityNeeded = 2,
+            LoadedAtUtc = observed,
+            LastReconciledAtUtc = observed.AddMinutes(1),
+            PriceEvaluation = new MarketPriceEvaluation { ItemId = 1, EvaluatedAtUtc = observed.AddMinutes(2) },
+            Worlds =
+            [
+                new WorldMarketAnalysis
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Alpha",
+                    FetchedAtUtc = observed.AddMinutes(3),
+                    MarketUploadedAtUtc = observed.AddMinutes(4),
+                    DataAge = TimeSpan.FromMinutes(5),
+                    Listings = [new AnalyzedMarketListing { Quantity = 2, PricePerUnit = 50, LastReviewTimeUtc = observed.AddMinutes(6) }]
+                }
+            ]
+        };
+        var shopping = new DetailedShoppingPlan { ItemId = 1, Name = "Item", QuantityNeeded = 2, DCAveragePrice = 50 };
         return new MarketAnalysisExecutionResult(
             evidence,
-            [],
-            [],
+            [analysis],
+            [shopping],
             new MarketAnalysisExecutionTimings(duration ?? TimeSpan.Zero, duration ?? TimeSpan.Zero));
     }
 
@@ -525,6 +692,11 @@ public sealed class EngineArchitectureTests
 
     private sealed class RepresentativeFixtureRunner : IEngineParityFixtureRunner
     {
+        private int _active;
+        private int _maxObservedConcurrency;
+
+        public int MaxObservedConcurrency => _maxObservedConcurrency;
+
         public async Task<(string ExpandedGraphHash, string ResultHash, bool RouteSucceeded)> RunAsync(
             EngineParityFixture fixture,
             int degreeOfParallelism,
@@ -562,17 +734,44 @@ public sealed class EngineArchitectureTests
                 : await DeterministicWorkUnits.ExecuteBoundedParallelAsync(
                     units.Reverse(),
                     degreeOfParallelism,
-                static (input, _) => Task.FromResult(new
-                {
-                    input.ItemId,
-                    input.Quantity,
-                    Total = input.Quantity * input.UnitPrice,
-                    World = input.ItemId == 1 ? "Alpha" : "Beta"
-                }),
-                cancellationToken);
+                    async (input, ct) =>
+                    {
+                        var active = Interlocked.Increment(ref _active);
+                        UpdateMaximum(ref _maxObservedConcurrency, active);
+                        try
+                        {
+                            await Task.Delay(25, ct);
+                            return new
+                            {
+                                input.ItemId,
+                                input.Quantity,
+                                Total = input.Quantity * input.UnitPrice,
+                                World = input.ItemId == 1 ? "Alpha" : "Beta"
+                            };
+                        }
+                        finally
+                        {
+                            Interlocked.Decrement(ref _active);
+                        }
+                    },
+                    cancellationToken);
             var resultHash = DeterministicWorkUnits.ComputeResultHash(
                 degreeOfParallelism == 1 ? results : results.Reverse());
             return (expandedGraphHash, resultHash, demands.All(demand => demand.Quantity > 0));
+        }
+
+        private static void UpdateMaximum(ref int maximum, int candidate)
+        {
+            var observed = Volatile.Read(ref maximum);
+            while (candidate > observed)
+            {
+                var prior = Interlocked.CompareExchange(ref maximum, candidate, observed);
+                if (prior == observed)
+                {
+                    return;
+                }
+                observed = prior;
+            }
         }
     }
 
@@ -616,12 +815,15 @@ public sealed class EngineArchitectureTests
 
         public TaskCompletionSource? StartGate { get; init; }
 
+        public Queue<TaskCompletionSource>? StartGates { get; init; }
+
         public async Task<EngineWorkerCapability> StartAsync(CancellationToken cancellationToken)
         {
             StartCount++;
-            if (StartGate is not null)
+            var gate = StartGates is { Count: > 0 } ? StartGates.Peek() : StartGate;
+            if (gate is not null)
             {
-                await StartGate.Task.WaitAsync(cancellationToken);
+                await gate.Task.WaitAsync(cancellationToken);
             }
             return new EngineWorkerCapability("1", true, false, false, false);
         }

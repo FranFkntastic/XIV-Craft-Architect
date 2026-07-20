@@ -112,7 +112,12 @@ public static class EngineCanonicalHash
                 var items = element.EnumerateArray().ToArray();
                 if (sortArray)
                 {
-                    items = items.OrderBy(Compute, StringComparer.Ordinal).ToArray();
+                    items = items
+                        .Select(item => (Item: item, Hash: Compute(item)))
+                        .OrderBy(item => item.Hash, StringComparer.Ordinal)
+                        .DistinctBy(item => item.Hash, StringComparer.Ordinal)
+                        .Select(item => item.Item)
+                        .ToArray();
                 }
                 foreach (var item in items)
                 {

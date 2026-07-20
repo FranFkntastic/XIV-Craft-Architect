@@ -94,8 +94,19 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
                 throw new NotSupportedException($"Input kind '{request.InputKind}' is not supported by the reference executor yet.");
             }
 
+            var actualRootIntentHash = ComputeReferenceRootIntentHash(request.Input);
+            if (!string.Equals(request.RootIntentHash, actualRootIntentHash, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("The supplied root-intent basis does not match the interpreted input.");
+            }
+
             var input = request.Input.Deserialize<ReferenceEngineInput>()
                 ?? throw new InvalidOperationException("The reference engine input is empty.");
+            var actualGraphHash = ComputeReferenceGraphHash(input);
+            if (!string.Equals(request.ExpandedGraphHash, actualGraphHash, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("The supplied expanded-graph basis does not match the authoritative reference graph.");
+            }
             if (input.MarketAnalysis is null && input.ProcurementRoute is null)
             {
                 throw new InvalidOperationException("The reference engine requires at least one analysis or procurement operation.");
@@ -124,7 +135,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             }
 
             analysisHash = analysis is null ? string.Empty : ComputeAnalysisSemanticHash(analysis);
-            routeHash = route is null ? string.Empty : EngineCanonicalHash.Compute(route);
+            routeHash = route is null ? string.Empty : ComputeRouteSemanticHash(route);
             output = new ReferenceEngineOutput(analysis, route);
             var resultElement = JsonSerializer.SerializeToElement(new
             {
@@ -238,8 +249,21 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
         }
     }
 
+    public static string ComputeReferenceRootIntentHash(JsonElement input) =>
+        EngineCanonicalHash.Compute(new { Domain = "reference-root-intent-v1", Input = EngineSemanticProjection.Create(input) });
+
+    public static string ComputeReferenceGraphHash(ReferenceEngineInput input) =>
+        EngineCanonicalHash.Compute(new
+        {
+            Domain = "reference-expanded-graph-v1",
+            ParsedGraph = EngineSemanticProjection.Create(input)
+        });
+
     public static string ComputeAnalysisSemanticHash(MarketAnalysisExecutionResult analysis) =>
-        EngineCanonicalHash.Compute(CreateAnalysisSemanticProjection(analysis));
+        EngineSemanticProjection.ComputeHash(CreateAnalysisSemanticProjection(analysis));
+
+    public static string ComputeRouteSemanticHash(ProcurementRouteExecutionResult route) =>
+        EngineSemanticProjection.ComputeHash(route);
 
     private static object CreateAnalysisSemanticProjection(MarketAnalysisExecutionResult analysis) =>
         new
