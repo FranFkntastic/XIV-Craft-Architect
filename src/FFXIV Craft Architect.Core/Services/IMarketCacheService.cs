@@ -173,6 +173,7 @@ public class CacheStats
     public int TotalEntries { get; set; }
     public int ValidEntries { get; set; }
     public int StaleEntries { get; set; }
+    public int LegacyUnindexedEntries { get; set; }
     public DateTime? OldestEntry { get; set; }
     public DateTime? NewestEntry { get; set; }
     public long ApproximateSizeBytes { get; set; }

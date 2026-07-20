@@ -2,7 +2,9 @@
 // Uses Unix timestamps (seconds since epoch) for serialization safety
 
 const DB_NAME = 'FFXIVCraftArchitect';
-const DB_VERSION = 8;  // Adds durable Trade order craft snapshots
+const DB_VERSION = 9;  // Repairs the market-cache timestamp index for bounded maintenance
+const MODULE_REVISION = 10;
+const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const STORE_PLANS = 'plans';
 const STORE_PLAN_SUMMARIES = 'planSummaries';
 const STORE_SETTINGS = 'settings';
@@ -67,7 +69,7 @@ async function initDB() {
         request.onsuccess = () => {
             const database = attachDatabaseConnection(
                 request.result,
-                '[IndexedDB] Database opened successfully (v8 - Trade order craft snapshots)');
+                `[IndexedDB] Database opened successfully (schema v${request.result.version}; module r${MODULE_REVISION})`);
             ensureTradeStores(database).then(resolve).catch(reject);
         };
         
@@ -104,6 +106,12 @@ async function initDB() {
                 const cacheStore = database.createObjectStore(STORE_MARKET_CACHE, { keyPath: 'key' });
                 cacheStore.createIndex('fetchedAtUnix', 'fetchedAtUnix', { unique: false });
                 console.log('[IndexedDB] Created market cache store with Unix timestamp index');
+            } else {
+                const cacheStore = event.target.transaction.objectStore(STORE_MARKET_CACHE);
+                if (!cacheStore.indexNames.contains('fetchedAtUnix')) {
+                    cacheStore.createIndex('fetchedAtUnix', 'fetchedAtUnix', { unique: false });
+                    console.log('[IndexedDB] Repaired missing market cache timestamp index');
+                }
             }
 
             if (!database.objectStoreNames.contains(STORE_TRADE_COMPANY_PROFILES)) {
@@ -1056,39 +1064,37 @@ function getFetchedAtUnix(entry) {
  */
 async function deleteStaleMarketData(cutoffUnix) {
     const database = await initDB();
-    
-    console.log('[IndexedDB] Deleting stale entries older than Unix timestamp:', cutoffUnix);
-    
+
+    console.log('[IndexedDB] Deleting stale entries through timestamp index up to:', cutoffUnix);
+
     return new Promise((resolve, reject) => {
         const transaction = database.transaction([STORE_MARKET_CACHE], 'readwrite');
         const store = transaction.objectStore(STORE_MARKET_CACHE);
-        const request = store.openCursor();
-        
+        const index = store.index('fetchedAtUnix');
+        const request = index.openKeyCursor(IDBKeyRange.upperBound(cutoffUnix));
         let deletedCount = 0;
-        
+        let settled = false;
+
+        transaction.oncomplete = () => {
+            settled = true;
+            if (deletedCount > 0) {
+                console.log('[IndexedDB] Deleted', deletedCount, 'stale entries');
+            }
+            resolve(deletedCount);
+        };
+        transaction.onerror = (event) => {
+            if (!settled) reject(transaction.error || event.target?.error);
+        };
+        transaction.onabort = (event) => {
+            if (!settled) reject(transaction.error || event.target?.error);
+        };
+        request.onerror = () => transaction.abort();
         request.onsuccess = (event) => {
             const cursor = event.target.result;
-            if (cursor) {
-                const entry = cursor.value;
-                const entryUnix = getFetchedAtUnix(entry);
-                
-                // Check if this entry is stale (older than cutoff)
-                if (entryUnix <= cutoffUnix) {
-                    store.delete(cursor.primaryKey);
-                    deletedCount++;
-                }
-                cursor.continue();
-            } else {
-                if (deletedCount > 0) {
-                    console.log('[IndexedDB] Deleted', deletedCount, 'stale entries');
-                }
-                resolve(deletedCount);
-            }
-        };
-        
-        request.onerror = () => {
-            console.error('[IndexedDB] Failed to delete stale entries:', request.error);
-            reject(request.error);
+            if (!cursor) return;
+            store.delete(cursor.primaryKey);
+            deletedCount++;
+            cursor.continue();
         };
     });
 }
@@ -1099,44 +1105,86 @@ async function deleteStaleMarketData(cutoffUnix) {
  */
 async function deleteOldestEntries(count) {
     const database = await initDB();
-    
-    console.log('[IndexedDB] Deleting', count, 'oldest entries');
-    
+    const requestedCount = Math.max(0, Math.floor(count || 0));
+    if (requestedCount === 0) return 0;
+
+    console.log('[IndexedDB] Deleting', requestedCount, 'oldest indexed entries');
+
     return new Promise((resolve, reject) => {
         const transaction = database.transaction([STORE_MARKET_CACHE], 'readwrite');
         const store = transaction.objectStore(STORE_MARKET_CACHE);
-        
-        // Can't use index cursor since we need to handle both old/new formats
-        // Collect all entries, sort by timestamp, delete oldest
-        const request = store.openCursor();
-        const entries = [];
-        
+        const request = store.index('fetchedAtUnix').openKeyCursor();
+        let deletedCount = 0;
+        let settled = false;
+
+        transaction.oncomplete = () => {
+            settled = true;
+            console.log('[IndexedDB] Deleted', deletedCount, 'oldest entries');
+            resolve(deletedCount);
+        };
+        transaction.onerror = (event) => {
+            if (!settled) reject(transaction.error || event.target?.error);
+        };
+        transaction.onabort = (event) => {
+            if (!settled) reject(transaction.error || event.target?.error);
+        };
+        request.onerror = () => transaction.abort();
         request.onsuccess = (event) => {
             const cursor = event.target.result;
-            if (cursor) {
-                entries.push({
-                    key: cursor.primaryKey,
-                    unix: getFetchedAtUnix(cursor.value)
-                });
-                cursor.continue();
-            } else {
-                // Sort by timestamp (oldest first)
-                entries.sort((a, b) => a.unix - b.unix);
-                
-                // Delete oldest N
-                let deletedCount = 0;
-                for (let i = 0; i < Math.min(count, entries.length); i++) {
-                    store.delete(entries[i].key);
+            if (!cursor || deletedCount >= requestedCount) return;
+            store.delete(cursor.primaryKey);
+            deletedCount++;
+            cursor.continue();
+        };
+    });
+}
+
+/**
+ * Delete records that are absent from the timestamp index without reading their payloads.
+ * This legacy repair runs only when cache limits are already exceeded.
+ */
+async function deleteUnindexedMarketData(count) {
+    const database = await initDB();
+    const requestedCount = Math.max(0, Math.floor(count || 0));
+    if (requestedCount === 0) return 0;
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_MARKET_CACHE], 'readwrite');
+        const store = transaction.objectStore(STORE_MARKET_CACHE);
+        const allKeysRequest = store.getAllKeys();
+        const indexedKeysRequest = store.index('fetchedAtUnix').getAllKeys();
+        let deletedCount = 0;
+        let settled = false;
+
+        transaction.oncomplete = () => {
+            settled = true;
+            resolve(deletedCount);
+        };
+        transaction.onerror = (event) => {
+            if (!settled) reject(transaction.error || event.target?.error);
+        };
+        transaction.onabort = (event) => {
+            if (!settled) reject(transaction.error || event.target?.error);
+        };
+        indexedKeysRequest.onsuccess = () => {
+            if (allKeysRequest.readyState !== 'done') return;
+            const indexedKeys = new Set(indexedKeysRequest.result);
+            for (const key of allKeysRequest.result) {
+                if (!indexedKeys.has(key) && deletedCount < requestedCount) {
+                    store.delete(key);
                     deletedCount++;
                 }
-                console.log('[IndexedDB] Deleted', deletedCount, 'oldest entries');
-                resolve(deletedCount);
             }
         };
-        
-        request.onerror = () => {
-            console.error('[IndexedDB] Failed to delete oldest entries:', request.error);
-            reject(request.error);
+        allKeysRequest.onsuccess = () => {
+            if (indexedKeysRequest.readyState !== 'done') return;
+            const indexedKeys = new Set(indexedKeysRequest.result);
+            for (const key of allKeysRequest.result) {
+                if (!indexedKeys.has(key) && deletedCount < requestedCount) {
+                    store.delete(key);
+                    deletedCount++;
+                }
+            }
         };
     });
 }
@@ -1147,67 +1195,51 @@ async function deleteOldestEntries(count) {
  */
 async function getMarketCacheStats(cutoffUnix) {
     const database = await initDB();
-    
+
     return new Promise((resolve, reject) => {
         const transaction = database.transaction([STORE_MARKET_CACHE], 'readonly');
         const store = transaction.objectStore(STORE_MARKET_CACHE);
-        const request = store.openCursor();
-        
-        let total = 0;
-        let valid = 0;
-        let stale = 0;
-        let oldestUnix = null;
-        let newestUnix = null;
-        let totalSize = 0;
-        
-        request.onsuccess = (event) => {
-            const cursor = event.target.result;
-            if (cursor) {
-                const entry = cursor.value;
-                const entryUnix = getFetchedAtUnix(entry);
-                
-                total++;
-                totalSize += JSON.stringify(entry).length * 2; // Rough byte estimate
-                
-                // Track oldest/newest
-                if (oldestUnix === null || entryUnix < oldestUnix) {
-                    oldestUnix = entryUnix;
-                }
-                if (newestUnix === null || entryUnix > newestUnix) {
-                    newestUnix = entryUnix;
-                }
-                
-                // Check staleness using Unix timestamp comparison
-                if (entryUnix <= cutoffUnix) {
-                    stale++;
-                } else {
-                    valid++;
-                }
-                
-                cursor.continue();
-            } else {
-                const stats = {
-                    total,
-                    valid,
-                    stale,
-                    oldestUnix: oldestUnix || 0,
-                    newestUnix: newestUnix || 0,
-                    sizeBytes: totalSize
-                };
-                console.log('[IndexedDB] Cache stats:', stats);
-                resolve(stats);
-            }
+        const index = store.index('fetchedAtUnix');
+        const totalRequest = store.count();
+        const indexedRequest = index.count();
+        const staleRequest = index.count(IDBKeyRange.upperBound(cutoffUnix));
+        const oldestRequest = index.openKeyCursor();
+        const newestRequest = index.openKeyCursor(null, 'prev');
+        let settled = false;
+
+        transaction.oncomplete = () => {
+            settled = true;
+            const total = totalRequest.result;
+            const indexed = indexedRequest.result;
+            const stale = staleRequest.result;
+            const legacyUnindexed = Math.max(0, total - indexed);
+            const stats = {
+                total,
+                valid: Math.max(0, indexed - stale),
+                stale,
+                legacyUnindexed,
+                oldestUnix: oldestRequest.result?.key || 0,
+                newestUnix: newestRequest.result?.key || 0,
+                // A conservative fixed-per-entry policy is stable and bounded. It avoids
+                // cloning or serializing listing payloads merely to enforce cache limits.
+                sizeBytes: total * APPROXIMATE_MARKET_ENTRY_BYTES
+            };
+            console.log('[IndexedDB] Cache stats:', stats);
+            resolve(stats);
         };
-        
-        request.onerror = () => {
-            console.error('[IndexedDB] Failed to get stats:', request.error);
-            reject(request.error);
+        transaction.onerror = (event) => {
+            if (!settled) reject(transaction.error || event.target?.error);
+        };
+        transaction.onabort = (event) => {
+            if (!settled) reject(transaction.error || event.target?.error);
         };
     });
 }
 
 // Export functions for Blazor interop
 window.IndexedDB = {
+    moduleRevision: MODULE_REVISION,
+    schemaVersion: DB_VERSION,
     savePlan,
     loadPlan,
     loadAllPlans,
@@ -1228,6 +1260,7 @@ window.IndexedDB = {
     getMarketDataFreshness,
     deleteStaleMarketData,
     deleteOldestEntries,
+    deleteUnindexedMarketData,
     getMarketCacheStats,
     saveTradeCompanyProfile,
     loadTradeCompanyProfiles,
@@ -1249,4 +1282,4 @@ window.IndexedDB = {
     getTradeStoreDiagnostics
 };
 
-console.log('[IndexedDB] Module loaded (v9 with market data freshness probe)');
+console.log(`[IndexedDB] Module loaded (revision ${MODULE_REVISION}, schema ${DB_VERSION})`);

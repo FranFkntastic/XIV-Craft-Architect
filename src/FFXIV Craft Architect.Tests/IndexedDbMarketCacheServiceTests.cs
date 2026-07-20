@@ -69,6 +69,35 @@ public class IndexedDbMarketCacheServiceTests
         Assert.Equal(0, cache.LastDecisionSnapshot.StaleExistingEntryCount);
         Assert.Equal(0, cache.LastDecisionSnapshot.MissingEntryCount);
         Assert.Equal(0, cache.LastDecisionSnapshot.OrdinaryFetchedPairCount);
+        Assert.Equal(0, jsRuntime.DeleteStaleCallCount);
+        Assert.Equal(0, jsRuntime.StatsCallCount);
+    }
+
+    [Fact]
+    public async Task GetStatsAsync_MapsLegacyUnindexedCountAndApproximateSize()
+    {
+        var jsRuntime = new RecordingMarketCacheJsRuntime
+        {
+            StatsResult = new IndexedDbCacheStats
+            {
+                Total = 7,
+                Valid = 4,
+                Stale = 2,
+                LegacyUnindexed = 1,
+                SizeBytes = 7 * 256 * 1024
+            }
+        };
+        var cache = new IndexedDbMarketCacheService(
+            jsRuntime,
+            new UniversalisService(new HttpClient(new ConcurrentMarketFetchHandler())));
+
+        var stats = await cache.GetStatsAsync();
+
+        Assert.Equal(7, stats.TotalEntries);
+        Assert.Equal(4, stats.ValidEntries);
+        Assert.Equal(2, stats.StaleEntries);
+        Assert.Equal(1, stats.LegacyUnindexedEntries);
+        Assert.Equal(7 * 256 * 1024, stats.ApproximateSizeBytes);
     }
 
     [Fact]
@@ -277,7 +306,8 @@ public class IndexedDbMarketCacheServiceTests
 
             if (identifier == "IndexedDB.getMarketCacheStats")
             {
-                return (TValue)(object)new IndexedDbCacheStats();
+                StatsCallCount++;
+                return (TValue)(object)StatsResult;
             }
 
             if (identifier == "IndexedDB.deleteStaleMarketData")
@@ -323,6 +353,8 @@ public class IndexedDbMarketCacheServiceTests
             return default!;
         }
 
+        public IndexedDbCacheStats StatsResult { get; init; } = new();
+
         public int BatchSaveCallCount { get; private set; }
 
         public int BatchSaveEntryCount { get; private set; }
@@ -330,5 +362,7 @@ public class IndexedDbMarketCacheServiceTests
         public int SingleSaveCount { get; private set; }
 
         public int DeleteStaleCallCount { get; private set; }
+
+        public int StatsCallCount { get; private set; }
     }
 }

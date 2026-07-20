@@ -351,12 +351,20 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
-        return await PopulateAsync(
-            requests,
-            maxAge: null,
-            refreshRequestedPairs: true,
-            progress,
-            ct);
+        await _populateSemaphore.WaitAsync(ct);
+        try
+        {
+            return await PopulateAsync(
+                requests,
+                maxAge: null,
+                refreshRequestedPairs: true,
+                progress,
+                ct);
+        }
+        finally
+        {
+            _populateSemaphore.Release();
+        }
     }
 
     private async Task<int> PopulateAsync(
@@ -386,13 +394,34 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
             return 0;
         }
 
+        progress?.Report("Checking local market cache...");
         var preCleanupState = await AnalyzeRequestedCacheAsync(requests, effectiveMaxAge);
 
-        // STEP 1: Clean up stale entries before fetching new data
+        // A fully warm request must not pay for unrelated global maintenance. This is
+        // the common analysis path and only needs targeted key/timestamp probes.
+        if (!refreshRequestedPairs &&
+            preCleanupState.StaleEntryCount == 0 &&
+            preCleanupState.MissingEntryCount == 0)
+        {
+            progress?.Report("Local market cache is ready.");
+            LastDecisionSnapshot = CreateDecisionSnapshot(
+                requests,
+                requestedItemCount,
+                preCleanupState,
+                fetchedCount: 0,
+                verifiedCount: 0,
+                cleanedCount: 0,
+                cacheSizeEvictionCount: 0,
+                dataCenterFetchCallCount: 0,
+                maxAge,
+                refreshRequestedPairs);
+            return 0;
+        }
+
         var cleanedCount = 0;
         if (!refreshRequestedPairs)
         {
-            progress?.Report("Cleaning up stale cache entries...");
+            progress?.Report("Removing stale local market entries...");
             cleanedCount = await CleanupStaleAsync(effectiveMaxAge);
             if (cleanedCount > 0)
             {
@@ -400,31 +429,38 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
             }
         }
 
-        // STEP 2: Check cache size and enforce limits
+        progress?.Report("Checking local market cache limits...");
         var stats = await GetStatsAsync();
         var cacheSizeEvictionCount = 0;
         if (stats.ApproximateSizeBytes > MaxCacheSizeBytes || stats.TotalEntries > MaxCacheEntries)
         {
             _logger?.LogWarning("[IndexedDbMarketCache] Cache size exceeded (size={Size}MB, entries={Entries}). Running emergency cleanup...",
                 stats.ApproximateSizeBytes / 1024 / 1024, stats.TotalEntries);
-            progress?.Report("Cache size limit reached, cleaning up old entries...");
+            progress?.Report("Reducing local market cache to its configured limit...");
 
-            // Aggressive cleanup - remove anything older than 30 minutes
             var cacheSizeCleanupCount = await CleanupStaleAsync(TimeSpan.FromMinutes(30));
-
-            // If still too big, clear half the cache
             var newStats = await GetStatsAsync();
             var oldestEntryCleanupCount = 0;
-            if (newStats.ApproximateSizeBytes > MaxCacheSizeBytes * 0.8)
+            var entriesOverLimit = Math.Max(0, newStats.TotalEntries - MaxCacheEntries);
+            var sizeTargetEntries = newStats.ApproximateSizeBytes > MaxCacheSizeBytes * 0.8
+                ? Math.Max(1, newStats.TotalEntries / 2)
+                : 0;
+            var entriesToEvict = Math.Max(entriesOverLimit, sizeTargetEntries);
+            if (entriesToEvict > 0)
             {
-                oldestEntryCleanupCount = await ClearOldestEntriesAsync(stats.TotalEntries / 2);
+                var legacyCleanupCount = await ClearUnindexedEntriesAsync(
+                    Math.Min(entriesToEvict, newStats.LegacyUnindexedEntries));
+                oldestEntryCleanupCount = legacyCleanupCount;
+                if (legacyCleanupCount < entriesToEvict)
+                {
+                    oldestEntryCleanupCount += await ClearOldestEntriesAsync(entriesToEvict - legacyCleanupCount);
+                }
             }
 
             cleanedCount += cacheSizeCleanupCount;
             cacheSizeEvictionCount = cacheSizeCleanupCount + oldestEntryCleanupCount;
         }
 
-        // STEP 3: Check what's missing from cache
         var missing = refreshRequestedPairs
             ? requests
             : await GetMissingAsync(requests, maxAge);
@@ -873,8 +909,26 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
         }
     }
 
+    private async Task<int> ClearUnindexedEntriesAsync(int count)
+    {
+        if (count <= 0)
+        {
+            return 0;
+        }
+
+        try
+        {
+            return await _jsRuntime.InvokeAsync<int>("IndexedDB.deleteUnindexedMarketData", count);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[IndexedDbMarketCache] Error clearing legacy unindexed entries");
+            return 0;
+        }
+    }
+
     /// <summary>
-    /// Clears the oldest N entries from the cache (LRU eviction).
+    /// Clears the oldest N timestamp-indexed entries from the cache.
     /// </summary>
     public async Task<int> ClearOldestEntriesAsync(int count)
     {
@@ -904,6 +958,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
                 TotalEntries = stats.Total,
                 ValidEntries = stats.Valid,
                 StaleEntries = stats.Stale,
+                LegacyUnindexedEntries = stats.LegacyUnindexed,
                 OldestEntry = stats.OldestUnix > 0 ? UnixToDateTimeOffset(stats.OldestUnix).DateTime : null,
                 NewestEntry = stats.NewestUnix > 0 ? UnixToDateTimeOffset(stats.NewestUnix).DateTime : null,
                 ApproximateSizeBytes = stats.SizeBytes
@@ -973,6 +1028,7 @@ public class IndexedDbCacheStats
     public int Total { get; set; }
     public int Valid { get; set; }
     public int Stale { get; set; }
+    public int LegacyUnindexed { get; set; }
     public long OldestUnix { get; set; }  // Unix timestamp
     public long NewestUnix { get; set; }  // Unix timestamp
     public long SizeBytes { get; set; }
