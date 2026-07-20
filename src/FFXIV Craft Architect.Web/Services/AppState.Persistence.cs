@@ -283,6 +283,7 @@ public partial class AppState
     public void RecordAutoSaveCompleted(DateTime completedAt)
     {
         LastAutoSave = completedAt;
+        PublishChange(AppStateChangeScope.Status);
     }
 
 }

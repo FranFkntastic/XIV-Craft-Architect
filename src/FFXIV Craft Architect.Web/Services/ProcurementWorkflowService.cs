@@ -15,6 +15,7 @@ public interface IProcurementWorkflowService
 public sealed class ProcurementWorkflowService : IProcurementWorkflowService
 {
     private readonly AppState _appState;
+    private readonly ILogger<ProcurementWorkflowService>? _logger;
     private readonly IProcurementRouteExecutionService _procurementRouteExecutionService;
     private readonly MarketAnalysisItemRefreshService _itemRefreshService;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
@@ -23,9 +24,11 @@ public sealed class ProcurementWorkflowService : IProcurementWorkflowService
         AppState appState,
         IProcurementRouteExecutionService procurementRouteExecutionService,
         MarketAnalysisItemRefreshService itemRefreshService,
-        IRecipeLayerWorkflowService recipeLayerWorkflow)
+        IRecipeLayerWorkflowService recipeLayerWorkflow,
+        ILogger<ProcurementWorkflowService>? logger = null)
     {
         _appState = appState;
+        _logger = logger;
         _procurementRouteExecutionService = procurementRouteExecutionService;
         _itemRefreshService = itemRefreshService;
         _recipeLayerWorkflow = recipeLayerWorkflow;
@@ -132,6 +135,11 @@ public sealed class ProcurementWorkflowService : IProcurementWorkflowService
                 "No complete route could cover every purchase item with the current listings and exclusions. Refresh the affected items or clear temporary exclusions, then try again.");
         }
 
+        _logger?.LogInformation(
+            "[stage] route execution returned (plans={PlanCount}, routeDecision={HasRouteDecision}, activeItems={ActiveItemCount})",
+            result.ShoppingPlans.Count,
+            result.RouteDecision is not null,
+            result.ActiveProcurementItems?.Count ?? activeItemsList.Count);
         var optimizedPlan = result.OptimizedPlan ?? plan;
         var optimizedActiveItems = result.ActiveProcurementItems
             ?? AcquisitionPlanningService.GetActiveProcurementItems(optimizedPlan);
@@ -147,6 +155,11 @@ public sealed class ProcurementWorkflowService : IProcurementWorkflowService
         {
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.StalePlan);
         }
+        _logger?.LogInformation(
+            "[stage] route overlay published (validity={Validity}, decision={HasDecision}, basis={HasBasis})",
+            _appState.ProcurementRouteValidity,
+            _appState.ProcurementRouteDecision is not null,
+            _appState.ProcurementRoutePublicationBasis is not null);
         return new ProcurementWorkflowResult(ProcurementWorkflowStatus.Published, result.ShoppingPlans.Count);
     }
 

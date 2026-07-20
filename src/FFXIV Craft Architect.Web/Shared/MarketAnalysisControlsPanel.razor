@@ -50,7 +50,9 @@
                FullWidth="true"
                Class="mb-4"
                StartIcon="@(IsAnalyzing ? "" : Icons.Material.Filled.Analytics)"
-               data-benchmark-id="@BenchmarkHook("market-analysis-run")">
+               data-benchmark-id="@BenchmarkHook("market-analysis-run")"
+               data-can-analyze="@(CanAnalyze ? "true" : "false")"
+               data-is-analyzing="@(IsAnalyzing ? "true" : "false")">
         @if (IsAnalyzing)
         {
             <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
