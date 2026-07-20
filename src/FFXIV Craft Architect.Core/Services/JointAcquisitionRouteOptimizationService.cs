@@ -139,15 +139,40 @@ public sealed class JointAcquisitionRouteOptimizationService
         var maximumTotal = GetMaximumTotal(cheapestTotal, maximumPremiumRate);
         var finalists = new List<EvaluatedVariant>();
 
-        foreach (var candidate in evaluated.Where(candidate => candidate.Variant.FixedGilCost <= maximumTotal))
+        // Gate the travel pass with a stock-checked lower bound on achievable world
+        // stops (a k-cover over the candidate's demanded items). Candidates are
+        // processed cheapest-travel-potential first; once a route exists, any
+        // candidate whose bound exceeds its stop count can never win the travel
+        // competition and never gets a beam. Candidates at the bound keep their
+        // re-route because tiebreaks are decided by the route itself.
+        var candidatesByTravelPotential = evaluated
+            .Where(candidate => candidate.Variant.FixedGilCost <= maximumTotal)
+            .Select(candidate => new
+            {
+                Candidate = candidate,
+                MinimumStops = EstimateMinimumWorldStops(candidate.Variant, evidenceByItem)
+            })
+            .OrderBy(entry => entry.MinimumStops)
+            .ThenBy(entry => entry.Candidate.Variant.DecisionKey, StringComparer.Ordinal)
+            .ToList();
+
+        var bestStops = int.MaxValue;
+
+        foreach (var entry in candidatesByTravelPotential)
         {
             ct.ThrowIfCancellationRequested();
+            var candidate = entry.Candidate;
             if (config.TravelTolerance == 11 || candidate.Variant.MarketDemand.Count == 0)
             {
                 if (candidate.TotalGilCost <= maximumTotal)
                 {
                     finalists.Add(candidate);
                 }
+                continue;
+            }
+
+            if (entry.MinimumStops > bestStops)
+            {
                 continue;
             }
 
@@ -170,6 +195,9 @@ public sealed class JointAcquisitionRouteOptimizationService
             var total = Add(candidate.Variant.FixedGilCost, route.Decision?.SelectedGilCost ?? 0);
             if (total <= maximumTotal)
             {
+                // Only cost-eligible routes raise the travel bar; a candidate that
+                // cannot afford the premium cap must not block cheaper rivals.
+                bestStops = Math.Min(bestStops, route.Decision!.SelectedWorldStops);
                 finalists.Add(candidate with { Route = route, TotalGilCost = total });
             }
         }
@@ -250,6 +278,70 @@ public sealed class JointAcquisitionRouteOptimizationService
             session,
             ct,
             absoluteMaximumGilCost);
+    }
+
+    /// <summary>
+    /// Stock-checked lower bound on the world stops a candidate's route needs:
+    /// 0 when the candidate has no market demand, 1 when a single world covers every
+    /// demanded item, 2 when some pair of worlds does, 3 otherwise (the true
+    /// minimum may be higher; the bound only ever underestimates stops).
+    /// </summary>
+    private static int EstimateMinimumWorldStops(
+        AcquisitionVariant variant,
+        IReadOnlyDictionary<int, DetailedShoppingPlan> evidenceByItem)
+    {
+        if (variant.MarketDemand.Count == 0)
+        {
+            return 0;
+        }
+
+        var sufficientWorlds = new List<HashSet<(string DataCenter, string WorldName)>>();
+        foreach (var (itemId, _) in variant.MarketDemand)
+        {
+            if (!evidenceByItem.TryGetValue(itemId, out var evidence))
+            {
+                return 0;
+            }
+
+            var worlds = evidence.WorldOptions
+                .Where(world => world.HasSufficientStock)
+                .Select(world => (world.DataCenter, world.WorldName))
+                .ToHashSet();
+            if (worlds.Count == 0)
+            {
+                return 0;
+            }
+
+            sufficientWorlds.Add(worlds);
+        }
+
+        var allWorlds = sufficientWorlds
+            .SelectMany(worlds => worlds)
+            .ToHashSet();
+
+        // k=1: one world covers every demanded item.
+        if (allWorlds.Any(world => sufficientWorlds.All(worlds => worlds.Contains(world))))
+        {
+            return 1;
+        }
+
+        // k=2: some pair of worlds jointly covers every demanded item.
+        var worldList = allWorlds.ToList();
+        for (var first = 0; first < worldList.Count; first++)
+        {
+            for (var second = first; second < worldList.Count; second++)
+            {
+                var firstWorld = worldList[first];
+                var secondWorld = worldList[second];
+                if (sufficientWorlds.All(worlds => worlds.Contains(firstWorld) || worlds.Contains(secondWorld)))
+                {
+                    return 2;
+                }
+            }
+        }
+
+        // No single world or pair covers: the route needs at least three stops.
+        return 3;
     }
 
     private static (long Cost, bool Complete) EvaluateDecomposedCost(
