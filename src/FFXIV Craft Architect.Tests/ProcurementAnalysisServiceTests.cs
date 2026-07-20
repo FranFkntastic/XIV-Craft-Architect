@@ -70,6 +70,50 @@ public class ProcurementRouteExecutionServiceTests
         Assert.Empty(result.MissingItems);
         Assert.Empty(result.RefreshedEvidence);
         Assert.Equal([101, 202], result.EvidencePlans.Select(plan => plan.ItemId));
+        Assert.True(result.IsComplete);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_JointOptimizationWithoutFeasiblePlan_IsIncomplete()
+    {
+        var plan = new CraftingPlan
+        {
+            RootItems =
+            [
+                new PlanNode
+                {
+                    ItemId = 101,
+                    Name = "Unroutable Item",
+                    Quantity = 5,
+                    Source = AcquisitionSource.MarketBuyNq,
+                    CanBuyFromMarket = true
+                }
+            ]
+        };
+        var marketExecution = new Mock<IMarketAnalysisExecutionService>(MockBehavior.Strict);
+        var service = new ProcurementRouteExecutionService(
+            new MarketEvidenceReconciliationService(marketExecution.Object),
+            new MarketShoppingService(Mock.Of<IMarketCacheService>()));
+
+        var result = await service.AnalyzeAsync(
+            new ProcurementRouteExecutionRequest
+            {
+                Plan = plan,
+                SourceShoppingPlans = [ShoppingPlan(101, "Unroutable Item")],
+                SourceMarketAnalyses =
+                [
+                    MarketAnalysis(101, "Unroutable Item", MarketFetchScope.SelectedDataCenter, "Aether")
+                ],
+                Scope = MarketFetchScope.SelectedDataCenter,
+                SelectedDataCenter = "Aether",
+                SelectedRegion = "North America",
+                Lens = MarketAcquisitionLens.MinimumUpfrontCost,
+                ProcurementConfig = new MarketAnalysisConfig { TravelTolerance = 0 }
+            },
+            executionOptions: MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.False(result.IsComplete);
+        Assert.Null(result.RouteDecision);
     }
 
     [Fact]

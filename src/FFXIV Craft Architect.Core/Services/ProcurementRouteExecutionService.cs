@@ -95,7 +95,8 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             {
                 optimization = new ProcurementRouteOptimizationResult(
                     jointOptimization.ShoppingPlans,
-                    jointOptimization.RouteDecision);
+                    jointOptimization.RouteDecision,
+                    IsComplete: false);
             }
         }
         else

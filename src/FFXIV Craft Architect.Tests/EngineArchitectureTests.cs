@@ -149,12 +149,12 @@ public sealed class EngineArchitectureTests
                 new(0, 1, 1, 10,
                 [
                     new(0, "Aether", "Alpha", 1, 10, "market-single", MarketDataQualityBucket.Current, MarketDataAgeSource.UniversalisWorldUpload, 100)
-                ]),
+                ], null, null),
                 new(1, 2, 1, 20,
                 [
                     new(0, "Aether", "Alpha", 1, 20, "market-single", MarketDataQualityBucket.Current, MarketDataAgeSource.UniversalisWorldUpload, 100)
-                ])
-            ], 30, 1, 0, true);
+                ], null, null)
+            ], 30, 1, 0, true, null);
         var routeB = routeA with { OrderedItems = routeA.OrderedItems.Reverse().ToArray() };
 
         Assert.NotEqual(EngineSemanticSnapshotHash.ExpandedGraph(graphA), EngineSemanticSnapshotHash.ExpandedGraph(graphB));
@@ -308,6 +308,19 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
+    public void AnalysisSemanticHash_BindsShoppingFailuresAndWarnings()
+    {
+        var baseline = CreateAnalysisResult();
+        var failed = CreateAnalysisResult();
+        var warned = CreateAnalysisResult();
+        failed.ShoppingPlans[0].Error = "No supported acquisition was found.";
+        warned.ShoppingPlans[0].MarketDataWarning = "Market evidence is aging.";
+
+        Assert.NotEqual(ComputeAnalysisHash(baseline), ComputeAnalysisHash(failed));
+        Assert.NotEqual(ComputeAnalysisHash(baseline), ComputeAnalysisHash(warned));
+    }
+
+    [Fact]
     public void RouteSemanticHash_BindsFreshnessEvidenceAndDecisions()
     {
         var early = CreateRouteResult(DateTime.UnixEpoch, 100);
@@ -320,6 +333,38 @@ public sealed class EngineArchitectureTests
         Assert.NotEqual(
             ComputeRouteHash(early),
             ComputeRouteHash(changed));
+    }
+
+    [Fact]
+    public void RouteSemanticHash_BindsRouteDecisionPolicyAndEvidence()
+    {
+        var baseline = CreateRouteResult(DateTime.UnixEpoch, 100);
+        var decision = baseline.RouteDecision!;
+        var changedResults = new[]
+        {
+            baseline with
+            {
+                RouteDecision = decision with { SelectedEvidencePenalty = 1 }
+            },
+            baseline with
+            {
+                RouteDecision = decision with { TravelPriority = MarketTravelPriority.WorldVisitsFirst }
+            },
+            baseline with
+            {
+                RouteDecision = decision with { AcquisitionSearchWasTruncated = true }
+            },
+            baseline with
+            {
+                RouteDecision = decision with
+                {
+                    ItemDecisions = [new MarketRouteItemDecision(1, "Item", 90, 100)]
+                }
+            }
+        };
+        var baselineHash = ComputeRouteHash(baseline);
+
+        Assert.All(changedResults, result => Assert.NotEqual(baselineHash, ComputeRouteHash(result)));
     }
 
     [Fact]

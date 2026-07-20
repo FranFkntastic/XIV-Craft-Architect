@@ -68,7 +68,8 @@ public sealed record EngineRouteSemanticSnapshot(
     long SelectedGilCost,
     int SelectedWorldStops,
     int SelectedDataCenterTransfers,
-    bool IsComplete);
+    bool IsComplete,
+    EngineRouteDecisionSnapshot? Decision);
 
 public sealed record EngineRouteStopSnapshot(
     int Order,
@@ -81,7 +82,9 @@ public sealed record EngineRouteItemSnapshot(
     int ItemId,
     int Quantity,
     long TotalGil,
-    IReadOnlyList<EngineRouteLegSnapshot> SelectedLegs);
+    IReadOnlyList<EngineRouteLegSnapshot> SelectedLegs,
+    string? Error,
+    string? MarketDataWarning);
 
 public sealed record EngineRouteLegSnapshot(
     int Order,
@@ -93,6 +96,38 @@ public sealed record EngineRouteLegSnapshot(
     MarketDataQualityBucket DataQualityBucket,
     MarketDataAgeSource DataAgeSource,
     long? UpstreamUploadUnixMilliseconds);
+
+public sealed record EngineRouteDecisionSnapshot(
+    int TravelTolerance,
+    decimal? MaximumPremiumRate,
+    long CheapestGilCost,
+    long SelectedGilCost,
+    long SelectedEvidencePenalty,
+    int CheapestWorldStops,
+    int SelectedWorldStops,
+    int CheapestDataCenterTransfers,
+    int SelectedDataCenterTransfers,
+    bool StartsFromHomeDataCenter,
+    string? HomeDataCenter,
+    MarketTravelPriority TravelPriority,
+    long FixedAcquisitionGilCost,
+    bool AcquisitionSearchWasTruncated,
+    IReadOnlyList<EngineRouteFrontierOptionSnapshot> FrontierOptions,
+    IReadOnlyList<EngineRouteItemDecisionSnapshot> ItemDecisions);
+
+public sealed record EngineRouteFrontierOptionSnapshot(
+    int Order,
+    int MinimumTolerance,
+    int MaximumTolerance,
+    long GilCost,
+    int WorldStops,
+    int DataCenterTransfers);
+
+public sealed record EngineRouteItemDecisionSnapshot(
+    int Order,
+    int ItemId,
+    long CheapestEligibleGilCost,
+    long SelectedGilCost);
 
 public sealed record ReferenceEnginePreparedInput(
     ReferenceEngineInput Input,

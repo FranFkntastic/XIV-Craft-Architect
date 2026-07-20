@@ -96,7 +96,8 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
             result.RouteDecision?.SelectedGilCost ?? orderedItems.Sum(item => item.TotalGil),
             result.RouteDecision?.SelectedWorldStops ?? stops.Length,
             result.RouteDecision?.SelectedDataCenterTransfers ?? 0,
-            result.IsComplete);
+            result.IsComplete,
+            CaptureRouteDecision(result.RouteDecision));
     }
 
     private static EngineRouteItemSnapshot[] CaptureShoppingPlans(
@@ -110,7 +111,9 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                     plan.ItemId,
                     plan.QuantityNeeded,
                     legs.Sum(leg => leg.TotalGil),
-                    legs);
+                    legs,
+                    plan.Error,
+                    plan.MarketDataWarning);
             })
             .ToArray();
 
@@ -157,6 +160,41 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                 FindWorld(plan, world.DataCenter, world.WorldName)))
             .ToArray() ?? [];
     }
+
+    private static EngineRouteDecisionSnapshot? CaptureRouteDecision(MarketRouteDecision? decision) =>
+        decision is null
+            ? null
+            : new EngineRouteDecisionSnapshot(
+                decision.TravelTolerance,
+                decision.MaximumPremiumRate,
+                decision.CheapestGilCost,
+                decision.SelectedGilCost,
+                decision.SelectedEvidencePenalty,
+                decision.CheapestWorldStops,
+                decision.SelectedWorldStops,
+                decision.CheapestDataCenterTransfers,
+                decision.SelectedDataCenterTransfers,
+                decision.StartsFromHomeDataCenter,
+                decision.HomeDataCenter,
+                decision.TravelPriority,
+                decision.FixedAcquisitionGilCost,
+                decision.AcquisitionSearchWasTruncated,
+                decision.RepresentativeRoutes
+                    .Select((option, order) => new EngineRouteFrontierOptionSnapshot(
+                        order,
+                        option.MinimumTolerance,
+                        option.MaximumTolerance,
+                        option.GilCost,
+                        option.WorldStops,
+                        option.DataCenterTransfers))
+                    .ToArray(),
+                decision.ItemPremiums
+                    .Select((item, order) => new EngineRouteItemDecisionSnapshot(
+                        order,
+                        item.ItemId,
+                        item.CheapestEligibleGilCost,
+                        item.SelectedGilCost))
+                    .ToArray());
 
     private static EngineRouteLegSnapshot CreateLeg(
         int order,
