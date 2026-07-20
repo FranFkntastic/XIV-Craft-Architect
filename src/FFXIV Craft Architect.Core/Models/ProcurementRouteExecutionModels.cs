@@ -44,7 +44,8 @@ public sealed record ProcurementRouteExecutionResult(
     IReadOnlyList<MarketEvidenceReconciliationItemResult>? ReconciliationItems = null,
     CraftingPlan? OptimizedPlan = null,
     IReadOnlyList<MaterialAggregate>? ActiveProcurementItems = null,
-    IReadOnlyList<MarketItemAnalysis>? EvidenceAnalyses = null);
+    IReadOnlyList<MarketItemAnalysis>? EvidenceAnalyses = null,
+    bool IsComplete = true);
 
 public sealed record ProcurementRouteOptimizationResult(
     List<DetailedShoppingPlan> ShoppingPlans,

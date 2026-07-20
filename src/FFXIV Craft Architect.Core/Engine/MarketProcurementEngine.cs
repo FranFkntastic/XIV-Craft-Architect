@@ -146,6 +146,10 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             analysisHash = analysisSnapshot is null ? string.Empty : EngineSemanticSnapshotHash.Analysis(analysisSnapshot);
             routeHash = routeSnapshot is null ? string.Empty : EngineSemanticSnapshotHash.Route(routeSnapshot);
             output = new ReferenceEngineOutput(analysis, route);
+            if (routeSnapshot is { IsComplete: false })
+            {
+                throw new InvalidOperationException("The procurement route does not provide a viable acquisition for every requested item.");
+            }
             var resultElement = JsonSerializer.SerializeToElement(new
             {
                 MarketAnalysis = analysisSnapshot,

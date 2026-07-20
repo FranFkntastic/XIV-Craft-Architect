@@ -30,7 +30,8 @@ public sealed record EngineGraphEdgeSnapshot(
 
 public sealed record EngineAnalysisSemanticSnapshot(
     string SchemaVersion,
-    IReadOnlyList<EngineAnalysisItemSnapshot> Items);
+    IReadOnlyList<EngineAnalysisItemSnapshot> Items,
+    IReadOnlyList<EngineRouteItemSnapshot> ShoppingPlans);
 
 public sealed record EngineAnalysisItemSnapshot(
     int ItemId,
@@ -78,6 +79,14 @@ public sealed record EngineRouteStopSnapshot(
 public sealed record EngineRouteItemSnapshot(
     int Order,
     int ItemId,
+    int Quantity,
+    long TotalGil,
+    IReadOnlyList<EngineRouteLegSnapshot> SelectedLegs);
+
+public sealed record EngineRouteLegSnapshot(
+    int Order,
+    string DataCenter,
+    string World,
     int Quantity,
     long TotalGil,
     string AcquisitionSource,

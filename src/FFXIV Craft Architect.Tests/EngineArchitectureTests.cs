@@ -146,8 +146,14 @@ public sealed class EngineArchitectureTests
         var routeA = new EngineRouteSemanticSnapshot("1",
             [new(0, "Aether", "Alpha", [1, 2])],
             [
-                new(0, 1, 1, 10, "market", MarketDataQualityBucket.Current, MarketDataAgeSource.UniversalisWorldUpload, 100),
-                new(1, 2, 1, 20, "market", MarketDataQualityBucket.Current, MarketDataAgeSource.UniversalisWorldUpload, 100)
+                new(0, 1, 1, 10,
+                [
+                    new(0, "Aether", "Alpha", 1, 10, "market-single", MarketDataQualityBucket.Current, MarketDataAgeSource.UniversalisWorldUpload, 100)
+                ]),
+                new(1, 2, 1, 20,
+                [
+                    new(0, "Aether", "Alpha", 1, 20, "market-single", MarketDataQualityBucket.Current, MarketDataAgeSource.UniversalisWorldUpload, 100)
+                ])
             ], 30, 1, 0, true);
         var routeB = routeA with { OrderedItems = routeA.OrderedItems.Reverse().ToArray() };
 
@@ -215,6 +221,23 @@ public sealed class EngineArchitectureTests
             prepared.Input.ProcurementRoute.ExcludedItemWorlds);
     }
 
+    [Fact]
+    public void WireSerializer_CanonicalizesReadOnlySetOrder()
+    {
+        IReadOnlySet<string> forward = new SortedSet<string>(
+            ["Alpha", "Beta", "Gamma"],
+            StringComparer.Ordinal);
+        IReadOnlySet<string> reverse = new SortedSet<string>(
+            ["Alpha", "Beta", "Gamma"],
+            Comparer<string>.Create((left, right) => StringComparer.Ordinal.Compare(right, left)));
+        var options = EngineJsonSerializerOptions.CreateWire();
+
+        Assert.NotEqual(string.Join(',', forward), string.Join(',', reverse));
+        Assert.Equal(
+            JsonSerializer.Serialize(forward, options),
+            JsonSerializer.Serialize(reverse, options));
+    }
+
     [Theory]
     [InlineData(
         EngineInputKind.RootIntent,
@@ -274,6 +297,17 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
+    public void AnalysisSemanticHash_BindsShoppingRecommendations()
+    {
+        var alpha = CreateAnalysisResult();
+        var beta = CreateAnalysisResult();
+        alpha.ShoppingPlans[0].RecommendedWorld = CreateWorld("Alpha", 100);
+        beta.ShoppingPlans[0].RecommendedWorld = CreateWorld("Beta", 100);
+
+        Assert.NotEqual(ComputeAnalysisHash(alpha), ComputeAnalysisHash(beta));
+    }
+
+    [Fact]
     public void RouteSemanticHash_BindsFreshnessEvidenceAndDecisions()
     {
         var early = CreateRouteResult(DateTime.UnixEpoch, 100);
@@ -289,6 +323,31 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
+    public void RouteSemanticHash_BindsSplitWorldSelections()
+    {
+        var alphaBeta = CreateSplitRouteResult("Alpha", "Beta");
+        var gammaDelta = CreateSplitRouteResult("Gamma", "Delta");
+        var snapshot = new ReferenceEngineSemanticSnapshotProvider().CaptureRoute(alphaBeta);
+
+        Assert.NotEqual(ComputeRouteHash(alphaBeta), ComputeRouteHash(gammaDelta));
+        Assert.Equal(["Alpha", "Beta"], snapshot.OrderedItems[0].SelectedLegs.Select(leg => leg.World));
+        Assert.All(snapshot.OrderedItems[0].SelectedLegs, leg => Assert.Equal("market-split", leg.AcquisitionSource));
+        Assert.Equal(["Alpha", "Beta"], snapshot.OrderedStops.Select(stop => stop.World));
+    }
+
+    [Fact]
+    public void RouteSemanticHash_BindsCoverageWorldSelections()
+    {
+        var alphaBeta = CreateCoverageRouteResult("Alpha", "Beta");
+        var gammaDelta = CreateCoverageRouteResult("Gamma", "Delta");
+        var snapshot = new ReferenceEngineSemanticSnapshotProvider().CaptureRoute(alphaBeta);
+
+        Assert.NotEqual(ComputeRouteHash(alphaBeta), ComputeRouteHash(gammaDelta));
+        Assert.Equal(["Alpha", "Beta"], snapshot.OrderedItems[0].SelectedLegs.Select(leg => leg.World));
+        Assert.All(snapshot.OrderedItems[0].SelectedLegs, leg => Assert.Equal("market-coverage", leg.AcquisitionSource));
+    }
+
+    [Fact]
     public async Task ReferenceExecutor_RejectsStaleInputAndGraphBasis()
     {
         var engine = new ReferenceMarketProcurementEngine(
@@ -301,6 +360,33 @@ public sealed class EngineArchitectureTests
 
         Assert.Equal(EngineTerminalStatus.Failed, (await engine.ExecuteAsync(request with { RootIntentHash = "stale" })).Status);
         Assert.Equal(EngineTerminalStatus.Failed, (await engine.ExecuteAsync(request with { ExpandedGraphHash = "stale" })).Status);
+    }
+
+    [Fact]
+    public async Task ReferenceExecutor_RejectsIncompleteProcurementRoutes()
+    {
+        var routeService = new Mock<IProcurementRouteExecutionService>();
+        routeService
+            .Setup(service => service.AnalyzeAsync(
+                It.IsAny<ProcurementRouteExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .ReturnsAsync(CreateRouteResult(DateTime.UnixEpoch, 100) with { IsComplete = false });
+        var settlement = new RecordingSettlement();
+        var engine = new ReferenceMarketProcurementEngine(
+            Mock.Of<IMarketAnalysisExecutionService>(),
+            routeService.Object,
+            settlement,
+            new ReferenceEngineSemanticSnapshotProvider());
+        var request = CreateRequest(JsonSerializer.SerializeToElement(
+            new ReferenceEngineInput(null, new ProcurementRouteExecutionRequest())));
+
+        var result = await engine.ExecuteAsync(request);
+
+        Assert.Equal(EngineTerminalStatus.Failed, result.Status);
+        Assert.Contains("viable acquisition", result.Failure!.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(EnginePhase.Publishing, settlement.Phases);
     }
 
     [Fact]
@@ -951,16 +1037,114 @@ public sealed class EngineArchitectureTests
         return new EngineResultEnvelope("1", request.TransactionId, EngineTerminalStatus.Cancelled, null, completion);
     }
 
-    private static ProcurementRouteExecutionResult CreateRouteResult(DateTime timestamp, long selectedCost)
+    private static ProcurementRouteExecutionResult CreateSplitRouteResult(
+        string firstWorld,
+        string secondWorld)
     {
-        var world = new WorldShoppingSummary
+        var first = CreateWorld(firstWorld, 50);
+        var second = CreateWorld(secondWorld, 50);
+        var shopping = new DetailedShoppingPlan
+        {
+            ItemId = 1,
+            Name = "Item",
+            QuantityNeeded = 2,
+            WorldOptions = [first, second],
+            RecommendedSplit =
+            [
+                new SplitWorldPurchase
+                {
+                    DataCenter = "Aether",
+                    WorldName = firstWorld,
+                    QuantityToBuy = 1,
+                    TotalCost = 50
+                },
+                new SplitWorldPurchase
+                {
+                    DataCenter = "Aether",
+                    WorldName = secondWorld,
+                    QuantityToBuy = 1,
+                    TotalCost = 50
+                }
+            ]
+        };
+        return new ProcurementRouteExecutionResult(
+            [shopping],
+            [shopping],
+            [],
+            [],
+            [],
+            new MarketRouteDecision(0, null, 100, 100, 0, 2, 2, 0, 0, true, "Aether"));
+    }
+
+    private static ProcurementRouteExecutionResult CreateCoverageRouteResult(
+        string firstWorld,
+        string secondWorld)
+    {
+        var first = CreateWorld(firstWorld, 50);
+        var second = CreateWorld(secondWorld, 50);
+        var coverage = new MarketCoverageOption(
+            "selected-coverage",
+            MarketCoverageTier.CompactSplit,
+            MarketCoverageKind.SupportedListings,
+            MarketCoverageQualityPolicy.NqOrHq,
+            2,
+            2,
+            0,
+            100,
+            100,
+            50,
+            MarketCoveragePriceBand.Competitive,
+            [
+                new MarketCoverageWorld("Aether", firstWorld, 1, 1, 50, 50),
+                new MarketCoverageWorld("Aether", secondWorld, 1, 1, 50, 50)
+            ],
+            [],
+            new MarketCoverageFriction(2, 1, 1, 1, 0),
+            MarketCoverageSavings.None,
+            true,
+            null);
+        var shopping = new DetailedShoppingPlan
+        {
+            ItemId = 1,
+            Name = "Item",
+            QuantityNeeded = 2,
+            WorldOptions = [first, second],
+            CoverageSet = new MarketCoverageSet(
+                1,
+                "Item",
+                2,
+                null,
+                coverage,
+                null,
+                null,
+                [coverage])
+        };
+        return new ProcurementRouteExecutionResult(
+            [shopping],
+            [shopping],
+            [],
+            [],
+            [],
+            new MarketRouteDecision(0, null, 100, 100, 0, 2, 2, 0, 0, true, "Aether"));
+    }
+
+    private static WorldShoppingSummary CreateWorld(
+        string worldName,
+        long totalCost,
+        DateTime? timestamp = null) =>
+        new()
         {
             DataCenter = "Aether",
-            WorldName = "Alpha",
-            TotalCost = selectedCost,
-            MarketUploadedAtUtc = timestamp,
+            WorldName = worldName,
+            TotalCost = totalCost,
+            TotalQuantityPurchased = 2,
+            MarketUploadedAtUtc = timestamp ?? DateTime.UnixEpoch,
             MarketDataAge = TimeSpan.FromMinutes(5)
         };
+
+    private static ProcurementRouteExecutionResult CreateRouteResult(DateTime timestamp, long selectedCost)
+    {
+        var world = CreateWorld("Alpha", selectedCost, timestamp);
         var shopping = new DetailedShoppingPlan
         {
             ItemId = 1,

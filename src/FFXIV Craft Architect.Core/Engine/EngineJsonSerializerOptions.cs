@@ -39,13 +39,38 @@ public static class EngineJsonSerializerOptions
             }
 
             var values = JsonSerializer.Deserialize<List<T>>(ref reader, options);
-            return values is null ? new HashSet<T>() : new HashSet<T>(values);
+            var result = new HashSet<T>();
+            foreach (var value in values ?? [])
+            {
+                if (!result.Add(value))
+                {
+                    throw new JsonException("Set-valued engine input cannot contain duplicate elements.");
+                }
+            }
+            return result;
         }
 
         public override void Write(
             Utf8JsonWriter writer,
             IReadOnlySet<T> value,
-            JsonSerializerOptions options) =>
-            JsonSerializer.Serialize(writer, value.ToArray(), options);
+            JsonSerializerOptions options)
+        {
+            var ordered = value
+                .Select(item => new
+                {
+                    Value = item,
+                    Hash = EngineCanonicalHash.Compute(item, options),
+                    Json = JsonSerializer.Serialize(item, options)
+                })
+                .OrderBy(item => item.Hash, StringComparer.Ordinal)
+                .ThenBy(item => item.Json, StringComparer.Ordinal)
+                .ToArray();
+            writer.WriteStartArray();
+            foreach (var item in ordered)
+            {
+                JsonSerializer.Serialize(writer, item.Value, options);
+            }
+            writer.WriteEndArray();
+        }
     }
 }

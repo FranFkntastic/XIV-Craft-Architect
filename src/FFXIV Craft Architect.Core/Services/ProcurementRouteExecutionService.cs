@@ -119,7 +119,8 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             reconciliation.Items,
             jointOptimization?.OptimizedPlan,
             jointOptimization?.ActiveProcurementItems,
-            reconciliation.Analyses);
+            reconciliation.Analyses,
+            optimization.IsComplete);
     }
 
     private static IReadOnlyList<MaterialAggregate> GetActiveProcurementItems(ProcurementRouteExecutionRequest request)

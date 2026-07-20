@@ -5,7 +5,8 @@ namespace FFXIV_Craft_Architect.Core.Engine;
 
 public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSemanticSnapshotProvider
 {
-    private const string SchemaVersion = "1";
+    private const string InputSchemaVersion = "1";
+    private const string OutputSchemaVersion = "2";
     private static readonly JsonSerializerOptions InputJsonOptions = EngineJsonSerializerOptions.CreateWire();
 
     public ReferenceEnginePreparedInput PrepareInput(EngineRequestEnvelope request)
@@ -23,7 +24,7 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                 group.Any(item => item.RequiresHq)))
             .ToArray();
         var root = new EngineRootIntentSnapshot(
-            SchemaVersion,
+            InputSchemaVersion,
             request.InputKind,
             demands,
             EngineCanonicalHash.Compute(request.Settings));
@@ -35,7 +36,7 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                 1000 + demand.ItemId,
                 "market"))
             .ToArray();
-        var graph = new EngineExpandedGraphSnapshot(SchemaVersion, nodes, []);
+        var graph = new EngineExpandedGraphSnapshot(InputSchemaVersion, nodes, []);
         return new ReferenceEnginePreparedInput(input, root, graph);
     }
 
@@ -43,7 +44,7 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
     {
         ArgumentNullException.ThrowIfNull(result);
         return new EngineAnalysisSemanticSnapshot(
-            SchemaVersion,
+            OutputSchemaVersion,
             result.Analyses
                 .OrderBy(item => item.ItemId)
                 .Select(item => new EngineAnalysisItemSnapshot(
@@ -69,47 +70,143 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                         world.CoverageBucket,
                         world.DataQualityBucket,
                         world.DataAgeSource,
-                        world.MarketUploadedAtUtc is { } upload
-                            ? new DateTimeOffset(upload).ToUnixTimeMilliseconds()
-                            : null,
+                        ToUnixTimeMilliseconds(world.MarketUploadedAtUtc),
                         world.DataQualityScore)).ToArray()))
-                .ToArray());
+                .ToArray(),
+            CaptureShoppingPlans(result.ShoppingPlans));
     }
 
     public EngineRouteSemanticSnapshot CaptureRoute(ProcurementRouteExecutionResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
-        var orderedItems = result.ShoppingPlans.Select((plan, order) =>
-        {
-            var world = plan.RecommendedWorld;
-            return new EngineRouteItemSnapshot(
-                order,
-                plan.ItemId,
-                plan.QuantityNeeded,
-                world?.TotalCost ?? 0,
-                world?.WorldName ?? "missing",
-                world?.MarketDataQualityBucket ?? MarketDataQualityBucket.Missing,
-                world?.MarketDataAgeSource ?? MarketDataAgeSource.Missing,
-                world?.MarketUploadedAtUtc is { } upload
-                    ? new DateTimeOffset(upload).ToUnixTimeMilliseconds()
-                    : null);
-        }).ToArray();
-        var stops = result.ShoppingPlans
-            .Where(plan => plan.RecommendedWorld is not null)
-            .GroupBy(plan => (plan.RecommendedWorld!.DataCenter, plan.RecommendedWorld.WorldName))
+        var orderedItems = CaptureShoppingPlans(result.ShoppingPlans);
+        var stops = orderedItems
+            .SelectMany(item => item.SelectedLegs.Select(leg => new { item.ItemId, Leg = leg }))
+            .GroupBy(item => (item.Leg.DataCenter, item.Leg.World))
             .Select((group, order) => new EngineRouteStopSnapshot(
                 order,
                 group.Key.DataCenter,
-                group.Key.WorldName,
-                group.Select(plan => plan.ItemId).ToArray()))
+                group.Key.World,
+                group.Select(item => item.ItemId).Distinct().ToArray()))
             .ToArray();
         return new EngineRouteSemanticSnapshot(
-            SchemaVersion,
+            OutputSchemaVersion,
             stops,
             orderedItems,
             result.RouteDecision?.SelectedGilCost ?? orderedItems.Sum(item => item.TotalGil),
             result.RouteDecision?.SelectedWorldStops ?? stops.Length,
             result.RouteDecision?.SelectedDataCenterTransfers ?? 0,
-            result.MissingItems.Count == 0);
+            result.IsComplete);
+    }
+
+    private static EngineRouteItemSnapshot[] CaptureShoppingPlans(
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans) =>
+        shoppingPlans
+            .Select((plan, order) =>
+            {
+                var legs = CaptureSelectedLegs(plan);
+                return new EngineRouteItemSnapshot(
+                    order,
+                    plan.ItemId,
+                    plan.QuantityNeeded,
+                    legs.Sum(leg => leg.TotalGil),
+                    legs);
+            })
+            .ToArray();
+
+    private static EngineRouteLegSnapshot[] CaptureSelectedLegs(DetailedShoppingPlan plan)
+    {
+        if (plan.RecommendedWorld is { } world)
+        {
+            return
+            [
+                CreateLeg(
+                    0,
+                    world.DataCenter,
+                    world.WorldName,
+                    plan.QuantityNeeded,
+                    world.TotalCost,
+                    world.WorldName == MarketShoppingConstants.VendorWorldName ? "vendor" : "market-single",
+                    world)
+            ];
+        }
+
+        if (plan.RecommendedSplit?.Count > 0)
+        {
+            return plan.RecommendedSplit
+                .Select((split, order) => CreateLeg(
+                    order,
+                    split.DataCenter,
+                    split.WorldName,
+                    split.QuantityToBuy,
+                    split.TotalCost,
+                    "market-split",
+                    FindWorld(plan, split.DataCenter, split.WorldName)))
+                .ToArray();
+        }
+
+        var coverage = GetSelectedCoverage(plan);
+        return coverage?.Worlds
+            .Select((world, order) => CreateLeg(
+                order,
+                world.DataCenter,
+                world.WorldName,
+                world.QuantityToPurchase,
+                ToLongSaturating(world.CashOutCost),
+                "market-coverage",
+                FindWorld(plan, world.DataCenter, world.WorldName)))
+            .ToArray() ?? [];
+    }
+
+    private static EngineRouteLegSnapshot CreateLeg(
+        int order,
+        string dataCenter,
+        string world,
+        int quantity,
+        long totalGil,
+        string acquisitionSource,
+        WorldShoppingSummary? evidence) =>
+        new(
+            order,
+            dataCenter,
+            world,
+            quantity,
+            totalGil,
+            acquisitionSource,
+            evidence?.MarketDataQualityBucket ?? MarketDataQualityBucket.Missing,
+            evidence?.MarketDataAgeSource ?? MarketDataAgeSource.Missing,
+            ToUnixTimeMilliseconds(evidence?.MarketUploadedAtUtc));
+
+    private static MarketCoverageOption? GetSelectedCoverage(DetailedShoppingPlan plan) =>
+        plan.CoverageSet?.AllCandidates.FirstOrDefault(candidate => candidate.IsDefaultEligible)
+        ?? plan.CoverageSet?.SingleWorld
+        ?? plan.CoverageSet?.CompactSplit
+        ?? plan.CoverageSet?.WideSplit
+        ?? plan.CoverageSet?.CheapestObserved;
+
+    private static WorldShoppingSummary? FindWorld(
+        DetailedShoppingPlan plan,
+        string dataCenter,
+        string world) =>
+        plan.WorldOptions.FirstOrDefault(option =>
+            string.Equals(option.DataCenter, dataCenter, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(option.WorldName, world, StringComparison.OrdinalIgnoreCase));
+
+    private static long? ToUnixTimeMilliseconds(DateTime? timestamp) =>
+        timestamp is { } value
+            ? new DateTimeOffset(value).ToUnixTimeMilliseconds()
+            : null;
+
+    private static long ToLongSaturating(decimal value)
+    {
+        if (value >= long.MaxValue)
+        {
+            return long.MaxValue;
+        }
+        if (value <= long.MinValue)
+        {
+            return long.MinValue;
+        }
+        return decimal.ToInt64(value);
     }
 }
