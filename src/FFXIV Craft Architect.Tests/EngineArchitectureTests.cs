@@ -162,8 +162,8 @@ public sealed class EngineArchitectureTests
         var slow = CreateAnalysisResult(TimeSpan.FromSeconds(8), DateTime.UnixEpoch);
         var freshEvidence = CreateAnalysisResult(TimeSpan.FromSeconds(8), DateTime.UnixEpoch.AddYears(20));
 
-        Assert.Equal(TestSnapshotProvider.ComputeAnalysisHash(fast), TestSnapshotProvider.ComputeAnalysisHash(slow));
-        Assert.NotEqual(TestSnapshotProvider.ComputeAnalysisHash(fast), TestSnapshotProvider.ComputeAnalysisHash(freshEvidence));
+        Assert.Equal(ComputeAnalysisHash(fast), ComputeAnalysisHash(slow));
+        Assert.NotEqual(ComputeAnalysisHash(fast), ComputeAnalysisHash(freshEvidence));
     }
 
     [Fact]
@@ -174,11 +174,11 @@ public sealed class EngineArchitectureTests
         var changed = CreateRouteResult(DateTime.UnixEpoch.AddYears(20), 101);
 
         Assert.NotEqual(
-            TestSnapshotProvider.ComputeRouteHash(early),
-            TestSnapshotProvider.ComputeRouteHash(late));
+            ComputeRouteHash(early),
+            ComputeRouteHash(late));
         Assert.NotEqual(
-            TestSnapshotProvider.ComputeRouteHash(early),
-            TestSnapshotProvider.ComputeRouteHash(changed));
+            ComputeRouteHash(early),
+            ComputeRouteHash(changed));
     }
 
     [Fact]
@@ -188,7 +188,7 @@ public sealed class EngineArchitectureTests
             Mock.Of<IMarketAnalysisExecutionService>(),
             Mock.Of<IProcurementRouteExecutionService>(),
             new RecordingSettlement(),
-            new TestSnapshotProvider());
+            new ReferenceEngineSemanticSnapshotProvider());
         var input = JsonSerializer.SerializeToElement(new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null));
         var request = CreateRequest(input);
 
@@ -203,7 +203,7 @@ public sealed class EngineArchitectureTests
             Mock.Of<IMarketAnalysisExecutionService>(),
             Mock.Of<IProcurementRouteExecutionService>(),
             new RecordingSettlement(),
-            new TestSnapshotProvider());
+            new ReferenceEngineSemanticSnapshotProvider());
         var operation = JsonSerializer.SerializeToElement(new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null));
         var unsupportedBudget = CreateRequest(operation) with
         {
@@ -231,7 +231,7 @@ public sealed class EngineArchitectureTests
             analysis.Object,
             Mock.Of<IProcurementRouteExecutionService>(),
             new NoOpEngineTransactionSettlement(),
-            new TestSnapshotProvider());
+            new ReferenceEngineSemanticSnapshotProvider());
         var request = CreateRequest(JsonSerializer.SerializeToElement(
             new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
 
@@ -249,7 +249,7 @@ public sealed class EngineArchitectureTests
             Mock.Of<IMarketAnalysisExecutionService>(),
             Mock.Of<IProcurementRouteExecutionService>(),
             new FailingCleanupSettlement(),
-            new TestSnapshotProvider());
+            new ReferenceEngineSemanticSnapshotProvider());
         var request = CreateRequest(JsonSerializer.SerializeToElement(new ReferenceEngineInput(null, null)));
 
         var result = await engine.ExecuteAsync(request);
@@ -275,7 +275,7 @@ public sealed class EngineArchitectureTests
             analysisService.Object,
             Mock.Of<IProcurementRouteExecutionService>(),
             settlement,
-            new TestSnapshotProvider());
+            new ReferenceEngineSemanticSnapshotProvider());
         var request = CreateRequest(JsonSerializer.SerializeToElement(
             new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
 
@@ -603,7 +603,7 @@ public sealed class EngineArchitectureTests
             new EngineBasisIdentity("session", "1", "session-hash"),
             new EngineBasisIdentity("publication", "1", "publication-hash"),
             new EngineBasisIdentity("route", "1", "route-hash"));
-        var provider = new TestSnapshotProvider();
+        var provider = new ReferenceEngineSemanticSnapshotProvider();
         var provisional = new EngineRequestEnvelope(
             "1",
             Guid.NewGuid(),
@@ -901,99 +901,11 @@ public sealed class EngineArchitectureTests
         }
     }
 
-    private sealed class TestSnapshotProvider : IReferenceEngineSemanticSnapshotProvider
-    {
-        public ReferenceEnginePreparedInput PrepareInput(EngineRequestEnvelope request)
-        {
-            var input = request.Input.Deserialize<ReferenceEngineInput>()
-                ?? throw new InvalidOperationException("Unsupported reference input.");
-            var demands = (input.MarketAnalysis?.Items ?? [])
-                .Concat(input.ProcurementRoute?.ActiveProcurementItems ?? [])
-                .GroupBy(item => item.ItemId)
-                .OrderBy(group => group.Key)
-                .Select(group => new EngineDemandSnapshot(
-                    group.Key,
-                    group.Sum(item => item.TotalQuantity),
-                    group.Any(item => item.RequiresHq)))
-                .ToArray();
-            var root = new EngineRootIntentSnapshot("1", request.InputKind, demands, EngineCanonicalHash.Compute(request.Settings));
-            var nodes = demands.Select((demand, index) => new EngineGraphNodeSnapshot(
-                $"item:{demand.ItemId}", demand.ItemId, demand.Quantity, 1000 + demand.ItemId, "market"))
-                .ToArray();
-            var graph = new EngineExpandedGraphSnapshot("1", nodes, []);
-            return new ReferenceEnginePreparedInput(input, root, graph);
-        }
+    private static string ComputeAnalysisHash(MarketAnalysisExecutionResult result) =>
+        EngineSemanticSnapshotHash.Analysis(new ReferenceEngineSemanticSnapshotProvider().CaptureAnalysis(result));
 
-        public EngineAnalysisSemanticSnapshot CaptureAnalysis(MarketAnalysisExecutionResult result) =>
-            new("1", result.Analyses
-                .OrderBy(item => item.ItemId)
-                .Select(item => new EngineAnalysisItemSnapshot(
-                    item.ItemId,
-                    item.QuantityNeeded,
-                    item.Scope,
-                    item.AnalysisScopeBaselineUnitPrice,
-                    item.AnalysisScopeAverageUnitPrice,
-                    item.AnalysisScopeMedianUnitPrice,
-                    item.CompetitiveThresholdUnitPrice,
-                    item.SaneThresholdUnitPrice,
-                    item.WorstDataQualityBucket,
-                    item.RequestedDataCenters.Order(StringComparer.Ordinal).ToArray(),
-                    item.PresentDataCenters.Order(StringComparer.Ordinal).ToArray(),
-                    item.MissingDataCenters.Order(StringComparer.Ordinal).ToArray(),
-                    item.Worlds.Select((world, rank) => new EngineWorldAnalysisSnapshot(
-                        rank,
-                        world.DataCenter,
-                        world.WorldName,
-                        world.ActionableQuantity,
-                        world.CostToCoverTotalGil,
-                        world.CostToCoverUnitPrice,
-                        world.CoverageBucket,
-                        world.DataQualityBucket,
-                        world.DataAgeSource,
-                        world.MarketUploadedAtUtc is { } upload ? new DateTimeOffset(upload).ToUnixTimeMilliseconds() : null,
-                        world.DataQualityScore)).ToArray()))
-                .ToArray());
-
-        public EngineRouteSemanticSnapshot CaptureRoute(ProcurementRouteExecutionResult result)
-        {
-            var orderedItems = result.ShoppingPlans.Select((plan, order) =>
-            {
-                var world = plan.RecommendedWorld;
-                return new EngineRouteItemSnapshot(
-                    order,
-                    plan.ItemId,
-                    plan.QuantityNeeded,
-                    world?.TotalCost ?? 0,
-                    world?.WorldName ?? "missing",
-                    world?.MarketDataQualityBucket ?? MarketDataQualityBucket.Missing,
-                    world?.MarketDataAgeSource ?? MarketDataAgeSource.Missing,
-                    world?.MarketUploadedAtUtc is { } upload ? new DateTimeOffset(upload).ToUnixTimeMilliseconds() : null);
-            }).ToArray();
-            var stops = result.ShoppingPlans
-                .Where(plan => plan.RecommendedWorld is not null)
-                .GroupBy(plan => (plan.RecommendedWorld!.DataCenter, plan.RecommendedWorld.WorldName))
-                .Select((group, order) => new EngineRouteStopSnapshot(
-                    order,
-                    group.Key.DataCenter,
-                    group.Key.WorldName,
-                    group.Select(plan => plan.ItemId).ToArray()))
-                .ToArray();
-            return new EngineRouteSemanticSnapshot(
-                "1",
-                stops,
-                orderedItems,
-                result.RouteDecision?.SelectedGilCost ?? orderedItems.Sum(item => item.TotalGil),
-                result.RouteDecision?.SelectedWorldStops ?? stops.Length,
-                result.RouteDecision?.SelectedDataCenterTransfers ?? 0,
-                result.MissingItems.Count == 0);
-        }
-
-        public static string ComputeAnalysisHash(MarketAnalysisExecutionResult result) =>
-            EngineSemanticSnapshotHash.Analysis(new TestSnapshotProvider().CaptureAnalysis(result));
-
-        public static string ComputeRouteHash(ProcurementRouteExecutionResult result) =>
-            EngineSemanticSnapshotHash.Route(new TestSnapshotProvider().CaptureRoute(result));
-    }
+    private static string ComputeRouteHash(ProcurementRouteExecutionResult result) =>
+        EngineSemanticSnapshotHash.Route(new ReferenceEngineSemanticSnapshotProvider().CaptureRoute(result));
 
     private sealed class RecordingSettlement : IEngineTransactionSettlement
     {
