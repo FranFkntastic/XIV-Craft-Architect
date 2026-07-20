@@ -54,15 +54,18 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
     private readonly IMarketAnalysisExecutionService _marketAnalysis;
     private readonly IProcurementRouteExecutionService _procurementRoute;
     private readonly IEngineTransactionSettlement _settlement;
+    private readonly IReferenceEngineSemanticSnapshotProvider _snapshots;
 
     public ReferenceMarketProcurementEngine(
         IMarketAnalysisExecutionService marketAnalysis,
         IProcurementRouteExecutionService procurementRoute,
-        IEngineTransactionSettlement settlement)
+        IEngineTransactionSettlement settlement,
+        IReferenceEngineSemanticSnapshotProvider snapshots)
     {
         _marketAnalysis = marketAnalysis ?? throw new ArgumentNullException(nameof(marketAnalysis));
         _procurementRoute = procurementRoute ?? throw new ArgumentNullException(nameof(procurementRoute));
         _settlement = settlement ?? throw new ArgumentNullException(nameof(settlement));
+        _snapshots = snapshots ?? throw new ArgumentNullException(nameof(snapshots));
     }
 
     public async Task<EngineResultEnvelope> ExecuteAsync(
@@ -94,15 +97,15 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
                 throw new NotSupportedException($"Input kind '{request.InputKind}' is not supported by the reference executor yet.");
             }
 
-            var actualRootIntentHash = ComputeReferenceRootIntentHash(request.Input);
+            var prepared = _snapshots.PrepareInput(request);
+            var actualRootIntentHash = EngineSemanticSnapshotHash.RootIntent(prepared.RootIntent);
             if (!string.Equals(request.RootIntentHash, actualRootIntentHash, StringComparison.Ordinal))
             {
-                throw new InvalidOperationException("The supplied root-intent basis does not match the interpreted input.");
+                throw new InvalidOperationException("The supplied root-intent basis does not match the authoritative root-intent snapshot.");
             }
 
-            var input = request.Input.Deserialize<ReferenceEngineInput>()
-                ?? throw new InvalidOperationException("The reference engine input is empty.");
-            var actualGraphHash = ComputeReferenceGraphHash(input);
+            var input = prepared.Input;
+            var actualGraphHash = EngineSemanticSnapshotHash.ExpandedGraph(prepared.ExpandedGraph);
             if (!string.Equals(request.ExpandedGraphHash, actualGraphHash, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("The supplied expanded-graph basis does not match the authoritative reference graph.");
@@ -134,14 +137,24 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
                 route = await _procurementRoute.AnalyzeAsync(input.ProcurementRoute, ct: cancellationToken);
             }
 
-            analysisHash = analysis is null ? string.Empty : ComputeAnalysisSemanticHash(analysis);
-            routeHash = route is null ? string.Empty : ComputeRouteSemanticHash(route);
+            var analysisSnapshot = analysis is null ? null : _snapshots.CaptureAnalysis(analysis);
+            var routeSnapshot = route is null ? null : _snapshots.CaptureRoute(route);
+            analysisHash = analysisSnapshot is null ? string.Empty : EngineSemanticSnapshotHash.Analysis(analysisSnapshot);
+            routeHash = routeSnapshot is null ? string.Empty : EngineSemanticSnapshotHash.Route(routeSnapshot);
             output = new ReferenceEngineOutput(analysis, route);
             var resultElement = JsonSerializer.SerializeToElement(new
             {
-                MarketAnalysis = analysis is null ? null : CreateAnalysisSemanticProjection(analysis),
-                ProcurementRoute = route
+                MarketAnalysis = analysisSnapshot,
+                ProcurementRoute = routeSnapshot
             });
+            if (analysis is not null)
+            {
+                settlementEvidence["phase:Analyzing"] = "complete";
+            }
+            if (route is not null)
+            {
+                settlementEvidence["phase:Reconciling"] = "complete";
+            }
             var settlementContext = new EngineSettlementContext(request, output, analysisHash, routeHash);
 
             foreach (var settlementPhase in SettlementPhases)
@@ -249,67 +262,6 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
         }
     }
 
-    public static string ComputeReferenceRootIntentHash(JsonElement input) =>
-        EngineCanonicalHash.Compute(new { Domain = "reference-root-intent-v1", Input = EngineSemanticProjection.Create(input) });
-
-    public static string ComputeReferenceGraphHash(ReferenceEngineInput input) =>
-        EngineCanonicalHash.Compute(new
-        {
-            Domain = "reference-expanded-graph-v1",
-            ParsedGraph = EngineSemanticProjection.Create(input)
-        });
-
-    public static string ComputeAnalysisSemanticHash(MarketAnalysisExecutionResult analysis) =>
-        EngineSemanticProjection.ComputeHash(CreateAnalysisSemanticProjection(analysis));
-
-    public static string ComputeRouteSemanticHash(ProcurementRouteExecutionResult route) =>
-        EngineSemanticProjection.ComputeHash(route);
-
-    private static object CreateAnalysisSemanticProjection(MarketAnalysisExecutionResult analysis) =>
-        new
-        {
-            Evidence = analysis.Evidence.Entries
-                .OrderBy(entry => entry.Key.itemId)
-                .ThenBy(entry => entry.Key.dataCenter, StringComparer.Ordinal)
-                .Select(entry => new
-                {
-                    ItemId = entry.Key.itemId,
-                    DataCenter = entry.Key.dataCenter,
-                    entry.Value.DCAveragePrice,
-                    entry.Value.HQAveragePrice,
-                    Worlds = entry.Value.Worlds
-                        .OrderBy(world => world.WorldId)
-                        .ThenBy(world => world.WorldName, StringComparer.Ordinal)
-                        .Select(world => new
-                        {
-                            world.WorldId,
-                            world.WorldName,
-                            world.EvidenceOrigin,
-                            world.EvidenceCompleteness,
-                            world.ReportedListingCount,
-                            world.ListingCapacity,
-                            world.IsTruncated,
-                            world.IsCongested,
-                            Listings = world.Listings
-                                .OrderBy(listing => listing.PricePerUnit)
-                                .ThenBy(listing => listing.Quantity)
-                                .ThenBy(listing => listing.IsHq)
-                                .ThenBy(listing => listing.ListingId, StringComparer.Ordinal)
-                                .Select(listing => new
-                                {
-                                    listing.Quantity,
-                                    listing.PricePerUnit,
-                                    listing.RetainerName,
-                                    listing.ListingId,
-                                    listing.RetainerId,
-                                    listing.IsHq
-                                })
-                        })
-                }),
-            Analyses = analysis.Analyses.OrderBy(item => item.ItemId),
-            ShoppingPlans = analysis.ShoppingPlans.OrderBy(item => item.ItemId)
-        };
-
     private static readonly EnginePhase[] TerminalSettlementPhases =
     [
         EnginePhase.ReleasingGate,
@@ -346,7 +298,8 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             ["terminalCode"] = code,
             ["failedPhase"] = failedPhase.ToString(),
             ["failureType"] = failureType,
-            ["failureMessageHash"] = EngineCanonicalHash.Compute(message.Trim())
+            ["failureMessageHash"] = EngineCanonicalHash.Compute(message.Trim()),
+            ["isRetryable"] = bool.FalseString
         };
         var finalHash = EngineCanonicalHash.ComputeFinalTransactionHash(request, status, analysisResultHash, routeResultHash, evidence);
         var completion = new EngineCompletionEvidence(
@@ -362,7 +315,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             finalHash,
             evidence);
         var failure = status == EngineTerminalStatus.Failed
-            ? new EngineFailure(code, message, false, failedPhase)
+            ? new EngineFailure(code, message, false, failedPhase, failureType)
             : null;
         return new EngineResultEnvelope(ContractVersion, request.TransactionId, status, null, completion, failure);
     }

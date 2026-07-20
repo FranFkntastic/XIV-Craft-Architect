@@ -397,8 +397,14 @@ public sealed class EngineWorkerClient : IAsyncDisposable
             var failure = result.Failure!;
             if (!result.Completion.TerminalEvidence.TryGetValue("terminalCode", out var terminalCode) ||
                 !result.Completion.TerminalEvidence.TryGetValue("failedPhase", out var failedPhase) ||
+                !result.Completion.TerminalEvidence.TryGetValue("failureType", out var failureType) ||
+                !result.Completion.TerminalEvidence.TryGetValue("failureMessageHash", out var failureMessageHash) ||
+                !result.Completion.TerminalEvidence.TryGetValue("isRetryable", out var isRetryable) ||
                 !string.Equals(terminalCode, failure.Code, StringComparison.Ordinal) ||
-                !string.Equals(failedPhase, failure.FailedPhase.ToString(), StringComparison.Ordinal))
+                !string.Equals(failedPhase, failure.FailedPhase.ToString(), StringComparison.Ordinal) ||
+                !string.Equals(failureType, failure.FailureType, StringComparison.Ordinal) ||
+                !string.Equals(failureMessageHash, EngineCanonicalHash.Compute(failure.Message.Trim()), StringComparison.Ordinal) ||
+                !string.Equals(isRetryable, failure.IsRetryable.ToString(), StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("Worker failure details are not bound to terminal evidence.");
             }
@@ -417,6 +423,14 @@ public sealed class EngineWorkerClient : IAsyncDisposable
             {
                 throw new InvalidOperationException("Successful worker results require completed settlement evidence.");
             }
+            foreach (var requiredPhase in GetRequiredSuccessPhases(request))
+            {
+                if (!result.Completion.TerminalEvidence.TryGetValue($"phase:{requiredPhase}", out var phaseEvidence) ||
+                    string.IsNullOrWhiteSpace(phaseEvidence))
+                {
+                    throw new InvalidOperationException($"Successful worker result is missing required phase evidence for '{requiredPhase}'.");
+                }
+            }
 
             if (!string.Equals(payloadHash, EngineCanonicalHash.Compute(payload), StringComparison.Ordinal))
             {
@@ -434,6 +448,34 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         {
             throw new InvalidOperationException("Worker final transaction hash validation failed.");
         }
+    }
+
+    private static IReadOnlyList<EnginePhase> GetRequiredSuccessPhases(EngineRequestEnvelope request)
+    {
+        var input = request.Input.Deserialize<ReferenceEngineInput>(WireJsonOptions)
+            ?? throw new InvalidOperationException("Cannot determine required phase evidence for the engine request.");
+        var phases = new List<EnginePhase>
+        {
+            EnginePhase.Publishing,
+            EnginePhase.Persisting,
+            EnginePhase.ReleasingGate,
+            EnginePhase.SettlingUi,
+            EnginePhase.CapturingPostActionEvidence
+        };
+        if (input.MarketAnalysis is not null)
+        {
+            phases.Add(EnginePhase.Analyzing);
+        }
+        if (input.ProcurementRoute is not null)
+        {
+            phases.Add(EnginePhase.Reconciling);
+            phases.Add(EnginePhase.SettlingRoute);
+        }
+        if (request.InputKind == EngineInputKind.RestoredSession)
+        {
+            phases.Add(EnginePhase.CapturingRestorationEvidence);
+        }
+        return phases;
     }
 
     private void NotifyProgress(EngineProgress progress)
@@ -456,7 +498,9 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         try
         {
             await Task.Delay(_responseTimeoutDuration, cancellationToken);
-            FailExecution(new TimeoutException("The engine worker did not produce a terminal response before the timeout."), transactionId);
+            await TerminateTimedOutTransactionAsync(
+                transactionId,
+                "The engine worker did not produce a terminal response before the timeout.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -475,18 +519,42 @@ public sealed class EngineWorkerClient : IAsyncDisposable
                     return;
                 }
             }
-            TaskCompletionSource<EngineResultEnvelope>? completion;
-            lock (_sync)
+            await TerminateTimedOutTransactionAsync(
+                transactionId,
+                "The engine worker failed to acknowledge cancellation before the timeout.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task TerminateTimedOutTransactionAsync(Guid transactionId, string timeoutMessage)
+    {
+        TaskCompletionSource<EngineResultEnvelope>? completion;
+        lock (_sync)
+        {
+            if (_request?.TransactionId != transactionId ||
+                _state is not (EngineWorkerLifecycleState.Running or EngineWorkerLifecycleState.Cancelling))
             {
-                if (_request?.TransactionId != transactionId || _state != EngineWorkerLifecycleState.Cancelling)
-                {
-                    return;
-                }
-                _state = EngineWorkerLifecycleState.Terminating;
-                _generation++;
-                completion = _completion;
+                return;
             }
+            _state = EngineWorkerLifecycleState.Terminating;
+            _generation++;
+            completion = _completion;
+        }
+
+        Exception terminalException;
+        try
+        {
             await _transport.TerminateAsync(CancellationToken.None);
+            terminalException = new TimeoutException(timeoutMessage);
+        }
+        catch (Exception terminationFailure)
+        {
+            terminalException = new AggregateException(timeoutMessage, terminationFailure);
+        }
+        finally
+        {
             lock (_sync)
             {
                 if (_request?.TransactionId == transactionId)
@@ -495,11 +563,8 @@ public sealed class EngineWorkerClient : IAsyncDisposable
                     _state = EngineWorkerLifecycleState.Faulted;
                 }
             }
-            completion?.TrySetException(new TimeoutException("The engine worker was terminated after failing to acknowledge cancellation."));
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
+        completion?.TrySetException(terminalException);
     }
 
     private static EnginePhase ExpectedTerminalPhase(EngineTerminalStatus status) => status switch

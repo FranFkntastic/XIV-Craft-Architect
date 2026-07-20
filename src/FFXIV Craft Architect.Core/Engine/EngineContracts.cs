@@ -113,7 +113,8 @@ public sealed record EngineFailure(
     string Code,
     string Message,
     bool IsRetryable,
-    EnginePhase FailedPhase);
+    EnginePhase FailedPhase,
+    string FailureType);
 
 public sealed record EngineResultEnvelope(
     string ContractVersion,
