@@ -85,6 +85,9 @@ builder.Services.AddScoped<AcquisitionEvaluationItemDiagnosticDumpService>();
 builder.Services.AddScoped<AcquisitionDiagnosticSelectionService>();
 builder.Services.AddScoped<GitHubIssueReportService>();
 builder.Services.AddScoped<BrowserFileExportService>();
+builder.Services.AddSingleton(new ProcurementRouteAvailability(
+    bool.TryParse(builder.Configuration["ProcurementRoutes:GenerationEnabled"], out var routeGenerationEnabled) &&
+    routeGenerationEnabled));
 builder.Services.AddScoped<ProcurementWorkflowService>();
 builder.Services.AddScoped<IProcurementWorkflowService>(provider =>
     provider.GetRequiredService<ProcurementWorkflowService>());

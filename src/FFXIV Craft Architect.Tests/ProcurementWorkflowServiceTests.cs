@@ -10,6 +10,30 @@ namespace FFXIV_Craft_Architect.Tests;
 public class ProcurementWorkflowServiceTests
 {
     [Fact]
+    [Trait(TestTraits.Surface, TestTraits.DeployWeb)]
+    public async Task RunAnalysisAsync_WhenRouteGenerationIsDisabled_DoesNotEnterExecutionOrMutateState()
+    {
+        var appState = CreateAppState(101);
+        appState.ReplaceMarketAnalysis([], [ShoppingPlan(101)]);
+        appState.ReplaceProcurementOverlay([ShoppingPlan(101, "Siren")]);
+        var execution = new Mock<IProcurementRouteExecutionService>(MockBehavior.Strict);
+        var service = CreateService(
+            appState,
+            procurementExecution: execution.Object,
+            routeGenerationEnabled: false);
+        var before = appState.CurrentVersions;
+
+        var result = await service.RunAnalysisAsync(
+            new ProcurementWorkflowRequest(() => true, MarketAnalysisExecutionOptions.Synchronous));
+
+        Assert.Equal(ProcurementWorkflowStatus.Disabled, result.Status);
+        Assert.Equal(ProcurementRouteAvailability.DisabledMessage, result.Message);
+        Assert.Equal(before, appState.CurrentVersions);
+        Assert.Equal("Siren", Assert.Single(appState.ProcurementShoppingPlans).RecommendedWorld?.WorldName);
+        execution.VerifyNoOtherCalls();
+    }
+
+    [Fact]
     public async Task RunAnalysisAsync_PublishesProcurementOverlay()
     {
         var appState = CreateAppState();
@@ -421,7 +445,8 @@ public class ProcurementWorkflowServiceTests
         IProcurementRouteExecutionService? procurementExecution = null,
         IMarketAnalysisExecutionService? marketExecution = null,
         RecordingJsRuntime? jsRuntime = null,
-        IRecipeLayerWorkflowService? recipeLayerWorkflow = null)
+        IRecipeLayerWorkflowService? recipeLayerWorkflow = null,
+        bool routeGenerationEnabled = true)
     {
         jsRuntime ??= new RecordingJsRuntime();
         var indexedDb = new IndexedDbService(jsRuntime);
@@ -443,7 +468,8 @@ public class ProcurementWorkflowServiceTests
             appState,
             procurementExecution ?? Mock.Of<IProcurementRouteExecutionService>(),
             itemRefreshService,
-            recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService());
+            recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService(),
+            new ProcurementRouteAvailability(routeGenerationEnabled));
     }
 
     private static AppState CreateAppState(params int[] itemIds)
