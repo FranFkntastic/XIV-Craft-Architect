@@ -36,6 +36,13 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/IndexedDbBrowserTests/package-lock.json
+
       - name: Restore solution
         run: dotnet restore "FFXIV Craft Architect.sln"
 
@@ -59,6 +66,18 @@ jobs:
           --blame-hang-dump-type mini
           --logger "trx;LogFileName=regression.trx"
           --logger "console;verbosity=normal"
+
+      - name: Restore browser test dependencies
+        working-directory: tools/IndexedDbBrowserTests
+        run: npm ci
+
+      - name: Install browser engines
+        working-directory: tools/IndexedDbBrowserTests
+        run: npx playwright install chromium firefox
+
+      - name: Run browser regression suite
+        working-directory: tools/IndexedDbBrowserTests
+        run: npm test
 
       - name: Upload test results
         if: always()

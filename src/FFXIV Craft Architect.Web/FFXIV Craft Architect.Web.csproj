@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>FFXIV_Craft_Architect.Web</RootNamespace>
     <AssemblyName>FFXIV_Craft_Architect.Web</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     
     <!-- Razor runtime compilation disabled for CI/CD compatibility -->
     

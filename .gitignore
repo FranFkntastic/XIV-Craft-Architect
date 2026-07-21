@@ -36,6 +36,9 @@ artifacts/
 TestResults/
 *.trx
 
+# Node test dependencies
+node_modules/
+
 # OS files
 Thumbs.db
 .DS_Store

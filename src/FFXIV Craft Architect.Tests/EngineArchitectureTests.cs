@@ -3223,7 +3223,7 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
-    public void StaticWorkerAssets_DeclareCapabilityProbeWithoutIsolationRequirement()
+    public void StaticWorkerAssets_DeclareManagedRuntimeProbeWithoutEnablingExecution()
     {
         var root = LocateRepositoryRoot();
         var worker = File.ReadAllText(Path.Combine(root, "src", "FFXIV Craft Architect.Web", "wwwroot", "engine-worker.js"));
@@ -3233,14 +3233,49 @@ public sealed class EngineArchitectureTests
         Assert.Contains("self.crossOriginIsolated === true", worker, StringComparison.Ordinal);
         Assert.Contains("typeof SharedArrayBuffer", worker, StringComparison.Ordinal);
         Assert.Contains("executionSupported: false", worker, StringComparison.Ordinal);
+        Assert.Contains("managedRuntimeReady: managedRuntime.ready", worker, StringComparison.Ordinal);
+        Assert.Contains("await import(dotnetUrl.href)", worker, StringComparison.Ordinal);
+        Assert.Contains("getAssemblyExports", worker, StringComparison.Ordinal);
+        Assert.Contains("GetRuntimeProofJson", worker, StringComparison.Ordinal);
         Assert.Contains("resultKind: computationResultKind", worker, StringComparison.Ordinal);
         Assert.Contains("const computationResultKind = \"computation-result\"", worker, StringComparison.Ordinal);
         Assert.Contains("generation: message.generation", worker, StringComparison.Ordinal);
         Assert.Contains("executionId: message.executionId", worker, StringComparison.Ordinal);
         Assert.Contains("new Worker", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("type: \"module\"", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("subscribe(handler)", bootstrap, StringComparison.Ordinal);
         Assert.Contains("ping(generation)", bootstrap, StringComparison.Ordinal);
         Assert.DoesNotContain("requireCrossOriginIsolation", worker, StringComparison.Ordinal);
         Assert.DoesNotContain("finalTransactionHash", worker, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ManagedWorkerRuntimeProof_IsDeterministicAndChallengeBound()
+    {
+        var first = CraftArchitectEngineWorker.ManagedHost.CreateRuntimeProof("browser-canary");
+        var repeated = CraftArchitectEngineWorker.ManagedHost.CreateRuntimeProof("browser-canary");
+        var different = CraftArchitectEngineWorker.ManagedHost.CreateRuntimeProof("different-canary");
+
+        Assert.Equal("2", first.ProtocolVersion);
+        Assert.Equal("FFXIV_Craft_Architect.Web", first.RuntimeAssembly);
+        Assert.Equal(first, repeated);
+        Assert.NotEqual(first.ChallengeHash, different.ChallengeHash);
+        Assert.NotEqual(first.ProofHash, different.ProofHash);
+        Assert.Equal(64, first.ChallengeHash.Length);
+        Assert.Equal(64, first.ProofHash.Length);
+    }
+
+    [Fact]
+    public async Task WorkerClient_RejectsCapabilityWithoutManagedRuntimeProof()
+    {
+        var transport = new FakeWorkerTransport { ManagedRuntimeReady = false };
+        await using var client = new EngineWorkerClient(transport);
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => client.StartAsync());
+
+        Assert.Contains("managed computation-only", failure.Message, StringComparison.Ordinal);
+        Assert.Equal(EngineWorkerLifecycleState.Faulted, client.State);
+        Assert.Equal(1, transport.TerminateCount);
     }
 
     private static EngineRequestEnvelope CreateRequest(JsonElement input)
@@ -4749,7 +4784,10 @@ public sealed class EngineArchitectureTests
             false,
             false,
             false,
-            ExecutionSupported: true);
+            ExecutionSupported: true,
+            ManagedRuntimeReady: true,
+            ManagedRuntimeAssembly: EngineWorkerClient.ManagedRuntimeAssembly,
+            ManagedRuntimeProofHash: new string('a', 64));
     }
 
     private sealed class LateStartupWorkerTransport : IEngineWorkerTransport
@@ -4812,7 +4850,10 @@ public sealed class EngineArchitectureTests
                 false,
                 false,
                 false,
-                ExecutionSupported: true);
+                ExecutionSupported: true,
+                ManagedRuntimeReady: true,
+                ManagedRuntimeAssembly: EngineWorkerClient.ManagedRuntimeAssembly,
+                ManagedRuntimeProofHash: new string('a', 64));
         }
 
         public Task SendAsync(EngineWorkerMessage message, CancellationToken cancellationToken) =>
@@ -4888,6 +4929,8 @@ public sealed class EngineArchitectureTests
 
         public bool ExecutionSupported { get; init; } = true;
 
+        public bool ManagedRuntimeReady { get; init; } = true;
+
         public long CapabilityGenerationOffset { get; init; }
 
         public Action<EngineWorkerMessage>? OnSend { get; set; }
@@ -4919,7 +4962,10 @@ public sealed class EngineArchitectureTests
                 false,
                 false,
                 false,
-                ExecutionSupported);
+                ExecutionSupported,
+                ManagedRuntimeReady: ManagedRuntimeReady,
+                ManagedRuntimeAssembly: EngineWorkerClient.ManagedRuntimeAssembly,
+                ManagedRuntimeProofHash: new string('a', 64));
         }
 
         public async Task SendAsync(EngineWorkerMessage message, CancellationToken cancellationToken)

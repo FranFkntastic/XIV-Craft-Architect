@@ -24,7 +24,10 @@ public sealed record EngineWorkerCapability(
     bool SharedArrayBufferAvailable,
     bool ThreadsAvailable,
     bool ExecutionSupported = false,
-    string ResultKind = "computation-result");
+    string ResultKind = "computation-result",
+    bool ManagedRuntimeReady = false,
+    string? ManagedRuntimeAssembly = null,
+    string? ManagedRuntimeProofHash = null);
 
 public sealed record EngineWorkerMessage(
     string ProtocolVersion,
@@ -73,6 +76,7 @@ public sealed class EngineWorkerClient : IAsyncDisposable
 {
     public const string ProtocolVersion = "2";
     public const string ComputationResultMessageKind = "computation-result";
+    public const string ManagedRuntimeAssembly = "FFXIV_Craft_Architect.Web";
     private static readonly JsonSerializerOptions WireJsonOptions = EngineJsonSerializerOptions.CreateWire();
     private static readonly IReferenceEngineSemanticSnapshotProvider SemanticSnapshots =
         new ReferenceEngineSemanticSnapshotProvider();
@@ -484,9 +488,12 @@ public sealed class EngineWorkerClient : IAsyncDisposable
             if (!capability.DedicatedWorker ||
                 capability.Generation != generation ||
                 !string.Equals(capability.ProtocolVersion, ProtocolVersion, StringComparison.Ordinal) ||
-                !string.Equals(capability.ResultKind, ComputationResultMessageKind, StringComparison.Ordinal))
+                !string.Equals(capability.ResultKind, ComputationResultMessageKind, StringComparison.Ordinal) ||
+                !capability.ManagedRuntimeReady ||
+                !string.Equals(capability.ManagedRuntimeAssembly, ManagedRuntimeAssembly, StringComparison.Ordinal) ||
+                !IsSha256(capability.ManagedRuntimeProofHash))
             {
-                throw new InvalidOperationException("The engine worker did not prove the required computation-only dedicated-worker protocol.");
+                throw new InvalidOperationException("The engine worker did not prove the required managed computation-only dedicated-worker protocol.");
             }
 
             lock (_sync)
@@ -968,6 +975,9 @@ public sealed class EngineWorkerClient : IAsyncDisposable
 
     private static string DescribeQuarantineFailure(string stage, Exception exception) =>
         $"{stage}:{exception.GetType().Name}:{exception.Message}";
+
+    private static bool IsSha256(string? value) =>
+        value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
     private CancellationDispatch BeginCancellationLocked(
         WorkerExecutionIdentity execution,
