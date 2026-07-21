@@ -32,6 +32,14 @@ public sealed class WorkshopHostCraftAppraisalServiceCollectionExtensionsTests
             descriptor.ImplementationType == typeof(CoreRecipeCalculationPlanBuilder) &&
             descriptor.Lifetime == ServiceLifetime.Scoped);
         Assert.Contains(services, descriptor =>
+            descriptor.ServiceType == typeof(IRecipeOperationSnapshotService) &&
+            descriptor.ImplementationType == typeof(RecipeOperationSnapshotService) &&
+            descriptor.Lifetime == ServiceLifetime.Scoped);
+        Assert.Contains(services, descriptor =>
+            descriptor.ServiceType == typeof(ICraftRecipeGraphService) &&
+            descriptor.ImplementationType == typeof(CraftRecipeGraphService) &&
+            descriptor.Lifetime == ServiceLifetime.Scoped);
+        Assert.Contains(services, descriptor =>
             descriptor.ServiceType == typeof(ICraftAppraisalService) &&
             descriptor.ImplementationType == typeof(CraftAppraisalService) &&
             descriptor.Lifetime == ServiceLifetime.Scoped);
@@ -59,10 +67,12 @@ public sealed class WorkshopHostCraftAppraisalServiceCollectionExtensionsTests
 
         var appraisalService = scope.ServiceProvider.GetRequiredService<ICraftAppraisalService>();
         var evidenceService = scope.ServiceProvider.GetRequiredService<ICraftAppraisalPriceEvidenceService>();
+        var recipeGraphService = scope.ServiceProvider.GetRequiredService<ICraftRecipeGraphService>();
         var marketCache = scope.ServiceProvider.GetRequiredService<IMarketCacheService>();
 
         Assert.IsType<CraftAppraisalService>(appraisalService);
         Assert.IsType<CraftAppraisalPriceEvidenceService>(evidenceService);
+        Assert.IsType<CraftRecipeGraphService>(recipeGraphService);
         Assert.IsAssignableFrom<IMarketCacheService>(marketCache);
     }
 

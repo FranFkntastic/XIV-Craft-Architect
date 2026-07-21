@@ -37,6 +37,8 @@ public static class WorkshopHostCraftAppraisalServiceCollectionExtensions
             return new JsonFileMarketCacheService(universalis, cacheRoot);
         });
         services.TryAddScoped<ICoreRecipePlanBuilder, CoreRecipeCalculationPlanBuilder>();
+        services.TryAddScoped<IRecipeOperationSnapshotService, RecipeOperationSnapshotService>();
+        services.TryAddScoped<ICraftRecipeGraphService, CraftRecipeGraphService>();
         services.TryAddScoped<ICraftAppraisalPriceEvidenceService, CraftAppraisalPriceEvidenceService>();
         services.TryAddScoped<ICraftAppraisalService, CraftAppraisalService>();
         return services;

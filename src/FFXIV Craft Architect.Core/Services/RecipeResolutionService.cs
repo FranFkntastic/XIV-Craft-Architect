@@ -14,7 +14,7 @@ public sealed record RecipeResolutionResult(
     int RecipeLevel,
     int RecipeDisplayLevel,
     int RecipeStars,
-    int RecipeUnlockItemId,
+    int? RecipeUnlockItemId,
     int Yield,
     int CraftCount,
     GarlandCraft? StandardRecipe,

@@ -241,6 +241,8 @@ public static class StoredRecipeBasisMapper
             JobId = operation.JobId,
             JobName = operation.JobName,
             RecipeLevel = operation.RecipeLevel,
+            RecipeDisplayLevel = operation.RecipeDisplayLevel,
+            RecipeUnlockItemId = operation.RecipeUnlockItemId,
             Yield = operation.Yield,
             CraftCount = operation.CraftCount,
             Ingredients = operation.Ingredients.Select(ToStoredIngredient).ToList(),
@@ -277,7 +279,9 @@ public static class StoredRecipeBasisMapper
             operation.Ingredients.Select(HydrateIngredient).ToList(),
             operation.ResolutionConfidence,
             operation.RecipeDataSource,
-            operation.HasStructuralDiagnostics);
+            operation.HasStructuralDiagnostics,
+            operation.RecipeDisplayLevel,
+            operation.RecipeUnlockItemId);
     }
 
     private static StoredRecipeOperationIngredient ToStoredIngredient(RecipeOperationIngredient ingredient)
