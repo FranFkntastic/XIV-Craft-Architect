@@ -5,7 +5,8 @@ public sealed class MarketAnalysisExecutionOptions
     public static MarketAnalysisExecutionOptions Synchronous { get; } = new()
     {
         YieldEveryItems = 0,
-        ProgressEveryItems = 0
+        ProgressEveryItems = 0,
+        MaxTravelRouteEvaluations = null
     };
 
     public static MarketAnalysisExecutionOptions Interactive { get; } = new();
@@ -13,6 +14,8 @@ public sealed class MarketAnalysisExecutionOptions
     public int YieldEveryItems { get; init; } = 4;
 
     public int ProgressEveryItems { get; init; } = 1;
+
+    public int? MaxTravelRouteEvaluations { get; init; } = 64;
 
     public bool ShouldYieldAfterItem(int completedItems)
     {

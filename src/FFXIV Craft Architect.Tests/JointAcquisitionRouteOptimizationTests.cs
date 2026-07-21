@@ -286,6 +286,124 @@ public sealed class JointAcquisitionRouteOptimizationTests
     }
 
     [Fact]
+    public async Task ToleranceZeroKeepsOneStopWinnerAboveTwiceTheCheapestCost()
+    {
+        var result = await CreateService().OptimizeAsync(
+            CreateMakeOrBuyPlan(),
+            [
+                Evidence(100, "Finished", 1, ("Aether", "Siren", 1_000L)),
+                Evidence(201, "Ingredient A", 1, ("Aether", "Faerie", 50L)),
+                Evidence(202, "Ingredient B", 1, ("Aether", "Gilgamesh", 50L))
+            ],
+            Config(0),
+            includeSplitPurchases: true,
+            MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.Equal(AcquisitionSource.MarketBuyNq, result.OptimizedPlan.RootItems[0].Source);
+        Assert.Equal(100, result.RouteDecision?.CheapestGilCost);
+        Assert.Equal(1_000, result.RouteDecision?.SelectedGilCost);
+        Assert.Equal(1, result.RouteDecision?.SelectedWorldStops);
+    }
+
+    [Fact]
+    public async Task UntrustedCheapListingCannotCullTrustworthyWinner()
+    {
+        var first = Evidence(201, "Ingredient A", 1,
+            ("Aether", "Faerie", 1L),
+            ("Aether", "Siren", 100L));
+        first.WorldOptions[0].MarketDataQualityBucket = MarketDataQualityBucket.Ancient;
+        var second = Evidence(202, "Ingredient B", 1,
+            ("Aether", "Gilgamesh", 1L),
+            ("Aether", "Siren", 100L));
+        second.WorldOptions[0].MarketDataQualityBucket = MarketDataQualityBucket.Ancient;
+
+        var result = await CreateService().OptimizeAsync(
+            CreateMakeOrBuyPlan(),
+            [Evidence(100, "Finished", 1, ("Aether", "Siren", 10L)), first, second],
+            Config(11),
+            includeSplitPurchases: true,
+            MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.Equal(AcquisitionSource.MarketBuyNq, result.OptimizedPlan.RootItems[0].Source);
+        Assert.Equal(10, result.RouteDecision?.SelectedGilCost);
+    }
+
+    [Fact]
+    public async Task FinitePremiumCeilingRoundsDownToWholeGil()
+    {
+        var result = await CreateService().OptimizeAsync(
+            CreateMakeOrBuyPlan(),
+            [
+                Evidence(100, "Finished", 1, ("Aether", "Siren", 104L)),
+                Evidence(201, "Ingredient A", 1, ("Aether", "Faerie", 50L)),
+                Evidence(202, "Ingredient B", 1, ("Aether", "Gilgamesh", 51L))
+            ],
+            Config(10),
+            includeSplitPurchases: true,
+            MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.Equal(AcquisitionSource.Craft, result.OptimizedPlan.RootItems[0].Source);
+        Assert.Equal(101, result.RouteDecision?.CheapestGilCost);
+        Assert.Equal(101, result.RouteDecision?.SelectedGilCost);
+    }
+
+    [Fact]
+    public async Task DataCenterFirstAllowsMoreWorldsWhenTheyAvoidATransfer()
+    {
+        var children = new[]
+        {
+            Leaf(201, "Ingredient A"),
+            Leaf(202, "Ingredient B"),
+            Leaf(203, "Ingredient C")
+        };
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Finished",
+            Quantity = 2,
+            Source = AcquisitionSource.Craft,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            Children = children.ToList()
+        };
+        foreach (var child in children)
+        {
+            child.Parent = root;
+        }
+
+        var direct = new DetailedShoppingPlan
+        {
+            ItemId = root.ItemId,
+            Name = root.Name,
+            QuantityNeeded = 2,
+            WorldOptions =
+            [
+                World("Aether", "Siren", 1, 10),
+                World("Primal", "Leviathan", 1, 10)
+            ]
+        };
+        var config = Config(0);
+        config.TravelPriority = MarketTravelPriority.DataCenterTransfersFirst;
+
+        var result = await CreateService().OptimizeAsync(
+            new CraftingPlan { RootItems = [root] },
+            [
+                direct,
+                Evidence(201, children[0].Name, 1, ("Aether", "Faerie", 100L)),
+                Evidence(202, children[1].Name, 1, ("Aether", "Gilgamesh", 100L)),
+                Evidence(203, children[2].Name, 1, ("Aether", "Midgardsormr", 100L))
+            ],
+            config,
+            includeSplitPurchases: true,
+            MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.Equal(AcquisitionSource.Craft, result.OptimizedPlan.RootItems[0].Source);
+        Assert.Equal(0, result.RouteDecision?.SelectedDataCenterTransfers);
+        Assert.Equal(3, result.RouteDecision?.SelectedWorldStops);
+    }
+
+    [Fact]
     public async Task LowestCostEndpointNeverExceedsLegacyEvaluatorAcrossDeterministicCorpus()
     {
         var random = new Random(0xCA2026);
@@ -375,6 +493,115 @@ public sealed class JointAcquisitionRouteOptimizationTests
         Assert.Equal(first.RouteDecision?.SelectedGilCost, second.RouteDecision?.SelectedGilCost);
         Assert.Equal(first.OptimizedPlan.RootItems.Select(root => root.Source),
             second.OptimizedPlan.RootItems.Select(root => root.Source));
+    }
+
+    [Fact]
+    public async Task TravelWorkLimitReturnsACompleteMarkedIncumbent()
+    {
+        var roots = Enumerable.Range(0, 8)
+            .Select(index =>
+            {
+                var child = Leaf(4_000 + index, $"Ingredient {index}");
+                var root = new PlanNode
+                {
+                    ItemId = 3_000 + index,
+                    Name = $"Finished {index}",
+                    Quantity = 1,
+                    Source = AcquisitionSource.Craft,
+                    SourceReason = AcquisitionSourceReason.SystemDefault,
+                    CanCraft = true,
+                    CanBuyFromMarket = true,
+                    Children = [child]
+                };
+                child.Parent = root;
+                return root;
+            })
+            .ToList();
+        var evidence = roots
+            .SelectMany((root, index) => new[]
+            {
+                Evidence(root.ItemId, root.Name, 1,
+                    ("Aether", "Siren", 100L + index),
+                    ("Primal", "Leviathan", 120L + index)),
+                Evidence(root.Children[0].ItemId, root.Children[0].Name, 1,
+                    ("Crystal", "Balmung", 40L + index),
+                    ("Dynamis", "Seraph", 60L + index))
+            })
+            .ToList();
+
+        var result = await CreateService().OptimizeAsync(
+            new CraftingPlan { RootItems = roots },
+            evidence,
+            Config(0),
+            includeSplitPurchases: true,
+            new MarketAnalysisExecutionOptions
+            {
+                YieldEveryItems = 0,
+                ProgressEveryItems = 0,
+                MaxTravelRouteEvaluations = 64
+            });
+
+        var decision = Assert.IsType<MarketRouteDecision>(result.RouteDecision);
+        Assert.True(result.FeasiblePlanCount > 0);
+        Assert.True(result.SearchWasTruncated);
+        Assert.True(decision.TravelSearchWasTruncated);
+        Assert.Equal(64, decision.TravelRoutesEvaluated);
+        Assert.True(decision.SelectedGilCost > 0);
+        Assert.NotEmpty(result.ShoppingPlans);
+    }
+
+    [Fact]
+    public async Task NonselectedInnerRouteTruncationMarksTheJointResultApproximate()
+    {
+        var children = Enumerable.Range(0, 8)
+            .Select(index =>
+            {
+                var child = Leaf(5_000 + index, $"Routed ingredient {index}");
+                child.SourceReason = AcquisitionSourceReason.UserSelected;
+                return child;
+            })
+            .ToList();
+        var root = new PlanNode
+        {
+            ItemId = 4_999,
+            Name = "Direct winner",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            Children = children
+        };
+        foreach (var child in children)
+        {
+            child.Parent = root;
+        }
+
+        var evidence = children
+            .Select((child, itemIndex) => Evidence(
+                child.ItemId,
+                child.Name,
+                1,
+                Enumerable.Range(0, 8)
+                    .Select(worldIndex => (
+                        $"DC {worldIndex / 2}",
+                        $"World {worldIndex}",
+                        100L + ((itemIndex * 17 + worldIndex * 11) % 73)))
+                    .ToArray()))
+            .ToList();
+        evidence.Add(Evidence(root.ItemId, root.Name, 1, ("Aether", "Siren", 500L)));
+
+        var result = await CreateService().OptimizeAsync(
+            new CraftingPlan { RootItems = [root] },
+            evidence,
+            Config(0),
+            includeSplitPurchases: false,
+            MarketAnalysisExecutionOptions.Synchronous);
+
+        var decision = Assert.IsType<MarketRouteDecision>(result.RouteDecision);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, result.OptimizedPlan.RootItems[0].Source);
+        Assert.True(result.SearchWasTruncated);
+        Assert.True(decision.RouteSearchWasTruncated);
     }
 
     private static JointAcquisitionRouteOptimizationService CreateService() =>

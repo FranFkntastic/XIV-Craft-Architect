@@ -128,6 +128,72 @@ internal sealed class MarketAnalysisBenchmark
 
         SampleMemory(memorySamples, "AfterMarketAnalysis");
 
+        BenchmarkProcurementResult? procurement = null;
+        if (options.RouteTolerance.HasValue)
+        {
+            var routeStage = Stopwatch.StartNew();
+            using var routeCancellation = new CancellationTokenSource();
+            if (options.RouteCancellationAfter.HasValue)
+            {
+                routeCancellation.CancelAfter(options.RouteCancellationAfter.Value);
+            }
+
+            try
+            {
+                var marketShopping = new MarketShoppingService(cache);
+                var routeResult = await new JointAcquisitionRouteOptimizationService(marketShopping).OptimizeAsync(
+                    plan,
+                    executionResult.ShoppingPlans,
+                    new MarketAnalysisConfig
+                    {
+                        TravelTolerance = options.RouteTolerance.Value,
+                        TravelPriority = MarketTravelPriority.DataCenterTransfersFirst,
+                        EnableSplitWorld = options.IncludeSplitPurchases
+                    },
+                    options.IncludeSplitPurchases,
+                    new MarketAnalysisExecutionOptions
+                    {
+                        YieldEveryItems = 0,
+                        ProgressEveryItems = 0,
+                        MaxTravelRouteEvaluations = options.RouteMaxTravelRoutes
+                    },
+                    progress,
+                    routeCancellation.Token);
+                routeStage.Stop();
+                procurement = new BenchmarkProcurementResult(
+                    "Completed",
+                    routeStage.Elapsed,
+                    routeResult.FrontierPlanCount,
+                    routeResult.FeasiblePlanCount,
+                    routeResult.RouteDecision?.AcquisitionSearchWasTruncated ?? routeResult.SearchWasTruncated,
+                    routeResult.RouteDecision?.RouteSearchWasTruncated ?? false,
+                    routeResult.RouteDecision?.TravelSearchWasTruncated ?? false,
+                    routeResult.RouteDecision?.TravelRoutesEvaluated ?? 0,
+                    routeResult.RouteDecision?.SelectedGilCost,
+                    routeResult.RouteDecision?.SelectedWorldStops,
+                    routeResult.RouteDecision?.SelectedDataCenterTransfers);
+            }
+            catch (OperationCanceledException) when (routeCancellation.IsCancellationRequested)
+            {
+                routeStage.Stop();
+                procurement = new BenchmarkProcurementResult(
+                    "Cancelled",
+                    routeStage.Elapsed,
+                    0,
+                    0,
+                    false,
+                    false,
+                    false,
+                    0,
+                    null,
+                    null,
+                    null);
+            }
+
+            stages.Add(BenchmarkStageResult.FromStopwatch("ProcurementRouteOptimization", routeStage));
+            SampleMemory(memorySamples, "AfterProcurementRouteOptimization");
+        }
+
         var shape = BenchmarkShapeMetrics.FromExecutionResult(executionResult);
         var serializationStage = Stopwatch.StartNew();
         var payload = BenchmarkPayloadMetrics.FromExecutionResult(executionResult);
@@ -193,6 +259,7 @@ internal sealed class MarketAnalysisBenchmark
             Shape: shape,
             Payload: payload,
             Retention: BenchmarkRetentionMetrics.FromExecutionResult(executionResult),
+            Procurement: procurement,
             Fetched: executionResult.Evidence.FetchedCount,
             Plans: plansForSummary.Count,
             Recommended: recommended,
@@ -251,6 +318,19 @@ internal sealed class MarketAnalysisBenchmark
         Console.WriteLine($"Fetched: {run.Fetched}");
         Console.WriteLine($"Plans: {run.Plans}; Recommended: {run.Recommended}; Errors: {run.Errors}");
         Console.WriteLine($"Best value total: {run.BestValueTotal:N0}g");
+        if (run.Procurement != null)
+        {
+            Console.WriteLine(
+                $"Procurement: {run.Procurement.Status} in {FormatDuration(run.Procurement.Elapsed)}; " +
+                $"frontier={run.Procurement.FrontierPlanCount:N0}; feasible={run.Procurement.FeasiblePlanCount:N0}; " +
+                $"acquisitionTruncated={run.Procurement.AcquisitionSearchWasTruncated}; " +
+                $"routeTruncated={run.Procurement.RouteSearchWasTruncated}; " +
+                $"travelTruncated={run.Procurement.TravelSearchWasTruncated}; " +
+                $"travelRoutes={run.Procurement.TravelRoutesEvaluated:N0}; " +
+                $"gil={run.Procurement.SelectedGilCost?.ToString("N0") ?? "n/a"}; " +
+                $"worlds={run.Procurement.SelectedWorldStops?.ToString() ?? "n/a"}; " +
+                $"transfers={run.Procurement.SelectedDataCenterTransfers?.ToString() ?? "n/a"}");
+        }
 
         foreach (var item in run.TopRecommendedItems)
         {
@@ -344,6 +424,10 @@ internal sealed record ProbeOptions(
     string? JsonOutPath,
     TimeSpan? MaxAge,
     TimeSpan StaleAge,
+    int? RouteTolerance,
+    bool IncludeSplitPurchases,
+    TimeSpan? RouteCancellationAfter,
+    int? RouteMaxTravelRoutes,
     bool ShowHelp,
     bool HasError)
 {
@@ -361,6 +445,10 @@ internal sealed record ProbeOptions(
                 null,
                 null,
                 TimeSpan.FromDays(2),
+                null,
+                false,
+                null,
+                null,
                 true,
                 args.Length == 0);
         }
@@ -374,6 +462,9 @@ internal sealed record ProbeOptions(
             : BenchmarkCacheMode.Cold;
         var maxAge = TryGetMinutes(args, "--max-age-minutes");
         var staleAge = TryGetMinutes(args, "--stale-age-minutes") ?? TimeSpan.FromDays(2);
+        var routeTolerance = TryGetInteger(args, "--route-tolerance");
+        var routeCancellationSeconds = TryGetInteger(args, "--route-cancel-seconds");
+        var routeMaxTravelRoutes = TryGetInteger(args, "--route-max-travel-routes");
 
         return new ProbeOptions(
             planPath,
@@ -385,6 +476,12 @@ internal sealed record ProbeOptions(
             GetOption(args, "--json-out"),
             maxAge,
             staleAge,
+            routeTolerance.HasValue ? Math.Clamp(routeTolerance.Value, 0, 11) : null,
+            args.Contains("--route-splits", StringComparer.OrdinalIgnoreCase),
+            routeCancellationSeconds.HasValue
+                ? TimeSpan.FromSeconds(Math.Max(0, routeCancellationSeconds.Value))
+                : null,
+            routeMaxTravelRoutes.HasValue ? Math.Max(0, routeMaxTravelRoutes.Value) : null,
             false,
             false);
     }
@@ -404,6 +501,10 @@ internal sealed record ProbeOptions(
         Console.WriteLine("  --json-out <path>               Write benchmark result JSON.");
         Console.WriteLine("  --max-age-minutes <minutes>     Cache freshness threshold.");
         Console.WriteLine("  --stale-age-minutes <minutes>   Age assigned to stale seeded fixture entries.");
+        Console.WriteLine("  --route-tolerance <0-11>        Run joint procurement routing after analysis.");
+        Console.WriteLine("  --route-splits                  Include split-purchase candidates while routing.");
+        Console.WriteLine("  --route-cancel-seconds <secs>   Request route cancellation after this interval.");
+        Console.WriteLine("  --route-max-travel-routes <n>   Cap full travel-aware route evaluations.");
     }
 
     private static string? GetOption(string[] args, string name)
@@ -425,6 +526,12 @@ internal sealed record ProbeOptions(
         return int.TryParse(value, out var minutes)
             ? TimeSpan.FromMinutes(minutes)
             : null;
+    }
+
+    private static int? TryGetInteger(string[] args, string name)
+    {
+        var value = GetOption(args, name);
+        return int.TryParse(value, out var parsed) ? parsed : null;
     }
 }
 
@@ -785,6 +892,7 @@ internal sealed record BenchmarkRunResult(
     BenchmarkShapeMetrics Shape,
     BenchmarkPayloadMetrics Payload,
     BenchmarkRetentionMetrics Retention,
+    BenchmarkProcurementResult? Procurement,
     int Fetched,
     int Plans,
     int Recommended,
@@ -792,6 +900,19 @@ internal sealed record BenchmarkRunResult(
     decimal BestValueTotal,
     IReadOnlyList<BenchmarkRecommendedItem> TopRecommendedItems,
     IReadOnlyList<BenchmarkErrorItem> ErrorItems);
+
+internal sealed record BenchmarkProcurementResult(
+    string Status,
+    TimeSpan Elapsed,
+    int FrontierPlanCount,
+    int FeasiblePlanCount,
+    bool AcquisitionSearchWasTruncated,
+    bool RouteSearchWasTruncated,
+    bool TravelSearchWasTruncated,
+    int TravelRoutesEvaluated,
+    long? SelectedGilCost,
+    int? SelectedWorldStops,
+    int? SelectedDataCenterTransfers);
 
 internal sealed record BenchmarkStageResult(string Name, TimeSpan Elapsed)
 {
