@@ -690,8 +690,7 @@ public sealed class WebMarketAnalysisEngineSettlementTests
         Assert.Throws<InvalidOperationException>(() =>
             fixture.Registry.Register(fixture.Registration with
             {
-                EngineRequest = replacementRequest,
-                OwnsOperationGateLease = false
+                EngineRequest = replacementRequest
             }));
         Assert.True(fixture.Gate.IsHeld);
         Assert.Equal(0, fixture.Gate.ReleaseAttempts);
@@ -699,8 +698,7 @@ public sealed class WebMarketAnalysisEngineSettlementTests
 
         fixture.Registry.Register(fixture.Registration with
         {
-            EngineRequest = replacementRequest,
-            OwnsOperationGateLease = false
+            EngineRequest = replacementRequest
         });
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -724,7 +722,7 @@ public sealed class WebMarketAnalysisEngineSettlementTests
         var registration = fixture.Registration with
         {
             EngineRequest = request,
-            OperationGate = new WebEngineOperationGate(() => gate.IsHeld, gate.Release)
+            OperationGateLease = OperationGateLease.Create(() => gate.IsHeld, gate.Release)
         };
 
         Assert.Throws<NotSupportedException>(() => fixture.Registry.Register(registration));
@@ -733,8 +731,127 @@ public sealed class WebMarketAnalysisEngineSettlementTests
         Assert.Equal(1, gate.ReleaseAttempts);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Registry_ValidationFailureReleasesIncomingOwnedLease(bool emptyTransactionId)
+    {
+        var fixture = new SettlementFixture();
+        var gate = new RecordingGate();
+        var registration = fixture.Registration with
+        {
+            EngineRequest = fixture.Request with
+            {
+                TransactionId = emptyTransactionId ? Guid.Empty : Guid.NewGuid()
+            },
+            ExpectedSemanticHashes = emptyTransactionId
+                ? fixture.Registration.ExpectedSemanticHashes
+                : new WebMarketAnalysisExpectedSemanticHashes(string.Empty),
+            OperationGateLease = OperationGateLease.Create(() => gate.IsHeld, gate.Release)
+        };
+
+        Assert.Throws<ArgumentException>(() => fixture.Registry.Register(registration));
+
+        Assert.False(gate.IsHeld);
+        Assert.Equal(1, gate.ReleaseAttempts);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Registry_ValidationFailureDoesNotReleaseLeaseAlreadyOwnedByAdmission(bool emptyTransactionId)
+    {
+        var fixture = new SettlementFixture();
+        var registration = fixture.Registration with
+        {
+            EngineRequest = fixture.Request with
+            {
+                TransactionId = emptyTransactionId ? Guid.Empty : Guid.NewGuid()
+            },
+            ExpectedSemanticHashes = emptyTransactionId
+                ? fixture.Registration.ExpectedSemanticHashes
+                : new WebMarketAnalysisExpectedSemanticHashes(string.Empty),
+            OperationGateLease = fixture.GateLease.Wrap(() => fixture.Gate.IsHeld, fixture.Gate.Release)
+        };
+
+        Assert.Throws<ArgumentException>(() => fixture.Registry.Register(registration));
+
+        Assert.True(fixture.Gate.IsHeld);
+        Assert.Equal(0, fixture.Gate.ReleaseAttempts);
+    }
+
     [Fact]
-    public void Registry_ConflictAliasingExistingGateDoesNotReleaseExistingOwnerLease()
+    public void Registry_RejectedCapacityAdmissionRetriesFalseGateReleaseToSuccess()
+    {
+        var fixture = new SettlementFixture(registryCapacity: 1);
+        var gate = new RecordingGate { FailuresRemaining = 1 };
+        var registration = fixture.Registration with
+        {
+            EngineRequest = fixture.Request with { TransactionId = Guid.NewGuid() },
+            OperationGateLease = OperationGateLease.Create(() => gate.IsHeld, gate.Release)
+        };
+
+        Assert.Throws<InvalidOperationException>(() => fixture.Registry.Register(registration));
+
+        Assert.False(gate.IsHeld);
+        Assert.Equal(2, gate.ReleaseAttempts);
+    }
+
+    [Fact]
+    public void Registry_PersistentRejectedGateFailureIsRetainedWithRetryEvidence()
+    {
+        var fixture = new SettlementFixture(registryCapacity: 1);
+        var gate = new RecordingGate { FailuresRemaining = int.MaxValue };
+        var registration = fixture.Registration with
+        {
+            EngineRequest = fixture.Request with { TransactionId = Guid.NewGuid() },
+            OperationGateLease = OperationGateLease.Create(() => gate.IsHeld, gate.Release)
+        };
+
+        var failure = Assert.Throws<WebEngineRegistryAdmissionException>(() =>
+            fixture.Registry.Register(registration));
+
+        Assert.True(gate.IsHeld);
+        Assert.Equal(3, gate.ReleaseAttempts);
+        Assert.True(failure.CleanupEvidence.GateMayBeHeld);
+        Assert.False(failure.CleanupEvidence.Released);
+        Assert.Equal(3, failure.CleanupEvidence.Attempts);
+        Assert.NotEqual(Guid.Empty, failure.CleanupEvidence.CleanupId);
+
+        gate.FailuresRemaining = 0;
+        var retried = fixture.Registry.RetryRejectedRegistrationGateCleanup(
+            failure.CleanupEvidence.CleanupId);
+
+        Assert.True(retried.Released);
+        Assert.False(retried.GateMayBeHeld);
+        Assert.Equal(4, retried.Attempts);
+        Assert.False(gate.IsHeld);
+    }
+
+    [Fact]
+    public void Registry_RejectedGateCleanupRetriesExceptionToSuccess()
+    {
+        var fixture = new SettlementFixture();
+        using var malformedInput = JsonDocument.Parse("{\"value\":1e1000}");
+        var gate = new RecordingGate { ExceptionsRemaining = 1 };
+        var registration = fixture.Registration with
+        {
+            EngineRequest = fixture.Request with
+            {
+                TransactionId = Guid.NewGuid(),
+                Input = malformedInput.RootElement.Clone()
+            },
+            OperationGateLease = OperationGateLease.Create(() => gate.IsHeld, gate.Release)
+        };
+
+        Assert.Throws<NotSupportedException>(() => fixture.Registry.Register(registration));
+
+        Assert.False(gate.IsHeld);
+        Assert.Equal(2, gate.ReleaseAttempts);
+    }
+
+    [Fact]
+    public void Registry_ConflictUsingLeaseCallbackWrapperDoesNotReleaseAdmittedOwner()
     {
         var fixture = new SettlementFixture();
         var conflicting = fixture.Registration with
@@ -743,13 +860,61 @@ public sealed class WebMarketAnalysisEngineSettlementTests
             {
                 Input = JsonSerializer.SerializeToElement(new { conflicting = true })
             },
-            OwnsOperationGateLease = false
+            OperationGateLease = fixture.GateLease.Wrap(() => fixture.Gate.IsHeld, fixture.Gate.Release)
         };
 
         Assert.Throws<InvalidOperationException>(() => fixture.Registry.Register(conflicting));
 
         Assert.True(fixture.Gate.IsHeld);
         Assert.Equal(0, fixture.Gate.ReleaseAttempts);
+    }
+
+    [Fact]
+    public void Registry_DifferentLeasesNeverAliasEvenWhenCallbacksAreEqual()
+    {
+        var fixture = new SettlementFixture();
+        var incomingLease = OperationGateLease.Create(() => fixture.Gate.IsHeld, fixture.Gate.Release);
+        var conflicting = fixture.Registration with
+        {
+            EngineRequest = fixture.Request with
+            {
+                Input = JsonSerializer.SerializeToElement(new { conflicting = true })
+            },
+            OperationGateLease = incomingLease
+        };
+
+        Assert.NotSame(fixture.GateLease.LeaseId, incomingLease.LeaseId);
+        Assert.Throws<InvalidOperationException>(() => fixture.Registry.Register(conflicting));
+        Assert.False(fixture.Gate.IsHeld);
+        Assert.Equal(1, fixture.Gate.ReleaseAttempts);
+    }
+
+    [Fact]
+    public async Task Registry_RetriedRejectedCleanupDoesNotReleaseLeaseAdmittedAfterRejection()
+    {
+        var fixture = new SettlementFixture(registryCapacity: 1);
+        var gate = new RecordingGate { FailuresRemaining = int.MaxValue };
+        var lease = OperationGateLease.Create(() => gate.IsHeld, gate.Release);
+        var rejected = fixture.Registration with
+        {
+            EngineRequest = fixture.Request with { TransactionId = Guid.NewGuid() },
+            OperationGateLease = lease
+        };
+        var failure = Assert.Throws<WebEngineRegistryAdmissionException>(() =>
+            fixture.Registry.Register(rejected));
+        Assert.Equal(3, gate.ReleaseAttempts);
+
+        Assert.Equal(EngineTerminalStatus.Succeeded, (await fixture.CreateHost().ExecuteAsync(fixture.Request)).Status);
+        fixture.Registry.Register(rejected);
+        gate.FailuresRemaining = 0;
+
+        var retried = fixture.Registry.RetryRejectedRegistrationGateCleanup(
+            failure.CleanupEvidence.CleanupId);
+
+        Assert.True(retried.AdmittedOwnerObserved);
+        Assert.False(retried.Released);
+        Assert.True(gate.IsHeld);
+        Assert.Equal(3, gate.ReleaseAttempts);
     }
 
     [Fact]
@@ -916,6 +1081,7 @@ public sealed class WebMarketAnalysisEngineSettlementTests
                 recipeLayer.Object,
                 NullLogger<MarketAnalysisPublicationService>.Instance);
             Gate = new RecordingGate();
+            GateLease = OperationGateLease.Create(() => Gate.IsHeld, Gate.Release);
             Registry = new WebEngineTransactionContextRegistry(registryCapacity);
             var publicationRequest = new MarketAnalysisPublicationRequest(
                 plan,
@@ -952,8 +1118,7 @@ public sealed class WebMarketAnalysisEngineSettlementTests
                     planSemanticHash,
                     sessionSemanticHash,
                     rootIntentHash),
-                new WebEngineOperationGate(() => Gate.IsHeld, Gate.Release),
-                OwnsOperationGateLease: true);
+                GateLease);
             Registry.Register(Registration);
             Settlement = enableTestExecution
                 ? CreateSettlementForTesting(
@@ -984,6 +1149,7 @@ public sealed class WebMarketAnalysisEngineSettlementTests
         public RecordingStore Store { get; }
         public MarketAnalysisPublicationService PublicationService { get; }
         public RecordingGate Gate { get; }
+        public OperationGateLease GateLease { get; }
         public WebEngineTransactionContextRegistry Registry { get; }
         public WebMarketAnalysisSettlementRegistration Registration { get; }
         public WebMarketAnalysisEngineTransactionSettlement Settlement { get; }
@@ -1137,11 +1303,17 @@ public sealed class WebMarketAnalysisEngineSettlementTests
     {
         public bool IsHeld { get; private set; } = true;
         public int FailuresRemaining { get; set; }
+        public int ExceptionsRemaining { get; set; }
         public int ReleaseAttempts { get; private set; }
 
         public bool Release()
         {
             ReleaseAttempts++;
+            if (ExceptionsRemaining > 0)
+            {
+                ExceptionsRemaining--;
+                throw new IOException("Gate release acknowledgement failed.");
+            }
             if (FailuresRemaining > 0)
             {
                 FailuresRemaining--;

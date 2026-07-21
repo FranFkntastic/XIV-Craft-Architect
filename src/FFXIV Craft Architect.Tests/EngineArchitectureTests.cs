@@ -2602,7 +2602,7 @@ public sealed class EngineArchitectureTests
     {
         var terminationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var transport = new FakeWorkerTransport { TerminateGate = terminationGate };
-        await using var client = new EngineWorkerClient(transport);
+        var client = new EngineWorkerClient(transport);
         await client.StartAsync();
         var request = CreateRequest(JsonSerializer.SerializeToElement(new { demand = "fault-restart" }));
         var execution = client.ExecuteAsync(request);
@@ -2625,6 +2625,7 @@ public sealed class EngineArchitectureTests
         Assert.Equal(2, transport.StartCount);
         Assert.Equal(1, transport.MaxActiveWorkers);
         Assert.Equal(EngineWorkerLifecycleState.Ready, client.State);
+        await client.DisposeAsync();
     }
 
     [Fact]
@@ -2876,6 +2877,49 @@ public sealed class EngineArchitectureTests
     public async Task WorkerClient_ForeverHangingStartupIsBounded()
     {
         var transport = new ForeverHangingWorkerTransport(HangingWorkerOperation.Startup);
+        var client = new EngineWorkerClient(
+            transport,
+            transportTimeout: TimeSpan.FromMilliseconds(25));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.StartAsync())
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(EngineWorkerLifecycleState.Quarantined, client.State);
+        Assert.Equal(1, transport.StartCount);
+        Assert.Equal(1, transport.TerminateCount);
+        Assert.True(client.QuarantineEvidence!.StartupOutcomePending);
+        await Assert.ThrowsAsync<EngineWorkerQuarantineException>(() => client.DisposeAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task WorkerClient_LateStartupCompletionIsQuarantinedAndTerminatedBeforeReplacement()
+    {
+        var transport = new LateStartupWorkerTransport();
+        await using var client = new EngineWorkerClient(
+            transport,
+            transportTimeout: TimeSpan.FromMilliseconds(25));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.StartAsync())
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(1, transport.TerminateCount);
+        Assert.Equal(0, transport.ActiveWorkers);
+
+        transport.CompleteStartup();
+        await transport.LateWorkerTerminated.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(2, transport.TerminateCount);
+        Assert.Equal(0, transport.ActiveWorkers);
+        Assert.Equal(EngineWorkerLifecycleState.Faulted, client.State);
+
+        await client.StartAsync();
+        Assert.Equal(2, transport.StartCount);
+        Assert.Equal(1, transport.ActiveWorkers);
+    }
+
+    [Fact]
+    public async Task WorkerClient_UnknownLateStartupProhibitsReplacementWithinCallerDeadline()
+    {
+        var transport = new LateStartupWorkerTransport();
         await using var client = new EngineWorkerClient(
             transport,
             transportTimeout: TimeSpan.FromMilliseconds(25));
@@ -2883,9 +2927,137 @@ public sealed class EngineArchitectureTests
         await Assert.ThrowsAsync<TimeoutException>(() => client.StartAsync())
             .WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.Equal(EngineWorkerLifecycleState.Faulted, client.State);
+        await Assert.ThrowsAnyAsync<Exception>(() => client.StartAsync())
+            .WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(1, transport.StartCount);
-        Assert.Equal(1, transport.TerminateCount);
+
+        transport.CompleteStartup();
+        await transport.LateWorkerTerminated.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(0, transport.ActiveWorkers);
+    }
+
+    [Fact]
+    public async Task WorkerClient_DisposalStaysBoundedWhileLateStartupRemainsQuarantined()
+    {
+        var transport = new LateStartupWorkerTransport();
+        var client = new EngineWorkerClient(
+            transport,
+            transportTimeout: TimeSpan.FromMilliseconds(25));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.StartAsync())
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAsync<EngineWorkerQuarantineException>(() => client.DisposeAsync().AsTask())
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(EngineWorkerLifecycleState.Quarantined, client.State);
+        Assert.Equal(0, transport.DisposeCount);
+
+        transport.CompleteStartup();
+        await transport.LateWorkerTerminated.WaitAsync(TimeSpan.FromSeconds(2));
+        await transport.TransportDisposed.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(0, transport.ActiveWorkers);
+        Assert.Equal(3, transport.TerminateCount);
+        Assert.Equal(1, transport.DisposeCount);
+        Assert.Equal(EngineWorkerLifecycleState.Stopped, client.State);
+        Assert.True(client.QuarantineEvidence!.IsResolved);
+        await client.DisposeAsync();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => client.StartAsync());
+    }
+
+    [Fact]
+    public async Task WorkerClient_LateWorkerTerminationFailureRetainsQuarantineAndProhibitsReplacementUntilRetry()
+    {
+        var transport = new LateStartupWorkerTransport { FailActiveWorkerTermination = true };
+        var client = new EngineWorkerClient(
+            transport,
+            transportTimeout: TimeSpan.FromMilliseconds(25));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.StartAsync());
+        transport.CompleteStartup();
+        await transport.ActiveTerminationAttempted.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var unresolved = await client.RetryQuarantinedWorkerCleanupAsync();
+
+        Assert.False(unresolved.IsResolved);
+        Assert.True(unresolved.TerminationPending);
+        Assert.Contains(unresolved.Failures, item => item.StartsWith("termination:", StringComparison.Ordinal));
+        await Assert.ThrowsAsync<EngineWorkerQuarantineException>(() => client.StartAsync());
+        Assert.Equal(1, transport.StartCount);
+
+        transport.FailActiveWorkerTermination = false;
+        var resolved = await client.RetryQuarantinedWorkerCleanupAsync();
+
+        Assert.True(resolved.IsResolved);
+        Assert.False(resolved.TerminationPending);
+        await client.StartAsync();
+        Assert.Equal(2, transport.StartCount);
+        await client.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task WorkerClient_LateWorkerDisposalFailureRetainsQuarantineUntilRetrySucceeds()
+    {
+        var transport = new LateStartupWorkerTransport { FailTransportDisposal = true };
+        var client = new EngineWorkerClient(
+            transport,
+            transportTimeout: TimeSpan.FromMilliseconds(25));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.StartAsync());
+        await Assert.ThrowsAsync<EngineWorkerQuarantineException>(() => client.DisposeAsync().AsTask());
+        transport.CompleteStartup();
+        await transport.DisposalAttempted.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var unresolved = await client.RetryQuarantinedWorkerCleanupAsync();
+
+        Assert.False(unresolved.IsResolved);
+        Assert.False(unresolved.TerminationPending);
+        Assert.True(unresolved.TransportDisposalPending);
+        Assert.Contains(unresolved.Failures, item => item.StartsWith("transport-disposal:", StringComparison.Ordinal));
+
+        transport.FailTransportDisposal = false;
+        var resolved = await client.RetryQuarantinedWorkerCleanupAsync();
+
+        Assert.True(resolved.IsResolved);
+        Assert.Equal(EngineWorkerLifecycleState.Stopped, client.State);
+        await client.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task WorkerClient_LateWorkerTerminationAndDisposalHangsRemainQuarantinedAndRetrySameOperations()
+    {
+        var transport = new LateStartupWorkerTransport
+        {
+            HangActiveWorkerTermination = true,
+            HangTransportDisposal = true
+        };
+        var client = new EngineWorkerClient(
+            transport,
+            transportTimeout: TimeSpan.FromMilliseconds(25));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.StartAsync());
+        await Assert.ThrowsAsync<EngineWorkerQuarantineException>(() => client.DisposeAsync().AsTask());
+        transport.CompleteStartup();
+        await transport.ActiveTerminationAttempted.WaitAsync(TimeSpan.FromSeconds(2));
+        await transport.DisposalAttempted.WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.Delay(75);
+
+        var terminationAttempts = transport.TerminateCount;
+        var disposalAttempts = transport.DisposeCount;
+        var unresolved = await client.RetryQuarantinedWorkerCleanupAsync();
+
+        Assert.False(unresolved.IsResolved);
+        Assert.True(unresolved.TerminationPending);
+        Assert.True(unresolved.TransportDisposalPending);
+        Assert.Equal(terminationAttempts, transport.TerminateCount);
+        Assert.Equal(disposalAttempts, transport.DisposeCount);
+
+        transport.ReleaseCleanupHangs();
+        var resolved = await client.RetryQuarantinedWorkerCleanupAsync();
+
+        Assert.True(resolved.IsResolved);
+        Assert.Equal(0, transport.ActiveWorkers);
+        Assert.Equal(EngineWorkerLifecycleState.Stopped, client.State);
     }
 
     [Fact]
@@ -2928,25 +3100,26 @@ public sealed class EngineArchitectureTests
     public async Task WorkerClient_UnknownForeverHangingTerminationBlocksReplacementStartup()
     {
         var transport = new ForeverHangingWorkerTransport(HangingWorkerOperation.Termination);
-        await using var client = new EngineWorkerClient(
+        var client = new EngineWorkerClient(
             transport,
             transportTimeout: TimeSpan.FromMilliseconds(25));
         await client.StartAsync();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => client.ForceTerminateAndRestartAsync())
+        await Assert.ThrowsAsync<EngineWorkerQuarantineException>(() => client.ForceTerminateAndRestartAsync())
             .WaitAsync(TimeSpan.FromSeconds(2));
-        await Assert.ThrowsAnyAsync<Exception>(() => client.StartAsync())
+        await Assert.ThrowsAsync<EngineWorkerQuarantineException>(() => client.StartAsync())
             .WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Equal(1, transport.StartCount);
-        Assert.Equal(EngineWorkerLifecycleState.Faulted, client.State);
+        Assert.Equal(EngineWorkerLifecycleState.Quarantined, client.State);
+        Assert.True(client.QuarantineEvidence!.TerminationPending);
     }
 
     [Fact]
     public async Task WorkerClient_ForeverHangingRestartBarrierDoesNotWedgeStartupCaller()
     {
         var transport = new ForeverHangingWorkerTransport(HangingWorkerOperation.Termination);
-        await using var client = new EngineWorkerClient(
+        var client = new EngineWorkerClient(
             transport,
             transportTimeout: TimeSpan.FromMilliseconds(25));
         await client.StartAsync();
@@ -2956,7 +3129,7 @@ public sealed class EngineArchitectureTests
 
         await Assert.ThrowsAnyAsync<Exception>(() => startup)
             .WaitAsync(TimeSpan.FromSeconds(2));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => restart);
+        await Assert.ThrowsAsync<EngineWorkerQuarantineException>(() => restart);
         Assert.Equal(1, transport.StartCount);
     }
 
@@ -2969,10 +3142,12 @@ public sealed class EngineArchitectureTests
             transportTimeout: TimeSpan.FromMilliseconds(25));
         await client.StartAsync();
 
-        await Assert.ThrowsAsync<AggregateException>(() => client.DisposeAsync().AsTask())
+        var failure = await Assert.ThrowsAsync<EngineWorkerQuarantineException>(() => client.DisposeAsync().AsTask())
             .WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.Equal(EngineWorkerLifecycleState.Stopped, client.State);
+        Assert.Equal(EngineWorkerLifecycleState.Quarantined, client.State);
+        Assert.True(failure.Evidence.TransportDisposalPending);
+        Assert.Contains(failure.Evidence.Failures, item => item.StartsWith("transport-disposal:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -3015,7 +3190,7 @@ public sealed class EngineArchitectureTests
     public async Task WorkerClient_TimeoutClearsOwnershipWhenTerminationThrows(bool cancellationTimeout)
     {
         var transport = new FakeWorkerTransport { ThrowOnTerminate = true };
-        await using var client = new EngineWorkerClient(
+        var client = new EngineWorkerClient(
             transport,
             cancellationTimeout: TimeSpan.FromMilliseconds(20),
             responseTimeout: TimeSpan.FromMilliseconds(20));
@@ -3028,8 +3203,9 @@ public sealed class EngineArchitectureTests
         }
 
         await Assert.ThrowsAsync<AggregateException>(() => execution);
-        Assert.Equal(EngineWorkerLifecycleState.Faulted, client.State);
+        Assert.Equal(EngineWorkerLifecycleState.Quarantined, client.State);
         Assert.Equal(1, transport.TerminateCount);
+        Assert.True(client.QuarantineEvidence!.TerminationPending);
     }
 
     [Fact]
@@ -4574,6 +4750,117 @@ public sealed class EngineArchitectureTests
             false,
             false,
             ExecutionSupported: true);
+    }
+
+    private sealed class LateStartupWorkerTransport : IEngineWorkerTransport
+    {
+        private readonly TaskCompletionSource _startupGate =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _lateWorkerTerminated =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _transportDisposed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _activeTerminationAttempted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _disposalAttempted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _terminationHang =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _disposalHang =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _activeWorkers;
+
+        public event EventHandler<EngineWorkerMessage>? MessageReceived
+        {
+            add { }
+            remove { }
+        }
+
+        public int StartCount { get; private set; }
+
+        public int TerminateCount { get; private set; }
+
+        public int DisposeCount { get; private set; }
+
+        public int ActiveWorkers => Volatile.Read(ref _activeWorkers);
+
+        public Task LateWorkerTerminated => _lateWorkerTerminated.Task;
+
+        public Task TransportDisposed => _transportDisposed.Task;
+
+        public Task ActiveTerminationAttempted => _activeTerminationAttempted.Task;
+
+        public Task DisposalAttempted => _disposalAttempted.Task;
+
+        public bool FailActiveWorkerTermination { get; set; }
+
+        public bool FailTransportDisposal { get; set; }
+
+        public bool HangActiveWorkerTermination { get; set; }
+
+        public bool HangTransportDisposal { get; set; }
+
+        public async Task<EngineWorkerCapability> StartAsync(long generation, CancellationToken cancellationToken)
+        {
+            StartCount++;
+            await _startupGate.Task;
+            Interlocked.Increment(ref _activeWorkers);
+            return new EngineWorkerCapability(
+                EngineWorkerClient.ProtocolVersion,
+                generation,
+                true,
+                false,
+                false,
+                false,
+                ExecutionSupported: true);
+        }
+
+        public Task SendAsync(EngineWorkerMessage message, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public async Task TerminateAsync(CancellationToken cancellationToken)
+        {
+            TerminateCount++;
+            if (ActiveWorkers > 0)
+            {
+                _activeTerminationAttempted.TrySetResult();
+                if (HangActiveWorkerTermination)
+                {
+                    await _terminationHang.Task;
+                }
+                if (FailActiveWorkerTermination)
+                {
+                    throw new IOException("Active worker termination failed.");
+                }
+            }
+            if (Interlocked.Exchange(ref _activeWorkers, 0) > 0)
+            {
+                _lateWorkerTerminated.TrySetResult();
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            _disposalAttempted.TrySetResult();
+            if (HangTransportDisposal)
+            {
+                await _disposalHang.Task;
+            }
+            if (FailTransportDisposal)
+            {
+                throw new IOException("Worker transport disposal failed.");
+            }
+            _transportDisposed.TrySetResult();
+        }
+
+        public void CompleteStartup() => _startupGate.TrySetResult();
+
+        public void ReleaseCleanupHangs()
+        {
+            _terminationHang.TrySetResult();
+            _disposalHang.TrySetResult();
+        }
     }
 
     private sealed class FakeWorkerTransport : IEngineWorkerTransport

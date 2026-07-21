@@ -12,9 +12,70 @@ public sealed record WebMarketAnalysisExpectedSemanticHashes(
     string EngineAnalysisResultHash,
     string? PublishedAppStateAnalysisHash = null);
 
-public sealed record WebEngineOperationGate(
-    Func<bool> IsHeld,
-    Func<bool> Release);
+public sealed class OperationGateLeaseId
+{
+    internal OperationGateLeaseId()
+    {
+    }
+}
+
+public sealed class OperationGateLease
+{
+    private readonly Func<bool> _isHeld;
+    private readonly Func<bool> _release;
+
+    private OperationGateLease(
+        OperationGateLeaseId leaseId,
+        Func<bool> isHeld,
+        Func<bool> release)
+    {
+        LeaseId = leaseId;
+        _isHeld = isHeld;
+        _release = release;
+    }
+
+    public OperationGateLeaseId LeaseId { get; }
+
+    public static OperationGateLease Create(Func<bool> isHeld, Func<bool> release)
+    {
+        ArgumentNullException.ThrowIfNull(isHeld);
+        ArgumentNullException.ThrowIfNull(release);
+        return new OperationGateLease(new OperationGateLeaseId(), isHeld, release);
+    }
+
+    public OperationGateLease Wrap(Func<bool> isHeld, Func<bool> release)
+    {
+        ArgumentNullException.ThrowIfNull(isHeld);
+        ArgumentNullException.ThrowIfNull(release);
+        return new OperationGateLease(LeaseId, isHeld, release);
+    }
+
+    internal bool IsHeld() => _isHeld();
+
+    internal bool Release() => _release();
+}
+
+public sealed record WebEngineRejectedGateCleanupEvidence(
+    Guid CleanupId,
+    Guid TransactionId,
+    int Attempts,
+    bool Released,
+    bool GateMayBeHeld,
+    bool AdmittedOwnerObserved,
+    IReadOnlyList<string> Failures);
+
+public sealed class WebEngineRegistryAdmissionException : InvalidOperationException
+{
+    public WebEngineRegistryAdmissionException(
+        Exception admissionFailure,
+        WebEngineRejectedGateCleanupEvidence cleanupEvidence)
+        : base("Web engine registry admission failed and the rejected gate lease remains retained for cleanup retry.", admissionFailure)
+    {
+        CleanupEvidence = cleanupEvidence;
+    }
+
+    public WebEngineRejectedGateCleanupEvidence CleanupEvidence { get; }
+}
 
 public sealed record WebMarketAnalysisSettlementRegistration(
     EngineRequestEnvelope EngineRequest,
@@ -23,8 +84,7 @@ public sealed record WebMarketAnalysisSettlementRegistration(
     MarketAnalysisExecutionResult AnalysisResult,
     WebMarketAnalysisExpectedSemanticHashes ExpectedSemanticHashes,
     WebMarketAnalysisAppStateBinding AppStateBinding,
-    WebEngineOperationGate OperationGate,
-    bool OwnsOperationGateLease);
+    OperationGateLease OperationGateLease);
 
 public sealed record WebMarketAnalysisAppStateBinding(
     long PlanSessionVersion,
@@ -44,8 +104,10 @@ public sealed record WebMarketAnalysisAppStateBinding(
 
 public sealed class WebEngineTransactionContextRegistry
 {
+    private const int RejectedGateCleanupAttempts = 3;
     private readonly object _sync = new();
     private readonly Dictionary<Guid, RegisteredTransaction> _transactions = [];
+    private readonly Dictionary<Guid, RejectedGateCleanup> _rejectedGateCleanups = [];
     private readonly int _capacity;
     private long _accessSequence;
 
@@ -62,26 +124,25 @@ public sealed class WebEngineTransactionContextRegistry
     public void Register(WebMarketAnalysisSettlementRegistration registration)
     {
         ArgumentNullException.ThrowIfNull(registration);
-        if (registration.EngineRequest.TransactionId == Guid.Empty)
-        {
-            throw new ArgumentException("The transaction id is required.", nameof(registration));
-        }
-        if (string.IsNullOrWhiteSpace(registration.ExpectedSemanticHashes.EngineAnalysisResultHash))
-        {
-            throw new ArgumentException("The expected analysis semantic hash is required.", nameof(registration));
-        }
-        ArgumentNullException.ThrowIfNull(registration.OperationGate);
-        ArgumentNullException.ThrowIfNull(registration.OperationGate.IsHeld);
-        ArgumentNullException.ThrowIfNull(registration.OperationGate.Release);
-
-        WebMarketAnalysisSettlementRegistration snapshot;
-        string requestHash;
+        var incomingLease = registration.OperationGateLease;
         try
         {
+            ArgumentNullException.ThrowIfNull(registration.EngineRequest);
+            ArgumentNullException.ThrowIfNull(registration.ExpectedSemanticHashes);
+            ArgumentNullException.ThrowIfNull(incomingLease);
+            if (registration.EngineRequest.TransactionId == Guid.Empty)
+            {
+                throw new ArgumentException("The transaction id is required.", nameof(registration));
+            }
+            if (string.IsNullOrWhiteSpace(registration.ExpectedSemanticHashes.EngineAnalysisResultHash))
+            {
+                throw new ArgumentException("The expected analysis semantic hash is required.", nameof(registration));
+            }
+
             var persistence = MarketAnalysisPublicationService.SnapshotPersistence(
                 registration.PersistenceSnapshot);
             var publication = persistence.ToPublicationRequest(registration.PublicationRequest.Plan);
-            snapshot = registration with
+            var snapshot = registration with
             {
                 PublicationRequest = publication,
                 PersistenceSnapshot = persistence,
@@ -91,7 +152,7 @@ public sealed class WebEngineTransactionContextRegistry
                     ShoppingPlans = publication.ShoppingPlans
                 }
             };
-            requestHash = EngineCanonicalHash.Compute(
+            var requestHash = EngineCanonicalHash.Compute(
                 snapshot.EngineRequest,
                 EngineJsonSerializerOptions.CreateWire());
             var transaction = new RegisteredTransaction(snapshot, requestHash);
@@ -133,14 +194,34 @@ public sealed class WebEngineTransactionContextRegistry
                 _transactions.Add(snapshot.EngineRequest.TransactionId, transaction);
             }
         }
-        catch
+        catch (Exception admissionFailure)
         {
-            if (registration.OwnsOperationGateLease)
+            if (incomingLease is not null)
             {
-                TryReleaseRejectedRegistrationGate(registration.OperationGate);
+                var cleanup = RetainAndTryCleanupRejectedRegistrationGate(
+                    registration.EngineRequest?.TransactionId ?? Guid.Empty,
+                    incomingLease);
+                if (!cleanup.Released && !cleanup.AdmittedOwnerObserved)
+                {
+                    throw new WebEngineRegistryAdmissionException(admissionFailure, cleanup);
+                }
             }
             throw;
         }
+    }
+
+    public WebEngineRejectedGateCleanupEvidence RetryRejectedRegistrationGateCleanup(Guid cleanupId)
+    {
+        RejectedGateCleanup cleanup;
+        lock (_sync)
+        {
+            if (!_rejectedGateCleanups.TryGetValue(cleanupId, out cleanup!))
+            {
+                throw new InvalidOperationException("The rejected gate cleanup is no longer pending.");
+            }
+        }
+
+        return TryCleanupRejectedRegistrationGate(cleanup);
     }
 
     internal EngineInvocationCleanupOwnership? TryRegisterInvocationCleanupOwnership(
@@ -240,22 +321,102 @@ public sealed class WebEngineTransactionContextRegistry
             StringComparison.Ordinal) &&
         Equals(left.ExpectedSemanticHashes, right.ExpectedSemanticHashes) &&
         Equals(left.AppStateBinding, right.AppStateBinding) &&
-        Equals(left.OperationGate, right.OperationGate);
+        ReferenceEquals(left.OperationGateLease.LeaseId, right.OperationGateLease.LeaseId);
 
-    private static void TryReleaseRejectedRegistrationGate(WebEngineOperationGate gate)
+    private WebEngineRejectedGateCleanupEvidence RetainAndTryCleanupRejectedRegistrationGate(
+        Guid transactionId,
+        OperationGateLease lease)
     {
-        try
+        RejectedGateCleanup cleanup;
+        lock (_sync)
         {
-            if (gate.IsHeld())
-            {
-                _ = gate.Release();
-            }
+            cleanup = new RejectedGateCleanup(
+                Guid.NewGuid(),
+                transactionId,
+                lease);
+            _rejectedGateCleanups.Add(cleanup.CleanupId, cleanup);
         }
-        catch
+
+        return TryCleanupRejectedRegistrationGate(cleanup);
+    }
+
+    private WebEngineRejectedGateCleanupEvidence TryCleanupRejectedRegistrationGate(RejectedGateCleanup cleanup)
+    {
+        lock (cleanup)
         {
-            // Registration still fails closed; gate callbacks cannot replace the canonicalization error.
+            var failures = new List<string>();
+            for (var attempt = 0; attempt < RejectedGateCleanupAttempts; attempt++)
+            {
+                lock (_sync)
+                {
+                    if (!_rejectedGateCleanups.TryGetValue(cleanup.CleanupId, out var pending) ||
+                        !ReferenceEquals(pending, cleanup))
+                    {
+                        return CreateRejectedGateCleanupEvidence(cleanup);
+                    }
+                    cleanup.Attempts++;
+                    if (IsLeaseAdmittedLocked(cleanup.Lease.LeaseId))
+                    {
+                        cleanup.Failures.AddRange(failures);
+                        cleanup.Failures.Add("lease-owned-by-admitted-registration");
+                        cleanup.AdmittedOwnerObserved = true;
+                        _rejectedGateCleanups.Remove(cleanup.CleanupId);
+                        return CreateRejectedGateCleanupEvidence(cleanup);
+                    }
+
+                    try
+                    {
+                        if (!cleanup.Lease.IsHeld())
+                        {
+                            cleanup.Failures.AddRange(failures);
+                            return CompleteRejectedGateCleanupLocked(cleanup);
+                        }
+
+                        if (!cleanup.Lease.Release())
+                        {
+                            failures.Add("release-not-acknowledged");
+                        }
+                        if (!cleanup.Lease.IsHeld())
+                        {
+                            cleanup.Failures.AddRange(failures);
+                            return CompleteRejectedGateCleanupLocked(cleanup);
+                        }
+                        failures.Add("gate-still-held");
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Add($"{ex.GetType().Name}:{ex.Message}");
+                    }
+                }
+            }
+
+            cleanup.Failures.AddRange(failures);
+            return CreateRejectedGateCleanupEvidence(cleanup);
         }
     }
+
+    private bool IsLeaseAdmittedLocked(OperationGateLeaseId leaseId) =>
+        _transactions.Values.Any(transaction =>
+            ReferenceEquals(transaction.Registration.OperationGateLease.LeaseId, leaseId));
+
+    private WebEngineRejectedGateCleanupEvidence CompleteRejectedGateCleanupLocked(
+        RejectedGateCleanup cleanup)
+    {
+        cleanup.Released = true;
+        _rejectedGateCleanups.Remove(cleanup.CleanupId);
+        return CreateRejectedGateCleanupEvidence(cleanup);
+    }
+
+    private static WebEngineRejectedGateCleanupEvidence CreateRejectedGateCleanupEvidence(
+        RejectedGateCleanup cleanup) =>
+        new(
+            cleanup.CleanupId,
+            cleanup.TransactionId,
+            cleanup.Attempts,
+            cleanup.Released,
+            !cleanup.Released,
+            cleanup.AdmittedOwnerObserved,
+            cleanup.Failures.ToArray());
 
     internal sealed class RegisteredTransaction
     {
@@ -301,6 +462,20 @@ public sealed class WebEngineTransactionContextRegistry
         WebMarketAnalysisAppStateBinding Before,
         PreparedMarketAnalysisPublication Prepared,
         string PublicationPayloadHash);
+
+    private sealed class RejectedGateCleanup(
+        Guid cleanupId,
+        Guid transactionId,
+        OperationGateLease lease)
+    {
+        public Guid CleanupId { get; } = cleanupId;
+        public Guid TransactionId { get; } = transactionId;
+        public OperationGateLease Lease { get; } = lease;
+        public int Attempts { get; set; }
+        public bool Released { get; set; }
+        public bool AdmittedOwnerObserved { get; set; }
+        public List<string> Failures { get; } = [];
+    }
 }
 
 public sealed class WebMarketAnalysisEngineTransactionSettlement :
@@ -632,7 +807,7 @@ public sealed class WebMarketAnalysisEngineTransactionSettlement :
     private EngineSettlementEvidence ReleaseGate(
         WebEngineTransactionContextRegistry.RegisteredTransaction transaction)
     {
-        var gate = transaction.Registration.OperationGate;
+        var gate = transaction.Registration.OperationGateLease;
         if (!gate.IsHeld())
         {
             return new EngineSettlementEvidence(EngineSettlementOutcome.Applied, "operation-gate-already-released");
@@ -646,7 +821,7 @@ public sealed class WebMarketAnalysisEngineTransactionSettlement :
 
     private static EngineSettlementEvidence ObserveGate(
         WebEngineTransactionContextRegistry.RegisteredTransaction transaction) =>
-        transaction.Registration.OperationGate.IsHeld()
+        transaction.Registration.OperationGateLease.IsHeld()
             ? new EngineSettlementEvidence(EngineSettlementOutcome.NotApplied, "operation-gate-still-held")
             : new EngineSettlementEvidence(EngineSettlementOutcome.Applied, "operation-gate-release-observed");
 
