@@ -3232,7 +3232,7 @@ public sealed class EngineArchitectureTests
         Assert.Contains("dedicatedWorker: true", worker, StringComparison.Ordinal);
         Assert.Contains("self.crossOriginIsolated === true", worker, StringComparison.Ordinal);
         Assert.Contains("typeof SharedArrayBuffer", worker, StringComparison.Ordinal);
-        Assert.Contains("executionSupported: false", worker, StringComparison.Ordinal);
+        Assert.Contains("executionSupported: managedRuntime.ready", worker, StringComparison.Ordinal);
         Assert.Contains("managedRuntimeReady: managedRuntime.ready", worker, StringComparison.Ordinal);
         Assert.Contains("await import(dotnetUrl.href)", worker, StringComparison.Ordinal);
         Assert.Contains("getAssemblyExports", worker, StringComparison.Ordinal);
@@ -3263,6 +3263,100 @@ public sealed class EngineArchitectureTests
         Assert.NotEqual(first.ProofHash, different.ProofHash);
         Assert.Equal(64, first.ChallengeHash.Length);
         Assert.Equal(64, first.ProofHash.Length);
+    }
+
+    [Fact]
+    public async Task ManagedWorkerHost_ExecutesBoundedProcurementAndPreservesTruncationEvidence()
+    {
+        var executeJson = CraftArchitectEngineWorker.ManagedHost.GetAcceptanceExecuteMessageJsonCore(7);
+        var execute = JsonSerializer.Deserialize<EngineWorkerMessage>(
+            executeJson,
+            EngineJsonSerializerOptions.CreateWire());
+
+        var resultJson = await CraftArchitectEngineWorker.ManagedHost.ExecuteMessageJsonCore(executeJson);
+        var message = JsonSerializer.Deserialize<EngineWorkerMessage>(
+            resultJson,
+            EngineJsonSerializerOptions.CreateWire());
+        var computation = Assert.IsType<EngineComputationResult>(message!.Payload!.Value.Deserialize<EngineComputationResult>(
+            EngineJsonSerializerOptions.CreateWire()));
+        var snapshot = new ReferenceEngineSemanticSnapshotProvider()
+            .CaptureTransportedResult(computation.Result!.Value);
+        var decision = Assert.IsType<EngineRouteDecisionSnapshot>(snapshot.ProcurementRoute!.Decision);
+
+        Assert.Equal(7, message.Generation);
+        Assert.Equal(execute!.ExecutionId, message.ExecutionId);
+        Assert.Equal(execute.TransactionId, message.TransactionId);
+        Assert.Equal(EngineComputationStatus.Completed, computation.Status);
+        Assert.True(snapshot.ProcurementRoute.IsComplete);
+        Assert.True(decision.RouteSearchWasTruncated);
+        Assert.False(decision.AcquisitionSearchWasTruncated);
+        Assert.False(decision.TravelSearchWasTruncated);
+        Assert.Equal(0, decision.TravelRoutesEvaluated);
+    }
+
+    [Fact]
+    public async Task ManagedWorkerHost_MissingEmbeddedEvidenceFailsWithoutCacheOrNetworkFallback()
+    {
+        var executeJson = CraftArchitectEngineWorker.ManagedHost.GetAcceptanceExecuteMessageJsonCore(
+            8,
+            includeEvidence: false);
+
+        var resultJson = await CraftArchitectEngineWorker.ManagedHost.ExecuteMessageJsonCore(executeJson);
+        var message = JsonSerializer.Deserialize<EngineWorkerMessage>(
+            resultJson,
+            EngineJsonSerializerOptions.CreateWire());
+        var computation = Assert.IsType<EngineComputationResult>(message!.Payload!.Value.Deserialize<EngineComputationResult>(
+            EngineJsonSerializerOptions.CreateWire()));
+
+        Assert.Equal(EngineComputationStatus.Failed, computation.Status);
+        Assert.Equal("unhandled", computation.Failure?.Code);
+        Assert.Contains("complete reusable market evidence", computation.Failure?.Message, StringComparison.Ordinal);
+        Assert.Null(computation.Result);
+    }
+
+    [Fact]
+    public void RouteSemanticSnapshot_HashesEveryStableOptimizerTruncationBoundary()
+    {
+        var decision = new MarketRouteDecision(
+            TravelTolerance: 0,
+            MaximumPremiumRate: null,
+            CheapestGilCost: 100,
+            SelectedGilCost: 120,
+            SelectedEvidencePenalty: 0,
+            CheapestWorldStops: 2,
+            SelectedWorldStops: 1,
+            CheapestDataCenterTransfers: 1,
+            SelectedDataCenterTransfers: 0,
+            StartsFromHomeDataCenter: false,
+            HomeDataCenter: null)
+        {
+            AcquisitionSearchWasTruncated = true,
+            RouteSearchWasTruncated = true,
+            TravelSearchWasTruncated = true,
+            TravelRoutesEvaluated = 64
+        };
+        var provider = new ReferenceEngineSemanticSnapshotProvider();
+        var snapshot = provider.CaptureRoute(new ProcurementRouteExecutionResult(
+            [], [], [], [], [], decision, IsComplete: true));
+        var exactSnapshot = snapshot with
+        {
+            Decision = snapshot.Decision! with
+            {
+                AcquisitionSearchWasTruncated = false,
+                RouteSearchWasTruncated = false,
+                TravelSearchWasTruncated = false,
+                TravelRoutesEvaluated = 0
+            }
+        };
+
+        Assert.Equal("3", snapshot.SchemaVersion);
+        Assert.True(snapshot.Decision!.AcquisitionSearchWasTruncated);
+        Assert.True(snapshot.Decision.RouteSearchWasTruncated);
+        Assert.True(snapshot.Decision.TravelSearchWasTruncated);
+        Assert.Equal(64, snapshot.Decision.TravelRoutesEvaluated);
+        Assert.NotEqual(
+            EngineSemanticSnapshotHash.Route(snapshot),
+            EngineSemanticSnapshotHash.Route(exactSnapshot));
     }
 
     [Fact]
@@ -4787,7 +4881,8 @@ public sealed class EngineArchitectureTests
             ExecutionSupported: true,
             ManagedRuntimeReady: true,
             ManagedRuntimeAssembly: EngineWorkerClient.ManagedRuntimeAssembly,
-            ManagedRuntimeProofHash: new string('a', 64));
+            ManagedRuntimeProofHash: new string('a', 64),
+            WorkerInstanceId: "11111111-1111-1111-1111-111111111111");
     }
 
     private sealed class LateStartupWorkerTransport : IEngineWorkerTransport
@@ -4853,7 +4948,8 @@ public sealed class EngineArchitectureTests
                 ExecutionSupported: true,
                 ManagedRuntimeReady: true,
                 ManagedRuntimeAssembly: EngineWorkerClient.ManagedRuntimeAssembly,
-                ManagedRuntimeProofHash: new string('a', 64));
+                ManagedRuntimeProofHash: new string('a', 64),
+                WorkerInstanceId: "11111111-1111-1111-1111-111111111111");
         }
 
         public Task SendAsync(EngineWorkerMessage message, CancellationToken cancellationToken) =>
@@ -4965,7 +5061,8 @@ public sealed class EngineArchitectureTests
                 ExecutionSupported,
                 ManagedRuntimeReady: ManagedRuntimeReady,
                 ManagedRuntimeAssembly: EngineWorkerClient.ManagedRuntimeAssembly,
-                ManagedRuntimeProofHash: new string('a', 64));
+                ManagedRuntimeProofHash: new string('a', 64),
+                WorkerInstanceId: "11111111-1111-1111-1111-111111111111");
         }
 
         public async Task SendAsync(EngineWorkerMessage message, CancellationToken cancellationToken)

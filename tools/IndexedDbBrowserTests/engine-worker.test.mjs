@@ -59,8 +59,8 @@ after(async () => {
 });
 
 for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]) {
-  test(`${name}: managed engine worker boots without enabling execution`, {
-    timeout: 60_000
+  test(`${name}: managed worker executes bounded procurement and remains killable`, {
+    timeout: 90_000
   }, async () => {
     const browser = await browserType.launch({ headless: true });
     try {
@@ -72,108 +72,132 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       page.on('pageerror', error => errors.push(error.message));
       await page.goto(origin, { waitUntil: 'load' });
 
-      const result = await page.evaluate(async () => {
-        async function runProbe(generation) {
-          const worker = new Worker('/engine-worker.js', {
+      const evidence = await page.evaluate(async () => {
+        function waitFor(worker, predicate, timeoutMs, description) {
+          return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              worker.removeEventListener('message', listener);
+              reject(new Error(`${description} timed out.`));
+            }, timeoutMs);
+            const listener = event => {
+              if (!predicate(event.data)) return;
+              clearTimeout(timeout);
+              worker.removeEventListener('message', listener);
+              resolve(event.data);
+            };
+            worker.addEventListener('message', listener);
+          });
+        }
+
+        async function startWorker(generation) {
+          const worker = new Worker('/engine-worker.js?acceptance=true', {
             type: 'module',
             name: `engine-worker-test-${generation}`
           });
-          try {
-            const messages = [];
-            worker.addEventListener('message', event => messages.push(event.data));
-            worker.postMessage({
-              protocolVersion: '2', kind: 'ping', generation,
-              executionId: null, transactionId: null, payload: null
-            });
-            const capability = await new Promise((resolve, reject) => {
-              const timeout = setTimeout(() => reject(new Error('Worker capability timed out.')), 45_000);
-              worker.addEventListener('message', event => {
-                if (event.data?.kind === 'capability') {
-                  clearTimeout(timeout);
-                  resolve(event.data);
-                }
-              });
-            });
-            const executionId = crypto.randomUUID();
-            const transactionId = crypto.randomUUID();
-            async function reject(kind) {
-              const response = new Promise((resolve, rejectPromise) => {
-                const timeout = setTimeout(() => rejectPromise(new Error(`Worker ${kind} rejection timed out.`)), 5_000);
-                const listener = event => {
-                  if (event.data?.kind === 'protocol-error' &&
-                      event.data.executionId === executionId &&
-                      event.data.transactionId === transactionId) {
-                    clearTimeout(timeout);
-                    worker.removeEventListener('message', listener);
-                    resolve(event.data);
-                  }
-                };
-                worker.addEventListener('message', listener);
-              });
-              worker.postMessage({
-                protocolVersion: '2', kind, generation,
-                executionId, transactionId, payload: {}
-              });
-              return response;
-            }
-            return {
-              capability,
-              executeRejection: await reject('execute'),
-              cancelRejection: await reject('cancel'),
-              executionId,
-              transactionId,
-              messageCount: messages.length
-            };
-          } finally {
-            worker.terminate();
-          }
+          const capabilityPromise = waitFor(
+            worker,
+            message => message?.kind === 'capability' && message.generation === generation,
+            45_000,
+            'Worker capability');
+          worker.postMessage({
+            protocolVersion: '2', kind: 'ping', generation,
+            executionId: null, transactionId: null, payload: null
+          });
+          return { worker, capability: await capabilityPromise };
         }
-        async function runConcurrentPingProbe() {
-          const worker = new Worker('/engine-worker.js', { type: 'module' });
-          try {
-            const capabilities = [];
-            worker.addEventListener('message', event => {
-              if (event.data?.kind === 'capability') capabilities.push(event.data.generation);
-            });
-            for (const generation of [10, 11]) {
-              worker.postMessage({
-                protocolVersion: '2', kind: 'ping', generation,
-                executionId: null, transactionId: null, payload: null
-              });
-            }
-            const timeoutAt = performance.now() + 45_000;
-            while (capabilities.length === 0 && performance.now() < timeoutAt) {
-              await new Promise(resolve => setTimeout(resolve, 10));
-            }
-            await new Promise(resolve => setTimeout(resolve, 100));
-            return capabilities;
-          } finally {
-            worker.terminate();
-          }
-        }
+
+        const active = await startWorker(1);
+        const progress = [];
+        active.worker.addEventListener('message', event => {
+          if (event.data?.kind === 'progress') progress.push(event.data);
+        });
+        let heartbeatCount = 0;
+        let heartbeatMaxGapMs = 0;
+        let previousHeartbeat = performance.now();
+        const heartbeat = setInterval(() => {
+          const now = performance.now();
+          heartbeatMaxGapMs = Math.max(heartbeatMaxGapMs, now - previousHeartbeat);
+          previousHeartbeat = now;
+          heartbeatCount++;
+        }, 10);
+        const resultPromise = waitFor(
+          active.worker,
+          message => message?.kind === 'computation-result' || message?.kind === 'protocol-error',
+          45_000,
+          'Managed procurement result');
+        active.worker.postMessage({
+          protocolVersion: '2', kind: 'acceptance-execute', generation: 1,
+          executionId: null, transactionId: null, payload: null
+        });
+        const result = await resultPromise;
+        clearInterval(heartbeat);
+        active.worker.terminate();
+
+        const hanging = await startWorker(10);
+        const hangStarted = waitFor(
+          hanging.worker,
+          message => message?.kind === 'acceptance-hang-started',
+          10_000,
+          'Managed hang start');
+        hanging.worker.postMessage({
+          protocolVersion: '2', kind: 'acceptance-hang', generation: 10,
+          executionId: null, transactionId: null, payload: null
+        });
+        await hangStarted;
+        let terminationHeartbeat = 0;
+        const terminationTimer = setInterval(() => terminationHeartbeat++, 10);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        const terminationStarted = performance.now();
+        hanging.worker.terminate();
+        const terminationCallMs = performance.now() - terminationStarted;
+        const replacement = await startWorker(11);
+        clearInterval(terminationTimer);
+        replacement.worker.terminate();
+
         return {
-          first: await runProbe(1),
-          replacement: await runProbe(2),
-          concurrentPingGenerations: await runConcurrentPingProbe()
+          capability: active.capability,
+          result,
+          progress,
+          heartbeatCount,
+          heartbeatMaxGapMs,
+          hangingCapability: hanging.capability,
+          replacementCapability: replacement.capability,
+          terminationHeartbeat,
+          terminationCallMs
         };
       });
 
-      for (const [generation, probe] of [[1, result.first], [2, result.replacement]]) {
-        assert.equal(probe.capability.generation, generation);
-        assert.equal(probe.capability.payload.dedicatedWorker, true);
-        assert.equal(probe.capability.payload.managedRuntimeReady, true);
-        assert.equal(probe.capability.payload.executionSupported, false);
-        assert.equal(probe.capability.payload.managedRuntimeAssembly, 'FFXIV_Craft_Architect.Web');
-        assert.match(probe.capability.payload.managedRuntimeProofHash, /^[0-9a-f]{64}$/i);
-        for (const rejection of [probe.executeRejection, probe.cancelRejection]) {
-          assert.equal(rejection.generation, generation);
-          assert.equal(rejection.executionId, probe.executionId);
-          assert.equal(rejection.transactionId, probe.transactionId);
-          assert.equal(rejection.payload.code, 'engine-execution-not-enabled');
-        }
-        assert.ok(probe.messageCount >= 3);
-      }
-      assert.deepEqual(result.concurrentPingGenerations, [11]);
+      assert.equal(evidence.capability.payload.dedicatedWorker, true);
+      assert.equal(evidence.capability.payload.managedRuntimeReady, true);
+      assert.equal(evidence.capability.payload.executionSupported, true);
+      assert.equal(evidence.capability.payload.managedRuntimeAssembly, 'FFXIV_Craft_Architect.Web');
+      assert.match(evidence.capability.payload.managedRuntimeProofHash, /^[0-9a-f]{64}$/i);
+      assert.match(evidence.capability.payload.workerInstanceId, /^[0-9a-f-]{36}$/i);
+
+      assert.equal(evidence.result.kind, 'computation-result');
+      assert.equal(evidence.result.payload.status, 1, 'managed computation must complete');
+      assert.equal(evidence.result.payload.finalPhase, 7, 'procurement must reach reconciliation');
+      assert.match(evidence.result.payload.computationHash, /^[0-9a-f]{64}$/i);
+      assert.equal(evidence.result.payload.computationEvidence['phase:Reconciling'], 'complete');
+      const decision = evidence.result.payload.result.procurementRoute.decision;
+      assert.equal(evidence.result.payload.result.procurementRoute.isComplete, true);
+      assert.equal(decision.acquisitionSearchWasTruncated, false);
+      assert.equal(decision.routeSearchWasTruncated, true);
+      assert.equal(decision.travelSearchWasTruncated, false);
+      assert.equal(decision.travelRoutesEvaluated, 0);
+
+      assert.ok(evidence.progress.length >= 5, `received ${evidence.progress.length} progress messages`);
+      assert.ok(evidence.progress.some(message =>
+        message.payload.phase === 7 && /Optimizing procurement route/.test(message.payload.message)));
+      assert.ok(evidence.heartbeatCount >= 2, `heartbeat advanced ${evidence.heartbeatCount} times`);
+      assert.ok(evidence.heartbeatMaxGapMs < 1000, `heartbeat gap was ${evidence.heartbeatMaxGapMs}ms`);
+
+      assert.notEqual(
+        evidence.hangingCapability.payload.workerInstanceId,
+        evidence.replacementCapability.payload.workerInstanceId);
+      assert.equal(evidence.replacementCapability.payload.executionSupported, true);
+      assert.ok(evidence.terminationHeartbeat >= 2, 'page heartbeat must advance while Worker is hung');
+      assert.ok(evidence.terminationCallMs < 100, `Worker.terminate took ${evidence.terminationCallMs}ms`);
       assert.deepEqual(errors, []);
     } finally {
       await browser.close();

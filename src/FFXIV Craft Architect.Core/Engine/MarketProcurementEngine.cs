@@ -101,7 +101,15 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             {
                 phase = EnginePhase.Reconciling;
                 Report(progress, generation, executionId, request, phase, 5, 12, "Reconciling procurement evidence.");
-                route = await _procurementRoute.AnalyzeAsync(input.ProcurementRoute, ct: cancellationToken);
+                var routeProgress = progress is null
+                    ? null
+                    : new SynchronousProgress<string>(message =>
+                        Report(progress, generation, executionId, request, phase, 5, 12, message));
+                route = await _procurementRoute.AnalyzeAsync(
+                    input.ProcurementRoute,
+                    routeProgress,
+                    cancellationToken,
+                    MarketAnalysisExecutionOptions.Interactive);
                 computationEvidence["phase:Reconciling"] = "complete";
             }
 
@@ -253,5 +261,10 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
         int total,
         string message) =>
         progress?.Report(new EngineProgress(request.TransactionId, generation, executionId, phase, completed, total, message));
+
+    private sealed class SynchronousProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
+    }
 
 }

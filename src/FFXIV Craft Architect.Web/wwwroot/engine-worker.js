@@ -1,6 +1,8 @@
 const protocolVersion = "2";
 const computationResultKind = "computation-result";
 const runtimeProofChallenge = "craft-architect-engine-worker-v1";
+const workerInstanceId = crypto.randomUUID();
+const acceptanceMode = new URL(import.meta.url).searchParams.get("acceptance") === "true";
 let workerGeneration = null;
 
 self.onmessage = async event => {
@@ -30,34 +32,65 @@ self.onmessage = async event => {
                 crossOriginIsolated: self.crossOriginIsolated === true,
                 sharedArrayBufferAvailable: typeof SharedArrayBuffer !== "undefined",
                 threadsAvailable: false,
-                executionSupported: false,
+                executionSupported: managedRuntime.ready,
                 resultKind: computationResultKind,
                 managedRuntimeReady: managedRuntime.ready,
                 managedRuntimeAssembly: managedRuntime.proof?.runtimeAssembly ?? null,
-                managedRuntimeProofHash: managedRuntime.proof?.proofHash ?? null
+                managedRuntimeProofHash: managedRuntime.proof?.proofHash ?? null,
+                workerInstanceId
             }
         });
         return;
     }
 
-    if (message.kind === "execute" || message.kind === "cancel") {
-        if (message.protocolVersion !== protocolVersion ||
-            message.generation !== workerGeneration ||
-            typeof message.executionId !== "string" || message.executionId.length === 0 ||
-            typeof message.transactionId !== "string" || message.transactionId.length === 0) {
+    if (message.kind === "acceptance-execute" && acceptanceMode) {
+        const managedRuntime = await managedRuntimePromise;
+        if (!managedRuntime.ready || message.generation !== workerGeneration) {
             return;
         }
+        const executeMessage = JSON.parse(
+            managedRuntime.host.GetAcceptanceExecuteMessageJson(message.generation));
+        dispatchManagedExecution(executeMessage, managedRuntime.host);
+        return;
+    }
+
+    if (message.kind === "acceptance-hang" && acceptanceMode) {
+        const managedRuntime = await managedRuntimePromise;
         self.postMessage({
             protocolVersion,
-            kind: "protocol-error",
+            kind: "acceptance-hang-started",
             generation: message.generation,
-            executionId: message.executionId,
-            transactionId: message.transactionId,
-            payload: {
-                code: "engine-execution-not-enabled",
-                message: "The managed worker runtime is ready, but engine execution remains disabled until its bounded compute host is integrated."
-            }
+            executionId: null,
+            transactionId: null,
+            payload: { workerInstanceId }
         });
+        managedRuntime.host.RunAcceptanceHang();
+        return;
+    }
+
+    if (message.kind !== "execute" && message.kind !== "cancel") {
+        return;
+    }
+    if (message.protocolVersion !== protocolVersion ||
+        message.generation !== workerGeneration ||
+        typeof message.executionId !== "string" || message.executionId.length === 0 ||
+        typeof message.transactionId !== "string" || message.transactionId.length === 0) {
+        return;
+    }
+
+    const managedRuntime = await managedRuntimePromise;
+    if (!managedRuntime.ready) {
+        postProtocolError(message, "dotnet-host-not-loaded", "The managed engine Worker failed to start.");
+        return;
+    }
+    if (message.kind === "execute") {
+        dispatchManagedExecution(message, managedRuntime.host);
+        return;
+    }
+    try {
+        managedRuntime.host.CancelMessageJson(JSON.stringify(message));
+    } catch (error) {
+        postProtocolError(message, "managed-cancel-rejected", String(error));
     }
 };
 
@@ -71,9 +104,15 @@ async function initializeManagedRuntime() {
         const runtime = await dotnet
             .withConfigSrc(configUrl.href)
             .create();
+        runtime.setModuleImports("engine-worker", {
+            postMessage(messageJson) {
+                self.postMessage(JSON.parse(messageJson));
+            }
+        });
         const config = runtime.getConfig();
         const exports = await runtime.getAssemblyExports(config.mainAssemblyName);
-        const proofJson = exports.CraftArchitectEngineWorker.ManagedHost.GetRuntimeProofJson(runtimeProofChallenge);
+        const host = exports.CraftArchitectEngineWorker.ManagedHost;
+        const proofJson = host.GetRuntimeProofJson(runtimeProofChallenge);
         const proof = JSON.parse(proofJson);
         if (proof.protocolVersion !== protocolVersion ||
             proof.challenge !== runtimeProofChallenge ||
@@ -82,9 +121,26 @@ async function initializeManagedRuntime() {
             typeof proof.proofHash !== "string" || !/^[0-9a-f]{64}$/i.test(proof.proofHash)) {
             throw new Error("The managed worker runtime returned an invalid self-check proof.");
         }
-        return { ready: true, runtime, proof };
+        return { ready: true, runtime, host, proof };
     } catch (error) {
         console.error("Managed engine worker startup failed.", error);
         return { ready: false, error: String(error) };
     }
+}
+
+function dispatchManagedExecution(message, host) {
+    host.ExecuteMessageJson(JSON.stringify(message))
+        .then(resultJson => self.postMessage(JSON.parse(resultJson)))
+        .catch(error => postProtocolError(message, "managed-execution-rejected", String(error)));
+}
+
+function postProtocolError(message, code, errorMessage) {
+    self.postMessage({
+        protocolVersion,
+        kind: "protocol-error",
+        generation: message.generation,
+        executionId: message.executionId ?? null,
+        transactionId: message.transactionId ?? null,
+        payload: { code, message: errorMessage }
+    });
 }

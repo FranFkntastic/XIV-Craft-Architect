@@ -113,6 +113,9 @@ public sealed record EngineRouteDecisionSnapshot(
     MarketTravelPriority TravelPriority,
     long FixedAcquisitionGilCost,
     bool AcquisitionSearchWasTruncated,
+    bool RouteSearchWasTruncated,
+    bool TravelSearchWasTruncated,
+    int TravelRoutesEvaluated,
     IReadOnlyList<EngineRouteFrontierOptionSnapshot> FrontierOptions,
     IReadOnlyList<EngineRouteItemDecisionSnapshot> ItemDecisions);
 

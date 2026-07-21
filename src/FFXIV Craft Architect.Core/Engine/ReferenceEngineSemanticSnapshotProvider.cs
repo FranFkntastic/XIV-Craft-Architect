@@ -6,7 +6,7 @@ namespace FFXIV_Craft_Architect.Core.Engine;
 public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSemanticSnapshotProvider
 {
     private const string InputSchemaVersion = "1";
-    private const string OutputSchemaVersion = "2";
+    private const string OutputSchemaVersion = "3";
     private static readonly JsonSerializerOptions InputJsonOptions = EngineJsonSerializerOptions.CreateWire();
 
     public ReferenceEnginePreparedInput PrepareInput(EngineRequestEnvelope request)
@@ -190,6 +190,9 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                 decision.TravelPriority,
                 decision.FixedAcquisitionGilCost,
                 decision.AcquisitionSearchWasTruncated,
+                decision.RouteSearchWasTruncated,
+                decision.TravelSearchWasTruncated,
+                decision.TravelRoutesEvaluated,
                 decision.RepresentativeRoutes
                     .Select((option, order) => new EngineRouteFrontierOptionSnapshot(
                         order,

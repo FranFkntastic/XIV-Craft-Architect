@@ -27,7 +27,8 @@ public sealed record EngineWorkerCapability(
     string ResultKind = "computation-result",
     bool ManagedRuntimeReady = false,
     string? ManagedRuntimeAssembly = null,
-    string? ManagedRuntimeProofHash = null);
+    string? ManagedRuntimeProofHash = null,
+    string? WorkerInstanceId = null);
 
 public sealed record EngineWorkerMessage(
     string ProtocolVersion,
@@ -491,7 +492,8 @@ public sealed class EngineWorkerClient : IAsyncDisposable
                 !string.Equals(capability.ResultKind, ComputationResultMessageKind, StringComparison.Ordinal) ||
                 !capability.ManagedRuntimeReady ||
                 !string.Equals(capability.ManagedRuntimeAssembly, ManagedRuntimeAssembly, StringComparison.Ordinal) ||
-                !IsSha256(capability.ManagedRuntimeProofHash))
+                !IsSha256(capability.ManagedRuntimeProofHash) ||
+                !Guid.TryParse(capability.WorkerInstanceId, out _))
             {
                 throw new InvalidOperationException("The engine worker did not prove the required managed computation-only dedicated-worker protocol.");
             }

@@ -34,3 +34,48 @@ export function createEngineWorker(workerUrl = "engine-worker.js") {
         }
     };
 }
+
+export function createEngineWorkerController(callback, workerUrl = "engine-worker.js") {
+    if (!callback || typeof callback.invokeMethodAsync !== "function") {
+        throw new TypeError("A .NET Worker callback is required.");
+    }
+    const controller = createEngineWorker(workerUrl);
+    let disposed = false;
+    const unsubscribe = controller.subscribe(message => {
+        callback.invokeMethodAsync("ReceiveMessage", message).catch(() => {});
+    });
+    const reportError = event => {
+        const message = event?.message ?? "The Worker emitted an unstructured error.";
+        callback.invokeMethodAsync("ReceiveError", event.type, message).catch(() => {});
+    };
+    controller.worker.addEventListener("error", reportError);
+    controller.worker.addEventListener("messageerror", reportError);
+
+    function detach() {
+        if (disposed) return;
+        disposed = true;
+        unsubscribe();
+        controller.worker.removeEventListener("error", reportError);
+        controller.worker.removeEventListener("messageerror", reportError);
+    }
+
+    return {
+        ping(generation) {
+            if (disposed) throw new Error("The Worker controller is disposed.");
+            controller.ping(generation);
+        },
+        send(message) {
+            if (disposed) throw new Error("The Worker controller is disposed.");
+            controller.send(message);
+        },
+        terminate() {
+            if (disposed) return;
+            controller.terminate();
+            detach();
+        },
+        dispose() {
+            if (!disposed) controller.terminate();
+            detach();
+        }
+    };
+}
