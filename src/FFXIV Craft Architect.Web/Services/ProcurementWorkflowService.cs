@@ -19,12 +19,14 @@ public sealed class ProcurementWorkflowService : IProcurementWorkflowService
     private readonly IProcurementRouteExecutionService _procurementRouteExecutionService;
     private readonly MarketAnalysisItemRefreshService _itemRefreshService;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
+    private readonly ProcurementRouteAvailability _routeAvailability;
 
     public ProcurementWorkflowService(
         AppState appState,
         IProcurementRouteExecutionService procurementRouteExecutionService,
         MarketAnalysisItemRefreshService itemRefreshService,
         IRecipeLayerWorkflowService recipeLayerWorkflow,
+        ProcurementRouteAvailability routeAvailability,
         ILogger<ProcurementWorkflowService>? logger = null)
     {
         _appState = appState;
@@ -32,6 +34,7 @@ public sealed class ProcurementWorkflowService : IProcurementWorkflowService
         _procurementRouteExecutionService = procurementRouteExecutionService;
         _itemRefreshService = itemRefreshService;
         _recipeLayerWorkflow = recipeLayerWorkflow;
+        _routeAvailability = routeAvailability;
     }
 
     public async Task<ProcurementWorkflowResult> RunAnalysisAsync(
@@ -39,6 +42,14 @@ public sealed class ProcurementWorkflowService : IProcurementWorkflowService
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
+        if (!_routeAvailability.IsGenerationEnabled)
+        {
+            return new ProcurementWorkflowResult(
+                ProcurementWorkflowStatus.Disabled,
+                0,
+                ProcurementRouteAvailability.DisabledMessage);
+        }
+
         var plan = _appState.CurrentPlan;
         var planSessionVersion = _appState.PlanSessionVersion;
         if (plan == null)
@@ -253,6 +264,7 @@ public sealed record ProcurementWorkflowResult(
 
 public enum ProcurementWorkflowStatus
 {
+    Disabled,
     NoPlan,
     NoActiveProcurementItems,
     MissingDataCenter,

@@ -402,7 +402,9 @@ public sealed class TradeOrderPricingWorkflowService
         var activeItemList = (demandProjection?.ToActiveProcurementMaterialAggregates() ?? Array.Empty<MaterialAggregate>())
             .Where(item => item.TotalQuantity > 0)
             .ToArray();
-        var routePlans = _appState.ProcurementShoppingPlans.Any()
+        var routePlans = procurementResult.Status == ProcurementWorkflowStatus.Published &&
+                         _appState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.Current &&
+                         _appState.ProcurementShoppingPlans.Any()
             ? _appState.ProcurementShoppingPlans
             : _appState.ShoppingPlans;
         var lines = _costBasisResolver.BuildSelectedSourceLines(

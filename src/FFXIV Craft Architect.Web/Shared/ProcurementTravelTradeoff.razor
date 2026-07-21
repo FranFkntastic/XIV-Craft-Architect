@@ -70,6 +70,7 @@
             @foreach (var tolerance in Enumerable.Range(0, 12))
             {
                 <button type="button"
+                        disabled="@Disabled"
                         class="pp-clutch-tick @(tolerance == TravelTolerance ? "is-active" : null)"
                         style="@GetTrackRowStyle(tolerance)"
                         aria-label="Set travel preference to position @tolerance"
@@ -88,6 +89,7 @@
                max="11"
                step="1"
                value="@TravelTolerance"
+               disabled="@Disabled"
                aria-labelledby="procurement-travel-label"
                aria-describedby="procurement-travel-help"
                aria-valuetext="@MarketRouteScoring.GetToleranceLabel(TravelTolerance)"
@@ -101,6 +103,7 @@
             {
                 var selected = ContainsTolerance(option, GetPublishedTolerance());
                 <button type="button"
+                        disabled="@Disabled"
                         class="pp-frontier-chit @(selected ? "is-selected" : null)"
                         style="@GetRouteStyle(option)"
                         title="@GetRouteTitle(option)"
@@ -123,6 +126,13 @@
                 <span>@GetUnavailableFrontierMessage()</span>
             </div>
         }
+        else if (Disabled)
+        {
+            <div class="pp-frontier-empty">
+                <MudIcon Icon="@Icons.Material.Outlined.PauseCircle" Size="Size.Small" />
+                <span>Route generation is temporarily unavailable.</span>
+            </div>
+        }
         else
         {
             <div class="pp-frontier-empty">
@@ -132,7 +142,7 @@
         }
     </div>
 </div>
-@if (RouteValidity == ProcurementRoutePublicationValidity.SelectionChanged)
+@if (!Disabled && RouteValidity == ProcurementRoutePublicationValidity.SelectionChanged)
 {
     <div class="pp-clutch-pending" role="status">
         @GetPendingSelectionMessage()
@@ -144,6 +154,7 @@
     [Parameter] public MarketRouteDecision? RouteDecision { get; set; }
     [Parameter] public ProcurementRoutePublicationValidity RouteValidity { get; set; }
     [Parameter] public bool IsReconciling { get; set; }
+    [Parameter] public bool Disabled { get; set; }
     [Parameter] public string? RouteFailure { get; set; }
     [Parameter] public MarketTravelPriority TravelPriority { get; set; }
     [Parameter] public EventCallback<int> TravelToleranceChanged { get; set; }

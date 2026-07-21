@@ -9,6 +9,35 @@ public class ProcurementRouteReconciliationServiceTests
 {
     [Fact]
     [Trait(TestTraits.Surface, TestTraits.DeployWeb)]
+    public async Task DisabledRouteGeneration_DoesNotScheduleInitialOrChangedRouteWork()
+    {
+        var appState = CreateStateWithPublishedRoute();
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 100, Name = "Route Item" }],
+            [new DetailedShoppingPlan { ItemId = 100, Name = "Route Item" }]);
+        var workflow = new RecordingProcurementWorkflow(() =>
+            new ProcurementWorkflowResult(ProcurementWorkflowStatus.Published, 1));
+        using var operations = new CancellableOperationService(appState);
+        using var reconciliation = new ProcurementRouteReconciliationService(
+            appState,
+            workflow,
+            operations,
+            NullLogger<ProcurementRouteReconciliationService>.Instance,
+            new ProcurementRouteAvailability(false),
+            TimeSpan.FromMilliseconds(10));
+
+        reconciliation.Start();
+        appState.SetProcurementTravelPriority(MarketTravelPriority.WorldVisitsFirst);
+        await Task.Delay(50);
+
+        Assert.Equal(0, workflow.CallCount);
+        Assert.False(reconciliation.IsScheduled);
+        Assert.False(appState.IsProcurementRouteReconciling);
+        Assert.True(appState.IsProcurementRouteStale);
+    }
+
+    [Fact]
+    [Trait(TestTraits.Surface, TestTraits.DeployWeb)]
     public async Task PublishedMarketEvidence_GeneratesInitialRouteAutomatically()
     {
         var appState = new AppState();
@@ -39,6 +68,7 @@ public class ProcurementRouteReconciliationServiceTests
             workflow,
             operations,
             NullLogger<ProcurementRouteReconciliationService>.Instance,
+            new ProcurementRouteAvailability(true),
             TimeSpan.FromMilliseconds(10));
         reconciliation.Start();
 
@@ -69,6 +99,7 @@ public class ProcurementRouteReconciliationServiceTests
             workflow,
             operations,
             NullLogger<ProcurementRouteReconciliationService>.Instance,
+            new ProcurementRouteAvailability(true),
             TimeSpan.FromMilliseconds(10));
         reconciliation.Start();
 
@@ -101,6 +132,7 @@ public class ProcurementRouteReconciliationServiceTests
             workflow,
             operations,
             NullLogger<ProcurementRouteReconciliationService>.Instance,
+            new ProcurementRouteAvailability(true),
             TimeSpan.FromMilliseconds(30));
         reconciliation.Start();
 
@@ -135,6 +167,7 @@ public class ProcurementRouteReconciliationServiceTests
             workflow,
             operations,
             NullLogger<ProcurementRouteReconciliationService>.Instance,
+            new ProcurementRouteAvailability(true),
             TimeSpan.FromMilliseconds(10));
         reconciliation.Start();
 

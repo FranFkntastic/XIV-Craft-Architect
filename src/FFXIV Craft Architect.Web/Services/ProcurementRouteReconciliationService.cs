@@ -16,6 +16,7 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
     private readonly IProcurementWorkflowService _procurementWorkflow;
     private readonly CancellableOperationService _cancellableOperations;
     private readonly ILogger<ProcurementRouteReconciliationService> _logger;
+    private readonly ProcurementRouteAvailability _routeAvailability;
     private readonly TimeSpan _debounce;
     private CancellationTokenSource? _scheduledRepair;
 
@@ -28,8 +29,9 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
         AppState appState,
         IProcurementWorkflowService procurementWorkflow,
         CancellableOperationService cancellableOperations,
-        ILogger<ProcurementRouteReconciliationService> logger)
-        : this(appState, procurementWorkflow, cancellableOperations, logger, TimeSpan.FromMilliseconds(250))
+        ILogger<ProcurementRouteReconciliationService> logger,
+        ProcurementRouteAvailability routeAvailability)
+        : this(appState, procurementWorkflow, cancellableOperations, logger, routeAvailability, TimeSpan.FromMilliseconds(250))
     {
     }
 
@@ -38,12 +40,14 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
         IProcurementWorkflowService procurementWorkflow,
         CancellableOperationService cancellableOperations,
         ILogger<ProcurementRouteReconciliationService> logger,
+        ProcurementRouteAvailability routeAvailability,
         TimeSpan debounce)
     {
         _appState = appState;
         _procurementWorkflow = procurementWorkflow;
         _cancellableOperations = cancellableOperations;
         _logger = logger;
+        _routeAvailability = routeAvailability;
         _debounce = debounce;
     }
 
@@ -86,6 +90,7 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
     private void ScheduleRepairIfNeeded()
     {
         if (!_started ||
+            !_routeAvailability.IsGenerationEnabled ||
             _appState.DeferAutomaticProcurementReconciliationForBenchmark ||
             !NeedsRouteReconciliation() ||
             !string.IsNullOrWhiteSpace(_appState.ProcurementRouteFailure))

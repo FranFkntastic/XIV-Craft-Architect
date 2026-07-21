@@ -16,6 +16,7 @@
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject BrowserFileExportService FileExportService
 @inject CraftAppraisalQuoteExportService CraftAppraisalQuoteExportService
+@inject ProcurementRouteAvailability RouteAvailability
 @inject ILogger<ProcurementPlan> Logger
 @inject IndexedDbService IndexedDb
 @implements IDisposable
@@ -24,6 +25,7 @@
     <div class="pp-grid-layout">
         <ProcurementControlsPanel
             AppState="AppState"
+            RouteGenerationEnabled="RouteAvailability.IsGenerationEnabled"
             IsAnalyzing="IsRouteAnalyzing"
             CanAnalyze="CanAnalyze()"
             PrimaryActionLabel="@GetPrimaryActionLabel()"
@@ -37,14 +39,14 @@
             OnGoToMarketAnalysisRequested="GoToMarketAnalysis" />
 
         <ProcurementResultsShell
-            ShoppingPlans="AppState.ProcurementShoppingPlans"
-            RouteDecision="AppState.ProcurementRouteDecision"
-            IsStale="AppState.IsProcurementRouteStale"
-            IsAnalyzing="IsRouteAnalyzing"
-            FailureMessage="@AppState.ProcurementRouteFailure"
-            ExclusionOutcome="@_exclusionOutcome"
+            ShoppingPlans="VisibleRoutePlans"
+            RouteDecision="VisibleRouteDecision"
+            IsStale="@(RouteAvailability.IsGenerationEnabled && AppState.IsProcurementRouteStale)"
+            IsAnalyzing="@(RouteAvailability.IsGenerationEnabled && IsRouteAnalyzing)"
+            FailureMessage="@(RouteAvailability.IsGenerationEnabled ? AppState.ProcurementRouteFailure : null)"
+            ExclusionOutcome="@(RouteAvailability.IsGenerationEnabled ? _exclusionOutcome : null)"
             ReconcilingItemWorld="@_reconcilingItemWorld"
-            MarketMafiosoEnabled="@_marketMafiosoEnabled"
+            MarketMafiosoEnabled="@(RouteAvailability.IsGenerationEnabled && _marketMafiosoEnabled)"
             MarketMafiosoActiveItemWorld="@_marketMafiosoActiveItemWorld"
             MarketMafiosoBusyItemWorld="@_marketMafiosoBusyItemWorld"
             FocusItemId="RequestedItemId"
@@ -74,6 +76,10 @@
     private CancellationTokenSource? _marketMafiosoMonitorCancellation;
     private bool _marketMafiosoEnabled;
     private bool _revealRouteAfterRender;
+    private IReadOnlyList<DetailedShoppingPlan> VisibleRoutePlans =>
+        RouteAvailability.IsGenerationEnabled ? AppState.ProcurementShoppingPlans : [];
+    private MarketRouteDecision? VisibleRouteDecision =>
+        RouteAvailability.IsGenerationEnabled ? AppState.ProcurementRouteDecision : null;
 
     protected override void OnInitialized()
     {
@@ -155,6 +161,7 @@
     }
 
     private bool CanAnalyze() =>
+        RouteAvailability.IsGenerationEnabled &&
         AppState.CurrentPlan != null &&
         GetBuyItems().Any() &&
         !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
@@ -169,14 +176,22 @@
             .ToList();
 
     private string GetPrimaryActionLabel() =>
-        AppState.IsProcurementRouteReconciling
+        !RouteAvailability.IsGenerationEnabled
+            ? "Route Unavailable"
+            : AppState.IsProcurementRouteReconciling
             ? "Updating Route"
             : AppState.ProcurementShoppingPlans.Count > 0 ? "Regenerate Route" : "Generate Route";
 
-    private bool ShouldShowControlNotice() => AppState.ProcurementShoppingPlans.Count == 0;
+    private bool ShouldShowControlNotice() =>
+        !RouteAvailability.IsGenerationEnabled || AppState.ProcurementShoppingPlans.Count == 0;
 
     private Severity GetNoticeSeverity()
     {
+        if (!RouteAvailability.IsGenerationEnabled)
+        {
+            return Severity.Warning;
+        }
+
         if (!CanAnalyze())
         {
             return Severity.Warning;
@@ -192,6 +207,11 @@
 
     private string GetNoticeMessage()
     {
+        if (!RouteAvailability.IsGenerationEnabled)
+        {
+            return ProcurementRouteAvailability.DisabledMessage;
+        }
+
         if (AppState.CurrentPlan == null)
         {
             return "Build a recipe plan before generating a procurement route.";
@@ -231,6 +251,11 @@
 
     private string GetEmptyTitle()
     {
+        if (!RouteAvailability.IsGenerationEnabled)
+        {
+            return "Route generation temporarily unavailable";
+        }
+
         if (AppState.CurrentPlan == null)
         {
             return "No recipe plan yet";
@@ -241,6 +266,11 @@
 
     private string GetEmptyMessage()
     {
+        if (!RouteAvailability.IsGenerationEnabled)
+        {
+            return "Use Market Analysis for current prices and Acquisition Evaluation for manual source choices.";
+        }
+
         if (AppState.CurrentPlan == null)
         {
             return "Build a plan, then return here to organize its market purchases.";

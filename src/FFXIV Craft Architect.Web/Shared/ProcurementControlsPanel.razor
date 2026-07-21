@@ -16,6 +16,7 @@
                              Value="AppState.ProcurementSearchEntireRegion"
                              ValueChanged="OnProcurementSearchEntireRegionChanged"
                              Dense="true"
+                             Disabled="@(!RouteGenerationEnabled)"
                              Color="Color.Primary">
                     <span>Search the whole region</span>
                 </MudCheckBox>
@@ -28,6 +29,7 @@
                                             RouteValidity="AppState.ProcurementRouteValidity"
                                             IsReconciling="AppState.IsProcurementRouteReconciling"
                                             RouteFailure="AppState.ProcurementRouteFailure"
+                                            Disabled="@(!RouteGenerationEnabled)"
                                             TravelPriority="AppState.ProcurementTravelPriority"
                                             TravelToleranceChanged="OnProcurementTravelToleranceChanged" />
                 <p id="procurement-travel-help">@GetTravelPreferenceHelp()</p>
@@ -55,6 +57,7 @@
                                     Value="@AppState.TemporaryWorldBlacklistDurationMinutes.ToString()"
                                     ValueChanged="OnTemporaryWorldBlacklistDurationValueChanged"
                                     Options="WorldExclusionDurationOptions"
+                                    Disabled="@(!RouteGenerationEnabled)"
                                     Class="pp-full-width" />
             </div>
         </div>
@@ -117,6 +120,7 @@
 @code {
     [Parameter, EditorRequired] public AppState AppState { get; set; } = default!;
     [Parameter] public bool IsAnalyzing { get; set; }
+    [Parameter] public bool RouteGenerationEnabled { get; set; } = true;
     [Parameter] public bool CanAnalyze { get; set; }
     [Parameter] public string PrimaryActionLabel { get; set; } = "Generate Route";
     [Parameter] public bool ShowNotice { get; set; } = true;

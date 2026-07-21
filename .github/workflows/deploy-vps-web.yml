@@ -126,6 +126,9 @@ jobs:
           {
             "LodestoneLookup": {
               "BaseAddress": "https://${{ steps.deploy-slot.outputs.domain }}/api/"
+            },
+            "ProcurementRoutes": {
+              "GenerationEnabled": false
             }
           }
           JSON
@@ -184,4 +187,6 @@ jobs:
         run: |
           curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/appsettings.json" \
             | grep -q "https://${{ steps.deploy-slot.outputs.domain }}/api/"
+          curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/appsettings.json" \
+            | grep -q '"GenerationEnabled": false'
           curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/" > /dev/null

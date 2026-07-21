@@ -12,6 +12,7 @@
 @inject AcquisitionEvaluationWorkflowService AcquisitionEvaluationWorkflow
 @inject AcquisitionDiagnosticSelectionService DiagnosticSelection
 @inject MarketEvidenceHydrationService MarketEvidenceHydration
+@inject ProcurementRouteAvailability RouteAvailability
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
 @inject ILogger<AcquisitionEvaluation> Logger
@@ -55,8 +56,16 @@
         </div>
 
         <div class="ae-info">
-            <div class="ae-info-title">How automatic choices work</div>
-            <div>CA compares every item you could buy, then chooses what to craft or purchase together with the route. Your manual choices stay locked. Items marked Skipped are already covered by a parent item you are buying.</div>
+            @if (RouteAvailability.IsGenerationEnabled)
+            {
+                <div class="ae-info-title">How automatic choices work</div>
+                <div>CA compares every item you could buy, then chooses what to craft or purchase together with the route. Your manual choices stay locked. Items marked Skipped are already covered by a parent item you are buying.</div>
+            }
+            else
+            {
+                <div class="ae-info-title">Automatic choices temporarily unavailable</div>
+                <div>Market prices and manual source choices remain available while procurement route generation is disabled.</div>
+            }
         </div>
 
         <div class="ae-actions">
@@ -94,14 +103,16 @@
                 </div>
             </div>
 
-            @if (AppState.IsProcurementRouteReconciling ||
-                AppState.IsProcurementRouteStale && string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
+            @if (RouteAvailability.IsGenerationEnabled &&
+                (AppState.IsProcurementRouteReconciling ||
+                 AppState.IsProcurementRouteStale && string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure)))
             {
                 <div class="ae-route-state is-working" role="status">
                     Updating the route and its automatic acquisition choices…
                 </div>
             }
-            else if (!string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
+            else if (RouteAvailability.IsGenerationEnabled &&
+                     !string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
             {
                 <div class="ae-route-state is-error" role="alert">
                     Automatic route update failed. @AppState.ProcurementRouteFailure
@@ -612,6 +623,13 @@
 
         if (row.IsActiveProcurement)
         {
+            if (!RouteAvailability.IsGenerationEnabled)
+            {
+                return row.HasSuppressedOccurrences
+                    ? "Partially active"
+                    : "Manual planning";
+            }
+
             if (AppState.IsProcurementRouteReconciling ||
                 AppState.IsProcurementRouteStale && string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
             {
