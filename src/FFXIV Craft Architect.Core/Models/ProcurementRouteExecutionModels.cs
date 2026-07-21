@@ -71,6 +71,12 @@ public sealed record MarketRouteDecision(
 
     public bool AcquisitionSearchWasTruncated { get; init; }
 
+    public bool RouteSearchWasTruncated { get; init; }
+
+    public bool TravelSearchWasTruncated { get; init; }
+
+    public int TravelRoutesEvaluated { get; init; }
+
     public long PremiumGil => Math.Max(0, SelectedGilCost - CheapestGilCost);
 
     public decimal PremiumRate => CheapestGilCost > 0

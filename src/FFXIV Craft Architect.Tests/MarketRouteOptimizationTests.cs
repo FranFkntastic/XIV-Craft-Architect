@@ -220,6 +220,54 @@ public class MarketRouteOptimizationTests
     }
 
     [Fact]
+    public async Task OptimizeProcurementRoute_WideSearchIsBoundedAndMarkedApproximate()
+    {
+        var plans = Enumerable.Range(0, 8)
+            .Select(itemIndex => Plan(
+                10_000 + itemIndex,
+                $"Bounded item {itemIndex}",
+                1,
+                Enumerable.Range(0, 8)
+                    .Select(worldIndex =>
+                    {
+                        var price = 100L + ((itemIndex * 17 + worldIndex * 11) % 73);
+                        return World(
+                            $"DC {worldIndex / 2}",
+                            $"World {worldIndex}",
+                            price,
+                            price,
+                            Listing(1, price, $"Listing {itemIndex}-{worldIndex}"));
+                    })
+                    .ToArray()))
+            .ToList();
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+        var config = new MarketAnalysisConfig
+        {
+            TravelTolerance = 0,
+            TravelPriority = MarketTravelPriority.WorldVisitsFirst
+        };
+
+        var first = await service.OptimizeProcurementRouteWithDecisionAsync(
+            plans,
+            config,
+            includeSplitPurchases: false);
+        var second = await service.OptimizeProcurementRouteWithDecisionAsync(
+            plans,
+            config,
+            includeSplitPurchases: false);
+
+        var firstDecision = Assert.IsType<MarketRouteDecision>(first.Decision);
+        var secondDecision = Assert.IsType<MarketRouteDecision>(second.Decision);
+        Assert.True(first.IsComplete);
+        Assert.True(firstDecision.RouteSearchWasTruncated);
+        Assert.Equal(firstDecision.SelectedGilCost, secondDecision.SelectedGilCost);
+        Assert.Equal(firstDecision.SelectedWorldStops, secondDecision.SelectedWorldStops);
+        Assert.Equal(
+            first.ShoppingPlans.Select(plan => plan.RecommendedWorld?.WorldName),
+            second.ShoppingPlans.Select(plan => plan.RecommendedWorld?.WorldName));
+    }
+
+    [Fact]
     public void OptimizeProcurementRoute_MovingTowardCostNeverIncreasesSelectedCashCost()
     {
         var plans = new[]

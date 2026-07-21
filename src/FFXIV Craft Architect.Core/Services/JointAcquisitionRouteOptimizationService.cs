@@ -28,6 +28,7 @@ public sealed class JointAcquisitionRouteOptimizationService
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(evidencePlans);
         ArgumentNullException.ThrowIfNull(config);
+        var execution = executionOptions ?? MarketAnalysisExecutionOptions.Interactive;
 
         var evidenceByItem = evidencePlans
             .GroupBy(item => item.ItemId)
@@ -48,6 +49,7 @@ public sealed class JointAcquisitionRouteOptimizationService
         var cheapestConfig = CopyConfig(config, travelTolerance: 11);
         var evaluated = new List<EvaluatedVariant>(variants.Count);
         var routeSession = new ProcurementRouteOptimizationSession();
+        var anyRouteSearchWasTruncated = false;
 
         // Evaluate cheapest-lower-bound first so the incumbent converges early.
         // Output is order-independent (winners/frontier use deterministic tiebreaks),
@@ -62,39 +64,11 @@ public sealed class JointAcquisitionRouteOptimizationService
             .ThenBy(entry => entry.Variant.DecisionKey, StringComparer.Ordinal)
             .ToList();
 
-        // Decomposed cost gate: variant demand is binary per item (crafted or bought
-        // at plan quantity), so each item's minimum route cost is a per-(item, demand)
-        // constant that can be memoized. A variant's total is the sum of per-item
-        // minima plus its fixed cost, which is exactly what the tolerance-11 beam
-        // minimizes. Compute that sum for every variant up front and only run the
-        // full route search for variants within the widest premium tier of the
-        // incumbent; far variants cannot win at any travel tolerance, and skipping
-        // their route searches is where the time went.
-        var minCostByItem = new Dictionary<(int itemId, int quantity, int hqQuantity), (long cost, bool complete)>();
-        var incumbentTotal = long.MaxValue;
-        var skippedByBound = 0;
-
         for (var index = 0; index < orderedVariants.Count; index++)
         {
             ct.ThrowIfCancellationRequested();
             var entry = orderedVariants[index];
             var variant = entry.Variant;
-            var (decomposedCost, decomposedComplete) = EvaluateDecomposedCost(
-                variant,
-                evidenceByItem,
-                minCostByItem);
-            if (!decomposedComplete)
-            {
-                continue;
-            }
-
-            var estimatedTotal = Add(variant.FixedGilCost, decomposedCost);
-            incumbentTotal = Math.Min(incumbentTotal, estimatedTotal);
-            if (estimatedTotal > GetMaximumTotal(incumbentTotal, MarketRouteScoring.GetMaximumPremiumRate(1)))
-            {
-                skippedByBound++;
-                continue;
-            }
 
             var marketPlans = BuildDemandPlans(variant, evidenceByItem, routeSession);
             if (marketPlans == null)
@@ -106,9 +80,10 @@ public sealed class JointAcquisitionRouteOptimizationService
                 marketPlans,
                 cheapestConfig,
                 includeSplitPurchases,
-                executionOptions,
+                execution,
                 routeSession,
                 ct);
+            anyRouteSearchWasTruncated |= route.Decision?.RouteSearchWasTruncated ?? false;
             if (variant.MarketDemand.Count > 0 && (!route.IsComplete || route.Decision == null))
             {
                 continue;
@@ -123,12 +98,9 @@ public sealed class JointAcquisitionRouteOptimizationService
             }
         }
 
-        if (skippedByBound > 0)
-        {
-            progress?.Report($"Skipped {skippedByBound:N0} acquisition plans that cannot beat the best route found.");
-        }
-
-        progress?.Report($"[stage] variant evaluation complete ({evaluated.Count:N0} evaluated, {skippedByBound:N0} skipped), applying travel tolerance...");
+        progress?.Report(
+            $"[stage] variant evaluation complete ({evaluated.Count:N0} feasible of " +
+            $"{orderedVariants.Count:N0}), applying travel tolerance...");
         if (evaluated.Count == 0)
         {
             return JointAcquisitionRouteOptimizationResult.NoSolution(ClonePlan(plan));
@@ -138,30 +110,37 @@ public sealed class JointAcquisitionRouteOptimizationService
         var maximumPremiumRate = MarketRouteScoring.GetMaximumPremiumRate(config.TravelTolerance);
         var maximumTotal = GetMaximumTotal(cheapestTotal, maximumPremiumRate);
         var finalists = new List<EvaluatedVariant>();
+        var travelSearchWasTruncated = false;
+        if (config.TravelTolerance != 11)
+        {
+            finalists.Add(OrderFinalists(
+                    evaluated.Where(candidate => candidate.TotalGilCost <= maximumTotal),
+                    config)
+                .First());
+        }
 
-        // Gate the travel pass with a stock-checked lower bound on achievable world
-        // stops (a k-cover over the candidate's demanded items). Candidates are
-        // processed cheapest-travel-potential first; once a route exists, any
-        // candidate whose bound exceeds its stop count can never win the travel
-        // competition and never gets a beam. Candidates at the bound keep their
-        // re-route because tiebreaks are decided by the route itself.
-        var candidatesByTravelPotential = evaluated
-            .Where(candidate => candidate.Variant.FixedGilCost <= maximumTotal)
-            .Select(candidate => new
-            {
-                Candidate = candidate,
-                MinimumStops = EstimateMinimumWorldStops(candidate.Variant, evidenceByItem)
-            })
-            .OrderBy(entry => entry.MinimumStops)
-            .ThenBy(entry => entry.Candidate.Variant.DecisionKey, StringComparer.Ordinal)
+        var candidatesByTravelPotential = OrderFinalists(
+                evaluated.Where(candidate =>
+                    AcquisitionVariantFrontierBuilder.EstimateLowerBound(
+                        candidate.Variant,
+                        lowerBoundUnitCosts) <= maximumTotal),
+                config)
             .ToList();
+        var excludedByTravelCostFloor = evaluated.Count - candidatesByTravelPotential.Count;
+        if (excludedByTravelCostFloor > 0)
+        {
+            progress?.Report(
+                $"Excluded {excludedByTravelCostFloor:N0} acquisition plans whose admissible gil floor " +
+                "exceeds the travel premium ceiling.");
+        }
 
-        var bestStops = int.MaxValue;
+        var completedTravelRoutes = 0;
+        progress?.Report(
+            $"[stage] travel-aware optimization starting ({candidatesByTravelPotential.Count:N0} acquisition plans)...");
 
-        foreach (var entry in candidatesByTravelPotential)
+        foreach (var candidate in candidatesByTravelPotential)
         {
             ct.ThrowIfCancellationRequested();
-            var candidate = entry.Candidate;
             if (config.TravelTolerance == 11 || candidate.Variant.MarketDemand.Count == 0)
             {
                 if (candidate.TotalGilCost <= maximumTotal)
@@ -171,9 +150,11 @@ public sealed class JointAcquisitionRouteOptimizationService
                 continue;
             }
 
-            if (entry.MinimumStops > bestStops)
+            if (execution.MaxTravelRouteEvaluations.HasValue &&
+                completedTravelRoutes >= execution.MaxTravelRouteEvaluations.Value)
             {
-                continue;
+                travelSearchWasTruncated = true;
+                break;
             }
 
             var marketBudget = maximumTotal == long.MaxValue
@@ -183,10 +164,18 @@ public sealed class JointAcquisitionRouteOptimizationService
                 candidate.MarketPlans,
                 config,
                 includeSplitPurchases,
-                executionOptions,
+                execution,
                 routeSession,
                 ct,
                 marketBudget);
+            anyRouteSearchWasTruncated |= route.Decision?.RouteSearchWasTruncated ?? false;
+            completedTravelRoutes++;
+            if (completedTravelRoutes % 25 == 0)
+            {
+                progress?.Report(
+                    $"Evaluated {completedTravelRoutes:N0} bounded travel routes " +
+                    $"from {candidatesByTravelPotential.Count:N0} acquisition plans...");
+            }
             if (candidate.Variant.MarketDemand.Count > 0 && (!route.IsComplete || route.Decision == null))
             {
                 continue;
@@ -195,11 +184,15 @@ public sealed class JointAcquisitionRouteOptimizationService
             var total = Add(candidate.Variant.FixedGilCost, route.Decision?.SelectedGilCost ?? 0);
             if (total <= maximumTotal)
             {
-                // Only cost-eligible routes raise the travel bar; a candidate that
-                // cannot afford the premium cap must not block cheaper rivals.
-                bestStops = Math.Min(bestStops, route.Decision!.SelectedWorldStops);
                 finalists.Add(candidate with { Route = route, TotalGilCost = total });
             }
+        }
+
+        if (travelSearchWasTruncated)
+        {
+            progress?.Report(
+                $"Travel-aware optimization reached its {completedTravelRoutes:N0}-route work limit; " +
+                "using the best complete route found so far.");
         }
 
         var selected = OrderFinalists(finalists, config).First();
@@ -249,7 +242,10 @@ public sealed class JointAcquisitionRouteOptimizationService
             selected.Variant.FixedGilCost,
             cheapest.Route.Decision,
             representativeRoutes,
-            frontierSearch.WasTruncated);
+            frontierSearch.WasTruncated,
+            anyRouteSearchWasTruncated,
+            travelSearchWasTruncated,
+            completedTravelRoutes);
 
         return new JointAcquisitionRouteOptimizationResult(
             optimizedPlan,
@@ -258,7 +254,7 @@ public sealed class JointAcquisitionRouteOptimizationService
             activeItems,
             variants.Count,
             evaluated.Count,
-            frontierSearch.WasTruncated);
+            frontierSearch.WasTruncated || anyRouteSearchWasTruncated || travelSearchWasTruncated);
     }
 
     private Task<ProcurementRouteOptimizationResult> OptimizeRouteAsync(
@@ -278,129 +274,6 @@ public sealed class JointAcquisitionRouteOptimizationService
             session,
             ct,
             absoluteMaximumGilCost);
-    }
-
-    /// <summary>
-    /// Stock-checked lower bound on the world stops a candidate's route needs:
-    /// 0 when the candidate has no market demand, 1 when a single world covers every
-    /// demanded item, 2 when some pair of worlds does, 3 otherwise (the true
-    /// minimum may be higher; the bound only ever underestimates stops).
-    /// </summary>
-    private static int EstimateMinimumWorldStops(
-        AcquisitionVariant variant,
-        IReadOnlyDictionary<int, DetailedShoppingPlan> evidenceByItem)
-    {
-        if (variant.MarketDemand.Count == 0)
-        {
-            return 0;
-        }
-
-        var sufficientWorlds = new List<HashSet<(string DataCenter, string WorldName)>>();
-        foreach (var (itemId, _) in variant.MarketDemand)
-        {
-            if (!evidenceByItem.TryGetValue(itemId, out var evidence))
-            {
-                return 0;
-            }
-
-            var worlds = evidence.WorldOptions
-                .Where(world => world.HasSufficientStock)
-                .Select(world => (world.DataCenter, world.WorldName))
-                .ToHashSet();
-            if (worlds.Count == 0)
-            {
-                return 0;
-            }
-
-            sufficientWorlds.Add(worlds);
-        }
-
-        var allWorlds = sufficientWorlds
-            .SelectMany(worlds => worlds)
-            .ToHashSet();
-
-        // k=1: one world covers every demanded item.
-        if (allWorlds.Any(world => sufficientWorlds.All(worlds => worlds.Contains(world))))
-        {
-            return 1;
-        }
-
-        // k=2: some pair of worlds jointly covers every demanded item.
-        var worldList = allWorlds.ToList();
-        for (var first = 0; first < worldList.Count; first++)
-        {
-            for (var second = first; second < worldList.Count; second++)
-            {
-                var firstWorld = worldList[first];
-                var secondWorld = worldList[second];
-                if (sufficientWorlds.All(worlds => worlds.Contains(firstWorld) || worlds.Contains(secondWorld)))
-                {
-                    return 2;
-                }
-            }
-        }
-
-        // No single world or pair covers: the route needs at least three stops.
-        return 3;
-    }
-
-    private static (long Cost, bool Complete) EvaluateDecomposedCost(
-        AcquisitionVariant variant,
-        IReadOnlyDictionary<int, DetailedShoppingPlan> evidenceByItem,
-        Dictionary<(int itemId, int quantity, int hqQuantity), (long cost, bool complete)> minCostByItem)
-    {
-        long total = 0;
-        foreach (var (itemId, demand) in variant.MarketDemand)
-        {
-            var key = (itemId, demand.Quantity, demand.HqQuantity);
-            if (!minCostByItem.TryGetValue(key, out var itemCost))
-            {
-                if (!evidenceByItem.TryGetValue(itemId, out var evidence))
-                {
-                    return (0, false);
-                }
-
-                // Variant demand is binary per item (crafted or bought at plan
-                // quantity), so the evidence plan's per-world costs and split
-                // recommendation apply at exactly this demand.
-                itemCost = GetMinimumItemCost(evidence);
-                minCostByItem[key] = itemCost;
-            }
-
-            if (!itemCost.complete)
-            {
-                return (0, false);
-            }
-
-            total = Add(total, itemCost.cost);
-        }
-
-        return (total, true);
-    }
-
-    private static (long Cost, bool Complete) GetMinimumItemCost(DetailedShoppingPlan plan)
-    {
-        var bestWorldCost = long.MaxValue;
-        foreach (var world in plan.WorldOptions)
-        {
-            if (world.HasSufficientStock && world.TotalCost < bestWorldCost)
-            {
-                bestWorldCost = world.TotalCost;
-            }
-        }
-
-        if (bestWorldCost < long.MaxValue)
-        {
-            return (bestWorldCost, true);
-        }
-
-        if (plan.RecommendedSplit is { Count: > 0 } split &&
-            split.Sum(part => part.QuantityToBuy) >= plan.QuantityNeeded)
-        {
-            return (split.Sum(part => part.TotalCost), true);
-        }
-
-        return (0, false);
     }
 
     private static List<DetailedShoppingPlan>? BuildDemandPlans(
@@ -639,7 +512,10 @@ public sealed class JointAcquisitionRouteOptimizationService
         long fixedGilCost,
         MarketRouteDecision? cheapestRoute,
         IReadOnlyList<MarketRouteFrontierOption> representativeRoutes,
-        bool acquisitionSearchWasTruncated)
+        bool acquisitionSearchWasTruncated,
+        bool routeSearchWasTruncated,
+        bool travelSearchWasTruncated,
+        int travelRoutesEvaluated)
     {
         return new MarketRouteDecision(
             config.TravelTolerance,
@@ -658,7 +534,10 @@ public sealed class JointAcquisitionRouteOptimizationService
             route?.ItemDecisions)
         {
             FixedAcquisitionGilCost = fixedGilCost,
-            AcquisitionSearchWasTruncated = acquisitionSearchWasTruncated
+            AcquisitionSearchWasTruncated = acquisitionSearchWasTruncated,
+            RouteSearchWasTruncated = routeSearchWasTruncated,
+            TravelSearchWasTruncated = travelSearchWasTruncated,
+            TravelRoutesEvaluated = travelRoutesEvaluated
         };
     }
 
@@ -762,7 +641,7 @@ public sealed class JointAcquisitionRouteOptimizationService
             return long.MaxValue;
         }
 
-        var maximum = decimal.Ceiling(cheapestTotal * (1m + premiumRate.Value));
+        var maximum = decimal.Floor(cheapestTotal * (1m + premiumRate.Value));
         return ToLong(maximum);
     }
 

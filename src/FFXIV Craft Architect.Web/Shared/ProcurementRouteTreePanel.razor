@@ -49,7 +49,21 @@
         {
             <div class="pp-decision-warning" role="status">
                 <MudIcon Icon="@Icons.Material.Filled.Tune" Size="Size.Small" />
-                <span>This plan has more make-or-buy combinations than CA can exhaustively compare at once. Lock a few acquisition choices, then regenerate for an exact search.</span>
+                <span>This plan has more make-or-buy combinations than CA can exhaustively compare at once. Lock a few acquisition choices, then regenerate for a narrower comparison.</span>
+            </div>
+        }
+        @if (RouteDecision.TravelSearchWasTruncated)
+        {
+            <div class="pp-decision-warning" role="status">
+                <MudIcon Icon="@Icons.Material.Filled.Route" Size="Size.Small" />
+                <span>CA reached its travel-search work limit after comparing @RouteDecision.TravelRoutesEvaluated.ToString("N0") complete routes. This is the best complete route found, not a proven optimum.</span>
+            </div>
+        }
+        @if (RouteDecision.RouteSearchWasTruncated)
+        {
+            <div class="pp-decision-warning" role="status">
+                <MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small" />
+                <span>Some per-route combinations exceeded the local search width. The displayed route is complete but approximate.</span>
             </div>
         }
     }

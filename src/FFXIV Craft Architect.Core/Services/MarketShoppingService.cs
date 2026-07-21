@@ -40,6 +40,7 @@ namespace FFXIV_Craft_Architect.Core.Services;
 /// </summary>
 public class MarketShoppingService
 {
+    private const int MaxProcurementRouteBeamWidth = 64;
 
     private readonly IMarketCacheService _cacheService;
     private readonly IWorldStatusService? _worldStatusService;
@@ -298,6 +299,7 @@ public class MarketShoppingService
             new()
         };
         var lowestCostOnly = config.TravelTolerance == 11;
+        var routeSearchWasTruncated = false;
 
         for (var planIndex = 0; planIndex < candidatePlanIndexes.Count; planIndex++)
         {
@@ -349,7 +351,8 @@ public class MarketShoppingService
                 }
             }
 
-            beam = PruneRouteBeam(nextBeam);
+            beam = PruneRouteBeam(nextBeam, config, out var stepWasTruncated);
+            routeSearchWasTruncated |= stepWasTruncated;
 
             var completedItems = planIndex + 1;
             if (executionOptions.ShouldReportProgress(completedItems))
@@ -456,7 +459,10 @@ public class MarketShoppingService
                 config.StartFromHomeDataCenter ? config.HomeDataCenter : null,
                 config.TravelPriority,
                 representativeRoutes,
-                itemDecisions);
+                itemDecisions)
+            {
+                RouteSearchWasTruncated = routeSearchWasTruncated
+            };
 
         var isComplete = bestState.Choices.All(choice => choice.Candidate != null);
         return new ProcurementRouteOptimizationResult(plans, decision, isComplete);
@@ -1981,35 +1987,47 @@ public class MarketShoppingService
     }
 
     private static List<ProcurementRouteSearchState> PruneRouteBeam(
-        IEnumerable<ProcurementRouteSearchState> states)
+        IEnumerable<ProcurementRouteSearchState> states,
+        MarketAnalysisConfig config,
+        out bool wasTruncated)
     {
-        var distinctStates = states
-            .GroupBy(state => state.RouteShapeKey, StringComparer.Ordinal)
-            .SelectMany(group =>
-            {
-                var values = group.ToList();
-                return values.Where(candidate => !values.Any(other =>
-                    !ReferenceEquals(candidate, other) &&
-                    other.TotalGilCost <= candidate.TotalGilCost &&
-                    other.TotalEvidencePenalty <= candidate.TotalEvidencePenalty &&
-                    (other.TotalGilCost < candidate.TotalGilCost ||
-                     other.TotalEvidencePenalty < candidate.TotalEvidencePenalty)));
-            })
-            .ToList();
-        var subsetFrontier = distinctStates
-            .Where(candidate => !distinctStates.Any(other =>
-                !ReferenceEquals(candidate, other) &&
-                string.Equals(candidate.MissingChoiceKey, other.MissingChoiceKey, StringComparison.Ordinal) &&
-                other.Route.Worlds.All(candidate.Route.ContainsWorld) &&
-                other.TotalGilCost <= candidate.TotalGilCost &&
-                other.TotalEvidencePenalty <= candidate.TotalEvidencePenalty &&
-                (other.Route.Worlds.Count < candidate.Route.Worlds.Count ||
-                 other.TotalGilCost < candidate.TotalGilCost ||
-                 other.TotalEvidencePenalty < candidate.TotalEvidencePenalty)))
-            .ToList();
+        var discardedParetoLabel = false;
+        var distinctStates = new List<ProcurementRouteSearchState>();
+        foreach (var group in states.GroupBy(state => state.RouteShapeKey, StringComparer.Ordinal))
+        {
+            var values = group.ToList();
+            var selected = values
+                .OrderBy(state => state.TotalGilCost)
+                .ThenBy(state => state.TotalEvidencePenalty)
+                .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
+                .First();
+            discardedParetoLabel |= values.Any(state => state.TotalEvidencePenalty < selected.TotalEvidencePenalty);
+            distinctStates.Add(selected);
+        }
 
-        return subsetFrontier
-            .OrderBy(state => state.RouteShapeKey, StringComparer.Ordinal)
+        wasTruncated = discardedParetoLabel || distinctStates.Count > MaxProcurementRouteBeamWidth;
+        if (!wasTruncated)
+        {
+            return OrderRouteStates(distinctStates, config).ToList();
+        }
+
+        if (distinctStates.Count <= MaxProcurementRouteBeamWidth)
+        {
+            return OrderRouteStates(distinctStates, config).ToList();
+        }
+
+        var preferred = OrderRouteStates(distinctStates, config)
+            .Take(MaxProcurementRouteBeamWidth - 16);
+        var cheapest = distinctStates
+            .OrderBy(state => state.TotalGilCost)
+            .ThenBy(state => state.TotalEvidencePenalty)
+            .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
+            .Take(16);
+
+        return preferred
+            .Concat(cheapest)
+            .DistinctBy(state => state.RouteShapeKey, StringComparer.Ordinal)
+            .Take(MaxProcurementRouteBeamWidth)
             .ToList();
     }
 
