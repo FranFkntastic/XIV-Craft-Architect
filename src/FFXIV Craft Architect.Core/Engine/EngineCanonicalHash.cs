@@ -48,6 +48,7 @@ public static class EngineCanonicalHash
         string procurementRouteResultHash,
         IReadOnlyDictionary<string, string> terminalEvidence)
     {
+        terminalEvidence = EngineEvidenceSnapshots.Freeze(terminalEvidence);
         var stableResult = new
         {
             request.ContractVersion,
@@ -80,8 +81,10 @@ public static class EngineCanonicalHash
     public static string ComputeRequestValidationFailureHash(
         EngineRequestEnvelope request,
         EngineTerminalStatus status,
-        IReadOnlyDictionary<string, string> terminalEvidence) =>
-        Compute(new
+        IReadOnlyDictionary<string, string> terminalEvidence)
+    {
+        terminalEvidence = EngineEvidenceSnapshots.Freeze(terminalEvidence);
+        return Compute(new
         {
             Domain = "engine-invalid-request-terminal-v1",
             request.ContractVersion,
@@ -89,6 +92,7 @@ public static class EngineCanonicalHash
             Status = status,
             TerminalEvidence = terminalEvidence
         });
+    }
 
     public static string ComputeComputationHash(
         long generation,
@@ -102,6 +106,7 @@ public static class EngineCanonicalHash
         IReadOnlyDictionary<string, string> computationEvidence,
         EngineFailure? failure)
     {
+        computationEvidence = EngineEvidenceSnapshots.Freeze(computationEvidence);
         var boundComputation = new
         {
             Domain = "engine-computation-v1",

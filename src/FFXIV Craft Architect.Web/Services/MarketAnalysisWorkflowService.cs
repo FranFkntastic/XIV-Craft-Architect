@@ -56,10 +56,11 @@ public sealed class MarketAnalysisWorkflowService
         var planSessionVersion = _appState.PlanSessionVersion;
         var planDecisionVersion = _appState.CurrentVersions.PlanDecisionVersion;
         var planId = _appState.CurrentPlanId;
+        var planName = _appState.CurrentPlanName;
         var candidateResult = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidateResultAsync(plan, ct);
         var materials = candidateResult?.Candidates.ToList() ?? [];
         var recipeBasis = candidateResult?.RecipeBasis;
-        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        if (!IsCurrentPlanIdentity(plan, planSessionVersion, planId, planName))
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, 0);
         }
@@ -106,7 +107,7 @@ public sealed class MarketAnalysisWorkflowService
             executionOptions: executionOptions);
         ct.ThrowIfCancellationRequested();
 
-        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
+        if (!IsCurrentPlanIdentity(plan, planSessionVersion, planId, planName))
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, reconciliation.FetchedCount);
         }
@@ -127,6 +128,7 @@ public sealed class MarketAnalysisWorkflowService
             planSessionVersion,
             planDecisionVersion,
             planId,
+            planName,
             reconciliation.Analyses,
             reconciliation.ShoppingPlans.ToList(),
             recipeBasis,
@@ -163,6 +165,7 @@ public sealed class MarketAnalysisWorkflowService
         var planSessionVersion = _appState.PlanSessionVersion;
         var planDecisionVersion = _appState.CurrentVersions.PlanDecisionVersion;
         var planId = _appState.CurrentPlanId;
+        var planName = _appState.CurrentPlanName;
         var shoppingPlans = _appState.MarketItemAnalyses
             .Select(analysis => _marketPriceLadderAnalysis.ProjectToShoppingPlan(analysis, lens))
             .ToList();
@@ -171,6 +174,7 @@ public sealed class MarketAnalysisWorkflowService
             planSessionVersion,
             planDecisionVersion,
             planId,
+            planName,
             _appState.MarketItemAnalyses,
             shoppingPlans,
             _appState.MarketAnalysisRecipeBasis,
@@ -193,6 +197,7 @@ public sealed class MarketAnalysisWorkflowService
         long planSessionVersion,
         long planDecisionVersion,
         string? planId,
+        string? planName,
         IEnumerable<MarketItemAnalysis> analyses,
         List<DetailedShoppingPlan> shoppingPlans,
         StoredRecipeOperationSnapshot? recipeBasis,
@@ -210,6 +215,7 @@ public sealed class MarketAnalysisWorkflowService
                 planSessionVersion,
                 planDecisionVersion,
                 planId,
+                planName,
                 analyses.ToList(),
                 shoppingPlans,
                 recipeBasis,
@@ -228,6 +234,15 @@ public sealed class MarketAnalysisWorkflowService
                string.Equals(snapshot.SelectedRegion, _appState.SelectedRegion, StringComparison.Ordinal) &&
                snapshot.Lens == _appState.MarketAnalysisLens;
     }
+
+    private bool IsCurrentPlanIdentity(
+        CraftingPlan? plan,
+        long planSessionVersion,
+        string? planId,
+        string? planName) =>
+        _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
+        string.Equals(_appState.CurrentPlanId, planId, StringComparison.Ordinal) &&
+        string.Equals(_appState.CurrentPlanName, planName, StringComparison.Ordinal);
 
     private sealed record MarketAnalysisRequestSnapshot(
         MarketFetchScope Scope,

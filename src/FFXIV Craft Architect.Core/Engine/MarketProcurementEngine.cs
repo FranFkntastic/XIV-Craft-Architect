@@ -117,6 +117,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
                 new ReferenceEngineResultSnapshot(analysisSnapshot, routeSnapshot),
                 EngineJsonSerializerOptions.CreateWire());
             computationEvidence["resultPayloadHash"] = EngineCanonicalHash.Compute(resultElement);
+            var frozenEvidence = EngineEvidenceSnapshots.Freeze(computationEvidence);
             var computationHash = EngineCanonicalHash.ComputeComputationHash(
                 generation,
                 executionId,
@@ -126,7 +127,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
                 computationEvidence["resultPayloadHash"],
                 analysisHash,
                 routeHash,
-                computationEvidence,
+                frozenEvidence,
                 null);
             return new EngineComputationResult(
                 request.ContractVersion,
@@ -146,7 +147,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
                 analysisHash,
                 routeHash,
                 computationHash,
-                computationEvidence);
+                frozenEvidence);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -208,6 +209,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
         var failure = status == EngineComputationStatus.Failed
             ? new EngineFailure(code, message, false, failedPhase, failureType)
             : null;
+        var frozenEvidence = EngineEvidenceSnapshots.Freeze(evidence);
         var computationHash = EngineCanonicalHash.ComputeComputationHash(
             generation,
             executionId,
@@ -217,7 +219,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             string.Empty,
             string.Empty,
             string.Empty,
-            evidence,
+            frozenEvidence,
             failure);
         return new EngineComputationResult(
             request.ContractVersion,
@@ -237,7 +239,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             string.Empty,
             string.Empty,
             computationHash,
-            evidence,
+            frozenEvidence,
             failure);
     }
 

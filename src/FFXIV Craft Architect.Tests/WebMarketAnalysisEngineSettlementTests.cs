@@ -424,6 +424,66 @@ public sealed class WebMarketAnalysisEngineSettlementTests
     }
 
     [Theory]
+    [InlineData("id")]
+    [InlineData("name")]
+    public async Task Settlement_RejectsPlanIdentityChangeBeforePersistenceWithoutWriting(string mutation)
+    {
+        var fixture = new SettlementFixture(namedPlan: true);
+        await fixture.SettleAsync(EnginePhase.Publishing);
+        fixture.AppState.TrackCurrentPlanIdentity(
+            mutation == "id" ? "replacement-plan" : "named-plan",
+            mutation == "name" ? "Replacement plan" : "Named plan");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.SettleAsync(EnginePhase.Persisting));
+
+        Assert.Empty(fixture.Store.NamedSnapshots);
+        Assert.Empty(fixture.Store.AutoSaveSnapshots);
+    }
+
+    [Theory]
+    [InlineData("named")]
+    [InlineData("autosave")]
+    public async Task Settlement_PersistenceAwaitsKeepPlanIdAndNameFromOneCapturedIdentity(string awaitedSave)
+    {
+        var fixture = new SettlementFixture(namedPlan: true);
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (awaitedSave == "named")
+        {
+            fixture.Store.NamedSaveCompletion = completion;
+        }
+        else
+        {
+            fixture.Store.AutoSaveCompletion = completion;
+        }
+        await fixture.SettleAsync(EnginePhase.Publishing);
+
+        var persistence = fixture.SettleAsync(EnginePhase.Persisting);
+        Assert.False(persistence.IsCompleted);
+        var written = awaitedSave == "named"
+            ? Assert.Single(fixture.Store.NamedSnapshots)
+            : Assert.Single(fixture.Store.AutoSaveSnapshots);
+        Assert.Equal("named-plan", written.PlanId);
+        Assert.Equal("Named plan", written.PlanName);
+
+        fixture.AppState.TrackCurrentPlanIdentity("replacement-plan", "Replacement plan");
+        completion.SetResult(true);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => persistence);
+        Assert.All(
+            fixture.Store.NamedSnapshots.Concat(fixture.Store.AutoSaveSnapshots),
+            snapshot =>
+            {
+                Assert.Equal("named-plan", snapshot.PlanId);
+                Assert.Equal("Named plan", snapshot.PlanName);
+            });
+        if (awaitedSave == "named")
+        {
+            Assert.Empty(fixture.Store.AutoSaveSnapshots);
+        }
+    }
+
+    [Theory]
     [InlineData("named")]
     [InlineData("autosave")]
     public async Task Settlement_RejectsSettingsChangesDuringEveryPersistenceAwait(string awaitedSave)
@@ -628,10 +688,20 @@ public sealed class WebMarketAnalysisEngineSettlementTests
         var replacementRequest = fixture.Request with { TransactionId = Guid.NewGuid() };
 
         Assert.Throws<InvalidOperationException>(() =>
-            fixture.Registry.Register(fixture.Registration with { EngineRequest = replacementRequest }));
+            fixture.Registry.Register(fixture.Registration with
+            {
+                EngineRequest = replacementRequest,
+                OwnsOperationGateLease = false
+            }));
+        Assert.True(fixture.Gate.IsHeld);
+        Assert.Equal(0, fixture.Gate.ReleaseAttempts);
         Assert.Equal(EngineTerminalStatus.Succeeded, (await fixture.CreateHost().ExecuteAsync(fixture.Request)).Status);
 
-        fixture.Registry.Register(fixture.Registration with { EngineRequest = replacementRequest });
+        fixture.Registry.Register(fixture.Registration with
+        {
+            EngineRequest = replacementRequest,
+            OwnsOperationGateLease = false
+        });
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             fixture.Settlement.ObserveAsync(
@@ -661,6 +731,25 @@ public sealed class WebMarketAnalysisEngineSettlementTests
 
         Assert.False(gate.IsHeld);
         Assert.Equal(1, gate.ReleaseAttempts);
+    }
+
+    [Fact]
+    public void Registry_ConflictAliasingExistingGateDoesNotReleaseExistingOwnerLease()
+    {
+        var fixture = new SettlementFixture();
+        var conflicting = fixture.Registration with
+        {
+            EngineRequest = fixture.Request with
+            {
+                Input = JsonSerializer.SerializeToElement(new { conflicting = true })
+            },
+            OwnsOperationGateLease = false
+        };
+
+        Assert.Throws<InvalidOperationException>(() => fixture.Registry.Register(conflicting));
+
+        Assert.True(fixture.Gate.IsHeld);
+        Assert.Equal(0, fixture.Gate.ReleaseAttempts);
     }
 
     [Fact]
@@ -764,6 +853,7 @@ public sealed class WebMarketAnalysisEngineSettlementTests
                 Domain = "web-app-state-session-v1",
                 PlanObjectId = plan.Id,
                 AppState.CurrentPlanId,
+                AppState.CurrentPlanName,
                 AppState.PlanSessionVersion,
                 versions.PlanStructureVersion,
                 versions.PlanDecisionVersion,
@@ -832,6 +922,7 @@ public sealed class WebMarketAnalysisEngineSettlementTests
                 AppState.PlanSessionVersion,
                 AppState.CurrentVersions.PlanDecisionVersion,
                 AppState.CurrentPlanId,
+                AppState.CurrentPlanName,
                 AnalysisResult.Analyses,
                 AnalysisResult.ShoppingPlans,
                 RecipeBasis: null,
@@ -855,12 +946,14 @@ public sealed class WebMarketAnalysisEngineSettlementTests
                     versions.MarketAnalysisVersion,
                     versions.SettingsVersion,
                     AppState.CurrentPlanId,
+                    AppState.CurrentPlanName,
                     AppState.RecommendationMode,
                     AppState.MarketAnalysisLens,
                     planSemanticHash,
                     sessionSemanticHash,
                     rootIntentHash),
-                new WebEngineOperationGate(() => Gate.IsHeld, Gate.Release));
+                new WebEngineOperationGate(() => Gate.IsHeld, Gate.Release),
+                OwnsOperationGateLease: true);
             Registry.Register(Registration);
             Settlement = enableTestExecution
                 ? CreateSettlementForTesting(

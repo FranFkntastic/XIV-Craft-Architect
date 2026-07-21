@@ -80,6 +80,7 @@ public sealed class EngineWorkerClient : IAsyncDisposable
     private readonly List<ProgressSubscription> _progressSubscriptions = [];
     private readonly TimeSpan _cancellationTimeout;
     private readonly TimeSpan _responseTimeoutDuration;
+    private readonly TimeSpan _transportTimeout;
     private TaskCompletionSource<EngineComputationResult>? _completion;
     private EngineRequestEnvelope? _request;
     private WorkerExecutionIdentity? _execution;
@@ -99,12 +100,16 @@ public sealed class EngineWorkerClient : IAsyncDisposable
     public EngineWorkerClient(
         IEngineWorkerTransport transport,
         TimeSpan? cancellationTimeout = null,
-        TimeSpan? responseTimeout = null)
+        TimeSpan? responseTimeout = null,
+        TimeSpan? transportTimeout = null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _cancellationTimeout = cancellationTimeout ?? TimeSpan.FromSeconds(10);
         _responseTimeoutDuration = responseTimeout ?? TimeSpan.FromMinutes(2);
-        if (_cancellationTimeout <= TimeSpan.Zero || _responseTimeoutDuration <= TimeSpan.Zero)
+        _transportTimeout = transportTimeout ?? TimeSpan.FromSeconds(10);
+        if (_cancellationTimeout <= TimeSpan.Zero ||
+            _responseTimeoutDuration <= TimeSpan.Zero ||
+            _transportTimeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(cancellationTimeout));
         }
@@ -179,10 +184,10 @@ public sealed class EngineWorkerClient : IAsyncDisposable
             {
                 break;
             }
-            await transition.WaitAsync(cancellationToken);
+            await AwaitBoundedAsync(transition, cancellationToken, "worker restart barrier");
         }
 
-        await _lifecycle.WaitAsync(cancellationToken);
+        await WaitLifecycleAsync(cancellationToken, "worker startup lifecycle lock");
         try
         {
             lock (_sync)
@@ -230,15 +235,18 @@ public sealed class EngineWorkerClient : IAsyncDisposable
 
         try
         {
-            await _transport.SendAsync(
-                new EngineWorkerMessage(
-                    ProtocolVersion,
-                    "execute",
-                    execution.Generation,
-                    execution.ExecutionId,
-                    execution.TransactionId,
-                    JsonSerializer.SerializeToElement(request, WireJsonOptions)),
-                cancellationToken);
+            await InvokeTransportAsync(
+                token => _transport.SendAsync(
+                    new EngineWorkerMessage(
+                        ProtocolVersion,
+                        "execute",
+                        execution.Generation,
+                        execution.ExecutionId,
+                        execution.TransactionId,
+                        JsonSerializer.SerializeToElement(request, WireJsonOptions)),
+                    token),
+                cancellationToken,
+                "worker execution dispatch");
             return await completion.Task.WaitAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -391,7 +399,10 @@ public sealed class EngineWorkerClient : IAsyncDisposable
 
         try
         {
-            var capability = await _transport.StartAsync(generation, startup.Token);
+            var capability = await InvokeTransportAsync(
+                token => _transport.StartAsync(generation, token),
+                startup.Token,
+                "worker startup");
             cancellationToken.ThrowIfCancellationRequested();
             if (!capability.DedicatedWorker ||
                 capability.Generation != generation ||
@@ -451,7 +462,7 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         await Task.Yield();
-        await _lifecycle.WaitAsync(CancellationToken.None);
+        await WaitLifecycleAsync(CancellationToken.None, "worker restart lifecycle lock");
         try
         {
             var terminationFailure = await TryTerminateWorkerAsync();
@@ -493,7 +504,7 @@ public sealed class EngineWorkerClient : IAsyncDisposable
     private async Task DisposeCoreAsync(TaskCompletionSource<EngineComputationResult>? completion)
     {
         await Task.Yield();
-        await _lifecycle.WaitAsync(CancellationToken.None);
+        await WaitLifecycleAsync(CancellationToken.None, "worker disposal lifecycle lock");
         Exception? terminationFailure = null;
         Exception? disposalFailure = null;
         try
@@ -502,7 +513,10 @@ public sealed class EngineWorkerClient : IAsyncDisposable
             completion?.TrySetCanceled(new CancellationToken(canceled: true));
             try
             {
-                await _transport.DisposeAsync();
+                await AwaitBoundedAsync(
+                    _transport.DisposeAsync().AsTask(),
+                    CancellationToken.None,
+                    "worker transport disposal");
                 _workerMayBeAlive = false;
                 terminationFailure = null;
             }
@@ -536,7 +550,10 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         }
         try
         {
-            await _transport.TerminateAsync(CancellationToken.None);
+            await InvokeTransportAsync(
+                token => _transport.TerminateAsync(token),
+                CancellationToken.None,
+                "worker termination");
             _workerMayBeAlive = false;
             return null;
         }
@@ -563,22 +580,25 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         CancellationDispatch cancellation,
         CancellationToken cancellationToken)
     {
-        await _transport.SendAsync(
-            new EngineWorkerMessage(
-                ProtocolVersion,
-                "cancel",
-                cancellation.Execution.Generation,
-                cancellation.Execution.ExecutionId,
-                cancellation.Execution.TransactionId,
-                JsonSerializer.SerializeToElement(
-                    new EngineCancelRequest(
-                        cancellation.ContractVersion,
-                        cancellation.Execution.Generation,
-                        cancellation.Execution.ExecutionId,
-                        cancellation.Execution.TransactionId,
-                        cancellation.Reason),
-                    WireJsonOptions)),
-            cancellationToken);
+        await InvokeTransportAsync(
+            token => _transport.SendAsync(
+                new EngineWorkerMessage(
+                    ProtocolVersion,
+                    "cancel",
+                    cancellation.Execution.Generation,
+                    cancellation.Execution.ExecutionId,
+                    cancellation.Execution.TransactionId,
+                    JsonSerializer.SerializeToElement(
+                        new EngineCancelRequest(
+                            cancellation.ContractVersion,
+                            cancellation.Execution.Generation,
+                            cancellation.Execution.ExecutionId,
+                            cancellation.Execution.TransactionId,
+                            cancellation.Reason),
+                        WireJsonOptions)),
+                token),
+            cancellationToken,
+            "worker cancellation dispatch");
         lock (_sync)
         {
             if (IsCurrentExecutionLocked(cancellation.Execution) &&
@@ -661,7 +681,7 @@ public sealed class EngineWorkerClient : IAsyncDisposable
             RejectSettlementAuthority(resultPayload);
             var computation = resultPayload.Deserialize<EngineComputationResult>(WireJsonOptions)
                 ?? throw new InvalidOperationException("Worker computation-result payload is empty.");
-            EngineComputationResultValidation.Validate(
+            computation = EngineComputationResultValidation.Validate(
                 execution.Generation,
                 execution.ExecutionId,
                 request,
@@ -848,10 +868,12 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         TaskCompletionSource<EngineComputationResult>? completion)
     {
         await Task.Yield();
-        await _lifecycle.WaitAsync(CancellationToken.None);
         Exception terminalException = exception;
+        var lifecycleAcquired = false;
         try
         {
+            await WaitLifecycleAsync(CancellationToken.None, "fault termination lifecycle lock");
+            lifecycleAcquired = true;
             var terminationFailure = await TryTerminateWorkerAsync();
             if (terminationFailure is not null)
             {
@@ -868,11 +890,93 @@ public sealed class EngineWorkerClient : IAsyncDisposable
                 }
             }
         }
+        catch (Exception terminationFailure)
+        {
+            terminalException = new AggregateException(
+                "The engine worker faulted and cleanup did not terminate cleanly.",
+                exception,
+                terminationFailure);
+            lock (_sync)
+            {
+                if (!_disposeRequested)
+                {
+                    _state = EngineWorkerLifecycleState.Faulted;
+                }
+            }
+        }
         finally
         {
-            _lifecycle.Release();
+            if (lifecycleAcquired)
+            {
+                _lifecycle.Release();
+            }
+            completion?.TrySetException(terminalException);
         }
-        completion?.TrySetException(terminalException);
+    }
+
+    private async Task<T> InvokeTransportAsync<T>(
+        Func<CancellationToken, Task<T>> operation,
+        CancellationToken cancellationToken,
+        string operationName)
+    {
+        using var deadline = new CancellationTokenSource(_transportTimeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        try
+        {
+            return await operation(linked.Token).WaitAsync(linked.Token);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"The {operationName} did not terminate before its deadline.");
+        }
+    }
+
+    private async Task InvokeTransportAsync(
+        Func<CancellationToken, Task> operation,
+        CancellationToken cancellationToken,
+        string operationName)
+    {
+        using var deadline = new CancellationTokenSource(_transportTimeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        try
+        {
+            await operation(linked.Token).WaitAsync(linked.Token);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"The {operationName} did not terminate before its deadline.");
+        }
+    }
+
+    private async Task AwaitBoundedAsync(
+        Task task,
+        CancellationToken cancellationToken,
+        string operationName)
+    {
+        using var deadline = new CancellationTokenSource(_transportTimeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        try
+        {
+            await task.WaitAsync(linked.Token);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"The {operationName} did not terminate before its deadline.");
+        }
+    }
+
+    private async Task WaitLifecycleAsync(CancellationToken cancellationToken, string operationName)
+    {
+        using var deadline = new CancellationTokenSource(_transportTimeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        try
+        {
+            await _lifecycle.WaitAsync(linked.Token);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"The {operationName} did not terminate before its deadline.");
+        }
     }
 
     private void ClearExecutionLocked()

@@ -11,6 +11,7 @@ public sealed record MarketAnalysisPublicationRequest(
     long PlanSessionVersion,
     long PlanDecisionVersion,
     string? PlanId,
+    string? PlanName,
     IReadOnlyList<MarketItemAnalysis> Analyses,
     List<DetailedShoppingPlan> ShoppingPlans,
     StoredRecipeOperationSnapshot? RecipeBasis,
@@ -43,6 +44,7 @@ public sealed record MarketAnalysisPersistenceSnapshot(
             PlanSessionVersion,
             PlanDecisionVersion,
             PlanId,
+            PlanName,
             Analyses,
             ShoppingPlans.ToList(),
             RecipeBasis,
@@ -267,7 +269,7 @@ public sealed class MarketAnalysisPublicationService
             snapshotRequest.PlanSessionVersion,
             snapshotRequest.PlanDecisionVersion,
             snapshotRequest.PlanId,
-            _appState.CurrentPlanName,
+            snapshotRequest.PlanName,
             _appState.SelectedDataCenter,
             capturedAtUtc ?? DateTime.UtcNow,
             _appState.ProjectItems.Select(item => new StoredProjectItem
@@ -404,25 +406,37 @@ public sealed class MarketAnalysisPublicationService
 
         if (ShouldPersistNamedPlan(publication))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsCurrent(publication.Request))
+            {
+                return null;
+            }
             await PersistNamedPlanAsync(publication);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsCurrent(publication.Request))
+            {
+                return null;
+            }
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_appState.IsCurrentPlanSession(request.Plan, request.PlanSessionVersion))
+        if (!IsCurrent(publication.Request))
         {
             return null;
         }
 
         await AutoSaveAsync(publication);
         cancellationToken.ThrowIfCancellationRequested();
-        return _appState.IsCurrentPlanSession(request.Plan, request.PlanSessionVersion)
+        return IsCurrent(publication.Request)
             ? publication
             : null;
     }
 
     private bool IsCurrent(MarketAnalysisPublicationRequest request) =>
         _appState.IsCurrentPlanSession(request.Plan, request.PlanSessionVersion) &&
-        _appState.CurrentVersions.PlanDecisionVersion == request.PlanDecisionVersion;
+        _appState.CurrentVersions.PlanDecisionVersion == request.PlanDecisionVersion &&
+        string.Equals(_appState.CurrentPlanId, request.PlanId, StringComparison.Ordinal) &&
+        string.Equals(_appState.CurrentPlanName, request.PlanName, StringComparison.Ordinal);
 
     private static T Clone<T>(T value, JsonSerializerOptions options) =>
         JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, options), options)
@@ -438,6 +452,7 @@ public sealed class MarketAnalysisPublicationService
             request.PlanSessionVersion,
             request.PlanDecisionVersion,
             request.PlanId,
+            request.PlanName,
             request.Analyses,
             request.ShoppingPlans,
             request.RecipeBasis,

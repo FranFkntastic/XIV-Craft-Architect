@@ -23,7 +23,8 @@ public sealed record WebMarketAnalysisSettlementRegistration(
     MarketAnalysisExecutionResult AnalysisResult,
     WebMarketAnalysisExpectedSemanticHashes ExpectedSemanticHashes,
     WebMarketAnalysisAppStateBinding AppStateBinding,
-    WebEngineOperationGate OperationGate);
+    WebEngineOperationGate OperationGate,
+    bool OwnsOperationGateLease);
 
 public sealed record WebMarketAnalysisAppStateBinding(
     long PlanSessionVersion,
@@ -34,6 +35,7 @@ public sealed record WebMarketAnalysisAppStateBinding(
     long MarketAnalysisVersion,
     long SettingsVersion,
     string? PlanId,
+    string? PlanName,
     RecommendationMode RecommendationMode,
     MarketAcquisitionLens MarketAnalysisLens,
     string PlanSemanticHash,
@@ -92,49 +94,52 @@ public sealed class WebEngineTransactionContextRegistry
             requestHash = EngineCanonicalHash.Compute(
                 snapshot.EngineRequest,
                 EngineJsonSerializerOptions.CreateWire());
+            var transaction = new RegisteredTransaction(snapshot, requestHash);
+            lock (_sync)
+            {
+                if (_transactions.TryGetValue(snapshot.EngineRequest.TransactionId, out var existing))
+                {
+                    if (!string.Equals(existing.RequestHash, requestHash, StringComparison.Ordinal) ||
+                        !SamePublicationContext(existing.Registration, snapshot))
+                    {
+                        if (string.Equals(existing.RequestHash, requestHash, StringComparison.Ordinal) &&
+                            existing.CanReplaceRegistration)
+                        {
+                            _transactions[snapshot.EngineRequest.TransactionId] = transaction;
+                            transaction.LastAccess = ++_accessSequence;
+                            return;
+                        }
+                        throw new InvalidOperationException("The transaction id is already bound to a different settlement context.");
+                    }
+
+                    existing.LastAccess = ++_accessSequence;
+                    return;
+                }
+
+                if (_transactions.Count >= _capacity)
+                {
+                    var evictable = _transactions
+                        .Where(pair => pair.Value.IsTerminal)
+                        .OrderBy(pair => pair.Value.LastAccess)
+                        .FirstOrDefault();
+                    if (evictable.Value is null)
+                    {
+                        throw new InvalidOperationException("The Web engine settlement registry has reached capacity.");
+                    }
+                    _transactions.Remove(evictable.Key);
+                }
+
+                transaction.LastAccess = ++_accessSequence;
+                _transactions.Add(snapshot.EngineRequest.TransactionId, transaction);
+            }
         }
         catch
         {
-            TryReleaseRejectedRegistrationGate(registration.OperationGate);
+            if (registration.OwnsOperationGateLease)
+            {
+                TryReleaseRejectedRegistrationGate(registration.OperationGate);
+            }
             throw;
-        }
-        var transaction = new RegisteredTransaction(snapshot, requestHash);
-        lock (_sync)
-        {
-            if (_transactions.TryGetValue(snapshot.EngineRequest.TransactionId, out var existing))
-            {
-                if (!string.Equals(existing.RequestHash, requestHash, StringComparison.Ordinal) ||
-                    !SamePublicationContext(existing.Registration, snapshot))
-                {
-                    if (string.Equals(existing.RequestHash, requestHash, StringComparison.Ordinal) &&
-                        existing.CanReplaceRegistration)
-                    {
-                        _transactions[snapshot.EngineRequest.TransactionId] = transaction;
-                        transaction.LastAccess = ++_accessSequence;
-                        return;
-                    }
-                    throw new InvalidOperationException("The transaction id is already bound to a different settlement context.");
-                }
-
-                existing.LastAccess = ++_accessSequence;
-                return;
-            }
-
-            if (_transactions.Count >= _capacity)
-            {
-                var evictable = _transactions
-                    .Where(pair => pair.Value.IsTerminal)
-                    .OrderBy(pair => pair.Value.LastAccess)
-                    .FirstOrDefault();
-                if (evictable.Value is null)
-                {
-                    throw new InvalidOperationException("The Web engine settlement registry has reached capacity.");
-                }
-                _transactions.Remove(evictable.Key);
-            }
-
-            transaction.LastAccess = ++_accessSequence;
-            _transactions.Add(snapshot.EngineRequest.TransactionId, transaction);
         }
     }
 
@@ -550,7 +555,10 @@ public sealed class WebMarketAnalysisEngineTransactionSettlement :
             bool saved;
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 saved = await _publicationService.PersistNamedPlanAsync(publication);
+                ValidateContext(transaction, context);
+                EnsurePublicationPayloadUnchanged(transaction);
             }
             catch
             {
@@ -565,17 +573,7 @@ public sealed class WebMarketAnalysisEngineTransactionSettlement :
 
             transaction.NamedPlanPersisted = true;
             transaction.PersistenceIndeterminate = true;
-            try
-            {
-                ValidateContext(transaction, context);
-                EnsurePublicationPayloadUnchanged(transaction);
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-            catch
-            {
-                transaction.PersistenceIndeterminate = true;
-                throw;
-            }
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         if (!transaction.AutoSavePersisted)
@@ -587,6 +585,8 @@ public sealed class WebMarketAnalysisEngineTransactionSettlement :
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 saved = await _publicationService.AutoSaveAsync(publication);
+                ValidateContext(transaction, context);
+                EnsurePublicationPayloadUnchanged(transaction);
             }
             catch
             {
@@ -601,16 +601,6 @@ public sealed class WebMarketAnalysisEngineTransactionSettlement :
 
             transaction.AutoSavePersisted = true;
             transaction.PersistenceIndeterminate = true;
-            try
-            {
-                ValidateContext(transaction, context);
-                EnsurePublicationPayloadUnchanged(transaction);
-            }
-            catch
-            {
-                transaction.PersistenceIndeterminate = true;
-                throw;
-            }
         }
 
         transaction.PersistenceIndeterminate = false;
@@ -896,6 +886,7 @@ public sealed class WebMarketAnalysisEngineTransactionSettlement :
             versions.MarketAnalysisVersion,
             versions.SettingsVersion,
             _appState.CurrentPlanId,
+            _appState.CurrentPlanName,
             _appState.RecommendationMode,
             _appState.MarketAnalysisLens,
             planSemanticHash,
@@ -919,6 +910,7 @@ public sealed class WebMarketAnalysisEngineTransactionSettlement :
             Domain = "web-app-state-session-v1",
             PlanObjectId = plan.Id,
             appState.CurrentPlanId,
+            appState.CurrentPlanName,
             appState.PlanSessionVersion,
             versions.PlanStructureVersion,
             versions.PlanDecisionVersion,
@@ -944,6 +936,7 @@ public sealed class WebMarketAnalysisEngineTransactionSettlement :
             publication.PlanSessionVersion != actual.PlanSessionVersion ||
             publication.PlanDecisionVersion != actual.PlanDecisionVersion ||
             !string.Equals(publication.PlanId, actual.PlanId, StringComparison.Ordinal) ||
+            !string.Equals(publication.PlanName, actual.PlanName, StringComparison.Ordinal) ||
             !string.Equals(registration.EngineRequest.RootIntentHash, actual.RootIntentHash, StringComparison.Ordinal) ||
             !string.Equals(registration.EngineRequest.Basis.Plan.Hash, actual.PlanSemanticHash, StringComparison.Ordinal) ||
             !string.Equals(registration.EngineRequest.Basis.Session.Hash, actual.SessionSemanticHash, StringComparison.Ordinal) ||
@@ -987,6 +980,7 @@ public sealed class WebMarketAnalysisEngineTransactionSettlement :
             actual.MarketAnalysisVersion != before.MarketAnalysisVersion ||
             actual.SettingsVersion != before.SettingsVersion ||
             !string.Equals(actual.PlanId, before.PlanId, StringComparison.Ordinal) ||
+            !string.Equals(actual.PlanName, before.PlanName, StringComparison.Ordinal) ||
             actual.RecommendationMode != before.RecommendationMode ||
             actual.MarketAnalysisLens != before.MarketAnalysisLens ||
             !string.Equals(actual.PlanSemanticHash, before.PlanSemanticHash, StringComparison.Ordinal) ||
@@ -1021,6 +1015,7 @@ public sealed class WebMarketAnalysisEngineTransactionSettlement :
             actual.MarketAnalysisVersion != before.MarketAnalysisVersion + 1 ||
             actual.SettingsVersion != before.SettingsVersion ||
             !string.Equals(actual.PlanId, before.PlanId, StringComparison.Ordinal) ||
+            !string.Equals(actual.PlanName, before.PlanName, StringComparison.Ordinal) ||
             actual.RecommendationMode != before.RecommendationMode ||
             actual.MarketAnalysisLens != before.MarketAnalysisLens ||
             !string.Equals(actual.PlanSemanticHash, before.PlanSemanticHash, StringComparison.Ordinal) ||

@@ -167,6 +167,30 @@ public sealed record EngineResultEnvelope(
     EngineCompletionEvidence Completion,
     EngineFailure? Failure = null);
 
+internal static class EngineEvidenceSnapshots
+{
+    public static IReadOnlyDictionary<string, string> Freeze(IReadOnlyDictionary<string, string> evidence)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        return evidence
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .ToFrozenDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+    }
+
+    public static EngineResultEnvelope FreezeTerminal(EngineResultEnvelope result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(result.Completion);
+        return result with
+        {
+            Completion = result.Completion with
+            {
+                TerminalEvidence = Freeze(result.Completion.TerminalEvidence)
+            }
+        };
+    }
+}
+
 public sealed record EngineCancelRequest(
     string ContractVersion,
     long Generation,

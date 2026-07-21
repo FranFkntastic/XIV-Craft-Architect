@@ -4,7 +4,7 @@ namespace FFXIV_Craft_Architect.Core.Engine;
 
 public static class EngineComputationResultValidation
 {
-    public static void Validate(
+    public static EngineComputationResult Validate(
         long generation,
         Guid executionId,
         EngineRequestEnvelope request,
@@ -14,6 +14,10 @@ public static class EngineComputationResultValidation
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(computation);
         ArgumentNullException.ThrowIfNull(snapshots);
+        computation = computation with
+        {
+            ComputationEvidence = EngineEvidenceSnapshots.Freeze(computation.ComputationEvidence)
+        };
         if (computation.Generation != generation || computation.ExecutionId != executionId)
         {
             throw new InvalidOperationException("Stale engine computation identity was rejected.");
@@ -196,6 +200,7 @@ public static class EngineComputationResultValidation
         {
             throw new InvalidOperationException("Engine computation hash validation failed.");
         }
+        return computation;
     }
 
     private static void ValidatePhaseEvidence(EngineComputationResult computation, EnginePhase phase)

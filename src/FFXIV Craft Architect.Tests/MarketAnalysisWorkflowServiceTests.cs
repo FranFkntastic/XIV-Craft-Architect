@@ -202,6 +202,35 @@ public class MarketAnalysisWorkflowServiceTests
         Assert.Equal(0, jsRuntime.SavePlanCallCount);
     }
 
+    [Theory]
+    [InlineData("id")]
+    [InlineData("name")]
+    public async Task RunAnalysisAsync_WhenPlanIdentityChangesWithoutVersionAdvance_WritesNoPlanIdentity(string mutation)
+    {
+        var appState = new AppState();
+        appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
+        appState.TrackCurrentPlanIdentity("saved-plan", "Original plan");
+        var jsRuntime = new RecordingJsRuntime();
+        var execution = new Mock<IMarketAnalysisExecutionService>();
+        execution.Setup(e => e.ExecuteAsync(
+                It.IsAny<MarketAnalysisExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback(() => appState.TrackCurrentPlanIdentity(
+                mutation == "id" ? "replacement-plan" : "saved-plan",
+                mutation == "name" ? "Replacement plan" : "Original plan"))
+            .ReturnsAsync(CreateExecutionResult());
+        var service = CreateService(appState, execution.Object, jsRuntime);
+
+        var result = await service.RunAnalysisAsync(new MarketAnalysisWorkflowRequest(ForceRefreshData: false));
+
+        Assert.False(result.Published);
+        Assert.Empty(appState.MarketItemAnalyses);
+        Assert.Equal(0, jsRuntime.PatchMarketAnalysisCallCount);
+        Assert.Equal(0, jsRuntime.SavePlanCallCount);
+    }
+
     [Fact]
     public async Task RunAnalysisAsync_WhenMarketScopeChangesDuringExecution_DoesNotPublishStaleResults()
     {

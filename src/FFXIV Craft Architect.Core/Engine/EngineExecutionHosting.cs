@@ -219,6 +219,7 @@ public sealed class InMemoryEngineTransactionLedger : IEngineTransactionLedger
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(terminalResult);
+        terminalResult = EngineEvidenceSnapshots.FreezeTerminal(terminalResult);
         cancellationToken.ThrowIfCancellationRequested();
         lock (_sync)
         {
@@ -681,10 +682,6 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
             if (claim.Disposition == EngineTransactionClaimDisposition.TerminalReplay)
             {
                 var replay = ValidateLedgerReplay(request, claim.TerminalResult!);
-                if (replay.Failure?.Code == "transaction-abandoned-after-crash")
-                {
-                    return replay;
-                }
                 return await CompletePreComputationOutcomeAsync(
                     request,
                     requestHash,
@@ -710,7 +707,14 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
                         ["replayStatus"] = "active-on-another-host"
                     },
                     isRetryable: true);
-                return active;
+                return await CompletePreComputationOutcomeAsync(
+                    request,
+                    requestHash,
+                    active,
+                    lease,
+                    invocationToken,
+                    claimToken: null,
+                    ownsCleanup);
             }
 
             var claimToken = claim.ClaimToken!;
@@ -744,11 +748,25 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
                         lease,
                         "transaction-ledger-write-indeterminate",
                         "The abandoned transaction result could not be durably recorded before the deadline.");
-                    return abandoned;
+                    return await CompletePreComputationOutcomeAsync(
+                        request,
+                        requestHash,
+                        abandoned,
+                        lease,
+                        invocationToken,
+                        claimToken: null,
+                        ownsCleanup);
                 }
                 catch (Exception ex)
                 {
-                    return CreateLedgerWriteIndeterminate(request, abandoned, ex);
+                    return await CompletePreComputationOutcomeAsync(
+                        request,
+                        requestHash,
+                        CreateLedgerWriteIndeterminate(request, abandoned, ex),
+                        lease,
+                        invocationToken,
+                        claimToken: null,
+                        ownsCleanup);
                 }
             }
 
@@ -905,7 +923,7 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
                 lease,
                 "computation-timeout-indeterminate",
                 "The engine computation did not terminate before its deadline.");
-            ValidateComputation(generation, executionId, request, computation);
+            computation = ValidateComputation(generation, executionId, request, computation);
             computationValidated = true;
             foreach (var pair in computation.ComputationEvidence)
             {
@@ -1389,14 +1407,12 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
         }
     }
 
-    private void ValidateComputation(
+    private EngineComputationResult ValidateComputation(
         long generation,
         Guid executionId,
         EngineRequestEnvelope request,
-        EngineComputationResult computation)
-    {
+        EngineComputationResult computation) =>
         EngineComputationResultValidation.Validate(generation, executionId, request, computation, _snapshots);
-    }
 
     private EngineResultEnvelope ValidateLedgerReplay(
         EngineRequestEnvelope request,
@@ -1404,6 +1420,7 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
     {
         try
         {
+            replay = EngineEvidenceSnapshots.FreezeTerminal(replay);
             ValidateTerminalResult(request, replay);
             return replay;
         }
@@ -1737,6 +1754,7 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
             ["isRetryable"] = bool.FalseString,
             ["requestValidation"] = "canonical-hash-unavailable"
         };
+        var frozenEvidence = EngineEvidenceSnapshots.Freeze(evidence);
         var completion = new EngineCompletionEvidence(
             request.ContractVersion,
             request.TransactionId,
@@ -1750,8 +1768,8 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
             EngineCanonicalHash.ComputeRequestValidationFailureHash(
                 request,
                 EngineTerminalStatus.Indeterminate,
-                evidence),
-            evidence);
+                frozenEvidence),
+            frozenEvidence);
         return new EngineResultEnvelope(
             request.ContractVersion,
             request.TransactionId,
@@ -1767,6 +1785,7 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
         IReadOnlyDictionary<string, string> evidence,
         bool requestValidationFailure)
     {
+        evidence = EngineEvidenceSnapshots.Freeze(evidence);
         var finalHash = requestValidationFailure
             ? EngineCanonicalHash.ComputeRequestValidationFailureHash(request, result.Status, evidence)
             : EngineCanonicalHash.ComputeFinalTransactionHash(
@@ -1805,7 +1824,8 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
             ["failureMessageHash"] = EngineCanonicalHash.Compute(message.Trim()),
             ["isRetryable"] = isRetryable.ToString()
         };
-        var completion = CreateCompletion(request, computation, status, terminalPhase, evidence);
+        var frozenEvidence = EngineEvidenceSnapshots.Freeze(evidence);
+        var completion = CreateCompletion(request, computation, status, terminalPhase, frozenEvidence);
         var failure = status is EngineTerminalStatus.Failed or EngineTerminalStatus.Indeterminate
             ? new EngineFailure(code, message, isRetryable, failedPhase, failureType)
             : null;
@@ -1839,13 +1859,14 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
             ["failureMessageHash"] = EngineCanonicalHash.Compute(message.Trim()),
             ["isRetryable"] = isRetryable.ToString()
         };
+        var frozenEvidence = EngineEvidenceSnapshots.Freeze(evidence);
         var completion = CreateCompletion(
             request,
             status,
             terminalPhase,
             analysisResultHash,
             procurementRouteResultHash,
-            evidence);
+            frozenEvidence);
         return new EngineResultEnvelope(
             request.ContractVersion,
             request.TransactionId,
@@ -1862,6 +1883,7 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
         EnginePhase terminalPhase,
         IReadOnlyDictionary<string, string> evidence)
     {
+        evidence = EngineEvidenceSnapshots.Freeze(evidence);
         var analysisHash = computation?.AnalysisResultHash ?? string.Empty;
         var routeHash = computation?.ProcurementRouteResultHash ?? string.Empty;
         var finalHash = EngineCanonicalHash.ComputeFinalTransactionHash(
@@ -1892,6 +1914,7 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
         string procurementRouteResultHash,
         IReadOnlyDictionary<string, string> evidence)
     {
+        evidence = EngineEvidenceSnapshots.Freeze(evidence);
         var finalHash = EngineCanonicalHash.ComputeFinalTransactionHash(
             request,
             status,

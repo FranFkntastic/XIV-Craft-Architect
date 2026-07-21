@@ -983,6 +983,31 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
+    public async Task InMemoryLedger_DetachesTerminalEvidenceBeforeStorage()
+    {
+        var ledger = new InMemoryEngineTransactionLedger();
+        var request = CreateRequest(JsonSerializer.SerializeToElement(
+            new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
+        var requestHash = EngineCanonicalHash.Compute(request, EngineJsonSerializerOptions.CreateWire());
+        var claim = await ledger.ClaimAsync(request.TransactionId, requestHash, CancellationToken.None);
+        var source = CreateSuccessfulResult(request);
+        var mutableEvidence = Assert.IsType<Dictionary<string, string>>(source.Completion.TerminalEvidence);
+
+        await ledger.CompleteAsync(
+            request.TransactionId,
+            requestHash,
+            claim.ClaimToken!,
+            source,
+            CancellationToken.None);
+        mutableEvidence["phase:Analyzing"] = "mutated-after-write";
+
+        var replay = await ledger.ClaimAsync(request.TransactionId, requestHash, CancellationToken.None);
+        var stored = replay.TerminalResult!;
+        Assert.Equal("complete", stored.Completion.TerminalEvidence["phase:Analyzing"]);
+        AssertEvidenceCannotBeMutated(stored.Completion.TerminalEvidence);
+    }
+
+    [Fact]
     public async Task Host_AbandonedClaimIsFencedTerminalizedAndReplayedWithoutExternalEffects()
     {
         var ledger = new InMemoryEngineTransactionLedger();
@@ -1013,7 +1038,7 @@ public sealed class EngineArchitectureTests
         Assert.Equal("abandoned-after-crash", abandoned.Completion.TerminalEvidence["replayStatus"]);
         Assert.False(abandoned.Failure.IsRetryable);
         Assert.Equal(0, transport.ExecutionCount);
-        Assert.Empty(settlement.Phases);
+        Assert.Equal([EnginePhase.ReleasingGate], settlement.Phases);
 
         var replayTransport = new StubEngineExecutionTransport((generation, executionId, current) =>
             CreateCompletedComputation(current, generation, executionId));
@@ -1027,7 +1052,7 @@ public sealed class EngineArchitectureTests
         Assert.Equal(abandoned.Completion.FinalTransactionHash, replay.Completion.FinalTransactionHash);
         Assert.Equal(abandoned.Completion.TerminalEvidence, replay.Completion.TerminalEvidence);
         Assert.Equal(0, replayTransport.ExecutionCount);
-        Assert.Empty(replaySettlement.Phases);
+        Assert.Equal([EnginePhase.ReleasingGate], replaySettlement.Phases);
     }
 
     [Fact]
@@ -1050,7 +1075,45 @@ public sealed class EngineArchitectureTests
         Assert.Equal("transaction-ledger-write-indeterminate", result.Failure!.Code);
         Assert.Equal("transaction-abandoned-after-crash", result.Completion.TerminalEvidence["ledgerWrite:originalTerminalCode"]);
         Assert.Equal(0, transport.ExecutionCount);
-        Assert.Empty(settlement.Phases);
+        Assert.Equal([EnginePhase.ReleasingGate], settlement.Phases);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Host_AbandonedReplayCleanupIsLimitedToCurrentInvocationOwner(bool ledgerWriteFails)
+    {
+        var request = CreateRequest(JsonSerializer.SerializeToElement(
+            new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
+        var requestHash = EngineCanonicalHash.Compute(request, EngineJsonSerializerOptions.CreateWire());
+        IEngineTransactionLedger ledger;
+        if (ledgerWriteFails)
+        {
+            ledger = new AbandonedWriteFailureLedger();
+        }
+        else
+        {
+            var memory = new InMemoryEngineTransactionLedger();
+            var claim = await memory.ClaimAsync(request.TransactionId, requestHash, CancellationToken.None);
+            memory.MarkClaimAbandoned(request.TransactionId, requestHash, claim.ClaimToken!);
+            ledger = memory;
+        }
+        var settlement = new InvocationFencedGateSettlement();
+        Assert.NotNull(settlement.TryRegisterInvocationCleanupOwnership(
+            new EngineInvocationCleanupRegistration(request, "existing-owner")));
+        var host = EngineExecutionHost.CreateForTesting(
+            new StubEngineExecutionTransport((generation, executionId, current) =>
+                CreateCompletedComputation(current, generation, executionId)),
+            settlement,
+            ledger,
+            new ReferenceEngineSemanticSnapshotProvider());
+
+        var result = await host.ExecuteAsync(request);
+
+        Assert.Equal(EngineTerminalStatus.Indeterminate, result.Status);
+        Assert.True(settlement.IsGateHeld);
+        Assert.Equal(0, settlement.SettlementCalls);
+        Assert.Equal(0, settlement.GateReleaseCount);
     }
 
     [Fact]
@@ -1700,7 +1763,7 @@ public sealed class EngineArchitectureTests
 
         var active = await host.ExecuteAsync(request);
         Assert.Equal("transaction-replay-in-progress", active.Failure!.Code);
-        Assert.Empty(settlement.Phases);
+        Assert.Equal([EnginePhase.ReleasingGate], settlement.Phases);
 
         var replay = await host.ExecuteAsync(request);
 
@@ -1711,11 +1774,32 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
+    public async Task Host_ActiveReplayReleasesFreshLocalGate()
+    {
+        var request = CreateRequest(JsonSerializer.SerializeToElement(
+            new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
+        var settlement = new RecordingSettlement();
+        var host = EngineExecutionHost.CreateForTesting(
+            new StubEngineExecutionTransport((generation, executionId, current) =>
+                CreateCompletedComputation(current, generation, executionId)),
+            settlement,
+            new ActiveThenTerminalLedger(CreateSuccessfulResult(request)),
+            new ReferenceEngineSemanticSnapshotProvider());
+
+        var active = await host.ExecuteAsync(request);
+
+        Assert.Equal("transaction-replay-in-progress", active.Failure!.Code);
+        Assert.Equal([EnginePhase.ReleasingGate], settlement.Phases);
+    }
+
+    [Fact]
     public async Task Host_LiveActiveReplayPreservesTheRegisteredOwnerGate()
     {
         var request = CreateRequest(JsonSerializer.SerializeToElement(
             new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
         var settlement = new InvocationFencedGateSettlement();
+        Assert.NotNull(settlement.TryRegisterInvocationCleanupOwnership(
+            new EngineInvocationCleanupRegistration(request, "existing-owner")));
         var host = new EngineExecutionHost(
             new StubEngineExecutionTransport((generation, executionId, current) =>
                 CreateCompletedComputation(current, generation, executionId)),
@@ -1729,6 +1813,78 @@ public sealed class EngineArchitectureTests
         Assert.True(settlement.IsGateHeld);
         Assert.Equal(0, settlement.SettlementCalls);
         Assert.Equal(0, settlement.GateReleaseCount);
+    }
+
+    [Fact]
+    public async Task Host_FreezesComputationAndTerminalEvidenceBeforeCachingAndHashing()
+    {
+        var request = CreateRequest(JsonSerializer.SerializeToElement(
+            new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
+        Dictionary<string, string>? mutableComputationEvidence = null;
+        var host = EngineExecutionHost.CreateForTesting(
+            new StubEngineExecutionTransport((generation, executionId, current) =>
+            {
+                var computation = CreateCompletedComputation(current, generation, executionId);
+                mutableComputationEvidence = new Dictionary<string, string>(computation.ComputationEvidence);
+                return computation with { ComputationEvidence = mutableComputationEvidence };
+            }),
+            new RecordingSettlement(),
+            new InMemoryEngineTransactionLedger(),
+            new ReferenceEngineSemanticSnapshotProvider());
+
+        var result = await host.ExecuteAsync(request);
+        var hash = result.Completion.FinalTransactionHash;
+        mutableComputationEvidence!["phase:Analyzing"] = "mutated-after-validation";
+        mutableComputationEvidence["injected"] = "mutable";
+
+        Assert.Equal("complete", result.Completion.TerminalEvidence["phase:Analyzing"]);
+        Assert.False(result.Completion.TerminalEvidence.ContainsKey("injected"));
+        Assert.Equal(
+            hash,
+            EngineCanonicalHash.ComputeFinalTransactionHash(
+                request,
+                result.Status,
+                result.Completion.AnalysisResultHash,
+                result.Completion.ProcurementRouteResultHash,
+                result.Completion.TerminalEvidence));
+        AssertEvidenceCannotBeMutated(result.Completion.TerminalEvidence);
+
+        var cached = await host.ExecuteAsync(request);
+        Assert.Equal(hash, cached.Completion.FinalTransactionHash);
+        Assert.Equal("complete", cached.Completion.TerminalEvidence["phase:Analyzing"]);
+        AssertEvidenceCannotBeMutated(cached.Completion.TerminalEvidence);
+    }
+
+    [Fact]
+    public async Task Host_ValidatedReplayDetachesAndFreezesMutableLedgerEvidence()
+    {
+        var request = CreateRequest(JsonSerializer.SerializeToElement(
+            new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
+        var source = CreateSuccessfulResult(request);
+        var mutableEvidence = Assert.IsType<Dictionary<string, string>>(source.Completion.TerminalEvidence);
+        var host = new EngineExecutionHost(
+            new StubEngineExecutionTransport((generation, executionId, current) =>
+                CreateCompletedComputation(current, generation, executionId)),
+            new RecordingSettlement(),
+            new TerminalReplayLedger(source),
+            new ReferenceEngineSemanticSnapshotProvider());
+
+        var replay = await host.ExecuteAsync(request);
+        var replayHash = replay.Completion.FinalTransactionHash;
+        mutableEvidence["phase:Analyzing"] = "mutated-after-replay";
+        mutableEvidence["injected"] = "mutable";
+
+        Assert.Equal("complete", replay.Completion.TerminalEvidence["phase:Analyzing"]);
+        Assert.False(replay.Completion.TerminalEvidence.ContainsKey("injected"));
+        Assert.Equal(
+            replayHash,
+            EngineCanonicalHash.ComputeFinalTransactionHash(
+                request,
+                replay.Status,
+                replay.Completion.AnalysisResultHash,
+                replay.Completion.ProcurementRouteResultHash,
+                replay.Completion.TerminalEvidence));
+        AssertEvidenceCannotBeMutated(replay.Completion.TerminalEvidence);
     }
 
     [Fact]
@@ -2157,6 +2313,7 @@ public sealed class EngineArchitectureTests
 
         Assert.True(capability.DedicatedWorker);
         Assert.Equal(EngineComputationStatus.Cancelled, result.Status);
+        AssertEvidenceCannotBeMutated(result.ComputationEvidence);
         Assert.Equal(EngineWorkerLifecycleState.Ready, client.State);
         var executeMessage = Assert.Single(transport.Sent, message => message.Kind == "execute");
         var cancelMessage = Assert.Single(transport.Sent, message => message.Kind == "cancel");
@@ -2716,6 +2873,109 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
+    public async Task WorkerClient_ForeverHangingStartupIsBounded()
+    {
+        var transport = new ForeverHangingWorkerTransport(HangingWorkerOperation.Startup);
+        await using var client = new EngineWorkerClient(
+            transport,
+            transportTimeout: TimeSpan.FromMilliseconds(25));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.StartAsync())
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(EngineWorkerLifecycleState.Faulted, client.State);
+        Assert.Equal(1, transport.StartCount);
+        Assert.Equal(1, transport.TerminateCount);
+    }
+
+    [Fact]
+    public async Task WorkerClient_ForeverHangingExecutionDispatchIsBounded()
+    {
+        var transport = new ForeverHangingWorkerTransport(HangingWorkerOperation.ExecuteSend);
+        await using var client = new EngineWorkerClient(
+            transport,
+            transportTimeout: TimeSpan.FromMilliseconds(25));
+        await client.StartAsync();
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.ExecuteAsync(
+            CreateRequest(JsonSerializer.SerializeToElement(new { demand = "hanging-send" }))))
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(EngineWorkerLifecycleState.Faulted, client.State);
+        Assert.Equal(1, transport.TerminateCount);
+    }
+
+    [Fact]
+    public async Task WorkerClient_ForeverHangingCancellationDispatchIsBounded()
+    {
+        var transport = new ForeverHangingWorkerTransport(HangingWorkerOperation.CancellationSend);
+        await using var client = new EngineWorkerClient(
+            transport,
+            transportTimeout: TimeSpan.FromMilliseconds(25));
+        await client.StartAsync();
+        var execution = client.ExecuteAsync(
+            CreateRequest(JsonSerializer.SerializeToElement(new { demand = "hanging-cancel" })));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.CancelAsync("cancel"))
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAsync<TimeoutException>(() => execution);
+
+        Assert.Equal(EngineWorkerLifecycleState.Faulted, client.State);
+        Assert.Equal(1, transport.TerminateCount);
+    }
+
+    [Fact]
+    public async Task WorkerClient_UnknownForeverHangingTerminationBlocksReplacementStartup()
+    {
+        var transport = new ForeverHangingWorkerTransport(HangingWorkerOperation.Termination);
+        await using var client = new EngineWorkerClient(
+            transport,
+            transportTimeout: TimeSpan.FromMilliseconds(25));
+        await client.StartAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.ForceTerminateAndRestartAsync())
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAnyAsync<Exception>(() => client.StartAsync())
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(1, transport.StartCount);
+        Assert.Equal(EngineWorkerLifecycleState.Faulted, client.State);
+    }
+
+    [Fact]
+    public async Task WorkerClient_ForeverHangingRestartBarrierDoesNotWedgeStartupCaller()
+    {
+        var transport = new ForeverHangingWorkerTransport(HangingWorkerOperation.Termination);
+        await using var client = new EngineWorkerClient(
+            transport,
+            transportTimeout: TimeSpan.FromMilliseconds(25));
+        await client.StartAsync();
+
+        var restart = client.ForceTerminateAndRestartAsync();
+        var startup = client.StartAsync();
+
+        await Assert.ThrowsAnyAsync<Exception>(() => startup)
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => restart);
+        Assert.Equal(1, transport.StartCount);
+    }
+
+    [Fact]
+    public async Task WorkerClient_ForeverHangingTransportDisposalIsBounded()
+    {
+        var transport = new ForeverHangingWorkerTransport(HangingWorkerOperation.Disposal);
+        var client = new EngineWorkerClient(
+            transport,
+            transportTimeout: TimeSpan.FromMilliseconds(25));
+        await client.StartAsync();
+
+        await Assert.ThrowsAsync<AggregateException>(() => client.DisposeAsync().AsTask())
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(EngineWorkerLifecycleState.Stopped, client.State);
+    }
+
+    [Fact]
     public async Task WorkerClient_ObsoleteStartupCannotResurrectAfterDispose()
     {
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2848,6 +3108,12 @@ public sealed class EngineArchitectureTests
             settlement,
             new InMemoryEngineTransactionLedger(),
             new ReferenceEngineSemanticSnapshotProvider());
+
+    private static void AssertEvidenceCannotBeMutated(IReadOnlyDictionary<string, string> evidence)
+    {
+        var dictionary = Assert.IsAssignableFrom<IDictionary<string, string>>(evidence);
+        Assert.Throws<NotSupportedException>(() => dictionary.Add("mutation", "blocked"));
+    }
 
     private static EngineExecutionHost CreateBoundedHost(
         IEngineExecutionTransport transport,
@@ -4243,6 +4509,71 @@ public sealed class EngineArchitectureTests
             ExecutionCount++;
             return Task.FromResult(_execute(generation, executionId, request));
         }
+    }
+
+    private enum HangingWorkerOperation
+    {
+        Startup,
+        ExecuteSend,
+        CancellationSend,
+        Termination,
+        Disposal
+    }
+
+    private sealed class ForeverHangingWorkerTransport(HangingWorkerOperation hangingOperation)
+        : IEngineWorkerTransport
+    {
+        private readonly TaskCompletionSource _never =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public event EventHandler<EngineWorkerMessage>? MessageReceived
+        {
+            add { }
+            remove { }
+        }
+
+        public int StartCount { get; private set; }
+
+        public int TerminateCount { get; private set; }
+
+        public Task<EngineWorkerCapability> StartAsync(long generation, CancellationToken cancellationToken)
+        {
+            StartCount++;
+            return hangingOperation == HangingWorkerOperation.Startup
+                ? _never.Task.ContinueWith(
+                    _ => CreateCapability(generation),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default)
+                : Task.FromResult(CreateCapability(generation));
+        }
+
+        public Task SendAsync(EngineWorkerMessage message, CancellationToken cancellationToken) =>
+            hangingOperation == HangingWorkerOperation.ExecuteSend && message.Kind == "execute" ||
+            hangingOperation == HangingWorkerOperation.CancellationSend && message.Kind == "cancel"
+                ? _never.Task
+                : Task.CompletedTask;
+
+        public Task TerminateAsync(CancellationToken cancellationToken)
+        {
+            TerminateCount++;
+            return hangingOperation == HangingWorkerOperation.Termination
+                ? _never.Task
+                : Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => hangingOperation == HangingWorkerOperation.Disposal
+            ? new ValueTask(_never.Task)
+            : ValueTask.CompletedTask;
+
+        private static EngineWorkerCapability CreateCapability(long generation) => new(
+            EngineWorkerClient.ProtocolVersion,
+            generation,
+            true,
+            false,
+            false,
+            false,
+            ExecutionSupported: true);
     }
 
     private sealed class FakeWorkerTransport : IEngineWorkerTransport
