@@ -69,6 +69,66 @@ public static class EngineCanonicalHash
         return Compute(stableResult);
     }
 
+    public static string ComputeRequestValidationFailureIdentity(EngineRequestEnvelope request) =>
+        Compute(new
+        {
+            Domain = "engine-invalid-request-identity-v1",
+            request.ContractVersion,
+            request.TransactionId
+        });
+
+    public static string ComputeRequestValidationFailureHash(
+        EngineRequestEnvelope request,
+        EngineTerminalStatus status,
+        IReadOnlyDictionary<string, string> terminalEvidence) =>
+        Compute(new
+        {
+            Domain = "engine-invalid-request-terminal-v1",
+            request.ContractVersion,
+            request.TransactionId,
+            Status = status,
+            TerminalEvidence = terminalEvidence
+        });
+
+    public static string ComputeComputationHash(
+        long generation,
+        Guid executionId,
+        EngineRequestEnvelope request,
+        EngineComputationStatus status,
+        EnginePhase finalPhase,
+        string resultPayloadHash,
+        string analysisResultHash,
+        string procurementRouteResultHash,
+        IReadOnlyDictionary<string, string> computationEvidence,
+        EngineFailure? failure)
+    {
+        var boundComputation = new
+        {
+            Domain = "engine-computation-v1",
+            Generation = generation,
+            ExecutionId = executionId,
+            request.ContractVersion,
+            request.TransactionId,
+            request.InputKind,
+            request.Basis,
+            request.Settings,
+            request.Budgets,
+            InputHash = ComputeEngineInput(request.Input),
+            request.RootIntentHash,
+            request.ExpandedGraphHash,
+            request.AnalysisBasisHash,
+            request.RouteBasisHash,
+            Status = status,
+            FinalPhase = finalPhase,
+            ResultPayloadHash = resultPayloadHash,
+            AnalysisResultHash = analysisResultHash,
+            ProcurementRouteResultHash = procurementRouteResultHash,
+            ComputationEvidence = computationEvidence,
+            Failure = failure
+        };
+        return Compute(boundComputation);
+    }
+
     private static int CountSignificantDigits(string token)
     {
         var exponentIndex = token.IndexOfAny(['e', 'E']);

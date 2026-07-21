@@ -18,12 +18,10 @@ public sealed class MarketAnalysisWorkflowService
 {
     private readonly AppState _appState;
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
-    private readonly MarketShoppingService _marketShoppingService;
     private readonly IMarketPriceLadderAnalysisService _marketPriceLadderAnalysis;
-    private readonly IMarketAnalysisPersistence _marketAnalysisPersistence;
     private readonly IndexedDbService _indexedDb;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
-    private readonly ILogger<MarketAnalysisWorkflowService> _logger;
+    private readonly MarketAnalysisPublicationService _publicationService;
 
     public MarketAnalysisWorkflowService(
         AppState appState,
@@ -37,12 +35,15 @@ public sealed class MarketAnalysisWorkflowService
     {
         _appState = appState;
         _marketEvidenceReconciliation = marketEvidenceReconciliation;
-        _marketShoppingService = marketShoppingService;
         _marketPriceLadderAnalysis = marketPriceLadderAnalysis;
-        _marketAnalysisPersistence = marketAnalysisPersistence;
         _indexedDb = indexedDb;
         _recipeLayerWorkflow = recipeLayerWorkflow;
-        _logger = logger;
+        _publicationService = new MarketAnalysisPublicationService(
+            appState,
+            marketShoppingService,
+            new MarketAnalysisPublicationStore(appState, marketAnalysisPersistence, indexedDb),
+            recipeLayerWorkflow,
+            logger);
     }
 
     public async Task<MarketAnalysisWorkflowResult> RunAnalysisAsync(
@@ -187,7 +188,7 @@ public sealed class MarketAnalysisWorkflowService
             0);
     }
 
-    private async Task<PublishMarketAnalysisResult?> PublishMarketAnalysisAsync(
+    private async Task<MarketAnalysisPublication?> PublishMarketAnalysisAsync(
         CraftingPlan? plan,
         long planSessionVersion,
         long planDecisionVersion,
@@ -198,68 +199,23 @@ public sealed class MarketAnalysisWorkflowService
         PublishedMarketAnalysisScopeSnapshot publishedScope,
         CancellationToken ct)
     {
-        if (plan == null ||
-            !_appState.IsCurrentPlanSession(plan, planSessionVersion) ||
-            _appState.CurrentVersions.PlanDecisionVersion != planDecisionVersion)
+        if (plan == null)
         {
             return null;
         }
 
-        ct.ThrowIfCancellationRequested();
-        var analysisList = analyses.ToList();
-        var changedDecisions = AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
-            plan,
-            shoppingPlans);
-        _marketShoppingService.ApplyVendorPurchaseOverrides(plan, shoppingPlans);
-
-        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion) ||
-            _appState.CurrentVersions.PlanDecisionVersion != planDecisionVersion)
-        {
-            return null;
-        }
-
-        _appState.ApplyMarketAnalysisPublication(
-            analysisList,
-            shoppingPlans,
-            _recipeLayerWorkflow.BuildActiveProcurementItems(plan),
-            changedDecisions > 0,
-            recipeBasis,
-            publishedScope);
-        _logger.LogInformation("[stage] hot-state publication applied ({Count} analyses, {PlanCount} plans)", analysisList.Count, shoppingPlans.Count);
-
-        if (!string.IsNullOrEmpty(planId) &&
-            _appState.IsCurrentPlanSession(plan, planSessionVersion) &&
-            string.Equals(_appState.CurrentPlanId, planId, StringComparison.Ordinal))
-        {
-            _logger.LogInformation("[stage] analysis persistence starting (plan {PlanId})", planId);
-            await _marketAnalysisPersistence.SaveAsync(
+        return await _publicationService.PublishLegacyAsync(
+            new MarketAnalysisPublicationRequest(
+                plan,
+                planSessionVersion,
+                planDecisionVersion,
                 planId,
+                analyses.ToList(),
                 shoppingPlans,
-                analysisList,
-                RecommendationMode.MinimizeTotalCost,
-                _appState.MarketAnalysisLens,
                 recipeBasis,
-                publishedScope,
-                _appState.MarketIntelligence);
-            _logger.LogInformation("[stage] analysis persistence complete");
-        }
-
-        ct.ThrowIfCancellationRequested();
-        if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
-        {
-            return null;
-        }
-
-        _logger.LogInformation("[stage] autosave starting");
-        await _indexedDb.AutoSaveStateAsync(_appState);
-        _logger.LogInformation("[stage] autosave complete");
-        ct.ThrowIfCancellationRequested();
-        return _appState.IsCurrentPlanSession(plan, planSessionVersion)
-            ? new PublishMarketAnalysisResult(changedDecisions)
-            : null;
+                publishedScope),
+            ct);
     }
-
-    private sealed record PublishMarketAnalysisResult(int ChangedDecisionCount);
 
     private bool IsCurrentRequest(MarketAnalysisRequestSnapshot snapshot)
     {

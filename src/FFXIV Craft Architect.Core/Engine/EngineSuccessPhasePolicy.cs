@@ -6,6 +6,8 @@ public sealed record EngineSuccessPhaseRequirements(
 
 public static class EngineSuccessPhasePolicy
 {
+    public const EnginePhase CommitPhase = EnginePhase.Persisting;
+
     public static EngineSuccessPhaseRequirements Resolve(
         EngineInputKind inputKind,
         bool includesMarketAnalysis,
@@ -30,13 +32,13 @@ public static class EngineSuccessPhasePolicy
             settlementPhases.Add(EnginePhase.SettlingRoute);
         }
         settlementPhases.Add(EnginePhase.Persisting);
-        settlementPhases.Add(EnginePhase.ReleasingGate);
         settlementPhases.Add(EnginePhase.SettlingUi);
         settlementPhases.Add(EnginePhase.CapturingPostActionEvidence);
         if (inputKind == EngineInputKind.RestoredSession)
         {
             settlementPhases.Add(EnginePhase.CapturingRestorationEvidence);
         }
+        settlementPhases.Add(EnginePhase.ReleasingGate);
 
         requiredEvidencePhases.AddRange(settlementPhases);
         return new EngineSuccessPhaseRequirements(

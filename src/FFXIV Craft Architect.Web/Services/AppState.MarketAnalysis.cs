@@ -24,13 +24,19 @@ public partial class AppState
         IReadOnlyList<MaterialAggregate> activeProcurementItems,
         bool acquisitionDecisionsChanged,
         StoredRecipeOperationSnapshot? recipeBasis = null,
-        PublishedMarketAnalysisScopeSnapshot? publishedScope = null)
+        PublishedMarketAnalysisScopeSnapshot? publishedScope = null,
+        Guid? marketIntelligenceId = null)
     {
         ArgumentNullException.ThrowIfNull(activeProcurementItems);
 
         using (BeginStateChangeBatch())
         {
-            ReplaceMarketAnalysis(analyses, shoppingPlans, recipeBasis, publishedScope);
+            ReplaceMarketAnalysis(
+                analyses,
+                shoppingPlans,
+                recipeBasis,
+                publishedScope,
+                marketIntelligenceId);
             ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
             if (acquisitionDecisionsChanged)
             {
@@ -43,7 +49,8 @@ public partial class AppState
         IEnumerable<MarketItemAnalysis> analyses,
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
         StoredRecipeOperationSnapshot? recipeBasis = null,
-        PublishedMarketAnalysisScopeSnapshot? publishedScope = null)
+        PublishedMarketAnalysisScopeSnapshot? publishedScope = null,
+        Guid? marketIntelligenceId = null)
     {
         ArgumentNullException.ThrowIfNull(analyses);
         ArgumentNullException.ThrowIfNull(shoppingPlans);
@@ -51,7 +58,7 @@ public partial class AppState
         ReplaceListContents(_marketItemAnalyses, analyses);
         ReplaceListContents(_shoppingPlans, shoppingPlans);
         _marketIntelligenceId = _marketItemAnalyses.Count > 0 || _shoppingPlans.Count > 0
-            ? Guid.NewGuid()
+            ? marketIntelligenceId ?? Guid.NewGuid()
             : Guid.Empty;
         _marketAnalysisRecipeBasis = CloneRecipeBasis(recipeBasis);
         _publishedMarketAnalysisScope = publishedScope;

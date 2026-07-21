@@ -6,7 +6,9 @@ namespace FFXIV_Craft_Architect.Core.Engine;
 
 public interface IMarketProcurementEngine
 {
-    Task<EngineResultEnvelope> ExecuteAsync(
+    Task<EngineComputationResult> ComputeAsync(
+        long generation,
+        Guid executionId,
         EngineRequestEnvelope request,
         IProgress<EngineProgress>? progress = null,
         CancellationToken cancellationToken = default);
@@ -16,59 +18,26 @@ public sealed record ReferenceEngineInput(
     MarketAnalysisExecutionRequest? MarketAnalysis,
     ProcurementRouteExecutionRequest? ProcurementRoute);
 
-public sealed record ReferenceEngineOutput(
-    MarketAnalysisExecutionResult? MarketAnalysis,
-    ProcurementRouteExecutionResult? ProcurementRoute);
-
-public sealed record EngineSettlementContext(
-    EngineRequestEnvelope Request,
-    ReferenceEngineOutput Output,
-    string AnalysisResultHash,
-    string ProcurementRouteResultHash);
-
-public sealed record EngineSettlementEvidence(bool Completed, string Evidence);
-
-public interface IEngineTransactionSettlement
-{
-    Task<EngineSettlementEvidence> SettleAsync(
-        EnginePhase phase,
-        EngineSettlementContext context,
-        CancellationToken cancellationToken);
-}
-
-public sealed class NoOpEngineTransactionSettlement : IEngineTransactionSettlement
-{
-    public Task<EngineSettlementEvidence> SettleAsync(
-        EnginePhase phase,
-        EngineSettlementContext context,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(new EngineSettlementEvidence(false, "unsupported"));
-    }
-}
-
 public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
 {
     private const string ContractVersion = "1";
     private readonly IMarketAnalysisExecutionService _marketAnalysis;
     private readonly IProcurementRouteExecutionService _procurementRoute;
-    private readonly IEngineTransactionSettlement _settlement;
     private readonly IReferenceEngineSemanticSnapshotProvider _snapshots;
 
     public ReferenceMarketProcurementEngine(
         IMarketAnalysisExecutionService marketAnalysis,
         IProcurementRouteExecutionService procurementRoute,
-        IEngineTransactionSettlement settlement,
         IReferenceEngineSemanticSnapshotProvider snapshots)
     {
         _marketAnalysis = marketAnalysis ?? throw new ArgumentNullException(nameof(marketAnalysis));
         _procurementRoute = procurementRoute ?? throw new ArgumentNullException(nameof(procurementRoute));
-        _settlement = settlement ?? throw new ArgumentNullException(nameof(settlement));
         _snapshots = snapshots ?? throw new ArgumentNullException(nameof(snapshots));
     }
 
-    public async Task<EngineResultEnvelope> ExecuteAsync(
+    public async Task<EngineComputationResult> ComputeAsync(
+        long generation,
+        Guid executionId,
         EngineRequestEnvelope request,
         IProgress<EngineProgress>? progress = null,
         CancellationToken cancellationToken = default)
@@ -80,18 +49,16 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
         }
 
         var phase = EnginePhase.Accepted;
-        var settledPhases = new HashSet<EnginePhase>();
-        var settlementEvidence = new Dictionary<string, string>(StringComparer.Ordinal);
-        var output = new ReferenceEngineOutput(null, null);
+        var computationEvidence = new Dictionary<string, string>(StringComparer.Ordinal);
         var analysisHash = string.Empty;
         var routeHash = string.Empty;
         try
         {
-            Report(progress, request, phase, 0, 12, "Transaction accepted.");
+            Report(progress, generation, executionId, request, phase, 0, 12, "Transaction accepted.");
             cancellationToken.ThrowIfCancellationRequested();
 
             phase = EnginePhase.InterpretingInput;
-            Report(progress, request, phase, 1, 12, "Interpreting engine input.");
+            Report(progress, generation, executionId, request, phase, 1, 12, "Interpreting engine input.");
             if (request.InputKind != EngineInputKind.RootIntent)
             {
                 throw new NotSupportedException($"Input kind '{request.InputKind}' is not supported by the reference executor yet.");
@@ -115,139 +82,79 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
                 throw new InvalidOperationException("The reference engine requires at least one analysis or procurement operation.");
             }
             ValidateBudgets(request.Budgets, input);
-            var successPhases = EngineSuccessPhasePolicy.Resolve(
-                request.InputKind,
-                input.MarketAnalysis is not null,
-                input.ProcurementRoute is not null);
-
             phase = EnginePhase.ConstructingOrRestoringGraph;
-            Report(progress, request, phase, 2, 12, "Preparing graph basis.");
+            Report(progress, generation, executionId, request, phase, 2, 12, "Preparing graph basis.");
             cancellationToken.ThrowIfCancellationRequested();
 
             MarketAnalysisExecutionResult? analysis = null;
             if (input.MarketAnalysis is not null)
             {
                 phase = EnginePhase.ResolvingEvidence;
-                Report(progress, request, phase, 3, 12, "Resolving market evidence.");
+                Report(progress, generation, executionId, request, phase, 3, 12, "Resolving market evidence.");
                 phase = EnginePhase.Analyzing;
                 analysis = await _marketAnalysis.ExecuteAsync(input.MarketAnalysis, ct: cancellationToken);
+                computationEvidence["phase:Analyzing"] = "complete";
             }
 
             ProcurementRouteExecutionResult? route = null;
             if (input.ProcurementRoute is not null)
             {
                 phase = EnginePhase.Reconciling;
-                Report(progress, request, phase, 5, 12, "Reconciling procurement evidence.");
+                Report(progress, generation, executionId, request, phase, 5, 12, "Reconciling procurement evidence.");
                 route = await _procurementRoute.AnalyzeAsync(input.ProcurementRoute, ct: cancellationToken);
+                computationEvidence["phase:Reconciling"] = "complete";
             }
 
             var analysisSnapshot = analysis is null ? null : _snapshots.CaptureAnalysis(analysis);
             var routeSnapshot = route is null ? null : _snapshots.CaptureRoute(route);
             analysisHash = analysisSnapshot is null ? string.Empty : EngineSemanticSnapshotHash.Analysis(analysisSnapshot);
             routeHash = routeSnapshot is null ? string.Empty : EngineSemanticSnapshotHash.Route(routeSnapshot);
-            output = new ReferenceEngineOutput(analysis, route);
             if (routeSnapshot is { IsComplete: false })
             {
                 throw new InvalidOperationException("The procurement route does not provide a viable acquisition for every requested item.");
             }
-            var resultElement = JsonSerializer.SerializeToElement(new
-            {
-                MarketAnalysis = analysisSnapshot,
-                ProcurementRoute = routeSnapshot
-            });
-            if (analysis is not null)
-            {
-                settlementEvidence["phase:Analyzing"] = "complete";
-            }
-            if (route is not null)
-            {
-                settlementEvidence["phase:Reconciling"] = "complete";
-            }
-            var settlementContext = new EngineSettlementContext(request, output, analysisHash, routeHash);
-
-            foreach (var settlementPhase in successPhases.SettlementPhases)
-            {
-                phase = settlementPhase;
-                Report(progress, request, phase, ProgressIndex(phase), 12, PhaseMessage(phase));
-                var evidence = await _settlement.SettleAsync(phase, settlementContext, cancellationToken);
-                if (!evidence.Completed)
-                {
-                    throw new InvalidOperationException($"Settlement phase '{phase}' did not complete: {evidence.Evidence}");
-                }
-                settlementEvidence[$"phase:{phase}"] = evidence.Evidence;
-                settledPhases.Add(phase);
-            }
-
-            foreach (var requiredPhase in successPhases.RequiredEvidencePhases)
-            {
-                if (!settlementEvidence.TryGetValue($"phase:{requiredPhase}", out var evidence) ||
-                    string.IsNullOrWhiteSpace(evidence))
-                {
-                    throw new InvalidOperationException($"Successful engine result is missing required phase evidence for '{requiredPhase}'.");
-                }
-            }
-
-            var terminalEvidence = new Dictionary<string, string>(settlementEvidence, StringComparer.Ordinal)
-            {
-                ["resultPayloadHash"] = EngineCanonicalHash.Compute(resultElement),
-                ["settlement"] = "complete"
-            };
-            var finalHash = EngineCanonicalHash.ComputeFinalTransactionHash(
+            var resultElement = JsonSerializer.SerializeToElement(
+                new ReferenceEngineResultSnapshot(analysisSnapshot, routeSnapshot),
+                EngineJsonSerializerOptions.CreateWire());
+            computationEvidence["resultPayloadHash"] = EngineCanonicalHash.Compute(resultElement);
+            var computationHash = EngineCanonicalHash.ComputeComputationHash(
+                generation,
+                executionId,
                 request,
-                EngineTerminalStatus.Succeeded,
+                EngineComputationStatus.Completed,
+                phase,
+                computationEvidence["resultPayloadHash"],
                 analysisHash,
                 routeHash,
-                terminalEvidence);
-            var completion = new EngineCompletionEvidence(
-                ContractVersion,
+                computationEvidence,
+                null);
+            return new EngineComputationResult(
+                request.ContractVersion,
+                generation,
+                executionId,
                 request.TransactionId,
-                EngineTerminalStatus.Succeeded,
-                EnginePhase.Completed,
+                EngineComputationStatus.Completed,
+                phase,
+                resultElement,
                 request.Basis,
+                EngineCanonicalHash.ComputeEngineInput(request.Input),
+                request.Budgets,
                 request.RootIntentHash,
                 request.ExpandedGraphHash,
+                request.AnalysisBasisHash,
+                request.RouteBasisHash,
                 analysisHash,
                 routeHash,
-                finalHash,
-                terminalEvidence);
-            Report(progress, request, EnginePhase.Completed, 12, 12, "Transaction completed.");
-            return new EngineResultEnvelope(ContractVersion, request.TransactionId, EngineTerminalStatus.Succeeded, resultElement, completion);
+                computationHash,
+                computationEvidence);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await RunTerminalSettlementAsync(new EngineSettlementContext(request, output, analysisHash, routeHash), settledPhases, settlementEvidence);
-            return CreateTerminal(request, EngineTerminalStatus.Cancelled, EnginePhase.Cancelled, phase, "cancelled", "The transaction was cancelled.", nameof(OperationCanceledException), analysisHash, routeHash, settlementEvidence);
+            return CreateTerminal(generation, executionId, request, EngineComputationStatus.Cancelled, phase, "cancelled", "The computation was cancelled.", nameof(OperationCanceledException), computationEvidence);
         }
         catch (Exception ex)
         {
-            await RunTerminalSettlementAsync(new EngineSettlementContext(request, output, analysisHash, routeHash), settledPhases, settlementEvidence);
-            return CreateTerminal(request, EngineTerminalStatus.Failed, EnginePhase.Failed, phase, "unhandled", ex.Message, ex.GetType().FullName ?? ex.GetType().Name, analysisHash, routeHash, settlementEvidence);
-        }
-    }
-
-    private async Task RunTerminalSettlementAsync(
-        EngineSettlementContext context,
-        IReadOnlySet<EnginePhase> settledPhases,
-        IDictionary<string, string> settlementEvidence)
-    {
-        foreach (var terminalPhase in TerminalSettlementPhases)
-        {
-            if (settledPhases.Contains(terminalPhase))
-            {
-                continue;
-            }
-
-            try
-            {
-                var evidence = await _settlement.SettleAsync(terminalPhase, context, CancellationToken.None);
-                settlementEvidence[$"cleanup:{terminalPhase}"] = evidence.Completed
-                    ? evidence.Evidence
-                    : $"failed:{evidence.Evidence}";
-            }
-            catch (Exception ex)
-            {
-                settlementEvidence[$"cleanup:{terminalPhase}"] = $"failed:{ex.GetType().Name}";
-            }
+            return CreateTerminal(generation, executionId, request, EngineComputationStatus.Failed, phase, "unhandled", ex.Message, ex.GetType().FullName ?? ex.GetType().Name, computationEvidence);
         }
     }
 
@@ -279,27 +186,18 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
         }
     }
 
-    private static readonly EnginePhase[] TerminalSettlementPhases =
-    [
-        EnginePhase.ReleasingGate,
-        EnginePhase.SettlingUi,
-        EnginePhase.CapturingPostActionEvidence,
-        EnginePhase.CapturingRestorationEvidence
-    ];
-
-    private static EngineResultEnvelope CreateTerminal(
+    private static EngineComputationResult CreateTerminal(
+        long generation,
+        Guid executionId,
         EngineRequestEnvelope request,
-        EngineTerminalStatus status,
-        EnginePhase terminalPhase,
+        EngineComputationStatus status,
         EnginePhase failedPhase,
         string code,
         string message,
         string failureType,
-        string analysisResultHash,
-        string routeResultHash,
-        IReadOnlyDictionary<string, string> settlementEvidence)
+        IReadOnlyDictionary<string, string> computationEvidence)
     {
-        var evidence = new Dictionary<string, string>(settlementEvidence, StringComparer.Ordinal)
+        var evidence = new Dictionary<string, string>(computationEvidence, StringComparer.Ordinal)
         {
             ["terminalCode"] = code,
             ["failedPhase"] = failedPhase.ToString(),
@@ -307,47 +205,51 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             ["failureMessageHash"] = EngineCanonicalHash.Compute(message.Trim()),
             ["isRetryable"] = bool.FalseString
         };
-        var finalHash = EngineCanonicalHash.ComputeFinalTransactionHash(request, status, analysisResultHash, routeResultHash, evidence);
-        var completion = new EngineCompletionEvidence(
-            ContractVersion,
-            request.TransactionId,
-            status,
-            terminalPhase,
-            request.Basis,
-            request.RootIntentHash,
-            request.ExpandedGraphHash,
-            analysisResultHash,
-            routeResultHash,
-            finalHash,
-            evidence);
-        var failure = status == EngineTerminalStatus.Failed
+        var failure = status == EngineComputationStatus.Failed
             ? new EngineFailure(code, message, false, failedPhase, failureType)
             : null;
-        return new EngineResultEnvelope(ContractVersion, request.TransactionId, status, null, completion, failure);
+        var computationHash = EngineCanonicalHash.ComputeComputationHash(
+            generation,
+            executionId,
+            request,
+            status,
+            failedPhase,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            evidence,
+            failure);
+        return new EngineComputationResult(
+            request.ContractVersion,
+            generation,
+            executionId,
+            request.TransactionId,
+            status,
+            failedPhase,
+            null,
+            request.Basis,
+            EngineCanonicalHash.ComputeEngineInput(request.Input),
+            request.Budgets,
+            request.RootIntentHash,
+            request.ExpandedGraphHash,
+            request.AnalysisBasisHash,
+            request.RouteBasisHash,
+            string.Empty,
+            string.Empty,
+            computationHash,
+            evidence,
+            failure);
     }
 
-    private static void Report(IProgress<EngineProgress>? progress, EngineRequestEnvelope request, EnginePhase phase, int completed, int total, string message) =>
-        progress?.Report(new EngineProgress(request.TransactionId, phase, completed, total, message));
+    private static void Report(
+        IProgress<EngineProgress>? progress,
+        long generation,
+        Guid executionId,
+        EngineRequestEnvelope request,
+        EnginePhase phase,
+        int completed,
+        int total,
+        string message) =>
+        progress?.Report(new EngineProgress(request.TransactionId, generation, executionId, phase, completed, total, message));
 
-    private static int ProgressIndex(EnginePhase phase) => phase switch
-    {
-        EnginePhase.Publishing => 6,
-        EnginePhase.SettlingRoute => 7,
-        EnginePhase.Persisting => 8,
-        EnginePhase.ReleasingGate => 9,
-        EnginePhase.SettlingUi => 10,
-        _ => 11
-    };
-
-    private static string PhaseMessage(EnginePhase phase) => phase switch
-    {
-        EnginePhase.Publishing => "Publishing analysis.",
-        EnginePhase.SettlingRoute => "Settling procurement route.",
-        EnginePhase.Persisting => "Persisting and autosaving.",
-        EnginePhase.ReleasingGate => "Releasing operation gate.",
-        EnginePhase.SettlingUi => "Settling UI state.",
-        EnginePhase.CapturingPostActionEvidence => "Capturing post-action evidence.",
-        EnginePhase.CapturingRestorationEvidence => "Capturing restoration evidence.",
-        _ => phase.ToString()
-    };
 }

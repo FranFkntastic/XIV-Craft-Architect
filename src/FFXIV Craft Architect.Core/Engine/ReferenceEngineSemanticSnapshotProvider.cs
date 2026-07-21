@@ -100,6 +100,17 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
             CaptureRouteDecision(result.RouteDecision));
     }
 
+    public ReferenceEngineResultSnapshot CaptureTransportedResult(JsonElement result)
+    {
+        if (result.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException("The transported engine result must be an object.");
+        }
+
+        return result.Deserialize<ReferenceEngineResultSnapshot>(InputJsonOptions)
+            ?? throw new InvalidOperationException("The transported engine result is empty.");
+    }
+
     private static EngineRouteItemSnapshot[] CaptureShoppingPlans(
         IReadOnlyList<DetailedShoppingPlan> shoppingPlans) =>
         shoppingPlans

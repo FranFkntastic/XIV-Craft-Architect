@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Core.Engine;
@@ -134,6 +135,10 @@ public sealed record ReferenceEnginePreparedInput(
     EngineRootIntentSnapshot RootIntent,
     EngineExpandedGraphSnapshot ExpandedGraph);
 
+public sealed record ReferenceEngineResultSnapshot(
+    EngineAnalysisSemanticSnapshot? MarketAnalysis,
+    EngineRouteSemanticSnapshot? ProcurementRoute);
+
 public interface IReferenceEngineSemanticSnapshotProvider
 {
     ReferenceEnginePreparedInput PrepareInput(EngineRequestEnvelope request);
@@ -141,6 +146,8 @@ public interface IReferenceEngineSemanticSnapshotProvider
     EngineAnalysisSemanticSnapshot CaptureAnalysis(MarketAnalysisExecutionResult result);
 
     EngineRouteSemanticSnapshot CaptureRoute(ProcurementRouteExecutionResult result);
+
+    ReferenceEngineResultSnapshot CaptureTransportedResult(JsonElement result);
 }
 
 public static class EngineSemanticSnapshotHash

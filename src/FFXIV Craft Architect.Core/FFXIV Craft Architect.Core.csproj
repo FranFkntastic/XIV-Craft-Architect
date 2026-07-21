@@ -27,4 +27,8 @@
     <EmbeddedResource Include="Data\world-directory.json" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="FFXIV Craft Architect.Tests" />
+  </ItemGroup>
+
 </Project>
