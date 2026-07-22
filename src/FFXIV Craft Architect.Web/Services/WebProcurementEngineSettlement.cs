@@ -325,7 +325,8 @@ public sealed class WebProcurementEngineSettlement :
         cancellationToken.ThrowIfCancellationRequested();
         var outcome = await _indexedDb.AutoSaveStateWithOutcomeAsync(
             _appState,
-            skipIfInFlight: false);
+            skipIfInFlight: false,
+            allowDuringEngineMemoryPressure: true);
         if (outcome is not (AutoSaveStateOutcome.Saved or AutoSaveStateOutcome.AlreadyPersisted))
         {
             _pendingPersistenceFailure = "The computed procurement route could not be saved and was discarded.";

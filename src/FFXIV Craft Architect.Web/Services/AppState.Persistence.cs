@@ -326,6 +326,12 @@ public partial class AppState
             return false;
         }
 
+        if (Volatile.Read(ref _engineMemoryPressureLeaseCount) > 0)
+        {
+            _autoSaveSemaphore.Release();
+            return false;
+        }
+
         dirtyBuckets = GetDirtyPersistedBuckets();
         if (dirtyBuckets == PersistedStateBucket.None)
         {
@@ -336,7 +342,9 @@ public partial class AppState
         return true;
     }
 
-    public async Task<AppStateAutoSaveLease?> BeginAutoSaveAsync(bool skipIfInFlight = false)
+    public async Task<AppStateAutoSaveLease?> BeginAutoSaveAsync(
+        bool skipIfInFlight = false,
+        bool allowDuringEngineMemoryPressure = false)
     {
         if (CurrentPlan == null && !_projectItems.Any())
         {
@@ -359,6 +367,13 @@ public partial class AppState
             return null;
         }
 
+        if (!allowDuringEngineMemoryPressure &&
+            Volatile.Read(ref _engineMemoryPressureLeaseCount) > 0)
+        {
+            _autoSaveSemaphore.Release();
+            return null;
+        }
+
         var capturedVersions = CurrentVersions;
         var dirtyBuckets = GetDirtyPersistedBuckets();
         if (dirtyBuckets == PersistedStateBucket.None)
@@ -368,6 +383,21 @@ public partial class AppState
         }
 
         return new AppStateAutoSaveLease(capturedVersions, dirtyBuckets);
+    }
+
+    public async Task<IDisposable> BeginEngineMemoryPressureLeaseAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await _autoSaveSemaphore.WaitAsync(cancellationToken);
+        try
+        {
+            Interlocked.Increment(ref _engineMemoryPressureLeaseCount);
+            return new EngineMemoryPressureLease(this);
+        }
+        finally
+        {
+            _autoSaveSemaphore.Release();
+        }
     }
 
     public void CompleteAutoSave(
@@ -385,6 +415,20 @@ public partial class AppState
         finally
         {
             _autoSaveSemaphore.Release();
+        }
+    }
+
+    private sealed class EngineMemoryPressureLease(AppState owner) : IDisposable
+    {
+        private AppState? _owner = owner;
+
+        public void Dispose()
+        {
+            var capturedOwner = Interlocked.Exchange(ref _owner, null);
+            if (capturedOwner is not null)
+            {
+                Interlocked.Decrement(ref capturedOwner._engineMemoryPressureLeaseCount);
+            }
         }
     }
 

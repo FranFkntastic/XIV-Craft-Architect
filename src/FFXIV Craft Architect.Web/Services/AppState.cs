@@ -77,6 +77,7 @@ public partial class AppState
     private long _lastPersistedProcurementOverlayVersion = -1;
     private bool _procurementRouteClearPending;
     private readonly SemaphoreSlim _autoSaveSemaphore = new(1, 1);
+    private int _engineMemoryPressureLeaseCount;
     private int _changeBatchDepth;
     private AppStateChangeScope _batchedScopes = AppStateChangeScope.None;
     private bool _raisePlanChanged;

@@ -451,13 +451,19 @@ public class IndexedDbService
     public async Task<bool> AutoSaveStateAsync(
         AppState state,
         string planName = "AutoSave",
-        bool skipIfInFlight = false) =>
-        await AutoSaveStateWithOutcomeAsync(state, planName, skipIfInFlight) == AutoSaveStateOutcome.Saved;
+        bool skipIfInFlight = false,
+        bool allowDuringEngineMemoryPressure = false) =>
+        await AutoSaveStateWithOutcomeAsync(
+            state,
+            planName,
+            skipIfInFlight,
+            allowDuringEngineMemoryPressure) == AutoSaveStateOutcome.Saved;
 
     public async Task<AutoSaveStateOutcome> AutoSaveStateWithOutcomeAsync(
         AppState state,
         string planName = "AutoSave",
-        bool skipIfInFlight = false)
+        bool skipIfInFlight = false,
+        bool allowDuringEngineMemoryPressure = false)
     {
         AppStateAutoSaveLease? autoSaveLease = null;
         var success = false;
@@ -472,7 +478,9 @@ public class IndexedDbService
                 return AutoSaveStateOutcome.Failed;
             }
 
-            autoSaveLease = await state.BeginAutoSaveAsync(skipIfInFlight);
+            autoSaveLease = await state.BeginAutoSaveAsync(
+                skipIfInFlight,
+                allowDuringEngineMemoryPressure);
             if (autoSaveLease == null)
             {
                 return state.GetDirtyPersistedBuckets() == PersistedStateBucket.None

@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -14,23 +13,25 @@ public static class EngineCanonicalHash
 
     public static string Compute(JsonElement value)
     {
-        var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false }))
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var stream = new IncrementalHashWriteStream(hash);
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = false }))
         {
             WriteCanonical(writer, value);
         }
 
-        return Convert.ToHexString(SHA256.HashData(buffer.WrittenSpan)).ToLowerInvariant();
+        return FormatHash(hash.GetHashAndReset());
     }
 
     public static string ComputeEngineInput(JsonElement value)
     {
-        using var stream = new MemoryStream();
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var stream = new IncrementalHashWriteStream(hash);
         using (var writer = new Utf8JsonWriter(stream))
         {
             WriteCanonical(writer, value);
         }
-        return Convert.ToHexString(SHA256.HashData(stream.ToArray())).ToLowerInvariant();
+        return FormatHash(hash.GetHashAndReset());
     }
 
     public static async ValueTask<string> ComputeEngineInputAsync(
@@ -38,14 +39,15 @@ public static class EngineCanonicalHash
         Func<CancellationToken, ValueTask>? cooperativeYield = null,
         CancellationToken cancellationToken = default)
     {
-        var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false }))
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var stream = new IncrementalHashWriteStream(hash);
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = false }))
         {
             var state = new CooperativeCanonicalWriteState(cooperativeYield, cancellationToken);
             await WriteCanonicalAsync(writer, value, state);
         }
 
-        return Convert.ToHexString(SHA256.HashData(buffer.WrittenSpan)).ToLowerInvariant();
+        return FormatHash(hash.GetHashAndReset());
     }
 
     public static string ResolveEngineInputHash(EngineRequestEnvelope request) =>
@@ -230,6 +232,9 @@ public static class EngineCanonicalHash
         var digits = mantissa.Where(char.IsDigit).SkipWhile(character => character == '0').Count();
         return Math.Max(1, digits);
     }
+
+    private static string FormatHash(byte[] hash) =>
+        Convert.ToHexString(hash).ToLowerInvariant();
 
     private static void WriteCanonical(
         Utf8JsonWriter writer,
@@ -416,6 +421,51 @@ public static class EngineCanonicalHash
             {
                 await cooperativeYield(cancellationToken);
             }
+        }
+    }
+
+    private sealed class IncrementalHashWriteStream(IncrementalHash hash) : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+
+        public override void SetLength(long value) =>
+            throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            hash.AppendData(buffer, offset, count);
+
+        public override void Write(ReadOnlySpan<byte> buffer) =>
+            hash.AppendData(buffer);
+
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            hash.AppendData(buffer.Span);
+            return ValueTask.CompletedTask;
         }
     }
 }

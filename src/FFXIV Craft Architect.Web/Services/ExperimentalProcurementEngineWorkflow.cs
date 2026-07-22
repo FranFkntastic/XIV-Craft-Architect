@@ -53,6 +53,13 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.Superseded);
         }
 
+        using var memoryPressureLease = await _appState.BeginEngineMemoryPressureLeaseAsync(
+            cancellationToken);
+        if (!IsCurrent(request))
+        {
+            return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.Superseded);
+        }
+
         progress?.Report("Preparing procurement engine request...");
         var preparation = Stopwatch.StartNew();
         _logger?.LogInformation("[stage] procurement engine request preparation starting");
@@ -104,7 +111,10 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
         }
 
         var routeBasisHash = EngineCanonicalHash.Compute(request.RouteBasis, wireOptions);
-        var marketAnalysisHash = EngineCanonicalHash.Compute(_appState.MarketItemAnalyses, wireOptions);
+        var marketAnalysisHash = EngineCanonicalHash.Compute(
+            inputElement
+                .GetProperty("procurementRoute")
+                .GetProperty("sourceMarketAnalyses"));
         LogPreparationStage("publication basis hashed", preparation);
         await YieldToBrowserAsync(cancellationToken);
         if (!IsCurrent(request))
