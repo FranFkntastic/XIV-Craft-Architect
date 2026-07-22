@@ -5,17 +5,20 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed class WebPlanPersistenceService
 {
+    private readonly AppState _appState;
     private readonly IndexedDbService _indexedDb;
     private readonly StoredPlanSnapshotBuilder _snapshotBuilder;
     private readonly PlanSessionLoadService _sessionLoadService;
     private readonly MarketEvidenceHydrationService? _marketEvidenceHydration;
 
     public WebPlanPersistenceService(
+        AppState appState,
         IndexedDbService indexedDb,
         StoredPlanSnapshotBuilder snapshotBuilder,
         PlanSessionLoadService sessionLoadService,
         MarketEvidenceHydrationService? marketEvidenceHydration = null)
     {
+        _appState = appState;
         _indexedDb = indexedDb;
         _snapshotBuilder = snapshotBuilder;
         _sessionLoadService = sessionLoadService;
@@ -55,7 +58,11 @@ public sealed class WebPlanPersistenceService
             return null;
         }
 
-        var result = _sessionLoadService.Load(storedPlan, trackStoredPlanIdentity: false);
+        var result = _sessionLoadService.Load(
+            storedPlan,
+            trackStoredPlanIdentity: false,
+            markRestoredStatePersisted: true);
+        _indexedDb.RememberRestoredMarketEvidence(_appState, storedPlan);
         _marketEvidenceHydration?.ScheduleAfterPlanLoad(result);
         return result;
     }

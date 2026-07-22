@@ -63,6 +63,60 @@ public class IndexedDbService
         }
     }
 
+    public async Task<bool> PatchPlanAndProcurementRouteAsync(
+        string planId,
+        StoredPlanCorePatch planPatch)
+    {
+        try
+        {
+            await EnsureInitialized();
+            return await _jsRuntime.InvokeAsync<bool>(
+                "IndexedDB.patchPlanAndProcurementRoute",
+                planId,
+                planPatch);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to patch plan decisions and the procurement route for plan {PlanId}", planId);
+            return false;
+        }
+    }
+
+    public void RememberRestoredMarketEvidence(AppState state, StoredPlan storedPlan)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(storedPlan);
+
+        if (string.IsNullOrWhiteSpace(storedPlan.MarketIntelligenceJson))
+        {
+            _reusableStoredMarketEvidence = null;
+            return;
+        }
+
+        string? marketEvidenceHash = null;
+        if (state.ProcurementRouteValidity == ProcurementRoutePublicationValidity.Current &&
+            !string.IsNullOrWhiteSpace(storedPlan.ProcurementRouteJson))
+        {
+            try
+            {
+                marketEvidenceHash = JsonSerializer.Deserialize<StoredProcurementRoute>(
+                    storedPlan.ProcurementRouteJson)?.MarketEvidenceHash;
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        var versions = state.CurrentVersions;
+        _reusableStoredMarketEvidence = new ReusableStoredMarketEvidence(
+            versions.MarketAnalysisVersion,
+            versions.SettingsVersion,
+            storedPlan.MarketIntelligenceJson,
+            storedPlan.MarketAnalysisRecipeBasisJson,
+            storedPlan.MarketAnalysisScopeSnapshotJson,
+            marketEvidenceHash);
+    }
+
     /// <summary>
     /// Load a specific plan by ID.
     /// </summary>
@@ -488,6 +542,68 @@ public class IndexedDbService
                     : AutoSaveStateOutcome.Skipped;
             }
 
+            if ((autoSaveLease.DirtyBuckets & PersistedStateBucket.MarketAnalysis) == PersistedStateBucket.None &&
+                _reusableStoredMarketEvidence is { } reusableMarketEvidence &&
+                reusableMarketEvidence.MarketAnalysisVersion == state.CurrentVersions.MarketAnalysisVersion &&
+                reusableMarketEvidence.SettingsVersion == state.CurrentVersions.SettingsVersion &&
+                (state.ProcurementRouteValidity != ProcurementRoutePublicationValidity.Current ||
+                 !string.IsNullOrWhiteSpace(reusableMarketEvidence.MarketIntelligenceJson)))
+            {
+                var routeSnapshotElapsed = Stopwatch.StartNew();
+                var marketEvidenceHash = reusableMarketEvidence.MarketEvidenceHash;
+                if (state.ProcurementRouteValidity == ProcurementRoutePublicationValidity.Current &&
+                    string.IsNullOrWhiteSpace(marketEvidenceHash))
+                {
+                    marketEvidenceHash = StoredPlanSnapshotBuilder.ComputeMarketEvidenceHash(
+                        reusableMarketEvidence.MarketIntelligenceJson
+                            ?? throw new InvalidOperationException(
+                                "Reusable market evidence lost its canonical payload."));
+                    _reusableStoredMarketEvidence = reusableMarketEvidence with
+                    {
+                        MarketEvidenceHash = marketEvidenceHash
+                    };
+                }
+                var routeJson = StoredPlanSnapshotBuilder.BuildProcurementRouteJson(
+                    state,
+                    marketEvidenceHash);
+                var planPatch = new StoredPlanCorePatch
+                {
+                    DataCenter = state.SelectedDataCenter,
+                    ProjectItems = state.ProjectItems.Select(item => new StoredProjectItem
+                    {
+                        Id = item.Id,
+                        Name = item.Name,
+                        IconId = item.IconId,
+                        Quantity = item.Quantity,
+                        MustBeHq = item.MustBeHq
+                    }).ToList(),
+                    PlanJson = state.CurrentPlan is null
+                        ? null
+                        : JsonSerializer.Serialize(state.CurrentPlan),
+                    ProcurementRouteJson = routeJson,
+                    SourcePlanId = state.CurrentPlanId,
+                    SourcePlanName = state.CurrentPlanName,
+                    SavedAt = DateTime.UtcNow
+                };
+                routeSnapshotElapsed.Stop();
+
+                await Task.Delay(50);
+                var routeSaveElapsed = Stopwatch.StartNew();
+                success = await PatchPlanAndProcurementRouteAsync("autosave", planPatch);
+                routeSaveElapsed.Stop();
+                totalElapsed.Stop();
+                LastAutoSavePerformanceTiming = new AutoSavePerformanceTiming(
+                    routeSnapshotElapsed.ElapsedMilliseconds,
+                    0,
+                    routeSaveElapsed.ElapsedMilliseconds,
+                    totalElapsed.ElapsedMilliseconds,
+                    ReusedMarketEvidence: true);
+                _logger?.LogInformation(
+                    "Auto-save patched plan decisions and the procurement route without retransferring market evidence in {TotalElapsedMs} ms",
+                    totalElapsed.ElapsedMilliseconds);
+                return success ? AutoSaveStateOutcome.Saved : AutoSaveStateOutcome.Failed;
+            }
+
             var snapshotElapsed = Stopwatch.StartNew();
             var planData = StoredPlanSnapshotBuilder.BuildForAutoSave(
                 state,
@@ -767,6 +883,17 @@ public class StoredPlan
     /// Named plan display name active when this autosave was captured.
     /// </summary>
     public string? SourcePlanName { get; set; }
+}
+
+public sealed class StoredPlanCorePatch
+{
+    public string DataCenter { get; set; } = "Aether";
+    public List<StoredProjectItem> ProjectItems { get; set; } = [];
+    public string? PlanJson { get; set; }
+    public string? ProcurementRouteJson { get; set; }
+    public string? SourcePlanId { get; set; }
+    public string? SourcePlanName { get; set; }
+    public DateTime SavedAt { get; set; } = DateTime.UtcNow;
 }
 
 public sealed record StoredProcurementRoute(

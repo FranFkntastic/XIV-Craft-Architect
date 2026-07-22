@@ -176,22 +176,7 @@ public sealed class StoredPlanSnapshotBuilder
                 ? JsonSerializer.Serialize(appState.CurrentPlan)
                 : null,
             MarketIntelligenceJson = marketIntelligenceJson,
-            ProcurementRouteJson = appState.CurrentPlan is { } currentPlan &&
-                                   marketIntelligenceJson is not null &&
-                                   appState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.Current &&
-                                   appState.ProcurementRouteDecision is { } routeDecision &&
-                                   appState.ProcurementRoutePublicationBasis is { } routeBasis
-                ? JsonSerializer.Serialize(new StoredProcurementRoute(
-                    ProcurementRouteSchemaVersion,
-                    ProcurementOptimizerVersion,
-                    appState.ProcurementShoppingPlans,
-                    routeDecision,
-                    routeBasis,
-                    ComputePlanHash(currentPlan),
-                    marketEvidenceHash ?? throw new InvalidOperationException(
-                        "Current market intelligence has no persistence hash."),
-                    ComputeRoutePayloadHash(appState.ProcurementShoppingPlans, routeDecision)))
-                : null,
+            ProcurementRouteJson = BuildProcurementRouteJson(appState, marketEvidenceHash),
             MarketPlansJson = includeLegacyMarketAnalysisFields && appState.ShoppingPlans.Any()
                 ? JsonSerializer.Serialize(appState.ShoppingPlans)
                 : null,
@@ -205,6 +190,34 @@ public sealed class StoredPlanSnapshotBuilder
             SourcePlanId = includeSourcePlanIdentity ? appState.CurrentPlanId : null,
             SourcePlanName = includeSourcePlanIdentity ? appState.CurrentPlanName : null
         };
+    }
+
+    internal static string? BuildProcurementRouteJson(
+        AppState appState,
+        string? marketEvidenceHash)
+    {
+        if (appState.CurrentPlan is not { } currentPlan ||
+            appState.ProcurementRouteValidity != ProcurementRoutePublicationValidity.Current ||
+            appState.ProcurementRouteDecision is not { } routeDecision ||
+            appState.ProcurementRoutePublicationBasis is not { } routeBasis)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(marketEvidenceHash))
+        {
+            throw new InvalidOperationException("Current market intelligence has no persistence hash.");
+        }
+
+        return JsonSerializer.Serialize(new StoredProcurementRoute(
+            ProcurementRouteSchemaVersion,
+            ProcurementOptimizerVersion,
+            appState.ProcurementShoppingPlans,
+            routeDecision,
+            routeBasis,
+            ComputePlanHash(currentPlan),
+            marketEvidenceHash,
+            ComputeRoutePayloadHash(appState.ProcurementShoppingPlans, routeDecision)));
     }
 
     public static string ComputePlanHash(CraftingPlan plan)

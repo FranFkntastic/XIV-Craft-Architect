@@ -478,7 +478,11 @@
 
             // Load the plan into AppState
             var stateLoadElapsed = System.Diagnostics.Stopwatch.StartNew();
-            PlanSessionLoad.ApplyPreparedSession(loadResult, trackStoredPlanIdentity: false);
+            PlanSessionLoad.ApplyPreparedSession(
+                loadResult,
+                trackStoredPlanIdentity: false,
+                markRestoredStatePersisted: true);
+            IndexedDb.RememberRestoredMarketEvidence(AppState, autoSave);
             MarketEvidenceHydration.ScheduleAfterPlanLoad(loadResult);
             stateLoadElapsed.Stop();
             totalElapsed.Stop();

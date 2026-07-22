@@ -17,17 +17,27 @@ public sealed class PlanSessionLoadService
         _recipeLayerWorkflow = recipeLayerWorkflow ?? new LightweightRecipeLayerWorkflowService();
     }
 
-    public PlanSessionLoadResult Load(StoredPlan storedPlan, bool trackStoredPlanIdentity = true)
+    public PlanSessionLoadResult Load(
+        StoredPlan storedPlan,
+        bool trackStoredPlanIdentity = true,
+        bool markRestoredStatePersisted = false)
     {
         var result = PrepareSession(storedPlan);
-        return ApplyPreparedSession(result, trackStoredPlanIdentity);
+        return ApplyPreparedSession(
+            result,
+            trackStoredPlanIdentity,
+            markRestoredStatePersisted);
     }
 
     public PlanSessionLoadResult ApplyPreparedSession(
         PlanSessionLoadResult preparedSession,
-        bool trackStoredPlanIdentity = true)
+        bool trackStoredPlanIdentity = true,
+        bool markRestoredStatePersisted = false)
     {
-        _appState.ApplyLoadedPlanSession(preparedSession, trackStoredPlanIdentity);
+        _appState.ApplyLoadedPlanSession(
+            preparedSession,
+            trackStoredPlanIdentity,
+            markRestoredStatePersisted);
         return preparedSession;
     }
 

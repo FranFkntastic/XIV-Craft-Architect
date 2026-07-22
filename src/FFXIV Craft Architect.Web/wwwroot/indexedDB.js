@@ -3,7 +3,7 @@
 
 const DB_NAME = 'FFXIVCraftArchitect';
 const DB_VERSION = 12;  // Adds bounded terminal engine transaction retention
-const MODULE_REVISION = 15;
+const MODULE_REVISION = 16;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const ENGINE_TERMINAL_RETENTION_LIMIT = 128;
 const ENGINE_TERMINAL_RETENTION_SCHEMA = 1;
@@ -420,6 +420,42 @@ async function patchMarketAnalysis(
                 modifiedAt: new Date().toISOString()
             };
 
+            store.put(patched);
+            summaryStore.put(toPlanSummary(patched));
+        };
+
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
+/**
+ * Patch plan decisions and the procurement route without transferring the
+ * large market-evidence payload back through WebAssembly interop.
+ */
+async function patchPlanAndProcurementRoute(planId, planPatch) {
+    const database = await initDB();
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
+        const store = transaction.objectStore(STORE_PLANS);
+        const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
+        const request = store.get(planId);
+
+        request.onsuccess = () => {
+            const plan = request.result;
+            if (!plan) {
+                resolve(false);
+                return;
+            }
+
+            const patched = {
+                ...plan,
+                ...planPatch,
+                modifiedAt: new Date().toISOString()
+            };
             store.put(patched);
             summaryStore.put(toPlanSummary(patched));
         };
@@ -1586,6 +1622,7 @@ window.IndexedDB = {
     loadPlanSummaries,
     savePlansBatch,
     patchMarketAnalysis,
+    patchPlanAndProcurementRoute,
     deletePlan,
     saveSetting,
     loadSetting,

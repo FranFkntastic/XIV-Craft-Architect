@@ -535,6 +535,20 @@ public sealed class PersistenceContractTests
     }
 
     [Fact]
+    public void AutosaveRestoration_CanStartFromItsAlreadyPersistedSnapshot()
+    {
+        var stored = WebStoredPlan("autosave", "Autosave");
+        var state = new AppState();
+
+        new PlanSessionLoadService(state).Load(
+            stored,
+            trackStoredPlanIdentity: false,
+            markRestoredStatePersisted: true);
+
+        Assert.Equal(PersistedStateBucket.None, state.GetDirtyPersistedBuckets());
+    }
+
+    [Fact]
     public void NamedPlanRestoration_TracksStoredIdentityAndStartsClean()
     {
         var state = new AppState();

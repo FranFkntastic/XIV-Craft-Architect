@@ -61,7 +61,8 @@ public partial class AppState
 
     public void ApplyLoadedPlanSession(
         PlanSessionLoadResult session,
-        bool trackStoredPlanIdentity = true)
+        bool trackStoredPlanIdentity = true,
+        bool markRestoredStatePersisted = false)
     {
         var storedPlan = session.StoredPlan;
         using (BeginStateChangeBatch())
@@ -110,7 +111,7 @@ public partial class AppState
             NotifyShoppingListChanged();
         }
 
-        if (trackStoredPlanIdentity)
+        if (trackStoredPlanIdentity || markRestoredStatePersisted)
         {
             var restoredBuckets = _procurementRouteClearPending
                 ? PersistedStateBucket.All & ~PersistedStateBucket.ProcurementRoute

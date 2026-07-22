@@ -80,7 +80,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
       const page = await context.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 15);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 16);
       const repaired = await page.evaluate(async () => {
         await IndexedDB.getTradeStoreDiagnostics();
         const request = indexedDB.open('FFXIVCraftArchitect');
@@ -150,7 +150,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       });
       page.on('pageerror', error => errors.push(error.message));
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 15);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 16);
 
       const result = await page.evaluate(async () => {
         await window.IndexedDB.clearMarketCache();
@@ -211,7 +211,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 15);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 16);
 
       const patched = await page.evaluate(async () => {
         await IndexedDB.savePlan({
@@ -239,12 +239,49 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     }
   });
 
+  test(`${name}: procurement route patch preserves the large stored evidence payload`, { timeout: 30_000 }, async () => {
+    const browser = await browserType.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(origin, { waitUntil: 'load' });
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 16);
+
+      const patched = await page.evaluate(async () => {
+        const marketIntelligenceJson = JSON.stringify({ evidence: 'x'.repeat(1024 * 1024) });
+        await IndexedDB.savePlan({
+          id: 'autosave',
+          name: 'AutoSave',
+          projectItems: [{ id: 1, name: 'Crasher' }],
+          planJson: '{"plan":"preserved"}',
+          marketIntelligenceJson,
+          procurementRouteJson: null
+        });
+        await IndexedDB.patchPlanAndProcurementRoute('autosave', {
+          planJson: '{"plan":"current"}',
+          procurementRouteJson: '{"route":"current"}'
+        });
+        const plan = await IndexedDB.loadPlan('autosave');
+        return {
+          planJson: plan.planJson,
+          marketIntelligenceJsonMatches: plan.marketIntelligenceJson === marketIntelligenceJson,
+          procurementRouteJson: plan.procurementRouteJson
+        };
+      });
+
+      assert.equal(patched.planJson, '{"plan":"current"}');
+      assert.equal(patched.marketIntelligenceJsonMatches, true);
+      assert.equal(patched.procurementRouteJson, '{"route":"current"}');
+    } finally {
+      await browser.close();
+    }
+  });
+
   test(`${name}: durable engine ledger fences claims and survives reload`, { timeout: 30_000 }, async () => {
     const browser = await browserType.launch({ headless: true });
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 15);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 16);
       const initial = await page.evaluate(async () => {
         const bounded = (label, operation) => Promise.race([
           operation,
@@ -285,7 +322,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       assert.equal(initial.terminal.terminalResultJson, initial.terminalJson);
 
       await page.reload({ waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 15);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 16);
       const recovered = await page.evaluate(async ({ abandonedId, canonicalHash }) => {
         const claim = await IndexedDB.claimEngineTransaction(abandonedId, canonicalHash);
         await IndexedDB.releaseEngineTransaction(
@@ -360,5 +397,5 @@ test('static cache buster matches module revision', async () => {
   const html = await readFile(path.resolve(here, '../../src/FFXIV Craft Architect.Web/wwwroot/index.html'), 'utf8');
   const script = await readFile(scriptPath, 'utf8');
   assert.match(html, /indexedDB\.js\?v=15/);
-  assert.match(script, /const MODULE_REVISION = 15;/);
+  assert.match(script, /const MODULE_REVISION = 16;/);
 });
