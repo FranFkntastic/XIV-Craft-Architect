@@ -510,7 +510,7 @@ jobs:
             import { readFile } from "node:fs/promises";
             const config = JSON.parse(await readFile("deployed-appsettings.json", "utf8"));
             const enabled = process.env.DEPLOY_SLOT === "local-dev";
-            if (config?.LodestoneLookup?.BaseAddress !== `https://${process.env.DEPLOY_DOMAIN}/api/`) process.exit(1);
+            if (config?.LodestoneLookup?.BaseAddress !== "https://" + process.env.DEPLOY_DOMAIN + "/api/") process.exit(1);
             if (config?.ProcurementRoutes?.GenerationEnabled !== enabled) process.exit(1);
             if (config?.EngineRewrite?.ExecutionEnabled !== enabled) process.exit(1);
             if (config?.EngineAcceptance?.Enabled !== false) process.exit(1);
