@@ -28,7 +28,7 @@ public class GarlandModelsTests
     }
 
     [Fact]
-    public void GarlandItemResponse_CraftDraftUnlockId_DeserializesWithZeroUnlockItemId()
+    public void GarlandItemResponse_CraftDraftUnlockId_DoesNotClaimNumericUnlockEvidence()
     {
         var json = @"{
             ""item"": {
@@ -54,8 +54,28 @@ public class GarlandModelsTests
         Assert.NotNull(response);
         var craft = Assert.Single(response.Item.Crafts!);
         Assert.Equal("fc563", craft.Id);
-        Assert.Equal(0, craft.UnlockItemId);
+        Assert.Null(craft.UnlockItemId);
         Assert.Equal(26521, Assert.Single(craft.Ingredients).Id);
+    }
+
+    [Theory]
+    [InlineData("0", 0)]
+    [InlineData("1225", 1225)]
+    public void GarlandItemResponse_NumericUnlockId_PreservesExplicitEvidence(string unlockId, int expected)
+    {
+        var json = $$"""
+            {
+                "item": {
+                    "id": 1,
+                    "name": "Test",
+                    "craft": [{ "id": "2", "unlockId": {{unlockId}} }]
+                }
+            }
+            """;
+
+        var response = JsonSerializer.Deserialize<GarlandItemResponse>(json);
+
+        Assert.Equal(expected, Assert.Single(response!.Item.Crafts!).UnlockItemId);
     }
 
     [Fact]

@@ -2,7 +2,7 @@ namespace FFXIV_Craft_Architect.Core.Models;
 
 public sealed class StoredRecipeOperationSnapshot
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -90,6 +90,10 @@ public sealed class StoredRecipeOperation
     public string JobName { get; set; } = string.Empty;
 
     public int RecipeLevel { get; set; }
+
+    public int RecipeDisplayLevel { get; set; }
+
+    public int? RecipeUnlockItemId { get; set; }
 
     public int Yield { get; set; }
 

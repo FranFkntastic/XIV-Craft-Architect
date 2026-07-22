@@ -1816,8 +1816,8 @@ public class RecipeCalculationService
             ? Math.Max(0, recipe.Stars)
             : resolution.RecipeStars;
         node.RecipeUnlockItemId = resolution.StandardRecipe == null
-            ? recipe.UnlockItemId
-            : resolution.RecipeUnlockItemId;
+            ? recipe.UnlockItemId ?? 0
+            : resolution.RecipeUnlockItemId ?? 0;
         node.Job = resolution.StandardRecipe == null ? JobHelper.GetJobName(recipe.JobId) : resolution.JobName;
         node.Yield = resolution.StandardRecipe == null ? Math.Max(1, recipe.Yield) : resolution.Yield;
     }

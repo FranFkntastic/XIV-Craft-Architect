@@ -161,7 +161,9 @@ public sealed class RecipeOperationSnapshotService : IRecipeOperationSnapshotSer
                 ingredients,
                 resolution.Confidence,
                 resolution.DataSource,
-                nodeDiagnostics.Count > 0));
+                nodeDiagnostics.Count > 0,
+                resolution.RecipeDisplayLevel,
+                resolution.RecipeUnlockItemId));
         }
 
         var childSuppressingAncestor = suppressingAncestor ?? GetDirectSuppressingAncestor(node);

@@ -390,8 +390,8 @@ public class GarlandCraft
     public int Stars { get; set; }
 
     [JsonPropertyName("unlockId")]
-    [JsonConverter(typeof(FlexibleIntConverter))]
-    public int UnlockItemId { get; set; }
+    [JsonConverter(typeof(FlexibleNullableIntConverter))]
+    public int? UnlockItemId { get; set; }
 
     [JsonPropertyName("yield")]
     public int Yield { get; set; } = 1;
@@ -729,6 +729,45 @@ public class FlexibleIntConverter : JsonConverter<int>
     public override void Write(Utf8JsonWriter writer, int value, JsonSerializerOptions options)
     {
         writer.WriteNumberValue(value);
+    }
+}
+
+/// <summary>
+/// Preserves the distinction between a numeric zero and missing or non-numeric Garland data.
+/// </summary>
+public sealed class FlexibleNullableIntConverter : JsonConverter<int?>
+{
+    public override int? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Number)
+        {
+            return reader.TryGetInt32(out var value) ? value : null;
+        }
+
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            var value = reader.GetString();
+            return int.TryParse(value, out var parsed) ? parsed : null;
+        }
+
+        if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+        {
+            reader.Skip();
+        }
+
+        return null;
+    }
+
+    public override void Write(Utf8JsonWriter writer, int? value, JsonSerializerOptions options)
+    {
+        if (value.HasValue)
+        {
+            writer.WriteNumberValue(value.Value);
+        }
+        else
+        {
+            writer.WriteNullValue();
+        }
     }
 }
 

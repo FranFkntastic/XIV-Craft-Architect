@@ -245,7 +245,9 @@ public sealed record RecipeOperation(
     IReadOnlyList<RecipeOperationIngredient> Ingredients,
     RecipeResolutionConfidence ResolutionConfidence = RecipeResolutionConfidence.None,
     RecipeDataSourceKind RecipeDataSource = RecipeDataSourceKind.None,
-    bool HasStructuralDiagnostics = false)
+    bool HasStructuralDiagnostics = false,
+    int RecipeDisplayLevel = 0,
+    int? RecipeUnlockItemId = null)
 {
     public bool IsRoot => ParentNodeId == null;
 

@@ -57,6 +57,8 @@ public class StoredRecipeBasisMapperTests
         Assert.Equal(5, operation.JobId);
         Assert.Equal("Carpenter", operation.JobName);
         Assert.Equal(90, operation.RecipeLevel);
+        Assert.Equal(91, operation.RecipeDisplayLevel);
+        Assert.Equal(789, operation.RecipeUnlockItemId);
         Assert.Equal(2, operation.Yield);
         Assert.Equal(2, operation.CraftCount);
         Assert.Equal(RecipeResolutionConfidence.Exact, operation.ResolutionConfidence);
@@ -272,7 +274,9 @@ public class StoredRecipeBasisMapperTests
             ],
             RecipeResolutionConfidence.Exact,
             RecipeDataSourceKind.GarlandStandardCraft,
-            true);
+            true,
+            91,
+            789);
 
         var metadata = new RecipeOperationSnapshotMetadata(
             new RecipeOperationSnapshotIdentity(
