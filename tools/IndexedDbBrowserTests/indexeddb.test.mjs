@@ -19,13 +19,13 @@ before(async () => {
       response.end('<!doctype html>');
       return;
     }
-    if (request.url === '/indexedDB.js?v=15') {
+    if (request.url === '/indexedDB.js?v=16') {
       response.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' });
       response.end(script);
       return;
     }
     response.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' });
-    response.end('<!doctype html><script src="/indexedDB.js?v=15"></script>');
+    response.end('<!doctype html><script src="/indexedDB.js?v=16"></script>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -396,6 +396,9 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 test('static cache buster matches module revision', async () => {
   const html = await readFile(path.resolve(here, '../../src/FFXIV Craft Architect.Web/wwwroot/index.html'), 'utf8');
   const script = await readFile(scriptPath, 'utf8');
-  assert.match(html, /indexedDB\.js\?v=15/);
-  assert.match(script, /const MODULE_REVISION = 16;/);
+  const cacheRevision = html.match(/indexedDB\.js\?v=(\d+)/)?.[1];
+  const moduleRevision = script.match(/const MODULE_REVISION = (\d+);/)?.[1];
+  assert.ok(cacheRevision, 'index.html must carry an IndexedDB module cache revision');
+  assert.ok(moduleRevision, 'indexedDB.js must declare its module revision');
+  assert.equal(cacheRevision, moduleRevision);
 });
