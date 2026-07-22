@@ -199,6 +199,7 @@ public sealed class SqliteProfileHostStore
         long expectedRevision,
         CancellationToken ct)
     {
+        ValidateCollection(collection);
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
         var existing = await LoadObjectAsync(connection, profileId, collection, objectId, ct);
@@ -266,6 +267,7 @@ public sealed class SqliteProfileHostStore
         long expectedRevision,
         CancellationToken ct)
     {
+        ValidateCollection(collection);
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
         var existing = await LoadObjectAsync(connection, profileId, collection, objectId, ct);
@@ -352,6 +354,14 @@ public sealed class SqliteProfileHostStore
                 ? null
                 : DateTime.Parse(reader.GetString(4), null, DateTimeStyles.RoundtripKind)
         };
+    }
+
+    private static void ValidateCollection(string collection)
+    {
+        if (!ProfileSyncCollections.All.Contains(collection))
+        {
+            throw new ArgumentException($"Collection '{collection}' is not syncable.", nameof(collection));
+        }
     }
 
     private static ProfileSyncObjectEnvelope ReadObject(SqliteDataReader reader)

@@ -2,14 +2,7 @@ name: Deploy Web App to VPS
 
 on:
   push:
-    branches: [ main, master, local-dev ]
-    paths:
-      - 'src/FFXIV Craft Architect.Web/**'
-      - 'src/FFXIV Craft Architect.Core/**'
-      - 'src/FFXIV Craft Architect.Tests/**'
-      - 'scripts/Assert-DeployTestSurface.ps1'
-      - 'global.json'
-      - '.github/workflows/deploy-vps-web.yml'
+    branches: [ main, local-dev ]
   workflow_dispatch:
     inputs:
       slot:
@@ -25,133 +18,396 @@ permissions:
   contents: read
 
 concurrency:
-  group: vps-web-${{ github.ref_name }}
+  group: vps-web-${{ (github.event_name == 'workflow_dispatch' && inputs.slot) || (github.ref_name == 'local-dev' && 'local-dev') || 'main' }}
   cancel-in-progress: false
 
 jobs:
-  test:
-    runs-on: windows-latest
-    timeout-minutes: 15
+  truthful-suite:
+    name: Truthful suite final gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      archive_name: ${{ steps.artifact.outputs.archive_name }}
+      archive_sha256: ${{ steps.artifact.outputs.archive_sha256 }}
+      configuration_sha256: ${{ steps.artifact.outputs.effective_configuration_sha256 }}
+      domain: ${{ steps.target.outputs.domain }}
+      release: ${{ steps.target.outputs.release }}
+      slot: ${{ steps.target.outputs.slot }}
+      source_sha: ${{ steps.target.outputs.commit_sha }}
+      transaction_sha256: ${{ steps.final-gate.outputs.transaction_sha256 }}
+      verifier_sha256: ${{ steps.target.outputs.verifier_sha256 }}
+      artifact_verifier_sha256: ${{ steps.target.outputs.artifact_verifier_sha256 }}
+    env:
+      TRUTHFUL_RUN_ID: ${{ github.run_id }}
+      TRUTHFUL_RUN_ATTEMPT: ${{ github.run_attempt }}
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+      - name: Resolve deploy target
+        id: deploy-target
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            slot="${{ inputs.slot }}"
+            if [[ "$GITHUB_REF_TYPE" != "branch" || "$GITHUB_REF" != "refs/heads/$slot" ]]; then
+              echo "Dispatch ref '$GITHUB_REF_NAME' must match selected slot '$slot'." >&2
+              exit 1
+            fi
+            checkout_ref="$GITHUB_SHA"
+            source_ref="$GITHUB_REF_NAME"
+          elif [[ "$GITHUB_REF_NAME" == "local-dev" ]]; then
+            slot="local-dev"
+            checkout_ref="$GITHUB_SHA"
+            source_ref="$GITHUB_REF_NAME"
+          else
+            slot="main"
+            checkout_ref="$GITHUB_SHA"
+            source_ref="$GITHUB_REF_NAME"
+          fi
+
+          if [[ "$slot" == "local-dev" ]]; then
+            domain="dev.xivcraftarchitect.com"
+          elif [[ "$slot" == "main" ]]; then
+            domain="xivcraftarchitect.com"
+          else
+            echo "Unsupported deploy slot: $slot" >&2
+            exit 1
+          fi
+
+          {
+            echo "slot=$slot"
+            echo "domain=$domain"
+            echo "checkout_ref=$checkout_ref"
+            echo "source_ref=$source_ref"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout immutable source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.slot || github.ref_name }}
+          ref: ${{ steps.deploy-target.outputs.checkout_ref }}
+
+      - name: Resolve immutable source identity
+        id: target
+        shell: bash
+        env:
+          BUILD_SOURCE_REF: ${{ steps.deploy-target.outputs.source_ref }}
+        run: |
+          set -euo pipefail
+          commit_sha="$(git rev-parse HEAD)"
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          test "$commit_sha" = "$GITHUB_SHA"
+          verifier_sha256="$(git show HEAD:tools/TruthfulSuite/verify-outcomes.mjs | sha256sum | cut -d' ' -f1)"
+          artifact_verifier_sha256="$(git show HEAD:tools/TruthfulSuite/truthful-artifact.mjs | sha256sum | cut -d' ' -f1)"
+          release="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${commit_sha:0:7}"
+          {
+            echo "commit_sha=$commit_sha"
+            echo "tree_sha=$tree_sha"
+            echo "source_ref=$BUILD_SOURCE_REF"
+            echo "slot=${{ steps.deploy-target.outputs.slot }}"
+            echo "domain=${{ steps.deploy-target.outputs.domain }}"
+            echo "release=$release"
+            echo "verifier_sha256=$verifier_sha256"
+            echo "artifact_verifier_sha256=$artifact_verifier_sha256"
+          } >> "$GITHUB_OUTPUT"
+          echo "TRUTHFUL_SOURCE_SHA=$commit_sha" >> "$GITHUB_ENV"
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
 
-      - name: Validate web deploy test slice
-        shell: pwsh
-        run: >
-          ./scripts/Assert-DeployTestSurface.ps1
-          -Surface DeployWeb
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
 
-      - name: Run web deploy test slice
+      - name: Test truthful-suite tooling
+        run: node --test "tools/TruthfulSuite/truthful-suite.test.mjs"
+
+      - name: Restore pinned browser package
+        shell: bash
+        run: timeout --signal=KILL 2m npm --prefix "tools/IndexedDbBrowserTests" ci
+
+      - name: Validate truthful suite structure
         run: >
-          dotnet test "src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj"
+          node tools/TruthfulSuite/run-command.mjs
+          --id suite-structure
+          --out dist/evidence/suite-structure.json
+          --timeout-seconds 120
+          --
+          pwsh -NoProfile -File scripts/Assert-TruthfulTestSuite.ps1
+
+      - name: Restore locked solution
+        shell: bash
+        run: timeout --signal=KILL 5m dotnet restore "FFXIV Craft Architect.sln" --locked-mode
+
+      - name: Audit vulnerable dependencies
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id dependency-audit
+          --out dist/evidence/dependency-audit.json
+          --timeout-seconds 300
+          --
+          node tools/TruthfulSuite/check-dependencies.mjs
+
+      - name: Verify formatting
+        shell: bash
+        run: timeout --signal=KILL 5m dotnet format "FFXIV Craft Architect.sln" --verify-no-changes --no-restore
+
+      - name: Build full solution
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id solution-build
+          --out dist/evidence/solution-build.json
+          --timeout-seconds 600
+          --
+          dotnet build "FFXIV Craft Architect.sln"
           --configuration Release
           --no-restore
+
+      - name: Run specification tests
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id spec-tests
+          --out dist/evidence/spec-tests.json
+          --timeout-seconds 600
+          --
+          dotnet test "src/FFXIV Craft Architect.SpecTests/FFXIV Craft Architect.SpecTests.csproj"
+          --configuration Release
           --no-build
-          --filter "Surface=DeployWeb"
+          --no-restore
           --blame-hang
-          --blame-hang-timeout 2m
+          --blame-hang-timeout 5m
           --blame-hang-dump-type mini
+          --logger "trx;LogFileName=spec-tests.trx"
           --logger "console;verbosity=normal"
 
+      - name: Run contract tests
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id contract-tests
+          --out dist/evidence/contract-tests.json
+          --timeout-seconds 600
+          --
+          dotnet test "src/FFXIV Craft Architect.ContractTests/FFXIV Craft Architect.ContractTests.csproj"
+          --configuration Release
+          --no-build
+          --no-restore
+          --blame-hang
+          --blame-hang-timeout 5m
+          --blame-hang-dump-type mini
+          --logger "trx;LogFileName=contract-tests.trx"
+          --logger "console;verbosity=normal"
+
+      - name: Publish web once
+        env:
+          BUILD_SOURCE_REF: ${{ steps.target.outputs.source_ref }}
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id web-publish
+          --out dist/evidence/web-publish.json
+          --timeout-seconds 600
+          --
+          dotnet publish "src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"
+          --configuration Release
+          --output dist/publish
+          --no-restore
+          "-p:BuildInfoBranchName=$BUILD_SOURCE_REF"
+
+      - name: Apply target configuration and create immutable artifact
+        id: artifact
+        shell: bash
+        env:
+          BUILD_SOURCE_REF: ${{ steps.target.outputs.source_ref }}
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=all)"
+          node tools/TruthfulSuite/truthful-artifact.mjs create \
+            --root "dist/publish/wwwroot" \
+            --out-dir "dist/release" \
+            --archive-name "craftarchitect-web-${{ steps.target.outputs.slot }}-${{ steps.target.outputs.release }}.tar.gz" \
+            --domain "${{ steps.target.outputs.domain }}" \
+            --slot "${{ steps.target.outputs.slot }}" \
+            --source-sha "${{ steps.target.outputs.commit_sha }}" \
+            --tree-sha "${{ steps.target.outputs.tree_sha }}" \
+            --source-dirty "false" \
+            --repository-root "." \
+            --source-ref "$BUILD_SOURCE_REF" \
+            --run-id "$TRUTHFUL_RUN_ID" \
+            --run-attempt "$TRUTHFUL_RUN_ATTEMPT" \
+            --release "${{ steps.target.outputs.release }}" \
+            --dotnet-version "$(dotnet --version)" \
+            --acceptance-root "tools/IndexedDbBrowserTests" \
+            --fixtures-root "fixtures/browser"
+
+      - name: Extract and verify accepted archive
+        run: >
+          node tools/TruthfulSuite/truthful-artifact.mjs verify
+          --archive "${{ steps.artifact.outputs.archive_path }}"
+          --file-manifest "${{ steps.artifact.outputs.file_manifest_path }}"
+          --build-manifest "${{ steps.artifact.outputs.build_manifest_path }}"
+          --extract "dist/subject/src/FFXIV Craft Architect.Web/wwwroot"
+
+      - name: Verify slot configuration from extracted bytes
+        env:
+          TRUTHFUL_ARTIFACT_SHA: ${{ steps.artifact.outputs.archive_sha256 }}
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id product-configuration
+          --out dist/evidence/product-configuration.json
+          --timeout-seconds 60
+          --subject archive
+          --
+          node tools/TruthfulSuite/check-product.mjs
+          "dist/subject/src/FFXIV Craft Architect.Web/wwwroot"
+          "${{ steps.target.outputs.domain }}"
+          "${{ steps.target.outputs.slot }}"
+
+      - name: Prepare deterministic browser harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "dist/subject/tools/IndexedDbBrowserTests"
+          mkdir -p "dist/subject/fixtures/browser"
+          cp tools/IndexedDbBrowserTests/truth-suite.mjs tools/IndexedDbBrowserTests/engine-worker.test.mjs "dist/subject/tools/IndexedDbBrowserTests/"
+          cp tools/IndexedDbBrowserTests/package.json tools/IndexedDbBrowserTests/package-lock.json "dist/subject/tools/IndexedDbBrowserTests/"
+          cp -R fixtures/browser/. "dist/subject/fixtures/browser/"
+          timeout --signal=KILL 2m npm --prefix "dist/subject/tools/IndexedDbBrowserTests" ci
+          timeout --signal=KILL 10m npm --prefix "dist/subject/tools/IndexedDbBrowserTests" exec -- playwright install --with-deps chromium firefox
+
+      - name: Run deterministic browser tests against extracted bytes
+        if: steps.target.outputs.slot == 'main'
+        env:
+          TRUTHFUL_ARTIFACT_SHA: ${{ steps.artifact.outputs.archive_sha256 }}
+          TRUTHFUL_HARNESS_SHA: ${{ steps.artifact.outputs.acceptance_harness_sha256 }}
+          TRUTHFUL_FIXTURE_SHA: ${{ steps.artifact.outputs.acceptance_fixture_sha256 }}
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id deterministic-browser-tests
+          --out dist/evidence/deterministic-browser-tests.json
+          --timeout-seconds 600
+          --subject archive
+          --cwd "dist/subject/tools/IndexedDbBrowserTests"
+          --
+          npm test --
+          --web-root "../../src/FFXIV Craft Architect.Web/wwwroot"
+          --output "../../../evidence/browser-truth-report.json"
+
+      - name: Run guarded engine browser tests against extracted bytes
+        if: steps.target.outputs.slot == 'local-dev'
+        env:
+          TRUTHFUL_ARTIFACT_SHA: ${{ steps.artifact.outputs.archive_sha256 }}
+          TRUTHFUL_HARNESS_SHA: ${{ steps.artifact.outputs.acceptance_harness_sha256 }}
+          TRUTHFUL_FIXTURE_SHA: ${{ steps.artifact.outputs.acceptance_fixture_sha256 }}
+          ENGINE_WORKER_PUBLISH_ROOT: ${{ github.workspace }}/dist/subject/src/FFXIV Craft Architect.Web/wwwroot
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id engine-browser-tests
+          --out dist/evidence/engine-browser-tests.json
+          --timeout-seconds 600
+          --subject archive
+          --cwd "dist/subject/tools/IndexedDbBrowserTests"
+          --
+          npm run test:engine
+
+      - name: Truthful suite final gate
+        id: final-gate
+        shell: bash
+        env:
+          VERIFIER_SHA256: ${{ steps.target.outputs.verifier_sha256 }}
+          ARTIFACT_VERIFIER_SHA256: ${{ steps.target.outputs.artifact_verifier_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(sha256sum tools/TruthfulSuite/verify-outcomes.mjs | cut -d' ' -f1)" = "$VERIFIER_SHA256"
+          test "$(sha256sum tools/TruthfulSuite/truthful-artifact.mjs | cut -d' ' -f1)" = "$ARTIFACT_VERIFIER_SHA256"
+          node tools/TruthfulSuite/verify-outcomes.mjs \
+            --archive "${{ steps.artifact.outputs.archive_path }}" \
+            --file-manifest "${{ steps.artifact.outputs.file_manifest_path }}" \
+            --build-manifest "${{ steps.artifact.outputs.build_manifest_path }}" \
+            --evidence-dir "dist/evidence" \
+            --acceptance-manifest "dist/release/acceptance-manifest.json" \
+            --acceptance-root "dist/subject/tools/IndexedDbBrowserTests" \
+            --fixtures-root "dist/subject/fixtures/browser" \
+            --spec-trx "src/FFXIV Craft Architect.SpecTests/TestResults/spec-tests.trx" \
+            --contract-trx "src/FFXIV Craft Architect.ContractTests/TestResults/contract-tests.trx"
+
+      - name: Upload accepted handoff
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: truthful-web-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/release/**
+            dist/evidence/**
+            dist/subject/tools/IndexedDbBrowserTests/truth-suite.mjs
+            dist/subject/tools/IndexedDbBrowserTests/engine-worker.test.mjs
+            dist/subject/tools/IndexedDbBrowserTests/package.json
+            dist/subject/tools/IndexedDbBrowserTests/package-lock.json
+            dist/subject/fixtures/browser/**
+            src/FFXIV Craft Architect.SpecTests/TestResults/spec-tests.trx
+            src/FFXIV Craft Architect.ContractTests/TestResults/contract-tests.trx
+            tools/TruthfulSuite/truthful-artifact.mjs
+            tools/TruthfulSuite/verify-outcomes.mjs
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: truthful-test-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            src/FFXIV Craft Architect.SpecTests/TestResults/**
+            src/FFXIV Craft Architect.ContractTests/TestResults/**
+          if-no-files-found: warn
+          retention-days: 7
+
   deploy:
-    needs: test
+    name: Deploy accepted artifact
+    needs: truthful-suite
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: ${{ needs.truthful-suite.outputs.slot == 'main' && 'production' || 'development' }}
+      url: https://${{ needs.truthful-suite.outputs.domain }}
     env:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
       VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
       VPS_SSH_PORT: 22
+      REMOTE_UPLOAD_DIR: .craftarchitect-deploy/${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - name: Resolve deploy slot
-        id: deploy-slot
+      - name: Download accepted handoff
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: truthful-web-${{ github.run_id }}-${{ github.run_attempt }}
+          path: accepted
+
+      - name: Verify accepted handoff without source checkout
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            slot="${{ inputs.slot }}"
-          elif [[ "${{ github.ref_name }}" == "local-dev" ]]; then
-            slot="local-dev"
-          else
-            slot="main"
-          fi
-
-          if [[ "$slot" == "local-dev" ]]; then
-            domain="dev.xivcraftarchitect.com"
-            ref="local-dev"
-            generation_enabled="true"
-            engine_enabled="true"
-          elif [[ "$slot" == "main" ]]; then
-            domain="xivcraftarchitect.com"
-            ref="main"
-            generation_enabled="false"
-            engine_enabled="false"
-          else
-            echo "Unsupported deploy slot: $slot" >&2
-            exit 1
-          fi
-
-          release="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA::7}"
-          {
-            echo "slot=$slot"
-            echo "domain=$domain"
-            echo "ref=$ref"
-            echo "release=$release"
-            echo "generation_enabled=$generation_enabled"
-            echo "engine_enabled=$engine_enabled"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Checkout source
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.deploy-slot.outputs.ref }}
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-
-      - name: Publish web app
-        run: >
-          dotnet publish "src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"
-          -c Release
-          -o dist/web
-          -p:BuildInfoBranchName=${{ steps.deploy-slot.outputs.ref }}
-
-      - name: Write hosted API configuration
-        shell: bash
-        run: |
-          cat > dist/web/wwwroot/appsettings.json <<JSON
-          {
-            "LodestoneLookup": {
-              "BaseAddress": "https://${{ steps.deploy-slot.outputs.domain }}/api/"
-            },
-            "ProcurementRoutes": {
-              "GenerationEnabled": ${{ steps.deploy-slot.outputs.generation_enabled }}
-            },
-            "EngineRewrite": {
-              "ExecutionEnabled": ${{ steps.deploy-slot.outputs.engine_enabled }}
-            },
-            "EngineAcceptance": {
-              "Enabled": false,
-              "UseDeterministicEvidence": false
-            }
-          }
-          JSON
-
-      - name: Package web files
-        run: tar -czf "craftarchitect-web-${{ steps.deploy-slot.outputs.slot }}-${{ steps.deploy-slot.outputs.release }}.tar.gz" -C dist/web/wwwroot .
+          set -euo pipefail
+          archive="accepted/dist/release/${{ needs.truthful-suite.outputs.archive_name }}"
+          test "$(sha256sum "$archive" | cut -d' ' -f1)" = "${{ needs.truthful-suite.outputs.archive_sha256 }}"
+          test "$(sha256sum accepted/tools/TruthfulSuite/verify-outcomes.mjs | cut -d' ' -f1)" = "${{ needs.truthful-suite.outputs.verifier_sha256 }}"
+          test "$(sha256sum accepted/tools/TruthfulSuite/truthful-artifact.mjs | cut -d' ' -f1)" = "${{ needs.truthful-suite.outputs.artifact_verifier_sha256 }}"
+          node accepted/tools/TruthfulSuite/verify-outcomes.mjs \
+            --archive "$archive" \
+            --file-manifest "accepted/dist/release/published-files.json" \
+            --build-manifest "accepted/dist/release/build-manifest.json" \
+            --evidence-dir "accepted/dist/evidence" \
+            --acceptance-manifest "accepted/dist/release/acceptance-manifest.json" \
+            --acceptance-root "accepted/dist/subject/tools/IndexedDbBrowserTests" \
+            --fixtures-root "accepted/dist/subject/fixtures/browser" \
+            --spec-trx "accepted/src/FFXIV Craft Architect.SpecTests/TestResults/spec-tests.trx" \
+            --contract-trx "accepted/src/FFXIV Craft Architect.ContractTests/TestResults/contract-tests.trx" \
+            --verify-only true \
+            --expected-transaction "${{ needs.truthful-suite.outputs.transaction_sha256 }}"
 
       - name: Configure SSH
         shell: bash
         run: |
+          set -euo pipefail
           test -n "$VPS_HOST"
           test -n "$VPS_USER"
           test -n "$VPS_SSH_PRIVATE_KEY"
@@ -160,48 +416,117 @@ jobs:
           chmod 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/craftarchitect_vps
           chmod 600 ~/.ssh/craftarchitect_vps
-          # Pin the VPS host key from secrets instead of trusting a live scan.
+          # Pin trusted secret material; never accept a live key scan.
           printf '%s\n' "$VPS_SSH_HOST_KEY" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Upload web archive
-        run: >
-          scp -P "$VPS_SSH_PORT"
-          -i ~/.ssh/craftarchitect_vps
-          "craftarchitect-web-${{ steps.deploy-slot.outputs.slot }}-${{ steps.deploy-slot.outputs.release }}.tar.gz"
-          "$VPS_USER@$VPS_HOST:/tmp/craftarchitect-web-${{ steps.deploy-slot.outputs.slot }}-${{ steps.deploy-slot.outputs.release }}.tar.gz"
-
-      - name: Activate web release
+      - name: Upload accepted web archive
         shell: bash
         run: |
-          ssh -p "$VPS_SSH_PORT" -i ~/.ssh/craftarchitect_vps "$VPS_USER@$VPS_HOST" <<'REMOTE'
           set -euo pipefail
-          slot="${{ steps.deploy-slot.outputs.slot }}"
-          release="${{ steps.deploy-slot.outputs.release }}"
-          archive="/tmp/craftarchitect-web-$slot-$release.tar.gz"
+          ssh -p "$VPS_SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -i ~/.ssh/craftarchitect_vps \
+            "$VPS_USER@$VPS_HOST" \
+            "install -d -m 700 '$REMOTE_UPLOAD_DIR'"
+          scp -P "$VPS_SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=2 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -i ~/.ssh/craftarchitect_vps \
+            "accepted/dist/release/${{ needs.truthful-suite.outputs.archive_name }}" \
+            "$VPS_USER@$VPS_HOST:$REMOTE_UPLOAD_DIR/${{ needs.truthful-suite.outputs.archive_name }}"
+
+      - name: Verify, extract, and activate accepted release
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -p "$VPS_SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=2 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -i ~/.ssh/craftarchitect_vps \
+            "$VPS_USER@$VPS_HOST" <<'REMOTE'
+          set -euo pipefail
+          slot="${{ needs.truthful-suite.outputs.slot }}"
+          release="${{ needs.truthful-suite.outputs.release }}"
+          upload_dir="$HOME/.craftarchitect-deploy/${{ github.run_id }}-${{ github.run_attempt }}"
+          archive="$upload_dir/${{ needs.truthful-suite.outputs.archive_name }}"
+          expected_sha="${{ needs.truthful-suite.outputs.archive_sha256 }}"
           root="/srv/craftarchitect/web/$slot"
           release_dir="$root/releases/$release"
+          staging_dir="$root/releases/.$release.staging"
+          cleanup() {
+            sudo rm -rf "$staging_dir"
+            rm -f "$archive"
+            rmdir "$upload_dir" 2>/dev/null || true
+          }
+          trap cleanup EXIT
 
-          sudo mkdir -p "$release_dir"
-          sudo tar -xzf "$archive" -C "$release_dir"
-          sudo chown -R "$USER:$USER" "$release_dir"
+          printf '%s  %s\n' "$expected_sha" "$archive" | sha256sum --check --strict -
+          sudo test ! -e "$release_dir"
+          sudo test ! -e "$staging_dir"
+          sudo mkdir -p "$staging_dir"
+          sudo tar -xzf "$archive" -C "$staging_dir"
+          sudo chown -R "$USER:$USER" "$staging_dir"
+          sudo mv "$staging_dir" "$release_dir"
           sudo ln -sfn "$release_dir" "$root/current"
           rm -f "$archive"
+          rmdir "$upload_dir"
+          trap - EXIT
 
-          # Keep the last five releases for quick symlink rollback.
-          sudo find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' |
-            sort -rn |
-            tail -n +6 |
-            cut -d' ' -f2- |
-            sudo xargs -r rm -rf
+          # Keep five releases for symlink rollback.
+          sudo find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\0' |
+            sort -zrn |
+            tail -z -n +6 |
+            cut -z -d' ' -f2- |
+            sudo xargs -0 -r rm -rf
           REMOTE
 
-      - name: Verify deployed site
+      - name: Verify deployed exact configuration and site
+        shell: bash
+        env:
+          DEPLOY_DOMAIN: ${{ needs.truthful-suite.outputs.domain }}
+          CONFIGURATION_SHA256: ${{ needs.truthful-suite.outputs.configuration_sha256 }}
+          DEPLOY_SOURCE_SHA: ${{ needs.truthful-suite.outputs.source_sha }}
+          DEPLOY_RELEASE: ${{ needs.truthful-suite.outputs.release }}
+          DEPLOY_SLOT: ${{ needs.truthful-suite.outputs.slot }}
         run: |
-          curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/appsettings.json" \
-            | grep -q "https://${{ steps.deploy-slot.outputs.domain }}/api/"
-          curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/appsettings.json" \
-            | grep -q '"GenerationEnabled": ${{ steps.deploy-slot.outputs.generation_enabled }}'
-          curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/appsettings.json" \
-            | grep -q '"ExecutionEnabled": ${{ steps.deploy-slot.outputs.engine_enabled }}'
-          curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/" > /dev/null
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 30 \
+            "https://$DEPLOY_DOMAIN/appsettings.json" --output deployed-appsettings.json
+          test "$(sha256sum deployed-appsettings.json | cut -d' ' -f1)" = "$CONFIGURATION_SHA256"
+          node --input-type=module -e '
+            import { readFile } from "node:fs/promises";
+            const config = JSON.parse(await readFile("deployed-appsettings.json", "utf8"));
+            const enabled = process.env.DEPLOY_SLOT === "local-dev";
+            if (config?.LodestoneLookup?.BaseAddress !== `https://${process.env.DEPLOY_DOMAIN}/api/`) process.exit(1);
+            if (config?.ProcurementRoutes?.GenerationEnabled !== enabled) process.exit(1);
+            if (config?.EngineRewrite?.ExecutionEnabled !== enabled) process.exit(1);
+            if (config?.EngineAcceptance?.Enabled !== false) process.exit(1);
+            if (config?.EngineAcceptance?.UseDeterministicEvidence !== false) process.exit(1);
+          '
+          curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 30 \
+            "https://$DEPLOY_DOMAIN/release.json" --output deployed-release.json
+          node --input-type=module -e '
+            import { readFile } from "node:fs/promises";
+            const release = JSON.parse(await readFile("deployed-release.json", "utf8"));
+            if (release?.sourceSha !== process.env.DEPLOY_SOURCE_SHA) process.exit(1);
+            if (release?.sourceDirty !== false) process.exit(1);
+            if (release?.release !== process.env.DEPLOY_RELEASE) process.exit(1);
+            if (release?.effectiveConfigurationSha256 !== process.env.CONFIGURATION_SHA256) process.exit(1);
+          '
+          curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 30 \
+            "https://$DEPLOY_DOMAIN/" --output /dev/null

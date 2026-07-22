@@ -2,7 +2,9 @@
   "name": "craft-architect-indexeddb-browser-tests",
   "private": true,
   "scripts": {
-    "test": "node --test indexeddb.test.mjs workflow-oracle.test.mjs engine-worker.test.mjs"
+    "test": "node truth-suite.mjs",
+    "test:engine": "node --test engine-worker.test.mjs",
+    "test:syntax": "node --check truth-suite.mjs"
   },
   "devDependencies": {
     "playwright": "1.61.1"

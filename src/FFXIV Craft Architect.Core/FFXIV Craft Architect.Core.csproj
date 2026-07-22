@@ -28,7 +28,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="FFXIV Craft Architect.Tests" />
+    <InternalsVisibleTo Include="FFXIV Craft Architect.ContractTests" />
   </ItemGroup>
 
 </Project>

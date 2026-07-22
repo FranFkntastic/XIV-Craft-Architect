@@ -1,0 +1,17 @@
+{
+  "fixedNow": "2026-07-21T12:00:00.000Z",
+  "searchQuery": "Fire Shard",
+  "searchResults": [
+    { "type": "item", "id": 2, "obj": { "n": "Fire Shard", "i": 20000, "c": 0, "l": 1 } }
+  ],
+  "itemNames": {
+    "2": "Fire Shard",
+    "5056": "Bronze Ingot"
+  },
+  "dataCenters": {
+    "Aether": { "worldId": 73, "worldName": "Adamantoise" },
+    "Crystal": { "worldId": 91, "worldName": "Balmung" },
+    "Primal": { "worldId": 78, "worldName": "Behemoth" },
+    "Dynamis": { "worldId": 406, "worldName": "Halicarnassus" }
+  }
+}

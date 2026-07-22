@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 3,
+  "provenance": "Production IndexedDB v3 schema before the plan-summary upgrade",
+  "sourceCommit": "6cfc17b484cc16cb633d5956f7b821938a915e36",
+  "stores": [
+    {
+      "name": "plans",
+      "keyPath": "id",
+      "indexes": [
+        { "name": "name", "keyPath": "name", "unique": false },
+        { "name": "modifiedAt", "keyPath": "modifiedAt", "unique": false }
+      ],
+      "records": [
+        {
+          "id": "historical-plan-sentinel",
+          "name": "Historical plan sentinel",
+          "savedAt": "2026-07-21T12:00:00.000Z",
+          "modifiedAt": "2026-07-21T12:00:00.000Z",
+          "dataCenter": "Aether",
+          "projectItems": [
+            { "id": 2, "name": "Fire Shard", "quantity": 7, "mustBeHq": false }
+          ],
+          "unrelatedPayload": { "owner": "v3", "durable": true }
+        }
+      ]
+    },
+    {
+      "name": "settings",
+      "keyPath": "key",
+      "indexes": [],
+      "records": [
+        {
+          "key": "truth.historical.setting",
+          "value": { "label": "settings sentinel", "sequence": [3, 1, 4] }
+        }
+      ]
+    },
+    {
+      "name": "marketCache",
+      "keyPath": "key",
+      "indexes": [
+        { "name": "fetchedAtUnix", "keyPath": "fetchedAtUnix", "unique": false }
+      ],
+      "records": [
+        {
+          "key": "2@Aether",
+          "itemId": 2,
+          "dataCenter": "Aether",
+          "fetchedAtUnix": 1784635200,
+          "dcAvgPrice": 91,
+          "hqAvgPrice": 0,
+          "worlds": { "Adamantoise": { "sentinel": "historical market payload" } }
+        }
+      ]
+    }
+  ]
+}

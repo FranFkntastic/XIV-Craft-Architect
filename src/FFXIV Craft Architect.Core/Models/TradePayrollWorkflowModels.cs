@@ -89,7 +89,7 @@ public sealed record TradeCommissionPaymentSummary(
             ? TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(effectivePolicy)
             : new TradePaymentPolicy(
                 draft?.ActivePaymentContract ?? TradePaymentContractMode.LegacyCommission,
-                draft?.CommissionPercent > 0 ? draft.CommissionPercent : CommissionPayoutPolicy.Default.CommissionPercent,
+                draft?.CommissionPercent ?? CommissionPayoutPolicy.Default.CommissionPercent,
                 draft?.LaborStandard)
             {
                 LaborStandardMaterialBonusPercent = draft == null || draft.LaborStandardMaterialBonusPercent < 0
