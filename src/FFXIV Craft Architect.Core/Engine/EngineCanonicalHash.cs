@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -14,8 +15,8 @@ public static class EngineCanonicalHash
     public static string Compute(JsonElement value)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        using var stream = new IncrementalHashWriteStream(hash);
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = false }))
+        using var buffer = new IncrementalHashBufferWriter(hash);
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false }))
         {
             WriteCanonical(writer, value);
         }
@@ -26,8 +27,8 @@ public static class EngineCanonicalHash
     public static string ComputeEngineInput(JsonElement value)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        using var stream = new IncrementalHashWriteStream(hash);
-        using (var writer = new Utf8JsonWriter(stream))
+        using var buffer = new IncrementalHashBufferWriter(hash);
+        using (var writer = new Utf8JsonWriter(buffer))
         {
             WriteCanonical(writer, value);
         }
@@ -40,8 +41,8 @@ public static class EngineCanonicalHash
         CancellationToken cancellationToken = default)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        using var stream = new IncrementalHashWriteStream(hash);
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = false }))
+        using var buffer = new IncrementalHashBufferWriter(hash);
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false }))
         {
             var state = new CooperativeCanonicalWriteState(cooperativeYield, cancellationToken);
             await WriteCanonicalAsync(writer, value, state);
@@ -424,48 +425,56 @@ public static class EngineCanonicalHash
         }
     }
 
-    private sealed class IncrementalHashWriteStream(IncrementalHash hash) : Stream
+    private sealed class IncrementalHashBufferWriter : IBufferWriter<byte>, IDisposable
     {
-        public override bool CanRead => false;
-        public override bool CanSeek => false;
-        public override bool CanWrite => true;
-        public override long Length => throw new NotSupportedException();
+        private const int DefaultBufferSize = 64 * 1024;
+        private readonly IncrementalHash _hash;
+        private byte[]? _buffer;
 
-        public override long Position
+        public IncrementalHashBufferWriter(IncrementalHash hash)
         {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
+            _hash = hash;
+            _buffer = ArrayPool<byte>.Shared.Rent(DefaultBufferSize);
         }
 
-        public override void Flush()
+        public void Advance(int count)
         {
+            var buffer = _buffer ?? throw new ObjectDisposedException(nameof(IncrementalHashBufferWriter));
+            if ((uint)count > (uint)buffer.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(count));
+            }
+            _hash.AppendData(buffer.AsSpan(0, count));
         }
 
-        public override Task FlushAsync(CancellationToken cancellationToken) =>
-            Task.CompletedTask;
+        public Memory<byte> GetMemory(int sizeHint = 0) =>
+            GetBuffer(sizeHint);
 
-        public override int Read(byte[] buffer, int offset, int count) =>
-            throw new NotSupportedException();
+        public Span<byte> GetSpan(int sizeHint = 0) =>
+            GetBuffer(sizeHint);
 
-        public override long Seek(long offset, SeekOrigin origin) =>
-            throw new NotSupportedException();
-
-        public override void SetLength(long value) =>
-            throw new NotSupportedException();
-
-        public override void Write(byte[] buffer, int offset, int count) =>
-            hash.AppendData(buffer, offset, count);
-
-        public override void Write(ReadOnlySpan<byte> buffer) =>
-            hash.AppendData(buffer);
-
-        public override ValueTask WriteAsync(
-            ReadOnlyMemory<byte> buffer,
-            CancellationToken cancellationToken = default)
+        public void Dispose()
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            hash.AppendData(buffer.Span);
-            return ValueTask.CompletedTask;
+            var buffer = Interlocked.Exchange(ref _buffer, null);
+            if (buffer is not null)
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+
+        private byte[] GetBuffer(int sizeHint)
+        {
+            var buffer = _buffer ?? throw new ObjectDisposedException(nameof(IncrementalHashBufferWriter));
+            var requiredSize = Math.Max(1, sizeHint);
+            if (requiredSize <= buffer.Length)
+            {
+                return buffer;
+            }
+
+            var replacement = ArrayPool<byte>.Shared.Rent(requiredSize);
+            _buffer = replacement;
+            ArrayPool<byte>.Shared.Return(buffer);
+            return replacement;
         }
     }
 }
