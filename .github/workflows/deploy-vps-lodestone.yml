@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout source
@@ -34,10 +34,16 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Restore locked contract graph
+        run: >
+          dotnet restore "src/FFXIV Craft Architect.ContractTests/FFXIV Craft Architect.ContractTests.csproj"
+          --locked-mode
+
       - name: Run Lodestone contract tests
         run: >
           dotnet test "src/FFXIV Craft Architect.ContractTests/FFXIV Craft Architect.ContractTests.csproj"
           --configuration Release
+          --no-restore
           --blame-hang
           --blame-hang-timeout 2m
           --blame-hang-dump-type mini
