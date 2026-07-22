@@ -45,6 +45,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             }
 
             ct.ThrowIfCancellationRequested();
+            await YieldBetweenStagesAsync(execution, ct);
 
             var entries = request.Evidence.GetEntriesForItem(item.ItemId);
             var scopePriceContext = _priceEvaluationService.Evaluate(
@@ -52,6 +53,8 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 request.Evidence.Scope,
                 request.Evidence.LoadedAtUtc,
                 entries);
+            await YieldBetweenStagesAsync(execution, ct);
+
             var missingDataCenters = request.Evidence.MissingRequests
                 .Where(pair => pair.itemId == item.ItemId)
                 .Select(pair => pair.dataCenter)
@@ -59,11 +62,26 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 .OrderBy(dataCenter => dataCenter, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var worlds = entries
-                .SelectMany(entry => AnalyzeEntryWorlds(entry, item.TotalQuantity, nowUtc, scopePriceContext))
+            var worlds = new List<WorldMarketAnalysis>();
+            var completedWorlds = 0;
+            foreach (var entry in entries)
+            {
+                foreach (var world in AnalyzeEntryWorlds(entry, item.TotalQuantity, nowUtc, scopePriceContext))
+                {
+                    worlds.Add(world);
+                    completedWorlds++;
+                    if (execution.ShouldYieldAfterItem(completedWorlds))
+                    {
+                        await Task.Delay(1, ct);
+                    }
+                }
+            }
+            worlds = worlds
                 .OrderBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            await YieldBetweenStagesAsync(execution, ct);
+
             var presentDataCenters = entries
                 .Select(entry => entry.DataCenter)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -80,9 +98,12 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 worlds,
                 missingDataCenters,
                 item.TotalQuantity));
+            await YieldBetweenStagesAsync(execution, ct);
 
             ApplyLensRanks(worlds, MarketAcquisitionLens.MinimumUpfrontCost);
             ApplyLensRanks(worlds, MarketAcquisitionLens.BulkValue);
+            await YieldBetweenStagesAsync(execution, ct);
+
             var scopePriceBands = BuildScopePriceBands(worlds, item.TotalQuantity, scopePriceContext);
             var procurementSignalWorld = SelectBestActionableWorld(worlds);
 
@@ -116,19 +137,45 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
             if (execution.ShouldYieldAfterItem(completedItems))
             {
-                await Task.Yield();
+                await Task.Delay(1, ct);
             }
         }
 
         return analyses;
     }
 
+    private static async Task YieldBetweenStagesAsync(
+        MarketAnalysisExecutionOptions execution,
+        CancellationToken cancellationToken)
+    {
+        if (execution.YieldEveryItems > 0)
+        {
+            await Task.Delay(1, cancellationToken);
+        }
+    }
+
     public DetailedShoppingPlan ProjectToShoppingPlan(
         MarketItemAnalysis analysis,
         MarketAcquisitionLens lens,
-        MarketAnalysisConfig? config = null)
+        MarketAnalysisConfig? config = null) =>
+        ProjectToShoppingPlanAsync(
+                analysis,
+                lens,
+                config,
+                MarketAnalysisExecutionOptions.Synchronous)
+            .GetAwaiter()
+            .GetResult();
+
+    public Task<DetailedShoppingPlan> ProjectToShoppingPlanAsync(
+        MarketItemAnalysis analysis,
+        MarketAcquisitionLens lens,
+        MarketAnalysisConfig? config = null,
+        MarketAnalysisExecutionOptions? executionOptions = null,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(analysis);
+        ct.ThrowIfCancellationRequested();
 
         var plan = new DetailedShoppingPlan
         {
@@ -141,8 +188,11 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
         foreach (var world in GetSortedWorlds(analysis.Worlds, lens))
         {
-            var listings = GetProcurementListings(world).ToList();
-            var summary = CreateWorldSummary(world, listings, analysis.QuantityNeeded, lens);
+            var summary = CreateWorldSummary(
+                world,
+                GetProcurementListings(world),
+                analysis.QuantityNeeded,
+                lens);
             plan.WorldOptions.Add(summary);
         }
 
@@ -166,7 +216,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
         plan.CoverageSet = MarketCoverageBuilder.Build(plan);
 
-        return plan;
+        return Task.FromResult(plan);
     }
 
     private static decimal GetProjectionUnitPrice(MarketItemAnalysis analysis)
@@ -1013,7 +1063,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
 
     private static WorldShoppingSummary CreateWorldSummary(
         WorldMarketAnalysis world,
-        IReadOnlyList<AnalyzedMarketListing> listings,
+        IEnumerable<AnalyzedMarketListing> listings,
         int quantityNeeded,
         MarketAcquisitionLens lens)
     {
@@ -1038,7 +1088,6 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
                 NeededFromStack = neededFromStack,
                 ExcessQuantity = Math.Max(0, listing.Quantity - neededFromStack)
             });
-
             if (remaining <= 0)
             {
                 break;
@@ -1059,7 +1108,7 @@ public sealed class MarketPriceLadderAnalysisService : IMarketPriceLadderAnalysi
             ExcessQuantity = Math.Max(0, purchasedQuantity - quantityNeeded),
             HasSufficientStock = hasSufficientStock,
             ShortfallQuantity = Math.Max(0, remaining),
-            BestSingleListing = entries.OrderBy(entry => entry.PricePerUnit).FirstOrDefault(),
+            BestSingleListing = entries.FirstOrDefault(),
             ValueScore = hasSufficientStock ? totalCost : decimal.MaxValue,
             MarketDataQualityScore = world.DataQualityScore,
             MarketDataQualityBucket = world.DataQualityBucket,

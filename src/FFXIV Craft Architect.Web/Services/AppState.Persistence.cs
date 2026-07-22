@@ -82,6 +82,13 @@ public partial class AppState
             RecommendationMode = session.MarketIntelligence?.RecommendationMode ?? storedPlan.SavedRecommendationMode;
             MarketAnalysisLens = session.MarketIntelligence?.Lens ?? storedPlan.SavedMarketAnalysisLens;
             ClearProcurementOverlay();
+            RestoreProcurementRoute(storedPlan.ProcurementRouteJson, storedPlan.MarketIntelligenceJson);
+            if (ProcurementRouteRestoreDiagnostic is not null)
+            {
+                AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
+                    CurrentPlan,
+                    session.ShoppingPlans);
+            }
 
             // Track the loaded plan ID for save-overwrite behavior
             if (trackStoredPlanIdentity)
@@ -105,8 +112,143 @@ public partial class AppState
 
         if (trackStoredPlanIdentity)
         {
-            MarkPersisted(PersistedStateBucket.PlanCore | PersistedStateBucket.MarketAnalysis, CurrentVersions);
+            var restoredBuckets = _procurementRouteClearPending
+                ? PersistedStateBucket.All & ~PersistedStateBucket.ProcurementRoute
+                : PersistedStateBucket.All;
+            MarkPersisted(restoredBuckets, CurrentVersions);
         }
+    }
+
+    private void RestoreProcurementRoute(string? routeJson, string? marketIntelligenceJson)
+    {
+        ProcurementRouteRestoreDiagnostic = null;
+        ProcurementRouteRestoreDiagnosticDetails = null;
+        _procurementRouteClearPending = !string.IsNullOrWhiteSpace(routeJson);
+        if (string.IsNullOrWhiteSpace(routeJson))
+        {
+            ProcurementRouteRestoreDiagnostic = "not-stored";
+            return;
+        }
+
+        StoredProcurementRoute? storedRoute;
+        try
+        {
+            storedRoute = System.Text.Json.JsonSerializer.Deserialize<StoredProcurementRoute>(routeJson);
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException)
+        {
+            ProcurementRouteRestoreDiagnostic = "invalid-json";
+            return;
+        }
+        if (storedRoute?.ShoppingPlans is not { Count: > 0 } shoppingPlans ||
+            storedRoute.Decision is not { } decision ||
+            storedRoute.Basis is not { } basis)
+        {
+            ProcurementRouteRestoreDiagnostic = "incomplete-payload";
+            return;
+        }
+        if (storedRoute.SchemaVersion != StoredPlanSnapshotBuilder.ProcurementRouteSchemaVersion ||
+            !string.Equals(
+                storedRoute.OptimizerVersion,
+                StoredPlanSnapshotBuilder.ProcurementOptimizerVersion,
+                StringComparison.Ordinal))
+        {
+            ProcurementRouteRestoreDiagnostic = "route-schema-mismatch";
+            return;
+        }
+        if (CurrentPlan is not { } currentPlan)
+        {
+            ProcurementRouteRestoreDiagnostic = "missing-plan";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(marketIntelligenceJson))
+        {
+            ProcurementRouteRestoreDiagnostic = "missing-market-evidence";
+            return;
+        }
+        if (!HasCompleteRouteCoverage(currentPlan, shoppingPlans))
+        {
+            ProcurementRouteRestoreDiagnostic = "route-coverage-mismatch";
+            ProcurementRouteRestoreDiagnosticDetails = DescribeRouteCoverage(currentPlan, shoppingPlans);
+            return;
+        }
+        try
+        {
+            if (!string.Equals(storedRoute.PlanHash, StoredPlanSnapshotBuilder.ComputePlanHash(currentPlan), StringComparison.Ordinal))
+            {
+                ProcurementRouteRestoreDiagnostic = "plan-hash-mismatch";
+                return;
+            }
+            if (!string.Equals(
+                    storedRoute.MarketEvidenceHash,
+                    StoredPlanSnapshotBuilder.ComputeMarketEvidenceHash(marketIntelligenceJson),
+                    StringComparison.Ordinal))
+            {
+                ProcurementRouteRestoreDiagnostic = "market-evidence-hash-mismatch";
+                return;
+            }
+            if (!string.Equals(
+                    storedRoute.PayloadHash,
+                    StoredPlanSnapshotBuilder.ComputeRoutePayloadHash(shoppingPlans, decision),
+                    StringComparison.Ordinal))
+            {
+                ProcurementRouteRestoreDiagnostic = "route-payload-hash-mismatch";
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException)
+        {
+            ProcurementRouteRestoreDiagnostic = "hash-validation-failed";
+            return;
+        }
+
+        var currentBasis = CreateCurrentProcurementRouteBasis();
+        var restoredBasis = basis with
+        {
+            PlanSessionVersion = currentBasis.PlanSessionVersion,
+            PlanDecisionVersion = currentBasis.PlanDecisionVersion
+        };
+        if (!restoredBasis.Matches(currentBasis))
+        {
+            ProcurementRouteRestoreDiagnostic = "route-basis-mismatch";
+            return;
+        }
+
+        ReplaceProcurementOverlay(shoppingPlans, decision);
+        _procurementRouteClearPending = false;
+        ProcurementRouteRestoreDiagnostic = null;
+        ProcurementRouteRestoreDiagnosticDetails = null;
+    }
+
+    private static bool HasCompleteRouteCoverage(
+        CraftingPlan plan,
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans)
+    {
+        var expected = AcquisitionPlanningService.GetActiveProcurementItems(plan)
+            .Where(item => item.TotalQuantity > 0)
+            .ToDictionary(item => item.ItemId, item => item.TotalQuantity);
+        if (shoppingPlans.Count != expected.Count ||
+            shoppingPlans.Select(item => item.ItemId).Distinct().Count() != shoppingPlans.Count)
+        {
+            return false;
+        }
+        return shoppingPlans.All(item =>
+            expected.TryGetValue(item.ItemId, out var quantity) &&
+            item.QuantityNeeded == quantity);
+    }
+
+    private static string DescribeRouteCoverage(
+        CraftingPlan plan,
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans)
+    {
+        var expected = AcquisitionPlanningService.GetActiveProcurementItems(plan)
+            .Where(item => item.TotalQuantity > 0)
+            .OrderBy(item => item.ItemId)
+            .Select(item => $"{item.ItemId}:{item.TotalQuantity}");
+        var actual = shoppingPlans
+            .OrderBy(item => item.ItemId)
+            .Select(item => $"{item.ItemId}:{item.QuantityNeeded}");
+        return $"expected={string.Join(',', expected)}|actual={string.Join(',', actual)}";
     }
 
     public IDisposable BeginStateChangeBatch()
@@ -129,6 +271,14 @@ public partial class AppState
             dirtyBuckets |= PersistedStateBucket.MarketAnalysis;
         }
 
+        if (IsDirtyVersion(
+                _procurementOverlayVersion,
+                _lastPersistedProcurementOverlayVersion,
+                _procurementShoppingPlans.Any() || _procurementRouteClearPending))
+        {
+            dirtyBuckets |= PersistedStateBucket.ProcurementRoute;
+        }
+
         return dirtyBuckets;
     }
 
@@ -149,6 +299,13 @@ public partial class AppState
             versions.MarketAnalysisVersion == _marketAnalysisVersion)
         {
             _lastPersistedMarketAnalysisVersion = versions.MarketAnalysisVersion;
+        }
+
+        if (buckets.HasFlag(PersistedStateBucket.ProcurementRoute) &&
+            versions.ProcurementOverlayVersion == _procurementOverlayVersion)
+        {
+            _lastPersistedProcurementOverlayVersion = versions.ProcurementOverlayVersion;
+            _procurementRouteClearPending = false;
         }
     }
 

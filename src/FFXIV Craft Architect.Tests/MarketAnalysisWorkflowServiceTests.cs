@@ -96,12 +96,15 @@ public class MarketAnalysisWorkflowServiceTests
         appState.ApplyBuiltRecipePlanWithActiveItems(CreatePlan());
         appState.TrackCurrentPlanIdentity("saved-plan", null);
         var jsRuntime = new RecordingJsRuntime();
+        MarketAnalysisExecutionOptions? capturedOptions = null;
         var execution = new Mock<IMarketAnalysisExecutionService>();
         execution.Setup(e => e.ExecuteAsync(
                 It.IsAny<MarketAnalysisExecutionRequest>(),
                 It.IsAny<IProgress<string>?>(),
                 It.IsAny<CancellationToken>(),
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback<MarketAnalysisExecutionRequest, IProgress<string>?, CancellationToken, MarketAnalysisExecutionOptions?>(
+                (_, _, _, options) => capturedOptions = options)
             .ReturnsAsync(CreateExecutionResult());
         var service = CreateService(appState, execution.Object, jsRuntime);
 
@@ -114,6 +117,9 @@ public class MarketAnalysisWorkflowServiceTests
         Assert.Empty(appState.ProcurementShoppingPlans);
         Assert.Equal(1, jsRuntime.PatchMarketAnalysisCallCount);
         Assert.Equal(1, jsRuntime.SavePlanCallCount);
+        Assert.NotNull(capturedOptions);
+        Assert.Equal(1, capturedOptions.YieldEveryItems);
+        Assert.Equal(1, capturedOptions.ProgressEveryItems);
         execution.Verify(e => e.ExecuteAsync(
             It.Is<MarketAnalysisExecutionRequest>(request => request.ForceRefreshData && request.MaxAge == null),
             It.IsAny<IProgress<string>?>(),

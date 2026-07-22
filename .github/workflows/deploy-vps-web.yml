@@ -86,9 +86,13 @@ jobs:
           if [[ "$slot" == "local-dev" ]]; then
             domain="dev.xivcraftarchitect.com"
             ref="local-dev"
+            generation_enabled="true"
+            engine_enabled="true"
           elif [[ "$slot" == "main" ]]; then
             domain="xivcraftarchitect.com"
             ref="main"
+            generation_enabled="false"
+            engine_enabled="false"
           else
             echo "Unsupported deploy slot: $slot" >&2
             exit 1
@@ -100,6 +104,8 @@ jobs:
             echo "domain=$domain"
             echo "ref=$ref"
             echo "release=$release"
+            echo "generation_enabled=$generation_enabled"
+            echo "engine_enabled=$engine_enabled"
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout source
@@ -128,7 +134,14 @@ jobs:
               "BaseAddress": "https://${{ steps.deploy-slot.outputs.domain }}/api/"
             },
             "ProcurementRoutes": {
-              "GenerationEnabled": false
+              "GenerationEnabled": ${{ steps.deploy-slot.outputs.generation_enabled }}
+            },
+            "EngineRewrite": {
+              "ExecutionEnabled": ${{ steps.deploy-slot.outputs.engine_enabled }}
+            },
+            "EngineAcceptance": {
+              "Enabled": false,
+              "UseDeterministicEvidence": false
             }
           }
           JSON
@@ -188,5 +201,7 @@ jobs:
           curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/appsettings.json" \
             | grep -q "https://${{ steps.deploy-slot.outputs.domain }}/api/"
           curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/appsettings.json" \
-            | grep -q '"GenerationEnabled": false'
+            | grep -q '"GenerationEnabled": ${{ steps.deploy-slot.outputs.generation_enabled }}'
+          curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/appsettings.json" \
+            | grep -q '"ExecutionEnabled": ${{ steps.deploy-slot.outputs.engine_enabled }}'
           curl --fail --silent --show-error "https://${{ steps.deploy-slot.outputs.domain }}/" > /dev/null

@@ -461,6 +461,373 @@ public class AppStatePersistenceTests
     }
 
     [Fact]
+    public void CreateStoredPlanSnapshot_RoundTripRestoresCurrentProcurementRoute()
+    {
+        var appState = new AppState();
+        var projectItem = new ProjectItem { Id = 123, Name = "Route Item", Quantity = 10 };
+        var plan = new CraftingPlan
+        {
+            RootItems =
+            [
+                new PlanNode
+                {
+                    ItemId = 123,
+                    Name = "Route Item",
+                    Quantity = 10,
+                    Source = AcquisitionSource.MarketBuyNq
+                }
+            ]
+        };
+        appState.ActivateRecipePlan(
+            plan,
+            [projectItem],
+            "Aether",
+            clearCurrentPlanId: true,
+            [new MaterialAggregate { ItemId = 123, Name = "Route Item", TotalQuantity = 10 }]);
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 123, Name = "Route Item", QuantityNeeded = 10 }],
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Route Item", QuantityNeeded = 10 }]);
+        var decision = new MarketRouteDecision(
+            0,
+            null,
+            1_000,
+            1_000,
+            0,
+            1,
+            1,
+            0,
+            0,
+            false,
+            null);
+        appState.ReplaceProcurementOverlay(
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Route Item", QuantityNeeded = 10 }],
+            decision);
+
+        var snapshot = appState.CreateStoredPlanSnapshot("autosave", "AutoSave");
+        var restored = new AppState();
+        restored.LoadStoredPlan(snapshot, deserializedPlan: null);
+
+        Assert.NotNull(snapshot.ProcurementRouteJson);
+        var storedRoute = JsonSerializer.Deserialize<StoredProcurementRoute>(snapshot.ProcurementRouteJson!)!;
+        Assert.Equal(storedRoute.PlanHash, StoredPlanSnapshotBuilder.ComputePlanHash(restored.CurrentPlan!));
+        Assert.Equal(
+            storedRoute.MarketEvidenceHash,
+            StoredPlanSnapshotBuilder.ComputeMarketEvidenceHash(snapshot.MarketIntelligenceJson!));
+        Assert.Equal(
+            storedRoute.PayloadHash,
+            StoredPlanSnapshotBuilder.ComputeRoutePayloadHash(storedRoute.ShoppingPlans!, storedRoute.Decision!));
+        Assert.Single(AcquisitionPlanningService.GetMarketAnalysisCandidates(restored.CurrentPlan));
+        var currentBasis = restored.CreateCurrentProcurementRouteBasis();
+        Assert.True((storedRoute.Basis! with
+        {
+            PlanSessionVersion = currentBasis.PlanSessionVersion,
+            PlanDecisionVersion = currentBasis.PlanDecisionVersion
+        }).Matches(currentBasis));
+        Assert.Equal(ProcurementRoutePublicationValidity.Current, restored.ProcurementRouteValidity);
+        Assert.Equal(1_000, restored.ProcurementRouteDecision?.SelectedGilCost);
+        Assert.Equal("Route Item", Assert.Single(restored.ProcurementShoppingPlans).Name);
+    }
+
+    [Fact]
+    public void CreateStoredPlanSnapshot_RoundTripRestoresRouteForFinalActiveProcurementItems()
+    {
+        var ingredient = new PlanNode
+        {
+            ItemId = 456,
+            Name = "Purchased Ingredient",
+            Quantity = 3,
+            Source = AcquisitionSource.MarketBuyNq
+        };
+        var craftedRoot = new PlanNode
+        {
+            ItemId = 123,
+            Name = "Crafted Result",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            CanCraft = true,
+            Children = [ingredient]
+        };
+        ingredient.Parent = craftedRoot;
+        ingredient.ParentNodeId = craftedRoot.NodeId;
+        var plan = new CraftingPlan { RootItems = [craftedRoot] };
+        var appState = new AppState();
+        appState.ActivateRecipePlan(
+            plan,
+            [new ProjectItem { Id = 123, Name = "Crafted Result", Quantity = 1 }],
+            "Aether",
+            clearCurrentPlanId: true,
+            [new MaterialAggregate { ItemId = 456, Name = "Purchased Ingredient", TotalQuantity = 3 }]);
+        appState.ReplaceMarketAnalysis(
+            [
+                new MarketItemAnalysis { ItemId = 123, Name = "Crafted Result", QuantityNeeded = 1 },
+                new MarketItemAnalysis { ItemId = 456, Name = "Purchased Ingredient", QuantityNeeded = 3 }
+            ],
+            [
+                new DetailedShoppingPlan { ItemId = 123, Name = "Crafted Result", QuantityNeeded = 1 },
+                new DetailedShoppingPlan { ItemId = 456, Name = "Purchased Ingredient", QuantityNeeded = 3 }
+            ]);
+        var routePlan = new DetailedShoppingPlan
+        {
+            ItemId = 456,
+            Name = "Purchased Ingredient",
+            QuantityNeeded = 3
+        };
+        appState.ReplaceProcurementOverlay(
+            [routePlan],
+            new MarketRouteDecision(0, null, 300, 300, 0, 1, 1, 0, 0, false, null));
+
+        var snapshot = appState.CreateStoredPlanSnapshot("autosave", "AutoSave");
+        var restored = new AppState();
+        restored.LoadStoredPlan(snapshot, deserializedPlan: null);
+
+        Assert.Equal(2, AcquisitionPlanningService.GetMarketAnalysisCandidates(restored.CurrentPlan).Count);
+        Assert.Single(AcquisitionPlanningService.GetActiveProcurementItems(restored.CurrentPlan));
+        Assert.Null(restored.ProcurementRouteRestoreDiagnostic);
+        Assert.Equal(ProcurementRoutePublicationValidity.Current, restored.ProcurementRouteValidity);
+        Assert.Equal(456, Assert.Single(restored.ProcurementShoppingPlans).ItemId);
+    }
+
+    [Fact]
+    public void CreateStoredPlanSnapshot_RoundTripRestoresRouteAfterProcurementOptimization()
+    {
+        var ingredient = new PlanNode
+        {
+            ItemId = 456,
+            Name = "Purchased Ingredient",
+            Quantity = 3,
+            Source = AcquisitionSource.Craft,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanCraft = true
+        };
+        var craftedRoot = new PlanNode
+        {
+            ItemId = 123,
+            Name = "Crafted Result",
+            Quantity = 1,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanCraft = true,
+            Children = [ingredient]
+        };
+        ingredient.Parent = craftedRoot;
+        ingredient.ParentNodeId = craftedRoot.NodeId;
+        var originalPlan = new CraftingPlan { RootItems = [craftedRoot] };
+        var appState = new AppState();
+        appState.ActivateRecipePlan(
+            originalPlan,
+            [new ProjectItem { Id = 123, Name = "Crafted Result", Quantity = 1 }],
+            "Aether",
+            clearCurrentPlanId: true,
+            [
+                new MaterialAggregate { ItemId = 123, Name = "Crafted Result", TotalQuantity = 1 },
+                new MaterialAggregate { ItemId = 456, Name = "Purchased Ingredient", TotalQuantity = 3 }
+            ]);
+        var optimizedPlan = new CraftingPlan
+        {
+            RootItems = originalPlan.RootItems.Select(root => root.Clone()).ToList()
+        };
+        optimizedPlan.RootItems[0].Source = AcquisitionSource.Craft;
+        optimizedPlan.RootItems[0].Children[0].Source = AcquisitionSource.MarketBuyNq;
+        var analyses = new[]
+        {
+            new MarketItemAnalysis { ItemId = 123, Name = "Crafted Result", QuantityNeeded = 1 },
+            new MarketItemAnalysis { ItemId = 456, Name = "Purchased Ingredient", QuantityNeeded = 3 }
+        };
+        var evidencePlans = new[]
+        {
+            new DetailedShoppingPlan { ItemId = 123, Name = "Crafted Result", QuantityNeeded = 1 },
+            new DetailedShoppingPlan { ItemId = 456, Name = "Purchased Ingredient", QuantityNeeded = 3 }
+        };
+        var routePlan = new DetailedShoppingPlan
+        {
+            ItemId = 456,
+            Name = "Purchased Ingredient",
+            QuantityNeeded = 3
+        };
+
+        var applied = appState.ApplyProcurementOptimization(
+            originalPlan,
+            optimizedPlan,
+            [new MaterialAggregate { ItemId = 456, Name = "Purchased Ingredient", TotalQuantity = 3 }],
+            [routePlan],
+            new MarketRouteDecision(0, null, 300, 300, 0, 1, 1, 0, 0, false, null),
+            analyses,
+            evidencePlans);
+        var snapshot = appState.CreateStoredPlanSnapshot("autosave", "AutoSave");
+        var restored = new AppState();
+
+        restored.LoadStoredPlan(snapshot, deserializedPlan: null);
+
+        Assert.True(applied);
+        Assert.Equal(AcquisitionSource.Craft, restored.CurrentPlan!.RootItems[0].Source);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, restored.CurrentPlan.RootItems[0].Children[0].Source);
+        Assert.True(restored.ProcurementRouteRestoreDiagnostic is null, restored.ProcurementRouteRestoreDiagnostic);
+        Assert.Equal(ProcurementRoutePublicationValidity.Current, restored.ProcurementRouteValidity);
+        Assert.Equal(456, Assert.Single(restored.ProcurementShoppingPlans).ItemId);
+    }
+
+    [Fact]
+    public void CreateStoredPlanSnapshot_RestoresRouteBeforeAutomaticSourceRepair()
+    {
+        var ingredient = new PlanNode
+        {
+            ItemId = 456,
+            Name = "Vendor Ingredient",
+            Quantity = 3,
+            Source = AcquisitionSource.VendorBuy,
+            CanBuyFromMarket = false,
+            CanBuyFromVendor = true,
+            VendorPrice = 10,
+            VendorOptions =
+            [
+                new VendorInfo { Name = "Supplier", Location = "Limsa Lominsa", Price = 10, Currency = "Gil" }
+            ]
+        };
+        var root = new PlanNode
+        {
+            ItemId = 123,
+            Name = "Route Item",
+            Quantity = 1,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            Children = [ingredient]
+        };
+        ingredient.Parent = root;
+        var source = new AppState();
+        source.ActivateRecipePlan(
+            new CraftingPlan { RootItems = [root] },
+            [new ProjectItem { Id = 123, Name = "Route Item", Quantity = 1 }],
+            "Aether",
+            clearCurrentPlanId: true,
+            [new MaterialAggregate { ItemId = 123, Name = "Route Item", TotalQuantity = 1 }]);
+        source.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 123, Name = "Route Item", QuantityNeeded = 1 }],
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Route Item", QuantityNeeded = 1 }]);
+        source.ReplaceProcurementOverlay(
+            [new DetailedShoppingPlan
+            {
+                ItemId = 123,
+                Name = "Route Item",
+                QuantityNeeded = 1,
+                RecommendedWorld = new WorldShoppingSummary
+                {
+                    DataCenter = "Aether",
+                    WorldName = "Siren",
+                    TotalCost = 100
+                }
+            }],
+            new MarketRouteDecision(0, null, 100, 100, 0, 1, 1, 0, 0, false, null));
+        var snapshot = source.CreateStoredPlanSnapshot("autosave", "AutoSave");
+        var restored = new AppState();
+
+        restored.LoadStoredPlan(snapshot, deserializedPlan: null);
+
+        Assert.Null(restored.ProcurementRouteRestoreDiagnostic);
+        Assert.Equal(ProcurementRoutePublicationValidity.Current, restored.ProcurementRouteValidity);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, restored.CurrentPlan!.RootItems[0].Source);
+        Assert.Equal(123, Assert.Single(restored.ProcurementShoppingPlans).ItemId);
+    }
+
+    [Fact]
+    public void LoadStoredPlan_DiscardsMalformedOrTransplantedProcurementRoute()
+    {
+        var source = new AppState();
+        var plan = new CraftingPlan
+        {
+            RootItems =
+            [
+                new PlanNode
+                {
+                    ItemId = 123,
+                    Name = "Route Item",
+                    Quantity = 10,
+                    Source = AcquisitionSource.MarketBuyNq
+                }
+            ]
+        };
+        source.ActivateRecipePlan(
+            plan,
+            [new ProjectItem { Id = 123, Name = "Route Item", Quantity = 10 }],
+            "Aether",
+            clearCurrentPlanId: true,
+            [new MaterialAggregate { ItemId = 123, Name = "Route Item", TotalQuantity = 10 }]);
+        source.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 123, Name = "Route Item", QuantityNeeded = 10 }],
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Route Item", QuantityNeeded = 10 }]);
+        source.ReplaceProcurementOverlay(
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Route Item", QuantityNeeded = 10 }],
+            new MarketRouteDecision(0, null, 1_000, 1_000, 0, 1, 1, 0, 0, false, null));
+        var snapshot = source.CreateStoredPlanSnapshot("autosave", "AutoSave");
+        var route = JsonSerializer.Deserialize<StoredProcurementRoute>(snapshot.ProcurementRouteJson!)!;
+        snapshot.ProcurementRouteJson = JsonSerializer.Serialize(route with
+        {
+            ShoppingPlans = [new DetailedShoppingPlan { ItemId = 999, Name = "Transplanted", QuantityNeeded = 1 }]
+        });
+        var restored = new AppState();
+
+        restored.LoadStoredPlan(snapshot, deserializedPlan: null);
+
+        Assert.Equal(ProcurementRoutePublicationValidity.None, restored.ProcurementRouteValidity);
+        Assert.Empty(restored.ProcurementShoppingPlans);
+        Assert.True(restored.IsPersistedBucketDirty(PersistedStateBucket.ProcurementRoute));
+        Assert.Null(restored.CreateStoredPlanSnapshot("autosave", "AutoSave").ProcurementRouteJson);
+        restored.MarkPersisted(PersistedStateBucket.ProcurementRoute, restored.CurrentVersions);
+        Assert.False(restored.IsPersistedBucketDirty(PersistedStateBucket.ProcurementRoute));
+
+        snapshot.ProcurementRouteJson = JsonSerializer.Serialize(route with { OptimizerVersion = "obsolete" });
+        restored.LoadStoredPlan(snapshot, deserializedPlan: null);
+        Assert.Equal("route-schema-mismatch", restored.ProcurementRouteRestoreDiagnostic);
+        Assert.Equal(ProcurementRoutePublicationValidity.None, restored.ProcurementRouteValidity);
+
+        var changedPlan = JsonSerializer.Deserialize<CraftingPlan>(snapshot.PlanJson!)!;
+        changedPlan.RootItems[0].Source = AcquisitionSource.VendorBuy;
+        snapshot.PlanJson = JsonSerializer.Serialize(changedPlan);
+        snapshot.ProcurementRouteJson = JsonSerializer.Serialize(route);
+        restored.LoadStoredPlan(snapshot, deserializedPlan: null);
+        Assert.Equal("plan-hash-mismatch", restored.ProcurementRouteRestoreDiagnostic);
+        Assert.Equal(ProcurementRoutePublicationValidity.None, restored.ProcurementRouteValidity);
+
+        snapshot.ProcurementRouteJson = "{\"shoppingPlans\":null,\"decision\":null,\"basis\":null}";
+        restored.LoadStoredPlan(snapshot, deserializedPlan: null);
+        Assert.Equal(ProcurementRoutePublicationValidity.None, restored.ProcurementRouteValidity);
+    }
+
+    [Fact]
+    public void CreateStoredPlanSnapshot_CurrentRouteWithoutMarketEvidenceIsOmitted()
+    {
+        var appState = new AppState();
+        var plan = new CraftingPlan
+        {
+            RootItems =
+            [
+                new PlanNode
+                {
+                    ItemId = 123,
+                    Name = "Route Item",
+                    Quantity = 1,
+                    Source = AcquisitionSource.MarketBuyNq
+                }
+            ]
+        };
+        appState.ActivateRecipePlan(
+            plan,
+            [new ProjectItem { Id = 123, Name = "Route Item", Quantity = 1 }],
+            "Aether",
+            clearCurrentPlanId: true,
+            [new MaterialAggregate { ItemId = 123, Name = "Route Item", TotalQuantity = 1 }]);
+        appState.ReplaceProcurementOverlay(
+            [new DetailedShoppingPlan { ItemId = 123, Name = "Route Item", QuantityNeeded = 1 }],
+            new MarketRouteDecision(0, null, 100, 100, 0, 1, 1, 0, 0, false, null));
+
+        var snapshot = appState.CreateStoredPlanSnapshot("autosave", "AutoSave");
+
+        Assert.Null(snapshot.MarketIntelligenceJson);
+        Assert.Null(snapshot.ProcurementRouteJson);
+    }
+
+    [Fact]
     public void CreateStoredPlanSnapshot_RoundTripPreservesMarketPriceEvaluation()
     {
         var appState = new AppState();

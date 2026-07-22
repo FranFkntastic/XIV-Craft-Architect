@@ -55,6 +55,21 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
         var itemsToReconcile = items
             .Where(item => decisions[item.ItemId].Disposition != MarketEvidenceReconciliationDisposition.ReusedPublished)
             .ToList();
+        var refreshedDecisions = decisions.ToDictionary(
+            entry => entry.Key,
+            entry => entry.Value with { Disposition = MarketEvidenceReconciliationDisposition.Refreshed });
+        var unavailableDecisions = decisions.ToDictionary(
+            entry => entry.Key,
+            entry => entry.Value with { Disposition = MarketEvidenceReconciliationDisposition.Unavailable });
+        var results = new List<MarketEvidenceReconciliationItemResult>(items.Count);
+        var finalAnalyses = new List<MarketItemAnalysis>(items.Count);
+        var finalPlans = new List<DetailedShoppingPlan>(items.Count);
+        var reconciliationResult = new MarketEvidenceReconciliationResult(
+            finalAnalyses,
+            finalPlans,
+            results,
+            itemsToReconcile,
+            fetchedCount: 0);
 
         MarketAnalysisExecutionResult? executionResult = null;
         DateTime? executionStartedAtUtc = null;
@@ -84,13 +99,21 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
         }
 
         ct.ThrowIfCancellationRequested();
-        var reconciledAnalyses = executionResult?.Analyses.ToDictionary(analysis => analysis.ItemId) ?? [];
-        var reconciledPlans = executionResult?.ShoppingPlans.ToDictionary(plan => plan.ItemId) ?? [];
+        IReadOnlyDictionary<int, MarketItemAnalysis> reconciledAnalyses =
+            executionResult?.AnalysesByItemId ??
+            executionResult?.Analyses.ToDictionary(analysis => analysis.ItemId) ??
+            new Dictionary<int, MarketItemAnalysis>();
+        IReadOnlyDictionary<int, DetailedShoppingPlan> reconciledPlans =
+            executionResult?.ShoppingPlansByItemId ??
+            executionResult?.ShoppingPlans.ToDictionary(plan => plan.ItemId) ??
+            new Dictionary<int, DetailedShoppingPlan>();
         var fetchedCount = executionResult?.Evidence.FetchedCount ?? 0;
-        var results = new List<MarketEvidenceReconciliationItemResult>(items.Count);
-        var finalAnalyses = new List<MarketItemAnalysis>(items.Count);
-        var finalPlans = new List<DetailedShoppingPlan>(items.Count);
-
+        reconciliationResult.FetchedCount = fetchedCount;
+        var fetchedItemIds = GetFetchedItemIds(
+            executionResult,
+            executionStartedAtUtc,
+            request.Policy.RefreshMode);
+        executionResult = null;
         foreach (var item in items)
         {
             var decision = decisions[item.ItemId];
@@ -119,26 +142,14 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
                 finalPlans.Add(reconciledPlan!);
             }
 
-            results.Add(decision with
-            {
-                Disposition = hasAnalysis && hasPlan
-                    ? WasFetched(
-                        item.ItemId,
-                        executionResult,
-                        executionStartedAtUtc,
-                        request.Policy.RefreshMode)
-                        ? MarketEvidenceReconciliationDisposition.Refreshed
-                        : MarketEvidenceReconciliationDisposition.RebuiltFromCache
-                    : MarketEvidenceReconciliationDisposition.Unavailable
-            });
+            results.Add(hasAnalysis && hasPlan
+                ? fetchedItemIds.Contains(item.ItemId)
+                    ? refreshedDecisions[item.ItemId]
+                    : decision
+                : unavailableDecisions[item.ItemId]);
         }
 
-        return new MarketEvidenceReconciliationResult(
-            finalAnalyses,
-            finalPlans,
-            results,
-            itemsToReconcile,
-            fetchedCount);
+        return reconciliationResult;
     }
 
     public Task<MarketWorldEvidenceReconciliationResult> ReconcileWorldAsync(
@@ -156,26 +167,31 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
         return _worldReconciliation.ReconcileAsync(request, progress, ct, executionOptions);
     }
 
-    private static bool WasFetched(
-        int itemId,
+    private static IReadOnlySet<int> GetFetchedItemIds(
         MarketAnalysisExecutionResult? executionResult,
         DateTime? executionStartedAtUtc,
         MarketEvidenceRefreshMode refreshMode)
     {
-        if (refreshMode == MarketEvidenceRefreshMode.ForceRefresh)
-        {
-            return true;
-        }
-
         if (executionResult == null || executionStartedAtUtc == null)
         {
-            return false;
+            return new HashSet<int>();
+        }
+
+        if (executionResult.FetchedItemIds is { } fetchedItemIds)
+        {
+            return fetchedItemIds;
+        }
+
+        if (refreshMode == MarketEvidenceRefreshMode.ForceRefresh)
+        {
+            return executionResult.Analyses.Select(analysis => analysis.ItemId).ToHashSet();
         }
 
         var thresholdUtc = executionStartedAtUtc.Value - TimeSpan.FromSeconds(1);
         return executionResult.Evidence.Entries
-            .Where(entry => entry.Key.itemId == itemId)
-            .Any(entry => CacheTimeHelper.NormalizeToUtc(entry.Value.FetchedAt) >= thresholdUtc);
+            .Where(entry => CacheTimeHelper.NormalizeToUtc(entry.Value.FetchedAt) >= thresholdUtc)
+            .Select(entry => entry.Key.itemId)
+            .ToHashSet();
     }
 
     private static MarketEvidenceReconciliationItemResult EvaluatePublishedEvidence(
@@ -211,7 +227,9 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
             return Reconcile(item, MarketEvidenceReconciliationReason.QuantityChanged);
         }
 
-        if (analysis.Scope != request.Scope)
+        if (analysis.Scope != request.Scope &&
+            !(analysis.Scope == MarketFetchScope.EntireRegion &&
+              request.Scope == MarketFetchScope.SelectedDataCenter))
         {
             return Reconcile(item, MarketEvidenceReconciliationReason.ScopeChanged);
         }

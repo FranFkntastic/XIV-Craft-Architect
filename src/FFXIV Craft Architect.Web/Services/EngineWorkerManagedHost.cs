@@ -18,7 +18,7 @@ public sealed record EngineWorkerRuntimeProof(
 
 public static partial class ManagedHost
 {
-    private const string ProtocolVersion = "2";
+    private const string ProtocolVersion = "4";
     private static readonly JsonSerializerOptions WireJsonOptions = EngineJsonSerializerOptions.CreateWire();
     private static readonly IReferenceEngineSemanticSnapshotProvider Snapshots =
         new ReferenceEngineSemanticSnapshotProvider();
@@ -45,8 +45,9 @@ public static partial class ManagedHost
             throw new InvalidOperationException("Worker execution identity and payload are required.");
         }
 
-        var request = payload.Deserialize<EngineRequestEnvelope>(WireJsonOptions)
+        var executionRequest = payload.Deserialize<EngineWorkerExecutionRequest>(WireJsonOptions)
             ?? throw new InvalidOperationException("Worker execution request is empty.");
+        var request = executionRequest.Request;
         if (request.TransactionId != transactionId)
         {
             throw new InvalidOperationException("Worker request transaction identity does not match its message envelope.");
@@ -59,8 +60,18 @@ public static partial class ManagedHost
                 "The browser Worker currently accepts procurement-only requests with complete embedded market evidence.");
         }
 
+        if (executionRequest.HostGeneration <= 0 || executionRequest.HostExecutionId != executionId)
+        {
+            throw new InvalidOperationException("Worker host execution identity does not match its message envelope.");
+        }
+
         var cancellation = new CancellationTokenSource();
-        var active = new ActiveExecution(message.Generation, executionId, transactionId, cancellation);
+        var active = new ActiveExecution(
+            message.Generation,
+            executionRequest.HostGeneration,
+            executionId,
+            transactionId,
+            cancellation);
         lock (Sync)
         {
             if (_activeExecution is not null)
@@ -82,7 +93,7 @@ public static partial class ManagedHost
                     transactionId,
                     JsonSerializer.SerializeToElement(value, WireJsonOptions))));
             var result = await Engine.ComputeAsync(
-                message.Generation,
+                executionRequest.HostGeneration,
                 executionId,
                 request,
                 progress,
@@ -121,6 +132,7 @@ public static partial class ManagedHost
         {
             if (_activeExecution is not { } active ||
                 !active.Matches(
+                    message.Generation,
                     cancellation.Generation,
                     cancellation.ExecutionId,
                     cancellation.TransactionId))
@@ -149,7 +161,9 @@ public static partial class ManagedHost
                 generation,
                 executionId,
                 transactionId,
-                JsonSerializer.SerializeToElement(request, WireJsonOptions)),
+                JsonSerializer.SerializeToElement(
+                    new EngineWorkerExecutionRequest(generation, executionId, request),
+                    WireJsonOptions)),
             WireJsonOptions);
     }
 
@@ -340,13 +354,21 @@ public static partial class ManagedHost
     private static partial void PostMessageToWorker(string messageJson);
 
     private sealed record ActiveExecution(
-        long Generation,
+        long WorkerGeneration,
+        long HostGeneration,
         Guid ExecutionId,
         Guid TransactionId,
         CancellationTokenSource Cancellation)
     {
-        public bool Matches(long generation, Guid executionId, Guid transactionId) =>
-            Generation == generation && ExecutionId == executionId && TransactionId == transactionId;
+        public bool Matches(
+            long workerGeneration,
+            long hostGeneration,
+            Guid executionId,
+            Guid transactionId) =>
+            WorkerGeneration == workerGeneration &&
+            HostGeneration == hostGeneration &&
+            ExecutionId == executionId &&
+            TransactionId == transactionId;
     }
 
     private sealed class SynchronousProgress<T>(Action<T> report) : IProgress<T>

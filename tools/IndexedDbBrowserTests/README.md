@@ -13,7 +13,15 @@ node tools/IndexedDbBrowserTests/crasher-verify.mjs chromium http://127.0.0.1:50
 node tools/IndexedDbBrowserTests/crasher-verify.mjs firefox  http://127.0.0.1:5083 C:/Users/gianf/Downloads/crasher.craftplan C:/tmp/crasher-firefox.json seeded
 ```
 
-Pass `live` as the final argument for a live-network smoke. Run engines sequentially.
+The optional seventh argument selects execution path:
+
+- `legacy` runs existing application route workflow and remains default;
+- `engine` runs configuration-enabled transaction probe with deterministic evidence;
+- `workflow-engine` clicks real Procurement Plan action through engine cutover.
+
+Engine modes require `seeded` evidence. `workflow-engine` also requires both production switches
+enabled in test host. Pass `live` as sixth argument for live-network analysis smoke. Run browsers
+sequentially.
 
 ## Completion contract
 

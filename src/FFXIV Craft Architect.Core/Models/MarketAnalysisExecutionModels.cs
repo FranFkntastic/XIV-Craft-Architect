@@ -51,8 +51,37 @@ public readonly record struct MarketAnalysisExecutionTimings(
         MarketFetchDuration > TimeSpan.Zero || AnalysisDuration > TimeSpan.Zero;
 }
 
-public sealed record MarketAnalysisExecutionResult(
-    MarketEvidenceSet Evidence,
-    List<MarketItemAnalysis> Analyses,
-    List<DetailedShoppingPlan> ShoppingPlans,
-    MarketAnalysisExecutionTimings Timings = default);
+public sealed record MarketAnalysisExecutionResult
+{
+    public MarketAnalysisExecutionResult(
+        MarketEvidenceSet evidence,
+        List<MarketItemAnalysis> analyses,
+        List<DetailedShoppingPlan> shoppingPlans,
+        MarketAnalysisExecutionTimings timings = default,
+        IReadOnlySet<int>? fetchedItemIds = null,
+        IReadOnlyDictionary<int, MarketItemAnalysis>? analysesByItemId = null,
+        IReadOnlyDictionary<int, DetailedShoppingPlan>? shoppingPlansByItemId = null)
+    {
+        Evidence = evidence;
+        Analyses = analyses;
+        ShoppingPlans = shoppingPlans;
+        Timings = timings;
+        FetchedItemIds = fetchedItemIds;
+        AnalysesByItemId = analysesByItemId;
+        ShoppingPlansByItemId = shoppingPlansByItemId;
+    }
+
+    public MarketEvidenceSet Evidence { get; init; }
+
+    public List<MarketItemAnalysis> Analyses { get; init; }
+
+    public List<DetailedShoppingPlan> ShoppingPlans { get; init; }
+
+    public MarketAnalysisExecutionTimings Timings { get; internal set; }
+
+    public IReadOnlySet<int>? FetchedItemIds { get; init; }
+
+    public IReadOnlyDictionary<int, MarketItemAnalysis>? AnalysesByItemId { get; init; }
+
+    public IReadOnlyDictionary<int, DetailedShoppingPlan>? ShoppingPlansByItemId { get; init; }
+}

@@ -100,16 +100,37 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
             45_000,
             'Worker capability');
           worker.postMessage({
-            protocolVersion: '2', kind: 'ping', generation,
+            protocolVersion: '4', kind: 'ping', generation,
             executionId: null, transactionId: null, payload: null
           });
           return { worker, capability: await capabilityPromise };
         }
 
         const active = await startWorker(1);
+        const malformedExecutionId = crypto.randomUUID();
+        const malformedTransactionId = crypto.randomUUID();
+        const malformedPromise = waitFor(
+          active.worker,
+          message => message?.kind === 'protocol-error' &&
+            message.executionId === malformedExecutionId &&
+            message.transactionId === malformedTransactionId,
+          10_000,
+          'Malformed managed JSON rejection');
+        active.worker.postMessage({
+          kind: 'managed-json',
+          messageJson: '{',
+          generation: 1,
+          messageKind: 'execute',
+          executionId: malformedExecutionId,
+          transactionId: malformedTransactionId
+        });
+        const malformed = await malformedPromise;
         const progress = [];
         active.worker.addEventListener('message', event => {
-          if (event.data?.kind === 'progress') progress.push(event.data);
+          const message = event.data?.kind === 'managed-json'
+            ? JSON.parse(event.data.messageJson)
+            : event.data;
+          if (message?.kind === 'progress') progress.push(message);
         });
         let heartbeatCount = 0;
         let heartbeatMaxGapMs = 0;
@@ -120,16 +141,36 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           previousHeartbeat = now;
           heartbeatCount++;
         }, 10);
+        const requestPromise = waitFor(
+          active.worker,
+          message => message?.kind === 'acceptance-request',
+          45_000,
+          'Managed procurement request');
+        active.worker.postMessage({
+          protocolVersion: '4', kind: 'acceptance-request', generation: 1,
+          executionId: null, transactionId: null, payload: null
+        });
+        const request = await requestPromise;
         const resultPromise = waitFor(
           active.worker,
-          message => message?.kind === 'computation-result' || message?.kind === 'protocol-error',
+          message => {
+            const decoded = message?.kind === 'managed-json'
+              ? JSON.parse(message.messageJson)
+              : message;
+            return decoded?.kind === 'computation-result' || decoded?.kind === 'protocol-error';
+          },
           45_000,
           'Managed procurement result');
         active.worker.postMessage({
-          protocolVersion: '2', kind: 'acceptance-execute', generation: 1,
-          executionId: null, transactionId: null, payload: null
+          kind: 'managed-json',
+          messageJson: request.messageJson,
+          generation: 1,
+          messageKind: 'execute'
         });
-        const result = await resultPromise;
+        const resultEnvelope = await resultPromise;
+        const result = resultEnvelope.kind === 'managed-json'
+          ? JSON.parse(resultEnvelope.messageJson)
+          : resultEnvelope;
         clearInterval(heartbeat);
         active.worker.terminate();
 
@@ -140,7 +181,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           10_000,
           'Managed hang start');
         hanging.worker.postMessage({
-          protocolVersion: '2', kind: 'acceptance-hang', generation: 10,
+          protocolVersion: '4', kind: 'acceptance-hang', generation: 10,
           executionId: null, transactionId: null, payload: null
         });
         await hangStarted;
@@ -156,6 +197,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
         return {
           capability: active.capability,
+          malformed,
           result,
           progress,
           heartbeatCount,
@@ -173,14 +215,16 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       assert.equal(evidence.capability.payload.managedRuntimeAssembly, 'FFXIV_Craft_Architect.Web');
       assert.match(evidence.capability.payload.managedRuntimeProofHash, /^[0-9a-f]{64}$/i);
       assert.match(evidence.capability.payload.workerInstanceId, /^[0-9a-f-]{36}$/i);
+      assert.equal(evidence.malformed.payload.code, 'managed-json-invalid');
 
       assert.equal(evidence.result.kind, 'computation-result');
       assert.equal(evidence.result.payload.status, 1, 'managed computation must complete');
       assert.equal(evidence.result.payload.finalPhase, 7, 'procurement must reach reconciliation');
       assert.match(evidence.result.payload.computationHash, /^[0-9a-f]{64}$/i);
       assert.equal(evidence.result.payload.computationEvidence['phase:Reconciling'], 'complete');
-      const decision = evidence.result.payload.result.procurementRoute.decision;
-      assert.equal(evidence.result.payload.result.procurementRoute.isComplete, true);
+      const route = evidence.result.payload.result.procurementRouteResult;
+      const decision = route.routeDecision;
+      assert.equal(route.isComplete, true);
       assert.equal(decision.acquisitionSearchWasTruncated, false);
       assert.equal(decision.routeSearchWasTruncated, true);
       assert.equal(decision.travelSearchWasTruncated, false);

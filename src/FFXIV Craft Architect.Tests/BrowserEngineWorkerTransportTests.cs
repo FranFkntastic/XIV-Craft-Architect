@@ -37,7 +37,11 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Equal(progress.ExecutionId, received?.ExecutionId);
         Assert.Equal(progress.TransactionId, received?.TransactionId);
         Assert.Equal(progress.Payload?.GetRawText(), received?.Payload?.GetRawText());
-        Assert.Same(progress, controller.Sent);
+        Assert.Equal(progress.Kind, controller.Sent?.Kind);
+        Assert.Equal(progress.Generation, controller.Sent?.Generation);
+        Assert.Equal(progress.ExecutionId, controller.Sent?.ExecutionId);
+        Assert.Equal(progress.TransactionId, controller.Sent?.TransactionId);
+        Assert.Equal(progress.Payload?.GetRawText(), controller.Sent?.Payload?.GetRawText());
         Assert.Equal("engine-worker.js?acceptance=true", module.WorkerUrl);
         Assert.True(controller.Terminated);
         Assert.True(controller.Disposed);
@@ -87,6 +91,34 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Contains("runtime crashed", received?.Payload?.GetProperty("message").GetString(), StringComparison.Ordinal);
         await transport.DisposeAsync();
     }
+
+    [Fact]
+    public async Task Transport_MalformedRunningMessageFailsActiveExecutionImmediately()
+    {
+        var controller = new RecordingController();
+        var transport = new BrowserEngineWorkerTransport(
+            new RecordingRuntime(new RecordingModule(controller)));
+        EngineWorkerMessage? received = null;
+        transport.MessageReceived += (_, message) => received = message;
+        await transport.StartAsync(1, CancellationToken.None);
+        var execute = new EngineWorkerMessage(
+            EngineWorkerClient.ProtocolVersion,
+            "execute",
+            1,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            JsonSerializer.SerializeToElement(new { request = "fixture" }));
+        await transport.SendAsync(execute, CancellationToken.None);
+
+        await transport.ReceiveMessageJson("{");
+
+        Assert.Equal("protocol-error", received?.Kind);
+        Assert.Equal(execute.ExecutionId, received?.ExecutionId);
+        Assert.Equal(execute.TransactionId, received?.TransactionId);
+        Assert.Equal("worker-message-invalid", received?.Payload?.GetProperty("code").GetString());
+        await transport.DisposeAsync();
+    }
+
 
     private sealed class RecordingRuntime(RecordingModule module) : IJSRuntime
     {
@@ -179,8 +211,12 @@ public sealed class BrowserEngineWorkerTransportTests
                     Callback!.Value.ReceiveMessage(
                         JsonSerializer.SerializeToElement(message, EngineJsonSerializerOptions.CreateWire())).GetAwaiter().GetResult();
                     break;
-                case "send":
-                    Sent = Assert.IsType<EngineWorkerMessage>(args![0]);
+                case "sendJson":
+                    Sent = JsonSerializer.Deserialize<EngineWorkerMessage>(
+                        Assert.IsType<string>(args![0]),
+                        EngineJsonSerializerOptions.CreateWire());
+                    Assert.Equal(Sent!.Generation, Assert.IsType<long>(args[1]));
+                    Assert.Equal(Sent.Kind, Assert.IsType<string>(args[2]));
                     break;
                 case "terminate":
                     TerminationAttempts++;

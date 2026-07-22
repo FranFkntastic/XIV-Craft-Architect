@@ -20,6 +20,8 @@ public sealed class ProcurementWorkflowService : IProcurementWorkflowService
     private readonly MarketAnalysisItemRefreshService _itemRefreshService;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
     private readonly ProcurementRouteAvailability _routeAvailability;
+    private readonly ExperimentalProcurementEngineCapability? _engineCapability;
+    private readonly IExperimentalProcurementEngineWorkflow? _engineWorkflow;
 
     public ProcurementWorkflowService(
         AppState appState,
@@ -27,7 +29,9 @@ public sealed class ProcurementWorkflowService : IProcurementWorkflowService
         MarketAnalysisItemRefreshService itemRefreshService,
         IRecipeLayerWorkflowService recipeLayerWorkflow,
         ProcurementRouteAvailability routeAvailability,
-        ILogger<ProcurementWorkflowService>? logger = null)
+        ILogger<ProcurementWorkflowService>? logger = null,
+        ExperimentalProcurementEngineCapability? engineCapability = null,
+        IExperimentalProcurementEngineWorkflow? engineWorkflow = null)
     {
         _appState = appState;
         _logger = logger;
@@ -35,6 +39,8 @@ public sealed class ProcurementWorkflowService : IProcurementWorkflowService
         _itemRefreshService = itemRefreshService;
         _recipeLayerWorkflow = recipeLayerWorkflow;
         _routeAvailability = routeAvailability;
+        _engineCapability = engineCapability;
+        _engineWorkflow = engineWorkflow;
     }
 
     public async Task<ProcurementWorkflowResult> RunAnalysisAsync(
@@ -82,6 +88,22 @@ public sealed class ProcurementWorkflowService : IProcurementWorkflowService
             ? MarketFetchScope.EntireRegion
             : MarketFetchScope.SelectedDataCenter;
         var requestSnapshot = _appState.CreateCurrentProcurementRouteBasis();
+        if (_engineCapability?.IsExecutionEnabled == true)
+        {
+            var engineWorkflow = _engineWorkflow
+                ?? throw new InvalidOperationException("Experimental procurement engine workflow is not registered.");
+            return await engineWorkflow.RunAsync(
+                new ExperimentalProcurementEngineWorkflowRequest(
+                    plan,
+                    activeItemsList,
+                    planSessionVersion,
+                    capturedDecisionVersion,
+                    capturedMarketAnalysisVersion,
+                    requestSnapshot,
+                    request.IsCurrentOperation),
+                progress,
+                ct);
+        }
         var guardedProgress = progress == null
             ? null
             : new Progress<string>(message =>
@@ -273,7 +295,10 @@ public enum ProcurementWorkflowStatus
     StaleDecision,
     StaleConfiguration,
     StalePlan,
-    Superseded
+    Superseded,
+    Cancelled,
+    Indeterminate,
+    Failed
 }
 
 public sealed record ProcurementItemRefreshWorkflowRequest(

@@ -14,4 +14,12 @@ public interface IMarketPriceLadderAnalysisService
         MarketItemAnalysis analysis,
         MarketAcquisitionLens lens,
         MarketAnalysisConfig? config = null);
+
+    Task<DetailedShoppingPlan> ProjectToShoppingPlanAsync(
+        MarketItemAnalysis analysis,
+        MarketAcquisitionLens lens,
+        MarketAnalysisConfig? config = null,
+        MarketAnalysisExecutionOptions? executionOptions = null,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default);
 }

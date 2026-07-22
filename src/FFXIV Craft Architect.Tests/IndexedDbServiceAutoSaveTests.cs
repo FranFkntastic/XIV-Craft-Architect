@@ -31,9 +31,12 @@ public class IndexedDbServiceAutoSaveTests
         appState.ReplaceProjectItems([new ProjectItem { Id = 123, Name = "Saved Item", Quantity = 10 }]);
 
         var firstSave = await service.AutoSaveStateAsync(appState);
+        var timing = service.LastAutoSavePerformanceTiming;
         var secondSave = await service.AutoSaveStateAsync(appState);
 
         Assert.True(firstSave);
+        Assert.NotNull(timing);
+        Assert.True(timing.TotalMilliseconds >= timing.SnapshotMilliseconds + timing.SaveMilliseconds);
         Assert.False(secondSave);
         Assert.Equal(1, jsRuntime.SavePlanCallCount);
     }
@@ -64,6 +67,43 @@ public class IndexedDbServiceAutoSaveTests
 
         Assert.True(await secondSave);
         Assert.Equal(2, jsRuntime.SavePlanCallCount);
+    }
+
+    [Fact]
+    public async Task AutoSaveStateWithOutcomeAsync_RecognizesOverlappingSaveAlreadyPersistedCurrentState()
+    {
+        var jsRuntime = new RecordingJsRuntime(manualCompletion: true);
+        var service = new IndexedDbService(jsRuntime);
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 123, Name = "Saved Item", Quantity = 10 }]);
+
+        var firstSave = service.AutoSaveStateAsync(appState);
+        await jsRuntime.WaitForSavePlanCallCountAsync(1);
+        var overlappingSave = service.AutoSaveStateWithOutcomeAsync(appState);
+        Assert.False(overlappingSave.IsCompleted);
+
+        jsRuntime.CompleteNextSave();
+
+        Assert.True(await firstSave);
+        Assert.Equal(AutoSaveStateOutcome.AlreadyPersisted, await overlappingSave);
+        Assert.Equal(1, jsRuntime.SavePlanCallCount);
+    }
+
+    [Fact]
+    public async Task AutoSaveStateAsync_ReusesUnchangedMarketEvidence()
+    {
+        var service = new IndexedDbService(new RecordingJsRuntime());
+        var appState = new AppState();
+        appState.ReplaceProjectItems([new ProjectItem { Id = 123, Name = "Saved Item", Quantity = 10 }]);
+        appState.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 123, QuantityNeeded = 10 }],
+            [new DetailedShoppingPlan { ItemId = 123, QuantityNeeded = 10 }]);
+        Assert.True(await service.AutoSaveStateAsync(appState));
+
+        appState.ReplaceProjectItems([new ProjectItem { Id = 123, Name = "Saved Item", Quantity = 20 }]);
+        Assert.True(await service.AutoSaveStateAsync(appState));
+
+        Assert.True(service.LastAutoSavePerformanceTiming?.ReusedMarketEvidence);
     }
 
     [Fact]

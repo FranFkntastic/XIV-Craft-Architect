@@ -1,0 +1,476 @@
+@using System.Text.Json
+@using FFXIV_Craft_Architect.Core.Engine
+@inject IConfiguration Configuration
+@inject AppState AppState
+@inject IRecipeLayerWorkflowService RecipeLayerWorkflow
+@inject IndexedDbService IndexedDb
+@inject IJSRuntime JSRuntime
+@inject IReferenceEngineSemanticSnapshotProvider EngineSnapshots
+@inject ExperimentalProcurementEngineFactory EngineFactory
+
+@if (_enabled)
+{
+    <div data-benchmark-id="engine-transaction-acceptance"
+         data-status="@_status"
+         data-progress-count="@_progressCount"
+         data-progress="@_progress"
+         data-terminal-status="@_terminalStatus"
+         data-final-transaction-hash="@_finalTransactionHash"
+         data-failure-code="@_failureCode"
+         data-failed-phase="@_failedPhase"
+         data-terminal-evidence="@_terminalEvidence"
+          data-evidence-issues="@_evidenceIssues"
+          data-settlement-phase-timings="@_settlementPhaseTimings"
+          data-autosave-timings="@_autoSaveTimings"
+          data-ledger-complete-timings="@_ledgerCompleteTimings"
+          data-worker-result-timings="@_workerResultTimings"
+          data-computation-validation-ms="@_computationValidationMilliseconds"
+         data-replay-matched="@_replayMatched.ToString().ToLowerInvariant()"
+         data-replay-status="@_replayStatus"
+         data-replay-hash="@_replayHash"
+         data-replay-error="@_replayError"
+         data-route-validity="@AppState.ProcurementRouteValidity"
+         data-route-has-decision="@(AppState.ProcurementRouteDecision is not null ? "true" : "false")"
+         data-route-truncated="@(AppState.ProcurementRouteDecision?.RouteSearchWasTruncated.ToString().ToLowerInvariant())"
+         data-acquisition-truncated="@(AppState.ProcurementRouteDecision?.AcquisitionSearchWasTruncated.ToString().ToLowerInvariant())"
+         data-travel-truncated="@(AppState.ProcurementRouteDecision?.TravelSearchWasTruncated.ToString().ToLowerInvariant())"
+         data-travel-routes-evaluated="@AppState.ProcurementRouteDecision?.TravelRoutesEvaluated"
+         data-acquisition-combination-evaluations="@AppState.ProcurementRouteDecision?.AcquisitionCombinationEvaluations"
+         data-error="@_error">
+        @if (_deterministicEvidenceEnabled)
+        {
+            <button type="button"
+                    data-benchmark-id="engine-acceptance-seed-evidence"
+                    disabled="@_running"
+                    @onclick="SeedDeterministicEvidenceAsync">
+                Seed deterministic market evidence
+            </button>
+        }
+        <button type="button"
+                data-benchmark-id="engine-transaction-run"
+                disabled="@_running"
+                @onclick="RunAsync">
+            Run browser Worker transaction acceptance
+        </button>
+        <span data-benchmark-id="engine-transaction-progress">@_progress</span>
+    </div>
+}
+
+@code {
+    private bool _enabled;
+    private bool _deterministicEvidenceEnabled;
+    private bool _running;
+    private string _status = "ready";
+    private string _terminalStatus = string.Empty;
+    private string _finalTransactionHash = string.Empty;
+    private string _failureCode = string.Empty;
+    private string _failedPhase = string.Empty;
+    private string _terminalEvidence = string.Empty;
+    private string _evidenceIssues = string.Empty;
+    private string _settlementPhaseTimings = string.Empty;
+    private string _autoSaveTimings = string.Empty;
+    private string _ledgerCompleteTimings = string.Empty;
+    private string _workerResultTimings = string.Empty;
+    private string _computationValidationMilliseconds = string.Empty;
+    private string _progress = string.Empty;
+    private string _error = string.Empty;
+    private int _progressCount;
+    private bool _replayMatched;
+    private string _replayStatus = string.Empty;
+    private string _replayHash = string.Empty;
+    private string _replayError = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        _enabled = Configuration.GetValue<bool>("EngineAcceptance:Enabled");
+        _deterministicEvidenceEnabled = Configuration.GetValue<bool>(
+            "EngineAcceptance:UseDeterministicEvidence");
+    }
+
+    private async Task RunAsync()
+    {
+        if (_running)
+        {
+            return;
+        }
+        _running = true;
+        _status = "running";
+        _error = string.Empty;
+        _progressCount = 0;
+        var gateHeld = true;
+        try
+        {
+            var plan = AppState.CurrentPlan
+                ?? throw new InvalidOperationException("Import a craft plan before running engine acceptance.");
+            var candidates = await RecipeLayerWorkflow.BuildCurrentMarketAnalysisCandidatesAsync(plan)
+                ?? throw new InvalidOperationException("The current plan changed while acceptance was preparing.");
+            var activeItems = candidates.Where(item => item.TotalQuantity > 0).ToArray();
+            var scope = AppState.ProcurementSearchEntireRegion
+                ? MarketFetchScope.EntireRegion
+                : MarketFetchScope.SelectedDataCenter;
+            if (_deterministicEvidenceEnabled)
+            {
+                var (analyses, shoppingPlans) = CreateDeterministicEvidence(activeItems, scope);
+                AppState.ReplaceMarketAnalysis(
+                    analyses,
+                    shoppingPlans,
+                    publishedScope: AppState.CreateMarketAnalysisScopeSnapshot(scope));
+                if (!await IndexedDb.AutoSaveStateAsync(AppState, skipIfInFlight: false))
+                {
+                    throw new InvalidOperationException("Deterministic acceptance evidence could not be saved.");
+                }
+            }
+            if (activeItems.Length == 0 || AppState.MarketItemAnalyses.Count == 0 || AppState.ShoppingPlans.Count == 0)
+            {
+                throw new InvalidOperationException("Run market analysis before engine acceptance.");
+            }
+
+            var planSessionVersion = AppState.PlanSessionVersion;
+            var planDecisionVersion = AppState.CurrentVersions.PlanDecisionVersion;
+            var marketAnalysisVersion = AppState.CurrentVersions.MarketAnalysisVersion;
+            var routeBasis = AppState.CreateCurrentProcurementRouteBasis();
+            _evidenceIssues = DiagnoseEmbeddedEvidence(
+                activeItems,
+                AppState.ShoppingPlans,
+                AppState.MarketItemAnalyses,
+                scope,
+                AppState.SelectedDataCenter,
+                AppState.SelectedRegion);
+            var input = new ReferenceEngineInput(
+                null,
+                new ProcurementRouteExecutionRequest
+                {
+                    Plan = plan,
+                    ActiveProcurementItems = activeItems,
+                    SourceShoppingPlans = AppState.ShoppingPlans,
+                    SourceMarketAnalyses = AppState.MarketItemAnalyses,
+                    Scope = scope,
+                    SelectedDataCenter = AppState.SelectedDataCenter,
+                    SelectedRegion = AppState.SelectedRegion,
+                    Lens = AppState.MarketAnalysisLens,
+                    ProcurementConfig = new MarketAnalysisConfig
+                    {
+                        EnableSplitWorld = AppState.ProcurementEnableSplitWorldPurchases,
+                        TravelTolerance = AppState.ProcurementTravelTolerance,
+                        TravelPriority = AppState.ProcurementTravelPriority,
+                        StartFromHomeDataCenter = AppState.ProcurementStartFromHomeDataCenter
+                    },
+                    IncludeSplitPurchases = AppState.ProcurementEnableSplitWorldPurchases,
+                    BlacklistedWorlds = AppState.GetActiveBlacklistedMarketWorlds(),
+                    ExcludedItemWorlds = AppState.TemporarilyExcludedItemWorlds,
+                    ExpectedWorldsByDataCenter = AppState.GetExpectedMarketWorlds(scope),
+                    IncludeReconciliationEvidenceInResult = false
+                });
+            var inputElement = JsonSerializer.SerializeToElement(input, EngineJsonSerializerOptions.CreateWire());
+            var routeBasisHash = EngineCanonicalHash.Compute(routeBasis, EngineJsonSerializerOptions.CreateWire());
+            var provisional = new EngineRequestEnvelope(
+                "1",
+                Guid.NewGuid(),
+                EngineInputKind.RootIntent,
+                inputElement,
+                new EngineBasisSet(
+                    new EngineBasisIdentity("plan", "1", routeBasisHash),
+                    new EngineBasisIdentity("session", "1", planSessionVersion.ToString()),
+                    new EngineBasisIdentity("publication", "1", AppState.CurrentVersions.MarketAnalysisVersion.ToString()),
+                    new EngineBasisIdentity("route", "1", routeBasisHash)),
+                new EngineDeterministicSettings(
+                    "stable-procurement-worker-v2",
+                    new Dictionary<string, string>
+                    {
+                        ["travelTolerance"] = AppState.ProcurementTravelTolerance.ToString(),
+                        ["travelPriority"] = AppState.ProcurementTravelPriority.ToString()
+                    }),
+                EngineExecutionBudgets.Default,
+                string.Empty,
+                string.Empty,
+                EngineCanonicalHash.Compute(AppState.MarketItemAnalyses, EngineJsonSerializerOptions.CreateWire()),
+                routeBasisHash,
+                EngineCanonicalHash.ComputeEngineInput(inputElement));
+            var prepared = EngineSnapshots.PrepareInput(provisional);
+            var request = provisional with
+            {
+                RootIntentHash = EngineSemanticSnapshotHash.RootIntent(prepared.RootIntent),
+                ExpandedGraphHash = EngineSemanticSnapshotHash.ExpandedGraph(prepared.ExpandedGraph)
+            };
+            var gate = OperationGateLease.Create(() => gateHeld, () =>
+            {
+                if (!gateHeld)
+                {
+                    return false;
+                }
+                gateHeld = false;
+                return true;
+            });
+            await using var execution = EngineFactory.Create(new WebProcurementSettlementRegistration(
+                request,
+                plan,
+                planSessionVersion,
+                planDecisionVersion,
+                marketAnalysisVersion,
+                routeBasis,
+                gate));
+            var progress = new Progress<EngineProgress>(value =>
+            {
+                _progressCount++;
+                _progress = value.Message;
+                _ = InvokeAsync(StateHasChanged);
+            });
+
+            var result = await execution.ExecuteAsync(request, progress);
+            var acceptanceModule = await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import",
+                "./engine-worker-bootstrap.js");
+            await acceptanceModule.InvokeVoidAsync("reportEngineHostFinalized");
+            await acceptanceModule.DisposeAsync();
+            _settlementPhaseTimings = string.Join(
+                ";",
+                execution.SettlementPhaseElapsedMilliseconds
+                    .OrderBy(pair => pair.Key)
+                    .Select(pair => $"{pair.Key}={pair.Value}"));
+            if (execution.AutoSavePerformanceTiming is { } autoSaveTiming)
+            {
+                _autoSaveTimings =
+                    $"Snapshot={autoSaveTiming.SnapshotMilliseconds};" +
+                    $"Metrics={autoSaveTiming.MetricsMilliseconds};" +
+                    $"Save={autoSaveTiming.SaveMilliseconds};" +
+                    $"Total={autoSaveTiming.TotalMilliseconds};" +
+                    $"ReusedMarketEvidence={autoSaveTiming.ReusedMarketEvidence}";
+            }
+            if (execution.LedgerCompleteTiming is { } ledgerTiming)
+            {
+                _ledgerCompleteTimings =
+                    $"Serialization={ledgerTiming.SerializationMilliseconds};" +
+                    $"Write={ledgerTiming.WriteMilliseconds};" +
+                    $"Total={ledgerTiming.TotalMilliseconds}";
+            }
+            if (execution.WorkerResultTiming is { } workerTiming)
+            {
+                _workerResultTimings =
+                    $"AuthorityScan={workerTiming.AuthorityScanMilliseconds};" +
+                    $"Deserialization={workerTiming.DeserializationMilliseconds};" +
+                    $"Validation={workerTiming.ValidationMilliseconds};" +
+                    $"Total={workerTiming.TotalMilliseconds}";
+            }
+            _computationValidationMilliseconds =
+                execution.ComputationValidationMilliseconds?.ToString() ?? string.Empty;
+            _terminalStatus = result.Status.ToString();
+            _finalTransactionHash = result.Completion.FinalTransactionHash;
+            _failureCode = result.Failure?.Code ?? string.Empty;
+            _failedPhase = result.Failure?.FailedPhase.ToString() ?? string.Empty;
+            _terminalEvidence = string.Join(
+                ";",
+                result.Completion.TerminalEvidence.Select(pair => $"{pair.Key}={pair.Value}"));
+            if (result.Status != EngineTerminalStatus.Succeeded)
+            {
+                throw new InvalidOperationException(result.Failure?.Message ?? "The engine transaction failed.");
+            }
+
+            var replay = await execution.ReplayAsync(request);
+            _replayStatus = replay.Status.ToString();
+            _replayHash = replay.Completion.FinalTransactionHash;
+            _replayError = replay.Failure?.Message ?? string.Empty;
+            _replayMatched = replay.Status == result.Status &&
+                string.Equals(
+                    replay.Completion.FinalTransactionHash,
+                    result.Completion.FinalTransactionHash,
+                    StringComparison.Ordinal);
+            if (!_replayMatched)
+            {
+                throw new InvalidOperationException("The durable terminal replay did not match the committed transaction.");
+            }
+            _status = "complete";
+        }
+        catch (Exception ex)
+        {
+            _status = "failed";
+            _error = ex.Message;
+        }
+        finally
+        {
+            if (gateHeld)
+            {
+                gateHeld = false;
+            }
+            _running = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task SeedDeterministicEvidenceAsync()
+    {
+        if (!_deterministicEvidenceEnabled)
+        {
+            return;
+        }
+        if (_running)
+        {
+            return;
+        }
+        _running = true;
+        _status = "seeding";
+        _error = string.Empty;
+        try
+        {
+            var plan = AppState.CurrentPlan
+                ?? throw new InvalidOperationException("Import a craft plan before seeding engine acceptance evidence.");
+            var candidates = await RecipeLayerWorkflow.BuildCurrentMarketAnalysisCandidatesAsync(plan)
+                ?? throw new InvalidOperationException("The current plan changed while acceptance was preparing.");
+            var activeItems = candidates.Where(item => item.TotalQuantity > 0).ToArray();
+            var scope = AppState.ProcurementSearchEntireRegion
+                ? MarketFetchScope.EntireRegion
+                : MarketFetchScope.SelectedDataCenter;
+            var (analyses, shoppingPlans) = CreateDeterministicEvidence(activeItems, scope);
+            AppState.ReplaceMarketAnalysis(
+                analyses,
+                shoppingPlans,
+                publishedScope: AppState.CreateMarketAnalysisScopeSnapshot(scope));
+            if (!await IndexedDb.AutoSaveStateAsync(AppState, skipIfInFlight: false))
+            {
+                throw new InvalidOperationException("Deterministic acceptance evidence could not be saved.");
+            }
+            _status = "seeded";
+        }
+        catch (Exception ex)
+        {
+            _status = "failed";
+            _error = ex.Message;
+        }
+        finally
+        {
+            _running = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private static string DiagnoseEmbeddedEvidence(
+        IReadOnlyList<MaterialAggregate> items,
+        IReadOnlyList<DetailedShoppingPlan> plans,
+        IReadOnlyList<MarketItemAnalysis> analyses,
+        MarketFetchScope scope,
+        string selectedDataCenter,
+        string selectedRegion)
+    {
+        var plansByItem = plans.ToDictionary(plan => plan.ItemId);
+        var analysesByItem = analyses.ToDictionary(analysis => analysis.ItemId);
+        var requiredDataCenters = MarketFetchScopeResolver.GetDataCenters(
+            scope,
+            selectedDataCenter,
+            selectedRegion);
+        var issues = new List<string>();
+        foreach (var item in items)
+        {
+            if (!plansByItem.TryGetValue(item.ItemId, out var plan))
+            {
+                issues.Add($"{item.Name}:missing-plan");
+                continue;
+            }
+            if (plan.Vendors.Count > 0)
+            {
+                if (plan.QuantityNeeded != item.TotalQuantity)
+                {
+                    issues.Add($"{item.Name}:vendor-quantity");
+                }
+                continue;
+            }
+            if (!analysesByItem.TryGetValue(item.ItemId, out var analysis))
+            {
+                issues.Add($"{item.Name}:missing-analysis");
+                continue;
+            }
+            if (analysis.QuantityNeeded != item.TotalQuantity || plan.QuantityNeeded != item.TotalQuantity)
+            {
+                issues.Add($"{item.Name}:quantity");
+            }
+            if (analysis.Scope != scope &&
+                !(analysis.Scope == MarketFetchScope.EntireRegion &&
+                  scope == MarketFetchScope.SelectedDataCenter))
+            {
+                issues.Add($"{item.Name}:scope");
+            }
+            var requested = analysis.RequestedDataCenters.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var missing = analysis.MissingDataCenters.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (requiredDataCenters.Any(dataCenter => !requested.Contains(dataCenter) || missing.Contains(dataCenter)))
+            {
+                issues.Add($"{item.Name}:incomplete-scope");
+            }
+        }
+        return string.Join(",", issues);
+    }
+
+    private (IReadOnlyList<MarketItemAnalysis> Analyses, IReadOnlyList<DetailedShoppingPlan> ShoppingPlans)
+        CreateDeterministicEvidence(IReadOnlyList<MaterialAggregate> items, MarketFetchScope scope)
+    {
+        var now = DateTime.UtcNow;
+        var dataCenters = MarketFetchScopeResolver.GetDataCenters(
+            scope,
+            AppState.SelectedDataCenter,
+            AppState.SelectedRegion);
+        var expected = AppState.GetExpectedMarketWorlds(scope);
+        var worlds = dataCenters
+            .SelectMany(dataCenter => expected.GetValueOrDefault(dataCenter, [$"{dataCenter} Fixture"])
+                .Select(world => (DataCenter: dataCenter, World: world)))
+            .Take(16)
+            .ToArray();
+        if (worlds.Length == 0)
+        {
+            worlds = [(AppState.SelectedDataCenter, $"{AppState.SelectedDataCenter} Fixture")];
+        }
+
+        var plans = items.Select((item, itemIndex) =>
+        {
+            var options = worlds.Select((world, worldIndex) =>
+            {
+                var unitPrice = 100L + ((itemIndex * 17L + worldIndex * 11L) % 73L);
+                return new WorldShoppingSummary
+                {
+                    DataCenter = world.DataCenter,
+                    WorldName = world.World,
+                    TotalCost = unitPrice * item.TotalQuantity,
+                    AveragePricePerUnit = unitPrice,
+                    TotalQuantityPurchased = item.TotalQuantity,
+                    HasSufficientStock = true,
+                    MarketDataQualityBucket = MarketDataQualityBucket.Current,
+                    MarketDataAgeSource = MarketDataAgeSource.UniversalisWorldUpload,
+                    MarketUploadedAtUtc = now,
+                    Listings =
+                    [
+                        new ShoppingListingEntry
+                        {
+                            Quantity = item.TotalQuantity,
+                            NeededFromStack = item.TotalQuantity,
+                            PricePerUnit = unitPrice,
+                            RetainerName = $"Fixture {itemIndex}-{worldIndex}"
+                        }
+                    ]
+                };
+            }).ToList();
+            return new DetailedShoppingPlan
+            {
+                ItemId = item.ItemId,
+                Name = item.Name,
+                IconId = item.IconId,
+                QuantityNeeded = item.TotalQuantity,
+                WorldOptions = options,
+                RecommendedWorld = options.MinBy(option => option.TotalCost)
+            };
+        }).ToArray();
+        var analyses = items.Select(item => new MarketItemAnalysis
+        {
+            ItemId = item.ItemId,
+            Name = item.Name,
+            QuantityNeeded = item.TotalQuantity,
+            Scope = scope,
+            LoadedAtUtc = now,
+            RequestedDataCenters = dataCenters,
+            PresentDataCenters = dataCenters,
+            Worlds = worlds.Select(world => new WorldMarketAnalysis
+            {
+                DataCenter = world.DataCenter,
+                WorldName = world.World,
+                MarketUploadedAtUtc = now,
+                DataQualityBucket = MarketDataQualityBucket.Current
+            }).ToList()
+        }).ToArray();
+        return (analyses, plans);
+    }
+}

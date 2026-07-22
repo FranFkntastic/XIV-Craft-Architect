@@ -2,9 +2,11 @@
 // Uses Unix timestamps (seconds since epoch) for serialization safety
 
 const DB_NAME = 'FFXIVCraftArchitect';
-const DB_VERSION = 9;  // Repairs the market-cache timestamp index for bounded maintenance
-const MODULE_REVISION = 10;
+const DB_VERSION = 12;  // Adds bounded terminal engine transaction retention
+const MODULE_REVISION = 15;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
+const ENGINE_TERMINAL_RETENTION_LIMIT = 128;
+const ENGINE_TERMINAL_RETENTION_SCHEMA = 1;
 const STORE_PLANS = 'plans';
 const STORE_PLAN_SUMMARIES = 'planSummaries';
 const STORE_SETTINGS = 'settings';
@@ -14,8 +16,10 @@ const STORE_TRADE_CRAFTERS = 'tradeCrafters';
 const STORE_TRADE_ORDERS = 'tradeOrders';
 const STORE_TRADE_ORDER_CRAFT_SNAPSHOTS = 'tradeOrderCraftSnapshots';
 const STORE_TRADE_PAYROLL_DRAFTS = 'tradePayrollDrafts';
+const STORE_ENGINE_TRANSACTIONS = 'engineTransactions';
 
 let db = null;
+const engineTransactionLocks = new Map();
 
 function attachDatabaseConnection(database, openMessage) {
     db = database;
@@ -152,6 +156,25 @@ async function initDB() {
                 console.log('[IndexedDB] Created Trade payroll draft store');
             }
 
+            if (!database.objectStoreNames.contains(STORE_ENGINE_TRANSACTIONS)) {
+                const engineStore = database.createObjectStore(STORE_ENGINE_TRANSACTIONS, { keyPath: 'transactionId' });
+                engineStore.createIndex('updatedAtUnixMilliseconds', 'updatedAtUnixMilliseconds', { unique: false });
+                engineStore.createIndex('terminalUpdatedAtUnixMilliseconds', 'terminalUpdatedAtUnixMilliseconds', { unique: false });
+                console.log('[IndexedDB] Created durable engine transaction ledger');
+            } else {
+                const engineStore = event.target.transaction.objectStore(STORE_ENGINE_TRANSACTIONS);
+                if (!engineStore.indexNames.contains('updatedAtUnixMilliseconds')) {
+                    engineStore.createIndex('updatedAtUnixMilliseconds', 'updatedAtUnixMilliseconds', { unique: false });
+                }
+                if (!engineStore.indexNames.contains('terminalUpdatedAtUnixMilliseconds')) {
+                    backfillEngineTerminalRetention(engineStore, () =>
+                        engineStore.createIndex(
+                            'terminalUpdatedAtUnixMilliseconds',
+                            'terminalUpdatedAtUnixMilliseconds',
+                            { unique: false }));
+                }
+            }
+
         };
     });
 }
@@ -189,7 +212,8 @@ function hasRequiredTradeStores(database) {
         database.objectStoreNames.contains(STORE_TRADE_CRAFTERS) &&
         database.objectStoreNames.contains(STORE_TRADE_ORDERS) &&
         database.objectStoreNames.contains(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS) &&
-        database.objectStoreNames.contains(STORE_TRADE_PAYROLL_DRAFTS);
+        database.objectStoreNames.contains(STORE_TRADE_PAYROLL_DRAFTS) &&
+        database.objectStoreNames.contains(STORE_ENGINE_TRANSACTIONS);
 }
 
 async function ensureTradeStores(database) {
@@ -255,6 +279,26 @@ function openTradeStoreRepairUpgrade(repairVersion) {
                 payrollStore.createIndex('planSessionVersion', 'planSessionVersion', { unique: false });
                 payrollStore.createIndex('updatedAtUtc', 'updatedAtUtc', { unique: false });
                 console.log('[IndexedDB] Repaired missing Trade payroll draft store');
+            }
+
+
+            if (!database.objectStoreNames.contains(STORE_ENGINE_TRANSACTIONS)) {
+                const engineStore = database.createObjectStore(STORE_ENGINE_TRANSACTIONS, { keyPath: 'transactionId' });
+                engineStore.createIndex('updatedAtUnixMilliseconds', 'updatedAtUnixMilliseconds', { unique: false });
+                engineStore.createIndex('terminalUpdatedAtUnixMilliseconds', 'terminalUpdatedAtUnixMilliseconds', { unique: false });
+                console.log('[IndexedDB] Repaired missing durable engine transaction ledger');
+            } else {
+                const engineStore = event.target.transaction.objectStore(STORE_ENGINE_TRANSACTIONS);
+                if (!engineStore.indexNames.contains('updatedAtUnixMilliseconds')) {
+                    engineStore.createIndex('updatedAtUnixMilliseconds', 'updatedAtUnixMilliseconds', { unique: false });
+                }
+                if (!engineStore.indexNames.contains('terminalUpdatedAtUnixMilliseconds')) {
+                    backfillEngineTerminalRetention(engineStore, () =>
+                        engineStore.createIndex(
+                            'terminalUpdatedAtUnixMilliseconds',
+                            'terminalUpdatedAtUnixMilliseconds',
+                            { unique: false }));
+                }
             }
         };
         request.onsuccess = () => {
@@ -370,6 +414,7 @@ async function patchMarketAnalysis(
                 marketItemAnalysesJson,
                 marketAnalysisRecipeBasisJson,
                 marketAnalysisScopeSnapshotJson,
+                procurementRouteJson: null,
                 savedRecommendationMode: recommendationMode,
                 savedMarketAnalysisLens: marketAnalysisLens,
                 modifiedAt: new Date().toISOString()
@@ -1236,6 +1281,301 @@ async function getMarketCacheStats(cutoffUnix) {
     });
 }
 
+async function claimEngineTransaction(transactionId, canonicalRequestHash) {
+    requireEngineLedgerIdentity(transactionId, canonicalRequestHash);
+    const lockAcquired = await acquireEngineTransactionLock(transactionId);
+    if (!lockAcquired) {
+        const existing = await readEngineTransaction(transactionId);
+        if (!existing) {
+            return {
+                disposition: 'activeReplay',
+                canonicalRequestHash,
+                terminalResultJson: null,
+                claimToken: null
+            };
+        }
+        return createEngineTransactionClaim(existing, canonicalRequestHash, false);
+    }
+
+    try {
+        const database = await initDB();
+        const result = await new Promise((resolve, reject) => {
+            const transaction = database.transaction(STORE_ENGINE_TRANSACTIONS, 'readwrite');
+            const store = transaction.objectStore(STORE_ENGINE_TRANSACTIONS);
+            const request = store.get(transactionId);
+            let claim;
+            request.onsuccess = () => {
+                const existing = request.result;
+                if (existing && existing.canonicalRequestHash !== canonicalRequestHash) {
+                    claim = createEngineTransactionClaim(existing, canonicalRequestHash, true);
+                    return;
+                }
+                if (existing?.terminalResultJson || existing?.terminalExpired) {
+                    claim = createEngineTransactionClaim(existing, canonicalRequestHash, true);
+                    return;
+                }
+
+                const claimToken = crypto.randomUUID().replaceAll('-', '');
+                const disposition = existing ? 'abandonedReplay' : 'claimed';
+                store.put({
+                    transactionId,
+                    canonicalRequestHash,
+                    claimToken,
+                    terminalResultJson: null,
+                    updatedAtUnixMilliseconds: Date.now()
+                });
+                claim = {
+                    disposition,
+                    canonicalRequestHash,
+                    terminalResultJson: null,
+                    claimToken
+                };
+            };
+            request.onerror = () => reject(request.error);
+            transaction.oncomplete = () => resolve(claim);
+            transaction.onerror = () => reject(transaction.error);
+            transaction.onabort = () => reject(transaction.error);
+        });
+
+        if (result.claimToken) {
+            engineTransactionLocks.get(transactionId).claimToken = result.claimToken;
+            return result;
+        }
+        releaseEngineTransactionLock(transactionId);
+        return result;
+    } catch (error) {
+        releaseEngineTransactionLock(transactionId);
+        throw error;
+    }
+}
+
+async function completeEngineTransaction(
+    transactionId,
+    canonicalRequestHash,
+    claimToken,
+    terminalResultJson) {
+    requireEngineLedgerIdentity(transactionId, canonicalRequestHash, claimToken);
+    if (!terminalResultJson) throw new Error('A terminal engine result is required.');
+    const heldLock = engineTransactionLocks.get(transactionId);
+    if (!heldLock || heldLock.claimToken !== claimToken) {
+        throw new Error('The engine transaction lock is not owned by this claim.');
+    }
+    const database = await initDB();
+    await new Promise((resolve, reject) => {
+        const transaction = database.transaction(STORE_ENGINE_TRANSACTIONS, 'readwrite');
+        const store = transaction.objectStore(STORE_ENGINE_TRANSACTIONS);
+        const request = store.get(transactionId);
+        request.onsuccess = () => {
+            const existing = request.result;
+            if (!existing ||
+                existing.canonicalRequestHash !== canonicalRequestHash ||
+                existing.claimToken !== claimToken) {
+                transaction.abort();
+                reject(new Error('The engine transaction claim no longer matches its canonical identity.'));
+                return;
+            }
+            if (existing.terminalResultJson && existing.terminalResultJson !== terminalResultJson) {
+                transaction.abort();
+                reject(new Error('The engine transaction already contains a different terminal result.'));
+                return;
+            }
+            existing.terminalResultJson ||= terminalResultJson;
+            existing.terminalExpired = false;
+            const completedAt = Date.now();
+            existing.updatedAtUnixMilliseconds = completedAt;
+            existing.terminalUpdatedAtUnixMilliseconds = completedAt;
+            existing.retentionSchemaVersion = ENGINE_TERMINAL_RETENTION_SCHEMA;
+            const put = store.put(existing);
+            put.onsuccess = () => expireTerminalPayloads(
+                store,
+                store.index('terminalUpdatedAtUnixMilliseconds'),
+                ENGINE_TERMINAL_RETENTION_LIMIT);
+        };
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(
+            transaction.error || new Error('Engine transaction completion aborted.'));
+    });
+    releaseEngineTransactionLock(transactionId, claimToken);
+}
+
+function backfillEngineTerminalRetention(store, createIndex) {
+    const request = store.openCursor();
+    request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+            expireTerminalPayloads(store, createIndex(), ENGINE_TERMINAL_RETENTION_LIMIT);
+            return;
+        }
+        const value = cursor.value;
+        if (value.terminalResultJson && !value.terminalUpdatedAtUnixMilliseconds) {
+            value.terminalUpdatedAtUnixMilliseconds = value.updatedAtUnixMilliseconds || Date.now();
+            value.retentionSchemaVersion = ENGINE_TERMINAL_RETENTION_SCHEMA;
+            cursor.update(value);
+        }
+        cursor.continue();
+    };
+}
+
+function expireTerminalPayloads(store, index, maximumRetained) {
+    const request = index.openCursor(null, 'prev');
+    let retained = 0;
+    request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        const value = cursor.value;
+        if (value.terminalResultJson) {
+            if (retained < maximumRetained) {
+                retained++;
+            } else {
+                value.terminalResultJson = null;
+                value.terminalExpired = true;
+                delete value.terminalUpdatedAtUnixMilliseconds;
+                cursor.update(value);
+            }
+        }
+        cursor.continue();
+    };
+}
+
+async function releaseEngineTransaction(transactionId, canonicalRequestHash, claimToken) {
+    requireEngineLedgerIdentity(transactionId, canonicalRequestHash, claimToken);
+    await mutateClaimedEngineTransaction(
+        transactionId,
+        canonicalRequestHash,
+        claimToken,
+        existing => {
+            if (existing.terminalResultJson || existing.terminalExpired) {
+                throw new Error('A terminal engine transaction cannot be released.');
+            }
+            return null;
+        });
+    releaseEngineTransactionLock(transactionId, claimToken);
+}
+
+async function mutateClaimedEngineTransaction(
+    transactionId,
+    canonicalRequestHash,
+    claimToken,
+    mutate) {
+    const heldLock = engineTransactionLocks.get(transactionId);
+    if (!heldLock || heldLock.claimToken !== claimToken) {
+        throw new Error('The engine transaction lock is not owned by this claim.');
+    }
+    const database = await initDB();
+    await new Promise((resolve, reject) => {
+        const transaction = database.transaction(STORE_ENGINE_TRANSACTIONS, 'readwrite');
+        const store = transaction.objectStore(STORE_ENGINE_TRANSACTIONS);
+        const request = store.get(transactionId);
+        request.onsuccess = () => {
+            const existing = request.result;
+            if (!existing ||
+                existing.canonicalRequestHash !== canonicalRequestHash ||
+                existing.claimToken !== claimToken) {
+                transaction.abort();
+                reject(new Error('The engine transaction claim no longer matches its canonical identity.'));
+                return;
+            }
+            try {
+                const updated = mutate(existing);
+                if (updated) store.put(updated);
+                else store.delete(transactionId);
+            } catch (error) {
+                transaction.abort();
+                reject(error);
+            }
+        };
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error || new Error('Engine transaction mutation aborted.'));
+    });
+}
+
+async function readEngineTransaction(transactionId) {
+    const database = await initDB();
+    return await new Promise((resolve, reject) => {
+        const transaction = database.transaction(STORE_ENGINE_TRANSACTIONS, 'readonly');
+        const request = transaction.objectStore(STORE_ENGINE_TRANSACTIONS).get(transactionId);
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+function createEngineTransactionClaim(existing, requestedHash, ownsLock) {
+    if (existing.canonicalRequestHash !== requestedHash) {
+        return {
+            disposition: 'conflict',
+            canonicalRequestHash: existing.canonicalRequestHash,
+            terminalResultJson: null,
+            claimToken: null
+        };
+    }
+    if (existing.terminalResultJson) {
+        return {
+            disposition: 'terminalReplay',
+            canonicalRequestHash: existing.canonicalRequestHash,
+            terminalResultJson: existing.terminalResultJson,
+            claimToken: null
+        };
+    }
+    if (existing.terminalExpired) {
+        return {
+            disposition: 'expiredTerminalReplay',
+            canonicalRequestHash: existing.canonicalRequestHash,
+            terminalResultJson: null,
+            claimToken: null
+        };
+    }
+    return {
+        disposition: ownsLock ? 'abandonedReplay' : 'activeReplay',
+        canonicalRequestHash: existing.canonicalRequestHash,
+        terminalResultJson: null,
+        claimToken: ownsLock ? existing.claimToken : null
+    };
+}
+
+async function acquireEngineTransactionLock(transactionId) {
+    if (!navigator.locks) {
+        throw new Error('The Web Locks API is required for durable engine transaction ownership.');
+    }
+    if (engineTransactionLocks.has(transactionId)) return false;
+
+    let release;
+    let reportAcquisition;
+    const held = new Promise(resolve => { release = resolve; });
+    const acquired = new Promise(resolve => { reportAcquisition = resolve; });
+    const lockTask = navigator.locks.request(
+        `craft-architect-engine:${transactionId}`,
+        { mode: 'exclusive', ifAvailable: true },
+        async lock => {
+            reportAcquisition(Boolean(lock));
+            if (lock) await held;
+        });
+    const available = await acquired;
+    if (!available) {
+        await lockTask;
+        return false;
+    }
+    engineTransactionLocks.set(transactionId, { release, lockTask, claimToken: null });
+    return true;
+}
+
+function releaseEngineTransactionLock(transactionId, claimToken = null) {
+    const held = engineTransactionLocks.get(transactionId);
+    if (!held || claimToken && held.claimToken !== claimToken) return false;
+    engineTransactionLocks.delete(transactionId);
+    held.release();
+    return true;
+}
+
+function requireEngineLedgerIdentity(transactionId, canonicalRequestHash, claimToken = null) {
+    if (!transactionId || !canonicalRequestHash || claimToken === '') {
+        throw new Error('Complete engine transaction identity is required.');
+    }
+}
+
 // Export functions for Blazor interop
 window.IndexedDB = {
     moduleRevision: MODULE_REVISION,
@@ -1279,7 +1619,10 @@ window.IndexedDB = {
     saveTradePayrollDraftsBatch,
     loadTradePayrollDrafts,
     deleteTradePayrollDraft,
-    getTradeStoreDiagnostics
+    getTradeStoreDiagnostics,
+    claimEngineTransaction,
+    completeEngineTransaction,
+    releaseEngineTransaction
 };
 
 console.log(`[IndexedDB] Module loaded (revision ${MODULE_REVISION}, schema ${DB_VERSION})`);

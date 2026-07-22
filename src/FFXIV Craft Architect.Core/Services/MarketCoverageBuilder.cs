@@ -16,8 +16,10 @@ public static class MarketCoverageBuilder
         var candidates = new List<MarketCoverageOption>();
         candidates.AddRange(BuildSingleWorldCandidates(plan, MarketCoverageQualityPolicy.NqOrHq));
         candidates.AddRange(BuildSingleWorldCandidates(plan, MarketCoverageQualityPolicy.HqOnly));
-        candidates.AddRange(BuildSplitCandidates(plan, MarketCoverageQualityPolicy.NqOrHq));
-        candidates.AddRange(BuildSplitCandidates(plan, MarketCoverageQualityPolicy.HqOnly));
+        var nqOrHqListings = EnumerateMarketListings(plan, MarketCoverageQualityPolicy.NqOrHq);
+        var hqListings = EnumerateMarketListings(plan, MarketCoverageQualityPolicy.HqOnly);
+        candidates.AddRange(BuildSplitCandidates(plan, MarketCoverageQualityPolicy.NqOrHq, nqOrHqListings));
+        candidates.AddRange(BuildSplitCandidates(plan, MarketCoverageQualityPolicy.HqOnly, hqListings));
 
         var singleWorld = candidates
             .Where(candidate => candidate.Tier == MarketCoverageTier.SingleWorld)
@@ -77,12 +79,14 @@ public static class MarketCoverageBuilder
 
     private static IEnumerable<MarketCoverageOption> BuildSplitCandidates(
         DetailedShoppingPlan plan,
-        MarketCoverageQualityPolicy qualityPolicy)
+        MarketCoverageQualityPolicy qualityPolicy,
+        IReadOnlyList<MarketCoverageListing> orderedListings)
     {
         if (TryCoverAcrossWorlds(
                 plan,
                 qualityPolicy,
                 maxWorlds: DefaultCompactWorldCap,
+                orderedListings,
                 out var compactListings))
         {
             var compact = CreateOption(
@@ -101,6 +105,7 @@ public static class MarketCoverageBuilder
                 plan,
                 qualityPolicy,
                 maxWorlds: WideWorldCap,
+                orderedListings,
                 out var wideListings))
         {
             var wide = CreateOption(
@@ -119,6 +124,7 @@ public static class MarketCoverageBuilder
                 plan,
                 qualityPolicy,
                 maxWorlds: null,
+                orderedListings,
                 out var cheapestListings))
         {
             var cheapest = CreateOption(
@@ -142,11 +148,18 @@ public static class MarketCoverageBuilder
     {
         selectedListings = [];
         var remaining = quantityNeeded;
-
-        foreach (var listing in world.Listings
+        var eligibleListings = world.Listings
             .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
             .Where(listing => qualityPolicy != MarketCoverageQualityPolicy.HqOnly || listing.IsHq)
-            .OrderBy(listing => listing.PricePerUnit))
+            .ToList();
+        if (!IsPriceOrdered(eligibleListings))
+        {
+            eligibleListings = eligibleListings
+                .OrderBy(listing => listing.PricePerUnit)
+                .ToList();
+        }
+
+        foreach (var listing in eligibleListings)
         {
             var used = Math.Min(remaining, listing.Quantity);
             selectedListings.Add(new MarketCoverageListing(
@@ -172,13 +185,14 @@ public static class MarketCoverageBuilder
         DetailedShoppingPlan plan,
         MarketCoverageQualityPolicy qualityPolicy,
         int? maxWorlds,
+        IReadOnlyList<MarketCoverageListing> orderedListings,
         out List<MarketCoverageListing> selectedListings)
     {
         selectedListings = [];
         var remaining = plan.QuantityNeeded;
         var selectedWorlds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var listing in EnumerateMarketListings(plan, qualityPolicy))
+        foreach (var listing in orderedListings)
         {
             var worldKey = $"{listing.DataCenter}|{listing.WorldName}";
             if (!selectedWorlds.Contains(worldKey) &&
@@ -206,13 +220,13 @@ public static class MarketCoverageBuilder
         return false;
     }
 
-    private static IEnumerable<MarketCoverageListing> EnumerateMarketListings(
+    private static List<MarketCoverageListing> EnumerateMarketListings(
         DetailedShoppingPlan plan,
         MarketCoverageQualityPolicy qualityPolicy)
     {
-        return plan.WorldOptions
+        var sources = plan.WorldOptions
             .Where(IsMarketWorld)
-            .SelectMany(world => world.Listings
+            .Select(world => world.Listings
                 .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
                 .Where(listing => qualityPolicy != MarketCoverageQualityPolicy.HqOnly || listing.IsHq)
                 .Select(listing => new MarketCoverageListing(
@@ -222,11 +236,80 @@ public static class MarketCoverageBuilder
                     QuantityUsed: 0,
                     QuantityPurchased: 0,
                     listing.PricePerUnit,
-                    listing.IsHq)))
-            .OrderBy(listing => listing.PricePerUnit)
-            .ThenByDescending(listing => listing.QuantityAvailable)
-            .ThenBy(listing => listing.DataCenter)
-            .ThenBy(listing => listing.WorldName);
+                    listing.IsHq))
+                .ToList())
+            .Where(source => source.Count > 0)
+            .ToList();
+        for (var index = 0; index < sources.Count; index++)
+        {
+            if (!IsCoverageOrdered(sources[index]))
+            {
+                sources[index] = sources[index]
+                    .OrderBy(listing => listing.PricePerUnit)
+                    .ThenByDescending(listing => listing.QuantityAvailable)
+                    .ToList();
+            }
+        }
+
+        var queue = new PriorityQueue<CoverageCursor, CoveragePriority>(CoveragePriorityComparer.Instance);
+        for (var sourceIndex = 0; sourceIndex < sources.Count; sourceIndex++)
+        {
+            Enqueue(sourceIndex, listingIndex: 0);
+        }
+
+        var ordered = new List<MarketCoverageListing>(sources.Sum(source => source.Count));
+        while (queue.TryDequeue(out var cursor, out _))
+        {
+            ordered.Add(cursor.Listing);
+            Enqueue(cursor.SourceIndex, cursor.ListingIndex + 1);
+        }
+        return ordered;
+
+        void Enqueue(int sourceIndex, int listingIndex)
+        {
+            if (listingIndex >= sources[sourceIndex].Count)
+            {
+                return;
+            }
+            var listing = sources[sourceIndex][listingIndex];
+            queue.Enqueue(
+                new CoverageCursor(listing, sourceIndex, listingIndex),
+                new CoveragePriority(
+                    listing.PricePerUnit,
+                    listing.QuantityAvailable,
+                    listing.DataCenter,
+                    listing.WorldName,
+                    sourceIndex,
+                    listingIndex));
+        }
+    }
+
+    private static bool IsPriceOrdered(IReadOnlyList<ShoppingListingEntry> listings)
+    {
+        for (var index = 1; index < listings.Count; index++)
+        {
+            if (listings[index - 1].PricePerUnit > listings[index].PricePerUnit)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool IsCoverageOrdered(IReadOnlyList<MarketCoverageListing> listings)
+    {
+        for (var index = 1; index < listings.Count; index++)
+        {
+            var previous = listings[index - 1];
+            var current = listings[index];
+            if (previous.PricePerUnit > current.PricePerUnit ||
+                previous.PricePerUnit == current.PricePerUnit &&
+                previous.QuantityAvailable < current.QuantityAvailable)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static bool IsMeaningfulSplit(
@@ -315,5 +398,49 @@ public static class MarketCoverageBuilder
             world.WorldName,
             MarketShoppingConstants.VendorWorldName,
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    private readonly record struct CoverageCursor(
+        MarketCoverageListing Listing,
+        int SourceIndex,
+        int ListingIndex);
+
+    private readonly record struct CoveragePriority(
+        decimal PricePerUnit,
+        int QuantityAvailable,
+        string DataCenter,
+        string WorldName,
+        int SourceIndex,
+        int ListingIndex);
+
+    private sealed class CoveragePriorityComparer : IComparer<CoveragePriority>
+    {
+        public static CoveragePriorityComparer Instance { get; } = new();
+
+        public int Compare(CoveragePriority left, CoveragePriority right)
+        {
+            var comparison = left.PricePerUnit.CompareTo(right.PricePerUnit);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = right.QuantityAvailable.CompareTo(left.QuantityAvailable);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = Comparer<string>.Default.Compare(left.DataCenter, right.DataCenter);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = Comparer<string>.Default.Compare(left.WorldName, right.WorldName);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = left.SourceIndex.CompareTo(right.SourceIndex);
+            return comparison != 0 ? comparison : left.ListingIndex.CompareTo(right.ListingIndex);
+        }
     }
 }

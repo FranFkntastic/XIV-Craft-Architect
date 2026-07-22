@@ -32,6 +32,8 @@ public sealed class ProcurementRouteExecutionRequest
         = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
 
     public MarketEvidenceReconciliationPolicy ReconciliationPolicy { get; init; } = new();
+
+    public bool IncludeReconciliationEvidenceInResult { get; init; } = true;
 }
 
 public sealed record ProcurementRouteExecutionResult(
@@ -45,7 +47,13 @@ public sealed record ProcurementRouteExecutionResult(
     CraftingPlan? OptimizedPlan = null,
     IReadOnlyList<MaterialAggregate>? ActiveProcurementItems = null,
     IReadOnlyList<MarketItemAnalysis>? EvidenceAnalyses = null,
+    IReadOnlyList<ProcurementAcquisitionDecision>? AcquisitionDecisions = null,
     bool IsComplete = true);
+
+public sealed record ProcurementAcquisitionDecision(
+    string NodeId,
+    AcquisitionSource Source,
+    AcquisitionSourceReason SourceReason);
 
 public sealed record ProcurementRouteOptimizationResult(
     List<DetailedShoppingPlan> ShoppingPlans,
@@ -77,6 +85,8 @@ public sealed record MarketRouteDecision(
     public bool TravelSearchWasTruncated { get; init; }
 
     public int TravelRoutesEvaluated { get; init; }
+
+    public long AcquisitionCombinationEvaluations { get; init; }
 
     public long PremiumGil => Math.Max(0, SelectedGilCost - CheapestGilCost);
 

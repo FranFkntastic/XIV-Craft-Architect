@@ -70,7 +70,13 @@ public sealed record EngineRouteSemanticSnapshot(
     int SelectedWorldStops,
     int SelectedDataCenterTransfers,
     bool IsComplete,
-    EngineRouteDecisionSnapshot? Decision);
+    EngineRouteDecisionSnapshot? Decision,
+    string OptimizedPlanHash = "",
+    string ActiveProcurementItemsHash = "",
+    string EvidenceAnalysesHash = "",
+    string EvidencePlansHash = "",
+    string AcquisitionDecisionsHash = "",
+    string ShoppingPlansHash = "");
 
 public sealed record EngineRouteStopSnapshot(
     int Order,
@@ -113,6 +119,7 @@ public sealed record EngineRouteDecisionSnapshot(
     MarketTravelPriority TravelPriority,
     long FixedAcquisitionGilCost,
     bool AcquisitionSearchWasTruncated,
+    long AcquisitionCombinationEvaluations,
     bool RouteSearchWasTruncated,
     bool TravelSearchWasTruncated,
     int TravelRoutesEvaluated,
@@ -130,6 +137,7 @@ public sealed record EngineRouteFrontierOptionSnapshot(
 public sealed record EngineRouteItemDecisionSnapshot(
     int Order,
     int ItemId,
+    string ItemName,
     long CheapestEligibleGilCost,
     long SelectedGilCost);
 
@@ -140,7 +148,8 @@ public sealed record ReferenceEnginePreparedInput(
 
 public sealed record ReferenceEngineResultSnapshot(
     EngineAnalysisSemanticSnapshot? MarketAnalysis,
-    EngineRouteSemanticSnapshot? ProcurementRoute);
+    EngineRouteSemanticSnapshot? ProcurementRoute,
+    ProcurementRouteExecutionResult? ProcurementRouteResult = null);
 
 public interface IReferenceEngineSemanticSnapshotProvider
 {
@@ -165,5 +174,5 @@ public static class EngineSemanticSnapshotHash
         EngineCanonicalHash.Compute(new { Domain = "analysis-result-v1", Snapshot = snapshot });
 
     public static string Route(EngineRouteSemanticSnapshot snapshot) =>
-        EngineCanonicalHash.Compute(new { Domain = "route-result-v1", Snapshot = snapshot });
+        EngineCanonicalHash.Compute(new { Domain = "route-result-v3", Snapshot = snapshot });
 }

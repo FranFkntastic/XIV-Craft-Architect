@@ -2,12 +2,12 @@ const TIMEOUT_SPECS = {
   globalMs: ['CA_ORACLE_GLOBAL_TIMEOUT_MS', 30_000, 900_000],
   importMs: ['CA_ORACLE_IMPORT_TIMEOUT_MS', 5_000, 300_000],
   analysisMs: ['CA_ORACLE_ANALYSIS_TIMEOUT_MS', 5_000, 300_000],
-  routeReturnMs: ['CA_ORACLE_ROUTE_RETURN_TIMEOUT_MS', 2_000, 120_000],
+  routeReturnMs: ['CA_ORACLE_ROUTE_RETURN_TIMEOUT_MS', 2_000, 300_000],
   routeSettleMs: ['CA_ORACLE_ROUTE_SETTLE_TIMEOUT_MS', 1_000, 60_000],
   navigationMs: ['CA_ORACLE_NAVIGATION_TIMEOUT_MS', 2_000, 120_000],
   reloadMs: ['CA_ORACLE_RELOAD_TIMEOUT_MS', 5_000, 300_000],
-  stallMs: ['CA_ORACLE_STALL_TIMEOUT_MS', 2_000, 120_000],
-  operationMs: ['CA_ORACLE_BROWSER_OPERATION_TIMEOUT_MS', 1_000, 60_000],
+  stallMs: ['CA_ORACLE_STALL_TIMEOUT_MS', 2_000, 300_000],
+  operationMs: ['CA_ORACLE_BROWSER_OPERATION_TIMEOUT_MS', 1_000, 120_000],
   closeMs: ['CA_ORACLE_CLOSE_TIMEOUT_MS', 500, 30_000],
   heartbeatMs: ['CA_ORACLE_HEARTBEAT_MS', 250, 10_000],
   settledMs: ['CA_ORACLE_SETTLED_WINDOW_MS', 250, 10_000]
@@ -30,12 +30,13 @@ const SEEDED_DEFAULTS = {
 
 const LIVE_DEFAULTS = {
   ...SEEDED_DEFAULTS,
-  globalMs: 300_000,
-  importMs: 120_000,
-  analysisMs: 180_000,
+  globalMs: 600_000,
+  importMs: 300_000,
+  analysisMs: 300_000,
   routeReturnMs: 60_000,
   reloadMs: 120_000,
-  stallMs: 60_000
+  stallMs: 300_000,
+  operationMs: 120_000
 };
 
 export const REQUIRED_MARKERS = [

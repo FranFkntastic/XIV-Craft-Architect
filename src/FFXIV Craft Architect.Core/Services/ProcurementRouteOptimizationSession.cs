@@ -11,11 +11,44 @@ internal sealed class ProcurementRouteOptimizationSession
     private readonly Dictionary<PurchaseCandidateCacheKey, IReadOnlyList<MarketPurchaseCandidate>> _standaloneCandidates = [];
     private readonly Dictionary<AdjustedPlanCacheKey, DetailedShoppingPlan> _adjustedPlans = [];
 
+    public ProcurementRouteOptimizationSession(
+        MarketAnalysisExecutionOptions executionOptions,
+        CancellationToken cancellationToken)
+    {
+        CandidateWorkBudget = new MarketRouteCandidateWorkBudget(executionOptions, cancellationToken);
+    }
+
+    public MarketRouteCandidateWorkBudget CandidateWorkBudget { get; }
+
     public IReadOnlyList<MarketPurchaseCandidate> GetOrAddCandidates(
         DetailedShoppingPlan plan,
         Func<DetailedShoppingPlan, List<MarketPurchaseCandidate>> candidateFactory)
     {
-        var key = new PurchaseCandidateCacheKey(plan.ItemId, plan.QuantityNeeded, plan.HqQuantityNeeded);
+        var key = new PurchaseCandidateCacheKey(
+            plan.ItemId,
+            plan.QuantityNeeded,
+            plan.HqQuantityNeeded,
+            string.Empty);
+        if (_standaloneCandidates.TryGetValue(key, out var candidates))
+        {
+            return candidates;
+        }
+
+        candidates = candidateFactory(plan);
+        _standaloneCandidates.Add(key, candidates);
+        return candidates;
+    }
+
+    public IReadOnlyList<MarketPurchaseCandidate> GetOrAddRouteCandidates(
+        DetailedShoppingPlan plan,
+        MarketRouteState route,
+        Func<DetailedShoppingPlan, List<MarketPurchaseCandidate>> candidateFactory)
+    {
+        var key = new PurchaseCandidateCacheKey(
+            plan.ItemId,
+            plan.QuantityNeeded,
+            plan.HqQuantityNeeded,
+            route.CanonicalKey);
         if (_standaloneCandidates.TryGetValue(key, out var candidates))
         {
             return candidates;
@@ -51,7 +84,8 @@ internal sealed class ProcurementRouteOptimizationSession
     private readonly record struct PurchaseCandidateCacheKey(
         int ItemId,
         int QuantityNeeded,
-        int HqQuantityNeeded);
+        int HqQuantityNeeded,
+        string RouteKey);
 
     private readonly record struct AdjustedPlanCacheKey(
         int ItemId,

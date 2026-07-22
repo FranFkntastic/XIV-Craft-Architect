@@ -6,7 +6,7 @@ namespace FFXIV_Craft_Architect.Core.Engine;
 public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSemanticSnapshotProvider
 {
     private const string InputSchemaVersion = "1";
-    private const string OutputSchemaVersion = "3";
+    private const string OutputSchemaVersion = "9";
     private static readonly JsonSerializerOptions InputJsonOptions = EngineJsonSerializerOptions.CreateWire();
 
     public ReferenceEnginePreparedInput PrepareInput(EngineRequestEnvelope request)
@@ -97,7 +97,17 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
             result.RouteDecision?.SelectedWorldStops ?? stops.Length,
             result.RouteDecision?.SelectedDataCenterTransfers ?? 0,
             result.IsComplete,
-            CaptureRouteDecision(result.RouteDecision));
+            CaptureRouteDecision(result.RouteDecision),
+            EngineCanonicalHash.Compute(result.OptimizedPlan, InputJsonOptions),
+            EngineCanonicalHash.Compute(result.ActiveProcurementItems, InputJsonOptions),
+            EngineCanonicalHash.Compute(result.EvidenceAnalyses, InputJsonOptions),
+            EngineCanonicalHash.Compute(result.EvidencePlans, InputJsonOptions),
+            EngineCanonicalHash.Compute(
+                new { Domain = "route-acquisition-decisions-v2", Value = result.AcquisitionDecisions },
+                InputJsonOptions),
+            EngineCanonicalHash.Compute(
+                new { Domain = "route-shopping-plans-v2", Value = result.ShoppingPlans },
+                InputJsonOptions));
     }
 
     public ReferenceEngineResultSnapshot CaptureTransportedResult(JsonElement result)
@@ -190,6 +200,7 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                 decision.TravelPriority,
                 decision.FixedAcquisitionGilCost,
                 decision.AcquisitionSearchWasTruncated,
+                decision.AcquisitionCombinationEvaluations,
                 decision.RouteSearchWasTruncated,
                 decision.TravelSearchWasTruncated,
                 decision.TravelRoutesEvaluated,
@@ -206,6 +217,7 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                     .Select((item, order) => new EngineRouteItemDecisionSnapshot(
                         order,
                         item.ItemId,
+                        item.ItemName,
                         item.CheapestEligibleGilCost,
                         item.SelectedGilCost))
                     .ToArray());

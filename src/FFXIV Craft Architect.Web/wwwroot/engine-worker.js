@@ -1,4 +1,4 @@
-const protocolVersion = "2";
+const protocolVersion = "4";
 const computationResultKind = "computation-result";
 const runtimeProofChallenge = "craft-architect-engine-worker-v1";
 const workerInstanceId = crypto.randomUUID();
@@ -43,14 +43,19 @@ self.onmessage = async event => {
         return;
     }
 
-    if (message.kind === "acceptance-execute" && acceptanceMode) {
+    if (message.kind === "acceptance-request" && acceptanceMode) {
         const managedRuntime = await managedRuntimePromise;
         if (!managedRuntime.ready || message.generation !== workerGeneration) {
             return;
         }
-        const executeMessage = JSON.parse(
-            managedRuntime.host.GetAcceptanceExecuteMessageJson(message.generation));
-        dispatchManagedExecution(executeMessage, managedRuntime.host);
+        self.postMessage({
+            protocolVersion,
+            kind: "acceptance-request",
+            generation: message.generation,
+            executionId: null,
+            transactionId: null,
+            messageJson: managedRuntime.host.GetAcceptanceExecuteMessageJson(message.generation)
+        });
         return;
     }
 
@@ -65,6 +70,36 @@ self.onmessage = async event => {
             payload: { workerInstanceId }
         });
         managedRuntime.host.RunAcceptanceHang();
+        return;
+    }
+
+    if (message.kind === "managed-json") {
+        if (typeof message.messageJson !== "string" || message.messageJson.length === 0 ||
+            message.generation !== workerGeneration ||
+            (message.messageKind !== "execute" && message.messageKind !== "cancel")) {
+            return;
+        }
+        let identity;
+        try {
+            identity = JSON.parse(message.messageJson);
+        } catch (error) {
+            postProtocolError(message, "managed-json-invalid", String(error));
+            return;
+        }
+        const managedRuntime = await managedRuntimePromise;
+        if (!managedRuntime.ready) {
+            postProtocolError(identity, "dotnet-host-not-loaded", "The managed engine Worker failed to start.");
+            return;
+        }
+        if (message.messageKind === "execute") {
+            dispatchManagedExecutionJson(message.messageJson, identity, managedRuntime.host);
+            return;
+        }
+        try {
+            managedRuntime.host.CancelMessageJson(message.messageJson);
+        } catch (error) {
+            postProtocolError(identity, "managed-cancel-rejected", String(error));
+        }
         return;
     }
 
@@ -106,7 +141,11 @@ async function initializeManagedRuntime() {
             .create();
         runtime.setModuleImports("engine-worker", {
             postMessage(messageJson) {
-                self.postMessage(JSON.parse(messageJson));
+                self.postMessage({
+                    kind: "managed-json",
+                    messageJson,
+                    messageKind: JSON.parse(messageJson).kind
+                });
             }
         });
         const config = runtime.getConfig();
@@ -132,6 +171,16 @@ function dispatchManagedExecution(message, host) {
     host.ExecuteMessageJson(JSON.stringify(message))
         .then(resultJson => self.postMessage(JSON.parse(resultJson)))
         .catch(error => postProtocolError(message, "managed-execution-rejected", String(error)));
+}
+
+function dispatchManagedExecutionJson(messageJson, identity, host) {
+    host.ExecuteMessageJson(messageJson)
+        .then(resultJson => self.postMessage({
+            kind: "managed-json",
+            messageJson: resultJson,
+            messageKind: computationResultKind
+        }))
+        .catch(error => postProtocolError(identity, "managed-execution-rejected", String(error)));
 }
 
 function postProtocolError(message, code, errorMessage) {

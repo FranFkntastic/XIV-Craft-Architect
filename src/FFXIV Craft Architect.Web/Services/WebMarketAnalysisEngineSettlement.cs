@@ -152,9 +152,7 @@ public sealed class WebEngineTransactionContextRegistry
                     ShoppingPlans = publication.ShoppingPlans
                 }
             };
-            var requestHash = EngineCanonicalHash.Compute(
-                snapshot.EngineRequest,
-                EngineJsonSerializerOptions.CreateWire());
+            var requestHash = EngineCanonicalHash.ComputeRequestIdentity(snapshot.EngineRequest);
             var transaction = new RegisteredTransaction(snapshot, requestHash);
             lock (_sync)
             {

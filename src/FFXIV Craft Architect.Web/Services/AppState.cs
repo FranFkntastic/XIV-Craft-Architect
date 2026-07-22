@@ -74,6 +74,8 @@ public partial class AppState
     private long? _currentOperationId;
     private long _lastPersistedPlanCoreVersion = -1;
     private long _lastPersistedMarketAnalysisVersion = -1;
+    private long _lastPersistedProcurementOverlayVersion = -1;
+    private bool _procurementRouteClearPending;
     private readonly SemaphoreSlim _autoSaveSemaphore = new(1, 1);
     private int _changeBatchDepth;
     private AppStateChangeScope _batchedScopes = AppStateChangeScope.None;
@@ -149,6 +151,8 @@ public partial class AppState
         !string.IsNullOrWhiteSpace(ProcurementRouteFailure);
     public string? ProcurementRouteStaleReason { get; private set; }
     public string? ProcurementRouteFailure { get; private set; }
+    public string? ProcurementRouteRestoreDiagnostic { get; private set; }
+    public string? ProcurementRouteRestoreDiagnosticDetails { get; private set; }
     public IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems { get; private set; } = Array.Empty<CoreMarketDataUnavailableItem>();
     public RecommendationMode RecommendationMode { get; private set; } = RecommendationMode.MinimizeTotalCost;
     public MarketAcquisitionLens MarketAnalysisLens { get; private set; } = MarketAcquisitionLens.MinimumUpfrontCost;
@@ -416,7 +420,8 @@ public enum PersistedStateBucket
     None = 0,
     PlanCore = 1 << 0,
     MarketAnalysis = 1 << 1,
-    All = PlanCore | MarketAnalysis
+    ProcurementRoute = 1 << 2,
+    All = PlanCore | MarketAnalysis | ProcurementRoute
 }
 
 public sealed record AppStateVersionSnapshot(

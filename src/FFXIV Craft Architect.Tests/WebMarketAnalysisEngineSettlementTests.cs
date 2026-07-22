@@ -539,6 +539,21 @@ public sealed class WebMarketAnalysisEngineSettlementTests
     }
 
     [Fact]
+    public async Task PersistenceSnapshot_AsyncAutoSaveSerializationMatchesSynchronousWireFormat()
+    {
+        var fixture = new SettlementFixture();
+        var snapshot = fixture.Registration.PersistenceSnapshot;
+
+        var synchronous = snapshot.ToAutoSavePlan();
+        var asynchronous = await snapshot.ToAutoSavePlanAsync(CancellationToken.None);
+
+        Assert.Equal(synchronous.PlanJson, asynchronous.PlanJson);
+        Assert.Equal(synchronous.MarketIntelligenceJson, asynchronous.MarketIntelligenceJson);
+        Assert.Equal(synchronous.MarketAnalysisRecipeBasisJson, asynchronous.MarketAnalysisRecipeBasisJson);
+        Assert.Equal(synchronous.MarketAnalysisScopeSnapshotJson, asynchronous.MarketAnalysisScopeSnapshotJson);
+    }
+
+    [Fact]
     public async Task Settlement_RejectsUnversionedMutationAfterExecutionRegistration()
     {
         var fixture = new SettlementFixture();
@@ -1041,7 +1056,7 @@ public sealed class WebMarketAnalysisEngineSettlementTests
                 RootIntentHash = rootIntentHash,
                 ExpandedGraphHash = EngineSemanticSnapshotHash.ExpandedGraph(preparedInput.ExpandedGraph)
             };
-            _requestHash = EngineCanonicalHash.Compute(_request, EngineJsonSerializerOptions.CreateWire());
+            _requestHash = EngineCanonicalHash.ComputeRequestIdentity(_request);
             var result = JsonSerializer.SerializeToElement(
                 new ReferenceEngineResultSnapshot(semanticSnapshot, null),
                 EngineJsonSerializerOptions.CreateWire());

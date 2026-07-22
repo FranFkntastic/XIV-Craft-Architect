@@ -167,13 +167,32 @@ public sealed class MarketEvidenceReconciliationRequest
     public DateTime? EvaluatedAtUtc { get; init; }
 }
 
-public sealed record MarketEvidenceReconciliationResult(
-    IReadOnlyList<MarketItemAnalysis> Analyses,
-    IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
-    IReadOnlyList<MarketEvidenceReconciliationItemResult> Items,
-    IReadOnlyList<MaterialAggregate> ReconciledItems,
-    int FetchedCount)
+public sealed record MarketEvidenceReconciliationResult
 {
+    public MarketEvidenceReconciliationResult(
+        IReadOnlyList<MarketItemAnalysis> analyses,
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
+        IReadOnlyList<MarketEvidenceReconciliationItemResult> items,
+        IReadOnlyList<MaterialAggregate> reconciledItems,
+        int fetchedCount)
+    {
+        Analyses = analyses;
+        ShoppingPlans = shoppingPlans;
+        Items = items;
+        ReconciledItems = reconciledItems;
+        FetchedCount = fetchedCount;
+    }
+
+    public IReadOnlyList<MarketItemAnalysis> Analyses { get; }
+
+    public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; }
+
+    public IReadOnlyList<MarketEvidenceReconciliationItemResult> Items { get; }
+
+    public IReadOnlyList<MaterialAggregate> ReconciledItems { get; }
+
+    public int FetchedCount { get; internal set; }
+
     public IReadOnlySet<int> ReusedItemIds => Items
         .Where(item => item.Disposition == MarketEvidenceReconciliationDisposition.ReusedPublished)
         .Select(item => item.ItemId)

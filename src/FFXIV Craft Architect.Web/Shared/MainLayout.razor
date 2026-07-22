@@ -41,6 +41,8 @@
          data-plan-session-version="@AppState.PlanSessionVersion"
          data-plan-root-count="@(AppState.CurrentPlan?.RootItems.Count ?? 0)"
          data-plan-node-count="@CountPlanNodes(AppState.CurrentPlan)"
+         data-plan-edge-count="@CountPlanEdges(AppState.CurrentPlan)"
+         data-market-candidate-count="@CountMarketCandidates(AppState.CurrentPlan)"
          data-plan-leaf-item-ids="@string.Join(",", GetPlanLeafItemIds(AppState.CurrentPlan))"
          data-market-analysis-count="@AppState.MarketItemAnalyses.Count"
          data-market-intelligence-id="@AppState.MarketIntelligenceId"
@@ -50,6 +52,8 @@
          data-route-validity="@AppState.ProcurementRouteValidity"
          data-route-has-decision="@BoolText(AppState.ProcurementRouteDecision is not null)"
          data-route-failure="@AppState.ProcurementRouteFailure"
+         data-route-restore-diagnostic="@AppState.ProcurementRouteRestoreDiagnostic"
+         data-route-restore-diagnostic-details="@AppState.ProcurementRouteRestoreDiagnosticDetails"
          data-route-basis-plan-session-version="@routeBasis?.PlanSessionVersion"
          data-route-basis-market-intelligence-id="@routeBasis?.MarketIntelligenceId"
          data-route-reconciling="@BoolText(AppState.IsProcurementRouteReconciling)"
@@ -57,6 +61,7 @@
          data-is-busy="@BoolText(AppState.IsBusy)"
          data-progress-percent="@AppState.ProgressPercent"
          data-current-operation="@AppState.CurrentOperation"
+         data-status-message="@AppState.StatusMessage"
          data-active-workflows="@string.Join(",", CancellableOperations.ActiveWorkflows)"
          data-dirty-persisted-buckets="@AppState.GetDirtyPersistedBuckets()"
          data-last-autosave="@AppState.LastAutoSave?.ToString("O")"
@@ -375,7 +380,7 @@
     
     private async Task AutoSaveCallback()
     {
-        if (!AppState.IsAutoSaveEnabled)
+        if (!AppState.IsAutoSaveEnabled || AppState.IsBusy || CancellableOperations.ActiveWorkflows.Count > 0)
             return;
             
         try
@@ -927,6 +932,12 @@
 
     private static int CountPlanNodes(PlanNode node) =>
         1 + node.Children.Sum(CountPlanNodes);
+
+    private static int CountPlanEdges(CraftingPlan? plan) =>
+        Math.Max(0, CountPlanNodes(plan) - (plan?.RootItems.Count ?? 0));
+
+    private static int CountMarketCandidates(CraftingPlan? plan) =>
+        plan is null ? 0 : AcquisitionPlanningService.GetMarketAnalysisCandidates(plan).Count;
 
     private static IEnumerable<int> GetPlanLeafItemIds(CraftingPlan? plan) =>
         plan is null

@@ -357,8 +357,7 @@
             var result = await MarketAnalysisWorkflow.RunAnalysisAsync(
                 new MarketAnalysisWorkflowRequest(forceRefreshData),
                 progress,
-                operation.Token,
-                executionOptions: MarketAnalysisExecutionOptions.Interactive);
+                operation.Token);
             if (!operation.IsCurrent)
             {
                 return false;

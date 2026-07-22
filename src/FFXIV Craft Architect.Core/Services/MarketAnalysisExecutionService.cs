@@ -34,6 +34,8 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
         }
 
         var items = request.Items.ToList();
+        var execution = executionOptions ?? MarketAnalysisExecutionOptions.Synchronous;
+        var evidenceLoadStartedAtUtc = DateTime.UtcNow - TimeSpan.FromSeconds(1);
         var fetchStopwatch = Stopwatch.StartNew();
         var evidence = await MarketEvidenceLoader.LoadAsync(
             _marketCache,
@@ -46,6 +48,10 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
             progress,
             ct);
         fetchStopwatch.Stop();
+        var fetchedItemIds = evidence.Entries
+            .Where(entry => CacheTimeHelper.NormalizeToUtc(entry.Value.FetchedAt) >= evidenceLoadStartedAtUtc)
+            .Select(entry => entry.Key.itemId)
+            .ToHashSet();
 
         progress?.Report($"[stage] evidence loaded ({items.Count} items), ladder analysis starting...");
         var ladderAnalysisStopwatch = Stopwatch.StartNew();
@@ -60,27 +66,56 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
             },
             progress,
             ct,
-            executionOptions);
+            execution);
         ladderAnalysisStopwatch.Stop();
-
-        progress?.Report($"[stage] ladder analysis complete ({analyses.Count} analyses), projecting recommendations...");
-        progress?.Report($"Projecting market recommendations for {analyses.Count} items...");
-        var shoppingPlanProjectionStopwatch = Stopwatch.StartNew();
-        var shoppingPlans = analyses
-            .Select(analysis => _marketPriceLadderAnalysisService.ProjectToShoppingPlan(
-                analysis,
-                request.Lens,
-                request.AnalysisConfig))
-            .ToList();
-        shoppingPlanProjectionStopwatch.Stop();
-
-        return new MarketAnalysisExecutionResult(
+        var analysesByItemId = analyses.ToDictionary(analysis => analysis.ItemId);
+        var shoppingPlans = new List<DetailedShoppingPlan>(analyses.Count);
+        var shoppingPlansByItemId = new Dictionary<int, DetailedShoppingPlan>(analyses.Count);
+        var result = new MarketAnalysisExecutionResult(
             evidence,
             analyses,
             shoppingPlans,
             new MarketAnalysisExecutionTimings(
                 fetchStopwatch.Elapsed,
                 ladderAnalysisStopwatch.Elapsed,
-                shoppingPlanProjectionStopwatch.Elapsed));
+                TimeSpan.Zero),
+            fetchedItemIds,
+            analysesByItemId,
+            shoppingPlansByItemId);
+
+        progress?.Report($"[stage] ladder analysis complete ({analyses.Count} analyses), projecting recommendations...");
+        progress?.Report($"Projecting market recommendations for {analyses.Count} items...");
+        var shoppingPlanProjectionStopwatch = Stopwatch.StartNew();
+        for (var analysisIndex = 0; analysisIndex < analyses.Count; analysisIndex++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var completedItems = analysisIndex + 1;
+            if (execution.ShouldReportProgress(completedItems))
+            {
+                progress?.Report($"Projecting market recommendations {completedItems}/{analyses.Count}: {analyses[analysisIndex].Name}...");
+            }
+
+            var shoppingPlan = await _marketPriceLadderAnalysisService.ProjectToShoppingPlanAsync(
+                analyses[analysisIndex],
+                request.Lens,
+                request.AnalysisConfig,
+                execution,
+                progress,
+                ct);
+            shoppingPlans.Add(shoppingPlan);
+            shoppingPlansByItemId.Add(shoppingPlan.ItemId, shoppingPlan);
+            if (execution.ShouldYieldAfterItem(completedItems))
+            {
+                await Task.Delay(1, ct);
+            }
+        }
+        shoppingPlanProjectionStopwatch.Stop();
+        progress?.Report($"[stage] recommendation projection complete ({shoppingPlans.Count} plans).");
+
+        result.Timings = new MarketAnalysisExecutionTimings(
+            fetchStopwatch.Elapsed,
+            ladderAnalysisStopwatch.Elapsed,
+            shoppingPlanProjectionStopwatch.Elapsed);
+        return result;
     }
 }

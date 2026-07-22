@@ -130,6 +130,21 @@ public sealed class MarketEvidenceReconciliationServiceTests
     }
 
     [Fact]
+    public async Task ReconcileAsync_RegionalEvidence_SatisfiesSelectedDataCenterScope()
+    {
+        var execution = new Mock<IMarketAnalysisExecutionService>(MockBehavior.Strict);
+        var service = new MarketEvidenceReconciliationService(execution.Object);
+        var analysis = PublishedAnalysis(NowUtc - TimeSpan.FromMinutes(5))
+            .WithScope(MarketFetchScope.EntireRegion);
+
+        var result = await service.ReconcileAsync(Request(analysis, PublishedPlan()));
+
+        var item = Assert.Single(result.Items);
+        Assert.Equal(MarketEvidenceReconciliationDisposition.ReusedPublished, item.Disposition);
+        Assert.Empty(result.ReconciledItems);
+    }
+
+    [Fact]
     public async Task ReconcileAsync_RecentNegativeEvidence_IsReusableUntilCacheWindowExpires()
     {
         var execution = new Mock<IMarketAnalysisExecutionService>(MockBehavior.Strict);

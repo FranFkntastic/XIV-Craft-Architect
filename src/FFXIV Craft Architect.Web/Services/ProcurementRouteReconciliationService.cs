@@ -108,6 +108,7 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
 
     private async Task RunRepairAsync(int generation, CancellationTokenSource cancellation)
     {
+        var mayReportFailure = false;
         try
         {
             await Task.Delay(_debounce, cancellation.Token);
@@ -147,8 +148,15 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
             }
             catch
             {
+                mayReportFailure = operation.IsCurrent;
                 operation.Cancel();
                 throw;
+            }
+
+            if (!operation.IsCurrent)
+            {
+                operation.Cancel();
+                return;
             }
 
             if (result.Status == ProcurementWorkflowStatus.Published)
@@ -166,6 +174,14 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
                 return;
             }
 
+            if (result.Status == ProcurementWorkflowStatus.Failed)
+            {
+                _appState.MarkProcurementRouteFailed(
+                    result.Message ?? "CA could not update the procurement route automatically.");
+                operation.Complete(result.Message ?? "Procurement route update failed.");
+                return;
+            }
+
             operation.Cancel();
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -174,8 +190,11 @@ public sealed class ProcurementRouteReconciliationService : IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Automatic procurement route reconciliation failed");
-            _appState.MarkProcurementRouteFailed(
-                "CA could not update the procurement route automatically. Open Procurement Plan to retry.");
+            if (mayReportFailure && generation == _generation)
+            {
+                _appState.MarkProcurementRouteFailed(
+                    "CA could not update the procurement route automatically. Open Procurement Plan to retry.");
+            }
         }
         finally
         {

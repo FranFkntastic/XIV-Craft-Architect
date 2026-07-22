@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Engine;
@@ -38,6 +39,11 @@ public sealed record EngineWorkerMessage(
     Guid? TransactionId,
     JsonElement? Payload);
 
+public sealed record EngineWorkerExecutionRequest(
+    long HostGeneration,
+    Guid HostExecutionId,
+    EngineRequestEnvelope Request);
+
 public sealed record EngineWorkerQuarantineEvidence(
     Guid QuarantineId,
     long Generation,
@@ -73,9 +79,15 @@ public interface IEngineWorkerTransport : IAsyncDisposable
     Task TerminateAsync(CancellationToken cancellationToken);
 }
 
+public sealed record EngineWorkerResultTiming(
+    long AuthorityScanMilliseconds,
+    long DeserializationMilliseconds,
+    long ValidationMilliseconds,
+    long TotalMilliseconds);
+
 public sealed class EngineWorkerClient : IAsyncDisposable
 {
-    public const string ProtocolVersion = "2";
+    public const string ProtocolVersion = "4";
     public const string ComputationResultMessageKind = "computation-result";
     public const string ManagedRuntimeAssembly = "FFXIV_Craft_Architect.Web";
     private static readonly JsonSerializerOptions WireJsonOptions = EngineJsonSerializerOptions.CreateWire();
@@ -129,6 +141,8 @@ public sealed class EngineWorkerClient : IAsyncDisposable
     private bool _disposeRequested;
     private bool _workerMayBeAlive;
     private long _generation;
+
+    public EngineWorkerResultTiming? LastResultTiming { get; private set; }
 
     public EngineWorkerClient(
         IEngineWorkerTransport transport,
@@ -254,7 +268,44 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         EngineRequestEnvelope request,
         CancellationToken cancellationToken = default)
     {
+        long generation;
+        lock (_sync)
+        {
+            generation = _generation;
+        }
+        return await ExecuteAsync(generation, Guid.NewGuid(), request, cancellationToken);
+    }
+
+    public Task<EngineComputationResult> ExecuteAsync(
+        long hostGeneration,
+        Guid hostExecutionId,
+        EngineRequestEnvelope request,
+        CancellationToken cancellationToken = default) =>
+        ExecuteCoreAsync(hostGeneration, hostExecutionId, request, validateComputation: true, cancellationToken);
+
+    internal Task<EngineComputationResult> ExecuteForHostAsync(
+        long hostGeneration,
+        Guid hostExecutionId,
+        EngineRequestEnvelope request,
+        CancellationToken cancellationToken = default) =>
+        ExecuteCoreAsync(hostGeneration, hostExecutionId, request, validateComputation: false, cancellationToken);
+
+    private async Task<EngineComputationResult> ExecuteCoreAsync(
+        long hostGeneration,
+        Guid hostExecutionId,
+        EngineRequestEnvelope request,
+        bool validateComputation,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(request);
+        if (hostGeneration <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(hostGeneration));
+        }
+        if (hostExecutionId == Guid.Empty)
+        {
+            throw new ArgumentException("A host execution identity is required.", nameof(hostExecutionId));
+        }
         TaskCompletionSource<EngineComputationResult> completion;
         WorkerExecutionIdentity execution;
         lock (_sync)
@@ -266,7 +317,12 @@ public sealed class EngineWorkerClient : IAsyncDisposable
                 throw new NotSupportedException("The browser worker does not host the .NET engine.");
             }
             _request = request;
-            execution = new WorkerExecutionIdentity(_generation, Guid.NewGuid(), request.TransactionId);
+            execution = new WorkerExecutionIdentity(
+                _generation,
+                hostGeneration,
+                hostExecutionId,
+                request.TransactionId,
+                validateComputation);
             _execution = execution;
             _lastProgress = null;
             completion = new TaskCompletionSource<EngineComputationResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -283,10 +339,15 @@ public sealed class EngineWorkerClient : IAsyncDisposable
                     new EngineWorkerMessage(
                         ProtocolVersion,
                         "execute",
-                        execution.Generation,
+                        execution.WorkerGeneration,
                         execution.ExecutionId,
                         execution.TransactionId,
-                        JsonSerializer.SerializeToElement(request, WireJsonOptions)),
+                        JsonSerializer.SerializeToElement(
+                            new EngineWorkerExecutionRequest(
+                                execution.HostGeneration,
+                                execution.ExecutionId,
+                                request),
+                            WireJsonOptions)),
                     token),
                 cancellationToken,
                 "worker execution dispatch");
@@ -1003,13 +1064,13 @@ public sealed class EngineWorkerClient : IAsyncDisposable
                 new EngineWorkerMessage(
                     ProtocolVersion,
                     "cancel",
-                    cancellation.Execution.Generation,
+                        cancellation.Execution.WorkerGeneration,
                     cancellation.Execution.ExecutionId,
                     cancellation.Execution.TransactionId,
                     JsonSerializer.SerializeToElement(
                         new EngineCancelRequest(
                             cancellation.ContractVersion,
-                            cancellation.Execution.Generation,
+                            cancellation.Execution.HostGeneration,
                             cancellation.Execution.ExecutionId,
                             cancellation.Execution.TransactionId,
                             cancellation.Reason),
@@ -1035,7 +1096,7 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         lock (_sync)
         {
             if (_request is null || _execution is not { } current ||
-                message.Generation != current.Generation ||
+                message.Generation != current.WorkerGeneration ||
                 message.ExecutionId != current.ExecutionId ||
                 message.TransactionId != current.TransactionId ||
                 _state is not (EngineWorkerLifecycleState.Running or EngineWorkerLifecycleState.Cancelling))
@@ -1096,15 +1157,31 @@ public sealed class EngineWorkerClient : IAsyncDisposable
                 throw new InvalidOperationException("Worker computation-result payload is missing.");
             }
 
+            var resultElapsed = Stopwatch.StartNew();
+            var authorityElapsed = Stopwatch.StartNew();
             RejectSettlementAuthority(resultPayload);
+            authorityElapsed.Stop();
+            var deserializationElapsed = Stopwatch.StartNew();
             var computation = resultPayload.Deserialize<EngineComputationResult>(WireJsonOptions)
                 ?? throw new InvalidOperationException("Worker computation-result payload is empty.");
-            computation = EngineComputationResultValidation.Validate(
-                execution.Generation,
-                execution.ExecutionId,
-                request,
-                computation,
-                SemanticSnapshots);
+            deserializationElapsed.Stop();
+            var validationElapsed = Stopwatch.StartNew();
+            if (execution.ValidateComputation)
+            {
+                computation = EngineComputationResultValidation.Validate(
+                    execution.HostGeneration,
+                    execution.ExecutionId,
+                    request,
+                    computation,
+                    SemanticSnapshots);
+            }
+            validationElapsed.Stop();
+            resultElapsed.Stop();
+            LastResultTiming = new EngineWorkerResultTiming(
+                authorityElapsed.ElapsedMilliseconds,
+                deserializationElapsed.ElapsedMilliseconds,
+                validationElapsed.ElapsedMilliseconds,
+                resultElapsed.ElapsedMilliseconds);
 
             lock (_sync)
             {
@@ -1187,7 +1264,7 @@ public sealed class EngineWorkerClient : IAsyncDisposable
         EngineProgress? previous)
     {
         if (progress.TransactionId != execution.TransactionId ||
-            progress.Generation != execution.Generation ||
+            progress.Generation != execution.HostGeneration ||
             progress.ExecutionId != execution.ExecutionId)
         {
             throw new InvalidOperationException("Worker progress identity does not match its active execution.");
@@ -1537,5 +1614,10 @@ public sealed class EngineWorkerClient : IAsyncDisposable
             Failures.ToArray());
     }
 
-    private readonly record struct WorkerExecutionIdentity(long Generation, Guid ExecutionId, Guid TransactionId);
+    private readonly record struct WorkerExecutionIdentity(
+        long WorkerGeneration,
+        long HostGeneration,
+        Guid ExecutionId,
+        Guid TransactionId,
+        bool ValidateComputation);
 }

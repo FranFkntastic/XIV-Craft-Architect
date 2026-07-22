@@ -47,11 +47,14 @@ public class MarketAnalysisExecutionServiceTests
             .Callback<MarketAnalysisRequest, IProgress<string>?, CancellationToken, MarketAnalysisExecutionOptions?>(
                 (request, _, _, _) => capturedAnalysisRequest = request)
             .ReturnsAsync([analysis]);
-        ladder.Setup(l => l.ProjectToShoppingPlan(
+        ladder.Setup(l => l.ProjectToShoppingPlanAsync(
                 analysis,
                 MarketAcquisitionLens.BulkValue,
-                It.IsAny<MarketAnalysisConfig?>()))
-            .Returns(projectedPlan);
+                It.IsAny<MarketAnalysisConfig?>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(projectedPlan);
         var service = new MarketAnalysisExecutionService(cache.Object, ladder.Object);
 
         var result = await service.ExecuteAsync(
@@ -229,13 +232,16 @@ public class MarketAnalysisExecutionServiceTests
                 It.IsAny<CancellationToken>(),
                 It.IsAny<MarketAnalysisExecutionOptions?>()))
             .ReturnsAsync([analysis]);
-        ladder.Setup(l => l.ProjectToShoppingPlan(
+        ladder.Setup(l => l.ProjectToShoppingPlanAsync(
                 It.Is<MarketItemAnalysis>(item => item.ItemId == 123),
                 MarketAcquisitionLens.BulkValue,
-                It.IsAny<MarketAnalysisConfig?>()))
-            .Callback<MarketItemAnalysis, MarketAcquisitionLens, MarketAnalysisConfig?>(
-                (item, _, _) => projectedAnalysis = item)
-            .Returns(new DetailedShoppingPlan
+                It.IsAny<MarketAnalysisConfig?>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<MarketItemAnalysis, MarketAcquisitionLens, MarketAnalysisConfig?, MarketAnalysisExecutionOptions?, IProgress<string>?, CancellationToken>(
+                (item, _, _, _, _, _) => projectedAnalysis = item)
+            .ReturnsAsync(new DetailedShoppingPlan
             {
                 ItemId = 123
             });

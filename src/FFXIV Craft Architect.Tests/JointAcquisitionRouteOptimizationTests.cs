@@ -172,6 +172,35 @@ public sealed class JointAcquisitionRouteOptimizationTests
     }
 
     [Fact]
+    public async Task DuplicateNodeIdsRouteTheDemandRealizedByAppliedDecisions()
+    {
+        var requiredCraft = CraftOnly(100, "Finished", Leaf(201, "Ingredient", quantity: 10));
+        requiredCraft.NodeId = "duplicate-root";
+        requiredCraft.SourceReason = AcquisitionSourceReason.UserSelected;
+        var automatic = CraftOnly(100, "Finished", Leaf(201, "Ingredient"));
+        automatic.NodeId = "duplicate-root";
+        automatic.SourceReason = AcquisitionSourceReason.SystemDefault;
+        automatic.CanBuyFromMarket = true;
+        var plan = new CraftingPlan { RootItems = [requiredCraft, automatic] };
+
+        var result = await CreateService().OptimizeAsync(
+            plan,
+            [
+                Evidence(100, "Finished", 1, ("Aether", "Siren", 1L)),
+                Evidence(201, "Ingredient", 11, ("Aether", "Faerie", 10L))
+            ],
+            Config(11),
+            includeSplitPurchases: true,
+            MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.All(result.OptimizedPlan.RootItems, root => Assert.Equal(AcquisitionSource.Craft, root.Source));
+        var routed = Assert.Single(result.ShoppingPlans);
+        Assert.Equal(201, routed.ItemId);
+        Assert.Equal(11, routed.QuantityNeeded);
+        Assert.Equal(11, Assert.Single(result.ActiveProcurementItems).TotalQuantity);
+    }
+
+    [Fact]
     public async Task MixedQualityDemandBuysOnlyTheRequiredHqQuantityAcrossWorlds()
     {
         var nq = new PlanNode
@@ -255,6 +284,49 @@ public sealed class JointAcquisitionRouteOptimizationTests
 
         Assert.Equal(0, result.FeasiblePlanCount);
         Assert.Null(result.RouteDecision);
+    }
+
+    [Fact]
+    public async Task TruncatedNoSolutionPreservesAcquisitionWorkEvidence()
+    {
+        var roots = Enumerable.Range(0, 15).Select(index =>
+        {
+            var child = Leaf(2_000 + index, $"Ingredient {index}");
+            var root = new PlanNode
+            {
+                NodeId = $"root-{index:D2}",
+                ItemId = 1_000 + index,
+                Name = $"Finished {index}",
+                Quantity = 1,
+                Source = AcquisitionSource.Craft,
+                SourceReason = AcquisitionSourceReason.SystemDefault,
+                CanCraft = true,
+                CanBuyFromMarket = true,
+                Children = [child]
+            };
+            child.Parent = root;
+            child.ParentNodeId = root.NodeId;
+            return root;
+        }).ToList();
+
+        var result = await CreateService().OptimizeAsync(
+            new CraftingPlan { RootItems = roots },
+            [],
+            Config(11),
+            includeSplitPurchases: true,
+            MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.Equal(0, result.FeasiblePlanCount);
+        Assert.Null(result.RouteDecision);
+        Assert.True(result.SearchWasTruncated);
+        Assert.InRange(
+            result.FrontierPlanCount,
+            1,
+            AcquisitionVariantFrontierBuilder.MaxRetainedFrontierPlans + 1);
+        Assert.InRange(
+            result.AcquisitionCombinationEvaluations,
+            1,
+            30L * AcquisitionVariantFrontierBuilder.MaxCombinationEvaluationsPerMerge);
     }
 
     [Theory]
@@ -487,9 +559,19 @@ public sealed class JointAcquisitionRouteOptimizationTests
             includeSplitPurchases: true,
             MarketAnalysisExecutionOptions.Synchronous);
 
-        Assert.InRange(first.FrontierPlanCount, 1, 4_097);
+        Assert.InRange(
+            first.FrontierPlanCount,
+            1,
+            AcquisitionVariantFrontierBuilder.MaxRetainedFrontierPlans + 1);
         Assert.True(first.SearchWasTruncated);
         Assert.True(first.RouteDecision?.AcquisitionSearchWasTruncated);
+        Assert.InRange(
+            first.AcquisitionCombinationEvaluations,
+            1,
+            28L * AcquisitionVariantFrontierBuilder.MaxCombinationEvaluationsPerMerge);
+        Assert.Equal(
+            first.AcquisitionCombinationEvaluations,
+            first.RouteDecision?.AcquisitionCombinationEvaluations);
         Assert.Equal(first.RouteDecision?.SelectedGilCost, second.RouteDecision?.SelectedGilCost);
         Assert.Equal(first.OptimizedPlan.RootItems.Select(root => root.Source),
             second.OptimizedPlan.RootItems.Select(root => root.Source));

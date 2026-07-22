@@ -17,10 +17,13 @@ public class ProcurementWorkflowServiceTests
         appState.ReplaceMarketAnalysis([], [ShoppingPlan(101)]);
         appState.ReplaceProcurementOverlay([ShoppingPlan(101, "Siren")]);
         var execution = new Mock<IProcurementRouteExecutionService>(MockBehavior.Strict);
+        var engineWorkflow = new Mock<IExperimentalProcurementEngineWorkflow>(MockBehavior.Strict);
         var service = CreateService(
             appState,
             procurementExecution: execution.Object,
-            routeGenerationEnabled: false);
+            routeGenerationEnabled: false,
+            engineExecutionEnabled: true,
+            engineWorkflow: engineWorkflow.Object);
         var before = appState.CurrentVersions;
 
         var result = await service.RunAnalysisAsync(
@@ -31,6 +34,7 @@ public class ProcurementWorkflowServiceTests
         Assert.Equal(before, appState.CurrentVersions);
         Assert.Equal("Siren", Assert.Single(appState.ProcurementShoppingPlans).RecommendedWorld?.WorldName);
         execution.VerifyNoOtherCalls();
+        engineWorkflow.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -75,6 +79,37 @@ public class ProcurementWorkflowServiceTests
             It.IsAny<IProgress<string>?>(),
             It.IsAny<CancellationToken>(),
             It.IsAny<MarketAnalysisExecutionOptions?>()));
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_WhenEngineIsEnabled_DelegatesWithoutLegacyExecution()
+    {
+        var appState = CreateAppState(101);
+        appState.ReplaceMarketAnalysis([], [ShoppingPlan(101)]);
+        var legacyExecution = new Mock<IProcurementRouteExecutionService>(MockBehavior.Strict);
+        var engineWorkflow = new Mock<IExperimentalProcurementEngineWorkflow>(MockBehavior.Strict);
+        engineWorkflow.Setup(workflow => workflow.RunAsync(
+                It.IsAny<ExperimentalProcurementEngineWorkflowRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcurementWorkflowResult(ProcurementWorkflowStatus.Published, 1));
+        var service = CreateService(
+            appState,
+            procurementExecution: legacyExecution.Object,
+            engineExecutionEnabled: true,
+            engineWorkflow: engineWorkflow.Object);
+
+        var result = await service.RunAnalysisAsync(new ProcurementWorkflowRequest(() => true));
+
+        Assert.Equal(ProcurementWorkflowStatus.Published, result.Status);
+        engineWorkflow.Verify(workflow => workflow.RunAsync(
+            It.Is<ExperimentalProcurementEngineWorkflowRequest>(request =>
+                ReferenceEquals(request.Plan, appState.CurrentPlan) &&
+                request.ActiveItems.Count == 1 &&
+                request.RouteBasis.Matches(appState.CreateCurrentProcurementRouteBasis())),
+            It.IsAny<IProgress<string>?>(),
+            It.IsAny<CancellationToken>()));
+        legacyExecution.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -446,7 +481,9 @@ public class ProcurementWorkflowServiceTests
         IMarketAnalysisExecutionService? marketExecution = null,
         RecordingJsRuntime? jsRuntime = null,
         IRecipeLayerWorkflowService? recipeLayerWorkflow = null,
-        bool routeGenerationEnabled = true)
+        bool routeGenerationEnabled = true,
+        bool engineExecutionEnabled = false,
+        IExperimentalProcurementEngineWorkflow? engineWorkflow = null)
     {
         jsRuntime ??= new RecordingJsRuntime();
         var indexedDb = new IndexedDbService(jsRuntime);
@@ -469,7 +506,9 @@ public class ProcurementWorkflowServiceTests
             procurementExecution ?? Mock.Of<IProcurementRouteExecutionService>(),
             itemRefreshService,
             recipeLayerWorkflow ?? new StubRecipeLayerWorkflowService(),
-            new ProcurementRouteAvailability(routeGenerationEnabled));
+            new ProcurementRouteAvailability(routeGenerationEnabled),
+            engineCapability: new ExperimentalProcurementEngineCapability(engineExecutionEnabled),
+            engineWorkflow: engineWorkflow);
     }
 
     private static AppState CreateAppState(params int[] itemIds)

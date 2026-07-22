@@ -199,10 +199,18 @@ public class MarketRouteState
         _dataCenters = _worlds
             .Select(w => w.DataCenter)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        CanonicalKey = string.Join(
+            ',',
+            _worlds
+                .OrderBy(world => world.DataCenter)
+                .ThenBy(world => world.WorldName)
+                .Select(world => $"{world.DataCenter}:{world.WorldName}"));
     }
 
     public IReadOnlyCollection<MarketWorldKey> Worlds => _worlds;
     public IReadOnlyCollection<string> DataCenters => _dataCenters;
+
+    internal string CanonicalKey { get; }
 
     public bool ContainsWorld(MarketWorldKey world) => _worlds.Contains(world);
     public bool ContainsDataCenter(string dataCenter) => _dataCenters.Contains(dataCenter);

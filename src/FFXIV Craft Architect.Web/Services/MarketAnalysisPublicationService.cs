@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 
 using FFXIV_Craft_Architect.Core.Engine;
@@ -52,6 +53,26 @@ public sealed record MarketAnalysisPersistenceSnapshot(
             PreparedDecisionChangeCount);
 
     public StoredPlan ToAutoSavePlan() =>
+        ToAutoSavePlan(JsonSerializer.Serialize(
+            StoredMarketIntelligence.FromMarketIntelligence(MarketIntelligence)));
+
+    public async Task<StoredPlan> ToAutoSavePlanAsync(CancellationToken cancellationToken)
+    {
+        var storedIntelligence = StoredMarketIntelligence.FromMarketIntelligence(MarketIntelligence);
+        await using var stream = new YieldingMemoryStream();
+        await JsonSerializer.SerializeAsync(
+            stream,
+            storedIntelligence,
+            new JsonSerializerOptions { DefaultBufferSize = 1024 * 1024 },
+            cancellationToken);
+        var marketIntelligenceJson = Encoding.UTF8.GetString(
+            stream.GetBuffer(),
+            0,
+            checked((int)stream.Length));
+        return ToAutoSavePlan(marketIntelligenceJson);
+    }
+
+    private StoredPlan ToAutoSavePlan(string marketIntelligenceJson) =>
         new()
         {
             Id = "autosave",
@@ -69,8 +90,7 @@ public sealed record MarketAnalysisPersistenceSnapshot(
                 MustBeHq = item.MustBeHq
             }).ToList(),
             PlanJson = JsonSerializer.Serialize(Plan),
-            MarketIntelligenceJson = JsonSerializer.Serialize(
-                StoredMarketIntelligence.FromMarketIntelligence(MarketIntelligence)),
+            MarketIntelligenceJson = marketIntelligenceJson,
             MarketPlansJson = null,
             MarketItemAnalysesJson = null,
             MarketAnalysisRecipeBasisJson = RecipeBasis is null
@@ -82,6 +102,27 @@ public sealed record MarketAnalysisPersistenceSnapshot(
             SourcePlanId = PlanId,
             SourcePlanName = PlanName
         };
+
+    private sealed class YieldingMemoryStream : MemoryStream
+    {
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            Write(buffer.Span);
+            await Task.Delay(1, cancellationToken);
+        }
+
+        public override async Task WriteAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken)
+        {
+            Write(buffer, offset, count);
+            await Task.Delay(1, cancellationToken);
+        }
+    }
 }
 
 public sealed record MarketAnalysisPublication(
@@ -142,7 +183,8 @@ public sealed class MarketAnalysisPublicationStore : IMarketAnalysisPublicationS
         var saved = false;
         try
         {
-            saved = await _indexedDb.SavePlanAsync(snapshot.ToAutoSavePlan());
+            saved = await _indexedDb.SavePlanAsync(
+                await snapshot.ToAutoSavePlanAsync(CancellationToken.None));
             return saved;
         }
         finally
@@ -185,7 +227,13 @@ public sealed class MarketAnalysisPublicationService
 
     public MarketAnalysisPublicationRequest? PrepareForRegistration(
         MarketAnalysisPublicationRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        PrepareForRegistration(request, cancellationToken, snapshot: true);
+
+    private MarketAnalysisPublicationRequest? PrepareForRegistration(
+        MarketAnalysisPublicationRequest request,
+        CancellationToken cancellationToken,
+        bool snapshot)
     {
         if (!IsCurrent(request))
         {
@@ -207,13 +255,26 @@ public sealed class MarketAnalysisPublicationService
             PlanDecisionVersion = _appState.CurrentVersions.PlanDecisionVersion,
             PreparedDecisionChangeCount = changedDecisions
         };
-        return IsCurrent(prepared) ? SnapshotRequest(prepared) : null;
+        return IsCurrent(prepared)
+            ? snapshot ? SnapshotRequest(prepared) : prepared
+            : null;
     }
 
     public MarketAnalysisPersistenceSnapshot CapturePersistenceSnapshot(
         MarketAnalysisPublicationRequest request,
         DateTime? capturedAtUtc = null,
-        Guid? marketIntelligenceId = null)
+        Guid? marketIntelligenceId = null) =>
+        CapturePersistenceSnapshot(
+            request,
+            capturedAtUtc,
+            marketIntelligenceId,
+            requestAlreadySnapshotted: false);
+
+    private MarketAnalysisPersistenceSnapshot CapturePersistenceSnapshot(
+        MarketAnalysisPublicationRequest request,
+        DateTime? capturedAtUtc,
+        Guid? marketIntelligenceId,
+        bool requestAlreadySnapshotted)
     {
         if (!IsCurrent(request))
         {
@@ -221,26 +282,29 @@ public sealed class MarketAnalysisPublicationService
         }
 
         var options = EngineJsonSerializerOptions.CreateWire();
-        var repairProbe = Clone(request.Plan, options);
-        if (AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
-                repairProbe,
-                request.ShoppingPlans) > 0)
+        if (!requestAlreadySnapshotted)
         {
-            throw new InvalidOperationException(
-                "Automatic source repair must be completed before the engine request and settlement snapshot.");
-        }
-        var vendorProbe = Clone(request.ShoppingPlans, options);
-        _marketShoppingService.ApplyVendorPurchaseOverrides(request.Plan, vendorProbe);
-        if (!string.Equals(
-                EngineCanonicalHash.Compute(vendorProbe, options),
-                EngineCanonicalHash.Compute(request.ShoppingPlans, options),
-                StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                "Vendor repair must be completed before the engine request and settlement snapshot.");
+            var repairProbe = Clone(request.Plan, options);
+            if (AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
+                    repairProbe,
+                    request.ShoppingPlans) > 0)
+            {
+                throw new InvalidOperationException(
+                    "Automatic source repair must be completed before the engine request and settlement snapshot.");
+            }
+            var vendorProbe = Clone(request.ShoppingPlans, options);
+            _marketShoppingService.ApplyVendorPurchaseOverrides(request.Plan, vendorProbe);
+            if (!string.Equals(
+                    EngineCanonicalHash.Compute(vendorProbe, options),
+                    EngineCanonicalHash.Compute(request.ShoppingPlans, options),
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Vendor repair must be completed before the engine request and settlement snapshot.");
+            }
         }
 
-        var snapshotRequest = SnapshotRequest(request);
+        var snapshotRequest = requestAlreadySnapshotted ? request : SnapshotRequest(request);
         var versions = _appState.CurrentVersions;
         var intelligence = new MarketIntelligence(
             marketIntelligenceId ?? Guid.NewGuid(),
@@ -289,7 +353,7 @@ public sealed class MarketAnalysisPublicationService
             _appState.MarketAnalysisLens,
             intelligence,
             snapshotRequest.PreparedDecisionChangeCount);
-        return SnapshotPersistence(snapshot);
+        return requestAlreadySnapshotted ? snapshot : SnapshotPersistence(snapshot);
     }
 
     internal PreparedMarketAnalysisPublication? Prepare(
@@ -390,19 +454,30 @@ public sealed class MarketAnalysisPublicationService
 
     public async Task<MarketAnalysisPublication?> PublishLegacyAsync(
         MarketAnalysisPublicationRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MarketAnalysisExecutionOptions? executionOptions = null)
     {
-        var preparedRequest = PrepareForRegistration(request, cancellationToken);
+        var preparedRequest = PrepareForRegistration(request, cancellationToken, snapshot: false);
         if (preparedRequest is null)
         {
             return null;
         }
-        var persistenceSnapshot = CapturePersistenceSnapshot(preparedRequest);
-        var publication = Publish(preparedRequest, persistenceSnapshot, cancellationToken);
-        if (publication == null)
-        {
-            return null;
-        }
+        await YieldIfInteractiveAsync(executionOptions, cancellationToken);
+
+        var persistenceSnapshot = CapturePersistenceSnapshot(
+            preparedRequest,
+            capturedAtUtc: null,
+            marketIntelligenceId: null,
+            requestAlreadySnapshotted: true);
+        await YieldIfInteractiveAsync(executionOptions, cancellationToken);
+
+        var publication = PublishPrepared(
+            new PreparedMarketAnalysisPublication(
+                preparedRequest,
+                preparedRequest.PreparedDecisionChangeCount,
+                persistenceSnapshot),
+            cancellationToken);
+        await YieldIfInteractiveAsync(executionOptions, cancellationToken);
 
         if (ShouldPersistNamedPlan(publication))
         {
@@ -430,6 +505,17 @@ public sealed class MarketAnalysisPublicationService
         return IsCurrent(publication.Request)
             ? publication
             : null;
+    }
+
+    private static async Task YieldIfInteractiveAsync(
+        MarketAnalysisExecutionOptions? executionOptions,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if ((executionOptions ?? MarketAnalysisExecutionOptions.Synchronous).YieldEveryItems > 0)
+        {
+            await Task.Delay(1, cancellationToken);
+        }
     }
 
     private bool IsCurrent(MarketAnalysisPublicationRequest request) =>

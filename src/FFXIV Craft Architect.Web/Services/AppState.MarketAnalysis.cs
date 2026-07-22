@@ -198,6 +198,43 @@ public partial class AppState
         return true;
     }
 
+    public bool RollbackProcurementOptimization(
+        CraftingPlan originalPlan,
+        CraftingPlan optimizedPlan,
+        long expectedPlanSessionVersion,
+        AppStateVersionSnapshot expectedVersions)
+    {
+        ArgumentNullException.ThrowIfNull(originalPlan);
+        ArgumentNullException.ThrowIfNull(optimizedPlan);
+        if (!ReferenceEquals(CurrentPlan, originalPlan) &&
+            !ReferenceEquals(CurrentPlan, optimizedPlan) ||
+            PlanSessionVersion != expectedPlanSessionVersion ||
+            CurrentVersions.PlanDecisionVersion != expectedVersions.PlanDecisionVersion ||
+            CurrentVersions.MarketAnalysisVersion != expectedVersions.MarketAnalysisVersion ||
+            CurrentVersions.ProcurementOverlayVersion != expectedVersions.ProcurementOverlayVersion)
+        {
+            return false;
+        }
+
+        var failure = ProcurementRouteFailure;
+        using (BeginStateChangeBatch())
+        {
+            if (!ReferenceEquals(CurrentPlan, originalPlan))
+            {
+                CurrentPlan = originalPlan;
+                NotifyPlanDecisionChanged();
+            }
+            ReplaceShoppingItemsFromActivePlan(
+                AcquisitionPlanningService.GetActiveProcurementItems(originalPlan));
+            ClearProcurementOverlay();
+            if (!string.IsNullOrWhiteSpace(failure))
+            {
+                MarkProcurementRouteFailed(failure);
+            }
+        }
+        return true;
+    }
+
     private static bool HaveSameAcquisitionDecisions(CraftingPlan left, CraftingPlan right)
     {
         var leftDecisions = EnumerateNodes(left.RootItems)

@@ -42,13 +42,16 @@ public sealed class JointAcquisitionRouteOptimizationService
                 .Select(listing => listing.PricePerUnit)
                 .DefaultIfEmpty(long.MaxValue)
                 .Min());
-        var frontierSearch = AcquisitionVariantFrontierBuilder.Build(plan, lowerBoundUnitCosts, ct);
+        var frontierSearch = AcquisitionVariantFrontierBuilder.Build(plan, lowerBoundUnitCosts, ct, progress);
         var variants = frontierSearch.Variants;
-        progress?.Report($"[stage] acquisition frontier built ({variants.Count:N0} variants), evaluating...");
-        progress?.Report($"Evaluating {variants.Count:N0} non-dominated acquisition plans...");
+        progress?.Report(
+            $"[stage] acquisition frontier built ({variants.Count:N0} variants, " +
+            $"{frontierSearch.CombinationEvaluations:N0} combinations), evaluating...");
+        progress?.Report($"Evaluating {variants.Count:N0} candidate acquisition plans...");
         var cheapestConfig = CopyConfig(config, travelTolerance: 11);
         var evaluated = new List<EvaluatedVariant>(variants.Count);
-        var routeSession = new ProcurementRouteOptimizationSession();
+        var routeSession = new ProcurementRouteOptimizationSession(execution, ct);
+        var realizedDecisionKeys = new HashSet<string>(StringComparer.Ordinal);
         var anyRouteSearchWasTruncated = false;
 
         // Evaluate cheapest-lower-bound first so the incumbent converges early.
@@ -68,7 +71,14 @@ public sealed class JointAcquisitionRouteOptimizationService
         {
             ct.ThrowIfCancellationRequested();
             var entry = orderedVariants[index];
-            var variant = entry.Variant;
+            var variant = AcquisitionVariantFrontierBuilder.BuildRealizedPlanVariant(
+                plan,
+                entry.Variant.Decisions,
+                ct);
+            if (variant is null || !realizedDecisionKeys.Add(variant.DecisionKey))
+            {
+                continue;
+            }
 
             var marketPlans = BuildDemandPlans(variant, evidenceByItem, routeSession);
             if (marketPlans == null)
@@ -90,7 +100,11 @@ public sealed class JointAcquisitionRouteOptimizationService
             }
 
             var marketCost = route.Decision?.SelectedGilCost ?? 0;
-            evaluated.Add(new EvaluatedVariant(variant, marketPlans, route, Add(variant.FixedGilCost, marketCost)));
+            evaluated.Add(new EvaluatedVariant(
+                variant,
+                marketPlans,
+                route,
+                Add(variant.FixedGilCost, marketCost)));
 
             if ((index + 1) % 25 == 0)
             {
@@ -103,7 +117,11 @@ public sealed class JointAcquisitionRouteOptimizationService
             $"{orderedVariants.Count:N0}), applying travel tolerance...");
         if (evaluated.Count == 0)
         {
-            return JointAcquisitionRouteOptimizationResult.NoSolution(ClonePlan(plan));
+            return JointAcquisitionRouteOptimizationResult.NoSolution(
+                ClonePlan(plan),
+                variants.Count,
+                frontierSearch.WasTruncated,
+                frontierSearch.CombinationEvaluations);
         }
 
         var cheapestTotal = evaluated.Min(candidate => candidate.TotalGilCost);
@@ -170,12 +188,10 @@ public sealed class JointAcquisitionRouteOptimizationService
                 marketBudget);
             anyRouteSearchWasTruncated |= route.Decision?.RouteSearchWasTruncated ?? false;
             completedTravelRoutes++;
-            if (completedTravelRoutes % 25 == 0)
-            {
-                progress?.Report(
-                    $"Evaluated {completedTravelRoutes:N0} bounded travel routes " +
-                    $"from {candidatesByTravelPotential.Count:N0} acquisition plans...");
-            }
+            progress?.Report(
+                $"Evaluated {completedTravelRoutes:N0} bounded travel " +
+                $"{(completedTravelRoutes == 1 ? "route" : "routes")} from " +
+                $"{candidatesByTravelPotential.Count:N0} acquisition plans...");
             if (candidate.Variant.MarketDemand.Count > 0 && (!route.IsComplete || route.Decision == null))
             {
                 continue;
@@ -245,7 +261,8 @@ public sealed class JointAcquisitionRouteOptimizationService
             frontierSearch.WasTruncated,
             anyRouteSearchWasTruncated,
             travelSearchWasTruncated,
-            completedTravelRoutes);
+            completedTravelRoutes,
+            frontierSearch.CombinationEvaluations);
 
         return new JointAcquisitionRouteOptimizationResult(
             optimizedPlan,
@@ -254,7 +271,8 @@ public sealed class JointAcquisitionRouteOptimizationService
             activeItems,
             variants.Count,
             evaluated.Count,
-            frontierSearch.WasTruncated || anyRouteSearchWasTruncated || travelSearchWasTruncated);
+            frontierSearch.WasTruncated || anyRouteSearchWasTruncated || travelSearchWasTruncated,
+            frontierSearch.CombinationEvaluations);
     }
 
     private Task<ProcurementRouteOptimizationResult> OptimizeRouteAsync(
@@ -515,7 +533,8 @@ public sealed class JointAcquisitionRouteOptimizationService
         bool acquisitionSearchWasTruncated,
         bool routeSearchWasTruncated,
         bool travelSearchWasTruncated,
-        int travelRoutesEvaluated)
+        int travelRoutesEvaluated,
+        long acquisitionCombinationEvaluations)
     {
         return new MarketRouteDecision(
             config.TravelTolerance,
@@ -537,7 +556,8 @@ public sealed class JointAcquisitionRouteOptimizationService
             AcquisitionSearchWasTruncated = acquisitionSearchWasTruncated,
             RouteSearchWasTruncated = routeSearchWasTruncated,
             TravelSearchWasTruncated = travelSearchWasTruncated,
-            TravelRoutesEvaluated = travelRoutesEvaluated
+            TravelRoutesEvaluated = travelRoutesEvaluated,
+            AcquisitionCombinationEvaluations = acquisitionCombinationEvaluations
         };
     }
 
@@ -570,16 +590,20 @@ public sealed class JointAcquisitionRouteOptimizationService
             })
             .DistinctBy(choice => (choice.GilCost, choice.WorldStops, choice.DataCenterTransfers))
             .ToList();
-        var frontier = choices
-            .Where(candidate => !choices.Any(other =>
-                !ReferenceEquals(candidate, other) &&
-                other.GilCost <= candidate.GilCost &&
-                other.WorldStops <= candidate.WorldStops &&
-                other.DataCenterTransfers <= candidate.DataCenterTransfers &&
-                (other.GilCost < candidate.GilCost ||
-                 other.WorldStops < candidate.WorldStops ||
-                 other.DataCenterTransfers < candidate.DataCenterTransfers)))
-            .ToList();
+        var frontier = new List<JointRouteChoice>();
+        foreach (var candidate in choices
+                     .OrderBy(choice => choice.GilCost)
+                     .ThenBy(choice => choice.WorldStops)
+                     .ThenBy(choice => choice.DataCenterTransfers)
+                     .ThenBy(choice => choice.Key, StringComparer.Ordinal))
+        {
+            if (frontier.Any(other => Dominates(other, candidate)))
+            {
+                continue;
+            }
+            frontier.RemoveAll(other => Dominates(candidate, other));
+            frontier.Add(candidate);
+        }
 
         var representatives = new List<MarketRouteFrontierOption>();
         JointRouteChoice? previous = null;
@@ -623,6 +647,14 @@ public sealed class JointAcquisitionRouteOptimizationService
         return representatives;
     }
 
+    private static bool Dominates(JointRouteChoice left, JointRouteChoice right) =>
+        left.GilCost <= right.GilCost &&
+        left.WorldStops <= right.WorldStops &&
+        left.DataCenterTransfers <= right.DataCenterTransfers &&
+        (left.GilCost < right.GilCost ||
+         left.WorldStops < right.WorldStops ||
+         left.DataCenterTransfers < right.DataCenterTransfers);
+
     private static MarketAnalysisConfig CopyConfig(MarketAnalysisConfig source, int travelTolerance) => new()
     {
         MaxWorldsPerItem = source.MaxWorldsPerItem,
@@ -662,33 +694,43 @@ public sealed class JointAcquisitionRouteOptimizationService
             IconId == 0 ? node.IconId : IconId);
     }
 
-    internal sealed record AcquisitionVariant(
-        IReadOnlyDictionary<int, MarketDemand> MarketDemand,
-        long FixedGilCost,
-        IReadOnlyDictionary<string, AcquisitionSource> Decisions)
+    internal sealed class AcquisitionVariant(
+        IReadOnlyDictionary<int, MarketDemand> marketDemand,
+        long fixedGilCost,
+        IReadOnlyDictionary<string, AcquisitionSource> decisions)
     {
         public static AcquisitionVariant Empty { get; } = new(
             new Dictionary<int, MarketDemand>(),
             0,
             new Dictionary<string, AcquisitionSource>(StringComparer.Ordinal));
 
-        public string EconomicKey => $"{FixedGilCost}|{string.Join(';', MarketDemand.OrderBy(pair => pair.Key).Select(pair => $"{pair.Key}:{pair.Value.Quantity}:{pair.Value.HqQuantity}"))}";
-        public string DecisionKey => string.Join(';', Decisions.OrderBy(pair => pair.Key).Select(pair => $"{pair.Key}:{(int)pair.Value}"));
+        public IReadOnlyDictionary<int, MarketDemand> MarketDemand { get; } = marketDemand;
+
+        public long FixedGilCost { get; } = fixedGilCost;
+
+        public IReadOnlyDictionary<string, AcquisitionSource> Decisions { get; } = decisions;
+
+        public string EconomicKey { get; } =
+            $"{fixedGilCost}|{string.Join(';', marketDemand.OrderBy(pair => pair.Key).Select(pair => $"{pair.Key}:{pair.Value.Quantity}:{pair.Value.HqQuantity}"))}";
+
+        public string DecisionKey { get; } =
+            string.Join(';', decisions.OrderBy(pair => pair.Key).Select(pair => $"{pair.Key}:{(int)pair.Value}"));
 
         public AcquisitionVariant WithMarketDemand(PlanNode node, bool hq)
         {
             var demand = MarketDemand.ToDictionary(pair => pair.Key, pair => pair.Value);
             demand[node.ItemId] = demand.GetValueOrDefault(node.ItemId).Add(node, hq);
-            return this with { MarketDemand = demand };
+            return new AcquisitionVariant(demand, FixedGilCost, Decisions);
         }
 
-        public AcquisitionVariant WithFixedCost(long cost) => this with { FixedGilCost = Add(FixedGilCost, cost) };
+        public AcquisitionVariant WithFixedCost(long cost) =>
+            new(MarketDemand, Add(FixedGilCost, cost), Decisions);
 
         public AcquisitionVariant WithDecision(string nodeId, AcquisitionSource source)
         {
             var decisions = Decisions.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
             decisions[nodeId] = source;
-            return this with { Decisions = decisions };
+            return new AcquisitionVariant(MarketDemand, FixedGilCost, decisions);
         }
 
         public AcquisitionVariant Combine(AcquisitionVariant other)
@@ -724,7 +766,8 @@ public sealed class JointAcquisitionRouteOptimizationService
 
     internal sealed record AcquisitionFrontierBuildResult(
         IReadOnlyList<AcquisitionVariant> Variants,
-        bool WasTruncated);
+        bool WasTruncated,
+        long CombinationEvaluations);
 }
 
 public sealed record JointAcquisitionRouteOptimizationResult(
@@ -734,8 +777,21 @@ public sealed record JointAcquisitionRouteOptimizationResult(
     IReadOnlyList<MaterialAggregate> ActiveProcurementItems,
     int FrontierPlanCount,
     int FeasiblePlanCount,
-    bool SearchWasTruncated)
+    bool SearchWasTruncated,
+    long AcquisitionCombinationEvaluations)
 {
-    public static JointAcquisitionRouteOptimizationResult NoSolution(CraftingPlan plan) =>
-        new(plan, [], null, [], 0, 0, false);
+    public static JointAcquisitionRouteOptimizationResult NoSolution(
+        CraftingPlan plan,
+        int frontierPlanCount = 0,
+        bool searchWasTruncated = false,
+        long acquisitionCombinationEvaluations = 0) =>
+        new(
+            plan,
+            [],
+            null,
+            [],
+            frontierPlanCount,
+            0,
+            searchWasTruncated,
+            acquisitionCombinationEvaluations);
 }

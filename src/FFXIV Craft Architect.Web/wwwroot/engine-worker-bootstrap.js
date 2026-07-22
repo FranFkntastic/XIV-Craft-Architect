@@ -21,7 +21,7 @@ export function createEngineWorker(workerUrl = "engine-worker.js") {
                 throw new RangeError("A positive worker generation is required.");
             }
             worker.postMessage({
-                protocolVersion: "2",
+                protocolVersion: "4",
                 kind: "ping",
                 generation,
                 executionId: null,
@@ -42,6 +42,15 @@ export function createEngineWorkerController(callback, workerUrl = "engine-worke
     const controller = createEngineWorker(workerUrl);
     let disposed = false;
     const unsubscribe = controller.subscribe(message => {
+        if (message?.kind === "managed-json" && typeof message.messageJson === "string") {
+            if (message.messageKind === "progress") {
+                window.dispatchEvent(new Event("craft-architect-engine-worker-progress"));
+            } else if (message.messageKind === "computation-result") {
+                window.dispatchEvent(new Event("craft-architect-engine-worker-complete"));
+            }
+            callback.invokeMethodAsync("ReceiveMessageJson", message.messageJson).catch(() => {});
+            return;
+        }
         callback.invokeMethodAsync("ReceiveMessage", message).catch(() => {});
     });
     const reportError = event => {
@@ -64,9 +73,28 @@ export function createEngineWorkerController(callback, workerUrl = "engine-worke
             if (disposed) throw new Error("The Worker controller is disposed.");
             controller.ping(generation);
         },
-        send(message) {
+        sendJson(messageJson, generation, kind) {
             if (disposed) throw new Error("The Worker controller is disposed.");
-            controller.send(message);
+            if (typeof messageJson !== "string" || messageJson.length === 0 ||
+                !Number.isSafeInteger(generation) || generation <= 0 ||
+                (kind !== "execute" && kind !== "cancel")) {
+                throw new TypeError("A valid managed Worker JSON message is required.");
+            }
+            const identity = JSON.parse(messageJson);
+            if (identity?.protocolVersion !== "4" ||
+                identity?.generation !== generation ||
+                typeof identity?.executionId !== "string" ||
+                typeof identity?.transactionId !== "string") {
+                throw new TypeError("Managed Worker JSON identity is invalid.");
+            }
+            controller.send({
+                kind: "managed-json",
+                messageJson,
+                generation,
+                messageKind: kind,
+                executionId: identity.executionId,
+                transactionId: identity.transactionId
+            });
         },
         terminate() {
             if (disposed) return;
@@ -78,4 +106,12 @@ export function createEngineWorkerController(callback, workerUrl = "engine-worke
             detach();
         }
     };
+}
+
+export function reportEngineHostFinalized() {
+    window.dispatchEvent(new Event("craft-architect-engine-host-finalized"));
+}
+
+export function yieldToBrowser() {
+    return new Promise(resolve => setTimeout(resolve, 0));
 }

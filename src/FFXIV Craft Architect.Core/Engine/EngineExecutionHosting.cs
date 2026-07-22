@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -129,7 +130,8 @@ public sealed class NoOpEngineTransactionSettlement : IEngineTransactionSettleme
 public sealed record EngineTransactionLedgerCapability(
     bool BindsCanonicalRequestIdentity,
     bool PreservesTerminalResult,
-    bool IsDurable);
+    bool IsDurable,
+    bool PreservesTerminalIdentity = false);
 
 public enum EngineTransactionClaimDisposition
 {
@@ -137,7 +139,8 @@ public enum EngineTransactionClaimDisposition
     ActiveReplay = 2,
     TerminalReplay = 3,
     Conflict = 4,
-    AbandonedReplay = 5
+    AbandonedReplay = 5,
+    ExpiredTerminalReplay = 6
 }
 
 public sealed record EngineTransactionClaim(
@@ -323,7 +326,8 @@ public sealed record EngineExecutionHostOptions(
     TimeSpan? SettlementPhaseTimeout = null,
     TimeSpan? LedgerWriteTimeout = null,
     TimeSpan? LedgerClaimTimeout = null,
-    int MaxConcurrentCleanupOperations = 2)
+    int MaxConcurrentCleanupOperations = 2,
+    Func<CancellationToken, ValueTask>? CooperativeYield = null)
 {
     public static EngineExecutionHostOptions Default { get; } = new(
         128,
@@ -354,12 +358,24 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
     private readonly TimeSpan _settlementPhaseTimeout;
     private readonly TimeSpan _ledgerWriteTimeout;
     private readonly TimeSpan _ledgerClaimTimeout;
+    private readonly Func<CancellationToken, ValueTask>? _cooperativeYield;
     private readonly SemaphoreSlim _executionSlots;
     private readonly SemaphoreSlim _cleanupSlots;
     private readonly object _sync = new();
     private readonly Dictionary<Guid, HostedExecution> _executions = [];
     private long _generation;
     private long _accessSequence;
+
+    private long _lastComputationValidationMilliseconds = -1;
+
+    public long? LastComputationValidationMilliseconds
+    {
+        get
+        {
+            var value = Interlocked.Read(ref _lastComputationValidationMilliseconds);
+            return value < 0 ? null : value;
+        }
+    }
 
     public EngineExecutionHost(
         IEngineExecutionTransport transport,
@@ -396,15 +412,19 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
         _settlementPhaseTimeout = _options.SettlementPhaseTimeout ?? TimeSpan.FromSeconds(30);
         _ledgerWriteTimeout = _options.LedgerWriteTimeout ?? TimeSpan.FromSeconds(5);
         _ledgerClaimTimeout = _options.LedgerClaimTimeout ?? _ledgerWriteTimeout;
+        _cooperativeYield = _options.CooperativeYield;
         _executionSlots = new SemaphoreSlim(_options.MaxConcurrentExecutions, _options.MaxConcurrentExecutions);
         _cleanupSlots = new SemaphoreSlim(
             _options.MaxConcurrentCleanupOperations,
             _options.MaxConcurrentCleanupOperations);
         var ledgerCapability = _ledger.Capability ??
             throw new ArgumentException("The transaction ledger must declare its capabilities.", nameof(ledger));
-        if (!ledgerCapability.BindsCanonicalRequestIdentity || !ledgerCapability.PreservesTerminalResult)
+        if (!ledgerCapability.BindsCanonicalRequestIdentity ||
+            !ledgerCapability.PreservesTerminalResult && !ledgerCapability.PreservesTerminalIdentity)
         {
-            throw new ArgumentException("The transaction ledger must bind canonical requests and preserve terminal results.", nameof(ledger));
+            throw new ArgumentException(
+                "The transaction ledger must bind canonical requests and preserve terminal results or terminal identities.",
+                nameof(ledger));
         }
         if (!ledgerCapability.IsDurable && !allowNonDurableLedger)
         {
@@ -451,7 +471,7 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
         string requestHash;
         try
         {
-            requestHash = EngineCanonicalHash.Compute(request, EngineJsonSerializerOptions.CreateWire());
+            requestHash = EngineCanonicalHash.ComputeRequestIdentity(request);
         }
         catch (Exception ex)
         {
@@ -473,6 +493,25 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
                 requestValidationFailure: true);
         }
 
+        return BeginRegisteredExecutionAsync(
+            request,
+            requestHash,
+            progress,
+            cancellationToken,
+            invocationToken,
+            registrar,
+            cleanupOwnership);
+    }
+
+    private Task<EngineResultEnvelope> BeginRegisteredExecutionAsync(
+        EngineRequestEnvelope request,
+        string requestHash,
+        IProgress<EngineProgress>? progress,
+        CancellationToken cancellationToken,
+        string invocationToken,
+        IEngineExecutionContextRegistrar? registrar,
+        EngineInvocationCleanupOwnership? cleanupOwnership)
+    {
         if (cleanupOwnership is not null &&
             !string.Equals(cleanupOwnership.CanonicalRequestHash, requestHash, StringComparison.Ordinal))
         {
@@ -592,6 +631,34 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
         var isolatedProgress = progress is null ? null : new IsolatedProgressObserver<EngineProgress>(progress);
         try
         {
+            try
+            {
+                var validatedRequestHash = await EngineCanonicalHash.ValidateAndComputeRequestIdentityAsync(
+                    request,
+                    _cooperativeYield,
+                    CancellationToken.None);
+                if (!string.Equals(validatedRequestHash, requestHash, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("The validated engine request identity changed before execution.");
+                }
+            }
+            catch (Exception ex)
+            {
+                var failure = CreateRequestValidationFailureTerminal(
+                    request,
+                    "canonical-request-validation-failed",
+                    ex);
+                return await CompletePreComputationOutcomeAsync(
+                    request,
+                    requestHash,
+                    failure,
+                    lease,
+                    invocationToken,
+                    claimToken: null,
+                    ownsCleanup,
+                    requestValidationFailure: true);
+            }
+
             if (cancellationToken.IsCancellationRequested)
             {
                 var cancelled = CreateTerminal(
@@ -686,6 +753,30 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
                     request,
                     requestHash,
                     replay,
+                    lease,
+                    invocationToken,
+                    claimToken: null,
+                    ownsCleanup);
+            }
+            if (claim.Disposition == EngineTransactionClaimDisposition.ExpiredTerminalReplay)
+            {
+                var expired = CreateTerminal(
+                    request,
+                    null,
+                    EngineTerminalStatus.Indeterminate,
+                    EnginePhase.Indeterminate,
+                    EnginePhase.Accepted,
+                    "transaction-replay-expired",
+                    "The transaction completed previously, but its exact terminal payload has expired.",
+                    nameof(InvalidOperationException),
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["replayStatus"] = "terminal-payload-expired"
+                    });
+                return await CompletePreComputationOutcomeAsync(
+                    request,
+                    requestHash,
+                    expired,
                     lease,
                     invocationToken,
                     claimToken: null,
@@ -923,8 +1014,31 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
                 lease,
                 "computation-timeout-indeterminate",
                 "The engine computation did not terminate before its deadline.");
-            computation = ValidateComputation(generation, executionId, request, computation);
+            await YieldCooperativelyAsync(cancellationToken);
+            var validationElapsed = Stopwatch.StartNew();
+            var preparedResult = EngineComputationResultValidation.PrepareCompletedResult(
+                generation,
+                executionId,
+                request,
+                computation,
+                _snapshots);
+            validationElapsed.Stop();
+            if (preparedResult is not null)
+            {
+                await YieldCooperativelyAsync(cancellationToken);
+            }
+            validationElapsed.Start();
+            computation = EngineComputationResultValidation.ValidatePrepared(
+                generation,
+                executionId,
+                request,
+                computation,
+                _snapshots,
+                preparedResult);
+            validationElapsed.Stop();
+            Interlocked.Exchange(ref _lastComputationValidationMilliseconds, validationElapsed.ElapsedMilliseconds);
             computationValidated = true;
+            await YieldCooperativelyAsync(cancellationToken);
             foreach (var pair in computation.ComputationEvidence)
             {
                 evidence[pair.Key] = pair.Value;
@@ -988,6 +1102,7 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
             {
                 phase = settlementPhase;
                 var settlementToken = committed ? CancellationToken.None : cancellationToken;
+                await YieldCooperativelyAsync(settlementToken, committed);
                 settlementToken.ThrowIfCancellationRequested();
                 progress?.Report(new EngineProgress(
                     request.TransactionId,
@@ -1054,6 +1169,10 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
                 evidence[$"phase:{phase}"] = settled.Evidence;
                 evidence[$"delivery:{phase}"] = context.PhaseDeliveryId;
             }
+
+            await YieldCooperativelyAsync(
+                committed ? CancellationToken.None : cancellationToken,
+                committed);
 
             foreach (var requiredPhase in requirements.RequiredEvidencePhases)
             {
@@ -1339,6 +1458,8 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
                 matchesRequest && hasClaimToken && claim.TerminalResult is null,
             EngineTransactionClaimDisposition.TerminalReplay =>
                 matchesRequest && !hasClaimToken && claim.TerminalResult is not null,
+            EngineTransactionClaimDisposition.ExpiredTerminalReplay =>
+                matchesRequest && !hasClaimToken && claim.TerminalResult is null,
             EngineTransactionClaimDisposition.Conflict =>
                 !matchesRequest && !hasClaimToken && claim.TerminalResult is null,
             _ => false
@@ -1404,6 +1525,31 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
                 lease.Track(task);
             }
             throw new EngineOperationIndeterminateException(indeterminateCode, indeterminateMessage);
+        }
+    }
+
+    private async ValueTask YieldCooperativelyAsync(
+        CancellationToken cancellationToken,
+        bool committed = false)
+    {
+        if (_cooperativeYield is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _cooperativeYield(cancellationToken)
+                .AsTask()
+                .WaitAsync(_options.TerminalGateCleanupTimeout, cancellationToken);
+        }
+        catch (Exception ex) when (committed && ex is not EngineOperationIndeterminateException)
+        {
+            throw new EngineOperationIndeterminateException(
+                ex is TimeoutException ? "cooperative-yield-timeout" : "cooperative-yield-failed",
+                ex is TimeoutException
+                    ? "Browser scheduling did not resume before the post-commit deadline."
+                    : "Browser scheduling failed after persistence committed.");
         }
     }
 
@@ -1578,17 +1724,27 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
 
     private void ValidateSuccessfulTerminalResult(EngineRequestEnvelope request, EngineResultEnvelope result)
     {
-        if (result.Result is not { } payload ||
-            !result.Completion.TerminalEvidence.TryGetValue("resultPayloadHash", out var payloadHash) ||
-            !string.Equals(payloadHash, EngineCanonicalHash.Compute(payload), StringComparison.Ordinal) ||
-            !result.Completion.TerminalEvidence.TryGetValue("settlement", out var settlement) ||
-            !string.Equals(settlement, "complete", StringComparison.Ordinal))
+        if (result.Result is not { } payload)
         {
             throw new InvalidOperationException("Successful ledger payload or settlement evidence is invalid.");
         }
-
+        var transported = _snapshots.CaptureTransportedResult(payload);
         var input = request.Input.Deserialize<ReferenceEngineInput>(EngineJsonSerializerOptions.CreateWire())
             ?? throw new InvalidOperationException("Cannot validate successful ledger phase evidence.");
+        var derivedRoute = transported.ProcurementRouteResult is null
+            ? null
+            : _snapshots.CaptureRoute(transported.ProcurementRouteResult);
+        if (transported.ProcurementRoute is not null &&
+            derivedRoute is not null &&
+            !string.Equals(
+                EngineSemanticSnapshotHash.Route(transported.ProcurementRoute),
+                EngineSemanticSnapshotHash.Route(derivedRoute),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The ledger procurement result does not match its semantic route snapshot.");
+        }
+        transported = transported with { ProcurementRoute = derivedRoute ?? transported.ProcurementRoute };
         var requirements = EngineSuccessPhasePolicy.Resolve(
             request.InputKind,
             input.MarketAnalysis is not null,
@@ -1603,9 +1759,9 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
             }
         }
 
-        var transported = _snapshots.CaptureTransportedResult(payload);
         if ((transported.MarketAnalysis is not null) != (input.MarketAnalysis is not null) ||
-            (transported.ProcurementRoute is not null) != (input.ProcurementRoute is not null))
+            (transported.ProcurementRoute is not null) != (input.ProcurementRoute is not null) ||
+            (transported.ProcurementRouteResult is not null) != (input.ProcurementRoute is not null))
         {
             throw new InvalidOperationException("Ledger result operations do not match the request.");
         }
@@ -1615,6 +1771,16 @@ public sealed class EngineExecutionHost : IEngineExecutionHost
         var routeHash = transported.ProcurementRoute is null
             ? string.Empty
             : EngineSemanticSnapshotHash.Route(transported.ProcurementRoute);
+        var expectedPayloadHash = string.IsNullOrWhiteSpace(request.InputHash)
+            ? EngineCanonicalHash.Compute(payload)
+            : EngineCanonicalHash.ComputeAuthoritativeResultPayloadHash(analysisHash, routeHash);
+        if (!result.Completion.TerminalEvidence.TryGetValue("resultPayloadHash", out var claimedPayloadHash) ||
+            !string.Equals(claimedPayloadHash, expectedPayloadHash, StringComparison.Ordinal) ||
+            !result.Completion.TerminalEvidence.TryGetValue("settlement", out var settlement) ||
+            !string.Equals(settlement, "complete", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Successful ledger payload or settlement evidence is invalid.");
+        }
         if (!string.Equals(result.Completion.AnalysisResultHash, analysisHash, StringComparison.Ordinal) ||
             !string.Equals(result.Completion.ProcurementRouteResultHash, routeHash, StringComparison.Ordinal))
         {

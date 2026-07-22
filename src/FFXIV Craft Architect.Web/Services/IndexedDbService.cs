@@ -6,6 +6,21 @@ using Microsoft.JSInterop;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
+public enum AutoSaveStateOutcome
+{
+    Saved,
+    AlreadyPersisted,
+    Skipped,
+    Failed
+}
+
+public sealed record AutoSavePerformanceTiming(
+    long SnapshotMilliseconds,
+    long MetricsMilliseconds,
+    long SaveMilliseconds,
+    long TotalMilliseconds,
+    bool ReusedMarketEvidence);
+
 /// <summary>
 /// Service for persisting plans and settings in browser IndexedDB.
 /// Provides local storage that survives page refreshes.
@@ -15,6 +30,9 @@ public class IndexedDbService
     private readonly IJSRuntime _jsRuntime;
     private readonly ILogger<IndexedDbService>? _logger;
     private bool _isInitialized = false;
+    private ReusableStoredMarketEvidence? _reusableStoredMarketEvidence;
+
+    public AutoSavePerformanceTiming? LastAutoSavePerformanceTiming { get; private set; }
 
     public IndexedDbService(IJSRuntime jsRuntime, ILogger<IndexedDbService>? logger = null)
     {
@@ -433,10 +451,17 @@ public class IndexedDbService
     public async Task<bool> AutoSaveStateAsync(
         AppState state,
         string planName = "AutoSave",
+        bool skipIfInFlight = false) =>
+        await AutoSaveStateWithOutcomeAsync(state, planName, skipIfInFlight) == AutoSaveStateOutcome.Saved;
+
+    public async Task<AutoSaveStateOutcome> AutoSaveStateWithOutcomeAsync(
+        AppState state,
+        string planName = "AutoSave",
         bool skipIfInFlight = false)
     {
         AppStateAutoSaveLease? autoSaveLease = null;
         var success = false;
+        LastAutoSavePerformanceTiming = null;
 
         try
         {
@@ -444,21 +469,27 @@ public class IndexedDbService
 
             if (!state.HasPlanOrProjectItems)
             {
-                return false;
+                return AutoSaveStateOutcome.Failed;
             }
 
             autoSaveLease = await state.BeginAutoSaveAsync(skipIfInFlight);
             if (autoSaveLease == null)
             {
-                return false;
+                return state.GetDirtyPersistedBuckets() == PersistedStateBucket.None
+                    ? AutoSaveStateOutcome.AlreadyPersisted
+                    : AutoSaveStateOutcome.Skipped;
             }
 
             var snapshotElapsed = Stopwatch.StartNew();
-            var planData = state.CreateStoredPlanSnapshot(
+            var planData = StoredPlanSnapshotBuilder.BuildForAutoSave(
+                state,
                 "autosave",
                 planName,
+                savedAt: null,
                 includeSourcePlanIdentity: true,
-                includeLegacyMarketAnalysisFields: false);
+                includeLegacyMarketAnalysisFields: false,
+                _reusableStoredMarketEvidence,
+                out var capturedMarketEvidence);
             snapshotElapsed.Stop();
 
             StoredPlanSnapshotMetrics? metrics = null;
@@ -469,10 +500,22 @@ public class IndexedDbService
             }
             metricsElapsed.Stop();
 
+            // Timer-backed yield lets the browser paint before IndexedDB serialization starts.
+            await Task.Delay(50);
             var saveElapsed = Stopwatch.StartNew();
             success = await SavePlanAsync(planData);
             saveElapsed.Stop();
             totalElapsed.Stop();
+            LastAutoSavePerformanceTiming = new AutoSavePerformanceTiming(
+                snapshotElapsed.ElapsedMilliseconds,
+                metricsElapsed.ElapsedMilliseconds,
+                saveElapsed.ElapsedMilliseconds,
+                totalElapsed.ElapsedMilliseconds,
+                ReferenceEquals(capturedMarketEvidence, _reusableStoredMarketEvidence));
+            if (success)
+            {
+                _reusableStoredMarketEvidence = capturedMarketEvidence;
+            }
 
             if (metrics != null)
             {
@@ -488,12 +531,12 @@ public class IndexedDbService
                     saveElapsed.ElapsedMilliseconds);
             }
 
-            return success;
+            return success ? AutoSaveStateOutcome.Saved : AutoSaveStateOutcome.Failed;
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Failed to auto-save state");
-            return false;
+            return AutoSaveStateOutcome.Failed;
         }
         finally
         {
@@ -677,6 +720,11 @@ public class StoredPlan
     public string? MarketIntelligenceJson { get; set; }
 
     /// <summary>
+    /// Serialized current procurement route and the inputs that make it valid.
+    /// </summary>
+    public string? ProcurementRouteJson { get; set; }
+
+    /// <summary>
     /// Serialized immutable market analysis source data.
     /// </summary>
     public string? MarketItemAnalysesJson { get; set; }
@@ -712,6 +760,16 @@ public class StoredPlan
     /// </summary>
     public string? SourcePlanName { get; set; }
 }
+
+public sealed record StoredProcurementRoute(
+    int SchemaVersion,
+    string OptimizerVersion,
+    IReadOnlyList<DetailedShoppingPlan>? ShoppingPlans,
+    MarketRouteDecision? Decision,
+    ProcurementRoutePublicationBasis? Basis,
+    string PlanHash,
+    string MarketEvidenceHash,
+    string PayloadHash);
 
 /// <summary>
 /// Stored project item for IndexedDB.

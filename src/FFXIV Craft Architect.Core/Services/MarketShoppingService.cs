@@ -273,6 +273,8 @@ public class MarketShoppingService
         {
             return new ProcurementRouteOptimizationResult(plans, null);
         }
+        var candidateWorkBudget = session?.CandidateWorkBudget ??
+            new MarketRouteCandidateWorkBudget(executionOptions, ct);
 
         var candidatePlanIndexes = plans
             .Select((plan, index) => new { Plan = plan, Index = index })
@@ -280,8 +282,10 @@ public class MarketShoppingService
             .ToList();
         var standaloneCandidatesByPlan = candidatePlanIndexes.ToDictionary(
             entry => entry.Index,
-            entry => (session?.GetOrAddCandidates(entry.Plan, plan => GeneratePurchaseCandidates(plan)) ??
-                    GeneratePurchaseCandidates(entry.Plan))
+            entry => (session?.GetOrAddCandidates(
+                        entry.Plan,
+                        plan => GeneratePurchaseCandidates(plan, currentRoute: null, candidateWorkBudget)) ??
+                    GeneratePurchaseCandidates(entry.Plan, currentRoute: null, candidateWorkBudget))
                 .Where(candidate => candidate.IsFullyFulfilled)
                 .Where(candidate => includeSplitPurchases || !candidate.IsSplitPurchase)
                 .ToList());
@@ -299,7 +303,7 @@ public class MarketShoppingService
             new()
         };
         var lowestCostOnly = config.TravelTolerance == 11;
-        var routeSearchWasTruncated = false;
+        var routeSearchWasTruncated = candidateWorkBudget.WasTruncated;
 
         for (var planIndex = 0; planIndex < candidatePlanIndexes.Count; planIndex++)
         {
@@ -313,11 +317,24 @@ public class MarketShoppingService
                 var state = beam[stateIndex];
                 var candidates = (lowestCostOnly
                         ? standaloneCandidatesByPlan.GetValueOrDefault(planEntry.Index) ?? []
-                        : GeneratePurchaseCandidates(planEntry.Plan, state.Route))
+                        : session?.GetOrAddRouteCandidates(
+                            planEntry.Plan,
+                            state.Route,
+                            plan => GeneratePurchaseCandidates(plan, state.Route, candidateWorkBudget)) ??
+                          GeneratePurchaseCandidates(planEntry.Plan, state.Route, candidateWorkBudget))
                     .Where(c => c.IsFullyFulfilled)
                     .Where(c => includeSplitPurchases || !c.IsSplitPurchase)
                     .Where(c => c.HasTrustworthyEvidence)
                     .ToList();
+                routeSearchWasTruncated |= candidateWorkBudget.WasTruncated;
+                var hadEligibleCandidate = candidates.Count > 0;
+                if (absoluteMaximumGilCost.HasValue)
+                {
+                    candidates = candidates
+                        .Where(candidate =>
+                            candidate.GilCost <= absoluteMaximumGilCost.Value - state.TotalGilCost)
+                        .ToList();
+                }
                 if (lowestCostOnly && candidates.Count > 0)
                 {
                     var minimumGilCost = candidates.Min(candidate => candidate.GilCost);
@@ -335,6 +352,10 @@ public class MarketShoppingService
 
                 if (candidates.Count == 0)
                 {
+                    if (absoluteMaximumGilCost.HasValue && hadEligibleCandidate)
+                    {
+                        continue;
+                    }
                     nextBeam.Add(state.WithoutRecommendation(planEntry.Index));
                     continue;
                 }
@@ -1139,7 +1160,13 @@ public class MarketShoppingService
     /// </summary>
     public List<MarketPurchaseCandidate> GeneratePurchaseCandidates(
         DetailedShoppingPlan plan,
-        MarketRouteState? currentRoute = null)
+        MarketRouteState? currentRoute = null) =>
+        GeneratePurchaseCandidates(plan, currentRoute, budget: null);
+
+    private List<MarketPurchaseCandidate> GeneratePurchaseCandidates(
+        DetailedShoppingPlan plan,
+        MarketRouteState? currentRoute,
+        MarketRouteCandidateWorkBudget? budget)
     {
         var candidates = new List<MarketPurchaseCandidate>();
         if (plan.QuantityNeeded <= 0 || plan.WorldOptions.Count == 0)
@@ -1149,7 +1176,7 @@ public class MarketShoppingService
 
         if (plan.HqQuantityNeeded > 0)
         {
-            return GenerateQualityAwarePurchaseCandidates(plan, currentRoute);
+            return GenerateQualityAwarePurchaseCandidates(plan, currentRoute, budget);
         }
 
         var coverageCandidates = MarketCoverageSelection.GetCandidates(plan.CoverageSet)
@@ -1207,7 +1234,11 @@ public class MarketShoppingService
             .Select(w => w.World)
             .ToList();
 
-        foreach (var split in GenerateSplitPurchaseAlternatives(plan.QuantityNeeded, splitWorlds, currentRoute))
+        foreach (var split in GenerateSplitPurchaseAlternatives(
+                     plan.QuantityNeeded,
+                     splitWorlds,
+                     currentRoute,
+                     budget))
         {
             var quantityFulfilled = split.Sum(s => s.QuantityToBuy);
             var evidencePenalty = CalculateSplitEvidencePenalty(split, plan.WorldOptions);
@@ -1231,7 +1262,8 @@ public class MarketShoppingService
 
     private static List<MarketPurchaseCandidate> GenerateQualityAwarePurchaseCandidates(
         DetailedShoppingPlan plan,
-        MarketRouteState? currentRoute)
+        MarketRouteState? currentRoute,
+        MarketRouteCandidateWorkBudget? budget)
     {
         var worlds = plan.WorldOptions
             .Where(world => !string.Equals(
@@ -1241,8 +1273,9 @@ public class MarketShoppingService
             .ToList();
         var worldSets = new Dictionary<string, IReadOnlyList<WorldShoppingSummary>>(StringComparer.Ordinal);
 
-        void AddWorldSet(IEnumerable<WorldShoppingSummary> source)
+        bool AddWorldSet(IEnumerable<WorldShoppingSummary> source)
         {
+            budget?.CheckCancellation();
             var set = source
                 .DistinctBy(world => new MarketWorldKey(world.DataCenter, world.WorldName))
                 .OrderBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
@@ -1250,27 +1283,31 @@ public class MarketShoppingService
                 .ToList();
             if (set.Count == 0)
             {
-                return;
+                return true;
             }
 
             var key = string.Join('|', set.Select(world => $"{world.DataCenter}:{world.WorldName}"));
-            worldSets.TryAdd(key, set);
+            if (worldSets.ContainsKey(key))
+            {
+                return true;
+            }
+            if (budget is not null && !budget.TryConsumeWorldSet())
+            {
+                return false;
+            }
+            worldSets.Add(key, set);
+            return true;
         }
 
         foreach (var world in worlds)
         {
-            AddWorldSet([world]);
-        }
-
-        for (var left = 0; left < worlds.Count; left++)
-        {
-            for (var right = left + 1; right < worlds.Count; right++)
+            if (!AddWorldSet([world]))
             {
-                AddWorldSet([worlds[left], worlds[right]]);
+                break;
             }
         }
-
         AddWorldSet(worlds);
+
         if (currentRoute?.Worlds.Count > 0)
         {
             var routeWorlds = worlds.Where(world => currentRoute.ContainsWorld(
@@ -1278,13 +1315,34 @@ public class MarketShoppingService
             AddWorldSet(routeWorlds);
             foreach (var world in worlds)
             {
-                AddWorldSet(routeWorlds.Append(world));
+                if (!AddWorldSet(routeWorlds.Append(world)))
+                {
+                    break;
+                }
+            }
+        }
+
+        for (var left = 0; left < worlds.Count; left++)
+        {
+            var exhausted = false;
+            for (var right = left + 1; right < worlds.Count; right++)
+            {
+                if (!AddWorldSet([worlds[left], worlds[right]]))
+                {
+                    exhausted = true;
+                    break;
+                }
+            }
+            if (exhausted)
+            {
+                break;
             }
         }
 
         var candidates = new List<MarketPurchaseCandidate>();
         foreach (var worldSet in worldSets.Values)
         {
+            budget?.CheckCancellation();
             var available = worldSet
                 .SelectMany(world => world.Listings
                     .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
@@ -1293,10 +1351,12 @@ public class MarketShoppingService
                 .ThenBy(entry => entry.World.DataCenter, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(entry => entry.World.WorldName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            var selected = QualityAwareListingCoverageOptimizer.Select(
+            var selection = QualityAwareListingCoverageOptimizer.SelectBounded(
                 available,
                 plan.QuantityNeeded,
-                plan.HqQuantityNeeded);
+                plan.HqQuantityNeeded,
+                budget);
+            var selected = selection.Listings;
             if (selected == null)
             {
                 continue;
@@ -1494,12 +1554,13 @@ public class MarketShoppingService
     private static List<List<SplitWorldPurchase>> GenerateSplitPurchaseAlternatives(
         int quantityNeeded,
         IReadOnlyList<WorldShoppingSummary> rankedWorlds,
-        MarketRouteState? currentRoute)
+        MarketRouteState? currentRoute,
+        MarketRouteCandidateWorkBudget? budget)
     {
         var alternatives = new Dictionary<string, List<SplitWorldPurchase>>(StringComparer.OrdinalIgnoreCase);
         var routeKeyOrder = new List<string>();
 
-        AddSplitAlternative(quantityNeeded, rankedWorlds, alternatives, routeKeyOrder);
+        AddSplitAlternative(quantityNeeded, rankedWorlds, alternatives, routeKeyOrder, budget);
         AddSplitAlternative(
             quantityNeeded,
             rankedWorlds
@@ -1507,16 +1568,21 @@ public class MarketShoppingService
                 .ThenBy(world => world.DataCenter)
                 .ThenBy(world => world.WorldName),
             alternatives,
-            routeKeyOrder);
+            routeKeyOrder,
+            budget);
 
         foreach (var seedWorld in GetSplitSeedWorlds(rankedWorlds, currentRoute))
         {
+            if (budget is not null && !budget.TryConsumeSplitSeed())
+            {
+                break;
+            }
             var seededWorlds = rankedWorlds
                 .Where(world => !IsSameWorld(world, seedWorld))
                 .Prepend(seedWorld)
                 .ToList();
 
-            AddSplitAlternative(quantityNeeded, seededWorlds, alternatives, routeKeyOrder);
+            AddSplitAlternative(quantityNeeded, seededWorlds, alternatives, routeKeyOrder, budget);
         }
 
         return routeKeyOrder
@@ -1546,9 +1612,10 @@ public class MarketShoppingService
         int quantityNeeded,
         IEnumerable<WorldShoppingSummary> worlds,
         Dictionary<string, List<SplitWorldPurchase>> alternatives,
-        List<string> routeKeyOrder)
+        List<string> routeKeyOrder,
+        MarketRouteCandidateWorkBudget? budget)
     {
-        var split = BuildSplitPurchase(quantityNeeded, worlds);
+        var split = BuildSplitPurchase(quantityNeeded, worlds, budget);
         if (split.Count <= 1 || split.Sum(s => s.QuantityToBuy) < quantityNeeded)
         {
             return;
@@ -1591,13 +1658,20 @@ public class MarketShoppingService
 
     internal static List<SplitWorldPurchase> BuildSplitPurchase(
         int quantityNeeded,
-        IEnumerable<WorldShoppingSummary> worlds)
+        IEnumerable<WorldShoppingSummary> worlds) =>
+        BuildSplitPurchase(quantityNeeded, worlds, budget: null);
+
+    private static List<SplitWorldPurchase> BuildSplitPurchase(
+        int quantityNeeded,
+        IEnumerable<WorldShoppingSummary> worlds,
+        MarketRouteCandidateWorkBudget? budget)
     {
         var split = new List<SplitWorldPurchase>();
         var remaining = quantityNeeded;
 
         foreach (var world in worlds)
         {
+            budget?.CheckCancellation();
             if (remaining <= 0)
             {
                 break;
@@ -1615,6 +1689,7 @@ public class MarketShoppingService
 
             foreach (var listing in world.Listings.Where(l => !l.IsAdditionalOption).OrderBy(l => l.PricePerUnit))
             {
+                budget?.CheckCancellation();
                 if (remainingFromWorld <= 0)
                 {
                     break;
@@ -2161,7 +2236,7 @@ public class MarketShoppingService
     private sealed class ProcurementRouteSearchState
     {
         public ProcurementRouteSearchState()
-            : this(new MarketRouteState(), 0, 0, [])
+            : this(new MarketRouteState(), 0, 0, [], string.Empty, string.Empty)
         {
         }
 
@@ -2169,18 +2244,17 @@ public class MarketShoppingService
             MarketRouteState route,
             long totalGilCost,
             long totalEvidencePenalty,
-            IReadOnlyList<ProcurementRouteChoice> choices)
+            IReadOnlyList<ProcurementRouteChoice> choices,
+            string tieBreakKey,
+            string missingChoiceKey)
         {
             Route = route;
             TotalGilCost = totalGilCost;
             TotalEvidencePenalty = totalEvidencePenalty;
             Choices = choices;
-            TieBreakKey = BuildTieBreakKey(choices);
-            RouteShapeKey = BuildRouteShapeKey(route, choices);
-            MissingChoiceKey = string.Join(",", choices
-                .Where(choice => choice.Candidate == null)
-                .Select(choice => choice.PlanIndex)
-                .OrderBy(index => index));
+            TieBreakKey = tieBreakKey;
+            MissingChoiceKey = missingChoiceKey;
+            RouteShapeKey = BuildRouteShapeKey(route, missingChoiceKey);
         }
 
         public MarketRouteState Route { get; }
@@ -2221,7 +2295,9 @@ public class MarketShoppingService
                 route,
                 SaturatingAdd(TotalGilCost, candidate.GilCost),
                 SaturatingAdd(TotalEvidencePenalty, candidate.MarketEvidencePenalty),
-                choices);
+                choices,
+                AppendChoiceKey(TieBreakKey, planIndex, candidate),
+                MissingChoiceKey);
         }
 
         public ProcurementRouteSearchState WithoutRecommendation(int planIndex)
@@ -2230,7 +2306,16 @@ public class MarketShoppingService
                 .Append(new ProcurementRouteChoice(planIndex, null))
                 .ToList();
 
-            return new ProcurementRouteSearchState(Route, TotalGilCost, TotalEvidencePenalty, choices);
+            var missingChoiceKey = string.IsNullOrEmpty(MissingChoiceKey)
+                ? planIndex.ToString()
+                : $"{MissingChoiceKey},{planIndex}";
+            return new ProcurementRouteSearchState(
+                Route,
+                TotalGilCost,
+                TotalEvidencePenalty,
+                choices,
+                AppendChoiceKey(TieBreakKey, planIndex, candidate: null),
+                missingChoiceKey);
         }
 
         private static long SaturatingAdd(long left, long right)
@@ -2243,44 +2328,27 @@ public class MarketShoppingService
             return left + right;
         }
 
-        private static string BuildTieBreakKey(IEnumerable<ProcurementRouteChoice> choices)
+        private static string AppendChoiceKey(
+            string existing,
+            int planIndex,
+            MarketPurchaseCandidate? candidate)
         {
-            return string.Join(
-                "|",
-                choices.Select(choice =>
-                {
-                    if (choice.Candidate == null)
-                    {
-                        return $"{choice.PlanIndex:D8}:NO_RECOMMENDATION";
-                    }
-
-                    var routeKey = string.Join(
-                        ",",
-                        choice.Candidate.Worlds
-                            .OrderBy(world => world.DataCenter)
-                            .ThenBy(world => world.WorldName)
-                            .Select(world => $"{world.DataCenter}:{world.WorldName}"));
-
-                    return $"{choice.PlanIndex:D8}:{choice.Candidate.GilCost:D20}:{routeKey}";
-                }));
+            var choiceKey = candidate is null
+                ? $"{planIndex:D8}:NO_RECOMMENDATION"
+                : $"{planIndex:D8}:{candidate.GilCost:D20}:{string.Join(
+                    ',',
+                    candidate.Worlds
+                        .OrderBy(world => world.DataCenter)
+                        .ThenBy(world => world.WorldName)
+                        .Select(world => $"{world.DataCenter}:{world.WorldName}"))}";
+            return string.IsNullOrEmpty(existing) ? choiceKey : $"{existing}|{choiceKey}";
         }
 
         private static string BuildRouteShapeKey(
             MarketRouteState route,
-            IEnumerable<ProcurementRouteChoice> choices)
+            string missingChoiceKey)
         {
-            var worlds = string.Join(
-                ",",
-                route.Worlds
-                    .OrderBy(world => world.DataCenter)
-                    .ThenBy(world => world.WorldName)
-                    .Select(world => $"{world.DataCenter}:{world.WorldName}"));
-            var missingPlans = string.Join(
-                ",",
-                choices
-                    .Where(choice => choice.Candidate == null)
-                    .Select(choice => choice.PlanIndex));
-            return $"{worlds}|missing:{missingPlans}";
+            return $"{route.CanonicalKey}|missing:{missingChoiceKey}";
         }
     }
 

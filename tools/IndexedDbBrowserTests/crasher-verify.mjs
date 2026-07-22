@@ -14,15 +14,53 @@ const url = process.argv[3] ?? 'http://127.0.0.1:5083';
 const plan = process.argv[4] ?? 'C:/Users/gianf/Downloads/crasher.craftplan';
 const output = process.argv[5] ?? `crasher-${browserName}.json`;
 const evidenceMode = process.argv[6] ?? 'seeded';
+const executionMode = process.argv[7] ?? 'legacy';
 const browserType = { chromium, firefox }[browserName];
 if (!browserType) throw new Error(`Unsupported browser ${browserName}`);
 if (!['seeded', 'live'].includes(evidenceMode)) throw new Error(`Unsupported evidence mode ${evidenceMode}`);
+if (!['legacy', 'engine', 'workflow-engine'].includes(executionMode)) throw new Error(`Unsupported execution mode ${executionMode}`);
+if (executionMode === 'engine' && evidenceMode === 'live') {
+  throw new Error('The standalone engine acceptance probe requires seeded evidence.');
+}
+const isSimpleCrasher = plan.toLowerCase().includes('simplecrasher');
+const expectedShape = isSimpleCrasher
+  ? {
+      rootCount: 4,
+      nodeCount: 80,
+      edgeCount: 76,
+      candidateCount: 26,
+      leafItemIds: '14,15,16,17,18,19,44848,45968,45969,45970,45984,45985,45986,46243,46244,46246,46252'
+    }
+  : {
+      rootCount: 15,
+      nodeCount: 88,
+      edgeCount: 73,
+      candidateCount: 53,
+      leafItemIds: '2,3,4,7,8,9,10,13,14,16,17,5106,5111,5114,5116,5118,5119,5121,5261,5384,5491,5518,5523,5528,5530,12223,12224,12531,12534,12631,12943'
+    };
 
 const budgets = loadOracleBudgets(evidenceMode);
-if (browserName === 'firefox' && !process.env.CA_ORACLE_BROWSER_OPERATION_TIMEOUT_MS) {
+if (executionMode === 'workflow-engine') {
+  if (!process.env.CA_ORACLE_GLOBAL_TIMEOUT_MS) budgets.globalMs = 600_000;
+  if (!process.env.CA_ORACLE_ROUTE_RETURN_TIMEOUT_MS) budgets.routeReturnMs = 420_000;
+  if (!process.env.CA_ORACLE_STALL_TIMEOUT_MS) budgets.stallMs = 240_000;
+  if (!process.env.CA_ORACLE_BROWSER_OPERATION_TIMEOUT_MS) budgets.operationMs = 60_000;
+}
+if (browserName === 'firefox' && evidenceMode === 'seeded' && !process.env.CA_ORACLE_BROWSER_OPERATION_TIMEOUT_MS) {
   // Firefox can keep its content thread inside a large IndexedDB structured-clone
   // commit for longer than Chromium while still making forward progress.
   budgets.operationMs = 30_000;
+}
+if (browserName === 'firefox' && evidenceMode === 'seeded' && !process.env.CA_ORACLE_GLOBAL_TIMEOUT_MS) {
+  // Managed WASM route enumeration is substantially slower in Firefox. Keep
+  // phase and stall limits strict, but allow the complete bounded transaction.
+  budgets.globalMs = 480_000;
+}
+if (browserName === 'firefox' && evidenceMode === 'seeded' && !process.env.CA_ORACLE_HEARTBEAT_MS) {
+  budgets.heartbeatMs = 6_000;
+}
+if (browserName === 'firefox' && evidenceMode === 'seeded' && !process.env.CA_ORACLE_STALL_TIMEOUT_MS) {
+  budgets.stallMs = 60_000;
 }
 const started = performance.now();
 const elapsed = () => performance.now() - started;
@@ -31,6 +69,7 @@ const report = {
   url,
   plan,
   evidenceMode,
+  executionMode,
   budgets,
   stages: [],
   console: [],
@@ -267,6 +306,12 @@ function throwIfPhaseExpired(phaseBudgetMs, snapshot) {
   const now = elapsed();
   const status = (snapshot?.statuses || []).join(' | ');
   const data = snapshot?.data || {};
+  if (routeResult?.workflowStatus && routeResult.workflowStatus !== 'Published') {
+    throw new OracleFailure(
+      'terminal-failure',
+      `Procurement workflow returned ${routeResult.workflowStatus}.`,
+      { lifecycle: snapshot, routeResult });
+  }
   if (data.routeFailure || /suspect cache|failed|could not|unhandled exception/i.test(status)) {
     throw new OracleFailure('terminal-failure', data.routeFailure || status, { lifecycle: snapshot });
   }
@@ -446,11 +491,35 @@ workflow: try {
         items: Object.fromEntries(ids.map(id => [id, item(id)]))
       } });
     });
+  } else {
+    await page.route('https://universalis.app/api/v2/**', async route => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        headers: { ...response.headers(), 'access-control-allow-origin': '*' }
+      });
+    });
+  }
+
+  if (executionMode !== 'legacy') {
+    await page.route('**/appsettings.json', async route => {
+      const response = await route.fetch();
+      const settings = await response.json();
+      settings.EngineRewrite = { ExecutionEnabled: true };
+      settings.EngineAcceptance = {
+        Enabled: true,
+        UseDeterministicEvidence: true
+      };
+      if (executionMode === 'workflow-engine') {
+        settings.ProcurementRoutes = { GenerationEnabled: true };
+      }
+      await route.fulfill({ response, json: settings });
+    });
   }
 
   setPhase('application-startup');
   await withDeadline('navigate to application', () => page.goto(`${url}?benchmark-defer-route=1`, { waitUntil: 'networkidle' }), budgets.importMs);
-  await withDeadline('wait for IndexedDB module', () => page.waitForFunction(() => window.IndexedDB?.moduleRevision === 10), budgets.importMs);
+  await withDeadline('wait for IndexedDB module', () => page.waitForFunction(() => window.IndexedDB?.moduleRevision === 15), budgets.importMs);
   stage('app-ready', { moduleRevision: await withDeadline('read IndexedDB module revision', () => page.evaluate(() => window.IndexedDB.moduleRevision)) });
   await withDeadline('enable benchmark settings', () => page.evaluate(async () => {
     await window.IndexedDB.saveSetting('debug.secret_tools_enabled', 'true');
@@ -476,11 +545,18 @@ workflow: try {
   stage('after-import-click');
   const importedLifecycle = await waitForLifecycle('import-and-expansion', budgets.importMs, snapshot => {
     const data = snapshot?.data;
-    return data && Number(data.planRootCount) === 15 && Number(data.planNodeCount) > Number(data.planRootCount);
+    return data &&
+      Number(data.planRootCount) === expectedShape.rootCount &&
+      Number(data.planNodeCount) === expectedShape.nodeCount &&
+      Number(data.planEdgeCount) === expectedShape.edgeCount &&
+      Number(data.marketCandidateCount) === expectedShape.candidateCount &&
+      data.planLeafItemIds === expectedShape.leafItemIds;
   });
   stage('plan-imported-and-recipe-graph-expanded', {
     rootCount: Number(importedLifecycle.data.planRootCount),
     nodeCount: Number(importedLifecycle.data.planNodeCount),
+    edgeCount: Number(importedLifecycle.data.planEdgeCount),
+    candidateCount: Number(importedLifecycle.data.marketCandidateCount),
     leafItemIds: importedLifecycle.data.planLeafItemIds,
     marketAnalysisCount: Number(importedLifecycle.data.marketAnalysisCount)
   });
@@ -495,6 +571,7 @@ workflow: try {
   stage('plan-import-activation-settled', { lifecycle: importSettled });
   await writeReport(true);
 
+  if (executionMode === 'legacy' || evidenceMode === 'live') {
   await withDeadline('open market analysis', () => page.getByRole('button', { name: 'Market Analysis', exact: true }).click());
   const analysisButton = page.locator('[data-benchmark-id="market-analysis-run"]');
   await withDeadline('wait for market analysis button', () => analysisButton.waitFor({ state: 'visible' }));
@@ -542,26 +619,164 @@ workflow: try {
       lifecycle: liveSnapshot
     };
     stage('live-network-smoke-complete');
-    report.completed = true;
-    report.durationMs = Math.round(elapsed());
-    report.finishedAt = new Date().toISOString();
-    await writeReport(true);
-    break workflow;
+    if (executionMode === 'legacy') {
+      report.completed = true;
+      report.durationMs = Math.round(elapsed());
+      report.finishedAt = new Date().toISOString();
+      await writeReport(true);
+      break workflow;
+    }
+  }
+  } else {
+    stage('test-only-deterministic-engine-evidence-selected');
   }
 
-  if (evidenceMode === 'seeded') {
+  if (executionMode === 'workflow-engine' && evidenceMode === 'seeded') {
+    await withDeadline('seed deterministic workflow evidence', () =>
+      page.locator('[data-benchmark-id="engine-acceptance-seed-evidence"]').click());
+    await waitForLifecycle('workflow-engine-evidence-publication', budgets.analysisMs, snapshot => {
+      const data = snapshot?.data;
+      return data && Number(data.marketAnalysisCount) > 0 && snapshot.autosave?.hasMarketIntelligence;
+    });
+    stage('workflow-engine-evidence-published');
+  }
+
+  if (evidenceMode === 'seeded' && executionMode === 'legacy') {
     await withDeadline('lock acquisition decisions', () => page.$eval(
       '[data-benchmark-id="lock-current-acquisition-decisions"]', element => element.click()));
     stage('deterministic-acquisition-decisions-locked');
   }
 
-  await withDeadline('open procurement plan', () => page.getByRole('button', { name: 'Procurement Plan', exact: true }).click());
-  const routeButton = page.locator('.pp-primary-action');
-  await withDeadline('wait for route button', () => routeButton.waitFor({ state: 'visible' }));
-  await withDeadline('start route generation', () => routeButton.click());
-  stage('explicit-route-generation-started');
-  await writeReport(true);
-  await waitForFullSettlement();
+  if (executionMode === 'engine') {
+    setPhase('engine-worker-transaction');
+    const probe = page.locator('[data-benchmark-id="engine-transaction-acceptance"]');
+    await withDeadline('wait for engine acceptance probe', () => probe.waitFor({ state: 'attached' }));
+    await withDeadline('start page heartbeat', () => page.evaluate(() => {
+      const heartbeat = {
+        workerCount: 0,
+        workerLastAt: 0,
+        workerMaxGapMs: 0,
+        workerMeasuring: false,
+        finalizationCount: 0,
+        finalizationLastAt: 0,
+        finalizationMaxGapMs: 0,
+        finalizationMeasuring: false,
+        timer: null
+      };
+      window.addEventListener('craft-architect-engine-worker-progress', () => {
+        if (!heartbeat.workerMeasuring) {
+          heartbeat.workerMeasuring = true;
+          heartbeat.workerLastAt = performance.now();
+        }
+      });
+      window.addEventListener('craft-architect-engine-worker-complete', () => {
+        heartbeat.workerMeasuring = false;
+        heartbeat.finalizationMeasuring = true;
+        heartbeat.finalizationLastAt = performance.now();
+      });
+      window.addEventListener('craft-architect-engine-host-finalized', () => {
+        heartbeat.finalizationMeasuring = false;
+      });
+      heartbeat.timer = setInterval(() => {
+        const now = performance.now();
+        if (heartbeat.workerMeasuring) {
+          heartbeat.workerMaxGapMs = Math.max(heartbeat.workerMaxGapMs, now - heartbeat.workerLastAt);
+          heartbeat.workerLastAt = now;
+          heartbeat.workerCount++;
+        }
+        if (heartbeat.finalizationMeasuring) {
+          heartbeat.finalizationMaxGapMs = Math.max(
+            heartbeat.finalizationMaxGapMs,
+            now - heartbeat.finalizationLastAt);
+          heartbeat.finalizationLastAt = now;
+          heartbeat.finalizationCount++;
+        }
+      }, 50);
+      window.__engineTransactionHeartbeat = heartbeat;
+    }));
+    await withDeadline('start engine Worker transaction', () =>
+      page.locator('[data-benchmark-id="engine-transaction-run"]').evaluate(element => element.click()));
+    await withDeadline('wait for engine Worker transaction', () => page.waitForFunction(() => {
+      const element = document.querySelector('[data-benchmark-id="engine-transaction-acceptance"]');
+      return element?.dataset.status === 'complete' || element?.dataset.status === 'failed';
+    }, null, { timeout: budgets.globalMs - elapsed() }), budgets.globalMs - elapsed());
+    const engineEvidence = await probe.evaluate(element => ({ ...element.dataset }));
+    engineEvidence.heartbeat = await withDeadline('read page heartbeat', () => page.evaluate(() => {
+      const heartbeat = window.__engineTransactionHeartbeat;
+      clearInterval(heartbeat?.timer);
+      if (!heartbeat) return null;
+      if (heartbeat.finalizationMeasuring) {
+        heartbeat.finalizationMaxGapMs = Math.max(
+          heartbeat.finalizationMaxGapMs,
+          performance.now() - heartbeat.finalizationLastAt);
+      }
+      return {
+        workerCount: heartbeat.workerCount,
+        workerMaxGapMs: Math.round(heartbeat.workerMaxGapMs),
+        finalizationCount: heartbeat.finalizationCount,
+        finalizationMaxGapMs: Math.round(heartbeat.finalizationMaxGapMs)
+      };
+    }));
+    if (engineEvidence.status !== 'complete') {
+      throw new OracleFailure('engine-transaction-failed', engineEvidence.error || 'Engine transaction failed.', {
+        engineEvidence
+      });
+    }
+    if (engineEvidence.terminalStatus !== 'Succeeded' ||
+        engineEvidence.replayMatched !== 'true' ||
+        engineEvidence.routeValidity !== 'Current' ||
+        engineEvidence.routeHasDecision !== 'true' ||
+        engineEvidence.acquisitionTruncated !== 'true' ||
+        engineEvidence.routeTruncated !== 'true' ||
+        engineEvidence.travelTruncated !== 'true' ||
+        Number(engineEvidence.travelRoutesEvaluated) <= 0 ||
+        Number(engineEvidence.travelRoutesEvaluated) > 8 ||
+        !engineEvidence.heartbeat ||
+        engineEvidence.heartbeat.workerCount < 10 ||
+        engineEvidence.heartbeat.workerMaxGapMs > budgets.heartbeatMs ||
+        engineEvidence.heartbeat.finalizationCount < 1 ||
+        engineEvidence.heartbeat.finalizationMaxGapMs > budgets.heartbeatMs ||
+        Number(engineEvidence.acquisitionCombinationEvaluations) <= 0 ||
+        Number(engineEvidence.acquisitionCombinationEvaluations) >
+          Number(importedLifecycle.data.planNodeCount) * 2_048) {
+      throw new OracleFailure('engine-settlement-contradiction', 'Engine transaction evidence is incomplete.', {
+        engineEvidence
+      });
+    }
+    routeResult = {
+      workflowStatus: 'Published',
+      routeDecision: true,
+      engineEvidence
+    };
+    report.engineEvidence = engineEvidence;
+    stage('engine-worker-transaction-settled', { engineEvidence });
+    await writeReport(true);
+  } else {
+    await withDeadline('open procurement plan', () => page.getByRole('button', { name: 'Procurement Plan', exact: true }).click());
+    const routeButton = page.locator('.pp-primary-action');
+    await withDeadline('wait for route button', () => routeButton.waitFor({ state: 'visible' }));
+    await withDeadline('start route generation', () => routeButton.click());
+    stage('explicit-route-generation-started');
+    await writeReport(true);
+    if (executionMode === 'workflow-engine') {
+      const settled = await waitForLifecycle('workflow-engine-route-settlement', budgets.routeReturnMs, snapshot => {
+        const data = snapshot?.data || {};
+        return routeResult?.workflowStatus === 'Published' &&
+          data.routeValidity === 'Current' &&
+          data.routeHasDecision === 'true' &&
+          data.isBusy === 'false' &&
+          !data.activeWorkflows &&
+          data.dirtyPersistedBuckets === 'None' &&
+          snapshot.autosave?.hasMarketIntelligence;
+      });
+      stage('full-operation-settled', { lifecycle: settled });
+      report.completed = true;
+      report.lifecycle = settled;
+      await writeReport(true);
+    } else {
+      await waitForFullSettlement();
+    }
+  }
 
   setPhase('post-completion-navigation');
   const interactionStarted = performance.now();
@@ -577,9 +792,15 @@ workflow: try {
   await writeReport(true);
 
   setPhase('reload-restoration');
-  await withDeadline('reenable automatic route reconciliation', () => page.evaluate(
-    () => window.IndexedDB.saveSetting('debug.defer_automatic_route_reconciliation', 'false')));
+  if (executionMode === 'legacy') {
+    await withDeadline('reenable automatic route reconciliation', () => page.evaluate(
+      () => window.IndexedDB.saveSetting('debug.defer_automatic_route_reconciliation', 'false')));
+  }
   await withDeadline('reload application', () => page.goto(url, { waitUntil: 'networkidle' }), budgets.reloadMs);
+  await withDeadline('wait for startup restoration', () => page.locator('.startup-overlay').waitFor({
+    state: 'detached',
+    timeout: budgets.reloadMs
+  }), budgets.reloadMs);
   await withDeadline('open restored procurement plan', () => page.getByRole('button', { name: 'Procurement Plan', exact: true }).click(), budgets.reloadMs);
   await withDeadline('wait for restored procurement route title', () => page.locator('#procurement-route-title').waitFor({ state: 'visible' }), budgets.reloadMs);
   const restored = await waitForLifecycle('reload-restoration', budgets.reloadMs, snapshot => {
@@ -595,7 +816,13 @@ workflow: try {
   });
   stage('autosave-restored-and-route-regenerated-after-reload', { lifecycle: restored });
   report.finalBodyPreview = (await withDeadline('read final body', () => page.locator('body').innerText())).slice(0, 4000);
-  report.consoleErrors = report.console.filter(entry => entry.type === 'error' || entry.type === 'warning');
+  report.transientConsoleDiagnostics = report.console.filter(entry =>
+    evidenceMode === 'live' &&
+    (entry.type === 'error' || entry.type === 'warning') &&
+    /status of 429|Rate limited \(429\)|Retry \d+\/\d+ for chunk/i.test(entry.text));
+  report.consoleErrors = report.console.filter(entry =>
+    (entry.type === 'error' || entry.type === 'warning') &&
+    !report.transientConsoleDiagnostics.includes(entry));
   const criticalRequestFailures = report.requestFailures.filter(entry => !/favicon|fonts\.googleapis|fonts\.gstatic/i.test(entry.url));
   if (report.pageErrors.length > 0 || report.consoleErrors.length > 0 || criticalRequestFailures.length > 0) {
     throw new OracleFailure('browser-diagnostics', 'Browser diagnostics were not clean', {

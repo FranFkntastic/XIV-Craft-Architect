@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Core.Engine;
@@ -47,6 +48,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
         {
             throw new NotSupportedException($"Engine contract version '{request.ContractVersion}' is not supported.");
         }
+        EngineCanonicalHash.ValidateBoundEngineInputHash(request);
 
         var phase = EnginePhase.Accepted;
         var computationEvidence = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -109,7 +111,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
                     input.ProcurementRoute,
                     routeProgress,
                     cancellationToken,
-                    MarketAnalysisExecutionOptions.Interactive);
+                    CreateExecutionOptions(request.Budgets));
                 computationEvidence["phase:Reconciling"] = "complete";
             }
 
@@ -119,12 +121,23 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             routeHash = routeSnapshot is null ? string.Empty : EngineSemanticSnapshotHash.Route(routeSnapshot);
             if (routeSnapshot is { IsComplete: false })
             {
-                throw new InvalidOperationException("The procurement route does not provide a viable acquisition for every requested item.");
+                return CreateTerminal(
+                    generation,
+                    executionId,
+                    request,
+                    EngineComputationStatus.Failed,
+                    phase,
+                    "no-complete-procurement-route",
+                    "The procurement route does not provide a viable acquisition for every requested item.",
+                    nameof(InvalidOperationException),
+                    computationEvidence);
             }
             var resultElement = JsonSerializer.SerializeToElement(
-                new ReferenceEngineResultSnapshot(analysisSnapshot, routeSnapshot),
+                new ReferenceEngineResultSnapshot(analysisSnapshot, null, route),
                 EngineJsonSerializerOptions.CreateWire());
-            computationEvidence["resultPayloadHash"] = EngineCanonicalHash.Compute(resultElement);
+            computationEvidence["resultPayloadHash"] = string.IsNullOrWhiteSpace(request.InputHash)
+                ? EngineCanonicalHash.Compute(resultElement)
+                : EngineCanonicalHash.ComputeAuthoritativeResultPayloadHash(analysisHash, routeHash);
             var frozenEvidence = EngineEvidenceSnapshots.Freeze(computationEvidence);
             var computationHash = EngineCanonicalHash.ComputeComputationHash(
                 generation,
@@ -146,7 +159,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
                 phase,
                 resultElement,
                 request.Basis,
-                EngineCanonicalHash.ComputeEngineInput(request.Input),
+                EngineCanonicalHash.ResolveEngineInputHash(request),
                 request.Budgets,
                 request.RootIntentHash,
                 request.ExpandedGraphHash,
@@ -169,20 +182,29 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
 
     private static void ValidateBudgets(EngineExecutionBudgets budgets, ReferenceEngineInput input)
     {
+        if (budgets.SchemaVersion != EngineExecutionBudgets.Default.SchemaVersion)
+        {
+            throw new NotSupportedException($"Engine budget schema '{budgets.SchemaVersion}' is not supported.");
+        }
         if (budgets.MaxWorkUnits <= 0 || budgets.MaxEvidenceRequests < 0 ||
-            budgets.MaxCandidateEvaluations <= 0 || budgets.CooperativeCancellationInterval <= 0)
+            budgets.MaxTravelRouteEvaluations < 0 || budgets.CooperativeCancellationInterval <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(budgets), "Engine budgets must be positive (evidence requests may be zero).");
+            throw new ArgumentOutOfRangeException(
+                nameof(budgets),
+                "Engine budgets must be positive (evidence requests and travel-route evaluations may be zero).");
         }
 
-        if (budgets.MaxCandidateEvaluations != EngineExecutionBudgets.Default.MaxCandidateEvaluations ||
-            budgets.CooperativeCancellationInterval != EngineExecutionBudgets.Default.CooperativeCancellationInterval)
+        if (budgets.CooperativeCancellationInterval != EngineExecutionBudgets.Default.CooperativeCancellationInterval)
         {
-            throw new NotSupportedException("Candidate-evaluation and cooperative-cancellation budgets are not supported by the reference executor yet; use their default values.");
+            throw new NotSupportedException("Cooperative-cancellation budgets are not supported by the reference executor yet; use the default value.");
         }
 
-        var operationCount = (input.MarketAnalysis is null ? 0 : 1) + (input.ProcurementRoute is null ? 0 : 1);
-        if (operationCount > budgets.MaxWorkUnits)
+        var maximumWorkUnits = input.ProcurementRoute?.Plan is { } plan
+            ? AcquisitionVariantFrontierBuilder.EstimateMaximumWorkUnits(
+                plan,
+                budgets.MaxTravelRouteEvaluations)
+            : (input.MarketAnalysis is null ? 0 : 1) + (input.ProcurementRoute is null ? 0 : 1);
+        if (maximumWorkUnits > budgets.MaxWorkUnits)
         {
             throw new InvalidOperationException("The request exceeds its engine work-unit budget.");
         }
@@ -194,6 +216,13 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             throw new InvalidOperationException("The request exceeds its market-evidence request budget.");
         }
     }
+
+    private static MarketAnalysisExecutionOptions CreateExecutionOptions(EngineExecutionBudgets budgets) => new()
+    {
+        YieldEveryItems = MarketAnalysisExecutionOptions.Interactive.YieldEveryItems,
+        ProgressEveryItems = MarketAnalysisExecutionOptions.Interactive.ProgressEveryItems,
+        MaxTravelRouteEvaluations = budgets.MaxTravelRouteEvaluations
+    };
 
     private static EngineComputationResult CreateTerminal(
         long generation,
@@ -238,7 +267,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             failedPhase,
             null,
             request.Basis,
-            EngineCanonicalHash.ComputeEngineInput(request.Input),
+            EngineCanonicalHash.ResolveEngineInputHash(request),
             request.Budgets,
             request.RootIntentHash,
             request.ExpandedGraphHash,

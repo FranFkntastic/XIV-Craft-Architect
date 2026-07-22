@@ -16,6 +16,11 @@ public sealed record MarketAnalysisWorkflowResult(
 
 public sealed class MarketAnalysisWorkflowService
 {
+    private static readonly MarketAnalysisExecutionOptions InteractiveExecution = new()
+    {
+        YieldEveryItems = 1
+    };
+
     private readonly AppState _appState;
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly IMarketPriceLadderAnalysisService _marketPriceLadderAnalysis;
@@ -52,6 +57,7 @@ public sealed class MarketAnalysisWorkflowService
         CancellationToken ct = default,
         MarketAnalysisExecutionOptions? executionOptions = null)
     {
+        var execution = executionOptions ?? InteractiveExecution;
         var plan = _appState.CurrentPlan;
         var planSessionVersion = _appState.PlanSessionVersion;
         var planDecisionVersion = _appState.CurrentVersions.PlanDecisionVersion;
@@ -60,6 +66,7 @@ public sealed class MarketAnalysisWorkflowService
         var candidateResult = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidateResultAsync(plan, ct);
         var materials = candidateResult?.Candidates.ToList() ?? [];
         var recipeBasis = candidateResult?.RecipeBasis;
+        var publicationProgressMessage = $"[stage] publishing {materials.Count} market analyses...";
         if (!IsCurrentPlanIdentity(plan, planSessionVersion, planId, planName))
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, 0);
@@ -104,7 +111,7 @@ public sealed class MarketAnalysisWorkflowService
             },
             progress,
             ct,
-            executionOptions: executionOptions);
+            executionOptions: execution);
         ct.ThrowIfCancellationRequested();
 
         if (!IsCurrentPlanIdentity(plan, planSessionVersion, planId, planName))
@@ -123,6 +130,7 @@ public sealed class MarketAnalysisWorkflowService
             return new MarketAnalysisWorkflowResult(false, 0, 0, reconciliation.FetchedCount);
         }
 
+        progress?.Report(publicationProgressMessage);
         var published = await PublishMarketAnalysisAsync(
             plan,
             planSessionVersion,
@@ -133,7 +141,8 @@ public sealed class MarketAnalysisWorkflowService
             reconciliation.ShoppingPlans.ToList(),
             recipeBasis,
             _appState.CreateCurrentMarketAnalysisScopeSnapshot(),
-            ct);
+            ct,
+            execution);
         if (published == null)
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, reconciliation.FetchedCount);
@@ -179,7 +188,8 @@ public sealed class MarketAnalysisWorkflowService
             shoppingPlans,
             _appState.MarketAnalysisRecipeBasis,
             _appState.CreateCurrentMarketAnalysisScopeSnapshot(),
-            ct);
+            ct,
+            MarketAnalysisExecutionOptions.Interactive);
         if (published == null)
         {
             return new MarketAnalysisWorkflowResult(false, 0, 0, 0);
@@ -202,7 +212,8 @@ public sealed class MarketAnalysisWorkflowService
         List<DetailedShoppingPlan> shoppingPlans,
         StoredRecipeOperationSnapshot? recipeBasis,
         PublishedMarketAnalysisScopeSnapshot publishedScope,
-        CancellationToken ct)
+        CancellationToken ct,
+        MarketAnalysisExecutionOptions? executionOptions)
     {
         if (plan == null)
         {
@@ -220,7 +231,8 @@ public sealed class MarketAnalysisWorkflowService
                 shoppingPlans,
                 recipeBasis,
                 publishedScope),
-            ct);
+            ct,
+            executionOptions);
     }
 
     private bool IsCurrentRequest(MarketAnalysisRequestSnapshot snapshot)

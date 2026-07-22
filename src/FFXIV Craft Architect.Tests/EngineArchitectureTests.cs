@@ -35,6 +35,39 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
+    public async Task CanonicalHash_CooperativeEngineInputMatchesSynchronousHash()
+    {
+        var input = JsonSerializer.SerializeToElement(Enumerable.Range(1, 256)
+            .Select(index => new { Index = index, Name = $"Item {index}" }));
+        var yieldCount = 0;
+
+        var hash = await EngineCanonicalHash.ComputeEngineInputAsync(
+            input,
+            _ =>
+            {
+                yieldCount++;
+                return ValueTask.CompletedTask;
+            });
+
+        Assert.Equal(EngineCanonicalHash.ComputeEngineInput(input), hash);
+        Assert.True(yieldCount > 0);
+    }
+
+    [Fact]
+    public async Task CanonicalHash_RequestIdentityRequiresAuthoritativeInputHash()
+    {
+        var authoritativeInput = JsonSerializer.SerializeToElement(new { Value = "authoritative" });
+        var tamperedInput = JsonSerializer.SerializeToElement(new { Value = "tampered" });
+        var request = CreateRequest(tamperedInput) with
+        {
+            InputHash = EngineCanonicalHash.ComputeEngineInput(authoritativeInput)
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            EngineCanonicalHash.ValidateAndComputeRequestIdentityAsync(request).AsTask());
+    }
+
+    [Fact]
     public void CanonicalHash_NormalizesEquivalentNumberSpellings()
     {
         using var integer = JsonDocument.Parse("1");
@@ -477,6 +510,71 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
+    public async Task ReferenceComputation_AppliesTravelRouteEvaluationBudget()
+    {
+        MarketAnalysisExecutionOptions? actualOptions = null;
+        var routeService = new Mock<IProcurementRouteExecutionService>();
+        routeService
+            .Setup(service => service.AnalyzeAsync(
+                It.IsAny<ProcurementRouteExecutionRequest>(),
+                It.IsAny<IProgress<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<MarketAnalysisExecutionOptions?>()))
+            .Callback<ProcurementRouteExecutionRequest, IProgress<string>?, CancellationToken, MarketAnalysisExecutionOptions?>(
+                (_, _, _, options) => actualOptions = options)
+            .ReturnsAsync(CreateRouteResult(DateTime.UnixEpoch, 100));
+        var engine = new ReferenceMarketProcurementEngine(
+            Mock.Of<IMarketAnalysisExecutionService>(),
+            routeService.Object,
+            new ReferenceEngineSemanticSnapshotProvider());
+        var operation = JsonSerializer.SerializeToElement(new ReferenceEngineInput(
+            null,
+            new ProcurementRouteExecutionRequest()));
+        var request = CreateRequest(operation) with
+        {
+            Budgets = EngineExecutionBudgets.Default with { MaxTravelRouteEvaluations = 12 }
+        };
+
+        var result = await engine.ComputeAsync(1, Guid.NewGuid(), request);
+
+        Assert.Equal(EngineComputationStatus.Completed, result.Status);
+        Assert.Equal(12, Assert.IsType<MarketAnalysisExecutionOptions>(actualOptions).MaxTravelRouteEvaluations);
+    }
+
+    [Fact]
+    public async Task ReferenceComputation_RejectsPlanAboveWorkBudget()
+    {
+        var plan = new CraftingPlan
+        {
+            RootItems =
+            [
+                new PlanNode
+                {
+                    ItemId = 100,
+                    Name = "Bounded Item",
+                    Quantity = 1,
+                    Source = AcquisitionSource.MarketBuyNq
+                }
+            ]
+        };
+        var engine = new ReferenceMarketProcurementEngine(
+            Mock.Of<IMarketAnalysisExecutionService>(),
+            Mock.Of<IProcurementRouteExecutionService>(),
+            new ReferenceEngineSemanticSnapshotProvider());
+        var request = CreateRequest(JsonSerializer.SerializeToElement(new ReferenceEngineInput(
+            null,
+            new ProcurementRouteExecutionRequest { Plan = plan }))) with
+        {
+            Budgets = EngineExecutionBudgets.Default with { MaxWorkUnits = 1 }
+        };
+
+        var result = await engine.ComputeAsync(1, Guid.NewGuid(), request);
+
+        Assert.Equal(EngineComputationStatus.Failed, result.Status);
+        Assert.Contains("work-unit budget", result.Failure?.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ReferenceComputation_RejectsUnsupportedBudgetsInputKindsAndEmptyOperations()
     {
         var engine = new ReferenceMarketProcurementEngine(
@@ -486,12 +584,17 @@ public sealed class EngineArchitectureTests
         var operation = JsonSerializer.SerializeToElement(new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null));
         var unsupportedBudget = CreateRequest(operation) with
         {
-            Budgets = EngineExecutionBudgets.Default with { MaxCandidateEvaluations = 12 }
+            Budgets = EngineExecutionBudgets.Default with { CooperativeCancellationInterval = 12 }
+        };
+        var unsupportedBudgetSchema = CreateRequest(operation) with
+        {
+            Budgets = EngineExecutionBudgets.Default with { SchemaVersion = 1 }
         };
         var unsupportedKind = CreateRequest(operation) with { InputKind = EngineInputKind.StructuredGraph };
         var empty = CreateRequest(JsonSerializer.SerializeToElement(new ReferenceEngineInput(null, null)));
 
         Assert.Equal(EngineComputationStatus.Failed, (await engine.ComputeAsync(1, Guid.NewGuid(), unsupportedBudget)).Status);
+        Assert.Equal(EngineComputationStatus.Failed, (await engine.ComputeAsync(1, Guid.NewGuid(), unsupportedBudgetSchema)).Status);
         Assert.Equal(EngineComputationStatus.Failed, (await engine.ComputeAsync(2, Guid.NewGuid(), unsupportedKind)).Status);
         Assert.Equal(EngineComputationStatus.Failed, (await engine.ComputeAsync(3, Guid.NewGuid(), empty)).Status);
     }
@@ -951,7 +1054,7 @@ public sealed class EngineArchitectureTests
         var ledger = new InMemoryEngineTransactionLedger();
         var request = CreateRequest(JsonSerializer.SerializeToElement(
             new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
-        var requestHash = EngineCanonicalHash.Compute(request, EngineJsonSerializerOptions.CreateWire());
+        var requestHash = EngineCanonicalHash.ComputeRequestIdentity(request);
         var first = await ledger.ClaimAsync(request.TransactionId, requestHash, CancellationToken.None);
 
         Assert.False(string.IsNullOrWhiteSpace(first.ClaimToken));
@@ -988,7 +1091,7 @@ public sealed class EngineArchitectureTests
         var ledger = new InMemoryEngineTransactionLedger();
         var request = CreateRequest(JsonSerializer.SerializeToElement(
             new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
-        var requestHash = EngineCanonicalHash.Compute(request, EngineJsonSerializerOptions.CreateWire());
+        var requestHash = EngineCanonicalHash.ComputeRequestIdentity(request);
         var claim = await ledger.ClaimAsync(request.TransactionId, requestHash, CancellationToken.None);
         var source = CreateSuccessfulResult(request);
         var mutableEvidence = Assert.IsType<Dictionary<string, string>>(source.Completion.TerminalEvidence);
@@ -1013,7 +1116,7 @@ public sealed class EngineArchitectureTests
         var ledger = new InMemoryEngineTransactionLedger();
         var request = CreateRequest(JsonSerializer.SerializeToElement(
             new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
-        var requestHash = EngineCanonicalHash.Compute(request, EngineJsonSerializerOptions.CreateWire());
+        var requestHash = EngineCanonicalHash.ComputeRequestIdentity(request);
         var lostClaim = await ledger.ClaimAsync(request.TransactionId, requestHash, CancellationToken.None);
         ledger.MarkClaimAbandoned(request.TransactionId, requestHash, lostClaim.ClaimToken!);
         await Assert.ThrowsAsync<InvalidOperationException>(() => ledger.CompleteAsync(
@@ -1085,7 +1188,7 @@ public sealed class EngineArchitectureTests
     {
         var request = CreateRequest(JsonSerializer.SerializeToElement(
             new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
-        var requestHash = EngineCanonicalHash.Compute(request, EngineJsonSerializerOptions.CreateWire());
+        var requestHash = EngineCanonicalHash.ComputeRequestIdentity(request);
         IEngineTransactionLedger ledger;
         if (ledgerWriteFails)
         {
@@ -1185,6 +1288,31 @@ public sealed class EngineArchitectureTests
         Assert.Equal(0, transport.ExecutionCount);
     }
 
+    [Fact]
+    public async Task Host_ExpiredTerminalIdentityNeverReexecutesTransaction()
+    {
+        var transport = new StubEngineExecutionTransport((generation, executionId, request) =>
+            CreateCompletedComputation(request, generation, executionId));
+        var settlement = new RecordingSettlement();
+        var host = new EngineExecutionHost(
+            transport,
+            settlement,
+            new ClaimResponseLedger(hash => new EngineTransactionClaim(
+                EngineTransactionClaimDisposition.ExpiredTerminalReplay,
+                hash)),
+            new ReferenceEngineSemanticSnapshotProvider());
+        var request = CreateRequest(JsonSerializer.SerializeToElement(
+            new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
+
+        var result = await host.ExecuteAsync(request);
+
+        Assert.Equal(EngineTerminalStatus.Indeterminate, result.Status);
+        Assert.Equal("transaction-replay-expired", result.Failure!.Code);
+        Assert.Equal("terminal-payload-expired", result.Completion.TerminalEvidence["replayStatus"]);
+        Assert.Equal(0, transport.ExecutionCount);
+        Assert.Equal([EnginePhase.ReleasingGate], settlement.Phases);
+    }
+
     [Theory]
     [InlineData(PrevalidationTransportBehavior.Unsupported)]
     [InlineData(PrevalidationTransportBehavior.Throwing)]
@@ -1241,6 +1369,63 @@ public sealed class EngineArchitectureTests
         Assert.Equal("gate-release-indeterminate", retry.Failure!.Code);
         Assert.Equal(2, settlement.ReleaseAttempts);
         Assert.Equal(0, transport.ExecutionCount);
+    }
+
+    [Fact]
+    public async Task Host_BoundsPostCommitCooperativeYieldAndReturnsIndeterminate()
+    {
+        var yieldCount = 0;
+        var neverResumes = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var settlement = new RecordingSettlement();
+        var host = EngineExecutionHost.CreateForTesting(
+            new StubEngineExecutionTransport((generation, executionId, current) =>
+                CreateCompletedComputation(current, generation, executionId)),
+            settlement,
+            new InMemoryEngineTransactionLedger(),
+            new ReferenceEngineSemanticSnapshotProvider(),
+            new EngineExecutionHostOptions(
+                4,
+                TimeSpan.FromMilliseconds(25),
+                CooperativeYield: _ => Interlocked.Increment(ref yieldCount) == 6
+                    ? new ValueTask(neverResumes.Task)
+                    : ValueTask.CompletedTask));
+        var request = CreateRequest(JsonSerializer.SerializeToElement(
+            new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
+
+        var result = await host.ExecuteAsync(request).WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(EngineTerminalStatus.Indeterminate, result.Status);
+        Assert.Equal("cooperative-yield-timeout", result.Failure!.Code);
+        Assert.Contains(EnginePhase.ReleasingGate, settlement.Phases);
+        Assert.Equal("committed", result.Completion.TerminalEvidence["commitState"]);
+    }
+
+    [Fact]
+    public async Task Host_PostCommitCooperativeYieldFailureReturnsIndeterminate()
+    {
+        var yieldCount = 0;
+        var settlement = new RecordingSettlement();
+        var host = EngineExecutionHost.CreateForTesting(
+            new StubEngineExecutionTransport((generation, executionId, current) =>
+                CreateCompletedComputation(current, generation, executionId)),
+            settlement,
+            new InMemoryEngineTransactionLedger(),
+            new ReferenceEngineSemanticSnapshotProvider(),
+            new EngineExecutionHostOptions(
+                4,
+                TimeSpan.FromSeconds(1),
+                CooperativeYield: _ => Interlocked.Increment(ref yieldCount) == 6
+                    ? ValueTask.FromException(new InvalidOperationException("scheduler failed"))
+                    : ValueTask.CompletedTask));
+        var request = CreateRequest(JsonSerializer.SerializeToElement(
+            new ReferenceEngineInput(new MarketAnalysisExecutionRequest(), null)));
+
+        var result = await host.ExecuteAsync(request);
+
+        Assert.Equal(EngineTerminalStatus.Indeterminate, result.Status);
+        Assert.Equal("cooperative-yield-failed", result.Failure!.Code);
+        Assert.Contains(EnginePhase.ReleasingGate, settlement.Phases);
+        Assert.Equal("committed", result.Completion.TerminalEvidence["commitState"]);
     }
 
     [Fact]
@@ -1992,6 +2177,119 @@ public sealed class EngineArchitectureTests
                 settlement,
                 new TerminalReplayLedger(mutation),
                 new ReferenceEngineSemanticSnapshotProvider());
+
+            var result = await host.ExecuteAsync(request);
+
+            Assert.Equal(EngineTerminalStatus.Indeterminate, result.Status);
+            Assert.Equal("transaction-ledger-corrupt", result.Failure!.Code);
+            Assert.Equal(0, transport.ExecutionCount);
+            Assert.Equal([EnginePhase.ReleasingGate], settlement.Phases);
+        }
+    }
+
+    [Fact]
+    public async Task Host_RejectsLedgerRoutePayloadThatDiffersFromItsSemanticSnapshot()
+    {
+        var input = JsonSerializer.SerializeToElement(
+            new ReferenceEngineInput(null, new ProcurementRouteExecutionRequest()),
+            EngineJsonSerializerOptions.CreateWire());
+        var request = CreateRequest(input) with
+        {
+            InputHash = EngineCanonicalHash.ComputeEngineInput(input)
+        };
+        var snapshots = new ReferenceEngineSemanticSnapshotProvider();
+        var routeResult = CreateRouteResult(DateTime.UnixEpoch, 100);
+        var routeSnapshot = snapshots.CaptureRoute(routeResult);
+        var routeHash = EngineSemanticSnapshotHash.Route(routeSnapshot);
+        var evidence = new Dictionary<string, string>
+        {
+            ["resultPayloadHash"] = EngineCanonicalHash.ComputeAuthoritativeResultPayloadHash(string.Empty, routeHash),
+            ["computationHash"] = new string('a', 64),
+            ["settlement"] = "complete"
+        };
+        foreach (var phase in EngineSuccessPhasePolicy.Resolve(
+                     request.InputKind,
+                     includesMarketAnalysis: false,
+                     includesProcurementRoute: true).RequiredEvidencePhases)
+        {
+            evidence[$"phase:{phase}"] = "complete";
+        }
+        var completion = new EngineCompletionEvidence(
+            request.ContractVersion,
+            request.TransactionId,
+            EngineTerminalStatus.Succeeded,
+            EnginePhase.Completed,
+            request.Basis,
+            request.RootIntentHash,
+            request.ExpandedGraphHash,
+            string.Empty,
+            routeHash,
+            EngineCanonicalHash.ComputeFinalTransactionHash(
+                request,
+                EngineTerminalStatus.Succeeded,
+                string.Empty,
+                routeHash,
+                evidence),
+            evidence);
+        var tamperedRoute = routeResult with
+        {
+            ShoppingPlans = routeResult.ShoppingPlans.Select(plan => new DetailedShoppingPlan
+            {
+                ItemId = plan.ItemId,
+                Name = plan.Name,
+                QuantityNeeded = plan.QuantityNeeded + 1,
+                RecommendedWorld = plan.RecommendedWorld
+            }).ToList()
+        };
+        var invalidPayloads = new[]
+        {
+            JsonSerializer.SerializeToElement(
+                new ReferenceEngineResultSnapshot(null, routeSnapshot, tamperedRoute),
+                EngineJsonSerializerOptions.CreateWire()),
+            JsonSerializer.SerializeToElement(
+                new ReferenceEngineResultSnapshot(null, routeSnapshot, null),
+                EngineJsonSerializerOptions.CreateWire())
+        };
+        var validPayload = JsonSerializer.SerializeToElement(
+            new ReferenceEngineResultSnapshot(null, routeSnapshot, routeResult),
+            EngineJsonSerializerOptions.CreateWire());
+        var validTerminal = new EngineResultEnvelope(
+            request.ContractVersion,
+            request.TransactionId,
+            EngineTerminalStatus.Succeeded,
+            validPayload,
+            completion);
+        var validTransport = new StubEngineExecutionTransport((generation, executionId, current) =>
+            CreateCompletedComputation(current, generation, executionId));
+        var validSettlement = new RecordingSettlement();
+        var validHost = EngineExecutionHost.CreateForTesting(
+            validTransport,
+            validSettlement,
+            new TerminalReplayLedger(validTerminal),
+            snapshots);
+
+        var validReplay = await validHost.ExecuteAsync(request);
+
+        Assert.Equal(EngineTerminalStatus.Succeeded, validReplay.Status);
+        Assert.Equal(0, validTransport.ExecutionCount);
+        Assert.Equal([EnginePhase.ReleasingGate], validSettlement.Phases);
+
+        foreach (var invalidPayload in invalidPayloads)
+        {
+            var terminal = new EngineResultEnvelope(
+                request.ContractVersion,
+                request.TransactionId,
+                EngineTerminalStatus.Succeeded,
+                invalidPayload,
+                completion);
+            var transport = new StubEngineExecutionTransport((generation, executionId, current) =>
+                CreateCompletedComputation(current, generation, executionId));
+            var settlement = new RecordingSettlement();
+            var host = EngineExecutionHost.CreateForTesting(
+                transport,
+                settlement,
+                new TerminalReplayLedger(terminal),
+                snapshots);
 
             var result = await host.ExecuteAsync(request);
 
@@ -3256,7 +3554,7 @@ public sealed class EngineArchitectureTests
         var repeated = CraftArchitectEngineWorker.ManagedHost.CreateRuntimeProof("browser-canary");
         var different = CraftArchitectEngineWorker.ManagedHost.CreateRuntimeProof("different-canary");
 
-        Assert.Equal("2", first.ProtocolVersion);
+        Assert.Equal("4", first.ProtocolVersion);
         Assert.Equal("FFXIV_Craft_Architect.Web", first.RuntimeAssembly);
         Assert.Equal(first, repeated);
         Assert.NotEqual(first.ChallengeHash, different.ChallengeHash);
@@ -3279,15 +3577,18 @@ public sealed class EngineArchitectureTests
             EngineJsonSerializerOptions.CreateWire());
         var computation = Assert.IsType<EngineComputationResult>(message!.Payload!.Value.Deserialize<EngineComputationResult>(
             EngineJsonSerializerOptions.CreateWire()));
-        var snapshot = new ReferenceEngineSemanticSnapshotProvider()
-            .CaptureTransportedResult(computation.Result!.Value);
-        var decision = Assert.IsType<EngineRouteDecisionSnapshot>(snapshot.ProcurementRoute!.Decision);
+        var snapshots = new ReferenceEngineSemanticSnapshotProvider();
+        var snapshot = snapshots.CaptureTransportedResult(computation.Result!.Value);
+        Assert.Null(snapshot.ProcurementRoute);
+        var route = snapshots.CaptureRoute(Assert.IsType<ProcurementRouteExecutionResult>(
+            snapshot.ProcurementRouteResult));
+        var decision = Assert.IsType<EngineRouteDecisionSnapshot>(route.Decision);
 
         Assert.Equal(7, message.Generation);
         Assert.Equal(execute!.ExecutionId, message.ExecutionId);
         Assert.Equal(execute.TransactionId, message.TransactionId);
         Assert.Equal(EngineComputationStatus.Completed, computation.Status);
-        Assert.True(snapshot.ProcurementRoute.IsComplete);
+        Assert.True(route.IsComplete);
         Assert.True(decision.RouteSearchWasTruncated);
         Assert.False(decision.AcquisitionSearchWasTruncated);
         Assert.False(decision.TravelSearchWasTruncated);
@@ -3315,11 +3616,52 @@ public sealed class EngineArchitectureTests
     }
 
     [Fact]
+    public async Task WorkerExecutionTransport_PreservesHostIdentityAcrossWorkerGeneration()
+    {
+        var worker = new FakeWorkerTransport();
+        var client = new EngineWorkerClient(worker);
+        await using var transport = new EngineWorkerExecutionTransport(client);
+        var request = CreateRequest(JsonSerializer.SerializeToElement(new { demand = "host-identity" }));
+        var hostExecutionId = Guid.NewGuid();
+        long workerGeneration = 0;
+        worker.OnSend = message =>
+        {
+            if (message.Kind != "execute")
+            {
+                return;
+            }
+            var execution = message.Payload!.Value.Deserialize<EngineWorkerExecutionRequest>(
+                EngineJsonSerializerOptions.CreateWire())!;
+            workerGeneration = message.Generation;
+            var computation = CreateCancelledComputation(
+                execution.Request,
+                execution.HostGeneration,
+                execution.HostExecutionId,
+                EnginePhase.InterpretingInput);
+            worker.Emit(new EngineWorkerMessage(
+                EngineWorkerClient.ProtocolVersion,
+                EngineWorkerClient.ComputationResultMessageKind,
+                message.Generation,
+                message.ExecutionId,
+                message.TransactionId,
+                JsonSerializer.SerializeToElement(computation, EngineJsonSerializerOptions.CreateWire())));
+        };
+
+        var result = await transport.ExecuteAsync(47, hostExecutionId, request);
+
+        Assert.Equal(47, result.Generation);
+        Assert.Equal(hostExecutionId, result.ExecutionId);
+        Assert.Equal(EngineComputationStatus.Cancelled, result.Status);
+        Assert.Equal(1, workerGeneration);
+        Assert.NotEqual(result.Generation, workerGeneration);
+    }
+
+    [Fact]
     public void RouteSemanticSnapshot_HashesEveryStableOptimizerTruncationBoundary()
     {
         var decision = new MarketRouteDecision(
             TravelTolerance: 0,
-            MaximumPremiumRate: null,
+            MaximumPremiumRate: 0.1m,
             CheapestGilCost: 100,
             SelectedGilCost: 120,
             SelectedEvidencePenalty: 0,
@@ -3328,7 +3670,8 @@ public sealed class EngineArchitectureTests
             CheapestDataCenterTransfers: 1,
             SelectedDataCenterTransfers: 0,
             StartsFromHomeDataCenter: false,
-            HomeDataCenter: null)
+            HomeDataCenter: null,
+            ItemDecisions: [new MarketRouteItemDecision(101, "Bound Item", 100, 120)])
         {
             AcquisitionSearchWasTruncated = true,
             RouteSearchWasTruncated = true,
@@ -3349,14 +3692,91 @@ public sealed class EngineArchitectureTests
             }
         };
 
-        Assert.Equal("3", snapshot.SchemaVersion);
+        Assert.Equal("9", snapshot.SchemaVersion);
         Assert.True(snapshot.Decision!.AcquisitionSearchWasTruncated);
         Assert.True(snapshot.Decision.RouteSearchWasTruncated);
         Assert.True(snapshot.Decision.TravelSearchWasTruncated);
         Assert.Equal(64, snapshot.Decision.TravelRoutesEvaluated);
+        Assert.Equal("Bound Item", Assert.Single(snapshot.Decision.ItemDecisions).ItemName);
         Assert.NotEqual(
             EngineSemanticSnapshotHash.Route(snapshot),
             EngineSemanticSnapshotHash.Route(exactSnapshot));
+        Assert.NotEqual(
+            EngineSemanticSnapshotHash.Route(snapshot),
+            EngineSemanticSnapshotHash.Route(snapshot with
+            {
+                Decision = snapshot.Decision with
+                {
+                    ItemDecisions =
+                    [snapshot.Decision.ItemDecisions[0] with { ItemName = "Tampered Item" }]
+                }
+            }));
+        Assert.Equal(
+            EngineSemanticSnapshotHash.Route(snapshot),
+            EngineSemanticSnapshotHash.Route(snapshot with
+            {
+                Decision = snapshot.Decision with { MaximumPremiumRate = 0.10m }
+            }));
+    }
+
+    [Fact]
+    public void RouteSemanticSnapshot_HashesEverySettlementAuthoritativePayload()
+    {
+        var provider = new ReferenceEngineSemanticSnapshotProvider();
+        var plan = new CraftingPlan { Name = "Authorized Plan" };
+        var item = new MaterialAggregate { ItemId = 101, Name = "Authorized Item", TotalQuantity = 2 };
+        var analysis = new MarketItemAnalysis { ItemId = 101, Name = "Authorized Item", QuantityNeeded = 2 };
+        var evidencePlan = new DetailedShoppingPlan { ItemId = 101, Name = "Authorized Item", QuantityNeeded = 2 };
+        var baseline = new ProcurementRouteExecutionResult(
+            [evidencePlan],
+            [evidencePlan],
+            [evidencePlan],
+            [],
+            [],
+            OptimizedPlan: plan,
+            ActiveProcurementItems: [item],
+            EvidenceAnalyses: [analysis]);
+        var hash = EngineSemanticSnapshotHash.Route(provider.CaptureRoute(baseline));
+
+        Assert.NotEqual(hash, Hash(baseline with { OptimizedPlan = new CraftingPlan { Name = "Changed Plan" } }));
+        Assert.NotEqual(hash, Hash(baseline with
+        {
+            ActiveProcurementItems = [new MaterialAggregate { ItemId = 101, Name = "Authorized Item", TotalQuantity = 3 }]
+        }));
+        Assert.NotEqual(hash, Hash(baseline with
+        {
+            EvidenceAnalyses = [new MarketItemAnalysis { ItemId = 101, Name = "Authorized Item", QuantityNeeded = 3 }]
+        }));
+        Assert.NotEqual(hash, Hash(baseline with
+        {
+            EvidencePlans = [new DetailedShoppingPlan { ItemId = 101, Name = "Authorized Item", QuantityNeeded = 3 }]
+        }));
+        Assert.NotEqual(hash, Hash(baseline with
+        {
+            AcquisitionDecisions =
+            [
+                new ProcurementAcquisitionDecision(
+                    "node-101",
+                    AcquisitionSource.MarketBuyNq,
+                    AcquisitionSourceReason.SystemDefault)
+            ]
+        }));
+        Assert.NotEqual(hash, Hash(baseline with
+        {
+            ShoppingPlans =
+            [
+                new DetailedShoppingPlan
+                {
+                    ItemId = 101,
+                    Name = "Changed Route Item",
+                    QuantityNeeded = 2,
+                    HqQuantityNeeded = 1
+                }
+            ]
+        }));
+
+        string Hash(ProcurementRouteExecutionResult result) =>
+            EngineSemanticSnapshotHash.Route(provider.CaptureRoute(result));
     }
 
     [Fact]
@@ -3447,11 +3867,14 @@ public sealed class EngineArchitectureTests
         var analysis = input?.MarketAnalysis is null
             ? null
             : new EngineAnalysisSemanticSnapshot("2", [], []);
-        var route = input?.ProcurementRoute is null
+        var routeResult = input?.ProcurementRoute is null
             ? null
-            : new EngineRouteSemanticSnapshot("2", [], [], 0, 0, 0, true, null);
+            : new ProcurementRouteExecutionResult([], [], [], [], []);
+        var route = routeResult is null
+            ? null
+            : new ReferenceEngineSemanticSnapshotProvider().CaptureRoute(routeResult);
         var payload = JsonSerializer.SerializeToElement(
-            new ReferenceEngineResultSnapshot(analysis, route),
+            new ReferenceEngineResultSnapshot(analysis, route, routeResult),
             EngineJsonSerializerOptions.CreateWire());
         var evidence = new Dictionary<string, string>
         {
@@ -3696,11 +4119,14 @@ public sealed class EngineArchitectureTests
         var analysis = input.MarketAnalysis is null
             ? null
             : new EngineAnalysisSemanticSnapshot("2", [], []);
-        var route = input.ProcurementRoute is null
+        var routeResult = input.ProcurementRoute is null
             ? null
-            : new EngineRouteSemanticSnapshot("2", [], [], 0, 0, 0, true, null);
+            : new ProcurementRouteExecutionResult([], [], [], [], []);
+        var route = routeResult is null
+            ? null
+            : new ReferenceEngineSemanticSnapshotProvider().CaptureRoute(routeResult);
         var payload = JsonSerializer.SerializeToElement(
-            new ReferenceEngineResultSnapshot(analysis, route),
+            new ReferenceEngineResultSnapshot(analysis, route, routeResult),
             EngineJsonSerializerOptions.CreateWire());
         var evidence = new Dictionary<string, string>
         {
@@ -4247,9 +4673,7 @@ public sealed class EngineArchitectureTests
             string requestHash;
             try
             {
-                requestHash = EngineCanonicalHash.Compute(
-                    registration.Request,
-                    EngineJsonSerializerOptions.CreateWire());
+                requestHash = EngineCanonicalHash.ComputeRequestIdentity(registration.Request);
             }
             catch
             {

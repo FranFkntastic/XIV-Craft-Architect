@@ -111,17 +111,150 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         }
 
         return new ProcurementRouteExecutionResult(
-            optimization.ShoppingPlans,
-            evidencePlans,
-            reusableEvidence,
-            refreshedEvidence,
-            reconciliation.ReconciledItems,
+            request.IncludeReconciliationEvidenceInResult
+                ? optimization.ShoppingPlans
+                : CompactResultShoppingPlans(optimization.ShoppingPlans),
+            request.IncludeReconciliationEvidenceInResult ? evidencePlans : [],
+            request.IncludeReconciliationEvidenceInResult ? reusableEvidence : [],
+            request.IncludeReconciliationEvidenceInResult ? refreshedEvidence : [],
+            request.IncludeReconciliationEvidenceInResult ? reconciliation.ReconciledItems : [],
             optimization.Decision,
-            reconciliation.Items,
-            jointOptimization?.OptimizedPlan,
-            jointOptimization?.ActiveProcurementItems,
-            reconciliation.Analyses,
-            optimization.IsComplete);
+            request.IncludeReconciliationEvidenceInResult ? reconciliation.Items : [],
+            request.IncludeReconciliationEvidenceInResult ? jointOptimization?.OptimizedPlan : null,
+            request.IncludeReconciliationEvidenceInResult ? jointOptimization?.ActiveProcurementItems : null,
+            request.IncludeReconciliationEvidenceInResult ? reconciliation.Analyses : null,
+            request.IncludeReconciliationEvidenceInResult || jointOptimization is null
+                ? null
+                : CaptureAcquisitionDecisions(jointOptimization.OptimizedPlan),
+            IsComplete: optimization.IsComplete);
+    }
+
+    private static IReadOnlyList<ProcurementAcquisitionDecision> CaptureAcquisitionDecisions(CraftingPlan plan) =>
+        EnumerateNodes(plan.RootItems)
+            .Select(node => new ProcurementAcquisitionDecision(node.NodeId, node.Source, node.SourceReason))
+            .ToArray();
+
+    private static IEnumerable<PlanNode> EnumerateNodes(IEnumerable<PlanNode> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            yield return node;
+            foreach (var child in EnumerateNodes(node.Children))
+            {
+                yield return child;
+            }
+        }
+    }
+
+    internal static List<DetailedShoppingPlan> CompactResultShoppingPlans(
+        IEnumerable<DetailedShoppingPlan> shoppingPlans) =>
+        shoppingPlans.Select(plan => new DetailedShoppingPlan
+        {
+            ItemId = plan.ItemId,
+            Name = plan.Name,
+            IconId = plan.IconId,
+            QuantityNeeded = plan.QuantityNeeded,
+            HqQuantityNeeded = plan.HqQuantityNeeded,
+            DCAveragePrice = plan.DCAveragePrice,
+            HQAveragePrice = plan.HQAveragePrice,
+            RecommendedWorld = plan.RecommendedWorld is null ? null : CompactWorld(plan.RecommendedWorld),
+            RecommendedSplit = plan.RecommendedSplit,
+            CoverageSet = CompactCoverageSet(plan),
+            WorldOptions = GetSelectedWorldOptions(plan).Select(CompactWorld).ToList(),
+            Error = plan.Error,
+            MarketDataWarning = plan.MarketDataWarning,
+            Vendors = plan.Vendors.ToList()
+        }).ToList();
+
+    private static WorldShoppingSummary CompactWorld(WorldShoppingSummary world) => new()
+    {
+        DataCenter = world.DataCenter,
+        WorldName = world.WorldName,
+        WorldId = world.WorldId,
+        TotalCost = world.TotalCost,
+        AveragePricePerUnit = world.AveragePricePerUnit,
+        ListingsUsed = world.ListingsUsed,
+        Listings = world.Listings.Select(CloneListing).ToList(),
+        IsFullyUnderAverage = world.IsFullyUnderAverage,
+        TotalQuantityPurchased = world.TotalQuantityPurchased,
+        ExcessQuantity = world.ExcessQuantity,
+        ModePricePerUnit = world.ModePricePerUnit,
+        ValueScore = world.ValueScore,
+        MarketDataQualityScore = world.MarketDataQualityScore,
+        MarketDataQualityBucket = world.MarketDataQualityBucket,
+        MarketDataAgeSource = world.MarketDataAgeSource,
+        MarketDataAge = world.MarketDataAge,
+        MarketUploadedAtUtc = world.MarketUploadedAtUtc,
+        LensRank = world.LensRank,
+        LensScoreBucket = world.LensScoreBucket,
+        ProcurementPriorityScore = world.ProcurementPriorityScore,
+        VendorName = world.VendorName,
+        HasSufficientStock = world.HasSufficientStock,
+        ShortfallQuantity = world.ShortfallQuantity,
+        BestSingleListing = world.BestSingleListing is null ? null : CloneListing(world.BestSingleListing),
+        Classification = world.Classification,
+        IsHomeWorld = world.IsHomeWorld,
+        IsBlacklisted = world.IsBlacklisted,
+        IsTravelProhibited = world.IsTravelProhibited,
+        CongestedWarning = world.CongestedWarning
+    };
+
+    private static ShoppingListingEntry CloneListing(ShoppingListingEntry listing) => new()
+    {
+        Quantity = listing.Quantity,
+        PricePerUnit = listing.PricePerUnit,
+        RetainerName = listing.RetainerName,
+        IsUnderAverage = listing.IsUnderAverage,
+        IsHq = listing.IsHq,
+        NeededFromStack = listing.NeededFromStack,
+        ExcessQuantity = listing.ExcessQuantity,
+        IsAdditionalOption = listing.IsAdditionalOption
+    };
+
+    private static List<WorldShoppingSummary> GetSelectedWorldOptions(DetailedShoppingPlan plan)
+    {
+        if (plan.RecommendedWorld is { } recommended)
+        {
+            return [recommended];
+        }
+        if (plan.RecommendedSplit?.Count > 0)
+        {
+            return plan.WorldOptions.Where(world => plan.RecommendedSplit.Any(split =>
+                string.Equals(split.DataCenter, world.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(split.WorldName, world.WorldName, StringComparison.OrdinalIgnoreCase))).ToList();
+        }
+
+        var coverage = GetSelectedCoverage(plan);
+        return coverage is null
+            ? []
+            : plan.WorldOptions.Where(world => coverage.Worlds.Any(selected =>
+                string.Equals(selected.DataCenter, world.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(selected.WorldName, world.WorldName, StringComparison.OrdinalIgnoreCase))).ToList();
+    }
+
+    private static MarketCoverageOption? GetSelectedCoverage(DetailedShoppingPlan plan) =>
+        plan.CoverageSet?.AllCandidates.FirstOrDefault(candidate => candidate.IsDefaultEligible)
+            ?? plan.CoverageSet?.SingleWorld
+            ?? plan.CoverageSet?.CompactSplit
+            ?? plan.CoverageSet?.WideSplit
+            ?? plan.CoverageSet?.CheapestObserved;
+
+    private static MarketCoverageSet? CompactCoverageSet(DetailedShoppingPlan plan)
+    {
+        var coverage = GetSelectedCoverage(plan);
+        if (coverage is null || plan.CoverageSet is not { } source)
+        {
+            return null;
+        }
+        return new MarketCoverageSet(
+            source.ItemId,
+            source.ItemName,
+            source.QuantityNeeded,
+            coverage.Tier == MarketCoverageTier.SingleWorld ? coverage : null,
+            coverage.Tier == MarketCoverageTier.CompactSplit ? coverage : null,
+            coverage.Tier == MarketCoverageTier.WideSplit ? coverage : null,
+            coverage.Tier == MarketCoverageTier.CheapestObserved ? coverage : null,
+            [coverage]);
     }
 
     private static IReadOnlyList<MaterialAggregate> GetActiveProcurementItems(ProcurementRouteExecutionRequest request)

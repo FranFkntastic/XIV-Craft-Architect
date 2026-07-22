@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace FFXIV_Craft_Architect.Core.Engine;
 
@@ -64,12 +65,13 @@ public sealed record EngineBasisSet(
     EngineBasisIdentity Route);
 
 public sealed record EngineExecutionBudgets(
+    int SchemaVersion,
     int MaxWorkUnits,
     int MaxEvidenceRequests,
-    long MaxCandidateEvaluations,
+    int MaxTravelRouteEvaluations,
     int CooperativeCancellationInterval = 64)
 {
-    public static EngineExecutionBudgets Default { get; } = new(10_000, 10_000, 5_000_000, 64);
+    public static EngineExecutionBudgets Default { get; } = new(2, 250_000, 10_000, 8, 64);
 }
 
 public sealed record EngineDeterministicSettings
@@ -102,7 +104,8 @@ public sealed record EngineRequestEnvelope(
     string RootIntentHash,
     string ExpandedGraphHash,
     string AnalysisBasisHash,
-    string RouteBasisHash);
+    string RouteBasisHash,
+    string InputHash = "");
 
 public sealed record EngineProgress(
     Guid TransactionId,
@@ -137,7 +140,11 @@ public sealed record EngineComputationResult(
     string ProcurementRouteResultHash,
     string ComputationHash,
     IReadOnlyDictionary<string, string> ComputationEvidence,
-    EngineFailure? Failure = null);
+    EngineFailure? Failure = null)
+{
+    [JsonIgnore]
+    public ReferenceEngineResultSnapshot? ValidatedTransportedResult { get; init; }
+}
 
 public sealed record EngineCompletionEvidence(
     string ContractVersion,

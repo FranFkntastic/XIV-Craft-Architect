@@ -7,14 +7,18 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 internal static class AcquisitionVariantFrontierBuilder
 {
-    private const int MaxFrontierPlans = 4_096;
+    internal const int MaxRetainedFrontierPlans = 1_024;
+    internal const int MaxCombinationEvaluationsPerMerge = MaxRetainedFrontierPlans * 2;
+    private const int ProgressReportInterval = 1_024;
+    private const int MaxDominanceCandidates = 256;
 
     public static AcquisitionFrontierBuildResult Build(
         CraftingPlan plan,
         IReadOnlyDictionary<int, long> lowerBoundUnitCosts,
-        CancellationToken ct)
+        CancellationToken ct,
+        IProgress<string>? progress = null)
     {
-        var searchContext = new FrontierSearchContext();
+        var searchContext = new FrontierSearchContext(progress);
         var combined = new List<AcquisitionVariant> { AcquisitionVariant.Empty };
         foreach (var root in plan.RootItems)
         {
@@ -27,18 +31,72 @@ internal static class AcquisitionVariantFrontierBuilder
                 ct);
         }
 
-        var current = BuildCurrentPlanVariant(plan);
-        combined.Add(current);
         var frontier = Prune(combined, lowerBoundUnitCosts, searchContext);
+        var current = BuildCurrentPlanVariant(plan, ct);
         if (frontier.All(candidate => !string.Equals(
-                candidate.EconomicKey,
-                current.EconomicKey,
+                candidate.DecisionKey,
+                current.DecisionKey,
                 StringComparison.Ordinal)))
         {
             frontier.Add(current);
         }
 
-        return new AcquisitionFrontierBuildResult(frontier, searchContext.WasTruncated);
+        return new AcquisitionFrontierBuildResult(
+            frontier,
+            searchContext.WasTruncated,
+            searchContext.CombinationEvaluations);
+    }
+
+    internal static long EstimateMaximumWorkUnits(
+        CraftingPlan plan,
+        int maxTravelRouteEvaluations)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        var combinedCount = 1L;
+        var combinationEvaluations = 0L;
+        foreach (var root in plan.RootItems)
+        {
+            var rootEstimate = EstimateNode(root);
+            combinationEvaluations = checked(
+                combinationEvaluations + rootEstimate.CombinationEvaluations);
+            var product = checked(combinedCount * rootEstimate.VariantCount);
+            combinationEvaluations = checked(
+                combinationEvaluations + Math.Min(product, MaxCombinationEvaluationsPerMerge));
+            combinedCount = Math.Min(product, MaxRetainedFrontierPlans);
+        }
+
+        return checked(combinationEvaluations + combinedCount + 1L + maxTravelRouteEvaluations);
+    }
+
+    private static FrontierEstimate EstimateNode(PlanNode node)
+    {
+        var variantCount = 0L;
+        var combinationEvaluations = 0L;
+        foreach (var source in GetAllowedSources(node))
+        {
+            if (source != AcquisitionSource.Craft)
+            {
+                variantCount++;
+                continue;
+            }
+
+            var craftedCount = 1L;
+            foreach (var child in node.Children)
+            {
+                var childEstimate = EstimateNode(child);
+                combinationEvaluations = checked(
+                    combinationEvaluations + childEstimate.CombinationEvaluations);
+                var product = checked(craftedCount * childEstimate.VariantCount);
+                combinationEvaluations = checked(
+                    combinationEvaluations + Math.Min(product, MaxCombinationEvaluationsPerMerge));
+                craftedCount = Math.Min(product, MaxRetainedFrontierPlans);
+            }
+            variantCount = checked(variantCount + craftedCount);
+        }
+
+        return new FrontierEstimate(
+            Math.Min(variantCount, MaxRetainedFrontierPlans),
+            combinationEvaluations);
     }
 
     private static List<AcquisitionVariant> BuildNodeVariants(
@@ -150,17 +208,28 @@ internal static class AcquisitionVariantFrontierBuilder
         CancellationToken ct)
     {
         var product = (long)left.Count * right.Count;
-        var combined = new List<AcquisitionVariant>((int)Math.Min(product, MaxFrontierPlans * 2L));
-        foreach (var leftValue in left)
+        if (product == 0)
         {
-            foreach (var rightValue in right)
+            return [];
+        }
+
+        var evaluationLimit = (int)Math.Min(product, MaxCombinationEvaluationsPerMerge);
+        if (product > evaluationLimit)
+        {
+            searchContext.WasTruncated = true;
+        }
+
+        var combined = new List<AcquisitionVariant>(evaluationLimit);
+        // Diagonal traversal gives every retained left variant equal access to the
+        // bounded product instead of exhausting the first rows of the Cartesian set.
+        for (var diagonal = 0; combined.Count < evaluationLimit; diagonal++)
+        {
+            for (var leftIndex = 0; leftIndex < left.Count && combined.Count < evaluationLimit; leftIndex++)
             {
                 ct.ThrowIfCancellationRequested();
-                combined.Add(leftValue.Combine(rightValue));
-                if (combined.Count >= MaxFrontierPlans * 2)
-                {
-                    combined = Prune(combined, lowerBoundUnitCosts, searchContext);
-                }
+                var rightIndex = (leftIndex + diagonal) % right.Count;
+                combined.Add(left[leftIndex].Combine(right[rightIndex]));
+                searchContext.RecordCombinationEvaluation();
             }
         }
 
@@ -177,29 +246,29 @@ internal static class AcquisitionVariantFrontierBuilder
             .Select(group => group.OrderBy(value => value.DecisionKey, StringComparer.Ordinal).First())
             .ToList();
 
-        if (distinct.Count > MaxFrontierPlans)
+        if (distinct.Count > MaxRetainedFrontierPlans)
         {
             searchContext.WasTruncated = true;
             var cheapest = distinct
                 .OrderBy(value => EstimateLowerBound(value, lowerBoundUnitCosts))
                 .ThenBy(value => value.DecisionKey, StringComparer.Ordinal)
-                .Take(3_072);
+                .Take(768);
             var leastComplex = distinct
                 .OrderBy(value => value.MarketDemand.Count)
                 .ThenBy(value => EstimateLowerBound(value, lowerBoundUnitCosts))
                 .ThenBy(value => value.DecisionKey, StringComparer.Ordinal)
-                .Take(512);
+                .Take(128);
             var smallestDemand = distinct
                 .OrderBy(value => value.MarketDemand.Values.Sum(demand => (long)demand.Quantity))
                 .ThenBy(value => EstimateLowerBound(value, lowerBoundUnitCosts))
                 .ThenBy(value => value.DecisionKey, StringComparer.Ordinal)
-                .Take(512);
+                .Take(128);
             var selected = cheapest
                 .Concat(leastComplex)
                 .Concat(smallestDemand)
                 .DistinctBy(value => value.EconomicKey, StringComparer.Ordinal)
                 .ToList();
-            if (selected.Count < MaxFrontierPlans)
+            if (selected.Count < MaxRetainedFrontierPlans)
             {
                 var selectedKeys = selected
                     .Select(value => value.EconomicKey)
@@ -213,17 +282,17 @@ internal static class AcquisitionVariantFrontierBuilder
                         selected.Add(value);
                     }
 
-                    if (selected.Count == MaxFrontierPlans)
+                    if (selected.Count == MaxRetainedFrontierPlans)
                     {
                         break;
                     }
                 }
             }
 
-            distinct = selected.Take(MaxFrontierPlans).ToList();
+            distinct = selected.Take(MaxRetainedFrontierPlans).ToList();
         }
 
-        if (distinct.Count > 1_024)
+        if (distinct.Count > MaxDominanceCandidates)
         {
             return distinct.OrderBy(value => value.DecisionKey, StringComparer.Ordinal).ToList();
         }
@@ -249,30 +318,79 @@ internal static class AcquisitionVariantFrontierBuilder
         return total;
     }
 
-    private static AcquisitionVariant BuildCurrentPlanVariant(CraftingPlan plan)
+    private static AcquisitionVariant BuildCurrentPlanVariant(CraftingPlan plan, CancellationToken ct) =>
+        BuildRealizedPlanVariant(plan, decisions: null, ct)!;
+
+    internal static AcquisitionVariant? BuildRealizedPlanVariant(
+        CraftingPlan plan,
+        IReadOnlyDictionary<string, AcquisitionSource>? decisions,
+        CancellationToken ct)
     {
-        var combined = AcquisitionVariant.Empty;
+        var marketDemand = new Dictionary<int, JointAcquisitionRouteOptimizationService.MarketDemand>();
+        var realizedDecisions = new Dictionary<string, AcquisitionSource>(StringComparer.Ordinal);
+        var fixedGilCost = 0L;
         foreach (var root in plan.RootItems)
         {
-            combined = combined.Combine(BuildCurrentNodeVariant(root));
+            ct.ThrowIfCancellationRequested();
+            if (!CollectRealizedNode(
+                    root,
+                    decisions,
+                    marketDemand,
+                    realizedDecisions,
+                    ref fixedGilCost,
+                    ct))
+            {
+                return null;
+            }
         }
 
-        return combined;
+        return new AcquisitionVariant(marketDemand, fixedGilCost, realizedDecisions);
     }
 
-    private static AcquisitionVariant BuildCurrentNodeVariant(PlanNode node)
+    private static bool CollectRealizedNode(
+        PlanNode node,
+        IReadOnlyDictionary<string, AcquisitionSource>? decisions,
+        Dictionary<int, JointAcquisitionRouteOptimizationService.MarketDemand> marketDemand,
+        Dictionary<string, AcquisitionSource> realizedDecisions,
+        ref long fixedGilCost,
+        CancellationToken ct)
     {
-        var variant = AcquisitionVariant.Empty.WithDecision(node.NodeId, node.Source);
-        return node.Source switch
+        ct.ThrowIfCancellationRequested();
+        var source = decisions?.GetValueOrDefault(node.NodeId) ?? node.Source;
+        if (node.SourceReason == AcquisitionSourceReason.UserSelected && source != node.Source)
         {
-            AcquisitionSource.Craft => node.Children.Aggregate(
-                variant,
-                (current, child) => current.Combine(BuildCurrentNodeVariant(child))),
-            AcquisitionSource.MarketBuyNq => variant.WithMarketDemand(node, hq: false),
-            AcquisitionSource.MarketBuyHq => variant.WithMarketDemand(node, hq: true),
-            AcquisitionSource.VendorBuy => variant.WithFixedCost(GetVendorCost(node)),
-            _ => variant
-        };
+            return false;
+        }
+        realizedDecisions[node.NodeId] = source;
+        switch (source)
+        {
+            case AcquisitionSource.MarketBuyNq:
+            case AcquisitionSource.MarketBuyHq:
+                marketDemand[node.ItemId] = marketDemand
+                    .GetValueOrDefault(node.ItemId)
+                    .Add(node, source == AcquisitionSource.MarketBuyHq);
+                return true;
+            case AcquisitionSource.VendorBuy:
+                fixedGilCost = Add(fixedGilCost, GetVendorCost(node));
+                return true;
+            case not AcquisitionSource.Craft:
+                return true;
+        }
+
+        foreach (var child in node.Children)
+        {
+            if (!CollectRealizedNode(
+                    child,
+                    decisions,
+                    marketDemand,
+                    realizedDecisions,
+                    ref fixedGilCost,
+                    ct))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static bool Dominates(AcquisitionVariant left, AcquisitionVariant right)
@@ -282,11 +400,9 @@ internal static class AcquisitionVariantFrontierBuilder
             return false;
         }
 
-        var allItems = left.MarketDemand.Keys.Concat(right.MarketDemand.Keys).Distinct();
         var strictlyBetter = left.FixedGilCost < right.FixedGilCost;
-        foreach (var itemId in allItems)
+        foreach (var (itemId, leftDemand) in left.MarketDemand)
         {
-            var leftDemand = left.MarketDemand.GetValueOrDefault(itemId);
             var rightDemand = right.MarketDemand.GetValueOrDefault(itemId);
             if (leftDemand.Quantity > rightDemand.Quantity || leftDemand.HqQuantity > rightDemand.HqQuantity)
             {
@@ -294,6 +410,16 @@ internal static class AcquisitionVariantFrontierBuilder
             }
 
             strictlyBetter |= leftDemand.Quantity < rightDemand.Quantity || leftDemand.HqQuantity < rightDemand.HqQuantity;
+        }
+
+        foreach (var (itemId, rightDemand) in right.MarketDemand)
+        {
+            if (left.MarketDemand.ContainsKey(itemId))
+            {
+                continue;
+            }
+
+            strictlyBetter |= rightDemand.Quantity > 0 || rightDemand.HqQuantity > 0;
         }
 
         return strictlyBetter;
@@ -307,8 +433,24 @@ internal static class AcquisitionVariantFrontierBuilder
 
     private static long ToLong(decimal value) => value >= long.MaxValue ? long.MaxValue : (long)value;
 
-    private sealed class FrontierSearchContext
+    private sealed class FrontierSearchContext(IProgress<string>? progress)
     {
         public bool WasTruncated { get; set; }
+
+        public long CombinationEvaluations { get; private set; }
+
+        public void RecordCombinationEvaluation()
+        {
+            CombinationEvaluations++;
+            if (CombinationEvaluations % ProgressReportInterval == 0)
+            {
+                progress?.Report(
+                    $"[stage] building acquisition frontier ({CombinationEvaluations:N0} combinations evaluated)...");
+            }
+        }
     }
+
+    private readonly record struct FrontierEstimate(
+        long VariantCount,
+        long CombinationEvaluations);
 }

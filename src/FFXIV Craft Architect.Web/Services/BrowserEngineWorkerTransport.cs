@@ -7,6 +7,7 @@ namespace FFXIV_Craft_Architect.Web.Services;
 public sealed class BrowserEngineWorkerTransport : IEngineWorkerTransport
 {
     private const string ModulePath = "./engine-worker-bootstrap.js";
+    private const int MaximumWorkerMessageCharacters = 16 * 1024 * 1024;
     private readonly IJSRuntime _jsRuntime;
     private readonly string _workerUrl;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
@@ -87,7 +88,13 @@ public sealed class BrowserEngineWorkerTransport : IEngineWorkerTransport
         }
         try
         {
-            await controller.InvokeVoidAsync("send", cancellationToken, message);
+            var messageJson = JsonSerializer.Serialize(message, EngineJsonSerializerOptions.CreateWire());
+            await controller.InvokeVoidAsync(
+                "sendJson",
+                cancellationToken,
+                messageJson,
+                message.Generation,
+                message.Kind);
         }
         catch
         {
@@ -135,51 +142,83 @@ public sealed class BrowserEngineWorkerTransport : IEngineWorkerTransport
         {
             var message = messageJson.Deserialize<EngineWorkerMessage>(EngineJsonSerializerOptions.CreateWire())
                 ?? throw new InvalidOperationException("The browser Worker message is empty.");
-            if (string.Equals(message.Kind, "capability", StringComparison.Ordinal))
-            {
-                var capability = message.Payload?.Deserialize<EngineWorkerCapability>(EngineJsonSerializerOptions.CreateWire())
-                    ?? throw new InvalidOperationException("The browser Worker capability is missing.");
-                _startup?.TrySetResult(capability);
-            }
-            else
-            {
-                if (message.Kind is "computation-result" or "protocol-error")
-                {
-                    lock (_sync)
-                    {
-                        if (_activeExecution is { } active &&
-                            active.Generation == message.Generation &&
-                            active.ExecutionId == message.ExecutionId &&
-                            active.TransactionId == message.TransactionId)
-                        {
-                            _activeExecution = null;
-                        }
-                    }
-                }
-                MessageReceived?.Invoke(this, message);
-            }
+            ReceiveMessage(message);
         }
         catch (Exception ex)
         {
-            _startup?.TrySetException(ex);
+            ReportProtocolFailure(ex);
         }
         return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public Task ReceiveMessageJson(string messageJson)
+    {
+        try
+        {
+            if (messageJson.Length > MaximumWorkerMessageCharacters)
+            {
+                throw new InvalidOperationException("The browser Worker message exceeds its transport limit.");
+            }
+            var message = JsonSerializer.Deserialize<EngineWorkerMessage>(messageJson, EngineJsonSerializerOptions.CreateWire())
+                ?? throw new InvalidOperationException("The browser Worker message is empty.");
+            ReceiveMessage(message);
+        }
+        catch (Exception ex)
+        {
+            ReportProtocolFailure(ex);
+        }
+        return Task.CompletedTask;
+    }
+
+    private void ReceiveMessage(EngineWorkerMessage message)
+    {
+        if (string.Equals(message.Kind, "capability", StringComparison.Ordinal))
+        {
+            var capability = message.Payload?.Deserialize<EngineWorkerCapability>(EngineJsonSerializerOptions.CreateWire())
+                ?? throw new InvalidOperationException("The browser Worker capability is missing.");
+            _startup?.TrySetResult(capability);
+        }
+        else
+        {
+            if (message.Kind is "computation-result" or "protocol-error")
+            {
+                lock (_sync)
+                {
+                    if (_activeExecution is { } active &&
+                        active.Generation == message.Generation &&
+                        active.ExecutionId == message.ExecutionId &&
+                        active.TransactionId == message.TransactionId)
+                    {
+                        _activeExecution = null;
+                    }
+                }
+            }
+            MessageReceived?.Invoke(this, message);
+        }
     }
 
     [JSInvokable]
     public Task ReceiveError(string kind, string message)
     {
         var failure = new InvalidOperationException($"Browser engine Worker {kind}: {message}");
+        ReportProtocolFailure(failure, $"worker-{kind}");
+        return Task.CompletedTask;
+    }
+
+    private void ReportProtocolFailure(Exception failure, string code = "worker-message-invalid")
+    {
         if (_startup is { Task.IsCompleted: false } startup)
         {
             startup.TrySetException(failure);
-            return Task.CompletedTask;
+            return;
         }
 
         EngineWorkerMessage? active;
         lock (_sync)
         {
             active = _activeExecution;
+            _activeExecution = null;
         }
         if (active is not null)
         {
@@ -192,10 +231,9 @@ public sealed class BrowserEngineWorkerTransport : IEngineWorkerTransport
                     active.ExecutionId,
                     active.TransactionId,
                     JsonSerializer.SerializeToElement(
-                        new { code = $"worker-{kind}", message = failure.Message },
+                        new { code, message = failure.Message },
                         EngineJsonSerializerOptions.CreateWire())));
         }
-        return Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()

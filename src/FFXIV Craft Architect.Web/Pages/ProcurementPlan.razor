@@ -311,6 +311,12 @@
                 result.Status,
                 result.ShoppingPlanCount);
 
+            if (!operation.IsCurrent)
+            {
+                operation.Cancel();
+                return;
+            }
+
             if (result.Status == ProcurementWorkflowStatus.StaleDecision)
             {
                 FinishStaleProcurementAnalysis(operation.Operation);
@@ -324,6 +330,24 @@
                 AppState.MarkProcurementRouteFailed(message);
                 operation.Complete(message);
                 Snackbar.Add(message, Severity.Warning);
+                return;
+            }
+
+            if (result.Status == ProcurementWorkflowStatus.Indeterminate)
+            {
+                var message = result.Message ??
+                    "Procurement route outcome is uncertain. Reload before retrying.";
+                operation.Complete(message);
+                Snackbar.Add(message, Severity.Warning);
+                return;
+            }
+
+            if (result.Status == ProcurementWorkflowStatus.Failed)
+            {
+                var message = result.Message ?? "Procurement route generation failed.";
+                AppState.MarkProcurementRouteFailed(message);
+                operation.Complete(message);
+                Snackbar.Add(message, Severity.Error);
                 return;
             }
 

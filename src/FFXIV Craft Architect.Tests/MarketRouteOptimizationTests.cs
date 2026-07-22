@@ -574,6 +574,140 @@ public class MarketRouteOptimizationTests
         Assert.Equal("Siren", result.RecommendedWorld?.WorldName);
     }
 
+    [Fact]
+    public async Task OptimizeProcurementRoute_QualityBudgetKeepsCompleteIncumbentAndMarksTruncation()
+    {
+        var hqListing = Listing(1, 2, "HQ");
+        hqListing.IsHq = true;
+        var hqWorld = World(
+            "Aether",
+            "Siren",
+            2,
+            2,
+            hqListing);
+        var nqWorld = World(
+            "Aether",
+            "Gilgamesh",
+            1,
+            1,
+            Listing(1, 1, "NQ"));
+        var plan = Plan(1, "Quality Bound", 2, hqWorld, nqWorld);
+        plan.HqQuantityNeeded = 1;
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var result = await service.OptimizeProcurementRouteWithDecisionAsync(
+            [plan],
+            new MarketAnalysisConfig { TravelTolerance = 11 },
+            includeSplitPurchases: true,
+            executionOptions: new MarketAnalysisExecutionOptions
+            {
+                MaxCandidateWorldSetEvaluations = 3,
+                MaxQualityCoverageTransitions = 1,
+                MaxSplitSeedEvaluations = 1
+            });
+
+        Assert.True(result.IsComplete);
+        Assert.NotNull(result.Decision);
+        Assert.True(result.Decision.RouteSearchWasTruncated);
+        var selectedCoverage = Assert.Single(Assert.Single(result.ShoppingPlans).CoverageSet!.AllCandidates);
+        Assert.Equal(2, selectedCoverage.QuantityCovered);
+        Assert.Equal(2, selectedCoverage.Worlds.Count);
+    }
+
+    [Fact]
+    public async Task OptimizeProcurementRoute_WorldSetBudgetKeepsCompleteIncumbentAndMarksTruncation()
+    {
+        var firstHq = Listing(1, 1, "First HQ");
+        firstHq.IsHq = true;
+        var secondHq = Listing(1, 2, "Second HQ");
+        secondHq.IsHq = true;
+        var plan = Plan(1, "World Set Bound", 1,
+            World("Aether", "Siren", 1, 1, firstHq),
+            World("Aether", "Gilgamesh", 2, 2, secondHq));
+        plan.HqQuantityNeeded = 1;
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var result = await service.OptimizeProcurementRouteWithDecisionAsync(
+            [plan],
+            new MarketAnalysisConfig { TravelTolerance = 11 },
+            executionOptions: new MarketAnalysisExecutionOptions
+            {
+                MaxCandidateWorldSetEvaluations = 1
+            });
+
+        Assert.True(result.IsComplete);
+        Assert.True(result.Decision?.RouteSearchWasTruncated);
+        Assert.Equal("Siren", Assert.Single(result.ShoppingPlans).RecommendedWorld?.WorldName);
+    }
+
+    [Fact]
+    public async Task OptimizeProcurementRoute_SplitSeedBudgetKeepsCompleteIncumbentAndMarksTruncation()
+    {
+        var plan = Plan(1, "Split Seed Bound", 2,
+            World("Aether", "Siren", 1, 1, Listing(1, 1, "First")),
+            World("Aether", "Gilgamesh", 2, 2, Listing(1, 2, "Second")));
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var result = await service.OptimizeProcurementRouteWithDecisionAsync(
+            [plan],
+            new MarketAnalysisConfig { TravelTolerance = 11 },
+            includeSplitPurchases: true,
+            executionOptions: new MarketAnalysisExecutionOptions
+            {
+                MaxSplitSeedEvaluations = 1
+            });
+
+        Assert.True(result.IsComplete);
+        Assert.True(result.Decision?.RouteSearchWasTruncated);
+        Assert.Equal(2, Assert.Single(result.ShoppingPlans).RecommendedSplit?.Sum(world => world.QuantityToBuy));
+    }
+
+    [Fact]
+    public async Task OptimizeProcurementRoute_SessionSharesCandidateBudgetAcrossVariants()
+    {
+        var firstListing = Listing(1, 1, "First HQ");
+        firstListing.IsHq = true;
+        var secondListing = Listing(1, 1, "Second HQ");
+        secondListing.IsHq = true;
+        var first = Plan(1, "First", 1, World("Aether", "Siren", 1, 1, firstListing));
+        var second = Plan(2, "Second", 1, World("Aether", "Siren", 1, 1, secondListing));
+        first.HqQuantityNeeded = 1;
+        second.HqQuantityNeeded = 1;
+        var options = new MarketAnalysisExecutionOptions { MaxQualityCoverageTransitions = 1 };
+        var session = new ProcurementRouteOptimizationSession(options, CancellationToken.None);
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+
+        var firstResult = await service.OptimizeProcurementRouteInSessionAsync(
+            [first], new MarketAnalysisConfig(), false, options, session, CancellationToken.None);
+        var secondResult = await service.OptimizeProcurementRouteInSessionAsync(
+            [second], new MarketAnalysisConfig(), false, options, session, CancellationToken.None);
+
+        Assert.True(firstResult.IsComplete);
+        Assert.True(secondResult.IsComplete);
+        Assert.True(secondResult.Decision?.RouteSearchWasTruncated);
+        Assert.True(session.CandidateWorkBudget.WasTruncated);
+    }
+
+    [Fact]
+    public async Task OptimizeProcurementRoute_CandidateGenerationObservesCancellation()
+    {
+        var hqListing = Listing(1, 1, "HQ");
+        hqListing.IsHq = true;
+        var plan = Plan(1, "Cancelled Bound", 1,
+            World("Aether", "Siren", 1, 1, hqListing));
+        plan.HqQuantityNeeded = 1;
+        var service = new MarketShoppingService(new Mock<IMarketCacheService>().Object);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.OptimizeProcurementRouteWithDecisionAsync(
+                [plan],
+                new MarketAnalysisConfig(),
+                executionOptions: MarketAnalysisExecutionOptions.Interactive,
+                ct: cancellation.Token));
+    }
+
     private static List<DetailedShoppingPlan> Optimize(
         IEnumerable<DetailedShoppingPlan> plans,
         int travelTolerance,
