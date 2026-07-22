@@ -11,6 +11,10 @@ public sealed class CommissionPayrollService
     {
         ArgumentNullException.ThrowIfNull(inputLines);
         ArgumentNullException.ThrowIfNull(policy);
+        if (policy.CommissionPercent is < 0 or > 100)
+        {
+            throw new ArgumentOutOfRangeException(nameof(policy), "Commission percent must be between 0 and 100.");
+        }
 
         var lines = inputLines
             .Select(ToPayrollLine)
@@ -39,6 +43,16 @@ public sealed class CommissionPayrollService
 
     private static CommissionPayrollLine ToPayrollLine(CommissionPayrollInputLine input)
     {
+        if (input.Quantity < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(input), "Material quantity cannot be negative.");
+        }
+
+        if (input.UnitCost < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(input), "Material unit cost cannot be negative.");
+        }
+
         var estimatedMaterialCost = RoundGil(input.Quantity * input.UnitCost);
         var materialBasis = input.Responsibility == CommissionMaterialResponsibility.Crafter
             ? estimatedMaterialCost

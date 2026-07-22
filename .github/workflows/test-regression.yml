@@ -3,68 +3,298 @@ name: Regression Tests
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - 'src/**'
-      - 'tools/**'
-      - '.editorconfig'
-      - '.gitattributes'
-      - 'global.json'
-      - '.github/workflows/test-regression.yml'
   push:
-    branches: [ main, master, local-dev ]
-    paths:
-      - 'src/**'
-      - 'tools/**'
-      - '.editorconfig'
-      - '.gitattributes'
-      - 'global.json'
-      - '.github/workflows/test-regression.yml'
+    branches: [ main, local-dev ]
 
 permissions:
   contents: read
 
 jobs:
-  regression:
-    runs-on: windows-latest
-    timeout-minutes: 20
+  truthful-suite:
+    name: Truthful suite final gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      TRUTHFUL_RUN_ID: ${{ github.run_id }}
+      TRUTHFUL_RUN_ATTEMPT: ${{ github.run_attempt }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Resolve immutable source and target
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit_sha="$(git rev-parse HEAD)"
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          test "$commit_sha" = "$GITHUB_SHA"
+          verifier_sha256="$(git show HEAD:tools/TruthfulSuite/verify-outcomes.mjs | sha256sum | cut -d' ' -f1)"
+          artifact_verifier_sha256="$(git show HEAD:tools/TruthfulSuite/truthful-artifact.mjs | sha256sum | cut -d' ' -f1)"
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            target_ref="$GITHUB_BASE_REF"
+            source_ref="$GITHUB_HEAD_REF"
+          else
+            target_ref="$GITHUB_REF_NAME"
+            source_ref="$GITHUB_REF_NAME"
+          fi
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
+                ( "$GITHUB_REF_TYPE" != "branch" ||
+                  ( "$GITHUB_REF" != "refs/heads/main" && "$GITHUB_REF" != "refs/heads/local-dev" ) ) ]]; then
+            echo "Manual regression runs require main or local-dev branch ref." >&2
+            exit 1
+          fi
+
+          if [[ "$target_ref" == "local-dev" ]]; then
+            slot="local-dev"
+            domain="dev.xivcraftarchitect.com"
+          else
+            slot="main"
+            domain="xivcraftarchitect.com"
+          fi
+
+          release="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${commit_sha:0:7}"
+          {
+            echo "commit_sha=$commit_sha"
+            echo "tree_sha=$tree_sha"
+            echo "source_ref=$source_ref"
+            echo "slot=$slot"
+            echo "domain=$domain"
+            echo "release=$release"
+            echo "verifier_sha256=$verifier_sha256"
+            echo "artifact_verifier_sha256=$artifact_verifier_sha256"
+            echo "TRUTHFUL_SOURCE_SHA=$commit_sha"
+          } >> "$GITHUB_OUTPUT"
+          echo "TRUTHFUL_SOURCE_SHA=$commit_sha" >> "$GITHUB_ENV"
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
 
-      - name: Restore solution
-        run: dotnet restore "FFXIV Craft Architect.sln"
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Test truthful-suite tooling
+        run: node --test "tools/TruthfulSuite/truthful-suite.test.mjs"
+
+      - name: Restore pinned browser package
+        shell: bash
+        run: timeout --signal=KILL 2m npm --prefix "tools/IndexedDbBrowserTests" ci
+
+      - name: Validate truthful suite structure
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id suite-structure
+          --out dist/evidence/suite-structure.json
+          --timeout-seconds 120
+          --
+          pwsh -NoProfile -File scripts/Assert-TruthfulTestSuite.ps1
+
+      - name: Restore locked solution
+        shell: bash
+        run: timeout --signal=KILL 5m dotnet restore "FFXIV Craft Architect.sln" --locked-mode
 
       - name: Audit vulnerable dependencies
-        run: dotnet list "FFXIV Craft Architect.sln" package --vulnerable --include-transitive --no-restore
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id dependency-audit
+          --out dist/evidence/dependency-audit.json
+          --timeout-seconds 300
+          --
+          node tools/TruthfulSuite/check-dependencies.mjs
 
       - name: Verify formatting
-        run: dotnet format "FFXIV Craft Architect.sln" --verify-no-changes --no-restore
+        shell: bash
+        run: timeout --signal=KILL 5m dotnet format "FFXIV Craft Architect.sln" --verify-no-changes --no-restore
 
       - name: Build full solution
-        run: dotnet build "FFXIV Craft Architect.sln" --configuration Release --no-restore
-
-      - name: Run regression suite
         run: >
-          dotnet test "src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj"
+          node tools/TruthfulSuite/run-command.mjs
+          --id solution-build
+          --out dist/evidence/solution-build.json
+          --timeout-seconds 600
+          --
+          dotnet build "FFXIV Craft Architect.sln"
+          --configuration Release
+          --no-restore
+
+      - name: Run specification tests
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id spec-tests
+          --out dist/evidence/spec-tests.json
+          --timeout-seconds 600
+          --
+          dotnet test "src/FFXIV Craft Architect.SpecTests/FFXIV Craft Architect.SpecTests.csproj"
           --configuration Release
           --no-build
           --no-restore
           --blame-hang
           --blame-hang-timeout 5m
           --blame-hang-dump-type mini
-          --logger "trx;LogFileName=regression.trx"
+          --logger "trx;LogFileName=spec-tests.trx"
           --logger "console;verbosity=normal"
+
+      - name: Run contract tests
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id contract-tests
+          --out dist/evidence/contract-tests.json
+          --timeout-seconds 600
+          --
+          dotnet test "src/FFXIV Craft Architect.ContractTests/FFXIV Craft Architect.ContractTests.csproj"
+          --configuration Release
+          --no-build
+          --no-restore
+          --blame-hang
+          --blame-hang-timeout 5m
+          --blame-hang-dump-type mini
+          --logger "trx;LogFileName=contract-tests.trx"
+          --logger "console;verbosity=normal"
+
+      - name: Publish web once
+        env:
+          BUILD_SOURCE_REF: ${{ steps.target.outputs.source_ref }}
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id web-publish
+          --out dist/evidence/web-publish.json
+          --timeout-seconds 600
+          --
+          dotnet publish "src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj"
+          --configuration Release
+          --output dist/publish
+          --no-restore
+          "-p:BuildInfoBranchName=$BUILD_SOURCE_REF"
+
+      - name: Apply target configuration and create immutable artifact
+        id: artifact
+        shell: bash
+        env:
+          BUILD_SOURCE_REF: ${{ steps.target.outputs.source_ref }}
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=all)"
+          node tools/TruthfulSuite/truthful-artifact.mjs create \
+            --root "dist/publish/wwwroot" \
+            --out-dir "dist/release" \
+            --archive-name "craftarchitect-web-${{ steps.target.outputs.slot }}-${{ steps.target.outputs.release }}.tar.gz" \
+            --domain "${{ steps.target.outputs.domain }}" \
+            --slot "${{ steps.target.outputs.slot }}" \
+            --source-sha "${{ steps.target.outputs.commit_sha }}" \
+            --tree-sha "${{ steps.target.outputs.tree_sha }}" \
+            --source-dirty "false" \
+            --repository-root "." \
+            --source-ref "$BUILD_SOURCE_REF" \
+            --run-id "$TRUTHFUL_RUN_ID" \
+            --run-attempt "$TRUTHFUL_RUN_ATTEMPT" \
+            --release "${{ steps.target.outputs.release }}" \
+            --dotnet-version "$(dotnet --version)" \
+            --acceptance-root "tools/IndexedDbBrowserTests" \
+            --fixtures-root "fixtures/browser"
+
+      - name: Extract and verify accepted archive
+        run: >
+          node tools/TruthfulSuite/truthful-artifact.mjs verify
+          --archive "${{ steps.artifact.outputs.archive_path }}"
+          --file-manifest "${{ steps.artifact.outputs.file_manifest_path }}"
+          --build-manifest "${{ steps.artifact.outputs.build_manifest_path }}"
+          --extract "dist/subject/src/FFXIV Craft Architect.Web/wwwroot"
+
+      - name: Verify production kill switch from extracted bytes
+        env:
+          TRUTHFUL_ARTIFACT_SHA: ${{ steps.artifact.outputs.archive_sha256 }}
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id product-kill-switch
+          --out dist/evidence/product-kill-switch.json
+          --timeout-seconds 60
+          --subject archive
+          --
+          node tools/TruthfulSuite/check-product.mjs
+          "dist/subject/src/FFXIV Craft Architect.Web/wwwroot"
+          "${{ steps.target.outputs.domain }}"
+
+      - name: Prepare deterministic browser harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "dist/subject/tools/IndexedDbBrowserTests"
+          mkdir -p "dist/subject/fixtures/browser"
+          cp tools/IndexedDbBrowserTests/truth-suite.mjs "dist/subject/tools/IndexedDbBrowserTests/"
+          cp tools/IndexedDbBrowserTests/package.json tools/IndexedDbBrowserTests/package-lock.json "dist/subject/tools/IndexedDbBrowserTests/"
+          cp -R fixtures/browser/. "dist/subject/fixtures/browser/"
+          timeout --signal=KILL 2m npm --prefix "dist/subject/tools/IndexedDbBrowserTests" ci
+          timeout --signal=KILL 10m npm --prefix "dist/subject/tools/IndexedDbBrowserTests" exec -- playwright install --with-deps chromium firefox
+
+      - name: Run deterministic browser tests against extracted bytes
+        env:
+          TRUTHFUL_ARTIFACT_SHA: ${{ steps.artifact.outputs.archive_sha256 }}
+          TRUTHFUL_HARNESS_SHA: ${{ steps.artifact.outputs.acceptance_harness_sha256 }}
+          TRUTHFUL_FIXTURE_SHA: ${{ steps.artifact.outputs.acceptance_fixture_sha256 }}
+        run: >
+          node tools/TruthfulSuite/run-command.mjs
+          --id deterministic-browser-tests
+          --out dist/evidence/deterministic-browser-tests.json
+          --timeout-seconds 600
+          --subject archive
+          --cwd "dist/subject/tools/IndexedDbBrowserTests"
+          --
+          npm test --
+          --web-root "../../src/FFXIV Craft Architect.Web/wwwroot"
+          --output "../../../evidence/browser-truth-report.json"
+
+      - name: Truthful suite final gate
+        id: final-gate
+        shell: bash
+        env:
+          VERIFIER_SHA256: ${{ steps.target.outputs.verifier_sha256 }}
+          ARTIFACT_VERIFIER_SHA256: ${{ steps.target.outputs.artifact_verifier_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(sha256sum tools/TruthfulSuite/verify-outcomes.mjs | cut -d' ' -f1)" = "$VERIFIER_SHA256"
+          test "$(sha256sum tools/TruthfulSuite/truthful-artifact.mjs | cut -d' ' -f1)" = "$ARTIFACT_VERIFIER_SHA256"
+          node tools/TruthfulSuite/verify-outcomes.mjs \
+            --archive "${{ steps.artifact.outputs.archive_path }}" \
+            --file-manifest "${{ steps.artifact.outputs.file_manifest_path }}" \
+            --build-manifest "${{ steps.artifact.outputs.build_manifest_path }}" \
+            --evidence-dir "dist/evidence" \
+            --acceptance-manifest "dist/release/acceptance-manifest.json" \
+            --acceptance-root "dist/subject/tools/IndexedDbBrowserTests" \
+            --fixtures-root "dist/subject/fixtures/browser" \
+            --spec-trx "src/FFXIV Craft Architect.SpecTests/TestResults/spec-tests.trx" \
+            --contract-trx "src/FFXIV Craft Architect.ContractTests/TestResults/contract-tests.trx"
+
+      - name: Upload truthful handoff evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: truthful-web-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/release/**
+            dist/evidence/**
+            dist/subject/tools/IndexedDbBrowserTests/truth-suite.mjs
+            dist/subject/tools/IndexedDbBrowserTests/package.json
+            dist/subject/tools/IndexedDbBrowserTests/package-lock.json
+            dist/subject/fixtures/browser/**
+            src/FFXIV Craft Architect.SpecTests/TestResults/spec-tests.trx
+            src/FFXIV Craft Architect.ContractTests/TestResults/contract-tests.trx
+            tools/TruthfulSuite/truthful-artifact.mjs
+            tools/TruthfulSuite/verify-outcomes.mjs
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: regression-test-results
+          name: truthful-test-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            src/FFXIV Craft Architect.Tests/TestResults/**
-            src/FFXIV Craft Architect.Tests/**/regression.trx
+            src/FFXIV Craft Architect.SpecTests/TestResults/**
+            src/FFXIV Craft Architect.ContractTests/TestResults/**
+          if-no-files-found: warn
+          retention-days: 7

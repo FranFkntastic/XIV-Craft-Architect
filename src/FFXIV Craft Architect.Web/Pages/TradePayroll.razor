@@ -289,7 +289,7 @@
             ? TradePayrollPersistence.ApplyResponsibilities(_source.Lines, _workflowDraft)
             : _source.Lines;
         _lines = lines.Select(TradePayrollLineEditor.FromInput).ToList();
-        if (_workflowDraft != null && _workflowDraft.CommissionPercent > 0)
+        if (_workflowDraft != null)
         {
             _commissionPercent = _workflowDraft.CommissionPercent;
         }
@@ -638,7 +638,7 @@
                 ? _companyProfile?.PaymentPolicy
                 : new TradePaymentPolicy(
                     _workflowDraft.ActivePaymentContract,
-                    _workflowDraft.CommissionPercent > 0 ? _workflowDraft.CommissionPercent : CommissionPayoutPolicy.Default.CommissionPercent,
+                    _workflowDraft.CommissionPercent,
                     _workflowDraft.LaborStandard)
                 {
                     LaborStandardMaterialBonusPercent = _workflowDraft.LaborStandardMaterialBonusPercent >= 0

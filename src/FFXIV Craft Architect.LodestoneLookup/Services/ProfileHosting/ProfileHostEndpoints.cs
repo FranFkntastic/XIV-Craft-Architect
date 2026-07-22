@@ -164,6 +164,16 @@ public static class ProfileHostEndpoints
                     return Results.Unauthorized();
                 }
 
+                if (payload.Objects == null ||
+                    payload.Objects.Any(item => item == null || !ProfileSyncCollections.All.Contains(item.Collection)))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "unsupported_collection",
+                        message = "Bootstrap contains a collection that is not syncable."
+                    });
+                }
+
                 foreach (var item in payload.Objects)
                 {
                     var result = await store.PutObjectAsync(

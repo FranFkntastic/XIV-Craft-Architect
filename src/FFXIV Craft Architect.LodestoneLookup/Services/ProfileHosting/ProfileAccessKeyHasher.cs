@@ -24,16 +24,37 @@ public sealed class ProfileAccessKeyHasher
 
     public bool Verify(string plaintextKey, string storedHash)
     {
-        var parts = storedHash.Split(':');
-        if (parts.Length != 4 ||
-            parts[0] != "pbkdf2-sha256" ||
-            !int.TryParse(parts[1], out var iterations))
+        if (string.IsNullOrEmpty(plaintextKey) || string.IsNullOrEmpty(storedHash))
         {
             return false;
         }
 
-        var salt = Convert.FromBase64String(parts[2]);
-        var expected = Convert.FromBase64String(parts[3]);
+        var parts = storedHash.Split(':');
+        if (parts.Length != 4 ||
+            parts[0] != "pbkdf2-sha256" ||
+            !int.TryParse(parts[1], out var iterations) ||
+            iterations != Iterations)
+        {
+            return false;
+        }
+
+        byte[] salt;
+        byte[] expected;
+        try
+        {
+            salt = Convert.FromBase64String(parts[2]);
+            expected = Convert.FromBase64String(parts[3]);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        if (salt.Length != SaltBytes || expected.Length != KeyBytes)
+        {
+            return false;
+        }
+
         var actual = Rfc2898DeriveBytes.Pbkdf2(
             plaintextKey,
             salt,

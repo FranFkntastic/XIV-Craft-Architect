@@ -2,15 +2,14 @@ name: Deploy Lodestone Helper to VPS
 
 on:
   push:
-    branches: [ main, master, local-dev ]
+    branches: [ main, local-dev ]
     paths:
       - 'src/FFXIV Craft Architect.LodestoneLookup/**'
       - 'src/FFXIV Craft Architect.Core/**'
       - 'src/FFXIV Craft Architect.Web/Services/HttpLodestoneCrafterLookupService.cs'
       - 'src/FFXIV Craft Architect.Web/Program.cs'
       - 'src/FFXIV Craft Architect.Web/wwwroot/appsettings.json'
-      - 'src/FFXIV Craft Architect.Tests/**'
-      - 'scripts/Assert-DeployTestSurface.ps1'
+      - 'src/FFXIV Craft Architect.ContractTests/**'
       - 'global.json'
       - '.github/workflows/deploy-vps-lodestone.yml'
   workflow_dispatch:
@@ -28,26 +27,17 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
 
-      - name: Validate Lodestone deploy test slice
-        shell: pwsh
+      - name: Run Lodestone contract tests
         run: >
-          ./scripts/Assert-DeployTestSurface.ps1
-          -Surface DeployLodestone
-
-      - name: Run Lodestone deploy test slice
-        run: >
-          dotnet test "src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj"
+          dotnet test "src/FFXIV Craft Architect.ContractTests/FFXIV Craft Architect.ContractTests.csproj"
           --configuration Release
-          --no-restore
-          --no-build
-          --filter "Surface=DeployLodestone"
           --blame-hang
           --blame-hang-timeout 2m
           --blame-hang-dump-type mini
@@ -64,10 +54,10 @@ jobs:
       VPS_SSH_PORT: 22
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
 

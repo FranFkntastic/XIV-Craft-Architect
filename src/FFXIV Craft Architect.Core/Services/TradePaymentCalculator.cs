@@ -7,8 +7,11 @@ public sealed class TradePaymentCalculator
     public TradePaymentComparisonSummary Calculate(TradePaymentCalculationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Policy);
 
         var materials = request.Materials?.ToArray() ?? [];
+        var laborInputs = request.CraftLabor ?? [];
+        ValidateInputs(materials, laborInputs, request.Policy);
         var estimatedProcurementTotal = RoundGil(materials.Sum(material => material.UnitCost * material.Quantity));
         var materialReimbursementTotal = RoundGil(materials
             .Where(material => material.Responsibility == CommissionMaterialResponsibility.Crafter)
@@ -21,7 +24,7 @@ public sealed class TradePaymentCalculator
             estimatedProcurementTotal);
         var labor = BuildLaborStandard(
             request.Policy,
-            request.CraftLabor ?? [],
+            laborInputs,
             materialReimbursementTotal,
             estimatedProcurementTotal);
         var active = request.Policy.ActiveContract == TradePaymentContractMode.LaborStandard
@@ -50,14 +53,43 @@ public sealed class TradePaymentCalculator
             warnings);
     }
 
+    private static void ValidateInputs(
+        IReadOnlyList<TradePaymentMaterialInput> materials,
+        IReadOnlyList<TradeCraftLaborInput> laborInputs,
+        TradePaymentPolicy policy)
+    {
+        if (policy.LegacyCommissionPercent is < 0 or > 100)
+        {
+            throw new ArgumentOutOfRangeException(nameof(policy), "Legacy commission percent must be between 0 and 100.");
+        }
+
+        if (policy.LaborStandardMaterialBonusPercent is < 0 or > 100)
+        {
+            throw new ArgumentOutOfRangeException(nameof(policy), "Labor material bonus percent must be between 0 and 100.");
+        }
+
+        if (policy.LaborStandard?.BenchmarkLaborPayout < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(policy), "Benchmark labor payout cannot be negative.");
+        }
+
+        if (materials.Any(material => material.Quantity < 0 || material.UnitCost < 0))
+        {
+            throw new ArgumentOutOfRangeException(nameof(materials), "Material quantity and unit cost cannot be negative.");
+        }
+
+        if (laborInputs.Any(input => input.RequestedQuantity < 0 || input.CraftCount < 0))
+        {
+            throw new ArgumentOutOfRangeException(nameof(laborInputs), "Requested quantity and craft count cannot be negative.");
+        }
+    }
+
     private static TradePaymentContractBreakdown BuildLegacy(
         TradePaymentPolicy policy,
         decimal materialReimbursementTotal,
         decimal estimatedProcurementTotal)
     {
-        var percent = policy.LegacyCommissionPercent > 0
-            ? policy.LegacyCommissionPercent
-            : CommissionPayoutPolicy.Default.CommissionPercent;
+        var percent = policy.LegacyCommissionPercent;
         var commission = RoundGil(estimatedProcurementTotal * percent / 100m);
 
         return new TradePaymentContractBreakdown(

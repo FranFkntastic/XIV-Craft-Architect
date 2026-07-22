@@ -374,17 +374,17 @@ public sealed class CraftRecipeGraphService : ICraftRecipeGraphService
         IReadOnlyList<uint> terminalMaterialItemIds,
         IReadOnlyList<CraftRecipeGraphDiagnosticV1> diagnostics,
         bool isComplete = false) => new()
-    {
-        ProviderVersion = providerVersion,
-        RecipeDataIdentity = ComputeRecipeDataIdentity(recipes, terminalMaterialItemIds),
-        IsComplete = isComplete,
-        RootItemId = request.ItemId,
-        RootItemName = root?.Name ?? request.ItemName,
-        Limits = Limits,
-        Recipes = recipes,
-        TerminalMaterialItemIds = terminalMaterialItemIds,
-        Diagnostics = diagnostics.Take(Limits.MaximumDiagnosticCount).ToList(),
-    };
+        {
+            ProviderVersion = providerVersion,
+            RecipeDataIdentity = ComputeRecipeDataIdentity(recipes, terminalMaterialItemIds),
+            IsComplete = isComplete,
+            RootItemId = request.ItemId,
+            RootItemName = root?.Name ?? request.ItemName,
+            Limits = Limits,
+            Recipes = recipes,
+            TerminalMaterialItemIds = terminalMaterialItemIds,
+            Diagnostics = diagnostics.Take(Limits.MaximumDiagnosticCount).ToList(),
+        };
 
     private static string ComputeRecipeDataIdentity(
         IReadOnlyList<CraftRecipeDefinitionV1> recipes,

@@ -31,6 +31,7 @@ artifacts/
 !deucalion.dll  # Keep the injected DLL
 *.pdb
 *.cache
+node_modules/
 
 # Test results
 TestResults/

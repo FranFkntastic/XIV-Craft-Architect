@@ -16,6 +16,7 @@ The canonical app is the hosted Blazor web app — no installation required:
 
 - A modern browser, to use the hosted app
 - .NET 10 SDK for development (pinned by `global.json`; application projects target .NET 8)
+- Node.js 22 for browser and release-verification tooling
 - a usecase, ideally
 
 ## Development verification
@@ -23,12 +24,16 @@ The canonical app is the hosted Blazor web app — no installation required:
 Run the same foundation checks used by CI before handing off a change:
 
 ```powershell
-dotnet restore ".\FFXIV Craft Architect.sln"
-dotnet list ".\FFXIV Craft Architect.sln" package --vulnerable --include-transitive --no-restore
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Assert-TruthfulTestSuite.ps1"
+node --test ".\tools\TruthfulSuite\truthful-suite.test.mjs"
+dotnet restore ".\FFXIV Craft Architect.sln" --locked-mode
+node ".\tools\TruthfulSuite\check-dependencies.mjs"
 dotnet format ".\FFXIV Craft Architect.sln" --verify-no-changes --no-restore
 dotnet build ".\FFXIV Craft Architect.sln" --configuration Release --no-restore
-dotnet test ".\src\FFXIV Craft Architect.Tests\FFXIV Craft Architect.Tests.csproj" --configuration Release --no-build --no-restore
+dotnet test ".\FFXIV Craft Architect.sln" --configuration Release --no-build --no-restore
 ```
+
+Web deployment publishes once, runs Chromium and Firefox against the hash-verified archive, and deploys those same bytes only after every required terminal outcome passes.
 
 ## License
 
