@@ -13,8 +13,11 @@ namespace FFXIV_Craft_Architect.Core.Services;
 /// </summary>
 public class UniversalisService : IUniversalisService
 {
+    internal const int MaxConcurrentApiRequests = 4;
+
     private readonly HttpClient _httpClient;
     private readonly ILogger<UniversalisService>? _logger;
+    private readonly SemaphoreSlim _apiRequestGate = new(MaxConcurrentApiRequests, MaxConcurrentApiRequests);
 
     private const string UniversalisApiUrl = "https://universalis.app/api/v2/{0}/{1}";
     private const string UniversalisMarketUrl = "https://universalis.app/market/{0}";
@@ -87,7 +90,7 @@ public class UniversalisService : IUniversalisService
         _logger?.LogDebug("Fetching market data for {ItemId} on {WorldOrDc} (HQ={HqOnly})", itemId, worldOrDc, hqOnly);
 
 #pragma warning disable CS0618 // Type or member is obsolete
-        var response = await _httpClient.GetAsync(url, ct);
+        var response = await SendApiRequestAsync(url, ct);
 #pragma warning restore CS0618 // Type or member is obsolete
         response.EnsureSuccessStatusCode();
 
@@ -113,7 +116,7 @@ public class UniversalisService : IUniversalisService
         const int initialChunkSize = 10; // Live regional tests showed chunk 10 avoids 504 split cascades
         const int minChunkSize = 5;      // Don't split below this
         const int maxConcurrency = 3;
-        const int maxGlobalRetries = 2;  // How many times to retry missing IDs
+        const int maxGlobalRetries = 1;  // One recovery pass; chunk retries already handle transient failures
 
         var itemIdList = itemIds.Distinct().ToList();
         if (itemIdList.Count == 0)
@@ -267,13 +270,9 @@ public class UniversalisService : IUniversalisService
                 "Missing {Count} items after initial fetch, global retry attempt {Attempt}/{Max}",
                 missingIds.Count, globalRetryAttempt, maxGlobalRetries);
 
-            // Reset delay strategy for retry phase
-            delayStrategy = new AdaptiveDelayStrategy(
-                initialDelayMs: 500,
-                minDelayMs: 250,
-                maxDelayMs: 15000,
-                backoffMultiplier: 2.0,
-                rateLimitMultiplier: 3.0);
+            // Preserve the accumulated backoff. Resetting it here caused a failed batch to
+            // immediately accelerate again while Universalis was still rate limiting us.
+            delayStrategy.ReportFailure(System.Net.HttpStatusCode.BadRequest);
 
             // Retry missing IDs in small chunks. Single-item retries make large regional
             // fetches appear stuck on attempt 1/2 and multiply the adaptive delay cost.
@@ -350,7 +349,7 @@ public class UniversalisService : IUniversalisService
         var ids = string.Join(",", workItem.ItemIds);
         var url = string.Format(UniversalisApiUrl, Uri.EscapeDataString(worldOrDc), ids);
 
-        const int maxRetries = 3;
+        const int maxRetries = 2;
         Exception? lastException = null;
         bool shouldSplit = false;
 
@@ -372,7 +371,7 @@ public class UniversalisService : IUniversalisService
                     workItem.ChunkIndex, workItem.ItemIds.Count, workItem.SplitDepth,
                     string.Join(",", workItem.ItemIds.Take(5)) + (workItem.ItemIds.Count > 5 ? "..." : ""));
 
-                var response = await _httpClient.GetAsync(url, ct);
+                var response = await SendApiRequestAsync(url, ct);
 
                 // Handle specific error codes
                 if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
@@ -520,6 +519,19 @@ public class UniversalisService : IUniversalisService
 
         // All retries exhausted
         return new ChunkFetchResult(false, false, lastException);
+    }
+
+    private async Task<HttpResponseMessage> SendApiRequestAsync(string url, CancellationToken ct)
+    {
+        await _apiRequestGate.WaitAsync(ct);
+        try
+        {
+            return await _httpClient.GetAsync(url, ct);
+        }
+        finally
+        {
+            _apiRequestGate.Release();
+        }
     }
 
     /// <summary>
