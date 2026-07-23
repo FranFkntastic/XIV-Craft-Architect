@@ -328,85 +328,134 @@ public static class EngineCanonicalHash
         CooperativeCanonicalWriteState state,
         bool sortArray = false)
     {
-        await state.AdvanceAsync();
-        switch (element.ValueKind)
+        var frames = new Stack<CanonicalWriteFrame>();
+        var pending = element;
+        var pendingSortArray = sortArray;
+        var hasPending = true;
+        while (hasPending || frames.Count > 0)
         {
-            case JsonValueKind.Object:
-                var properties = element.EnumerateObject()
-                    .OrderBy(property => property.Name, StringComparer.Ordinal)
-                    .ToArray();
-                for (var index = 1; index < properties.Length; index++)
+            if (hasPending)
+            {
+                if (state.Advance())
                 {
-                    if (string.Equals(properties[index - 1].Name, properties[index].Name, StringComparison.Ordinal))
-                    {
-                        throw new InvalidOperationException($"Duplicate JSON property '{properties[index].Name}' cannot be canonically hashed.");
-                    }
+                    await state.YieldAsync();
                 }
 
-                writer.WriteStartObject();
-                foreach (var property in properties)
+                switch (pending.ValueKind)
                 {
-                    writer.WritePropertyName(property.Name);
-                    await WriteCanonicalAsync(
-                        writer,
-                        property.Value,
-                        state,
-                        property.Name is "BlacklistedWorlds" or "ExcludedItemWorlds" or "blacklistedWorlds" or "excludedItemWorlds");
+                    case JsonValueKind.Object:
+                        var properties = pending.EnumerateObject()
+                            .OrderBy(property => property.Name, StringComparer.Ordinal)
+                            .ToArray();
+                        for (var index = 1; index < properties.Length; index++)
+                        {
+                            if (string.Equals(properties[index - 1].Name, properties[index].Name, StringComparison.Ordinal))
+                            {
+                                throw new InvalidOperationException($"Duplicate JSON property '{properties[index].Name}' cannot be canonically hashed.");
+                            }
+                        }
+                        writer.WriteStartObject();
+                        frames.Push(CanonicalWriteFrame.ForObject(properties));
+                        break;
+                    case JsonValueKind.Array:
+                        writer.WriteStartArray();
+                        var arrayItems = pending.EnumerateArray().ToArray();
+                        if (pendingSortArray)
+                        {
+                            arrayItems = arrayItems
+                                .Select(item => (Item: item, Hash: Compute(item)))
+                                .OrderBy(item => item.Hash, StringComparer.Ordinal)
+                                .DistinctBy(item => item.Hash, StringComparer.Ordinal)
+                                .Select(item => item.Item)
+                                .ToArray();
+                        }
+                        frames.Push(CanonicalWriteFrame.ForArray(arrayItems));
+                        break;
+                    case JsonValueKind.String:
+                        writer.WriteStringValue(pending.GetString());
+                        break;
+                    case JsonValueKind.Number:
+                        if (pending.TryGetInt64(out var integer))
+                        {
+                            writer.WriteNumberValue(integer);
+                        }
+                        else if (pending.TryGetDecimal(out var decimalValue))
+                        {
+                            if (CountSignificantDigits(pending.GetRawText()) > 29)
+                            {
+                                throw new NotSupportedException($"JSON number '{pending.GetRawText()}' exceeds the canonical decimal precision.");
+                            }
+                            writer.WriteRawValue(decimalValue.ToString("G29", System.Globalization.CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            throw new NotSupportedException($"JSON number '{pending.GetRawText()}' exceeds the canonical decimal domain.");
+                        }
+                        break;
+                    case JsonValueKind.True:
+                        writer.WriteBooleanValue(true);
+                        break;
+                    case JsonValueKind.False:
+                        writer.WriteBooleanValue(false);
+                        break;
+                    case JsonValueKind.Null:
+                    case JsonValueKind.Undefined:
+                        writer.WriteNullValue();
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(element), pending.ValueKind, "Unsupported JSON value kind.");
                 }
-                writer.WriteEndObject();
-                break;
-            case JsonValueKind.Array:
-                writer.WriteStartArray();
-                var items = element.EnumerateArray().ToArray();
-                if (sortArray)
+
+                hasPending = false;
+                continue;
+            }
+
+            var frame = frames.Pop();
+            if (frame.Kind == JsonValueKind.Object)
+            {
+                var properties = frame.Properties!;
+                if (frame.Index >= properties.Length)
                 {
-                    items = items
-                        .Select(item => (Item: item, Hash: Compute(item)))
-                        .OrderBy(item => item.Hash, StringComparer.Ordinal)
-                        .DistinctBy(item => item.Hash, StringComparer.Ordinal)
-                        .Select(item => item.Item)
-                        .ToArray();
+                    writer.WriteEndObject();
+                    continue;
                 }
-                foreach (var item in items)
-                {
-                    await WriteCanonicalAsync(writer, item, state);
-                }
+
+                var property = properties[frame.Index];
+                frames.Push(frame with { Index = frame.Index + 1 });
+                writer.WritePropertyName(property.Name);
+                pending = property.Value;
+                pendingSortArray = property.Name is
+                    "BlacklistedWorlds" or "ExcludedItemWorlds" or
+                    "blacklistedWorlds" or "excludedItemWorlds";
+                hasPending = true;
+                continue;
+            }
+
+            var frameItems = frame.Items!;
+            if (frame.Index >= frameItems.Length)
+            {
                 writer.WriteEndArray();
-                break;
-            case JsonValueKind.String:
-                writer.WriteStringValue(element.GetString());
-                break;
-            case JsonValueKind.Number:
-                if (element.TryGetInt64(out var integer))
-                {
-                    writer.WriteNumberValue(integer);
-                }
-                else if (element.TryGetDecimal(out var decimalValue))
-                {
-                    if (CountSignificantDigits(element.GetRawText()) > 29)
-                    {
-                        throw new NotSupportedException($"JSON number '{element.GetRawText()}' exceeds the canonical decimal precision.");
-                    }
-                    writer.WriteRawValue(decimalValue.ToString("G29", System.Globalization.CultureInfo.InvariantCulture));
-                }
-                else
-                {
-                    throw new NotSupportedException($"JSON number '{element.GetRawText()}' exceeds the canonical decimal domain.");
-                }
-                break;
-            case JsonValueKind.True:
-                writer.WriteBooleanValue(true);
-                break;
-            case JsonValueKind.False:
-                writer.WriteBooleanValue(false);
-                break;
-            case JsonValueKind.Null:
-            case JsonValueKind.Undefined:
-                writer.WriteNullValue();
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(element), element.ValueKind, "Unsupported JSON value kind.");
+                continue;
+            }
+
+            frames.Push(frame with { Index = frame.Index + 1 });
+            pending = frameItems[frame.Index];
+            pendingSortArray = false;
+            hasPending = true;
         }
+    }
+
+    private readonly record struct CanonicalWriteFrame(
+        JsonValueKind Kind,
+        JsonProperty[]? Properties,
+        JsonElement[]? Items,
+        int Index)
+    {
+        public static CanonicalWriteFrame ForObject(JsonProperty[] properties) =>
+            new(JsonValueKind.Object, properties, null, 0);
+
+        public static CanonicalWriteFrame ForArray(JsonElement[] items) =>
+            new(JsonValueKind.Array, null, items, 0);
     }
 
     private sealed class CooperativeCanonicalWriteState(
@@ -416,14 +465,14 @@ public static class EngineCanonicalHash
         private const int YieldInterval = 4096;
         private int _nodes;
 
-        public async ValueTask AdvanceAsync()
+        public bool Advance()
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (cooperativeYield is not null && ++_nodes % YieldInterval == 0)
-            {
-                await cooperativeYield(cancellationToken);
-            }
+            return cooperativeYield is not null && ++_nodes % YieldInterval == 0;
         }
+
+        public ValueTask YieldAsync() =>
+            cooperativeYield!(cancellationToken);
     }
 
     private sealed class IncrementalHashBufferWriter : IBufferWriter<byte>, IDisposable

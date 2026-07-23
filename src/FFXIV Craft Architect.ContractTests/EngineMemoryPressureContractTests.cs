@@ -99,8 +99,18 @@ public sealed class EngineMemoryPressureContractTests
         Volatile.Write(ref sampling, false);
         await sampler;
         var peakIncrease = peak - baseline;
+        var cooperativeYields = 0;
+        var cooperativeHash = await EngineCanonicalHash.ComputeEngineInputAsync(
+            document.RootElement,
+            _ =>
+            {
+                cooperativeYields++;
+                return ValueTask.CompletedTask;
+            });
 
         Assert.Equal(64, hash.Length);
+        Assert.Equal(hash, cooperativeHash);
+        Assert.True(cooperativeYields > 0);
         Assert.True(
             peakIncrease < 32 * 1024 * 1024,
             $"Hashing retained {peakIncrease:N0} peak live bytes for a {stream.Length:N0}-byte canonical payload.");
