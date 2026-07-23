@@ -68,10 +68,9 @@ public sealed record EngineExecutionBudgets(
     int SchemaVersion,
     int MaxWorkUnits,
     int MaxEvidenceRequests,
-    int MaxTravelRouteEvaluations,
     int CooperativeCancellationInterval = 64)
 {
-    public static EngineExecutionBudgets Default { get; } = new(2, 250_000, 10_000, 8, 64);
+    public static EngineExecutionBudgets Default { get; } = new(3, 250_000, 10_000, 64);
 }
 
 public sealed record EngineDeterministicSettings

@@ -197,20 +197,17 @@ public sealed class MarketAnalysisPublicationStore : IMarketAnalysisPublicationS
 public sealed class MarketAnalysisPublicationService
 {
     private readonly AppState _appState;
-    private readonly MarketShoppingService _marketShoppingService;
     private readonly IMarketAnalysisPublicationStore _store;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
     private readonly ILogger _logger;
 
     public MarketAnalysisPublicationService(
         AppState appState,
-        MarketShoppingService marketShoppingService,
         IMarketAnalysisPublicationStore store,
         IRecipeLayerWorkflowService recipeLayerWorkflow,
         ILogger logger)
     {
         _appState = appState;
-        _marketShoppingService = marketShoppingService;
         _store = store;
         _recipeLayerWorkflow = recipeLayerWorkflow;
         _logger = logger;
@@ -241,10 +238,9 @@ public sealed class MarketAnalysisPublicationService
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var changedDecisions = AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
+        var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(
             request.Plan,
             request.ShoppingPlans);
-        _marketShoppingService.ApplyVendorPurchaseOverrides(request.Plan, request.ShoppingPlans);
         if (changedDecisions > 0)
         {
             _appState.NotifyPlanDecisionChanged();
@@ -285,22 +281,12 @@ public sealed class MarketAnalysisPublicationService
         if (!requestAlreadySnapshotted)
         {
             var repairProbe = Clone(request.Plan, options);
-            if (AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
+            if (AcquisitionPlanningService.ReconcileAcquisitionDecisions(
                     repairProbe,
                     request.ShoppingPlans) > 0)
             {
                 throw new InvalidOperationException(
-                    "Automatic source repair must be completed before the engine request and settlement snapshot.");
-            }
-            var vendorProbe = Clone(request.ShoppingPlans, options);
-            _marketShoppingService.ApplyVendorPurchaseOverrides(request.Plan, vendorProbe);
-            if (!string.Equals(
-                    EngineCanonicalHash.Compute(vendorProbe, options),
-                    EngineCanonicalHash.Compute(request.ShoppingPlans, options),
-                    StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    "Vendor repair must be completed before the engine request and settlement snapshot.");
+                    "Acquisition evaluation must be completed before the engine request and settlement snapshot.");
             }
         }
 

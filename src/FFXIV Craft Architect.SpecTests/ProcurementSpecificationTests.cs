@@ -67,7 +67,7 @@ public sealed class ProcurementSpecificationTests
     }
 
     [Fact]
-    public void VendorOverrideUsesSelectedVendorForEntireDemand()
+    public async Task SelectedVendorPurchaseProjectsTheAcquisitionDecisionIntoTheRoute()
     {
         var node = new PlanNode
         {
@@ -93,7 +93,8 @@ public sealed class ProcurementSpecificationTests
                 5,
                 12));
 
-        new MarketShoppingService(null!).ApplyVendorPurchaseOverrides(
+        var service = new MarketShoppingService(null!);
+        service.ApplySelectedVendorPurchases(
             new CraftingPlan { RootItems = [node] },
             [shopping]);
 
@@ -102,6 +103,102 @@ public sealed class ProcurementSpecificationTests
         Assert.Equal("Chosen (Limsa)", shopping.RecommendedWorld?.VendorName);
         var marketWorld = Assert.Single(shopping.WorldOptions);
         Assert.Equal("Siren", marketWorld.WorldName);
+
+        var route = await service.OptimizeProcurementRouteWithDecisionAsync(
+            [shopping],
+            SpecificationFixtures.Config(tolerance: 0));
+        Assert.True(route.IsComplete);
+        Assert.Equal(90, route.Decision?.SelectedGilCost);
+        Assert.Equal(90, route.Decision?.FixedAcquisitionGilCost);
+        Assert.All(route.Decision?.ToleranceSelections ?? [], selection =>
+            Assert.Equal(90, selection.GilCost));
+    }
+
+    [Fact]
+    public void VendorAvailabilityDoesNotMasqueradeAsVendorSelection()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 105,
+            Name = "Market material",
+            Quantity = 5,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+            CanBuyFromVendor = true,
+            VendorOptions =
+            [
+                new VendorInfo { Name = "Supplier", Location = "Limsa", Price = 12, Currency = "gil" }
+            ]
+        };
+        var shopping = SpecificationFixtures.Evidence(
+            node.ItemId,
+            node.Name,
+            node.Quantity,
+            SpecificationFixtures.World("Aether", "Siren", 5, 25));
+
+        new MarketShoppingService(null!).ApplySelectedVendorPurchases(
+            new CraftingPlan { RootItems = [node] },
+            [shopping]);
+
+        Assert.NotEqual(MarketShoppingConstants.VendorWorldName, shopping.RecommendedWorld?.WorldName);
+        Assert.Equal("Siren", Assert.Single(shopping.WorldOptions).WorldName);
+        Assert.Empty(shopping.Vendors);
+    }
+
+    [Fact]
+    public void AcquisitionEvaluationSelectsCheaperVendorFromMarketEvidence()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 106,
+            Name = "Compared material",
+            Quantity = 5,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanBuyFromMarket = true,
+            CanBuyFromVendor = true,
+            VendorPrice = 12
+        };
+        var shopping = SpecificationFixtures.Evidence(
+            node.ItemId,
+            node.Name,
+            node.Quantity,
+            SpecificationFixtures.World("Aether", "Siren", 5, 25));
+
+        var changed = AcquisitionPlanningService.ReconcileAcquisitionDecisions(
+            new CraftingPlan { RootItems = [node] },
+            [shopping]);
+
+        Assert.Equal(1, changed);
+        Assert.Equal(AcquisitionSource.VendorBuy, node.Source);
+    }
+
+    [Fact]
+    public void AcquisitionEvaluationPreservesUserSelectedMarketSource()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 107,
+            Name = "Pinned material",
+            Quantity = 5,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.UserSelected,
+            CanBuyFromMarket = true,
+            CanBuyFromVendor = true,
+            VendorPrice = 12
+        };
+        var shopping = SpecificationFixtures.Evidence(
+            node.ItemId,
+            node.Name,
+            node.Quantity,
+            SpecificationFixtures.World("Aether", "Siren", 5, 25));
+
+        var changed = AcquisitionPlanningService.ReconcileAcquisitionDecisions(
+            new CraftingPlan { RootItems = [node] },
+            [shopping]);
+
+        Assert.Equal(0, changed);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, node.Source);
     }
 
     [Fact]

@@ -71,11 +71,9 @@ public sealed record EngineRouteSemanticSnapshot(
     int SelectedDataCenterTransfers,
     bool IsComplete,
     EngineRouteDecisionSnapshot? Decision,
-    string OptimizedPlanHash = "",
     string ActiveProcurementItemsHash = "",
     string EvidenceAnalysesHash = "",
     string EvidencePlansHash = "",
-    string AcquisitionDecisionsHash = "",
     string ShoppingPlansHash = "");
 
 public sealed record EngineRouteStopSnapshot(
@@ -118,11 +116,7 @@ public sealed record EngineRouteDecisionSnapshot(
     string? HomeDataCenter,
     MarketTravelPriority TravelPriority,
     long FixedAcquisitionGilCost,
-    bool AcquisitionSearchWasTruncated,
-    long AcquisitionCombinationEvaluations,
     bool RouteSearchWasTruncated,
-    bool TravelSearchWasTruncated,
-    int TravelRoutesEvaluated,
     IReadOnlyList<EngineRouteFrontierOptionSnapshot> FrontierOptions,
     IReadOnlyList<EngineRouteItemDecisionSnapshot> ItemDecisions,
     string ToleranceSelectionsHash = "");

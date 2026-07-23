@@ -72,7 +72,6 @@ public sealed class CoreProcurementWorkflowService
     private readonly CraftSessionState _session;
     private readonly IProcurementRouteExecutionService _procurementRouteExecutionService;
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
-    private readonly MarketShoppingService _marketShoppingService;
     private readonly ICoreRecipeLayerWorkflowService _recipeLayerWorkflow;
     private readonly ICraftOperationCoordinator _operationCoordinator;
 
@@ -80,14 +79,12 @@ public sealed class CoreProcurementWorkflowService
         CraftSessionState session,
         IProcurementRouteExecutionService procurementRouteExecutionService,
         IMarketEvidenceReconciliationService marketEvidenceReconciliation,
-        MarketShoppingService marketShoppingService,
         ICoreRecipeLayerWorkflowService recipeLayerWorkflow,
         ICraftOperationCoordinator operationCoordinator)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _procurementRouteExecutionService = procurementRouteExecutionService ?? throw new ArgumentNullException(nameof(procurementRouteExecutionService));
         _marketEvidenceReconciliation = marketEvidenceReconciliation ?? throw new ArgumentNullException(nameof(marketEvidenceReconciliation));
-        _marketShoppingService = marketShoppingService ?? throw new ArgumentNullException(nameof(marketShoppingService));
         _recipeLayerWorkflow = recipeLayerWorkflow ?? throw new ArgumentNullException(nameof(recipeLayerWorkflow));
         _operationCoordinator = operationCoordinator ?? throw new ArgumentNullException(nameof(operationCoordinator));
     }
@@ -206,22 +203,20 @@ public sealed class CoreProcurementWorkflowService
             var routeCards = ProcurementWorldCardBuilder.BuildWorldCards(
                 shoppingPlans,
                 request.SelectedDataCenter);
-            var optimizedPlan = result.OptimizedPlan ?? plan;
             var sessionPublished = false;
             var published = operation.CompleteIfCurrent(
-                () => sessionPublished = _session.TryPublishProcurementOptimization(
+                () => sessionPublished = _session.TryPublishProcurementRoute(
                     capturedVersions,
                     plan,
                     planSessionVersion,
-                    optimizedPlan,
                     new CraftSessionProcurementOverlay(
                         DateTime.UtcNow,
                         shoppingPlans.Select(item => item.ItemId).ToArray(),
-                        "joint acquisition and procurement optimization",
+                        "procurement route optimization",
                         shoppingPlans,
                         routeCards,
                         result.RouteDecision),
-                    "joint acquisition and procurement decisions published"),
+                    "procurement route published"),
                 "Procurement route published.");
             if (!published || !sessionPublished)
             {
@@ -336,7 +331,6 @@ public sealed class CoreProcurementWorkflowService
             }
 
             var refreshedPlans = new List<DetailedShoppingPlan> { reconciliation.ShoppingPlans.Single() };
-            _marketShoppingService.ApplyVendorPurchaseOverrides(plan, refreshedPlans);
             staleStatus = GetStaleRefreshStatus(planSessionVersion, capturedVersions, request.IsCurrentOperation);
             if (staleStatus != null)
             {

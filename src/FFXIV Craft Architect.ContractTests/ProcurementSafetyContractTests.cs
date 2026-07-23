@@ -93,22 +93,14 @@ public sealed class ProcurementSafetyContractTests
     public void TravelToleranceSelection_AppliesPublishedRouteWithoutSchedulingExecution()
     {
         var state = CreateState(100);
-        var nodeId = Assert.Single(state.CurrentPlan!.RootItems).NodeId;
-        var decisions = new[]
-        {
-            new ProcurementAcquisitionDecision(
-                nodeId,
-                AcquisitionSource.MarketBuyNq,
-                AcquisitionSourceReason.SystemDefault)
-        };
         var toleranceSelections = new[]
         {
             new MarketRouteToleranceSelection(
                 0, 5, "fewest", 500, 0, 1, 0, 0,
-                [RoutePlan(100, "Siren")], decisions, []),
+                [RoutePlan(100, "Siren")], []),
             new MarketRouteToleranceSelection(
                 6, 11, "cheapest", 400, 0, 2, 0, 0,
-                [RoutePlan(100, "Faerie")], decisions, [])
+                [RoutePlan(100, "Faerie")], [])
         };
         var decision = new MarketRouteDecision(
             0, null, 400, 500, 0, 2, 1, 0, 0, false, null,

@@ -25,7 +25,6 @@ public sealed class CoreMarketAnalysisWorkflowService
 {
     private readonly CraftSessionState _session;
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
-    private readonly MarketShoppingService _marketShoppingService;
     private readonly IMarketPriceLadderAnalysisService _marketPriceLadderAnalysis;
     private readonly ICoreRecipeLayerWorkflowService _recipeLayerWorkflow;
     private readonly ICraftOperationCoordinator _operationCoordinator;
@@ -33,14 +32,12 @@ public sealed class CoreMarketAnalysisWorkflowService
     public CoreMarketAnalysisWorkflowService(
         CraftSessionState session,
         IMarketEvidenceReconciliationService marketEvidenceReconciliation,
-        MarketShoppingService marketShoppingService,
         IMarketPriceLadderAnalysisService marketPriceLadderAnalysis,
         ICoreRecipeLayerWorkflowService recipeLayerWorkflow,
         ICraftOperationCoordinator operationCoordinator)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _marketEvidenceReconciliation = marketEvidenceReconciliation ?? throw new ArgumentNullException(nameof(marketEvidenceReconciliation));
-        _marketShoppingService = marketShoppingService ?? throw new ArgumentNullException(nameof(marketShoppingService));
         _marketPriceLadderAnalysis = marketPriceLadderAnalysis ?? throw new ArgumentNullException(nameof(marketPriceLadderAnalysis));
         _recipeLayerWorkflow = recipeLayerWorkflow ?? throw new ArgumentNullException(nameof(recipeLayerWorkflow));
         _operationCoordinator = operationCoordinator ?? throw new ArgumentNullException(nameof(operationCoordinator));
@@ -240,8 +237,7 @@ public sealed class CoreMarketAnalysisWorkflowService
         }
 
         var analysisList = analyses.ToList();
-        const int changedDecisions = 0;
-        _marketShoppingService.ApplyVendorPurchaseOverrides(plan, shoppingPlans);
+        var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(plan, shoppingPlans);
         if (_session.CaptureVersionStamp().PlanSession != capturedVersions.PlanSession)
         {
             operation.Cancel();

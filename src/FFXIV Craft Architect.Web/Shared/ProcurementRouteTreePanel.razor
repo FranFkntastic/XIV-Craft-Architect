@@ -38,27 +38,6 @@
                 <span><strong>@RouteDecision.SelectedDataCenterTransfers</strong> DC @Pluralize(RouteDecision.SelectedDataCenterTransfers, "transfer", "transfers")</span>
             </div>
         </div>
-        @if (RouteDecision.PremiumRate >= 1m && RouteDecision.PremiumGil >= 1_000m)
-        {
-            <div class="pp-decision-warning" role="status">
-                <MudIcon Icon="@Icons.Material.Filled.PriceChange" Size="Size.Small" />
-                <span>Minimizing travel more than doubles the route cost: +@RouteDecision.PremiumGil.ToString("N0")g over the cheapest eligible route.</span>
-            </div>
-        }
-        @if (RouteDecision.AcquisitionSearchWasTruncated)
-        {
-            <div class="pp-decision-warning" role="status">
-                <MudIcon Icon="@Icons.Material.Filled.Tune" Size="Size.Small" />
-                <span>This plan has more make-or-buy combinations than CA can exhaustively compare at once. Lock a few acquisition choices, then regenerate for a narrower comparison.</span>
-            </div>
-        }
-        @if (RouteDecision.TravelSearchWasTruncated)
-        {
-            <div class="pp-decision-warning" role="status">
-                <MudIcon Icon="@Icons.Material.Filled.Route" Size="Size.Small" />
-                <span>CA reached its travel-search work limit after comparing @RouteDecision.TravelRoutesEvaluated.ToString("N0") complete routes. This is the best complete route found, not a proven optimum.</span>
-            </div>
-        }
         @if (RouteDecision.RouteSearchWasTruncated)
         {
             <div class="pp-decision-warning" role="status">

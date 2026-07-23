@@ -15,9 +15,6 @@ internal static class SpecificationFixtures
             MaxPriceMultiplier = 2.5m
         };
 
-    public static JointAcquisitionRouteOptimizationService JointService() =>
-        new(new MarketShoppingService(null!));
-
     public static PlanNode MarketNode(
         int itemId,
         string name,

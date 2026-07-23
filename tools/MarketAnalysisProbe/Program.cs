@@ -141,9 +141,18 @@ internal sealed class MarketAnalysisBenchmark
             try
             {
                 var marketShopping = new MarketShoppingService(cache);
-                var routeResult = await new JointAcquisitionRouteOptimizationService(marketShopping).OptimizeAsync(
+                AcquisitionPlanningService.ReconcileAcquisitionDecisions(
                     plan,
-                    executionResult.ShoppingPlans,
+                    executionResult.ShoppingPlans);
+                var activeItemIds = AcquisitionPlanningService.GetActiveProcurementItems(plan)
+                    .Select(item => item.ItemId)
+                    .ToHashSet();
+                var routePlans = executionResult.ShoppingPlans
+                    .Where(shoppingPlan => activeItemIds.Contains(shoppingPlan.ItemId))
+                    .ToList();
+                marketShopping.ApplySelectedVendorPurchases(plan, routePlans);
+                var routeResult = await marketShopping.OptimizeProcurementRouteWithDecisionAsync(
+                    routePlans,
                     new MarketAnalysisConfig
                     {
                         TravelTolerance = options.RouteTolerance.Value,
@@ -154,8 +163,7 @@ internal sealed class MarketAnalysisBenchmark
                     new MarketAnalysisExecutionOptions
                     {
                         YieldEveryItems = 0,
-                        ProgressEveryItems = 0,
-                        MaxTravelRouteEvaluations = options.RouteMaxTravelRoutes
+                        ProgressEveryItems = 0
                     },
                     progress,
                     routeCancellation.Token);
@@ -163,15 +171,12 @@ internal sealed class MarketAnalysisBenchmark
                 procurement = new BenchmarkProcurementResult(
                     "Completed",
                     routeStage.Elapsed,
-                    routeResult.FrontierPlanCount,
-                    routeResult.FeasiblePlanCount,
-                    routeResult.RouteDecision?.AcquisitionSearchWasTruncated ?? routeResult.SearchWasTruncated,
-                    routeResult.RouteDecision?.RouteSearchWasTruncated ?? false,
-                    routeResult.RouteDecision?.TravelSearchWasTruncated ?? false,
-                    routeResult.RouteDecision?.TravelRoutesEvaluated ?? 0,
-                    routeResult.RouteDecision?.SelectedGilCost,
-                    routeResult.RouteDecision?.SelectedWorldStops,
-                    routeResult.RouteDecision?.SelectedDataCenterTransfers);
+                    routeResult.Decision?.RepresentativeRoutes.Count ?? 0,
+                    routeResult.IsComplete ? 1 : 0,
+                    routeResult.Decision?.RouteSearchWasTruncated ?? false,
+                    routeResult.Decision?.SelectedGilCost,
+                    routeResult.Decision?.SelectedWorldStops,
+                    routeResult.Decision?.SelectedDataCenterTransfers);
             }
             catch (OperationCanceledException) when (routeCancellation.IsCancellationRequested)
             {
@@ -182,9 +187,6 @@ internal sealed class MarketAnalysisBenchmark
                     0,
                     0,
                     false,
-                    false,
-                    false,
-                    0,
                     null,
                     null,
                     null);
@@ -322,11 +324,8 @@ internal sealed class MarketAnalysisBenchmark
         {
             Console.WriteLine(
                 $"Procurement: {run.Procurement.Status} in {FormatDuration(run.Procurement.Elapsed)}; " +
-                $"frontier={run.Procurement.FrontierPlanCount:N0}; feasible={run.Procurement.FeasiblePlanCount:N0}; " +
-                $"acquisitionTruncated={run.Procurement.AcquisitionSearchWasTruncated}; " +
+                $"frontier={run.Procurement.RouteFrontierCount:N0}; complete={run.Procurement.CompleteRouteCount:N0}; " +
                 $"routeTruncated={run.Procurement.RouteSearchWasTruncated}; " +
-                $"travelTruncated={run.Procurement.TravelSearchWasTruncated}; " +
-                $"travelRoutes={run.Procurement.TravelRoutesEvaluated:N0}; " +
                 $"gil={run.Procurement.SelectedGilCost?.ToString("N0") ?? "n/a"}; " +
                 $"worlds={run.Procurement.SelectedWorldStops?.ToString() ?? "n/a"}; " +
                 $"transfers={run.Procurement.SelectedDataCenterTransfers?.ToString() ?? "n/a"}");
@@ -427,7 +426,6 @@ internal sealed record ProbeOptions(
     int? RouteTolerance,
     bool IncludeSplitPurchases,
     TimeSpan? RouteCancellationAfter,
-    int? RouteMaxTravelRoutes,
     bool ShowHelp,
     bool HasError)
 {
@@ -448,7 +446,6 @@ internal sealed record ProbeOptions(
                 null,
                 false,
                 null,
-                null,
                 true,
                 args.Length == 0);
         }
@@ -464,8 +461,6 @@ internal sealed record ProbeOptions(
         var staleAge = TryGetMinutes(args, "--stale-age-minutes") ?? TimeSpan.FromDays(2);
         var routeTolerance = TryGetInteger(args, "--route-tolerance");
         var routeCancellationSeconds = TryGetInteger(args, "--route-cancel-seconds");
-        var routeMaxTravelRoutes = TryGetInteger(args, "--route-max-travel-routes");
-
         return new ProbeOptions(
             planPath,
             args.Contains("--region", StringComparer.OrdinalIgnoreCase),
@@ -481,7 +476,6 @@ internal sealed record ProbeOptions(
             routeCancellationSeconds.HasValue
                 ? TimeSpan.FromSeconds(Math.Max(0, routeCancellationSeconds.Value))
                 : null,
-            routeMaxTravelRoutes.HasValue ? Math.Max(0, routeMaxTravelRoutes.Value) : null,
             false,
             false);
     }
@@ -501,10 +495,9 @@ internal sealed record ProbeOptions(
         Console.WriteLine("  --json-out <path>               Write benchmark result JSON.");
         Console.WriteLine("  --max-age-minutes <minutes>     Cache freshness threshold.");
         Console.WriteLine("  --stale-age-minutes <minutes>   Age assigned to stale seeded fixture entries.");
-        Console.WriteLine("  --route-tolerance <0-11>        Run joint procurement routing after analysis.");
+        Console.WriteLine("  --route-tolerance <0-11>        Run fixed-decision procurement routing after analysis.");
         Console.WriteLine("  --route-splits                  Include split-purchase candidates while routing.");
         Console.WriteLine("  --route-cancel-seconds <secs>   Request route cancellation after this interval.");
-        Console.WriteLine("  --route-max-travel-routes <n>   Cap full travel-aware route evaluations.");
     }
 
     private static string? GetOption(string[] args, string name)
@@ -904,12 +897,9 @@ internal sealed record BenchmarkRunResult(
 internal sealed record BenchmarkProcurementResult(
     string Status,
     TimeSpan Elapsed,
-    int FrontierPlanCount,
-    int FeasiblePlanCount,
-    bool AcquisitionSearchWasTruncated,
+    int RouteFrontierCount,
+    int CompleteRouteCount,
     bool RouteSearchWasTruncated,
-    bool TravelSearchWasTruncated,
-    int TravelRoutesEvaluated,
     long? SelectedGilCost,
     int? SelectedWorldStops,
     int? SelectedDataCenterTransfers);

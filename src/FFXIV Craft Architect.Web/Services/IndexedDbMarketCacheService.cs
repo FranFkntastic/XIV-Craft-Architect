@@ -19,7 +19,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
     private readonly SemaphoreSlim _populateSemaphore = new(1, 1);
     private const long MaxCacheSizeBytes = 500 * 1024 * 1024; // 500MB max
     private const int MaxCacheEntries = 10000; // Max 10k items
-    private const int MaxDataCenterFetchConcurrency = 4;
+    private const int MaxDataCenterFetchConcurrency = 2;
     private static readonly TimeSpan WorldMetadataEnrichmentBudget = TimeSpan.FromSeconds(3);
 
     public MarketCacheDecisionSnapshot? LastDecisionSnapshot { get; private set; }

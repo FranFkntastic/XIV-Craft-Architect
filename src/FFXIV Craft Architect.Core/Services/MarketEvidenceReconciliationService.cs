@@ -212,11 +212,6 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
             return Reconcile(item, MarketEvidenceReconciliationReason.PublishedEvidenceMissing);
         }
 
-        if (IsVendorPlan(plan) && plan.QuantityNeeded == item.TotalQuantity)
-        {
-            return Reuse(item);
-        }
-
         if (analysis == null)
         {
             return Reconcile(item, MarketEvidenceReconciliationReason.PublishedEvidenceMissing);
@@ -340,13 +335,6 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
             MarketEvidenceReconciliationDisposition.RebuiltFromCache,
             reason,
             oldestEvidenceAge);
-
-    private static bool IsVendorPlan(DetailedShoppingPlan plan) =>
-        plan.Vendors.Count > 0 ||
-        string.Equals(
-            plan.RecommendedWorld?.WorldName,
-            MarketShoppingConstants.VendorWorldName,
-            StringComparison.OrdinalIgnoreCase);
 
     private static string CreateProgressMessage(int itemCount, MarketEvidenceRefreshMode refreshMode) =>
         refreshMode == MarketEvidenceRefreshMode.ForceRefresh

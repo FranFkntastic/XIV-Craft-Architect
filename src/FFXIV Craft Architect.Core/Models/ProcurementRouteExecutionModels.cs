@@ -44,16 +44,9 @@ public sealed record ProcurementRouteExecutionResult(
     IReadOnlyList<MaterialAggregate> MissingItems,
     MarketRouteDecision? RouteDecision = null,
     IReadOnlyList<MarketEvidenceReconciliationItemResult>? ReconciliationItems = null,
-    CraftingPlan? OptimizedPlan = null,
     IReadOnlyList<MaterialAggregate>? ActiveProcurementItems = null,
     IReadOnlyList<MarketItemAnalysis>? EvidenceAnalyses = null,
-    IReadOnlyList<ProcurementAcquisitionDecision>? AcquisitionDecisions = null,
     bool IsComplete = true);
-
-public sealed record ProcurementAcquisitionDecision(
-    string NodeId,
-    AcquisitionSource Source,
-    AcquisitionSourceReason SourceReason);
 
 public sealed record ProcurementRouteOptimizationResult(
     List<DetailedShoppingPlan> ShoppingPlans,
@@ -78,15 +71,7 @@ public sealed record MarketRouteDecision(
 {
     public long FixedAcquisitionGilCost { get; init; }
 
-    public bool AcquisitionSearchWasTruncated { get; init; }
-
     public bool RouteSearchWasTruncated { get; init; }
-
-    public bool TravelSearchWasTruncated { get; init; }
-
-    public int TravelRoutesEvaluated { get; init; }
-
-    public long AcquisitionCombinationEvaluations { get; init; }
 
     public long PremiumGil => Math.Max(0, SelectedGilCost - CheapestGilCost);
 
@@ -128,7 +113,6 @@ public sealed record MarketRouteToleranceSelection(
     int DataCenterTransfers,
     long FixedAcquisitionGilCost,
     IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
-    IReadOnlyList<ProcurementAcquisitionDecision> AcquisitionDecisions,
     IReadOnlyList<MarketRouteItemDecision> ItemDecisions)
 {
     public bool Contains(int travelTolerance) =>

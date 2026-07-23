@@ -40,7 +40,7 @@ public sealed class WebProcurementEngineSettlement :
     private readonly string _requestHash;
     private string? _cleanupInvocationToken;
     private EngineExecutionContextRegistration? _executionContext;
-    private CraftingPlan? _appliedOptimizedPlan;
+    private bool _routeWasApplied;
     private AppStateVersionSnapshot? _appliedVersions;
     private string? _pendingPersistenceFailure;
 
@@ -242,14 +242,10 @@ public sealed class WebProcurementEngineSettlement :
     {
         EnsureLiveBasis();
         var route = GetRouteResult(context);
-        var optimizedPlan = route.OptimizedPlan ?? ApplyAcquisitionDecisions(
-            _registration.OriginalPlan,
-            route.AcquisitionDecisions);
         var activeItems = route.ActiveProcurementItems
-            ?? AcquisitionPlanningService.GetActiveProcurementItems(optimizedPlan);
-        if (!_appState.ApplyProcurementOptimization(
+            ?? AcquisitionPlanningService.GetActiveProcurementItems(_registration.OriginalPlan);
+        if (!_appState.ApplyProcurementRoute(
                 _registration.OriginalPlan,
-                optimizedPlan,
                 activeItems,
                 route.ShoppingPlans,
                 route.RouteDecision,
@@ -262,62 +258,11 @@ public sealed class WebProcurementEngineSettlement :
         {
             throw new InvalidOperationException("The procurement route became stale before publication.");
         }
-        _appliedOptimizedPlan = optimizedPlan;
+        _routeWasApplied = true;
         _appliedVersions = _appState.CurrentVersions;
         return new EngineSettlementEvidence(
             EngineSettlementOutcome.Applied,
             context.Computation!.ProcurementRouteResultHash);
-    }
-
-    private static CraftingPlan ApplyAcquisitionDecisions(
-        CraftingPlan source,
-        IReadOnlyList<ProcurementAcquisitionDecision>? decisions)
-    {
-        if (decisions is null)
-        {
-            return source;
-        }
-        var decisionsByNode = decisions.ToDictionary(decision => decision.NodeId, StringComparer.Ordinal);
-        var clone = new CraftingPlan
-        {
-            Id = source.Id,
-            Name = source.Name,
-            CreatedAt = source.CreatedAt,
-            ModifiedAt = source.ModifiedAt,
-            DataCenter = source.DataCenter,
-            World = source.World,
-            RootItems = source.RootItems.Select(root => root.Clone()).ToList(),
-            SavedMarketPlans = source.SavedMarketPlans.ToList(),
-            PriceVersion = source.PriceVersion
-        };
-        var appliedCount = 0;
-        foreach (var node in EnumerateNodes(clone.RootItems))
-        {
-            if (!decisionsByNode.TryGetValue(node.NodeId, out var decision))
-            {
-                throw new InvalidOperationException("The Worker acquisition decision set does not cover the current plan.");
-            }
-            node.Source = decision.Source;
-            node.SourceReason = decision.SourceReason;
-            appliedCount++;
-        }
-        if (appliedCount != decisionsByNode.Count)
-        {
-            throw new InvalidOperationException("The Worker acquisition decision set contains unknown plan nodes.");
-        }
-        return clone;
-    }
-
-    private static IEnumerable<PlanNode> EnumerateNodes(IEnumerable<PlanNode> nodes)
-    {
-        foreach (var node in nodes)
-        {
-            yield return node;
-            foreach (var child in EnumerateNodes(node.Children))
-            {
-                yield return child;
-            }
-        }
     }
 
     private async Task<EngineSettlementEvidence> PersistAsync(CancellationToken cancellationToken)
@@ -358,11 +303,7 @@ public sealed class WebProcurementEngineSettlement :
         var actual = _appState.ProcurementRouteDecision
             ?? throw new InvalidOperationException("AppState lost the settled procurement route decision.");
         if (expected.SelectedGilCost != actual.SelectedGilCost ||
-            expected.AcquisitionSearchWasTruncated != actual.AcquisitionSearchWasTruncated ||
-            expected.AcquisitionCombinationEvaluations != actual.AcquisitionCombinationEvaluations ||
-            expected.RouteSearchWasTruncated != actual.RouteSearchWasTruncated ||
-            expected.TravelSearchWasTruncated != actual.TravelSearchWasTruncated ||
-            expected.TravelRoutesEvaluated != actual.TravelRoutesEvaluated)
+            expected.RouteSearchWasTruncated != actual.RouteSearchWasTruncated)
         {
             throw new InvalidOperationException("Visible procurement evidence differs from the Worker result.");
         }
@@ -411,14 +352,13 @@ public sealed class WebProcurementEngineSettlement :
         if (!_delivered.ContainsKey(EnginePhase.SettlingRoute) ||
             _delivered.TryGetValue(EnginePhase.Persisting, out var persistence) &&
             persistence.Evidence.Outcome == EngineSettlementOutcome.Committed ||
-            _appliedOptimizedPlan is null ||
+            !_routeWasApplied ||
             _appliedVersions is null)
         {
             return false;
         }
-        return _appState.RollbackProcurementOptimization(
+        return _appState.RollbackProcurementRoute(
             _registration.OriginalPlan,
-            _appliedOptimizedPlan,
             _registration.PlanSessionVersion,
             _appliedVersions);
     }

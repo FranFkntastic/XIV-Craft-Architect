@@ -269,23 +269,6 @@ public static class AcquisitionPlanningService
         return ApplyCheapestAcquisitionDefaults(plan, context);
     }
 
-    /// <summary>
-    /// Repairs only automatic market choices that current evidence cannot fulfill.
-    /// Full make/buy optimization remains the procurement route engine's job.
-    /// </summary>
-    public static int EnsureAutomaticMarketSourcesAreActionable(
-        CraftingPlan? plan,
-        IEnumerable<DetailedShoppingPlan> shoppingPlans)
-    {
-        if (plan == null)
-        {
-            return 0;
-        }
-
-        var planByItemId = CreatePlanLookup(shoppingPlans);
-        return plan.RootItems.Sum(root => EnsureAutomaticMarketSourcesAreActionable(root, planByItemId));
-    }
-
     public static bool TryGetSelectedAcquisitionCost(
         IEnumerable<PlanNode> nodes,
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
@@ -589,8 +572,7 @@ public static class AcquisitionPlanningService
         return string.IsNullOrWhiteSpace(shoppingPlan.Error) &&
             ((shoppingPlan.RecommendedWorld != null &&
               shoppingPlan.RecommendedWorld.TotalQuantityPurchased >= shoppingPlan.QuantityNeeded) ||
-             HasFulfilledRecommendedSplit(shoppingPlan, shoppingPlan.QuantityNeeded) ||
-             shoppingPlan.Vendors.Any());
+             HasFulfilledRecommendedSplit(shoppingPlan, shoppingPlan.QuantityNeeded));
     }
 
     private static IReadOnlyDictionary<int, DetailedShoppingPlan> CreatePlanLookup(IEnumerable<DetailedShoppingPlan> shoppingPlans)
@@ -633,74 +615,6 @@ public static class AcquisitionPlanningService
         }
 
         return changed;
-    }
-
-    private static int EnsureAutomaticMarketSourcesAreActionable(
-        PlanNode node,
-        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
-    {
-        var changed = node.Children.Sum(child =>
-            EnsureAutomaticMarketSourcesAreActionable(child, planByItemId));
-        var isProtectedUserSelection = node.SourceReason == AcquisitionSourceReason.UserSelected &&
-            (node.Source != AcquisitionSource.MarketBuyHq || node.MustBeHq);
-        if (isProtectedUserSelection ||
-            node.Source is not (AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq) ||
-            TryGetActionableAcquisitionCost(node, node.Source, planByItemId, out _))
-        {
-            return changed;
-        }
-
-        var replacement = GetAvailableSources(node)
-            .Where(source => source != node.Source)
-            .Select(source => TryGetActionableAcquisitionCost(node, source, planByItemId, out var cost)
-                ? (Source: source, Cost: cost)
-                : default)
-            .Where(candidate => candidate != default)
-            .OrderBy(candidate => candidate.Cost)
-            .ThenBy(candidate => GetSourceTieBreak(candidate.Source))
-            .FirstOrDefault();
-        if (replacement == default)
-        {
-            return changed;
-        }
-
-        SetAcquisitionSource(node, replacement.Source, AcquisitionSourceReason.SystemDefault);
-        return changed + 1;
-    }
-
-    private static bool TryGetActionableAcquisitionCost(
-        PlanNode node,
-        AcquisitionSource source,
-        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
-        out decimal cost)
-    {
-        if (source is not (AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq))
-        {
-            return TryGetDefaultEligibleAcquisitionCost(node, source, planByItemId, context: null, out cost);
-        }
-
-        if (!planByItemId.TryGetValue(node.ItemId, out var shoppingPlan))
-        {
-            cost = 0;
-            return false;
-        }
-
-        var hqOnly = source == AcquisitionSource.MarketBuyHq;
-        if ((hqOnly && (!node.CanBuyFromMarket || !node.CanBeHq)) ||
-            (!hqOnly && (!node.CanBuyFromMarket || node.MustBeHq)))
-        {
-            cost = 0;
-            return false;
-        }
-
-        var quantity = Math.Max(node.Quantity, shoppingPlan.QuantityNeeded);
-        var estimate = MarketPurchaseCostProjectionService.Estimate(
-            shoppingPlan,
-            quantity,
-            hqOnly,
-            includeVendor: false);
-        cost = estimate.Cost;
-        return estimate.IsDefaultEligible && cost > 0;
     }
 
     private static bool CanAutomaticallyChangeSource(PlanNode node)

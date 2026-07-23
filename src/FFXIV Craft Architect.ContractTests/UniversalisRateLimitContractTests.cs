@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using FFXIV_Craft_Architect.Core.Services;
 
@@ -93,9 +94,14 @@ public sealed class UniversalisRateLimitContractTests
             CancellationToken cancellationToken)
         {
             var requestNumber = Interlocked.Increment(ref _requestCount);
-            return Task.FromResult(requestNumber == 1
-                ? new HttpResponseMessage(HttpStatusCode.TooManyRequests)
-                : JsonResponse(request));
+            if (requestNumber != 1)
+            {
+                return Task.FromResult(JsonResponse(request));
+            }
+
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromMilliseconds(50));
+            return Task.FromResult(response);
         }
     }
 

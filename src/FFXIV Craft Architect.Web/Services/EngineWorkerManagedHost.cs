@@ -224,8 +224,7 @@ public static partial class ManagedHost
         var shopping = new MarketShoppingService(new UnavailableMarketCacheService());
         var procurement = new ProcurementRouteExecutionService(
             new MarketEvidenceReconciliationService(unavailableAnalysis),
-            shopping,
-            new JointAcquisitionRouteOptimizationService(shopping));
+            shopping);
         return new ReferenceMarketProcurementEngine(unavailableAnalysis, procurement, Snapshots);
     }
 

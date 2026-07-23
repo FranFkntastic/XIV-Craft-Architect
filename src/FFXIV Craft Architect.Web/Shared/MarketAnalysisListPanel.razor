@@ -590,11 +590,6 @@
             SortDescending);
     }
 
-    private static bool IsVendorPlan(DetailedShoppingPlan plan)
-    {
-        return plan.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName || plan.Vendors.Any();
-    }
-
     private static bool HasWarning(DetailedShoppingPlan plan)
     {
         return !string.IsNullOrWhiteSpace(plan.Error) ||
@@ -606,8 +601,6 @@
     {
         if (!string.IsNullOrWhiteSpace(plan.Error))
             return "Error";
-        if (IsVendorPlan(plan))
-            return "Vendor";
         if (plan.RequiresSplitPurchase)
             return "Split";
         return "Market";
@@ -615,8 +608,6 @@
 
     private static string GetQuantityLabel(DetailedShoppingPlan plan)
     {
-        if (IsVendorPlan(plan))
-            return FormatQuantity(plan.QuantityNeeded);
         if (!plan.HasSufficientStock)
             return $"{plan.TotalAvailableQuantity:N0}/{plan.QuantityNeeded:N0}";
         return FormatQuantity(plan.QuantityNeeded);
@@ -778,7 +769,7 @@
 
     private static string GetStockClass(DetailedShoppingPlan plan)
     {
-        return !plan.HasSufficientStock && !IsVendorPlan(plan)
+        return !plan.HasSufficientStock
             ? "ma-stock-warning"
             : "ma-stock-ok";
     }

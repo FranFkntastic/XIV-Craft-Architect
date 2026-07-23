@@ -42,7 +42,6 @@ builder.Services.AddScoped<IndexedDbMarketCacheService>();
 builder.Services.AddScoped<IMarketCacheService>(provider =>
     provider.GetRequiredService<IndexedDbMarketCacheService>());
 builder.Services.AddScoped<MarketShoppingService>();
-builder.Services.AddScoped<JointAcquisitionRouteOptimizationService>();
 builder.Services.AddScoped<IMarketPriceEvaluationService, MarketPriceEvaluationService>();
 builder.Services.AddScoped<IMarketPriceLadderAnalysisService, MarketPriceLadderAnalysisService>();
 builder.Services.AddScoped<IMarketAnalysisExecutionService, MarketAnalysisExecutionService>();

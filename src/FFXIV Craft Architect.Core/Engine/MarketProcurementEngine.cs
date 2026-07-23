@@ -187,11 +187,11 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             throw new NotSupportedException($"Engine budget schema '{budgets.SchemaVersion}' is not supported.");
         }
         if (budgets.MaxWorkUnits <= 0 || budgets.MaxEvidenceRequests < 0 ||
-            budgets.MaxTravelRouteEvaluations < 0 || budgets.CooperativeCancellationInterval <= 0)
+            budgets.CooperativeCancellationInterval <= 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(budgets),
-                "Engine budgets must be positive (evidence requests and travel-route evaluations may be zero).");
+                "Engine budgets must be positive (evidence requests may be zero).");
         }
 
         if (budgets.CooperativeCancellationInterval != EngineExecutionBudgets.Default.CooperativeCancellationInterval)
@@ -199,11 +199,9 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
             throw new NotSupportedException("Cooperative-cancellation budgets are not supported by the reference executor yet; use the default value.");
         }
 
-        var maximumWorkUnits = input.ProcurementRoute?.Plan is { } plan
-            ? AcquisitionVariantFrontierBuilder.EstimateMaximumWorkUnits(
-                plan,
-                budgets.MaxTravelRouteEvaluations)
-            : (input.MarketAnalysis is null ? 0 : 1) + (input.ProcurementRoute is null ? 0 : 1);
+        var maximumWorkUnits =
+            (input.MarketAnalysis?.Items.Count ?? 0) +
+            (input.ProcurementRoute?.ActiveProcurementItems.Count ?? 0);
         if (maximumWorkUnits > budgets.MaxWorkUnits)
         {
             throw new InvalidOperationException("The request exceeds its engine work-unit budget.");
@@ -220,8 +218,7 @@ public sealed class ReferenceMarketProcurementEngine : IMarketProcurementEngine
     private static MarketAnalysisExecutionOptions CreateExecutionOptions(EngineExecutionBudgets budgets) => new()
     {
         YieldEveryItems = MarketAnalysisExecutionOptions.Interactive.YieldEveryItems,
-        ProgressEveryItems = MarketAnalysisExecutionOptions.Interactive.ProgressEveryItems,
-        MaxTravelRouteEvaluations = budgets.MaxTravelRouteEvaluations
+        ProgressEveryItems = MarketAnalysisExecutionOptions.Interactive.ProgressEveryItems
     };
 
     private static EngineComputationResult CreateTerminal(

@@ -173,12 +173,10 @@ public sealed class ProcurementWorkflowService : IProcurementWorkflowService
             result.ShoppingPlans.Count,
             result.RouteDecision is not null,
             result.ActiveProcurementItems?.Count ?? activeItemsList.Count);
-        var optimizedPlan = result.OptimizedPlan ?? plan;
         var optimizedActiveItems = result.ActiveProcurementItems
-            ?? AcquisitionPlanningService.GetActiveProcurementItems(optimizedPlan);
-        if (!_appState.ApplyProcurementOptimization(
+            ?? AcquisitionPlanningService.GetActiveProcurementItems(plan);
+        if (!_appState.ApplyProcurementRoute(
                 plan,
-                optimizedPlan,
                 optimizedActiveItems,
                 result.ShoppingPlans,
                 result.RouteDecision,

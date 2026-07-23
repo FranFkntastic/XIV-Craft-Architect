@@ -12,6 +12,7 @@ public class AdaptiveDelayStrategy
     private readonly int _maxDelay;
     private readonly double _backoffMultiplier;
     private readonly double _rateLimitMultiplier;
+    private readonly object _sync = new();
 
     /// <summary>
     /// Creates a new adaptive delay strategy.
@@ -39,7 +40,13 @@ public class AdaptiveDelayStrategy
     /// <summary>
     /// Gets the current delay in milliseconds.
     /// </summary>
-    public int GetDelay() => _currentDelayMs;
+    public int GetDelay()
+    {
+        lock (_sync)
+        {
+            return _currentDelayMs;
+        }
+    }
 
     /// <summary>
     /// Reports a successful request.
@@ -47,12 +54,14 @@ public class AdaptiveDelayStrategy
     /// </summary>
     public void ReportSuccess()
     {
-        _consecutiveFailures = 0;
-
-        if (_currentDelayMs > _minDelay)
+        lock (_sync)
         {
-            var recoveredDelay = (int)Math.Ceiling(_currentDelayMs / _backoffMultiplier);
-            _currentDelayMs = Math.Max(_minDelay, recoveredDelay);
+            _consecutiveFailures = 0;
+            if (_currentDelayMs > _minDelay)
+            {
+                var recoveredDelay = (int)Math.Ceiling(_currentDelayMs / _backoffMultiplier);
+                _currentDelayMs = Math.Max(_minDelay, recoveredDelay);
+            }
         }
     }
 
@@ -63,15 +72,15 @@ public class AdaptiveDelayStrategy
     /// <param name="statusCode">HTTP status code of the failed request</param>
     public void ReportFailure(System.Net.HttpStatusCode statusCode)
     {
-        _consecutiveFailures++;
-
-        // Use higher multiplier for rate limit errors (429)
-        var multiplier = statusCode == System.Net.HttpStatusCode.TooManyRequests
-            ? _rateLimitMultiplier
-            : _backoffMultiplier;
-
-        var newDelay = (int)(_currentDelayMs * multiplier);
-        _currentDelayMs = Math.Min(_maxDelay, newDelay);
+        lock (_sync)
+        {
+            _consecutiveFailures++;
+            var multiplier = statusCode == System.Net.HttpStatusCode.TooManyRequests
+                ? _rateLimitMultiplier
+                : _backoffMultiplier;
+            var newDelay = (int)(_currentDelayMs * multiplier);
+            _currentDelayMs = Math.Min(_maxDelay, newDelay);
+        }
     }
 
     /// <summary>
@@ -79,6 +88,9 @@ public class AdaptiveDelayStrategy
     /// </summary>
     public string GetDiagnostics()
     {
-        return $"Delay: {_currentDelayMs}ms, ConsecutiveFailures: {_consecutiveFailures}";
+        lock (_sync)
+        {
+            return $"Delay: {_currentDelayMs}ms, ConsecutiveFailures: {_consecutiveFailures}";
+        }
     }
 }

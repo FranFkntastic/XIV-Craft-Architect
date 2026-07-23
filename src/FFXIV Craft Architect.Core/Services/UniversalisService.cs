@@ -13,11 +13,17 @@ namespace FFXIV_Craft_Architect.Core.Services;
 /// </summary>
 public class UniversalisService : IUniversalisService
 {
-    internal const int MaxConcurrentApiRequests = 4;
+    internal const int MaxConcurrentApiRequests = 2;
+    private static readonly TimeSpan MinimumRequestSpacing = TimeSpan.FromMilliseconds(150);
+    private static readonly TimeSpan DefaultRateLimitCooldown = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan MaximumRateLimitCooldown = TimeSpan.FromSeconds(30);
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<UniversalisService>? _logger;
     private readonly SemaphoreSlim _apiRequestGate = new(MaxConcurrentApiRequests, MaxConcurrentApiRequests);
+    private readonly SemaphoreSlim _requestStartGate = new(1, 1);
+    private readonly object _requestScheduleSync = new();
+    private DateTimeOffset _nextRequestAtUtc = DateTimeOffset.MinValue;
 
     private const string UniversalisApiUrl = "https://universalis.app/api/v2/{0}/{1}";
     private const string UniversalisMarketUrl = "https://universalis.app/market/{0}";
@@ -90,7 +96,7 @@ public class UniversalisService : IUniversalisService
         _logger?.LogDebug("Fetching market data for {ItemId} on {WorldOrDc} (HQ={HqOnly})", itemId, worldOrDc, hqOnly);
 
 #pragma warning disable CS0618 // Type or member is obsolete
-        var response = await SendApiRequestAsync(url, ct);
+        using var response = await SendApiRequestAsync(url, ct);
 #pragma warning restore CS0618 // Type or member is obsolete
         response.EnsureSuccessStatusCode();
 
@@ -115,7 +121,7 @@ public class UniversalisService : IUniversalisService
     {
         const int initialChunkSize = 10; // Live regional tests showed chunk 10 avoids 504 split cascades
         const int minChunkSize = 5;      // Don't split below this
-        const int maxConcurrency = 3;
+        const int maxConcurrency = MaxConcurrentApiRequests;
         const int maxGlobalRetries = 1;  // One recovery pass; chunk retries already handle transient failures
 
         var itemIdList = itemIds.Distinct().ToList();
@@ -371,7 +377,7 @@ public class UniversalisService : IUniversalisService
                     workItem.ChunkIndex, workItem.ItemIds.Count, workItem.SplitDepth,
                     string.Join(",", workItem.ItemIds.Take(5)) + (workItem.ItemIds.Count > 5 ? "..." : ""));
 
-                var response = await SendApiRequestAsync(url, ct);
+                using var response = await SendApiRequestAsync(url, ct);
 
                 // Handle specific error codes
                 if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
@@ -526,11 +532,78 @@ public class UniversalisService : IUniversalisService
         await _apiRequestGate.WaitAsync(ct);
         try
         {
-            return await _httpClient.GetAsync(url, ct);
+            await WaitForRequestSlotAsync(ct);
+            var response = await _httpClient.GetAsync(url, ct);
+            if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            {
+                ApplyRateLimitCooldown(response);
+            }
+            return response;
         }
         finally
         {
             _apiRequestGate.Release();
+        }
+    }
+
+    private async Task WaitForRequestSlotAsync(CancellationToken ct)
+    {
+        await _requestStartGate.WaitAsync(ct);
+        try
+        {
+            while (true)
+            {
+                TimeSpan delay;
+                lock (_requestScheduleSync)
+                {
+                    delay = _nextRequestAtUtc - DateTimeOffset.UtcNow;
+                }
+
+                if (delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(delay, ct);
+                    continue;
+                }
+
+                lock (_requestScheduleSync)
+                {
+                    var now = DateTimeOffset.UtcNow;
+                    if (_nextRequestAtUtc > now)
+                    {
+                        continue;
+                    }
+                    _nextRequestAtUtc = now + MinimumRequestSpacing;
+                    return;
+                }
+            }
+        }
+        finally
+        {
+            _requestStartGate.Release();
+        }
+    }
+
+    private void ApplyRateLimitCooldown(HttpResponseMessage response)
+    {
+        var retryAfter = response.Headers.RetryAfter?.Delta;
+        if (!retryAfter.HasValue && response.Headers.RetryAfter?.Date is { } retryAt)
+        {
+            retryAfter = retryAt - DateTimeOffset.UtcNow;
+        }
+
+        var cooldown = retryAfter.GetValueOrDefault(DefaultRateLimitCooldown);
+        cooldown = cooldown < MinimumRequestSpacing
+            ? MinimumRequestSpacing
+            : cooldown > MaximumRateLimitCooldown
+                ? MaximumRateLimitCooldown
+                : cooldown;
+        var resumeAt = DateTimeOffset.UtcNow + cooldown;
+        lock (_requestScheduleSync)
+        {
+            if (resumeAt > _nextRequestAtUtc)
+            {
+                _nextRequestAtUtc = resumeAt;
+            }
         }
     }
 

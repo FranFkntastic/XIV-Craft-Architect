@@ -233,26 +233,6 @@ public class MarketShoppingService
             absoluteMaximumGilCost);
     }
 
-    internal Task<ProcurementRouteOptimizationResult> OptimizeProcurementRouteInSessionAsync(
-        IEnumerable<DetailedShoppingPlan> evidencePlans,
-        MarketAnalysisConfig config,
-        bool includeSplitPurchases,
-        MarketAnalysisExecutionOptions executionOptions,
-        ProcurementRouteOptimizationSession session,
-        CancellationToken ct,
-        long? absoluteMaximumGilCost = null)
-    {
-        return OptimizeProcurementRouteCoreAsync(
-            evidencePlans,
-            config,
-            includeSplitPurchases,
-            executionOptions,
-            progress: null,
-            ct,
-            absoluteMaximumGilCost,
-            session);
-    }
-
     private async Task<ProcurementRouteOptimizationResult> OptimizeProcurementRouteCoreAsync(
         IEnumerable<DetailedShoppingPlan> evidencePlans,
         MarketAnalysisConfig? config,
@@ -260,8 +240,7 @@ public class MarketShoppingService
         MarketAnalysisExecutionOptions executionOptions,
         IProgress<string>? progress,
         CancellationToken ct,
-        long? absoluteMaximumGilCost = null,
-        ProcurementRouteOptimizationSession? session = null)
+        long? absoluteMaximumGilCost = null)
     {
         ArgumentNullException.ThrowIfNull(evidencePlans);
 
@@ -273,19 +252,20 @@ public class MarketShoppingService
         {
             return new ProcurementRouteOptimizationResult(plans, null);
         }
-        var candidateWorkBudget = session?.CandidateWorkBudget ??
-            new MarketRouteCandidateWorkBudget(executionOptions, ct);
+        var candidateWorkBudget = new MarketRouteCandidateWorkBudget(executionOptions, ct);
 
         var candidatePlanIndexes = plans
             .Select((plan, index) => new { Plan = plan, Index = index })
             .Where(p => !IsFixedVendorPlan(p.Plan))
             .ToList();
+        var fixedVendorGilCost = plans
+            .Where(IsFixedVendorPlan)
+            .Select(plan => plan.RecommendedWorld?.TotalCost ?? 0)
+            .Aggregate(0L, SaturatingAdd);
+        var hasFixedVendorPurchases = fixedVendorGilCost > 0;
         var standaloneCandidatesByPlan = candidatePlanIndexes.ToDictionary(
             entry => entry.Index,
-            entry => (session?.GetOrAddCandidates(
-                        entry.Plan,
-                        plan => GeneratePurchaseCandidates(plan, currentRoute: null, candidateWorkBudget)) ??
-                    GeneratePurchaseCandidates(entry.Plan, currentRoute: null, candidateWorkBudget))
+            entry => GeneratePurchaseCandidates(entry.Plan, currentRoute: null, candidateWorkBudget)
                 .Where(candidate => candidate.IsFullyFulfilled)
                 .Where(candidate => includeSplitPurchases || !candidate.IsSplitPurchase)
                 .ToList());
@@ -300,9 +280,8 @@ public class MarketShoppingService
 
         var beam = new List<ProcurementRouteSearchState>
         {
-            new()
+            new(fixedVendorGilCost)
         };
-        var lowestCostOnly = config.TravelTolerance == 11;
         var routeSearchWasTruncated = candidateWorkBudget.WasTruncated;
 
         for (var planIndex = 0; planIndex < candidatePlanIndexes.Count; planIndex++)
@@ -315,13 +294,10 @@ public class MarketShoppingService
             {
                 ct.ThrowIfCancellationRequested();
                 var state = beam[stateIndex];
-                var candidates = (lowestCostOnly
-                        ? standaloneCandidatesByPlan.GetValueOrDefault(planEntry.Index) ?? []
-                        : session?.GetOrAddRouteCandidates(
-                            planEntry.Plan,
-                            state.Route,
-                            plan => GeneratePurchaseCandidates(plan, state.Route, candidateWorkBudget)) ??
-                          GeneratePurchaseCandidates(planEntry.Plan, state.Route, candidateWorkBudget))
+                var routeCandidates = planEntry.Plan.HqQuantityNeeded > 0
+                    ? GeneratePurchaseCandidates(planEntry.Plan, state.Route, candidateWorkBudget)
+                    : standaloneCandidatesByPlan.GetValueOrDefault(planEntry.Index) ?? [];
+                var candidates = routeCandidates
                     .Where(c => c.IsFullyFulfilled)
                     .Where(c => includeSplitPurchases || !c.IsSplitPurchase)
                     .Where(c => c.HasTrustworthyEvidence)
@@ -335,14 +311,6 @@ public class MarketShoppingService
                             candidate.GilCost <= absoluteMaximumGilCost.Value - state.TotalGilCost)
                         .ToList();
                 }
-                if (lowestCostOnly && candidates.Count > 0)
-                {
-                    var minimumGilCost = candidates.Min(candidate => candidate.GilCost);
-                    candidates = candidates
-                        .Where(candidate => candidate.GilCost == minimumGilCost)
-                        .ToList();
-                }
-
                 candidates = candidates
                     .OrderBy(c => c, Comparer<MarketPurchaseCandidate>.Create(
                         (left, right) => MarketRouteScoring.CompareCandidates(left, right, state.Route, config)))
@@ -409,8 +377,10 @@ public class MarketShoppingService
             config,
             plans,
             standaloneCandidatesByPlan,
-            cheapestEligibleCandidateByPlan);
-        var decision = cheapestState == null || bestState.Choices.All(choice => choice.Candidate == null)
+            cheapestEligibleCandidateByPlan,
+            fixedVendorGilCost);
+        var decision = cheapestState == null ||
+            !hasFixedVendorPurchases && bestState.Choices.All(choice => choice.Candidate == null)
             ? null
             : new MarketRouteDecision(
                 config.TravelTolerance,
@@ -428,6 +398,7 @@ public class MarketShoppingService
                 representativeRoutes,
                 itemDecisions)
             {
+                FixedAcquisitionGilCost = fixedVendorGilCost,
                 RouteSearchWasTruncated = routeSearchWasTruncated,
                 ToleranceSelections = toleranceSelections
             };
@@ -441,7 +412,8 @@ public class MarketShoppingService
         MarketAnalysisConfig config,
         IReadOnlyList<DetailedShoppingPlan> sourcePlans,
         IReadOnlyDictionary<int, List<MarketPurchaseCandidate>> standaloneCandidatesByPlan,
-        IReadOnlyDictionary<int, MarketPurchaseCandidate?> cheapestEligibleCandidateByPlan)
+        IReadOnlyDictionary<int, MarketPurchaseCandidate?> cheapestEligibleCandidateByPlan,
+        long fixedVendorGilCost)
     {
         var selections = new List<MarketRouteToleranceSelection>();
         ProcurementRouteSearchState? previous = null;
@@ -471,9 +443,8 @@ public class MarketShoppingService
                 state.TotalEvidencePenalty,
                 state.WorldStops,
                 state.GetDataCenterTransfers(config),
-                0,
+                fixedVendorGilCost,
                 ProcurementRouteExecutionService.CompactResultShoppingPlans(selectedPlans),
-                [],
                 BuildItemDecisions(state, cheapestEligibleCandidateByPlan)));
             previous = state;
         }
@@ -934,7 +905,7 @@ public class MarketShoppingService
             ? (long)(summary.ModePricePerUnit * maxPriceMultiplier)
             : long.MaxValue;
 
-        _logger?.LogInformation("[FRAUD_CHECK] {WorldName}: ModePrice={ModePrice}, Multiplier={Multiplier}, Threshold={Threshold}, TotalListings={Count}",
+        _logger?.LogDebug("[FRAUD_CHECK] {WorldName}: ModePrice={ModePrice}, Multiplier={Multiplier}, Threshold={Threshold}, TotalListings={Count}",
             worldName, summary.ModePricePerUnit, maxPriceMultiplier, maxPriceThreshold, listings.Count);
 
         var remaining = quantityNeeded;
@@ -949,7 +920,7 @@ public class MarketShoppingService
             // Check if listing exceeds fraud threshold (soft filter - skip but continue scanning)
             if (listing.PricePerUnit > maxPriceThreshold)
             {
-                _logger?.LogWarning("[FRAUD_DETECTED] {WorldName}: Excluding listing - Price={Price}, Threshold={Threshold}, Retainer={Retainer}",
+                _logger?.LogDebug("[FRAUD_DETECTED] {WorldName}: Excluding listing - Price={Price}, Threshold={Threshold}, Retainer={Retainer}",
                     worldName, listing.PricePerUnit, maxPriceThreshold, listing.RetainerName);
                 fraudSkipped++;
                 summary.ExcludedListings.Add(new ShoppingListingEntry
@@ -1022,14 +993,13 @@ public class MarketShoppingService
         summary.AveragePricePerUnit = summary.TotalQuantityPurchased > 0
             ? (decimal)totalCost / summary.TotalQuantityPurchased
             : 0;
-        summary.ModePricePerUnit = CalculateModePrice(listings);
         summary.ListingsUsed = listingsUsed;
         summary.IsFullyUnderAverage = summary.Listings.Where(l => !l.IsAdditionalOption).All(l => l.IsUnderAverage);
         summary.ExcessQuantity = summary.TotalQuantityPurchased - quantityNeeded;
         summary.HasSufficientStock = remaining <= 0;
         summary.ShortfallQuantity = remaining > 0 ? remaining : 0;
 
-        _logger?.LogInformation("[CalculateWorldSummary] {World} - Purchased: {Purchased}/{Needed}, Cost: {Cost:N0}g, FraudSkipped: {Fraud}, Sufficient: {Sufficient}",
+        _logger?.LogDebug("[CalculateWorldSummary] {World} - Purchased: {Purchased}/{Needed}, Cost: {Cost:N0}g, FraudSkipped: {Fraud}, Sufficient: {Sufficient}",
             worldName, summary.TotalQuantityPurchased, quantityNeeded, totalCost, fraudSkipped, summary.HasSufficientStock);
 
         return summary;
@@ -1908,12 +1878,12 @@ public class MarketShoppingService
     }
 
     /// <summary>
-    /// Applies hard-lock vendor overrides for items explicitly marked as VendorBuy in the crafting plan.
+    /// Projects items already selected as VendorBuy into fixed procurement stops.
     ///
     /// This keeps existing market world options for comparison, but forces the recommended purchase source
     /// to a synthetic "Vendor" world using the selected vendor (or cheapest gil vendor fallback).
     /// </summary>
-    public void ApplyVendorPurchaseOverrides(CraftingPlan? plan, List<DetailedShoppingPlan> plans)
+    public void ApplySelectedVendorPurchases(CraftingPlan? plan, List<DetailedShoppingPlan> plans)
     {
         if (plan == null || plans == null || plans.Count == 0)
         {
@@ -2130,27 +2100,27 @@ public class MarketShoppingService
         MarketAnalysisConfig config,
         out bool wasTruncated)
     {
-        var discardedParetoLabel = false;
         var distinctStates = new List<ProcurementRouteSearchState>();
         foreach (var group in states.GroupBy(state => state.RouteShapeKey, StringComparer.Ordinal))
         {
-            var values = group.ToList();
-            var selected = values
+            var bestEvidencePenalty = long.MaxValue;
+            foreach (var state in group
                 .OrderBy(state => state.TotalGilCost)
                 .ThenBy(state => state.TotalEvidencePenalty)
-                .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
-                .First();
-            discardedParetoLabel |= values.Any(state => state.TotalEvidencePenalty < selected.TotalEvidencePenalty);
-            distinctStates.Add(selected);
+                .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal))
+            {
+                if (state.TotalEvidencePenalty >= bestEvidencePenalty)
+                {
+                    continue;
+                }
+
+                distinctStates.Add(state);
+                bestEvidencePenalty = state.TotalEvidencePenalty;
+            }
         }
 
-        wasTruncated = discardedParetoLabel || distinctStates.Count > MaxProcurementRouteBeamWidth;
+        wasTruncated = distinctStates.Count > MaxProcurementRouteBeamWidth;
         if (!wasTruncated)
-        {
-            return OrderRouteStates(distinctStates, config).ToList();
-        }
-
-        if (distinctStates.Count <= MaxProcurementRouteBeamWidth)
         {
             return OrderRouteStates(distinctStates, config).ToList();
         }
@@ -2276,6 +2246,16 @@ public class MarketShoppingService
             StringComparison.OrdinalIgnoreCase);
     }
 
+    private static long SaturatingAdd(long left, long right)
+    {
+        if (left > 0 && right > long.MaxValue - left)
+        {
+            return long.MaxValue;
+        }
+
+        return left + right;
+    }
+
     private static DetailedShoppingPlan ClonePlanForRouteOptimization(DetailedShoppingPlan plan)
     {
         return new DetailedShoppingPlan
@@ -2299,8 +2279,8 @@ public class MarketShoppingService
 
     private sealed class ProcurementRouteSearchState
     {
-        public ProcurementRouteSearchState()
-            : this(new MarketRouteState(), 0, 0, [], string.Empty, string.Empty)
+        public ProcurementRouteSearchState(long fixedGilCost)
+            : this(new MarketRouteState(), fixedGilCost, 0, [], string.Empty, string.Empty)
         {
         }
 
@@ -2357,8 +2337,8 @@ public class MarketShoppingService
 
             return new ProcurementRouteSearchState(
                 route,
-                SaturatingAdd(TotalGilCost, candidate.GilCost),
-                SaturatingAdd(TotalEvidencePenalty, candidate.MarketEvidencePenalty),
+                MarketShoppingService.SaturatingAdd(TotalGilCost, candidate.GilCost),
+                MarketShoppingService.SaturatingAdd(TotalEvidencePenalty, candidate.MarketEvidencePenalty),
                 choices,
                 AppendChoiceKey(TieBreakKey, planIndex, candidate),
                 MissingChoiceKey);
@@ -2380,16 +2360,6 @@ public class MarketShoppingService
                 choices,
                 AppendChoiceKey(TieBreakKey, planIndex, candidate: null),
                 missingChoiceKey);
-        }
-
-        private static long SaturatingAdd(long left, long right)
-        {
-            if (left > 0 && right > long.MaxValue - left)
-            {
-                return long.MaxValue;
-            }
-
-            return left + right;
         }
 
         private static string AppendChoiceKey(

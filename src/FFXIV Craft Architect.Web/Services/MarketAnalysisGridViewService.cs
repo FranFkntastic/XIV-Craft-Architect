@@ -160,11 +160,6 @@ public static class MarketAnalysisGridViewService
             return $"Cash Out is the sum of the selected split purchase: {splitQuantity:N0}/{plan.QuantityNeeded:N0} items across {plan.RecommendedSplit.Count:N0} worlds.";
         }
 
-        if (plan.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName || plan.Vendors.Any())
-        {
-            return $"Cash Out uses loaded gil vendor pricing for {plan.QuantityNeeded:N0} needed.";
-        }
-
         if (plan.RecommendedWorld != null)
         {
             return $"Cash Out uses the selected world's listing stacks for {plan.RecommendedWorld.TotalQuantityPurchased:N0}/{plan.QuantityNeeded:N0} needed.";
@@ -812,11 +807,6 @@ public static class MarketAnalysisGridViewService
         }
 
         return plan.RecommendedWorld == null ? 0 : 1;
-    }
-
-    private static bool IsVendorPlan(DetailedShoppingPlan plan)
-    {
-        return plan.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName || plan.Vendors.Any();
     }
 
     private static List<string> GetCompetitivenessListingClasses(AnalyzedMarketListing listing)

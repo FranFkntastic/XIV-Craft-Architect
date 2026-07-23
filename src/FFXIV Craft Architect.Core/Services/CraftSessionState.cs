@@ -608,16 +608,14 @@ public sealed class CraftSessionState
         });
     }
 
-    public bool TryPublishProcurementOptimization(
+    public bool TryPublishProcurementRoute(
         CraftSessionVersionStamp expectedStamp,
         CraftingPlan plan,
         long planSessionVersion,
-        CraftingPlan optimizedPlan,
         CraftSessionProcurementOverlay overlay,
         string reason)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        ArgumentNullException.ThrowIfNull(optimizedPlan);
         ArgumentNullException.ThrowIfNull(overlay);
 
         var applied = false;
@@ -628,49 +626,14 @@ public sealed class CraftSessionState
                 return;
             }
 
-            var decisionsChanged = !HaveSameAcquisitionDecisions(_activePlan, optimizedPlan);
-            _activePlan = ClonePlan(optimizedPlan);
-            if (decisionsChanged)
-            {
-                MarkPlanDecisionChanged(reason);
-            }
-            MarkProcurementOverlayPublished("joint procurement route published", () =>
+            MarkProcurementOverlayPublished("procurement route published", () =>
             {
                 _procurementOverlay = CloneProcurementOverlay(overlay);
             });
-            RegisterPlanInstance(optimizedPlan, _planSessionVersion);
-            RegisterPlanInstance(_activePlan, _planSessionVersion);
             applied = true;
         });
 
         return published && applied;
-    }
-
-    private static bool HaveSameAcquisitionDecisions(CraftingPlan? left, CraftingPlan right)
-    {
-        if (left == null)
-        {
-            return false;
-        }
-
-        var leftDecisions = EnumeratePlanNodes(left.RootItems)
-            .ToDictionary(node => node.NodeId, node => (node.Source, node.SourceReason), StringComparer.Ordinal);
-        var rightNodes = EnumeratePlanNodes(right.RootItems).ToList();
-        return leftDecisions.Count == rightNodes.Count && rightNodes.All(node =>
-            leftDecisions.TryGetValue(node.NodeId, out var decision) &&
-            decision == (node.Source, node.SourceReason));
-    }
-
-    private static IEnumerable<PlanNode> EnumeratePlanNodes(IEnumerable<PlanNode> roots)
-    {
-        foreach (var node in roots)
-        {
-            yield return node;
-            foreach (var child in EnumeratePlanNodes(node.Children))
-            {
-                yield return child;
-            }
-        }
     }
 
     private CraftSessionChange MarkProcurementOverlayPublished(string reason, Action? mutateState = null) =>

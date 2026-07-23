@@ -84,12 +84,9 @@ public partial class AppState
             MarketAnalysisLens = session.MarketIntelligence?.Lens ?? storedPlan.SavedMarketAnalysisLens;
             ClearProcurementOverlay();
             RestoreProcurementRoute(storedPlan.ProcurementRouteJson, storedPlan.MarketIntelligenceJson);
-            if (ProcurementRouteRestoreDiagnostic is not null)
-            {
-                AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
-                    CurrentPlan,
-                    session.ShoppingPlans);
-            }
+            AcquisitionPlanningService.ReconcileAcquisitionDecisions(
+                CurrentPlan,
+                session.ShoppingPlans);
 
             // Track the loaded plan ID for save-overwrite behavior
             if (trackStoredPlanIdentity)

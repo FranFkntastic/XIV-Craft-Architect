@@ -7,7 +7,7 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
 {
     private const string InputSchemaVersion = "1";
     private const string AnalysisOutputSchemaVersion = "10";
-    private const string RouteOutputSchemaVersion = "11";
+    private const string RouteOutputSchemaVersion = "12";
     private static readonly JsonSerializerOptions InputJsonOptions = EngineJsonSerializerOptions.CreateWire();
 
     public ReferenceEnginePreparedInput PrepareInput(EngineRequestEnvelope request)
@@ -99,13 +99,9 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
             result.RouteDecision?.SelectedDataCenterTransfers ?? 0,
             result.IsComplete,
             CaptureRouteDecision(result.RouteDecision),
-            EngineCanonicalHash.Compute(result.OptimizedPlan, InputJsonOptions),
             EngineCanonicalHash.Compute(result.ActiveProcurementItems, InputJsonOptions),
             EngineCanonicalHash.Compute(result.EvidenceAnalyses, InputJsonOptions),
             EngineCanonicalHash.Compute(result.EvidencePlans, InputJsonOptions),
-            EngineCanonicalHash.Compute(
-                new { Domain = "route-acquisition-decisions-v2", Value = result.AcquisitionDecisions },
-                InputJsonOptions),
             EngineCanonicalHash.Compute(
                 new { Domain = "route-shopping-plans-v2", Value = result.ShoppingPlans },
                 InputJsonOptions));
@@ -200,11 +196,7 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                 decision.HomeDataCenter,
                 decision.TravelPriority,
                 decision.FixedAcquisitionGilCost,
-                decision.AcquisitionSearchWasTruncated,
-                decision.AcquisitionCombinationEvaluations,
                 decision.RouteSearchWasTruncated,
-                decision.TravelSearchWasTruncated,
-                decision.TravelRoutesEvaluated,
                 decision.RepresentativeRoutes
                     .Select((option, order) => new EngineRouteFrontierOptionSnapshot(
                         order,

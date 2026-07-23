@@ -155,9 +155,8 @@ public partial class AppState
         NotifyProcurementOverlayChanged();
     }
 
-    public bool ApplyProcurementOptimization(
+    public bool ApplyProcurementRoute(
         CraftingPlan expectedPlan,
-        CraftingPlan optimizedPlan,
         IReadOnlyList<MaterialAggregate> activeProcurementItems,
         IEnumerable<DetailedShoppingPlan> shoppingPlans,
         MarketRouteDecision? routeDecision,
@@ -166,7 +165,6 @@ public partial class AppState
         PublishedMarketAnalysisScopeSnapshot? evidenceScope = null)
     {
         ArgumentNullException.ThrowIfNull(expectedPlan);
-        ArgumentNullException.ThrowIfNull(optimizedPlan);
         ArgumentNullException.ThrowIfNull(activeProcurementItems);
         ArgumentNullException.ThrowIfNull(shoppingPlans);
         if (!ReferenceEquals(CurrentPlan, expectedPlan))
@@ -185,12 +183,6 @@ public partial class AppState
                     evidenceScope ?? CreateCurrentMarketAnalysisScopeSnapshot());
             }
 
-            var decisionsChanged = !HaveSameAcquisitionDecisions(expectedPlan, optimizedPlan);
-            if (decisionsChanged)
-            {
-                CurrentPlan = optimizedPlan;
-                NotifyPlanDecisionChanged();
-            }
             ReplaceShoppingItemsFromActivePlan(activeProcurementItems);
             ReplaceProcurementOverlay(shoppingPlans, routeDecision);
         }
@@ -198,16 +190,13 @@ public partial class AppState
         return true;
     }
 
-    public bool RollbackProcurementOptimization(
+    public bool RollbackProcurementRoute(
         CraftingPlan originalPlan,
-        CraftingPlan optimizedPlan,
         long expectedPlanSessionVersion,
         AppStateVersionSnapshot expectedVersions)
     {
         ArgumentNullException.ThrowIfNull(originalPlan);
-        ArgumentNullException.ThrowIfNull(optimizedPlan);
-        if (!ReferenceEquals(CurrentPlan, originalPlan) &&
-            !ReferenceEquals(CurrentPlan, optimizedPlan) ||
+        if (!ReferenceEquals(CurrentPlan, originalPlan) ||
             PlanSessionVersion != expectedPlanSessionVersion ||
             CurrentVersions.PlanDecisionVersion != expectedVersions.PlanDecisionVersion ||
             CurrentVersions.MarketAnalysisVersion != expectedVersions.MarketAnalysisVersion ||
@@ -219,11 +208,6 @@ public partial class AppState
         var failure = ProcurementRouteFailure;
         using (BeginStateChangeBatch())
         {
-            if (!ReferenceEquals(CurrentPlan, originalPlan))
-            {
-                CurrentPlan = originalPlan;
-                NotifyPlanDecisionChanged();
-            }
             ReplaceShoppingItemsFromActivePlan(
                 AcquisitionPlanningService.GetActiveProcurementItems(originalPlan));
             ClearProcurementOverlay();
@@ -233,28 +217,6 @@ public partial class AppState
             }
         }
         return true;
-    }
-
-    private static bool HaveSameAcquisitionDecisions(CraftingPlan left, CraftingPlan right)
-    {
-        var leftDecisions = EnumerateNodes(left.RootItems)
-            .ToDictionary(node => node.NodeId, node => (node.Source, node.SourceReason), StringComparer.Ordinal);
-        var rightNodes = EnumerateNodes(right.RootItems).ToList();
-        return leftDecisions.Count == rightNodes.Count && rightNodes.All(node =>
-            leftDecisions.TryGetValue(node.NodeId, out var decision) &&
-            decision == (node.Source, node.SourceReason));
-    }
-
-    private static IEnumerable<PlanNode> EnumerateNodes(IEnumerable<PlanNode> roots)
-    {
-        foreach (var node in roots)
-        {
-            yield return node;
-            foreach (var child in EnumerateNodes(node.Children))
-            {
-                yield return child;
-            }
-        }
     }
 
     public void InvalidateProcurementRoute(string reason)
@@ -442,12 +404,6 @@ public partial class AppState
             return false;
         }
 
-        var optimizedPlan = ApplyAcquisitionDecisions(currentPlan, selection.AcquisitionDecisions);
-        if (optimizedPlan == null)
-        {
-            return false;
-        }
-
         var selectedDecision = new MarketRouteDecision(
             normalized,
             MarketRouteScoring.GetMaximumPremiumRate(normalized),
@@ -465,21 +421,16 @@ public partial class AppState
             selection.ItemDecisions)
         {
             FixedAcquisitionGilCost = selection.FixedAcquisitionGilCost,
-            AcquisitionSearchWasTruncated = currentDecision.AcquisitionSearchWasTruncated,
             RouteSearchWasTruncated = currentDecision.RouteSearchWasTruncated,
-            TravelSearchWasTruncated = currentDecision.TravelSearchWasTruncated,
-            TravelRoutesEvaluated = currentDecision.TravelRoutesEvaluated,
-            AcquisitionCombinationEvaluations = currentDecision.AcquisitionCombinationEvaluations,
             ToleranceSelections = currentDecision.ToleranceSelections
         };
 
         using (BeginStateChangeBatch())
         {
             ProcurementTravelTolerance = normalized;
-            if (!ApplyProcurementOptimization(
+            if (!ApplyProcurementRoute(
                     currentPlan,
-                    optimizedPlan,
-                    AcquisitionPlanningService.GetActiveProcurementItems(optimizedPlan),
+                    AcquisitionPlanningService.GetActiveProcurementItems(currentPlan),
                     selection.ShoppingPlans,
                     selectedDecision))
             {
@@ -489,43 +440,6 @@ public partial class AppState
         }
 
         return true;
-    }
-
-    private static CraftingPlan? ApplyAcquisitionDecisions(
-        CraftingPlan source,
-        IReadOnlyList<ProcurementAcquisitionDecision> decisions)
-    {
-        if (decisions.Count == 0)
-        {
-            return source;
-        }
-
-        var decisionsByNode = decisions.ToDictionary(decision => decision.NodeId, StringComparer.Ordinal);
-        var clone = new CraftingPlan
-        {
-            Id = source.Id,
-            Name = source.Name,
-            CreatedAt = source.CreatedAt,
-            ModifiedAt = source.ModifiedAt,
-            DataCenter = source.DataCenter,
-            World = source.World,
-            RootItems = source.RootItems.Select(root => root.Clone()).ToList(),
-            SavedMarketPlans = source.SavedMarketPlans.ToList(),
-            PriceVersion = source.PriceVersion
-        };
-        var applied = 0;
-        foreach (var node in EnumerateNodes(clone.RootItems))
-        {
-            if (!decisionsByNode.TryGetValue(node.NodeId, out var decision))
-            {
-                return null;
-            }
-            node.Source = decision.Source;
-            node.SourceReason = decision.SourceReason;
-            applied++;
-        }
-
-        return applied == decisionsByNode.Count ? clone : null;
     }
 
     public bool SetProcurementHomeDataCenterOrigin(bool enabled)

@@ -15,7 +15,7 @@ public sealed class WebProcurementEngineSettlementTests
     [InlineData(true, true, false)]
     [InlineData(false, false, true)]
     [InlineData(true, false, true)]
-    public async Task PreCommitTerminationDiscardsOwnedStateWithoutOverwritingUserEdit(
+    public async Task RouteSettlementNeverOwnsAcquisitionDecisionsOrOverwritesUserEdits(
         bool failDuringPersistence,
         bool userChangedPlan,
         bool newerPublication)
@@ -70,14 +70,7 @@ public sealed class WebProcurementEngineSettlementTests
             [],
             [],
             decision,
-            ActiveProcurementItems: [item],
-            AcquisitionDecisions:
-            [
-                new ProcurementAcquisitionDecision(
-                    plan.RootItems[0].NodeId,
-                    AcquisitionSource.VendorBuy,
-                    AcquisitionSourceReason.SystemDefault)
-            ]);
+            ActiveProcurementItems: [item]);
         var snapshots = new ReferenceEngineSemanticSnapshotProvider();
         var routeSnapshot = snapshots.CaptureRoute(route);
         var transactionId = Guid.NewGuid();
@@ -180,7 +173,7 @@ public sealed class WebProcurementEngineSettlementTests
         await settlement.SettleAsync(EnginePhase.Publishing, publishing, CancellationToken.None);
         await settlement.SettleAsync(EnginePhase.SettlingRoute, Context(EnginePhase.SettlingRoute), CancellationToken.None);
         Assert.Equal(ProcurementRoutePublicationValidity.Current, appState.ProcurementRouteValidity);
-        Assert.Equal(AcquisitionSource.VendorBuy, appState.CurrentPlan!.RootItems[0].Source);
+        Assert.Equal(AcquisitionSource.MarketBuyNq, appState.CurrentPlan!.RootItems[0].Source);
         var optimizedPlan = appState.CurrentPlan;
         Assert.Contains(EnginePhase.Publishing, settlement.SettlementPhaseElapsedMilliseconds.Keys);
         Assert.Contains(EnginePhase.SettlingRoute, settlement.SettlementPhaseElapsedMilliseconds.Keys);
@@ -230,13 +223,11 @@ public sealed class WebProcurementEngineSettlementTests
             !userChangedPlan && !newerPublication,
             released.Evidence.Contains("route-rolled-back", StringComparison.Ordinal));
         Assert.False(gateHeld);
-        Assert.Same(userChangedPlan || newerPublication ? optimizedPlan : plan, appState.CurrentPlan);
+        Assert.Same(plan, appState.CurrentPlan);
         Assert.Equal(
             userChangedPlan
                 ? AcquisitionSource.Craft
-                : newerPublication
-                    ? AcquisitionSource.VendorBuy
-                    : AcquisitionSource.MarketBuyNq,
+                : AcquisitionSource.MarketBuyNq,
             appState.CurrentPlan.RootItems[0].Source);
         if (newerPublication)
         {

@@ -66,7 +66,6 @@ public sealed class MarketAnalysisSubsetRefreshService
 {
     private readonly AppState _appState;
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
-    private readonly MarketShoppingService _marketShoppingService;
     private readonly WebPlanPersistenceService _planPersistence;
     private readonly IndexedDbService _indexedDb;
     private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
@@ -74,14 +73,12 @@ public sealed class MarketAnalysisSubsetRefreshService
     public MarketAnalysisSubsetRefreshService(
         AppState appState,
         IMarketEvidenceReconciliationService marketEvidenceReconciliation,
-        MarketShoppingService marketShoppingService,
         WebPlanPersistenceService planPersistence,
         IndexedDbService indexedDb,
         IRecipeLayerWorkflowService recipeLayerWorkflow)
     {
         _appState = appState;
         _marketEvidenceReconciliation = marketEvidenceReconciliation;
-        _marketShoppingService = marketShoppingService;
         _planPersistence = planPersistence;
         _indexedDb = indexedDb;
         _recipeLayerWorkflow = recipeLayerWorkflow;
@@ -288,7 +285,10 @@ public sealed class MarketAnalysisSubsetRefreshService
             analysis => analysis.ItemId,
             analysis => analysis.Name);
         var refreshedPlans = refreshedItemIds.Select(itemId => shoppingPlanByItemId[itemId]).ToList();
-        _marketShoppingService.ApplyVendorPurchaseOverrides(plan, refreshedPlans);
+        var updatedPlans = MarketEvidenceCollectionMerger.MergeShoppingPlans(
+            _appState.ShoppingPlans,
+            refreshedPlans);
+        var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(plan, updatedPlans);
         if (!_appState.IsCurrentPlanSession(plan, planSessionVersion))
         {
             return MarketAnalysisSubsetRefreshWorkflowResult.Noop(
@@ -297,6 +297,10 @@ public sealed class MarketAnalysisSubsetRefreshService
         }
 
         _appState.ReplaceMarketAnalysisItems(refreshedAnalyses, refreshedPlans);
+        if (changedDecisions > 0)
+        {
+            _appState.NotifyPlanDecisionChanged();
+        }
 
         if (!string.IsNullOrEmpty(capturedPlanId) &&
             _appState.IsCurrentPlanSession(plan, planSessionVersion) &&

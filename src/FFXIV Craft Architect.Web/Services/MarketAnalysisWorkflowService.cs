@@ -31,7 +31,6 @@ public sealed class MarketAnalysisWorkflowService
     public MarketAnalysisWorkflowService(
         AppState appState,
         IMarketEvidenceReconciliationService marketEvidenceReconciliation,
-        MarketShoppingService marketShoppingService,
         IMarketPriceLadderAnalysisService marketPriceLadderAnalysis,
         IMarketAnalysisPersistence marketAnalysisPersistence,
         IndexedDbService indexedDb,
@@ -45,7 +44,6 @@ public sealed class MarketAnalysisWorkflowService
         _recipeLayerWorkflow = recipeLayerWorkflow;
         _publicationService = new MarketAnalysisPublicationService(
             appState,
-            marketShoppingService,
             new MarketAnalysisPublicationStore(appState, marketAnalysisPersistence, indexedDb),
             recipeLayerWorkflow,
             logger);

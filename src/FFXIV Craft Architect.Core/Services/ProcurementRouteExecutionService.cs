@@ -7,16 +7,13 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
 {
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly MarketShoppingService _marketShoppingService;
-    private readonly JointAcquisitionRouteOptimizationService _jointOptimizer;
 
     public ProcurementRouteExecutionService(
         IMarketEvidenceReconciliationService marketEvidenceReconciliation,
-        MarketShoppingService marketShoppingService,
-        JointAcquisitionRouteOptimizationService? jointOptimizer = null)
+        MarketShoppingService marketShoppingService)
     {
         _marketEvidenceReconciliation = marketEvidenceReconciliation;
         _marketShoppingService = marketShoppingService;
-        _jointOptimizer = jointOptimizer ?? new JointAcquisitionRouteOptimizationService(marketShoppingService);
     }
 
     public async Task<ProcurementRouteExecutionResult> AnalyzeAsync(
@@ -56,59 +53,14 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         var scopedEvidence = PrepareProcurementEvidenceForScope(evidencePlans, request);
         progress?.Report($"Optimizing procurement route for {scopedEvidence.Count} items...");
         var procurementConfig = ProcurementRouteConfigFactory.Create(request);
-        JointAcquisitionRouteOptimizationResult? jointOptimization = null;
-        ProcurementRouteOptimizationResult optimization;
-        var planCandidateIds = AcquisitionPlanningService.GetMarketAnalysisCandidates(request.Plan)
-            .Select(item => item.ItemId)
-            .ToHashSet();
-        var requestedItemIds = activeProcurementItems.Select(item => item.ItemId).ToHashSet();
-        var canOptimizeJointly = request.Plan != null && planCandidateIds.SetEquals(requestedItemIds);
-        if (canOptimizeJointly && request.Plan is { } jointPlan)
-        {
-            jointOptimization = await _jointOptimizer.OptimizeAsync(
-                jointPlan,
-                scopedEvidence,
-                procurementConfig,
-                request.IncludeSplitPurchases,
-                executionOptions,
-                progress,
-                ct);
-            if (jointOptimization.FeasiblePlanCount > 0)
-            {
-                optimization = new ProcurementRouteOptimizationResult(
-                    jointOptimization.ShoppingPlans,
-                    jointOptimization.RouteDecision);
-            }
-            else if (request.Plan.RootItems.Count == 0)
-            {
-                jointOptimization = null;
-                _marketShoppingService.ApplyVendorPurchaseOverrides(request.Plan, scopedEvidence);
-                optimization = await _marketShoppingService.OptimizeProcurementRouteWithDecisionAsync(
-                    scopedEvidence,
-                    procurementConfig,
-                    request.IncludeSplitPurchases,
-                    executionOptions,
-                    progress,
-                    ct);
-            }
-            else
-            {
-                optimization = new ProcurementRouteOptimizationResult(
-                    jointOptimization.ShoppingPlans,
-                    jointOptimization.RouteDecision,
-                    IsComplete: false);
-            }
-        }
-        else
-        {
-            optimization = await _marketShoppingService.OptimizeProcurementRouteWithDecisionAsync(
-                scopedEvidence,
-                procurementConfig,
-                request.IncludeSplitPurchases,
-                executionOptions,
-                progress,
-                ct);
-        }
+        _marketShoppingService.ApplySelectedVendorPurchases(request.Plan, scopedEvidence);
+        var optimization = await _marketShoppingService.OptimizeProcurementRouteWithDecisionAsync(
+            scopedEvidence,
+            procurementConfig,
+            request.IncludeSplitPurchases,
+            executionOptions,
+            progress,
+            ct);
 
         return new ProcurementRouteExecutionResult(
             request.IncludeReconciliationEvidenceInResult
@@ -120,30 +72,9 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             request.IncludeReconciliationEvidenceInResult ? reconciliation.ReconciledItems : [],
             optimization.Decision,
             request.IncludeReconciliationEvidenceInResult ? reconciliation.Items : [],
-            request.IncludeReconciliationEvidenceInResult ? jointOptimization?.OptimizedPlan : null,
-            request.IncludeReconciliationEvidenceInResult ? jointOptimization?.ActiveProcurementItems : null,
-            request.IncludeReconciliationEvidenceInResult ? reconciliation.Analyses : null,
-            request.IncludeReconciliationEvidenceInResult || jointOptimization is null
-                ? null
-                : CaptureAcquisitionDecisions(jointOptimization.OptimizedPlan),
+            ActiveProcurementItems: request.IncludeReconciliationEvidenceInResult ? activeProcurementItems : null,
+            EvidenceAnalyses: request.IncludeReconciliationEvidenceInResult ? reconciliation.Analyses : null,
             IsComplete: optimization.IsComplete);
-    }
-
-    private static IReadOnlyList<ProcurementAcquisitionDecision> CaptureAcquisitionDecisions(CraftingPlan plan) =>
-        EnumerateNodes(plan.RootItems)
-            .Select(node => new ProcurementAcquisitionDecision(node.NodeId, node.Source, node.SourceReason))
-            .ToArray();
-
-    private static IEnumerable<PlanNode> EnumerateNodes(IEnumerable<PlanNode> nodes)
-    {
-        foreach (var node in nodes)
-        {
-            yield return node;
-            foreach (var child in EnumerateNodes(node.Children))
-            {
-                yield return child;
-            }
-        }
     }
 
     internal static List<DetailedShoppingPlan> CompactResultShoppingPlans(

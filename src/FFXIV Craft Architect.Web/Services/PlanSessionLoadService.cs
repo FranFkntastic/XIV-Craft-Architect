@@ -119,12 +119,9 @@ public sealed class PlanSessionLoadService
         var marketIntelligence = ApplyPublishedScopeFallback(
             marketRestore.MarketIntelligence,
             publishedScope);
-        if (string.IsNullOrWhiteSpace(storedPlan.ProcurementRouteJson))
-        {
-            AcquisitionPlanningService.EnsureAutomaticMarketSourcesAreActionable(
-                plan,
-                marketRestore.Recommendations);
-        }
+        AcquisitionPlanningService.ReconcileAcquisitionDecisions(
+            plan,
+            marketRestore.Recommendations);
         return new PlanSessionLoadResult(
             storedPlan,
             plan,

@@ -9,6 +9,7 @@ namespace FFXIV_Craft_Architect.Web.Services;
 /// </summary>
 public class WebSettingsService : ISettingsService
 {
+    private const string RegionalProcurementDefaultMigrationKey = "migration.regional_procurement_default";
     private readonly IndexedDbService _indexedDb;
     private readonly ILogger<WebSettingsService>? _logger;
     private readonly Dictionary<string, object> _cache = new();
@@ -22,7 +23,7 @@ public class WebSettingsService : ISettingsService
         ["market.default_search_scope"] = "EntireRegion",
         ["market.include_cross_world"] = true,
         ["market.exclude_congested_worlds"] = true,
-        ["procurement.search_entire_region"] = false,
+        ["procurement.search_entire_region"] = true,
         ["procurement.enable_split_world_purchases"] = true,
         ["procurement.travel_tolerance"] = 0,
         ["procurement.world_exclusion_duration_minutes"] = 60,
@@ -61,6 +62,8 @@ public class WebSettingsService : ISettingsService
 
         try
         {
+            await ApplyMigrationsAsync();
+
             // Load all settings from IndexedDB
             foreach (var key in DefaultSettings.Keys)
             {
@@ -86,6 +89,19 @@ public class WebSettingsService : ISettingsService
                 _cache[kvp.Key] = kvp.Value;
             }
             _isLoaded = true;
+        }
+    }
+
+    private async Task ApplyMigrationsAsync()
+    {
+        if (await _indexedDb.LoadSettingAsync(RegionalProcurementDefaultMigrationKey, false))
+        {
+            return;
+        }
+
+        if (await _indexedDb.SaveSettingAsync("procurement.search_entire_region", true))
+        {
+            await _indexedDb.SaveSettingAsync(RegionalProcurementDefaultMigrationKey, true);
         }
     }
 

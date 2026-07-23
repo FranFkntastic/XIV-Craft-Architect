@@ -792,24 +792,24 @@ public class RecipeCalculationService
         var shouldDefaultToVendor = !isRootItem && hasVendor;
         var shouldDefaultToBuy = !isRootItem && !shouldDefaultToVendor && canBuyFromMarket && ShouldDefaultToBuy(node);
 
-        _logger?.LogInformation("[RecipeCalc] {Name}: RecipeLevel={Level}, Children={ChildCount}, IsRoot={IsRoot}, HasVendor={HasVendor}, ShouldDefaultToVendor={ShouldVendor}, ShouldDefaultToBuy={ShouldBuy}",
+        _logger?.LogDebug("[RecipeCalc] {Name}: RecipeLevel={Level}, Children={ChildCount}, IsRoot={IsRoot}, HasVendor={HasVendor}, ShouldDefaultToVendor={ShouldVendor}, ShouldDefaultToBuy={ShouldBuy}",
             node.Name, node.RecipeLevel, node.Children.Count, isRootItem, hasVendor, shouldDefaultToVendor, shouldDefaultToBuy);
 
         if (shouldDefaultToVendor)
         {
-            _logger?.LogInformation("[RecipeCalc] {Name}: Setting Source=VendorBuy (vendor available)", node.Name);
+            _logger?.LogDebug("[RecipeCalc] {Name}: Setting Source=VendorBuy (vendor available)", node.Name);
             node.Source = AcquisitionSource.VendorBuy;
             node.SourceReason = AcquisitionSourceReason.SystemDefault;
         }
         else if (shouldDefaultToBuy)
         {
-            _logger?.LogInformation("[RecipeCalc] {Name}: Setting Source=MarketBuyNq (heuristic)", node.Name);
+            _logger?.LogDebug("[RecipeCalc] {Name}: Setting Source=MarketBuyNq (heuristic)", node.Name);
             node.Source = AcquisitionSource.MarketBuyNq;
             node.SourceReason = AcquisitionSourceReason.SystemDefault;
         }
         else
         {
-            _logger?.LogInformation("[RecipeCalc] {Name}: Source remains default={Source} (crafting preferred)", node.Name, node.Source);
+            _logger?.LogDebug("[RecipeCalc] {Name}: Source remains default={Source} (crafting preferred)", node.Name, node.Source);
             node.SourceReason = AcquisitionSourceReason.SystemDefault;
         }
 

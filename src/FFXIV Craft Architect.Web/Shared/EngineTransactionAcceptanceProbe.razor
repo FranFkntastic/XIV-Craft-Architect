@@ -32,10 +32,6 @@
          data-route-validity="@AppState.ProcurementRouteValidity"
          data-route-has-decision="@(AppState.ProcurementRouteDecision is not null ? "true" : "false")"
          data-route-truncated="@(AppState.ProcurementRouteDecision?.RouteSearchWasTruncated.ToString().ToLowerInvariant())"
-         data-acquisition-truncated="@(AppState.ProcurementRouteDecision?.AcquisitionSearchWasTruncated.ToString().ToLowerInvariant())"
-         data-travel-truncated="@(AppState.ProcurementRouteDecision?.TravelSearchWasTruncated.ToString().ToLowerInvariant())"
-         data-travel-routes-evaluated="@AppState.ProcurementRouteDecision?.TravelRoutesEvaluated"
-         data-acquisition-combination-evaluations="@AppState.ProcurementRouteDecision?.AcquisitionCombinationEvaluations"
          data-error="@_error">
         @if (_deterministicEvidenceEnabled)
         {
@@ -362,14 +358,6 @@
             if (!plansByItem.TryGetValue(item.ItemId, out var plan))
             {
                 issues.Add($"{item.Name}:missing-plan");
-                continue;
-            }
-            if (plan.Vendors.Count > 0)
-            {
-                if (plan.QuantityNeeded != item.TotalQuantity)
-                {
-                    issues.Add($"{item.Name}:vendor-quantity");
-                }
                 continue;
             }
             if (!analysesByItem.TryGetValue(item.ItemId, out var analysis))
