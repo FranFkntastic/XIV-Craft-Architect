@@ -150,6 +150,10 @@ public interface IReferenceEngineSemanticSnapshotProvider
 {
     ReferenceEnginePreparedInput PrepareInput(EngineRequestEnvelope request);
 
+    ReferenceEnginePreparedInput PrepareInput(
+        EngineRequestEnvelope request,
+        ReferenceEngineInput input);
+
     EngineAnalysisSemanticSnapshot CaptureAnalysis(MarketAnalysisExecutionResult result);
 
     EngineRouteSemanticSnapshot CaptureRoute(ProcurementRouteExecutionResult result);

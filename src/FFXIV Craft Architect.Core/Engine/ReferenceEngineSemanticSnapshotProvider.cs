@@ -15,6 +15,15 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
         ArgumentNullException.ThrowIfNull(request);
         var input = request.Input.Deserialize<ReferenceEngineInput>(InputJsonOptions)
             ?? throw new InvalidOperationException("Unsupported reference input.");
+        return PrepareInput(request, input);
+    }
+
+    public ReferenceEnginePreparedInput PrepareInput(
+        EngineRequestEnvelope request,
+        ReferenceEngineInput input)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(input);
         var demands = (input.MarketAnalysis?.Items ?? [])
             .Concat(input.ProcurementRoute?.ActiveProcurementItems ?? [])
             .GroupBy(item => item.ItemId)

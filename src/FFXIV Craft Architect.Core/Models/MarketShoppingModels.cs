@@ -170,7 +170,6 @@ public class MarketPurchaseCandidate
     public int QuantityNeeded { get; init; }
     public int QuantityFulfilled { get; init; }
     public long MarketEvidencePenalty { get; init; }
-    public bool HasTrustworthyEvidence { get; init; } = true;
     public WorldShoppingSummary? SingleWorld { get; init; }
     public List<SplitWorldPurchase>? Split { get; init; }
     public MarketCoverageOption? Coverage { get; init; }

@@ -272,7 +272,6 @@ public class MarketShoppingService
         var cheapestEligibleCandidateByPlan = standaloneCandidatesByPlan.ToDictionary(
             pair => pair.Key,
             pair => pair.Value
-                .Where(candidate => candidate.HasTrustworthyEvidence)
                 .OrderBy(candidate => candidate.GilCost)
                 .ThenBy(candidate => candidate.MarketEvidencePenalty)
                 .ThenBy(candidate => candidate.Worlds.Count)
@@ -300,7 +299,6 @@ public class MarketShoppingService
                 var candidates = routeCandidates
                     .Where(c => c.IsFullyFulfilled)
                     .Where(c => includeSplitPurchases || !c.IsSplitPurchase)
-                    .Where(c => c.HasTrustworthyEvidence)
                     .ToList();
                 routeSearchWasTruncated |= candidateWorkBudget.WasTruncated;
                 var hadEligibleCandidate = candidates.Count > 0;
@@ -492,11 +490,6 @@ public class MarketShoppingService
             var plan = plans[choice.PlanIndex];
             if (choice.Candidate == null)
             {
-                var standaloneCandidates = standaloneCandidatesByPlan.GetValueOrDefault(choice.PlanIndex) ?? [];
-                if (standaloneCandidates.Count > 0 && standaloneCandidates.All(candidate => !candidate.HasTrustworthyEvidence))
-                {
-                    plan.Error ??= "Market evidence is 12 hours old or older. Refresh this item before routing it.";
-                }
                 continue;
             }
 
@@ -1248,7 +1241,6 @@ public class MarketShoppingService
                 QuantityNeeded = plan.QuantityNeeded,
                 QuantityFulfilled = plan.QuantityNeeded,
                 MarketEvidencePenalty = MarketWorldRecommendationScoring.CalculateEvidencePenalty(world.TotalCost, world),
-                HasTrustworthyEvidence = MarketEvidenceFreshness.IsRouteEligible(world.MarketDataQualityBucket),
                 SingleWorld = world
             });
         }
@@ -1286,8 +1278,6 @@ public class MarketShoppingService
                 QuantityNeeded = plan.QuantityNeeded,
                 QuantityFulfilled = quantityFulfilled,
                 MarketEvidencePenalty = evidencePenalty,
-                HasTrustworthyEvidence = HasTrustworthyEvidence(plan, split.Select(world =>
-                    new MarketWorldKey(world.DataCenter, world.WorldName))),
                 Split = split
             });
         }
@@ -1421,7 +1411,6 @@ public class MarketShoppingService
                 QuantityNeeded = plan.QuantityNeeded,
                 QuantityFulfilled = plan.QuantityNeeded,
                 MarketEvidencePenalty = evidencePenalty,
-                HasTrustworthyEvidence = HasTrustworthyEvidence(plan, keys),
                 Coverage = coverage
             });
         }
@@ -1542,29 +1531,8 @@ public class MarketShoppingService
             QuantityNeeded = plan.QuantityNeeded,
             QuantityFulfilled = coverage.QuantityCovered,
             MarketEvidencePenalty = evidencePenalty,
-            HasTrustworthyEvidence = HasTrustworthyEvidence(
-                plan,
-                coverage.Worlds.Select(world => new MarketWorldKey(world.DataCenter, world.WorldName))),
             Coverage = coverage
         };
-    }
-
-    private static bool HasTrustworthyEvidence(
-        DetailedShoppingPlan plan,
-        IEnumerable<MarketWorldKey> worlds)
-    {
-        foreach (var worldKey in worlds)
-        {
-            var world = plan.WorldOptions.FirstOrDefault(option =>
-                string.Equals(option.DataCenter, worldKey.DataCenter, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(option.WorldName, worldKey.WorldName, StringComparison.OrdinalIgnoreCase));
-            if (world == null || !MarketEvidenceFreshness.IsRouteEligible(world.MarketDataQualityBucket))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private static long ToLongSaturating(decimal value)

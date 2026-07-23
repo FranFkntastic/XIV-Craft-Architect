@@ -115,6 +115,22 @@ public sealed class ProcurementSpecificationTests
     }
 
     [Fact]
+    public async Task ProcurementRoutesTheAcquisitionDecisionWithoutRejudgingEvidenceAge()
+    {
+        var world = SpecificationFixtures.World("Aether", "Siren", 5, 25);
+        world.MarketDataQualityBucket = MarketDataQualityBucket.VeryOld;
+        var shopping = SpecificationFixtures.Evidence(105, "Accepted material", 5, world);
+
+        var route = await new MarketShoppingService(null!)
+            .OptimizeProcurementRouteWithDecisionAsync(
+                [shopping],
+                SpecificationFixtures.Config(tolerance: 0));
+
+        Assert.True(route.IsComplete);
+        Assert.Equal("Siren", Assert.Single(route.ShoppingPlans).RecommendedWorld?.WorldName);
+    }
+
+    [Fact]
     public void VendorAvailabilityDoesNotMasqueradeAsVendorSelection()
     {
         var node = new PlanNode

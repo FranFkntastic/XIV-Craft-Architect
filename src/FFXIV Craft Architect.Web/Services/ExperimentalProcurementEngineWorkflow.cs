@@ -75,7 +75,7 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
             .ToHashSet();
         var routeRequest = new ProcurementRouteExecutionRequest
         {
-            Plan = request.Plan,
+            Plan = CreateVendorDecisionSnapshot(request.Plan, activeItemIds),
             ActiveProcurementItems = request.ActiveItems,
             SourceShoppingPlans = _appState.ShoppingPlans
                 .Where(plan => activeItemIds.Contains(plan.ItemId))
@@ -130,7 +130,10 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.Superseded);
         }
 
-        var engineInputHash = EngineCanonicalHash.ComputeEngineInput(inputElement);
+        var engineInputHash = await EngineCanonicalHash.ComputeEngineInputAsync(
+            inputElement,
+            YieldToBrowserForHashAsync,
+            cancellationToken);
         LogPreparationStage("engine input hashed", preparation);
         var provisional = new EngineRequestEnvelope(
             "1",
@@ -161,7 +164,7 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.Superseded);
         }
 
-        var prepared = _snapshots.PrepareInput(provisional);
+        var prepared = _snapshots.PrepareInput(provisional, input);
         LogPreparationStage("semantic snapshots prepared", preparation);
         await YieldToBrowserAsync(cancellationToken);
         if (!IsCurrent(request))
@@ -249,6 +252,58 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
     private static async Task YieldToBrowserAsync(CancellationToken cancellationToken)
     {
         await Task.Delay(1, cancellationToken);
+    }
+
+    private static async ValueTask YieldToBrowserForHashAsync(CancellationToken cancellationToken)
+    {
+        await Task.Delay(1, cancellationToken);
+    }
+
+    private static CraftingPlan CreateVendorDecisionSnapshot(
+        CraftingPlan plan,
+        IReadOnlySet<int> activeItemIds)
+    {
+        var vendorNodes = new List<PlanNode>();
+        AddVendorDecisionNodes(plan.RootItems, activeItemIds, vendorNodes);
+        return new CraftingPlan
+        {
+            Id = plan.Id,
+            Name = plan.Name,
+            CreatedAt = plan.CreatedAt,
+            ModifiedAt = plan.ModifiedAt,
+            DataCenter = plan.DataCenter,
+            World = plan.World,
+            RootItems = vendorNodes
+        };
+    }
+
+    private static void AddVendorDecisionNodes(
+        IEnumerable<PlanNode> nodes,
+        IReadOnlySet<int> activeItemIds,
+        ICollection<PlanNode> vendorNodes)
+    {
+        foreach (var node in nodes)
+        {
+            if (activeItemIds.Contains(node.ItemId) &&
+                node.Source == AcquisitionSource.VendorBuy)
+            {
+                vendorNodes.Add(new PlanNode
+                {
+                    ItemId = node.ItemId,
+                    Name = node.Name,
+                    Quantity = node.Quantity,
+                    Source = AcquisitionSource.VendorBuy,
+                    SourceReason = node.SourceReason,
+                    CanBuyFromVendor = node.CanBuyFromVendor,
+                    VendorPrice = node.VendorPrice,
+                    VendorOptions = node.VendorOptions.ToList(),
+                    SelectedVendorIndex = node.SelectedVendorIndex,
+                    NodeId = node.NodeId
+                });
+            }
+
+            AddVendorDecisionNodes(node.Children, activeItemIds, vendorNodes);
+        }
     }
 
     private void LogPreparationStage(string stage, Stopwatch stopwatch)
