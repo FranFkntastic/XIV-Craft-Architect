@@ -27,20 +27,20 @@ public interface IExperimentalProcurementEngineWorkflow
 public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcurementEngineWorkflow
 {
     private readonly AppState _appState;
-    private readonly ExperimentalProcurementEngineFactory _factory;
+    private readonly CraftArchitectEngineHost _engineHost;
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly IReferenceEngineSemanticSnapshotProvider _snapshots;
     private readonly ILogger<ExperimentalProcurementEngineWorkflow>? _logger;
 
     public ExperimentalProcurementEngineWorkflow(
         AppState appState,
-        ExperimentalProcurementEngineFactory factory,
+        CraftArchitectEngineHost engineHost,
         IMarketEvidenceReconciliationService marketEvidenceReconciliation,
         IReferenceEngineSemanticSnapshotProvider snapshots,
         ILogger<ExperimentalProcurementEngineWorkflow>? logger = null)
     {
         _appState = appState;
-        _factory = factory;
+        _engineHost = engineHost;
         _marketEvidenceReconciliation = marketEvidenceReconciliation;
         _snapshots = snapshots;
         _logger = logger;
@@ -248,7 +248,7 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
         var gate = OperationGateLease.Create(
             () => gateHeld && (request.IsCurrentOperation?.Invoke() ?? true),
             () => gateHeld && !(gateHeld = false));
-        await using var execution = _factory.Create(new WebProcurementSettlementRegistration(
+        await using var execution = _engineHost.CreateExecution(new WebProcurementSettlementRegistration(
             engineRequest,
             request.Plan,
             request.PlanSessionVersion,

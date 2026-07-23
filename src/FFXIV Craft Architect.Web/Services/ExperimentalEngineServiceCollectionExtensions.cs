@@ -17,7 +17,7 @@ public static class ExperimentalEngineServiceCollectionExtensions
         services.AddSingleton(new ExperimentalProcurementEngineCapability(
             configuration.GetValue<bool>(ExecutionEnabledConfigurationKey)));
         services.TryAddScoped<IReferenceEngineSemanticSnapshotProvider, ReferenceEngineSemanticSnapshotProvider>();
-        services.AddScoped<ExperimentalProcurementEngineFactory>();
+        services.AddScoped<CraftArchitectEngineHost>();
         services.AddScoped<IExperimentalProcurementEngineWorkflow, ExperimentalProcurementEngineWorkflow>();
         return services;
     }

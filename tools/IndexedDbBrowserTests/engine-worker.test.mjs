@@ -171,6 +171,37 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
         const result = resultEnvelope.kind === 'managed-json'
           ? JSON.parse(resultEnvelope.messageJson)
           : resultEnvelope;
+        const secondRequestPromise = waitFor(
+          active.worker,
+          message => message?.kind === 'acceptance-request',
+          45_000,
+          'Second managed procurement request');
+        active.worker.postMessage({
+          protocolVersion: '4', kind: 'acceptance-request', generation: 1,
+          executionId: null, transactionId: null, payload: null
+        });
+        const secondRequest = await secondRequestPromise;
+        const secondResultPromise = waitFor(
+          active.worker,
+          message => {
+            const decoded = message?.kind === 'managed-json'
+              ? JSON.parse(message.messageJson)
+              : message;
+            return decoded?.transactionId === JSON.parse(secondRequest.messageJson).transactionId &&
+              (decoded?.kind === 'computation-result' || decoded?.kind === 'protocol-error');
+          },
+          45_000,
+          'Second managed procurement result');
+        active.worker.postMessage({
+          kind: 'managed-json',
+          messageJson: secondRequest.messageJson,
+          generation: 1,
+          messageKind: 'execute'
+        });
+        const secondResultEnvelope = await secondResultPromise;
+        const secondResult = secondResultEnvelope.kind === 'managed-json'
+          ? JSON.parse(secondResultEnvelope.messageJson)
+          : secondResultEnvelope;
         clearInterval(heartbeat);
         active.worker.terminate();
 
@@ -199,6 +230,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           capability: active.capability,
           malformed,
           result,
+          secondResult,
           progress,
           heartbeatCount,
           heartbeatMaxGapMs,
@@ -222,6 +254,12 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       assert.equal(evidence.result.payload.finalPhase, 7, 'procurement must reach reconciliation');
       assert.match(evidence.result.payload.computationHash, /^[0-9a-f]{64}$/i);
       assert.equal(evidence.result.payload.computationEvidence['phase:Reconciling'], 'complete');
+      assert.equal(evidence.secondResult.kind, 'computation-result');
+      assert.equal(evidence.secondResult.payload.status, 1, 'the same Worker must accept a second command');
+      assert.notEqual(
+        evidence.secondResult.transactionId,
+        evidence.result.transactionId,
+        'sequential commands must retain distinct transaction identity');
       const route = evidence.result.payload.result.procurementRouteResult;
       const decision = route.routeDecision;
       assert.equal(route.isComplete, true);

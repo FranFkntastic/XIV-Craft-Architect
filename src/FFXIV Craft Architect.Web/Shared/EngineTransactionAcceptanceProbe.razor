@@ -6,7 +6,7 @@
 @inject IndexedDbService IndexedDb
 @inject IJSRuntime JSRuntime
 @inject IReferenceEngineSemanticSnapshotProvider EngineSnapshots
-@inject ExperimentalProcurementEngineFactory EngineFactory
+@inject CraftArchitectEngineHost EngineHost
 
 @if (_enabled)
 {
@@ -197,7 +197,7 @@
                 gateHeld = false;
                 return true;
             });
-            await using var execution = EngineFactory.Create(new WebProcurementSettlementRegistration(
+            await using var execution = EngineHost.CreateExecution(new WebProcurementSettlementRegistration(
                 request,
                 plan,
                 planSessionVersion,

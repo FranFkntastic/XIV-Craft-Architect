@@ -12,16 +12,16 @@ namespace FFXIV_Craft_Architect.Tests;
 public sealed class ExperimentalProcurementEngineRegistrationTests
 {
     [Fact]
-    public void DefaultCompositionRejectsBeforeBrowserInterop()
+    public async Task DefaultCompositionRejectsBeforeBrowserInterop()
     {
         var runtime = new RecordingJsRuntime();
-        using var provider = CreateProvider(runtime, executionEnabled: false);
-        using var scope = provider.CreateScope();
+        await using var provider = CreateProvider(runtime, executionEnabled: false);
+        await using var scope = provider.CreateAsyncScope();
         var services = scope.ServiceProvider;
 
         Assert.False(services.GetRequiredService<ExperimentalProcurementEngineCapability>().IsExecutionEnabled);
-        var factory = services.GetRequiredService<ExperimentalProcurementEngineFactory>();
-        var exception = Assert.Throws<NotSupportedException>(() => factory.Create(null!));
+        var host = services.GetRequiredService<CraftArchitectEngineHost>();
+        var exception = Assert.Throws<NotSupportedException>(() => host.CreateExecution(null!));
 
         Assert.Contains("disabled", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Null(services.GetService<IEngineExecutionTransport>());
@@ -31,18 +31,19 @@ public sealed class ExperimentalProcurementEngineRegistrationTests
     }
 
     [Fact]
-    public async Task EnabledCompositionCreatesIsolatedWorkerExecutionsWithDurableLedger()
+    public async Task EnabledCompositionCreatesCommandSettlementsOverOneLazyHost()
     {
         var runtime = new RecordingJsRuntime();
-        using var provider = CreateProvider(runtime, executionEnabled: true);
-        using var scope = provider.CreateScope();
+        await using var provider = CreateProvider(runtime, executionEnabled: true);
+        await using var scope = provider.CreateAsyncScope();
         var services = scope.ServiceProvider;
-        var factory = services.GetRequiredService<ExperimentalProcurementEngineFactory>();
+        var host = services.GetRequiredService<CraftArchitectEngineHost>();
         var appState = services.GetRequiredService<AppState>();
-        await using var first = factory.Create(CreateRegistration(appState));
-        await using var second = factory.Create(CreateRegistration(appState));
+        await using var first = host.CreateExecution(CreateRegistration(appState));
+        await using var second = host.CreateExecution(CreateRegistration(appState));
 
         Assert.NotSame(first, second);
+        Assert.Same(host, services.GetRequiredService<CraftArchitectEngineHost>());
         Assert.Equal(EngineExecutionTransportKind.BrowserWorker, first.TransportCapability.Kind);
         Assert.True(first.TransportCapability.IsSupported);
         Assert.True(first.LedgerCapability.IsDurable);
@@ -52,6 +53,9 @@ public sealed class ExperimentalProcurementEngineRegistrationTests
         Assert.Null(services.GetService<IEngineExecutionTransport>());
         Assert.Null(services.GetService<IEngineTransactionLedger>());
         Assert.Null(services.GetService<IEngineExecutionHost>());
+        Assert.Equal(EngineWorkerLifecycleState.Stopped, host.Health.State);
+        Assert.Equal(0, host.Health.Generation);
+        Assert.Equal(0, host.Health.PendingCommandCount);
         Assert.Equal(0, runtime.InvocationCount);
     }
 
