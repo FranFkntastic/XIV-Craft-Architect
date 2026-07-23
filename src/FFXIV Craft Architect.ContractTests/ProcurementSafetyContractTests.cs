@@ -57,6 +57,7 @@ public sealed class ProcurementSafetyContractTests
         var result = await service.RunAnalysisAsync(new ProcurementWorkflowRequest(() => true));
 
         Assert.Equal(ProcurementWorkflowStatus.StaleDecision, result.Status);
+        Assert.Equal(100, Assert.Single(execution.LastRequest!.ActiveProcurementItems).ItemId);
         Assert.Empty(state.ProcurementShoppingPlans);
     }
 
@@ -193,6 +194,8 @@ public sealed class ProcurementSafetyContractTests
     {
         public int Calls { get; private set; }
 
+        public ProcurementRouteExecutionRequest? LastRequest { get; private set; }
+
         public Task<ProcurementRouteExecutionResult> AnalyzeAsync(
             ProcurementRouteExecutionRequest request,
             IProgress<string>? progress = null,
@@ -200,6 +203,7 @@ public sealed class ProcurementSafetyContractTests
             MarketAnalysisExecutionOptions? executionOptions = null)
         {
             Calls++;
+            LastRequest = request;
             duringExecution?.Invoke();
             return Task.FromResult(new ProcurementRouteExecutionResult(
                 [RoutePlan(100, "Faerie")],
@@ -215,6 +219,12 @@ public sealed class ProcurementSafetyContractTests
         private static readonly IReadOnlyList<MaterialAggregate> Candidates =
         [
             new MaterialAggregate { ItemId = 100, Name = "Item 100", TotalQuantity = 5 },
+            new MaterialAggregate { ItemId = 200, Name = "Item 200", TotalQuantity = 5 },
+        ];
+
+        private static readonly IReadOnlyList<MaterialAggregate> ActiveItems =
+        [
+            new MaterialAggregate { ItemId = 100, Name = "Item 100", TotalQuantity = 5 },
         ];
 
         public RecipeOperationSnapshotIdentity CreateSnapshotIdentity() => RecipeOperationSnapshotIdentity.Unspecified;
@@ -224,7 +234,7 @@ public sealed class ProcurementSafetyContractTests
 
         public IReadOnlyList<MaterialAggregate> BuildMarketAnalysisCandidates(CraftingPlan? plan) => Candidates;
 
-        public IReadOnlyList<MaterialAggregate> BuildActiveProcurementItems(CraftingPlan? plan) => Candidates;
+        public IReadOnlyList<MaterialAggregate> BuildActiveProcurementItems(CraftingPlan? plan) => ActiveItems;
 
         public Task<RecipeDemandProjection?> BuildCurrentDemandProjectionAsync(
             CraftingPlan? plan,
@@ -239,7 +249,7 @@ public sealed class ProcurementSafetyContractTests
         public Task<IReadOnlyList<MaterialAggregate>?> BuildCurrentActiveProcurementItemsAsync(
             CraftingPlan? plan,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<MaterialAggregate>?>(Candidates);
+            Task.FromResult<IReadOnlyList<MaterialAggregate>?>(ActiveItems);
     }
 
     private sealed class FakeWorkflow : IProcurementWorkflowService

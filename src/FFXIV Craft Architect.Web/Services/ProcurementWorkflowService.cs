@@ -63,13 +63,13 @@ public sealed class ProcurementWorkflowService : IProcurementWorkflowService
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.NoPlan);
         }
 
-        var marketCandidates = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidatesAsync(plan, ct);
-        if (marketCandidates == null)
+        var activeProcurementItems = await _recipeLayerWorkflow.BuildCurrentActiveProcurementItemsAsync(plan, ct);
+        if (activeProcurementItems == null)
         {
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.StalePlan);
         }
 
-        var activeItemsList = marketCandidates
+        var activeItemsList = activeProcurementItems
             .Where(item => item.TotalQuantity > 0)
             .ToList();
         if (activeItemsList.Count == 0)
