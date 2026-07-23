@@ -104,12 +104,6 @@
 
     private string GetPriceBasisText()
     {
-        if (AppState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.Current &&
-            AppState.ProcurementShoppingPlans.Count > 0)
-        {
-            return "Current route prices";
-        }
-
         return AppState.IsMarketEvidenceHydrating
             ? "Building actionable prices"
             : "Current acquisition prices";
@@ -125,12 +119,6 @@
     {
         var useProcurementRoute = AppState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.Current &&
                                   AppState.ProcurementShoppingPlans.Count > 0;
-        var quotePlans = useProcurementRoute
-            ? AppState.ProcurementShoppingPlans
-            : ShoppingPlans;
-        var marketBasis = useProcurementRoute
-            ? RecipePlanAcquisitionQuoteBasis.ProcurementRoute
-            : RecipePlanAcquisitionQuoteBasis.MarketAnalysis;
         _procurementRoutes = useProcurementRoute
             ? RecipePlanProcurementRouteSummaryBuilder.Build(
                 AppState.ProcurementShoppingPlans,
@@ -140,8 +128,8 @@
             CreateDisplayKey(),
             () => RecipePlanTreeDisplayBuilder.Build(
                 CurrentPlan,
-                quotePlans,
-                marketBasis,
+                ShoppingPlans,
+                RecipePlanAcquisitionQuoteBasis.MarketAnalysis,
                 AppState.IsMarketEvidenceHydrating,
                 AppState.PublishedMarketAnalysisScope?.PublishedAtUtc));
     }

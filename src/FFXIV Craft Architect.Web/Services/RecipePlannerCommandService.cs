@@ -51,7 +51,7 @@ public sealed record BuildRecipePlanRequest(
     string SelectedDataCenter,
     string SelectedRegion,
     MarketFetchScope PriceFetchScope,
-    IRecipeBuildDiagnosticRecorder? Diagnostics = null);
+    IRecipePlanBuildDiagnosticRecorder? Diagnostics = null);
 
 public sealed record BuildRecipePlanResult(
     bool Built,
@@ -235,7 +235,6 @@ public sealed class RecipePlannerCommandService
                 token => RunMarketAnalysisAfterBuildAsync(
                     builtPlan,
                     builtPlanSessionVersion,
-                    diagnostics,
                     token),
                 operation.Token);
             if (!operation.IsCurrent)
@@ -337,7 +336,7 @@ public sealed class RecipePlannerCommandService
     }
 
     private static T RunDiagnosticPhase<T>(
-        IRecipeBuildDiagnosticRecorder? diagnostics,
+        IRecipePlanBuildDiagnosticRecorder? diagnostics,
         string name,
         Func<T> action)
     {
@@ -347,7 +346,7 @@ public sealed class RecipePlannerCommandService
     }
 
     private static void RunDiagnosticPhase(
-        IRecipeBuildDiagnosticRecorder? diagnostics,
+        IRecipePlanBuildDiagnosticRecorder? diagnostics,
         string name,
         Action action)
     {
@@ -361,7 +360,7 @@ public sealed class RecipePlannerCommandService
     }
 
     private static async Task<T> RunDiagnosticPhaseAsync<T>(
-        IRecipeBuildDiagnosticRecorder? diagnostics,
+        IRecipePlanBuildDiagnosticRecorder? diagnostics,
         string name,
         Func<CancellationToken, Task<T>> action,
         CancellationToken cancellationToken)
@@ -475,7 +474,6 @@ public sealed class RecipePlannerCommandService
     private async Task<MarketAnalysisWorkflowResult> RunMarketAnalysisAfterBuildAsync(
         CraftingPlan builtPlan,
         long builtPlanSessionVersion,
-        IRecipeBuildDiagnosticRecorder? diagnostics,
         CancellationToken ct)
     {
         if (_appState.DeferAutomaticMarketAnalysisForBenchmark ||
@@ -573,7 +571,6 @@ public sealed class RecipePlannerCommandService
                 ? await RunMarketAnalysisAfterBuildAsync(
                     request.Plan,
                     activatedPlanSessionVersion,
-                    null,
                     operation.Token)
                 : new MarketAnalysisWorkflowResult(false, 0, 0, 0);
             if (!operation.IsCurrent)

@@ -26,7 +26,7 @@
 @inject NativePlanImportClassifier NativePlanImportClassifier
 @inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject MarketAnalysisDiagnosticDumpService MarketAnalysisDiagnosticDumpService
-@inject RecipeBuildDiagnosticService RecipeBuildDiagnosticService
+@inject RecipePlanDiagnosticDumpService RecipePlanDiagnosticDumpService
 @inject ILogger<MainLayout> Logger
 @implements IDisposable
 
@@ -260,10 +260,10 @@
                                          Style="padding-left: 32px;">
                                 Dump Selected Market Analysis Item
                             </MudMenuItem>
-                            <MudMenuItem OnClick="OnBuildRecipePlanWithDiagnostics"
+                            <MudMenuItem OnClick="OnDumpRecipePlanDiagnostics"
                                          Icon="@Icons.Material.Filled.Assignment"
                                          Style="padding-left: 32px;">
-                                Build Recipe Plan Diagnostic Dump
+                                Dump Recipe Plan Pricing State
                             </MudMenuItem>
                         }
                     }
@@ -820,7 +820,7 @@
         return $"market-analysis-{dump.Selection.ExportedItemId}-{itemName}-{timestamp}.json";
     }
 
-    private async Task OnBuildRecipePlanWithDiagnostics()
+    private async Task OnDumpRecipePlanDiagnostics()
     {
         if (!IsDebugToolsAvailable)
         {
@@ -830,27 +830,20 @@
 
         try
         {
-            var dump = await RecipeBuildDiagnosticService.BuildWithDiagnosticsAsync(CancellationToken.None);
-            var json = RecipeBuildDiagnosticService.Serialize(dump);
+            var dump = RecipePlanDiagnosticDumpService.BuildDump();
+            var json = RecipePlanDiagnosticDumpService.Serialize(dump);
             var bytes = System.Text.Encoding.UTF8.GetBytes(json);
             using var stream = new MemoryStream(bytes);
             using var streamRef = new DotNetStreamReference(stream);
-            var fileName = RecipeBuildDiagnosticService.CreateFileName(
+            var fileName = RecipePlanDiagnosticDumpService.CreateFileName(
                 dump.Context.CurrentPlanName,
                 dump.ExportedAtUtc);
             await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
-            Snackbar.Add($"Downloaded {fileName}", dump.Status switch
-            {
-                RecipeBuildDiagnosticStatus.Succeeded => Severity.Success,
-                RecipeBuildDiagnosticStatus.TimedOut => Severity.Warning,
-                RecipeBuildDiagnosticStatus.Canceled => Severity.Info,
-                RecipeBuildDiagnosticStatus.NoProjectItems => Severity.Info,
-                _ => Severity.Error
-            });
+            Snackbar.Add($"Downloaded {fileName}", Severity.Success);
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to run diagnostic build: {ex.Message}", Severity.Error);
+            Snackbar.Add($"Failed to capture Recipe Planner state: {ex.Message}", Severity.Error);
         }
     }
 
