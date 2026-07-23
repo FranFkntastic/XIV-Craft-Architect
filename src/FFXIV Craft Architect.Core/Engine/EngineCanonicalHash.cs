@@ -413,7 +413,7 @@ public static class EngineCanonicalHash
         Func<CancellationToken, ValueTask>? cooperativeYield,
         CancellationToken cancellationToken)
     {
-        private const int YieldInterval = 64;
+        private const int YieldInterval = 4096;
         private int _nodes;
 
         public async ValueTask AdvanceAsync()
