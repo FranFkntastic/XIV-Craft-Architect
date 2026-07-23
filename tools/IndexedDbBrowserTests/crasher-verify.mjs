@@ -785,6 +785,42 @@ workflow: try {
   await withDeadline('wait for route generation banner to clear', () => page.waitForFunction(
     () => !/Generating route|Updating Route/i.test(document.body?.innerText || '')), budgets.navigationMs);
   stage('procurement-route-visible', { responseMs: Math.round(performance.now() - interactionStarted) });
+  const slider = page.locator('#procurement-travel-clutch');
+  await withDeadline('wait for travel tolerance slider', () => slider.waitFor({ state: 'visible' }), budgets.navigationMs);
+  const previousTolerance = await withDeadline('read travel tolerance', () => slider.inputValue());
+  const selectedTolerance = previousTolerance === '11' ? '0' : '11';
+  observeConsoleProgress();
+  const routeRunsBeforeSelection = report.console.filter(entry =>
+    /explicit route generation starting|route reconciliation starting/i.test(entry.text)).length;
+  await withDeadline('select precomputed travel tolerance', () => slider.evaluate((element, value) => {
+    element.value = value;
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, selectedTolerance), budgets.navigationMs);
+  const selectedLifecycle = await waitForLifecycle('travel-tolerance-local-selection', budgets.navigationMs, snapshot => {
+    const data = snapshot?.data || {};
+    return data.routeValidity === 'Current' &&
+      data.routeReconciling === 'false' &&
+      data.routeReconciliationScheduled === 'false' &&
+      data.isBusy === 'false' &&
+      !data.activeWorkflows &&
+      data.dirtyPersistedBuckets === 'None';
+  });
+  await page.waitForTimeout(500);
+  observeConsoleProgress();
+  const routeRunsAfterSelection = report.console.filter(entry =>
+    /explicit route generation starting|route reconciliation starting/i.test(entry.text)).length;
+  if (routeRunsAfterSelection !== routeRunsBeforeSelection) {
+    throw new OracleFailure(
+      'travel-tolerance-regenerated-route',
+      'Selecting a published travel tolerance started a new procurement solve.',
+      { previousTolerance, selectedTolerance, routeRunsBeforeSelection, routeRunsAfterSelection });
+  }
+  stage('travel-tolerance-selected-locally', {
+    previousTolerance,
+    selectedTolerance,
+    lifecycle: selectedLifecycle
+  });
   await withDeadline('navigate to recipe planner', () => page.getByRole('button', { name: 'Recipe Planner', exact: true }).click(), budgets.navigationMs);
   await withDeadline('navigate back to procurement plan', () => page.getByRole('button', { name: 'Procurement Plan', exact: true }).click(), budgets.navigationMs);
   await withDeadline('reopen procurement route', () => page.locator('#procurement-route-title').waitFor({ state: 'visible' }), budgets.navigationMs);
@@ -814,7 +850,26 @@ workflow: try {
       data.planSessionVersion === data.routeBasisPlanSessionVersion &&
       data.marketIntelligenceId === data.routeBasisMarketIntelligenceId;
   });
-  stage('autosave-restored-and-route-regenerated-after-reload', { lifecycle: restored });
+  const restoredTolerance = await withDeadline('read restored travel tolerance', () =>
+    page.locator('#procurement-travel-clutch').inputValue());
+  observeConsoleProgress();
+  const routeRunsAfterReload = report.console.filter(entry =>
+    /explicit route generation starting|route reconciliation starting/i.test(entry.text)).length;
+  if (restoredTolerance !== selectedTolerance || routeRunsAfterReload !== routeRunsBeforeSelection) {
+    throw new OracleFailure(
+      'travel-tolerance-not-restored-locally',
+      'The selected travel tolerance did not survive reload as the current precomputed route.',
+      {
+        selectedTolerance,
+        restoredTolerance,
+        routeRunsBeforeSelection,
+        routeRunsAfterReload
+      });
+  }
+  stage('autosave-restored-with-precomputed-travel-route', {
+    selectedTolerance,
+    lifecycle: restored
+  });
   report.finalBodyPreview = (await withDeadline('read final body', () => page.locator('body').innerText())).slice(0, 4000);
   report.transientConsoleDiagnostics = report.console.filter(entry =>
     evidenceMode === 'live' &&

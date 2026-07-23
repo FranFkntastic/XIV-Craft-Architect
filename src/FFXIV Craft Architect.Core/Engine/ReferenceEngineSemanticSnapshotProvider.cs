@@ -6,7 +6,7 @@ namespace FFXIV_Craft_Architect.Core.Engine;
 public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSemanticSnapshotProvider
 {
     private const string InputSchemaVersion = "1";
-    private const string OutputSchemaVersion = "9";
+    private const string OutputSchemaVersion = "10";
     private static readonly JsonSerializerOptions InputJsonOptions = EngineJsonSerializerOptions.CreateWire();
 
     public ReferenceEnginePreparedInput PrepareInput(EngineRequestEnvelope request)
@@ -220,7 +220,10 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                         item.ItemName,
                         item.CheapestEligibleGilCost,
                         item.SelectedGilCost))
-                    .ToArray());
+                    .ToArray(),
+                EngineCanonicalHash.Compute(
+                    new { Domain = "route-tolerance-selections-v1", Value = decision.ToleranceSelections },
+                    InputJsonOptions));
 
     private static EngineRouteLegSnapshot CreateLeg(
         int order,

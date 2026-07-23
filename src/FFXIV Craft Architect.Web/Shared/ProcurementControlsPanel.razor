@@ -3,6 +3,7 @@
 @using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
 @inject ISettingsService Settings
+@inject IndexedDbService IndexedDb
 
 <aside class="pp-controls-column" aria-labelledby="procurement-page-title">
     <h1 id="procurement-page-title" class="pp-page-title">Procurement Plan</h1>
@@ -31,7 +32,8 @@
                                             RouteFailure="AppState.ProcurementRouteFailure"
                                             Disabled="@(!RouteGenerationEnabled)"
                                             TravelPriority="AppState.ProcurementTravelPriority"
-                                            TravelToleranceChanged="OnProcurementTravelToleranceChanged" />
+                                            TravelToleranceChanged="OnProcurementTravelToleranceChanged"
+                                            TravelToleranceCommitted="OnProcurementTravelToleranceCommitted" />
                 <p id="procurement-travel-help">@GetTravelPreferenceHelp()</p>
                 <div class="pp-route-policies" aria-label="Route policies">
                     <p class="pp-route-policy-note">
@@ -148,8 +150,27 @@
     private Task OnProcurementSearchEntireRegionChanged(bool value) =>
         ApplyProcurementSettingsAsync(searchEntireRegion: value);
 
-    private Task OnProcurementTravelToleranceChanged(int value) =>
-        ApplyProcurementSettingsAsync(travelTolerance: value);
+    private async Task OnProcurementTravelToleranceChanged(int value)
+    {
+        if (AppState.TrySelectProcurementTravelTolerance(value))
+            return;
+
+        await ApplyProcurementSettingsAsync(travelTolerance: value);
+    }
+
+    private async Task OnProcurementTravelToleranceCommitted(int value)
+    {
+        if (AppState.ProcurementTravelTolerance != value)
+            await OnProcurementTravelToleranceChanged(value);
+
+        await Settings.SetAsync("procurement.travel_tolerance", AppState.ProcurementTravelTolerance);
+
+        if (AppState.ProcurementRouteValidity != ProcurementRoutePublicationValidity.Current)
+            return;
+
+        if (await IndexedDb.AutoSaveStateAsync(AppState, skipIfInFlight: false))
+            AppState.RecordAutoSaveCompleted(DateTime.Now);
+    }
 
     private string GetTravelPreferenceHelp()
     {

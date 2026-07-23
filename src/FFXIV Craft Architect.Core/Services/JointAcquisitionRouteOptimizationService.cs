@@ -125,32 +125,23 @@ public sealed class JointAcquisitionRouteOptimizationService
         }
 
         var cheapestTotal = evaluated.Min(candidate => candidate.TotalGilCost);
-        var maximumPremiumRate = MarketRouteScoring.GetMaximumPremiumRate(config.TravelTolerance);
-        var maximumTotal = GetMaximumTotal(cheapestTotal, maximumPremiumRate);
-        var finalists = new List<EvaluatedVariant>();
+        var travelEvaluated = new List<EvaluatedVariant>();
         var travelSearchWasTruncated = false;
-        if (config.TravelTolerance != 11)
-        {
-            finalists.Add(OrderFinalists(
-                    evaluated.Where(candidate => candidate.TotalGilCost <= maximumTotal),
-                    config)
-                .First());
-        }
-
+        var precomputeToleranceFrontier = execution.MaxTravelRouteEvaluations.HasValue;
+        var fullFrontierConfig = precomputeToleranceFrontier
+            ? CopyConfig(config, travelTolerance: 0)
+            : config;
+        var currentMaximumTotal = GetMaximumTotal(
+            cheapestTotal,
+            MarketRouteScoring.GetMaximumPremiumRate(config.TravelTolerance));
         var candidatesByTravelPotential = OrderFinalists(
-                evaluated.Where(candidate =>
-                    AcquisitionVariantFrontierBuilder.EstimateLowerBound(
+                precomputeToleranceFrontier
+                    ? evaluated
+                    : evaluated.Where(candidate => AcquisitionVariantFrontierBuilder.EstimateLowerBound(
                         candidate.Variant,
-                        lowerBoundUnitCosts) <= maximumTotal),
-                config)
+                        lowerBoundUnitCosts) <= currentMaximumTotal),
+                fullFrontierConfig)
             .ToList();
-        var excludedByTravelCostFloor = evaluated.Count - candidatesByTravelPotential.Count;
-        if (excludedByTravelCostFloor > 0)
-        {
-            progress?.Report(
-                $"Excluded {excludedByTravelCostFloor:N0} acquisition plans whose admissible gil floor " +
-                "exceeds the travel premium ceiling.");
-        }
 
         var completedTravelRoutes = 0;
         progress?.Report(
@@ -159,12 +150,15 @@ public sealed class JointAcquisitionRouteOptimizationService
         foreach (var candidate in candidatesByTravelPotential)
         {
             ct.ThrowIfCancellationRequested();
-            if (config.TravelTolerance == 11 || candidate.Variant.MarketDemand.Count == 0)
+            if (candidate.Variant.MarketDemand.Count == 0)
             {
-                if (candidate.TotalGilCost <= maximumTotal)
-                {
-                    finalists.Add(candidate);
-                }
+                travelEvaluated.Add(candidate);
+                continue;
+            }
+
+            if (!precomputeToleranceFrontier && config.TravelTolerance == 11)
+            {
+                travelEvaluated.Add(candidate);
                 continue;
             }
 
@@ -175,17 +169,16 @@ public sealed class JointAcquisitionRouteOptimizationService
                 break;
             }
 
-            var marketBudget = maximumTotal == long.MaxValue
-                ? (long?)null
-                : Math.Max(0, maximumTotal - candidate.Variant.FixedGilCost);
             var route = await OptimizeRouteAsync(
                 candidate.MarketPlans,
-                config,
+                fullFrontierConfig,
                 includeSplitPurchases,
                 execution,
                 routeSession,
                 ct,
-                marketBudget);
+                precomputeToleranceFrontier
+                    ? null
+                    : Math.Max(0, currentMaximumTotal - candidate.Variant.FixedGilCost));
             anyRouteSearchWasTruncated |= route.Decision?.RouteSearchWasTruncated ?? false;
             completedTravelRoutes++;
             progress?.Report(
@@ -198,10 +191,8 @@ public sealed class JointAcquisitionRouteOptimizationService
             }
 
             var total = Add(candidate.Variant.FixedGilCost, route.Decision?.SelectedGilCost ?? 0);
-            if (total <= maximumTotal)
-            {
-                finalists.Add(candidate with { Route = route, TotalGilCost = total });
-            }
+            var routedCandidate = candidate with { Route = route, TotalGilCost = total };
+            travelEvaluated.Add(routedCandidate);
         }
 
         if (travelSearchWasTruncated)
@@ -211,7 +202,6 @@ public sealed class JointAcquisitionRouteOptimizationService
                 "using the best complete route found so far.");
         }
 
-        var selected = OrderFinalists(finalists, config).First();
         var cheapest = evaluated
             .Where(candidate => candidate.TotalGilCost == cheapestTotal)
             .OrderBy(candidate => candidate.Route.Decision?.SelectedEvidencePenalty ?? 0)
@@ -221,48 +211,38 @@ public sealed class JointAcquisitionRouteOptimizationService
         // purchase. The tolerance pass expands those candidates again so it can discover
         // consolidated routes. Feed both passes into the displayed frontier; otherwise the
         // selected route can be absent from the clutch even though the recommendation is valid.
-        var representativeRoutes = BuildJointRepresentativeRoutes(
-            evaluated.Concat(finalists).ToList(),
+        var toleranceSelections = BuildJointToleranceSelections(
+            evaluated.Concat(travelEvaluated).ToList(),
+            plan,
+            evidenceByItem,
             config,
             cheapestTotal);
-        var optimizedPlan = ApplyVariant(plan, selected.Variant);
+        var representativeRoutes = toleranceSelections
+            .Select(selection => new MarketRouteFrontierOption(
+                selection.MinimumTolerance,
+                selection.MaximumTolerance,
+                selection.GilCost,
+                selection.WorldStops,
+                selection.DataCenterTransfers))
+            .ToArray();
+        var currentSelection = toleranceSelections.Single(selection => selection.Contains(config.TravelTolerance));
+        var optimizedPlan = ApplyAcquisitionDecisions(plan, currentSelection.AcquisitionDecisions);
         var activeItems = AcquisitionPlanningService.GetActiveProcurementItems(optimizedPlan);
-        var selectedPlans = selected.Route.ShoppingPlans.ToList();
-        foreach (var item in activeItems.Where(item => selectedPlans.All(plan => plan.ItemId != item.ItemId)))
-        {
-            if (evidenceByItem.TryGetValue(item.ItemId, out var evidence))
-            {
-                selectedPlans.Add(AdjustEvidence(
-                    evidence,
-                    new MarketDemand(item.TotalQuantity, item.RequiresHq ? item.TotalQuantity : 0, item.Name, item.IconId)));
-            }
-            else
-            {
-                selectedPlans.Add(new DetailedShoppingPlan
-                {
-                    ItemId = item.ItemId,
-                    Name = item.Name,
-                    IconId = item.IconId,
-                    QuantityNeeded = item.TotalQuantity,
-                    Error = "No market evidence is available for this acquisition."
-                });
-            }
-        }
-        _marketShoppingService.ApplyVendorPurchaseOverrides(optimizedPlan, selectedPlans);
+        var selectedPlans = ProcurementRouteExecutionService
+            .CompactResultShoppingPlans(currentSelection.ShoppingPlans);
 
         var routeDecision = CreateJointDecision(
-            selected.Route.Decision,
+            currentSelection,
             config,
             cheapestTotal,
-            selected.TotalGilCost,
-            selected.Variant.FixedGilCost,
             cheapest.Route.Decision,
             representativeRoutes,
             frontierSearch.WasTruncated,
             anyRouteSearchWasTruncated,
             travelSearchWasTruncated,
             completedTravelRoutes,
-            frontierSearch.CombinationEvaluations);
+            frontierSearch.CombinationEvaluations,
+            toleranceSelections);
 
         return new JointAcquisitionRouteOptimizationResult(
             optimizedPlan,
@@ -476,6 +456,28 @@ public sealed class JointAcquisitionRouteOptimizationService
         return clone;
     }
 
+    private static CraftingPlan ApplyAcquisitionDecisions(
+        CraftingPlan source,
+        IReadOnlyList<ProcurementAcquisitionDecision> decisions)
+    {
+        var clone = ClonePlan(source);
+        var decisionsByNode = decisions.ToDictionary(decision => decision.NodeId, StringComparer.Ordinal);
+        foreach (var node in EnumerateNodes(clone.RootItems))
+        {
+            if (!decisionsByNode.TryGetValue(node.NodeId, out var decision))
+            {
+                throw new InvalidOperationException("A tolerance selection does not cover the complete acquisition plan.");
+            }
+            node.Source = decision.Source;
+            node.SourceReason = decision.SourceReason;
+        }
+        if (decisionsByNode.Count != EnumerateNodes(clone.RootItems).Count())
+        {
+            throw new InvalidOperationException("A tolerance selection contains unknown acquisition decisions.");
+        }
+        return clone;
+    }
+
     private static CraftingPlan ClonePlan(CraftingPlan source) => new()
     {
         Id = source.Id,
@@ -523,78 +525,69 @@ public sealed class JointAcquisitionRouteOptimizationService
     }
 
     private static MarketRouteDecision CreateJointDecision(
-        MarketRouteDecision? route,
+        MarketRouteToleranceSelection selected,
         MarketAnalysisConfig config,
         long cheapestTotal,
-        long selectedTotal,
-        long fixedGilCost,
         MarketRouteDecision? cheapestRoute,
         IReadOnlyList<MarketRouteFrontierOption> representativeRoutes,
         bool acquisitionSearchWasTruncated,
         bool routeSearchWasTruncated,
         bool travelSearchWasTruncated,
         int travelRoutesEvaluated,
-        long acquisitionCombinationEvaluations)
+        long acquisitionCombinationEvaluations,
+        IReadOnlyList<MarketRouteToleranceSelection> toleranceSelections)
     {
         return new MarketRouteDecision(
             config.TravelTolerance,
             MarketRouteScoring.GetMaximumPremiumRate(config.TravelTolerance),
             cheapestTotal,
-            selectedTotal,
-            route?.SelectedEvidencePenalty ?? 0,
+            selected.GilCost,
+            selected.EvidencePenalty,
             cheapestRoute?.SelectedWorldStops ?? 0,
-            route?.SelectedWorldStops ?? 0,
+            selected.WorldStops,
             cheapestRoute?.SelectedDataCenterTransfers ?? 0,
-            route?.SelectedDataCenterTransfers ?? 0,
+            selected.DataCenterTransfers,
             config.StartFromHomeDataCenter && !string.IsNullOrWhiteSpace(config.HomeDataCenter),
             config.StartFromHomeDataCenter ? config.HomeDataCenter : null,
             config.TravelPriority,
             representativeRoutes,
-            route?.ItemDecisions)
+            selected.ItemDecisions)
         {
-            FixedAcquisitionGilCost = fixedGilCost,
+            FixedAcquisitionGilCost = selected.FixedAcquisitionGilCost,
             AcquisitionSearchWasTruncated = acquisitionSearchWasTruncated,
             RouteSearchWasTruncated = routeSearchWasTruncated,
             TravelSearchWasTruncated = travelSearchWasTruncated,
             TravelRoutesEvaluated = travelRoutesEvaluated,
-            AcquisitionCombinationEvaluations = acquisitionCombinationEvaluations
+            AcquisitionCombinationEvaluations = acquisitionCombinationEvaluations,
+            ToleranceSelections = toleranceSelections
         };
     }
 
-    private static IReadOnlyList<MarketRouteFrontierOption> BuildJointRepresentativeRoutes(
+    private IReadOnlyList<MarketRouteToleranceSelection> BuildJointToleranceSelections(
         IReadOnlyList<EvaluatedVariant> evaluated,
+        CraftingPlan sourcePlan,
+        IReadOnlyDictionary<int, DetailedShoppingPlan> evidenceByItem,
         MarketAnalysisConfig config,
         long cheapestTotal)
     {
         var choices = evaluated
-            .SelectMany(candidate =>
-            {
-                var routes = candidate.Route.Decision?.RepresentativeRoutes;
-                if (routes == null || routes.Count == 0)
-                {
-                    return
-                    [
-                        new JointRouteChoice(
-                            candidate.TotalGilCost,
-                            candidate.Route.Decision?.SelectedWorldStops ?? 0,
-                            candidate.Route.Decision?.SelectedDataCenterTransfers ?? 0,
-                            candidate.Variant.DecisionKey)
-                    ];
-                }
-
-                return routes.Select(route => new JointRouteChoice(
-                    Add(candidate.Variant.FixedGilCost, route.GilCost),
-                    route.WorldStops,
-                    route.DataCenterTransfers,
-                    $"{candidate.Variant.DecisionKey}|{route.GilCost}:{route.WorldStops}:{route.DataCenterTransfers}"));
-            })
-            .DistinctBy(choice => (choice.GilCost, choice.WorldStops, choice.DataCenterTransfers))
+            .SelectMany(candidate => GetRouteSelections(candidate).Select(selection =>
+                new JointToleranceChoice(
+                    candidate,
+                    selection,
+                    Add(candidate.Variant.FixedGilCost, selection.GilCost),
+                    $"{candidate.Variant.DecisionKey}|{selection.SelectionKey}")))
+            .GroupBy(choice => (choice.GilCost, choice.Selection.WorldStops, choice.Selection.DataCenterTransfers))
+            .Select(group => group
+                .OrderBy(choice => choice.Selection.EvidencePenalty)
+                .ThenBy(choice => choice.Key, StringComparer.Ordinal)
+                .First())
             .ToList();
-        var frontier = new List<JointRouteChoice>();
+        var frontier = new List<JointToleranceChoice>();
         foreach (var candidate in choices
                      .OrderBy(choice => choice.GilCost)
-                     .ThenBy(choice => choice.WorldStops)
-                     .ThenBy(choice => choice.DataCenterTransfers)
+                     .ThenBy(choice => choice.Selection.WorldStops)
+                     .ThenBy(choice => choice.Selection.DataCenterTransfers)
                      .ThenBy(choice => choice.Key, StringComparer.Ordinal))
         {
             if (frontier.Any(other => Dominates(other, candidate)))
@@ -605,55 +598,140 @@ public sealed class JointAcquisitionRouteOptimizationService
             frontier.Add(candidate);
         }
 
-        var representatives = new List<MarketRouteFrontierOption>();
-        JointRouteChoice? previous = null;
+        var selections = new List<MarketRouteToleranceSelection>();
+        JointToleranceChoice? previous = null;
         for (var tolerance = 0; tolerance <= 11; tolerance++)
         {
-            var premium = MarketRouteScoring.GetMaximumPremiumRate(tolerance);
-            var eligible = frontier.Where(choice => premium == null ||
-                choice.GilCost <= cheapestTotal * (1m + premium.Value));
-            var selected = config.TravelPriority == MarketTravelPriority.WorldVisitsFirst
-                ? eligible.OrderBy(choice => choice.WorldStops)
-                    .ThenBy(choice => choice.DataCenterTransfers)
-                    .ThenBy(choice => choice.GilCost)
-                    .ThenBy(choice => choice.Key, StringComparer.Ordinal)
-                    .First()
-                : eligible.OrderBy(choice => choice.DataCenterTransfers)
-                    .ThenBy(choice => choice.WorldStops)
-                    .ThenBy(choice => choice.GilCost)
-                    .ThenBy(choice => choice.Key, StringComparer.Ordinal)
-                    .First();
+            var maximum = GetMaximumTotal(
+                cheapestTotal,
+                MarketRouteScoring.GetMaximumPremiumRate(tolerance));
+            var eligible = frontier.Where(choice => choice.GilCost <= maximum);
+            var travelOrdered = config.TravelPriority == MarketTravelPriority.WorldVisitsFirst
+                ? eligible.OrderBy(choice => choice.Selection.WorldStops)
+                    .ThenBy(choice => choice.Selection.DataCenterTransfers)
+                : eligible.OrderBy(choice => choice.Selection.DataCenterTransfers)
+                    .ThenBy(choice => choice.Selection.WorldStops);
+            var selected = travelOrdered
+                .ThenBy(choice => choice.Selection.EvidencePenalty)
+                .ThenBy(choice => choice.GilCost)
+                .ThenBy(choice => choice.Key, StringComparer.Ordinal)
+                .First();
 
             if (previous != null &&
-                previous.GilCost == selected.GilCost &&
-                previous.WorldStops == selected.WorldStops &&
-                previous.DataCenterTransfers == selected.DataCenterTransfers)
+                string.Equals(previous.Key, selected.Key, StringComparison.Ordinal) &&
+                selections.Count > 0)
             {
-                representatives[^1] = representatives[^1] with { MaximumTolerance = tolerance };
+                selections[^1] = selections[^1] with { MaximumTolerance = tolerance };
             }
             else
             {
-                representatives.Add(new MarketRouteFrontierOption(
+                selections.Add(CreateJointToleranceSelection(
                     tolerance,
-                    tolerance,
-                    selected.GilCost,
-                    selected.WorldStops,
-                    selected.DataCenterTransfers));
+                    selected,
+                    sourcePlan,
+                    evidenceByItem));
             }
-
             previous = selected;
         }
 
-        return representatives;
+        return selections;
     }
 
-    private static bool Dominates(JointRouteChoice left, JointRouteChoice right) =>
+    private static IReadOnlyList<MarketRouteToleranceSelection> GetRouteSelections(EvaluatedVariant candidate)
+    {
+        if (candidate.Route.Decision?.ToleranceSelections.Count > 0)
+        {
+            return candidate.Route.Decision.ToleranceSelections;
+        }
+
+        var decision = candidate.Route.Decision;
+        return
+        [
+            new MarketRouteToleranceSelection(
+                decision?.TravelTolerance ?? 11,
+                decision?.TravelTolerance ?? 11,
+                candidate.Variant.DecisionKey,
+                decision?.SelectedGilCost ?? 0,
+                decision?.SelectedEvidencePenalty ?? 0,
+                decision?.SelectedWorldStops ?? 0,
+                decision?.SelectedDataCenterTransfers ?? 0,
+                0,
+                ProcurementRouteExecutionService.CompactResultShoppingPlans(candidate.Route.ShoppingPlans),
+                [],
+                decision?.ItemPremiums ?? [])
+        ];
+    }
+
+    private MarketRouteToleranceSelection CreateJointToleranceSelection(
+        int tolerance,
+        JointToleranceChoice selected,
+        CraftingPlan sourcePlan,
+        IReadOnlyDictionary<int, DetailedShoppingPlan> evidenceByItem)
+    {
+        var optimizedPlan = ApplyVariant(sourcePlan, selected.Candidate.Variant);
+        var activeItems = AcquisitionPlanningService.GetActiveProcurementItems(optimizedPlan);
+        var selectedPlans = ProcurementRouteExecutionService
+            .CompactResultShoppingPlans(selected.Selection.ShoppingPlans);
+        foreach (var item in activeItems.Where(item => selectedPlans.All(plan => plan.ItemId != item.ItemId)))
+        {
+            if (evidenceByItem.TryGetValue(item.ItemId, out var evidence))
+            {
+                selectedPlans.Add(AdjustEvidence(
+                    evidence,
+                    new MarketDemand(item.TotalQuantity, item.RequiresHq ? item.TotalQuantity : 0, item.Name, item.IconId)));
+            }
+            else
+            {
+                selectedPlans.Add(new DetailedShoppingPlan
+                {
+                    ItemId = item.ItemId,
+                    Name = item.Name,
+                    IconId = item.IconId,
+                    QuantityNeeded = item.TotalQuantity,
+                    Error = "No market evidence is available for this acquisition."
+                });
+            }
+        }
+        _marketShoppingService.ApplyVendorPurchaseOverrides(optimizedPlan, selectedPlans);
+
+        return new MarketRouteToleranceSelection(
+            tolerance,
+            tolerance,
+            selected.Key,
+            selected.GilCost,
+            selected.Selection.EvidencePenalty,
+            selected.Selection.WorldStops,
+            selected.Selection.DataCenterTransfers,
+            selected.Candidate.Variant.FixedGilCost,
+            ProcurementRouteExecutionService.CompactResultShoppingPlans(selectedPlans),
+            CaptureAcquisitionDecisions(optimizedPlan),
+            selected.Selection.ItemDecisions);
+    }
+
+    private static IReadOnlyList<ProcurementAcquisitionDecision> CaptureAcquisitionDecisions(CraftingPlan plan) =>
+        EnumerateNodes(plan.RootItems)
+            .Select(node => new ProcurementAcquisitionDecision(node.NodeId, node.Source, node.SourceReason))
+            .ToArray();
+
+    private static IEnumerable<PlanNode> EnumerateNodes(IEnumerable<PlanNode> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            yield return node;
+            foreach (var child in EnumerateNodes(node.Children))
+            {
+                yield return child;
+            }
+        }
+    }
+
+    private static bool Dominates(JointToleranceChoice left, JointToleranceChoice right) =>
         left.GilCost <= right.GilCost &&
-        left.WorldStops <= right.WorldStops &&
-        left.DataCenterTransfers <= right.DataCenterTransfers &&
+        left.Selection.WorldStops <= right.Selection.WorldStops &&
+        left.Selection.DataCenterTransfers <= right.Selection.DataCenterTransfers &&
         (left.GilCost < right.GilCost ||
-         left.WorldStops < right.WorldStops ||
-         left.DataCenterTransfers < right.DataCenterTransfers);
+         left.Selection.WorldStops < right.Selection.WorldStops ||
+         left.Selection.DataCenterTransfers < right.Selection.DataCenterTransfers);
 
     private static MarketAnalysisConfig CopyConfig(MarketAnalysisConfig source, int travelTolerance) => new()
     {
@@ -762,7 +840,11 @@ public sealed class JointAcquisitionRouteOptimizationService
         ProcurementRouteOptimizationResult Route,
         long TotalGilCost);
 
-    private sealed record JointRouteChoice(long GilCost, int WorldStops, int DataCenterTransfers, string Key);
+    private sealed record JointToleranceChoice(
+        EvaluatedVariant Candidate,
+        MarketRouteToleranceSelection Selection,
+        long GilCost,
+        string Key);
 
     internal sealed record AcquisitionFrontierBuildResult(
         IReadOnlyList<AcquisitionVariant> Variants,

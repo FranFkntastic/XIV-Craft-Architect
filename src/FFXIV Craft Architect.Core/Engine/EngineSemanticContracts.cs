@@ -124,7 +124,8 @@ public sealed record EngineRouteDecisionSnapshot(
     bool TravelSearchWasTruncated,
     int TravelRoutesEvaluated,
     IReadOnlyList<EngineRouteFrontierOptionSnapshot> FrontierOptions,
-    IReadOnlyList<EngineRouteItemDecisionSnapshot> ItemDecisions);
+    IReadOnlyList<EngineRouteItemDecisionSnapshot> ItemDecisions,
+    string ToleranceSelectionsHash = "");
 
 public sealed record EngineRouteFrontierOptionSnapshot(
     int Order,

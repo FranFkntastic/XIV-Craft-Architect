@@ -89,6 +89,65 @@ public sealed class ProcurementSafetyContractTests
         Assert.Empty(state.ProcurementShoppingPlans);
     }
 
+    [Fact]
+    public void TravelToleranceSelection_AppliesPublishedRouteWithoutSchedulingExecution()
+    {
+        var state = CreateState(100);
+        var nodeId = Assert.Single(state.CurrentPlan!.RootItems).NodeId;
+        var decisions = new[]
+        {
+            new ProcurementAcquisitionDecision(
+                nodeId,
+                AcquisitionSource.MarketBuyNq,
+                AcquisitionSourceReason.SystemDefault)
+        };
+        var toleranceSelections = new[]
+        {
+            new MarketRouteToleranceSelection(
+                0, 5, "fewest", 500, 0, 1, 0, 0,
+                [RoutePlan(100, "Siren")], decisions, []),
+            new MarketRouteToleranceSelection(
+                6, 11, "cheapest", 400, 0, 2, 0, 0,
+                [RoutePlan(100, "Faerie")], decisions, [])
+        };
+        var decision = new MarketRouteDecision(
+            0, null, 400, 500, 0, 2, 1, 0, 0, false, null,
+            FrontierOptions:
+            [
+                new MarketRouteFrontierOption(0, 5, 500, 1, 0),
+                new MarketRouteFrontierOption(6, 11, 400, 2, 0)
+            ])
+        {
+            ToleranceSelections = toleranceSelections
+        };
+        state.ReplaceProcurementOverlay([RoutePlan(100, "Siren")], decision);
+        var workflow = new FakeWorkflow();
+        using var reconciliation = new ProcurementRouteReconciliationService(
+            state,
+            workflow,
+            new CancellableOperationService(state),
+            NullLogger<ProcurementRouteReconciliationService>.Instance,
+            new ProcurementRouteAvailability(true),
+            TimeSpan.Zero);
+        reconciliation.Start();
+
+        var selected = state.TrySelectProcurementTravelTolerance(11);
+
+        Assert.True(selected);
+        Assert.Equal(11, state.ProcurementTravelTolerance);
+        Assert.Equal(ProcurementRoutePublicationValidity.Current, state.ProcurementRouteValidity);
+        Assert.Equal("Faerie", Assert.Single(state.ProcurementShoppingPlans).RecommendedWorld?.WorldName);
+        Assert.Equal(400, state.ProcurementRouteDecision?.SelectedGilCost);
+        Assert.False(reconciliation.IsScheduled);
+        Assert.Equal(0, workflow.Calls);
+    }
+
+    [Fact]
+    public void ProcurementScope_DefaultsToEntireRegion()
+    {
+        Assert.True(new AppState().ProcurementSearchEntireRegion);
+    }
+
     private static ProcurementWorkflowService CreateService(
         AppState state,
         IProcurementRouteExecutionService execution,

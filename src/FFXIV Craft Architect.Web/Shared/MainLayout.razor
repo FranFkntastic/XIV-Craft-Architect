@@ -413,7 +413,7 @@
             var selectedDataCenter = string.IsNullOrEmpty(AppState.SelectedDataCenter)
                 ? defaultDc
                 : AppState.SelectedDataCenter;
-            var procurementSearchEntireRegion = await Settings.GetAsync("procurement.search_entire_region", false);
+            var procurementSearchEntireRegion = await Settings.GetAsync("procurement.search_entire_region", true);
             var procurementEnableSplits = await Settings.GetAsync("procurement.enable_split_world_purchases", true);
             var procurementTravelTolerance = await Settings.GetAsync("procurement.travel_tolerance", 0);
             var procurementExclusionDuration = await Settings.GetAsync("procurement.world_exclusion_duration_minutes", 60);

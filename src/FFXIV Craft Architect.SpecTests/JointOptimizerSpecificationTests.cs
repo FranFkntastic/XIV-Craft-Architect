@@ -82,6 +82,61 @@ public sealed class JointOptimizerSpecificationTests
     }
 
     [Fact]
+    public async Task InteractiveSolvePublishesApplicablePlansForEveryTravelTolerance()
+    {
+        var childA = SpecificationFixtures.MarketNode(201, "Ingredient A", nodeId: "ingredient-a");
+        var childB = SpecificationFixtures.MarketNode(202, "Ingredient B", nodeId: "ingredient-b");
+        childA.SourceReason = AcquisitionSourceReason.SystemDefault;
+        childB.SourceReason = AcquisitionSourceReason.SystemDefault;
+        var root = new PlanNode
+        {
+            ItemId = 100,
+            Name = "Finished",
+            NodeId = "finished",
+            Quantity = 1,
+            Source = AcquisitionSource.Craft,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            Children = [childA, childB]
+        };
+        childA.Parent = root;
+        childB.Parent = root;
+        var evidence = new[]
+        {
+            SpecificationFixtures.Evidence(100, root.Name, 1, SpecificationFixtures.World("Aether", "Siren", 1, 102)),
+            SpecificationFixtures.Evidence(201, childA.Name, 1, SpecificationFixtures.World("Aether", "Faerie", 1, 50)),
+            SpecificationFixtures.Evidence(202, childB.Name, 1, SpecificationFixtures.World("Aether", "Gilgamesh", 1, 50))
+        };
+
+        var result = await SpecificationFixtures.JointService().OptimizeAsync(
+            new CraftingPlan { RootItems = [root] },
+            evidence,
+            SpecificationFixtures.Config(11),
+            includeSplitPurchases: true,
+            new MarketAnalysisExecutionOptions
+            {
+                YieldEveryItems = 0,
+                ProgressEveryItems = 0,
+                MaxTravelRouteEvaluations = 8
+            });
+
+        var decision = Assert.IsType<MarketRouteDecision>(result.RouteDecision);
+        Assert.All(Enumerable.Range(0, 12), tolerance =>
+            Assert.Single(decision.ToleranceSelections, selection => selection.Contains(tolerance)));
+        var fewestStops = Assert.Single(decision.ToleranceSelections, selection => selection.Contains(0));
+        var lowestCost = Assert.Single(decision.ToleranceSelections, selection => selection.Contains(11));
+        Assert.Equal(102, fewestStops.GilCost);
+        Assert.Equal([100], fewestStops.ShoppingPlans.Select(plan => plan.ItemId).ToArray());
+        Assert.Equal(AcquisitionSource.MarketBuyNq,
+            Assert.Single(fewestStops.AcquisitionDecisions, item => item.NodeId == "finished").Source);
+        Assert.Equal(100, lowestCost.GilCost);
+        Assert.Equal([201, 202], lowestCost.ShoppingPlans.Select(plan => plan.ItemId).Order().ToArray());
+        Assert.Equal(AcquisitionSource.Craft,
+            Assert.Single(lowestCost.AcquisitionDecisions, item => item.NodeId == "finished").Source);
+    }
+
+    [Fact]
     public async Task PartialMarketRouteCannotBecomeCompleteJointIncumbent()
     {
         var unfillable = SpecificationFixtures.MarketNode(300, "Unfillable", quantity: 5, hq: true);

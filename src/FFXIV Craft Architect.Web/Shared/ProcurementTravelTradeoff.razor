@@ -93,7 +93,8 @@
                aria-labelledby="procurement-travel-label"
                aria-describedby="procurement-travel-help"
                aria-valuetext="@MarketRouteScoring.GetToleranceLabel(TravelTolerance)"
-               @oninput="OnSliderInput" />
+               @oninput="OnSliderInput"
+               @onchange="OnSliderCommit" />
     </div>
 
     <div class="pp-frontier-lane" aria-label="Representative route choices">
@@ -158,6 +159,7 @@
     [Parameter] public string? RouteFailure { get; set; }
     [Parameter] public MarketTravelPriority TravelPriority { get; set; }
     [Parameter] public EventCallback<int> TravelToleranceChanged { get; set; }
+    [Parameter] public EventCallback<int> TravelToleranceCommitted { get; set; }
 
     private bool _open;
 
@@ -172,11 +174,22 @@
             : Task.CompletedTask;
     }
 
+    private Task OnSliderCommit(ChangeEventArgs args) =>
+        int.TryParse(args.Value?.ToString(), out var value)
+            ? TravelToleranceCommitted.InvokeAsync(Math.Clamp(value, 0, 11))
+            : Task.CompletedTask;
+
     private Task SelectRoute(MarketRouteFrontierOption option) =>
-        TravelToleranceChanged.InvokeAsync(option.RepresentativeTolerance);
+        CommitToleranceAsync(option.RepresentativeTolerance);
 
     private Task SelectTolerance(int tolerance) =>
-        TravelToleranceChanged.InvokeAsync(tolerance);
+        CommitToleranceAsync(tolerance);
+
+    private async Task CommitToleranceAsync(int tolerance)
+    {
+        await TravelToleranceChanged.InvokeAsync(tolerance);
+        await TravelToleranceCommitted.InvokeAsync(tolerance);
+    }
 
     private string GetExplanation()
     {

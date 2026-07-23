@@ -103,6 +103,9 @@ public sealed record MarketRouteDecision(
 
     public IReadOnlyList<MarketRouteItemDecision> ItemPremiums =>
         ItemDecisions ?? Array.Empty<MarketRouteItemDecision>();
+
+    public IReadOnlyList<MarketRouteToleranceSelection> ToleranceSelections { get; init; } =
+        Array.Empty<MarketRouteToleranceSelection>();
 }
 
 public sealed record MarketRouteFrontierOption(
@@ -113,6 +116,23 @@ public sealed record MarketRouteFrontierOption(
     int DataCenterTransfers)
 {
     public int RepresentativeTolerance => (MinimumTolerance + MaximumTolerance) / 2;
+}
+
+public sealed record MarketRouteToleranceSelection(
+    int MinimumTolerance,
+    int MaximumTolerance,
+    string SelectionKey,
+    long GilCost,
+    long EvidencePenalty,
+    int WorldStops,
+    int DataCenterTransfers,
+    long FixedAcquisitionGilCost,
+    IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
+    IReadOnlyList<ProcurementAcquisitionDecision> AcquisitionDecisions,
+    IReadOnlyList<MarketRouteItemDecision> ItemDecisions)
+{
+    public bool Contains(int travelTolerance) =>
+        travelTolerance >= MinimumTolerance && travelTolerance <= MaximumTolerance;
 }
 
 public sealed record MarketRouteItemDecision(

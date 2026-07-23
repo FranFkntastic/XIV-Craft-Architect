@@ -387,19 +387,6 @@ public class MarketShoppingService
             }
         }
 
-        foreach (var plan in plans)
-        {
-            if (IsFixedVendorPlan(plan))
-            {
-                plan.RecommendedSplit = null;
-                continue;
-            }
-
-            plan.RecommendedWorld = null;
-            plan.RecommendedSplit = null;
-            plan.CoverageSet = null;
-        }
-
         var frontier = ReduceToParetoFrontier(beam, config);
         var cheapestState = frontier
             .OrderBy(state => state.TotalGilCost)
@@ -413,7 +400,123 @@ public class MarketShoppingService
             return new ProcurementRouteOptimizationResult(plans, null, IsComplete: false);
         }
 
-        foreach (var choice in bestState.Choices)
+        ApplyRouteState(plans, bestState, standaloneCandidatesByPlan);
+
+        var representativeRoutes = BuildRepresentativeRoutes(frontier, config);
+        var itemDecisions = BuildItemDecisions(bestState, cheapestEligibleCandidateByPlan);
+        var toleranceSelections = BuildRouteToleranceSelections(
+            frontier,
+            config,
+            plans,
+            standaloneCandidatesByPlan,
+            cheapestEligibleCandidateByPlan);
+        var decision = cheapestState == null || bestState.Choices.All(choice => choice.Candidate == null)
+            ? null
+            : new MarketRouteDecision(
+                config.TravelTolerance,
+                MarketRouteScoring.GetMaximumPremiumRate(config.TravelTolerance),
+                cheapestState.TotalGilCost,
+                bestState.TotalGilCost,
+                bestState.TotalEvidencePenalty,
+                cheapestState.WorldStops,
+                bestState.WorldStops,
+                cheapestState.GetDataCenterTransfers(config),
+                bestState.GetDataCenterTransfers(config),
+                config.StartFromHomeDataCenter && !string.IsNullOrWhiteSpace(config.HomeDataCenter),
+                config.StartFromHomeDataCenter ? config.HomeDataCenter : null,
+                config.TravelPriority,
+                representativeRoutes,
+                itemDecisions)
+            {
+                RouteSearchWasTruncated = routeSearchWasTruncated,
+                ToleranceSelections = toleranceSelections
+            };
+
+        var isComplete = bestState.Choices.All(choice => choice.Candidate != null);
+        return new ProcurementRouteOptimizationResult(plans, decision, isComplete);
+    }
+
+    private static IReadOnlyList<MarketRouteToleranceSelection> BuildRouteToleranceSelections(
+        IReadOnlyList<ProcurementRouteSearchState> frontier,
+        MarketAnalysisConfig config,
+        IReadOnlyList<DetailedShoppingPlan> sourcePlans,
+        IReadOnlyDictionary<int, List<MarketPurchaseCandidate>> standaloneCandidatesByPlan,
+        IReadOnlyDictionary<int, MarketPurchaseCandidate?> cheapestEligibleCandidateByPlan)
+    {
+        var selections = new List<MarketRouteToleranceSelection>();
+        ProcurementRouteSearchState? previous = null;
+        for (var tolerance = 0; tolerance <= 11; tolerance++)
+        {
+            var state = OrderRouteStates(frontier, config, tolerance).FirstOrDefault();
+            if (state == null)
+            {
+                continue;
+            }
+
+            if (previous != null &&
+                string.Equals(previous.TieBreakKey, state.TieBreakKey, StringComparison.Ordinal) &&
+                selections.Count > 0)
+            {
+                selections[^1] = selections[^1] with { MaximumTolerance = tolerance };
+                continue;
+            }
+
+            var selectedPlans = sourcePlans.Select(ClonePlanForRouteOptimization).ToList();
+            ApplyRouteState(selectedPlans, state, standaloneCandidatesByPlan);
+            selections.Add(new MarketRouteToleranceSelection(
+                tolerance,
+                tolerance,
+                state.TieBreakKey,
+                state.TotalGilCost,
+                state.TotalEvidencePenalty,
+                state.WorldStops,
+                state.GetDataCenterTransfers(config),
+                0,
+                ProcurementRouteExecutionService.CompactResultShoppingPlans(selectedPlans),
+                [],
+                BuildItemDecisions(state, cheapestEligibleCandidateByPlan)));
+            previous = state;
+        }
+
+        return selections;
+    }
+
+    private static List<MarketRouteItemDecision> BuildItemDecisions(
+        ProcurementRouteSearchState state,
+        IReadOnlyDictionary<int, MarketPurchaseCandidate?> cheapestEligibleCandidateByPlan) =>
+        state.Choices
+            .Where(choice => choice.Candidate != null)
+            .Select(choice =>
+            {
+                var selected = choice.Candidate!;
+                var cheapest = cheapestEligibleCandidateByPlan.GetValueOrDefault(choice.PlanIndex);
+                return new MarketRouteItemDecision(
+                    selected.ItemId,
+                    selected.ItemName,
+                    cheapest?.GilCost ?? selected.GilCost,
+                    selected.GilCost);
+            })
+            .ToList();
+
+    private static void ApplyRouteState(
+        List<DetailedShoppingPlan> plans,
+        ProcurementRouteSearchState state,
+        IReadOnlyDictionary<int, List<MarketPurchaseCandidate>> standaloneCandidatesByPlan)
+    {
+        foreach (var plan in plans)
+        {
+            if (IsFixedVendorPlan(plan))
+            {
+                plan.RecommendedSplit = null;
+                continue;
+            }
+
+            plan.RecommendedWorld = null;
+            plan.RecommendedSplit = null;
+            plan.CoverageSet = null;
+        }
+
+        foreach (var choice in state.Choices)
         {
             var plan = plans[choice.PlanIndex];
             if (choice.Candidate == null)
@@ -449,44 +552,6 @@ public class MarketShoppingService
                 plan.RecommendedSplit = choice.Candidate.Split;
             }
         }
-
-        var representativeRoutes = BuildRepresentativeRoutes(frontier, config);
-        var itemDecisions = bestState.Choices
-            .Where(choice => choice.Candidate != null)
-            .Select(choice =>
-            {
-                var selected = choice.Candidate!;
-                var cheapest = cheapestEligibleCandidateByPlan.GetValueOrDefault(choice.PlanIndex);
-                return new MarketRouteItemDecision(
-                    selected.ItemId,
-                    selected.ItemName,
-                    cheapest?.GilCost ?? selected.GilCost,
-                    selected.GilCost);
-            })
-            .ToList();
-        var decision = cheapestState == null || bestState.Choices.All(choice => choice.Candidate == null)
-            ? null
-            : new MarketRouteDecision(
-                config.TravelTolerance,
-                MarketRouteScoring.GetMaximumPremiumRate(config.TravelTolerance),
-                cheapestState.TotalGilCost,
-                bestState.TotalGilCost,
-                bestState.TotalEvidencePenalty,
-                cheapestState.WorldStops,
-                bestState.WorldStops,
-                cheapestState.GetDataCenterTransfers(config),
-                bestState.GetDataCenterTransfers(config),
-                config.StartFromHomeDataCenter && !string.IsNullOrWhiteSpace(config.HomeDataCenter),
-                config.StartFromHomeDataCenter ? config.HomeDataCenter : null,
-                config.TravelPriority,
-                representativeRoutes,
-                itemDecisions)
-            {
-                RouteSearchWasTruncated = routeSearchWasTruncated
-            };
-
-        var isComplete = bestState.Choices.All(choice => choice.Candidate != null);
-        return new ProcurementRouteOptimizationResult(plans, decision, isComplete);
     }
 
     private static MarketCoverageSet CreateSelectedCoverageSet(

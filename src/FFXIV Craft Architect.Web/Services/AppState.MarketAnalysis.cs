@@ -424,6 +424,110 @@ public partial class AppState
         NotifySettingsChanged();
     }
 
+    public bool TrySelectProcurementTravelTolerance(int travelTolerance)
+    {
+        var normalized = Math.Clamp(travelTolerance, 0, 11);
+        if (CurrentPlan is not { } currentPlan ||
+            ProcurementRouteDecision is not { } currentDecision ||
+            ProcurementRouteValidity is not (ProcurementRoutePublicationValidity.Current or
+                ProcurementRoutePublicationValidity.SelectionChanged))
+        {
+            return false;
+        }
+
+        var selection = currentDecision.ToleranceSelections
+            .FirstOrDefault(option => option.Contains(normalized));
+        if (selection == null)
+        {
+            return false;
+        }
+
+        var optimizedPlan = ApplyAcquisitionDecisions(currentPlan, selection.AcquisitionDecisions);
+        if (optimizedPlan == null)
+        {
+            return false;
+        }
+
+        var selectedDecision = new MarketRouteDecision(
+            normalized,
+            MarketRouteScoring.GetMaximumPremiumRate(normalized),
+            currentDecision.CheapestGilCost,
+            selection.GilCost,
+            selection.EvidencePenalty,
+            currentDecision.CheapestWorldStops,
+            selection.WorldStops,
+            currentDecision.CheapestDataCenterTransfers,
+            selection.DataCenterTransfers,
+            currentDecision.StartsFromHomeDataCenter,
+            currentDecision.HomeDataCenter,
+            currentDecision.TravelPriority,
+            currentDecision.RepresentativeRoutes,
+            selection.ItemDecisions)
+        {
+            FixedAcquisitionGilCost = selection.FixedAcquisitionGilCost,
+            AcquisitionSearchWasTruncated = currentDecision.AcquisitionSearchWasTruncated,
+            RouteSearchWasTruncated = currentDecision.RouteSearchWasTruncated,
+            TravelSearchWasTruncated = currentDecision.TravelSearchWasTruncated,
+            TravelRoutesEvaluated = currentDecision.TravelRoutesEvaluated,
+            AcquisitionCombinationEvaluations = currentDecision.AcquisitionCombinationEvaluations,
+            ToleranceSelections = currentDecision.ToleranceSelections
+        };
+
+        using (BeginStateChangeBatch())
+        {
+            ProcurementTravelTolerance = normalized;
+            if (!ApplyProcurementOptimization(
+                    currentPlan,
+                    optimizedPlan,
+                    AcquisitionPlanningService.GetActiveProcurementItems(optimizedPlan),
+                    selection.ShoppingPlans,
+                    selectedDecision))
+            {
+                return false;
+            }
+            NotifySettingsChanged();
+        }
+
+        return true;
+    }
+
+    private static CraftingPlan? ApplyAcquisitionDecisions(
+        CraftingPlan source,
+        IReadOnlyList<ProcurementAcquisitionDecision> decisions)
+    {
+        if (decisions.Count == 0)
+        {
+            return source;
+        }
+
+        var decisionsByNode = decisions.ToDictionary(decision => decision.NodeId, StringComparer.Ordinal);
+        var clone = new CraftingPlan
+        {
+            Id = source.Id,
+            Name = source.Name,
+            CreatedAt = source.CreatedAt,
+            ModifiedAt = source.ModifiedAt,
+            DataCenter = source.DataCenter,
+            World = source.World,
+            RootItems = source.RootItems.Select(root => root.Clone()).ToList(),
+            SavedMarketPlans = source.SavedMarketPlans.ToList(),
+            PriceVersion = source.PriceVersion
+        };
+        var applied = 0;
+        foreach (var node in EnumerateNodes(clone.RootItems))
+        {
+            if (!decisionsByNode.TryGetValue(node.NodeId, out var decision))
+            {
+                return null;
+            }
+            node.Source = decision.Source;
+            node.SourceReason = decision.SourceReason;
+            applied++;
+        }
+
+        return applied == decisionsByNode.Count ? clone : null;
+    }
+
     public bool SetProcurementHomeDataCenterOrigin(bool enabled)
     {
         if (ProcurementStartFromHomeDataCenter == enabled)
