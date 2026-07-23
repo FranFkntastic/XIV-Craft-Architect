@@ -230,8 +230,8 @@ test('terminal verifier accepts only complete outcomes for exact source and arch
   const passingTrx = total => `<TestRun><Results>${Array.from({ length: total }, (_, index) => `<UnitTestResult executionId="execution-${index}" testId="test-${index}" testName="Test ${index}" outcome="Passed" />`).join('')}</Results><ResultSummary outcome="Completed"><Counters total="${total}" executed="${total}" passed="${total}" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="${total}" inProgress="0" pending="0" /></ResultSummary></TestRun>`;
   const specTrx = path.join(value.temporaryRoot, 'spec-tests.trx');
   const contractTrx = path.join(value.temporaryRoot, 'contract-tests.trx');
-  await writeFile(specTrx, passingTrx(56));
-  await writeFile(contractTrx, passingTrx(94));
+  await writeFile(specTrx, passingTrx(57));
+  await writeFile(contractTrx, passingTrx(96));
 
   const acceptanceManifest = path.join(outDir, 'acceptance-manifest.json');
   const verifyOptions = {
