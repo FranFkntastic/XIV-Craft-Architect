@@ -190,6 +190,9 @@
     private int? _expandedItemId;
     private bool _isAnalyzing;
 
+    [SupplyParameterFromQuery(Name = "itemId")]
+    public int? RequestedItemId { get; set; }
+
     private bool CanAnalyze =>
         !_isAnalyzing &&
         _market?.HasPlan == true &&
@@ -209,6 +212,11 @@
         {
             _scope = _market.Scope;
             _lens = _market.Lens;
+            if (RequestedItemId.HasValue &&
+                _market.Items.Any(item => item.ItemId == RequestedItemId.Value))
+            {
+                _expandedItemId = RequestedItemId.Value;
+            }
         }
     }
 

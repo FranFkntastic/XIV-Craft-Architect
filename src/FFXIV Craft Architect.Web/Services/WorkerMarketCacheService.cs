@@ -6,9 +6,10 @@ using FFXIV_Craft_Architect.Core.Services.Interfaces;
 namespace FFXIV_Craft_Architect.Web.Services;
 
 /// <summary>
-/// Process-lifetime market cache owned by the engine Worker. Missing evidence is
-/// fetched in serialized data-center batches so one user action cannot create a
-/// fan-out of competing Universalis requests.
+/// Worker-owned transient market cache. Missing evidence is fetched in serialized
+/// data-center batches so one user action cannot create a fan-out of competing
+/// Universalis requests. Once accepted evidence is published into the canonical
+/// session, the raw cache is released to avoid retaining two listing corpora.
 /// </summary>
 public sealed class WorkerMarketCacheService : IMarketCacheService
 {
@@ -21,42 +22,7 @@ public sealed class WorkerMarketCacheService : IMarketCacheService
         _universalis = universalis ?? throw new ArgumentNullException(nameof(universalis));
     }
 
-    public void Seed(IEnumerable<MarketItemAnalysis> analyses)
-    {
-        foreach (var analysis in analyses)
-        {
-            foreach (var dataCenterWorlds in analysis.Worlds
-                         .Where(world => !string.IsNullOrWhiteSpace(world.DataCenter))
-                         .GroupBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase))
-            {
-                var worlds = dataCenterWorlds.ToList();
-                var fetchedAt = worlds
-                    .Select(world => world.FetchedAtUtc)
-                    .Where(value => value.HasValue)
-                    .Select(value => value!.Value)
-                    .DefaultIfEmpty(analysis.LoadedAtUtc)
-                    .Max();
-                var listings = worlds.SelectMany(world => world.Listings).ToList();
-                var hqListings = listings.Where(listing => listing.IsHq).ToList();
-                var cached = new CachedMarketData
-                {
-                    ItemId = analysis.ItemId,
-                    DataCenter = dataCenterWorlds.Key,
-                    FetchedAt = fetchedAt,
-                    LastUploadTimeUnixMilliseconds = worlds
-                        .Select(world => world.MarketUploadedAtUtc)
-                        .Where(value => value.HasValue)
-                        .Select(value => new DateTimeOffset(value!.Value).ToUnixTimeMilliseconds())
-                        .DefaultIfEmpty()
-                        .Max(),
-                    DCAveragePrice = WeightedAverage(listings),
-                    HQAveragePrice = hqListings.Count == 0 ? null : WeightedAverage(hqListings),
-                    Worlds = worlds.Select(ProjectWorld).ToList()
-                };
-                SetCore(analysis.ItemId, dataCenterWorlds.Key, cached);
-            }
-        }
-    }
+    public void Clear() => _cache.Clear();
 
     public Task<CachedMarketData?> GetAsync(
         int itemId,
@@ -221,40 +187,6 @@ public sealed class WorkerMarketCacheService : IMarketCacheService
         var key = Key(itemId, dataCenter);
         _cache.TryGetValue(key, out var retained);
         _cache[key] = MarketEvidenceCacheMerger.PreferNewestWorldEvidence(retained, data);
-    }
-
-    private static CachedWorldData ProjectWorld(WorldMarketAnalysis world) =>
-        new()
-        {
-            WorldName = world.WorldName,
-            LastUploadTimeUnixMilliseconds = world.MarketUploadedAtUtc.HasValue
-                ? new DateTimeOffset(world.MarketUploadedAtUtc.Value).ToUnixTimeMilliseconds()
-                : null,
-            ObservedAtUnixMilliseconds = world.FetchedAtUtc.HasValue
-                ? new DateTimeOffset(world.FetchedAtUtc.Value).ToUnixTimeMilliseconds()
-                : null,
-            EvidenceOrigin = MarketEvidenceOrigin.Universalis,
-            EvidenceCompleteness = MarketEvidenceCompleteness.Complete,
-            ReportedListingCount = world.Listings.Count,
-            ListingCapacity = world.TotalListingQuantity,
-            Listings = world.Listings.Select(listing => new CachedListing
-            {
-                Quantity = listing.Quantity,
-                PricePerUnit = listing.PricePerUnit,
-                RetainerName = listing.RetainerName,
-                IsHq = listing.IsHq,
-                LastReviewTimeUnix = listing.LastReviewTimeUtc.HasValue
-                    ? new DateTimeOffset(listing.LastReviewTimeUtc.Value).ToUnixTimeSeconds()
-                    : null
-            }).ToList()
-        };
-
-    private static decimal WeightedAverage(IReadOnlyCollection<AnalyzedMarketListing> listings)
-    {
-        var quantity = listings.Sum(listing => (long)listing.Quantity);
-        return quantity == 0
-            ? 0
-            : listings.Sum(listing => listing.PricePerUnit * (decimal)listing.Quantity) / quantity;
     }
 
     private static string Key(int itemId, string dataCenter) =>

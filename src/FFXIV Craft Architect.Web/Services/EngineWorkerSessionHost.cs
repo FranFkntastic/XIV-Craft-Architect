@@ -186,7 +186,6 @@ public static partial class ManagedHost
             restore.StoredPlan,
             restore.TrackStoredPlanIdentity);
         _canonicalSession = replacement;
-        SessionMarketCache.Seed(_canonicalSession.Session.MarketEvidence.ItemAnalyses);
         _sessionRevision = restore.Revision;
         _sessionRestoreWarning = warning;
         _sessionMigratedFromLegacy = restore.MigratedFromLegacy;
@@ -406,7 +405,7 @@ public static partial class ManagedHost
                 request.Scope),
             "market analysis context published");
         _canonicalSession.InvalidateLegacyProcurementRoute();
-        SessionMarketCache.Seed(session.MarketEvidence.ItemAnalyses);
+        SessionMarketCache.Clear();
         _sessionRevision++;
         return CreateMutationResult(
             command.CommandKind,
@@ -503,6 +502,7 @@ public static partial class ManagedHost
                 $"Procurement route was not published ({result.Status}).");
         }
 
+        SessionMarketCache.Clear();
         _canonicalSession.InvalidateLegacyProcurementRoute();
         _sessionRevision++;
         return CreateMutationResult(

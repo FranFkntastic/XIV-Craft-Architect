@@ -7,17 +7,12 @@
 @using Microsoft.AspNetCore.Components.Forms
 @inject GarlandService GarlandService
 @inject RecipeCalculationService RecipeCalculationService
-@inject RecipePlannerCommandService RecipePlannerCommandService
 @inject WorkerSessionCoordinator WorkerSession
 @inject WorkerProjectionStore WorkerProjections
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
-@inject AppState AppState
-@inject IndexedDbService IndexedDb
 @inject WebPlanPersistenceService PlanPersistence
-@inject AcquisitionDecisionService AcquisitionDecisionService
-@inject ILogger<Index> Logger
 @implements IDisposable
 
 <!-- Planner layout: project inputs and recipe visualization only. -->
@@ -31,7 +26,6 @@
         IsSearching="@_isSearching"
         IsBuildingPlan="@_isBuildingPlan"
         ShowPlanActions="@(_recipe?.ProjectItems.Count > 0 || _recipe?.Roots.Count > 0)"
-        LastAutoSave="@AppState.LastAutoSave"
         SearchResults="@_searchResults"
         ProjectItems="@(_recipe?.ProjectItems ?? Array.Empty<ProjectItem>())"
         OnSearchRequested="SearchItemsAsync"
@@ -47,7 +41,7 @@
     <!-- Middle Column: Recipe Tree -->
     <RecipePlanPanel
         Recipe="@_recipe"
-        SavedPlans="@AppState.SavedPlans"
+        SavedPlans="@_savedPlans"
         OnExpandAllRequested="ExpandAllRecipeNodes"
         OnCollapseAllRequested="CollapseAllRecipeNodes"
         OnOpenPlanEditorRequested="OpenPlanEditorAsync"
@@ -69,14 +63,13 @@
     private bool _isBuildingPlan = false;
     private WorkerRecipePlannerProjection? _recipe;
     private WorkerRecipeNodeProjection? _selectedNode;
+    private IReadOnlyList<StoredPlanSummary> _savedPlans =
+        Array.Empty<StoredPlanSummary>();
     private int _expandVersion;
     private bool _expandAll = true;
 
     protected override async Task OnInitializedAsync()
     {
-        // Subscribe to state changes
-        AppState.OnPlanChanged += OnPlanChanged;
-        AppState.OnShoppingListChanged += OnShoppingListChanged;
         WorkerProjections.Changed += OnWorkerProjectionChanged;
 
         // Load saved plans list
@@ -88,16 +81,8 @@
         // all handled centrally in MainLayout.razor
     }
 
-    private void OnPlanChanged()
-    {
-        EnsureSelectedNode();
-        InvokeAsync(StateHasChanged);
-    }
-
     public void Dispose()
     {
-        AppState.OnPlanChanged -= OnPlanChanged;
-        AppState.OnShoppingListChanged -= OnShoppingListChanged;
         WorkerProjections.Changed -= OnWorkerProjectionChanged;
 
         // Note: Auto-save timer is now managed centrally in MainLayout.razor
@@ -110,15 +95,13 @@
         _ = InvokeAsync(StateHasChanged);
     }
 
-    private void OnShoppingListChanged()
-    {
-        InvokeAsync(StateHasChanged);
-    }
-
     private async Task RefreshSavedPlansListAsync()
     {
         var summaries = await PlanPersistence.LoadPlanSummariesAsync();
-        AppState.ReplaceSavedPlans(summaries.Where(p => p.Id != "autosave")); // Don't show autosave in list
+        _savedPlans = summaries
+            .Where(plan => plan.Id != "autosave")
+            .ToArray();
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task SearchItemsAsync()
@@ -357,8 +340,8 @@
     {
         return MarketFetchScopeResolver.GetDataCenters(
             MarketFetchScope.EntireRegion,
-            AppState.SelectedDataCenter,
-            AppState.SelectedRegion);
+            _recipe?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter,
+            _recipe?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion);
     }
 
     private void OnNodeSelected(WorkerRecipeNodeProjection node)

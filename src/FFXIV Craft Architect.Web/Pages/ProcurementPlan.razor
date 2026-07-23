@@ -1,9 +1,11 @@
 @page "/procurement"
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
 @inject WorkerSessionCoordinator WorkerSession
 @inject WorkerProjectionStore WorkerProjections
+@inject ISettingsService Settings
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 @implements IDisposable
@@ -20,7 +22,7 @@
 
             <MudSwitch T="bool"
                        Value="_regional"
-                       ValueChanged="@((bool value) => _regional = value)"
+                       ValueChanged="SetRegionalAsync"
                        Color="Color.Primary"
                        Dense="true"
                        Label="Search the whole region"
@@ -28,7 +30,7 @@
 
             <MudSwitch T="bool"
                        Value="_includeSplitPurchases"
-                       ValueChanged="@((bool value) => _includeSplitPurchases = value)"
+                       ValueChanged="SetSplitPurchasesAsync"
                        Color="Color.Primary"
                        Dense="true"
                        Label="Allow split purchases"
@@ -36,7 +38,7 @@
 
             <MudSwitch T="bool"
                        Value="_startFromHomeDataCenter"
-                       ValueChanged="@((bool value) => _startFromHomeDataCenter = value)"
+                       ValueChanged="SetStartFromHomeAsync"
                        Color="Color.Primary"
                        Dense="true"
                        Label="Start from home data center"
@@ -44,7 +46,7 @@
 
             <MudSelect T="MarketTravelPriority"
                        Value="_travelPriority"
-                       ValueChanged="@((MarketTravelPriority value) => _travelPriority = value)"
+                       ValueChanged="SetTravelPriorityAsync"
                        Label="Optimize travel by"
                        Dense="true"
                        Variant="Variant.Outlined"
@@ -203,8 +205,8 @@
     private WorkerProcurementProjection? _route;
     private WorkerMarketProjection? _market;
     private bool _regional = true;
-    private bool _includeSplitPurchases;
-    private bool _startFromHomeDataCenter = true;
+    private bool _includeSplitPurchases = true;
+    private bool _startFromHomeDataCenter;
     private MarketTravelPriority _travelPriority =
         MarketTravelPriority.DataCenterTransfersFirst;
     private int _travelTolerance;
@@ -224,11 +226,32 @@
     protected override async Task OnInitializedAsync()
     {
         WorkerProjections.Changed += ProjectionChanged;
+        _regional = await Settings.GetAsync(
+            "procurement.search_entire_region",
+            true);
+        _includeSplitPurchases = await Settings.GetAsync(
+            "procurement.enable_split_world_purchases",
+            true);
+        _travelTolerance = Math.Clamp(
+            await Settings.GetAsync("procurement.travel_tolerance", 0),
+            0,
+            11);
+        _startFromHomeDataCenter = await Settings.GetAsync(
+            "procurement.start_from_home_data_center",
+            false);
+        var storedPriority = await Settings.GetAsync(
+            "procurement.travel_priority",
+            nameof(MarketTravelPriority.DataCenterTransfersFirst));
+        if (!Enum.TryParse(storedPriority, ignoreCase: true, out _travelPriority))
+        {
+            _travelPriority = MarketTravelPriority.DataCenterTransfersFirst;
+        }
+
         _market = await WorkerSession.GetMarketProjectionAsync();
         _route = await WorkerSession.GetProcurementProjectionAsync();
-        if (_route is not null)
+        if (_route?.HasRoute == true)
         {
-            _regional = _route.HasRoute ? _route.SearchesEntireRegion : true;
+            _regional = _route.SearchesEntireRegion;
             _travelPriority = _route.TravelPriority;
             _travelTolerance = _route.TravelTolerance;
             _includeSplitPurchases = _route.IncludeSplitPurchases;
@@ -266,6 +289,7 @@
                     _travelPriority));
             _route = outcome.Procurement;
             _travelTolerance = _route.TravelTolerance;
+            await PersistControlsAsync();
             Snackbar.Add(
                 $"Route ready: {_route.WorldStops} worlds, {_route.SelectedGilCost:N0}g.",
                 Severity.Success);
@@ -300,12 +324,60 @@
         {
             _route = await WorkerSession.SelectProcurementToleranceAsync(
                 _travelTolerance);
+            await Settings.SetAsync(
+                "procurement.travel_tolerance",
+                _travelTolerance);
         }
         catch (Exception ex)
         {
             Snackbar.Add(ex.Message, Severity.Error);
             _travelTolerance = _route.TravelTolerance;
         }
+    }
+
+    private async Task SetRegionalAsync(bool value)
+    {
+        _regional = value;
+        await Settings.SetAsync("procurement.search_entire_region", value);
+    }
+
+    private async Task SetSplitPurchasesAsync(bool value)
+    {
+        _includeSplitPurchases = value;
+        await Settings.SetAsync(
+            "procurement.enable_split_world_purchases",
+            value);
+    }
+
+    private async Task SetStartFromHomeAsync(bool value)
+    {
+        _startFromHomeDataCenter = value;
+        await Settings.SetAsync(
+            "procurement.start_from_home_data_center",
+            value);
+    }
+
+    private async Task SetTravelPriorityAsync(MarketTravelPriority value)
+    {
+        _travelPriority = value;
+        await Settings.SetAsync("procurement.travel_priority", value.ToString());
+    }
+
+    private async Task PersistControlsAsync()
+    {
+        await Settings.SetAsync("procurement.search_entire_region", _regional);
+        await Settings.SetAsync(
+            "procurement.enable_split_world_purchases",
+            _includeSplitPurchases);
+        await Settings.SetAsync(
+            "procurement.start_from_home_data_center",
+            _startFromHomeDataCenter);
+        await Settings.SetAsync(
+            "procurement.travel_priority",
+            _travelPriority.ToString());
+        await Settings.SetAsync(
+            "procurement.travel_tolerance",
+            _travelTolerance);
     }
 
     public void Dispose()

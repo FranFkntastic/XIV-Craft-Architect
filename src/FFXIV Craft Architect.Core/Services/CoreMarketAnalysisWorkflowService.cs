@@ -76,10 +76,14 @@ public sealed class CoreMarketAnalysisWorkflowService
             }
 
             var capturedVersions = _session.CaptureVersionStamp();
+            var existingEvidence = _session.MarketEvidence;
             var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
                 new MarketEvidenceReconciliationRequest
                 {
                     Items = materials,
+                    PublishedAnalyses = existingEvidence.ItemAnalyses,
+                    PublishedShoppingPlans =
+                        existingEvidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>(),
                     Scope = request.Scope,
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,

@@ -28,6 +28,7 @@ public class WebSettingsService : ISettingsService
         ["procurement.travel_tolerance"] = 0,
         ["procurement.world_exclusion_duration_minutes"] = 60,
         ["procurement.start_from_home_data_center"] = false,
+        ["procurement.travel_priority"] = "DataCenterTransfersFirst",
         ["marketmafioso.workshop_host_url"] = "",
         ["marketmafioso.api_key"] = "",
         ["marketmafioso.target_character"] = "",
