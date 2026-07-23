@@ -103,11 +103,17 @@ public sealed partial class RecipePlanDiagnosticDumpService
             displayedQuotes.Values.ToArray(),
             displayedStates.Values.ToArray(),
             procurementQuotes.Values.ToArray(),
-            _appState.ShoppingPlans.ToArray(),
-            _appState.ProcurementShoppingPlans.ToArray(),
-            _appState.MarketItemAnalyses.ToArray(),
+            BuildShoppingPlanDiagnostics(
+                _appState.ShoppingPlans,
+                RecipePlanAcquisitionQuoteBasis.MarketAnalysis),
+            BuildShoppingPlanDiagnostics(
+                _appState.ProcurementShoppingPlans,
+                RecipePlanAcquisitionQuoteBasis.ProcurementRoute),
             _appState.UnavailableMarketItems.ToArray(),
-            _appState.ProcurementRouteDecision);
+            BuildRouteDiagnostic(_appState.ProcurementRouteDecision),
+            _appState.ShoppingPlans.Count,
+            _appState.ProcurementShoppingPlans.Count,
+            _appState.MarketItemAnalyses.Count);
     }
 
     public static string Serialize(RecipePlanDiagnosticDump dump)
@@ -126,6 +132,89 @@ public sealed partial class RecipePlanDiagnosticDumpService
         }
 
         return $"recipe-plan-{safeName}-{exportedAtUtc:yyyyMMdd-HHmmss}.json";
+    }
+
+    private static IReadOnlyList<RecipePlanShoppingPlanDiagnostic> BuildShoppingPlanDiagnostics(
+        IEnumerable<DetailedShoppingPlan> plans,
+        RecipePlanAcquisitionQuoteBasis basis)
+    {
+        return plans.Select(plan =>
+        {
+            var coverage = PurchaseRecommendationCost.GetDefaultCoverageOption(plan);
+            return new RecipePlanShoppingPlanDiagnostic(
+                basis,
+                plan.ItemId,
+                plan.Name,
+                plan.QuantityNeeded,
+                plan.HqQuantityNeeded,
+                plan.DCAveragePrice,
+                plan.HQAveragePrice,
+                plan.Error,
+                plan.MarketDataWarning,
+                coverage == null
+                    ? null
+                    : new RecipePlanCoverageDiagnostic(
+                        coverage.CandidateId,
+                        coverage.Kind,
+                        coverage.QualityPolicy,
+                        coverage.QuantityCovered,
+                        coverage.QuantityToPurchase,
+                        coverage.ExcessQuantity,
+                        coverage.CashOutCost,
+                        coverage.AverageUnitCost,
+                        coverage.IsDefaultEligible,
+                        coverage.DegradedReason,
+                        coverage.Worlds,
+                        coverage.Listings.Count,
+                        coverage.Listings.Sum(listing => listing.QuantityAvailable),
+                        coverage.Listings.Sum(listing => listing.QuantityUsed),
+                        coverage.Listings.Sum(listing => listing.QuantityPurchased)),
+                plan.RecommendedSplit?.Select(split =>
+                    new RecipePlanSplitDiagnostic(
+                        split.DataCenter,
+                        split.WorldName,
+                        split.QuantityToBuy,
+                        split.TotalCost,
+                        split.Listings.Count,
+                        split.Listings.Sum(listing => listing.Quantity),
+                        split.Listings.Where(listing => listing.IsHq).Sum(listing => listing.Quantity)))
+                    .ToArray() ?? Array.Empty<RecipePlanSplitDiagnostic>(),
+                plan.RecommendedWorld == null
+                    ? null
+                    : new RecipePlanWorldDiagnostic(
+                        plan.RecommendedWorld.DataCenter,
+                        plan.RecommendedWorld.WorldName,
+                        plan.RecommendedWorld.TotalCost,
+                        plan.RecommendedWorld.AveragePricePerUnit,
+                        plan.RecommendedWorld.TotalQuantityPurchased,
+                        plan.RecommendedWorld.HasSufficientStock,
+                        plan.RecommendedWorld.ShortfallQuantity,
+                        plan.RecommendedWorld.Listings.Count,
+                        plan.RecommendedWorld.Listings.Sum(listing => listing.Quantity),
+                        plan.RecommendedWorld.Listings
+                            .Where(listing => listing.IsHq)
+                            .Sum(listing => listing.Quantity)));
+        }).ToArray();
+    }
+
+    private static RecipePlanRouteDiagnostic? BuildRouteDiagnostic(MarketRouteDecision? decision)
+    {
+        return decision == null
+            ? null
+            : new RecipePlanRouteDiagnostic(
+                decision.TravelTolerance,
+                decision.MaximumPremiumRate,
+                decision.CheapestGilCost,
+                decision.SelectedGilCost,
+                decision.FixedAcquisitionGilCost,
+                decision.CheapestWorldStops,
+                decision.SelectedWorldStops,
+                decision.CheapestDataCenterTransfers,
+                decision.SelectedDataCenterTransfers,
+                decision.RouteSearchWasTruncated,
+                decision.RepresentativeRoutes.Count,
+                decision.ItemPremiums.Count,
+                decision.ToleranceSelections.Count);
     }
 
     private static string FormatLocalTimestamp(DateTimeOffset timestamp)
@@ -177,11 +266,13 @@ public sealed record RecipePlanDiagnosticDump(
     IReadOnlyList<RecipePlanAcquisitionQuote> DisplayedQuotes,
     IReadOnlyList<RecipeNodeDisplayState> DisplayedStates,
     IReadOnlyList<RecipePlanAcquisitionQuote> ProcurementComparisonQuotes,
-    IReadOnlyList<DetailedShoppingPlan> MarketShoppingPlans,
-    IReadOnlyList<DetailedShoppingPlan> ProcurementShoppingPlans,
-    IReadOnlyList<MarketItemAnalysis> MarketAnalyses,
+    IReadOnlyList<RecipePlanShoppingPlanDiagnostic> MarketShoppingPlans,
+    IReadOnlyList<RecipePlanShoppingPlanDiagnostic> ProcurementShoppingPlans,
     IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems,
-    MarketRouteDecision? ProcurementRouteDecision);
+    RecipePlanRouteDiagnostic? ProcurementRoute,
+    int MarketShoppingPlanCount,
+    int ProcurementShoppingPlanCount,
+    int MarketAnalysisCount);
 
 public sealed record RecipePlanDiagnosticContext(
     string? CurrentPlanId,
@@ -222,3 +313,70 @@ public sealed record RecipePlanNodeDiagnostic(
     string PriceSourceDetails,
     VendorInfo? SelectedVendor,
     VendorInfo? CheapestGilVendor);
+
+public sealed record RecipePlanShoppingPlanDiagnostic(
+    RecipePlanAcquisitionQuoteBasis Basis,
+    int ItemId,
+    string Name,
+    int QuantityNeeded,
+    int HqQuantityNeeded,
+    decimal DataCenterAveragePrice,
+    decimal? HqAveragePrice,
+    string? Error,
+    string? MarketDataWarning,
+    RecipePlanCoverageDiagnostic? DefaultCoverage,
+    IReadOnlyList<RecipePlanSplitDiagnostic> RecommendedSplit,
+    RecipePlanWorldDiagnostic? RecommendedWorld);
+
+public sealed record RecipePlanCoverageDiagnostic(
+    string CandidateId,
+    MarketCoverageKind Kind,
+    MarketCoverageQualityPolicy QualityPolicy,
+    int QuantityCovered,
+    int QuantityToPurchase,
+    int ExcessQuantity,
+    decimal CashOutCost,
+    decimal AverageUnitCost,
+    bool IsDefaultEligible,
+    string? DegradedReason,
+    IReadOnlyList<MarketCoverageWorld> Worlds,
+    int ListingCount,
+    int ListingQuantityAvailable,
+    int ListingQuantityUsed,
+    int ListingQuantityPurchased);
+
+public sealed record RecipePlanSplitDiagnostic(
+    string DataCenter,
+    string WorldName,
+    int QuantityToBuy,
+    long TotalCost,
+    int ListingCount,
+    int ListingQuantity,
+    int HqListingQuantity);
+
+public sealed record RecipePlanWorldDiagnostic(
+    string DataCenter,
+    string WorldName,
+    long TotalCost,
+    decimal AveragePricePerUnit,
+    int TotalQuantityPurchased,
+    bool HasSufficientStock,
+    int ShortfallQuantity,
+    int ListingCount,
+    int ListingQuantity,
+    int HqListingQuantity);
+
+public sealed record RecipePlanRouteDiagnostic(
+    int TravelTolerance,
+    decimal? MaximumPremiumRate,
+    long CheapestGilCost,
+    long SelectedGilCost,
+    long FixedAcquisitionGilCost,
+    int CheapestWorldStops,
+    int SelectedWorldStops,
+    int CheapestDataCenterTransfers,
+    int SelectedDataCenterTransfers,
+    bool RouteSearchWasTruncated,
+    int RepresentativeRouteCount,
+    int ItemDecisionCount,
+    int ToleranceSelectionCount);

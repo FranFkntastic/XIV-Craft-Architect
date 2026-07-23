@@ -43,6 +43,9 @@ public sealed class RecipePlanDiagnosticContractTests
         Assert.Equal(routeValidity, state.ProcurementRouteValidity);
         Assert.Contains("\"tool\": \"recipe-plan-diagnostic-dump\"", json);
         Assert.DoesNotContain("auto-market-analysis", json);
+        Assert.DoesNotContain("\"worldOptions\"", json);
+        Assert.DoesNotContain("\"marketAnalyses\"", json);
+        Assert.DoesNotContain("\"toleranceSelections\"", json);
         Assert.Equal(RecipePlanAcquisitionQuoteBasis.MarketAnalysis, dump.Context.DisplayedPriceBasis);
         Assert.Equal(500, Assert.Single(dump.DisplayedQuotes).TotalCost);
         Assert.Equal(RecipePlanAcquisitionQuoteBasis.MarketAnalysis, Assert.Single(dump.DisplayedQuotes).Basis);
