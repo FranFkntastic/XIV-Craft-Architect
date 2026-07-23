@@ -3,6 +3,7 @@ using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -27,17 +28,20 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
 {
     private readonly AppState _appState;
     private readonly ExperimentalProcurementEngineFactory _factory;
+    private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly IReferenceEngineSemanticSnapshotProvider _snapshots;
     private readonly ILogger<ExperimentalProcurementEngineWorkflow>? _logger;
 
     public ExperimentalProcurementEngineWorkflow(
         AppState appState,
         ExperimentalProcurementEngineFactory factory,
+        IMarketEvidenceReconciliationService marketEvidenceReconciliation,
         IReferenceEngineSemanticSnapshotProvider snapshots,
         ILogger<ExperimentalProcurementEngineWorkflow>? logger = null)
     {
         _appState = appState;
         _factory = factory;
+        _marketEvidenceReconciliation = marketEvidenceReconciliation;
         _snapshots = snapshots;
         _logger = logger;
     }
@@ -60,9 +64,6 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
             return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.Superseded);
         }
 
-        progress?.Report("Preparing procurement engine request...");
-        var preparation = Stopwatch.StartNew();
-        _logger?.LogInformation("[stage] procurement engine request preparation starting");
         await YieldToBrowserAsync(cancellationToken);
         if (!IsCurrent(request))
         {
@@ -73,15 +74,71 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
         var activeItemIds = request.ActiveItems
             .Select(item => item.ItemId)
             .ToHashSet();
+        var vendorDecisionSnapshot = CreateVendorDecisionSnapshot(request.Plan, activeItemIds);
+        var vendorItemIds = vendorDecisionSnapshot.RootItems
+            .Select(node => node.ItemId)
+            .ToHashSet();
+        var marketItems = request.ActiveItems
+            .Where(item => !vendorItemIds.Contains(item.ItemId))
+            .ToArray();
+        progress?.Report("Preparing current market evidence for the route...");
+        var evidencePreparation = Stopwatch.StartNew();
+        _logger?.LogInformation(
+            "[stage] procurement engine evidence reconciliation starting (items={ItemCount})",
+            marketItems.Length);
+        var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+            new MarketEvidenceReconciliationRequest
+            {
+                Items = marketItems,
+                PublishedAnalyses = _appState.MarketItemAnalyses
+                    .Where(analysis => activeItemIds.Contains(analysis.ItemId))
+                    .ToArray(),
+                PublishedShoppingPlans = _appState.ShoppingPlans
+                    .Where(plan => activeItemIds.Contains(plan.ItemId))
+                    .ToArray(),
+                Scope = scope,
+                SelectedDataCenter = request.RouteBasis.SelectedDataCenter,
+                SelectedRegion = request.RouteBasis.SelectedRegion,
+                RecommendationMode = RecommendationMode.MinimizeTotalCost,
+                Lens = request.RouteBasis.Lens,
+                ExpectedWorldsByDataCenter = _appState.GetExpectedMarketWorlds(scope)
+            },
+            progress,
+            cancellationToken);
+        _logger?.LogInformation(
+            "[stage] procurement engine evidence reconciliation complete ({ElapsedMilliseconds}ms, fetched={FetchedCount}, unavailable={UnavailableCount})",
+            evidencePreparation.ElapsedMilliseconds,
+            reconciliation.FetchedCount,
+            reconciliation.UnavailableItemIds.Count);
+        if (!IsCurrent(request))
+        {
+            return ProcurementWorkflowResult.Noop(ProcurementWorkflowStatus.Superseded);
+        }
+        if (reconciliation.UnavailableItemIds.Count > 0)
+        {
+            var unavailableNames = request.ActiveItems
+                .Where(item => reconciliation.UnavailableItemIds.Contains(item.ItemId))
+                .Select(item => item.Name)
+                .Take(3)
+                .ToArray();
+            var suffix = reconciliation.UnavailableItemIds.Count > unavailableNames.Length
+                ? $" and {reconciliation.UnavailableItemIds.Count - unavailableNames.Length} more"
+                : string.Empty;
+            return new ProcurementWorkflowResult(
+                ProcurementWorkflowStatus.NoCompleteRoute,
+                0,
+                $"No complete market route is available for {string.Join(", ", unavailableNames)}{suffix}.");
+        }
+
+        progress?.Report("Preparing procurement engine request...");
+        var preparation = Stopwatch.StartNew();
+        _logger?.LogInformation("[stage] procurement engine request preparation starting");
         var routeRequest = new ProcurementRouteExecutionRequest
         {
-            Plan = CreateVendorDecisionSnapshot(request.Plan, activeItemIds),
+            Plan = vendorDecisionSnapshot,
             ActiveProcurementItems = request.ActiveItems,
-            SourceShoppingPlans = _appState.ShoppingPlans
-                .Where(plan => activeItemIds.Contains(plan.ItemId))
-                .ToArray(),
-            SourceMarketAnalyses = _appState.MarketItemAnalyses
-                .Where(analysis => activeItemIds.Contains(analysis.ItemId))
+            SourceShoppingPlans = reconciliation.ShoppingPlans,
+            SourceMarketAnalyses = reconciliation.Analyses
                 .Select(CreateReconciliationAnalysisSnapshot)
                 .ToArray(),
             Scope = scope,
