@@ -70,12 +70,19 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
         }
 
         var scope = request.RouteBasis.Scope;
+        var activeItemIds = request.ActiveItems
+            .Select(item => item.ItemId)
+            .ToHashSet();
         var routeRequest = new ProcurementRouteExecutionRequest
         {
             Plan = request.Plan,
             ActiveProcurementItems = request.ActiveItems,
-            SourceShoppingPlans = _appState.ShoppingPlans,
-            SourceMarketAnalyses = _appState.MarketItemAnalyses,
+            SourceShoppingPlans = _appState.ShoppingPlans
+                .Where(plan => activeItemIds.Contains(plan.ItemId))
+                .ToArray(),
+            SourceMarketAnalyses = _appState.MarketItemAnalyses
+                .Where(analysis => activeItemIds.Contains(analysis.ItemId))
+                .ToArray(),
             Scope = scope,
             SelectedDataCenter = request.RouteBasis.SelectedDataCenter,
             SelectedRegion = request.RouteBasis.SelectedRegion,
@@ -111,10 +118,11 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
         }
 
         var routeBasisHash = EngineCanonicalHash.Compute(request.RouteBasis, wireOptions);
-        var marketAnalysisHash = EngineCanonicalHash.Compute(
-            inputElement
-                .GetProperty("procurementRoute")
-                .GetProperty("sourceMarketAnalyses"));
+        var marketAnalysisHash = EngineCanonicalHash.Compute(new
+        {
+            Domain = "market-analysis-publication-v1",
+            request.MarketAnalysisVersion
+        });
         LogPreparationStage("publication basis hashed", preparation);
         await YieldToBrowserAsync(cancellationToken);
         if (!IsCurrent(request))

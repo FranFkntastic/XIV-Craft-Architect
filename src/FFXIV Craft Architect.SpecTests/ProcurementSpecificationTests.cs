@@ -202,6 +202,48 @@ public sealed class ProcurementSpecificationTests
     }
 
     [Fact]
+    public void AcquisitionEvaluationFallsBackToCraftWhenAutomaticMarketChoiceHasNoSupportedCoverage()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 108,
+            Name = "HQ intermediate",
+            Quantity = 5,
+            Source = AcquisitionSource.MarketBuyHq,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanBuyFromMarket = true,
+            CanBeHq = true,
+            MustBeHq = true,
+            CanCraft = true,
+            Children =
+            [
+                new PlanNode
+                {
+                    ItemId = 109,
+                    Name = "Unpriced ingredient",
+                    Quantity = 10,
+                    Source = AcquisitionSource.MarketBuyNq,
+                    SourceReason = AcquisitionSourceReason.SystemDefault,
+                    CanBuyFromMarket = true
+                }
+            ]
+        };
+        var shopping = SpecificationFixtures.Evidence(
+            node.ItemId,
+            node.Name,
+            node.Quantity,
+            SpecificationFixtures.World("Aether", "Siren", 5, 25));
+        shopping.HQAveragePrice = 100;
+
+        var changed = AcquisitionPlanningService.ReconcileAcquisitionDecisions(
+            new CraftingPlan { RootItems = [node] },
+            [shopping]);
+
+        Assert.Equal(1, changed);
+        Assert.Equal(AcquisitionSource.Craft, node.Source);
+    }
+
+    [Fact]
     public void CompactSplitCalculatesExactNeedAndWholeStackCashOutSeparately()
     {
         var plan = SpecificationFixtures.Evidence(

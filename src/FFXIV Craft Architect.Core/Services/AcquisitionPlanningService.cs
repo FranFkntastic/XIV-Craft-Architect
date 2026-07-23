@@ -643,7 +643,14 @@ public static class AcquisitionPlanningService
             .ThenBy(candidate => GetSourceTieBreak(candidate.Source))
             .ToList();
 
-        return candidates.Count == 0 ? null : candidates[0].Source;
+        if (candidates.Count > 0)
+        {
+            return candidates[0].Source;
+        }
+
+        return node.CanCraft && node.Children.Count > 0
+            ? AcquisitionSource.Craft
+            : null;
     }
 
     private static IEnumerable<(AcquisitionSource Source, decimal Cost)> GetAcquisitionCostCandidates(

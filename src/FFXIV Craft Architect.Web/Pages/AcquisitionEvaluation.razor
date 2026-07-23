@@ -59,7 +59,7 @@
             @if (RouteAvailability.IsGenerationEnabled)
             {
                 <div class="ae-info-title">How automatic choices work</div>
-                <div>CA compares every item you could buy, then chooses what to craft or purchase together with the route. Your manual choices stay locked. Items marked Skipped are already covered by a parent item you are buying.</div>
+                <div>CA compares every item you could buy and chooses what to craft or purchase. Procurement then routes the selected purchases. Your manual choices stay locked. Items marked Skipped are already covered by a parent item you are buying.</div>
             }
             else
             {
@@ -623,24 +623,6 @@
 
         if (row.IsActiveProcurement)
         {
-            if (!RouteAvailability.IsGenerationEnabled)
-            {
-                return row.HasSuppressedOccurrences
-                    ? "Partially active"
-                    : "Manual planning";
-            }
-
-            if (AppState.IsProcurementRouteReconciling ||
-                AppState.IsProcurementRouteStale && string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
-            {
-                return "Updating route";
-            }
-
-            if (AppState.IsProcurementRouteStale)
-            {
-                return "Route unavailable";
-            }
-
             return row.HasSuppressedOccurrences
                 ? "Partially active"
                 : "Ready for procurement";
