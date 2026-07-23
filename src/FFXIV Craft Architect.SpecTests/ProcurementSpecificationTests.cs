@@ -1,5 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.SpecTests;
 
@@ -82,35 +83,38 @@ public sealed class ProcurementSpecificationTests
                 new VendorInfo { Name = "Chosen", Location = "Limsa", Price = 18, Currency = "gil" }
             ]
         };
-        var shopping = SpecificationFixtures.Evidence(
-            104,
-            node.Name,
-            5,
-            SpecificationFixtures.World("Aether", "Siren", 5, 25),
-            SpecificationFixtures.World(
-                MarketShoppingConstants.VendorWorldName,
-                MarketShoppingConstants.VendorWorldName,
-                5,
-                12));
+        var plan = new CraftingPlan { RootItems = [node] };
+        var reconciliation = new RecordingReconciliation();
+        var route = await new ProcurementRouteExecutionService(
+            reconciliation,
+            new MarketShoppingService(null!))
+            .AnalyzeAsync(new ProcurementRouteExecutionRequest
+            {
+                Plan = plan,
+                ActiveProcurementItems =
+                [
+                    new MaterialAggregate
+                    {
+                        ItemId = node.ItemId,
+                        Name = node.Name,
+                        TotalQuantity = node.Quantity
+                    }
+                ],
+                SelectedDataCenter = "Aether",
+                SelectedRegion = "North America"
+            });
+        var shopping = Assert.Single(route.ShoppingPlans);
 
-        var service = new MarketShoppingService(null!);
-        service.ApplySelectedVendorPurchases(
-            new CraftingPlan { RootItems = [node] },
-            [shopping]);
-
+        Assert.Empty(reconciliation.LastRequest!.Items);
         Assert.Equal(MarketShoppingConstants.VendorWorldName, shopping.RecommendedWorld?.WorldName);
         Assert.Equal(90, shopping.RecommendedWorld?.TotalCost);
         Assert.Equal("Chosen (Limsa)", shopping.RecommendedWorld?.VendorName);
-        var marketWorld = Assert.Single(shopping.WorldOptions);
-        Assert.Equal("Siren", marketWorld.WorldName);
+        Assert.Empty(shopping.WorldOptions);
 
-        var route = await service.OptimizeProcurementRouteWithDecisionAsync(
-            [shopping],
-            SpecificationFixtures.Config(tolerance: 0));
         Assert.True(route.IsComplete);
-        Assert.Equal(90, route.Decision?.SelectedGilCost);
-        Assert.Equal(90, route.Decision?.FixedAcquisitionGilCost);
-        Assert.All(route.Decision?.ToleranceSelections ?? [], selection =>
+        Assert.Equal(90, route.RouteDecision?.SelectedGilCost);
+        Assert.Equal(90, route.RouteDecision?.FixedAcquisitionGilCost);
+        Assert.All(route.RouteDecision?.ToleranceSelections ?? [], selection =>
             Assert.Equal(90, selection.GilCost));
     }
 
@@ -395,5 +399,27 @@ public sealed class ProcurementSpecificationTests
 
         Assert.Equal("Primal", remaining.DataCenter);
         Assert.Equal("Siren", remaining.WorldName);
+    }
+
+    private sealed class RecordingReconciliation : IMarketEvidenceReconciliationService
+    {
+        public MarketEvidenceReconciliationRequest? LastRequest { get; private set; }
+
+        public Task<MarketEvidenceReconciliationResult> ReconcileAsync(
+            MarketEvidenceReconciliationRequest request,
+            IProgress<string>? progress = null,
+            CancellationToken ct = default,
+            MarketAnalysisExecutionOptions? executionOptions = null)
+        {
+            LastRequest = request;
+            return Task.FromResult(new MarketEvidenceReconciliationResult([], [], [], [], 0));
+        }
+
+        public Task<MarketWorldEvidenceReconciliationResult> ReconcileWorldAsync(
+            MarketWorldEvidenceReconciliationRequest request,
+            IProgress<string>? progress = null,
+            CancellationToken ct = default,
+            MarketAnalysisExecutionOptions? executionOptions = null) =>
+            throw new NotSupportedException();
     }
 }

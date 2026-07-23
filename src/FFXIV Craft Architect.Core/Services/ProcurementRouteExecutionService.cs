@@ -26,10 +26,21 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
 
         progress?.Report("Reconciling procurement market evidence...");
         var activeProcurementItems = GetActiveProcurementItems(request);
+        var vendorEvidence = new List<DetailedShoppingPlan>();
+        _marketShoppingService.ApplySelectedVendorPurchases(
+            request.Plan,
+            vendorEvidence,
+            activeProcurementItems);
+        var vendorItemIds = vendorEvidence
+            .Select(plan => plan.ItemId)
+            .ToHashSet();
+        var marketProcurementItems = activeProcurementItems
+            .Where(item => !vendorItemIds.Contains(item.ItemId))
+            .ToList();
         var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
             new MarketEvidenceReconciliationRequest
             {
-                Items = activeProcurementItems,
+                Items = marketProcurementItems,
                 PublishedAnalyses = request.SourceMarketAnalyses,
                 PublishedShoppingPlans = request.SourceShoppingPlans,
                 Scope = request.Scope,
@@ -43,7 +54,9 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             progress,
             ct,
             executionOptions);
-        var evidencePlans = reconciliation.ShoppingPlans.ToList();
+        var evidencePlans = reconciliation.ShoppingPlans
+            .Concat(vendorEvidence)
+            .ToList();
         var reusableEvidence = evidencePlans
             .Where(plan => reconciliation.ReusedItemIds.Contains(plan.ItemId))
             .ToList();

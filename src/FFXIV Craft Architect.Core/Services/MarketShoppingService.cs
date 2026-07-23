@@ -1851,11 +1851,36 @@ public class MarketShoppingService
     /// This keeps existing market world options for comparison, but forces the recommended purchase source
     /// to a synthetic "Vendor" world using the selected vendor (or cheapest gil vendor fallback).
     /// </summary>
-    public void ApplySelectedVendorPurchases(CraftingPlan? plan, List<DetailedShoppingPlan> plans)
+    public void ApplySelectedVendorPurchases(
+        CraftingPlan? plan,
+        List<DetailedShoppingPlan> plans,
+        IReadOnlyList<MaterialAggregate>? activeProcurementItems = null)
     {
-        if (plan == null || plans == null || plans.Count == 0)
+        if (plan == null || plans == null)
         {
             return;
+        }
+
+        if (activeProcurementItems != null)
+        {
+            foreach (var item in activeProcurementItems)
+            {
+                var vendorNode = FindVendorBuyNodeByItemId(plan.RootItems, item.ItemId);
+                if (plans.Any(plan => plan.ItemId == item.ItemId) ||
+                    vendorNode == null ||
+                    !vendorNode.VendorOptions.Any(vendor => vendor.IsGilVendor))
+                {
+                    continue;
+                }
+
+                plans.Add(new DetailedShoppingPlan
+                {
+                    ItemId = item.ItemId,
+                    Name = item.Name,
+                    IconId = item.IconId,
+                    QuantityNeeded = item.TotalQuantity
+                });
+            }
         }
 
         foreach (var shoppingPlan in plans)
