@@ -562,11 +562,15 @@ workflow: try {
   });
   const importSettled = await waitForLifecycle('import-activation-settle', budgets.importMs, snapshot => {
     const data = snapshot?.data;
+    const marketWorkSettledDurably =
+      Number(data?.marketAnalysisCount) > 0 &&
+      data?.publicationKind === 'Known' &&
+      snapshot.autosave?.hasMarketIntelligence;
     return data &&
       data.isBusy === 'false' &&
       !data.currentOperation &&
       !data.activeWorkflows &&
-      Number(data.cacheFetchedPairs) > 0;
+      (Number(data.cacheFetchedPairs) > 0 || marketWorkSettledDurably);
   });
   stage('plan-import-activation-settled', { lifecycle: importSettled });
   await writeReport(true);
