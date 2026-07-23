@@ -2,8 +2,8 @@
 // Uses Unix timestamps (seconds since epoch) for serialization safety
 
 const DB_NAME = 'FFXIVCraftArchitect';
-const DB_VERSION = 12;  // Adds bounded terminal engine transaction retention
-const MODULE_REVISION = 16;
+const DB_VERSION = 13;  // Adds revisioned Worker-owned session persistence
+const MODULE_REVISION = 17;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const ENGINE_TERMINAL_RETENTION_LIMIT = 128;
 const ENGINE_TERMINAL_RETENTION_SCHEMA = 1;
@@ -17,6 +17,8 @@ const STORE_TRADE_ORDERS = 'tradeOrders';
 const STORE_TRADE_ORDER_CRAFT_SNAPSHOTS = 'tradeOrderCraftSnapshots';
 const STORE_TRADE_PAYROLL_DRAFTS = 'tradePayrollDrafts';
 const STORE_ENGINE_TRANSACTIONS = 'engineTransactions';
+const STORE_ENGINE_SESSION_MANIFESTS = 'engineSessionManifests';
+const STORE_ENGINE_SESSION_REVISIONS = 'engineSessionRevisions';
 
 let db = null;
 const engineTransactionLocks = new Map();
@@ -175,6 +177,19 @@ async function initDB() {
                 }
             }
 
+            if (!database.objectStoreNames.contains(STORE_ENGINE_SESSION_MANIFESTS)) {
+                database.createObjectStore(STORE_ENGINE_SESSION_MANIFESTS, { keyPath: 'id' });
+                console.log('[IndexedDB] Created Worker session manifest store');
+            }
+
+            if (!database.objectStoreNames.contains(STORE_ENGINE_SESSION_REVISIONS)) {
+                const revisionStore = database.createObjectStore(
+                    STORE_ENGINE_SESSION_REVISIONS,
+                    { keyPath: 'id' });
+                revisionStore.createIndex('createdAtUnixMilliseconds', 'createdAtUnixMilliseconds', { unique: false });
+                console.log('[IndexedDB] Created Worker session revision store');
+            }
+
         };
     });
 }
@@ -213,7 +228,9 @@ function hasRequiredTradeStores(database) {
         database.objectStoreNames.contains(STORE_TRADE_ORDERS) &&
         database.objectStoreNames.contains(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS) &&
         database.objectStoreNames.contains(STORE_TRADE_PAYROLL_DRAFTS) &&
-        database.objectStoreNames.contains(STORE_ENGINE_TRANSACTIONS);
+        database.objectStoreNames.contains(STORE_ENGINE_TRANSACTIONS) &&
+        database.objectStoreNames.contains(STORE_ENGINE_SESSION_MANIFESTS) &&
+        database.objectStoreNames.contains(STORE_ENGINE_SESSION_REVISIONS);
 }
 
 async function ensureTradeStores(database) {
@@ -299,6 +316,19 @@ function openTradeStoreRepairUpgrade(repairVersion) {
                             'terminalUpdatedAtUnixMilliseconds',
                             { unique: false }));
                 }
+            }
+
+            if (!database.objectStoreNames.contains(STORE_ENGINE_SESSION_MANIFESTS)) {
+                database.createObjectStore(STORE_ENGINE_SESSION_MANIFESTS, { keyPath: 'id' });
+                console.log('[IndexedDB] Repaired missing Worker session manifest store');
+            }
+
+            if (!database.objectStoreNames.contains(STORE_ENGINE_SESSION_REVISIONS)) {
+                const revisionStore = database.createObjectStore(
+                    STORE_ENGINE_SESSION_REVISIONS,
+                    { keyPath: 'id' });
+                revisionStore.createIndex('createdAtUnixMilliseconds', 'createdAtUnixMilliseconds', { unique: false });
+                console.log('[IndexedDB] Repaired missing Worker session revision store');
             }
         };
         request.onsuccess = () => {

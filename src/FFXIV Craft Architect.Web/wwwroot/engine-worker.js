@@ -4,6 +4,7 @@ const runtimeProofChallenge = "craft-architect-engine-worker-v1";
 const workerInstanceId = crypto.randomUUID();
 const acceptanceMode = new URL(import.meta.url).searchParams.get("acceptance") === "true";
 let workerGeneration = null;
+let sessionBootstrapPromise = null;
 
 self.onmessage = async event => {
     const message = event.data ?? {};
@@ -76,7 +77,9 @@ self.onmessage = async event => {
     if (message.kind === "managed-json") {
         if (typeof message.messageJson !== "string" || message.messageJson.length === 0 ||
             message.generation !== workerGeneration ||
-            (message.messageKind !== "execute" && message.messageKind !== "cancel")) {
+            (message.messageKind !== "execute" &&
+             message.messageKind !== "cancel" &&
+             message.messageKind !== "session-command")) {
             return;
         }
         let identity;
@@ -93,6 +96,10 @@ self.onmessage = async event => {
         }
         if (message.messageKind === "execute") {
             dispatchManagedExecutionJson(message.messageJson, identity, managedRuntime.host);
+            return;
+        }
+        if (message.messageKind === "session-command") {
+            dispatchManagedSessionCommandJson(message.messageJson, identity, managedRuntime.host);
             return;
         }
         try {
@@ -181,6 +188,288 @@ function dispatchManagedExecutionJson(messageJson, identity, host) {
             messageKind: computationResultKind
         }))
         .catch(error => postProtocolError(identity, "managed-execution-rejected", String(error)));
+}
+
+function dispatchManagedSessionCommandJson(messageJson, identity, host) {
+    executeSessionCommand(messageJson, host)
+        .then(resultJson => self.postMessage({
+            kind: "managed-json",
+            messageJson: resultJson,
+            messageKind: "session-result"
+        }))
+        .catch(error => postProtocolError(identity, "session-command-rejected", String(error)));
+}
+
+const sessionDatabaseName = "FFXIVCraftArchitect";
+const sessionManifestStore = "engineSessionManifests";
+const sessionRevisionStore = "engineSessionRevisions";
+const legacyPlanStore = "plans";
+const activeSessionManifestId = "active";
+
+async function executeSessionCommand(messageJson, host) {
+    const message = JSON.parse(messageJson);
+    const command = message.payload ?? {};
+    if (command.commandKind === "bootstrap") {
+        return await ensureSessionBootstrapped(host, message);
+    }
+
+    await ensureSessionBootstrapped(host, message);
+    if (command.commandKind === "replace") {
+        return await replaceDurableSession(host, message);
+    }
+    return await host.ExecuteSessionCommandJson(messageJson);
+}
+
+async function ensureSessionBootstrapped(host, requestMessage) {
+    sessionBootstrapPromise ??= bootstrapSession(host, requestMessage);
+    try {
+        return await sessionBootstrapPromise;
+    } catch (error) {
+        sessionBootstrapPromise = null;
+        throw error;
+    }
+}
+
+async function bootstrapSession(host, requestMessage) {
+    const durable = await loadDurableSession();
+    const restoreMessage = createManagedSessionMessage(
+        requestMessage,
+        "restore",
+        0,
+        {
+            revision: durable.revision,
+            storedPlan: durable.storedPlan,
+            trackStoredPlanIdentity: durable.trackStoredPlanIdentity,
+            migratedFromLegacy: durable.migratedFromLegacy
+        });
+    const resultJson = await host.ExecuteSessionCommandJson(JSON.stringify(restoreMessage));
+    const result = JSON.parse(resultJson);
+    if (result.payload?.accepted !== true) {
+        return resultJson;
+    }
+
+    if (durable.migratedFromLegacy && durable.storedPlan) {
+        await commitDurableSession(0, durable.revision, durable.storedPlan);
+    }
+    return resultJson;
+}
+
+async function replaceDurableSession(host, requestMessage) {
+    const command = requestMessage.payload;
+    const current = await loadDurableSession();
+    if (current.revision !== command.expectedRevision) {
+        return await host.ExecuteSessionCommandJson(JSON.stringify(createManagedSessionMessage(
+            requestMessage,
+            "shell",
+            command.expectedRevision,
+            {})));
+    }
+
+    const targetRevision = current.revision + 1;
+    const restoreMessage = createManagedSessionMessage(
+        requestMessage,
+        "restore",
+        current.revision,
+        {
+            revision: targetRevision,
+            storedPlan: command.payload?.storedPlan ?? null,
+            trackStoredPlanIdentity: command.payload?.trackStoredPlanIdentity !== false,
+            migratedFromLegacy: false
+        });
+    const resultJson = await host.ExecuteSessionCommandJson(JSON.stringify(restoreMessage));
+    const result = JSON.parse(resultJson);
+    if (result.payload?.accepted !== true) {
+        return resultJson;
+    }
+
+    try {
+        await commitDurableSession(
+            current.revision,
+            targetRevision,
+            command.payload?.storedPlan ?? null);
+        return resultJson;
+    } catch (error) {
+        sessionBootstrapPromise = null;
+        throw new Error(`Worker session durable commit failed: ${String(error)}`);
+    }
+}
+
+function createManagedSessionMessage(requestMessage, commandKind, expectedRevision, payload) {
+    return {
+        ...requestMessage,
+        payload: {
+            contractVersion: "1",
+            commandKind,
+            expectedRevision,
+            payload
+        }
+    };
+}
+
+async function loadDurableSession() {
+    const database = await openSessionDatabase();
+    try {
+        const manifest = await readStoreValue(database, sessionManifestStore, activeSessionManifestId);
+        if (manifest?.activeRevision > 0) {
+            const active = await readStoreValue(
+                database,
+                sessionRevisionStore,
+                revisionRecordId(manifest.activeRevision));
+            if (active?.storedPlan) {
+                return {
+                    revision: manifest.activeRevision,
+                    storedPlan: active.storedPlan,
+                    trackStoredPlanIdentity: active.trackStoredPlanIdentity !== false,
+                    migratedFromLegacy: false
+                };
+            }
+
+            if (manifest.previousRevision > 0) {
+                const previous = await readStoreValue(
+                    database,
+                    sessionRevisionStore,
+                    revisionRecordId(manifest.previousRevision));
+                if (previous?.storedPlan) {
+                    await repairManifestToPrevious(database, manifest.previousRevision);
+                    return {
+                        revision: manifest.previousRevision,
+                        storedPlan: previous.storedPlan,
+                        trackStoredPlanIdentity: previous.trackStoredPlanIdentity !== false,
+                        migratedFromLegacy: false
+                    };
+                }
+            }
+            throw new Error("The Worker session manifest does not reference a recoverable revision.");
+        }
+
+        const legacy = await readStoreValue(database, legacyPlanStore, "autosave");
+        if (legacy) {
+            return {
+                revision: 1,
+                storedPlan: legacy,
+                trackStoredPlanIdentity: false,
+                migratedFromLegacy: true
+            };
+        }
+        return {
+            revision: 0,
+            storedPlan: null,
+            trackStoredPlanIdentity: false,
+            migratedFromLegacy: false
+        };
+    } finally {
+        database.close();
+    }
+}
+
+function openSessionDatabase() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(sessionDatabaseName);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+            const database = request.result;
+            const required = [
+                sessionManifestStore,
+                sessionRevisionStore,
+                legacyPlanStore
+            ];
+            const missing = required.filter(name => !database.objectStoreNames.contains(name));
+            if (missing.length > 0) {
+                database.close();
+                reject(new Error(`Worker session stores are unavailable: ${missing.join(", ")}.`));
+                return;
+            }
+            resolve(database);
+        };
+    });
+}
+
+function readStoreValue(database, storeName, key) {
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction(storeName, "readonly");
+        const request = transaction.objectStore(storeName).get(key);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result ?? null);
+    });
+}
+
+function commitDurableSession(expectedRevision, revision, storedPlan) {
+    return new Promise(async (resolve, reject) => {
+        let database;
+        try {
+            database = await openSessionDatabase();
+        } catch (error) {
+            reject(error);
+            return;
+        }
+        const transaction = database.transaction(
+            [sessionManifestStore, sessionRevisionStore],
+            "readwrite");
+        const manifests = transaction.objectStore(sessionManifestStore);
+        const revisions = transaction.objectStore(sessionRevisionStore);
+        const manifestRequest = manifests.get(activeSessionManifestId);
+        let rejected = false;
+
+        transaction.oncomplete = () => {
+            database.close();
+            if (!rejected) resolve();
+        };
+        transaction.onerror = () => {
+            database.close();
+            reject(transaction.error);
+        };
+        transaction.onabort = () => {
+            database.close();
+            if (!rejected) reject(transaction.error ?? new Error("Worker session commit aborted."));
+        };
+        manifestRequest.onerror = () => transaction.abort();
+        manifestRequest.onsuccess = () => {
+            const manifest = manifestRequest.result;
+            const activeRevision = manifest?.activeRevision ?? 0;
+            if (activeRevision !== expectedRevision) {
+                rejected = true;
+                transaction.abort();
+                database.close();
+                reject(new Error(
+                    `Worker session revision changed from ${expectedRevision} to ${activeRevision}.`));
+                return;
+            }
+            revisions.put({
+                id: revisionRecordId(revision),
+                revision,
+                storedPlan,
+                trackStoredPlanIdentity: storedPlan?.id !== "autosave",
+                createdAtUnixMilliseconds: Date.now()
+            });
+            manifests.put({
+                id: activeSessionManifestId,
+                schemaVersion: 1,
+                activeRevision: revision,
+                previousRevision: activeRevision,
+                updatedAtUnixMilliseconds: Date.now()
+            });
+        };
+    });
+}
+
+function repairManifestToPrevious(database, previousRevision) {
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction(sessionManifestStore, "readwrite");
+        transaction.objectStore(sessionManifestStore).put({
+            id: activeSessionManifestId,
+            schemaVersion: 1,
+            activeRevision: previousRevision,
+            previousRevision: 0,
+            updatedAtUnixMilliseconds: Date.now()
+        });
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error ?? new Error("Manifest repair aborted."));
+    });
+}
+
+function revisionRecordId(revision) {
+    return `active:${revision}`;
 }
 
 function postProtocolError(message, code, errorMessage) {

@@ -19,13 +19,13 @@ before(async () => {
       response.end('<!doctype html>');
       return;
     }
-    if (request.url === '/indexedDB.js?v=16') {
+    if (request.url === '/indexedDB.js?v=17') {
       response.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' });
       response.end(script);
       return;
     }
     response.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' });
-    response.end('<!doctype html><script src="/indexedDB.js?v=16"></script>');
+    response.end('<!doctype html><script src="/indexedDB.js?v=17"></script>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -80,7 +80,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
       const page = await context.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 16);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 17);
       const repaired = await page.evaluate(async () => {
         await IndexedDB.getTradeStoreDiagnostics();
         const request = indexedDB.open('FFXIVCraftArchitect');
@@ -115,6 +115,8 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
         });
         const result = {
           hasStore: database.objectStoreNames.contains('engineTransactions'),
+          hasSessionManifestStore: database.objectStoreNames.contains('engineSessionManifests'),
+          hasSessionRevisionStore: database.objectStoreNames.contains('engineSessionRevisions'),
           hasUpdatedIndex: store.indexNames.contains('updatedAtUnixMilliseconds'),
           hasTerminalIndex: store.indexNames.contains('terminalUpdatedAtUnixMilliseconds'),
           terminalIndexCount,
@@ -128,6 +130,8 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
       assert.deepEqual(repaired, {
         hasStore: true,
+        hasSessionManifestStore: true,
+        hasSessionRevisionStore: true,
         hasUpdatedIndex: true,
         hasTerminalIndex: true,
           terminalIndexCount: 128,
@@ -150,7 +154,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       });
       page.on('pageerror', error => errors.push(error.message));
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 16);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 17);
 
       const result = await page.evaluate(async () => {
         await window.IndexedDB.clearMarketCache();
@@ -211,7 +215,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 16);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 17);
 
       const patched = await page.evaluate(async () => {
         await IndexedDB.savePlan({
@@ -244,7 +248,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 16);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 17);
 
       const patched = await page.evaluate(async () => {
         const marketIntelligenceJson = JSON.stringify({ evidence: 'x'.repeat(1024 * 1024) });
@@ -281,7 +285,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 16);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 17);
       const initial = await page.evaluate(async () => {
         const bounded = (label, operation) => Promise.race([
           operation,
@@ -322,7 +326,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       assert.equal(initial.terminal.terminalResultJson, initial.terminalJson);
 
       await page.reload({ waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 16);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 17);
       const recovered = await page.evaluate(async ({ abandonedId, canonicalHash }) => {
         const claim = await IndexedDB.claimEngineTransaction(abandonedId, canonicalHash);
         await IndexedDB.releaseEngineTransaction(

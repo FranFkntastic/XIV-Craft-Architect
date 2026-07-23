@@ -77,14 +77,15 @@ export function createEngineWorkerController(callback, workerUrl = "engine-worke
             if (disposed) throw new Error("The Worker controller is disposed.");
             if (typeof messageJson !== "string" || messageJson.length === 0 ||
                 !Number.isSafeInteger(generation) || generation <= 0 ||
-                (kind !== "execute" && kind !== "cancel")) {
+                (kind !== "execute" && kind !== "cancel" && kind !== "session-command")) {
                 throw new TypeError("A valid managed Worker JSON message is required.");
             }
             const identity = JSON.parse(messageJson);
             if (identity?.protocolVersion !== "4" ||
                 identity?.generation !== generation ||
                 typeof identity?.executionId !== "string" ||
-                typeof identity?.transactionId !== "string") {
+                typeof identity?.transactionId !== "string" ||
+                identity?.kind !== kind) {
                 throw new TypeError("Managed Worker JSON identity is invalid.");
             }
             controller.send({

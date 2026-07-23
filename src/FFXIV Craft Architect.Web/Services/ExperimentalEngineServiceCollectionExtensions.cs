@@ -18,6 +18,8 @@ public static class ExperimentalEngineServiceCollectionExtensions
             configuration.GetValue<bool>(ExecutionEnabledConfigurationKey)));
         services.TryAddScoped<IReferenceEngineSemanticSnapshotProvider, ReferenceEngineSemanticSnapshotProvider>();
         services.AddScoped<CraftArchitectEngineHost>();
+        services.AddScoped<WorkerProjectionStore>();
+        services.AddScoped<WorkerSessionCoordinator>();
         services.AddScoped<IExperimentalProcurementEngineWorkflow, ExperimentalProcurementEngineWorkflow>();
         return services;
     }

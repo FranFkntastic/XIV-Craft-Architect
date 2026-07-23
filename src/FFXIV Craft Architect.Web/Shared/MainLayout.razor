@@ -16,6 +16,9 @@
 @inject IndexedDbMarketCacheService MarketCache
 @inject PackagedWorldDirectoryService PackagedWorldDirectory
 @inject StartupInitializationService StartupInitialization
+@inject CraftArchitectEngineHost EngineHost
+@inject WorkerProjectionStore WorkerProjections
+@inject WorkerSessionCoordinator WorkerSession
 @inject IJSRuntime JSRuntime
 @inject HttpClient Http
 @inject ISnackbar Snackbar
@@ -348,12 +351,18 @@
         {
             await StartupInitialization.InitializeAsync(new StartupInitializationSteps(
                 LoadSettingsAsync: _ => LoadSettingsAsync(),
+                BootstrapEngineSessionAsync: BootstrapEngineSessionAsync,
                 InitializeWorldDataAsync: _ => AppState.InitializeWorldDataAsync(
                     PackagedWorldDirectory,
                     UniversalisService),
                 StartAutoSave: () => AppState.StartAutoSaveTimer(AutoSaveCallback),
                 RestoreAutoSaveAsync: _ => RestoreAutoSaveAsync()));
         }
+    }
+
+    private async Task BootstrapEngineSessionAsync(CancellationToken cancellationToken)
+    {
+        await WorkerSession.BootstrapAsync(cancellationToken);
     }
 
     private void OnStartupStatusChanged()
@@ -363,6 +372,15 @@
 
     private void OnAppStateChanged(AppStateChange change)
     {
+        const AppStateChangeScope persistedScopes =
+            AppStateChangeScope.PlanCore |
+            AppStateChangeScope.MarketAnalysis |
+            AppStateChangeScope.ProcurementOverlay |
+            AppStateChangeScope.Settings;
+        if ((change.Scopes & persistedScopes) != AppStateChangeScope.None)
+        {
+            WorkerSession.ScheduleCompatibilityCommit();
+        }
         if (change.HasScope(AppStateChangeScope.Settings) ||
             AppState.SecretDebugToolsEnabled && change.Scopes != AppStateChangeScope.None)
         {

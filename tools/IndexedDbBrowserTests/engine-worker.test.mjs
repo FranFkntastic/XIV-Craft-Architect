@@ -106,7 +106,70 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           return { worker, capability: await capabilityPromise };
         }
 
+        await IndexedDB.savePlan({
+          id: 'autosave',
+          name: 'Legacy autosave',
+          dataCenter: 'Aether',
+          projectItems: [{ id: 42, name: 'Worker item', iconId: 0, quantity: 2, mustBeHq: false }],
+          planJson: null,
+          savedAt: new Date().toISOString()
+        });
+
         const active = await startWorker(1);
+        async function sendSessionCommand(commandKind, expectedRevision, payload) {
+          const commandId = crypto.randomUUID();
+          const responsePromise = waitFor(
+            active.worker,
+            message => {
+              if (message?.kind !== 'managed-json' || message.messageKind !== 'session-result') return false;
+              const decoded = JSON.parse(message.messageJson);
+              return decoded.executionId === commandId && decoded.transactionId === commandId;
+            },
+            45_000,
+            `Worker session ${commandKind}`);
+          const message = {
+            protocolVersion: '4',
+            kind: 'session-command',
+            generation: 1,
+            executionId: commandId,
+            transactionId: commandId,
+            payload: {
+              contractVersion: '1',
+              commandKind,
+              expectedRevision,
+              payload
+            }
+          };
+          active.worker.postMessage({
+            kind: 'managed-json',
+            messageJson: JSON.stringify(message),
+            generation: 1,
+            messageKind: 'session-command',
+            executionId: commandId,
+            transactionId: commandId
+          });
+          const response = await responsePromise;
+          return JSON.parse(response.messageJson);
+        }
+
+        const bootstrappedSession = await sendSessionCommand('bootstrap', 0, {});
+        const replacedSession = await sendSessionCommand('replace', 1, {
+          storedPlan: {
+            id: 'autosave',
+            name: 'Worker replacement',
+            dataCenter: 'Aether',
+            projectItems: [
+              { id: 42, name: 'Worker item', iconId: 0, quantity: 2, mustBeHq: false },
+              { id: 43, name: 'Second item', iconId: 0, quantity: 1, mustBeHq: false }
+            ],
+            planJson: null,
+            savedAt: new Date().toISOString()
+          },
+          trackStoredPlanIdentity: false
+        });
+        const staleSession = await sendSessionCommand('shell', 1, {});
+        const currentSession = await sendSessionCommand('shell', 2, {});
+
         const malformedExecutionId = crypto.randomUUID();
         const malformedTransactionId = crypto.randomUUID();
         const malformedPromise = waitFor(
@@ -228,6 +291,10 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
         return {
           capability: active.capability,
+          bootstrappedSession,
+          replacedSession,
+          staleSession,
+          currentSession,
           malformed,
           result,
           secondResult,
@@ -247,6 +314,16 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       assert.equal(evidence.capability.payload.managedRuntimeAssembly, 'FFXIV_Craft_Architect.Web');
       assert.match(evidence.capability.payload.managedRuntimeProofHash, /^[0-9a-f]{64}$/i);
       assert.match(evidence.capability.payload.workerInstanceId, /^[0-9a-f-]{36}$/i);
+      assert.equal(evidence.bootstrappedSession.payload.accepted, true);
+      assert.equal(evidence.bootstrappedSession.payload.revision, 1);
+      assert.equal(evidence.bootstrappedSession.payload.projection.migratedFromLegacy, true);
+      assert.equal(evidence.replacedSession.payload.accepted, true);
+      assert.equal(evidence.replacedSession.payload.revision, 2);
+      assert.equal(evidence.replacedSession.payload.projection.projectItemCount, 2);
+      assert.equal(evidence.staleSession.payload.accepted, false);
+      assert.equal(evidence.staleSession.payload.rejectionCode, 'stale-revision');
+      assert.equal(evidence.currentSession.payload.accepted, true);
+      assert.equal(evidence.currentSession.payload.revision, 2);
       assert.equal(evidence.malformed.payload.code, 'managed-json-invalid');
 
       assert.equal(evidence.result.kind, 'computation-result');

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Engine;
 using Microsoft.JSInterop;
 
@@ -36,11 +37,15 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
     private readonly IndexedDbService _indexedDb;
     private readonly IReferenceEngineSemanticSnapshotProvider _snapshots;
     private readonly ILogger<WebProcurementEngineSettlement>? _settlementLogger;
+    private readonly BrowserEngineWorkerTransport _workerTransport;
     private readonly EngineWorkerClient _client;
     private readonly EngineWorkerExecutionTransport _transport;
     private readonly IndexedDbEngineTransactionLedger _ledger;
     private readonly BrowserEngineCooperativeYield _cooperativeYield;
     private readonly object _queueSync = new();
+    private readonly object _sessionSync = new();
+    private readonly Dictionary<Guid, TaskCompletionSource<WorkerSessionResultEnvelope>>
+        _pendingSessionCommands = [];
     private readonly Queue<QueuedCommand>[] _queues =
         Enum.GetValues<EngineCommandPriority>()
             .Select(_ => new Queue<QueuedCommand>())
@@ -65,8 +70,10 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
         _snapshots = snapshots ?? throw new ArgumentNullException(nameof(snapshots));
         _settlementLogger = settlementLogger;
 
+        _workerTransport = new BrowserEngineWorkerTransport(jsRuntime);
+        _workerTransport.MessageReceived += OnWorkerMessageReceived;
         _client = new EngineWorkerClient(
-            new BrowserEngineWorkerTransport(jsRuntime),
+            _workerTransport,
             cancellationTimeout: TimeSpan.FromSeconds(2),
             responseTimeout: BrowserComputationTimeout + TimeSpan.FromSeconds(10),
             transportTimeout: TimeSpan.FromSeconds(10));
@@ -154,6 +161,48 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             },
             cancellationToken);
 
+    public Task<WorkerSessionResultEnvelope> BootstrapSessionAsync(
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            "bootstrap",
+            expectedRevision: 0,
+            new { },
+            EngineCommandPriority.Interactive,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> GetShellProjectionAsync(
+        long expectedRevision,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            "shell",
+            expectedRevision,
+            new { },
+            EngineCommandPriority.Interactive,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> ReplaceSessionAsync(
+        long expectedRevision,
+        StoredPlan storedPlan,
+        bool trackStoredPlanIdentity,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            "replace",
+            expectedRevision,
+            new WorkerSessionReplacePayload(storedPlan, trackStoredPlanIdentity),
+            EngineCommandPriority.Persistence,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> ExportSessionAsync(
+        long expectedRevision,
+        WorkerSessionExportRequest request,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            "export",
+            expectedRevision,
+            request,
+            EngineCommandPriority.Interactive,
+            cancellationToken);
+
     internal Task<EngineResultEnvelope> ExecuteAsync(
         EngineExecutionHost executionHost,
         EngineRequestEnvelope request,
@@ -166,6 +215,133 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             priority,
             token => executionHost.ExecuteAsync(request, progress, token),
             cancellationToken);
+    }
+
+    private Task<WorkerSessionResultEnvelope> EnqueueSessionCommandAsync<TPayload>(
+        string commandKind,
+        long expectedRevision,
+        TPayload payload,
+        EngineCommandPriority priority,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_capability.IsExecutionEnabled)
+        {
+            throw new NotSupportedException("Worker-owned session execution is disabled.");
+        }
+        return EnqueueAsync(
+            priority,
+            token => SendSessionCommandCoreAsync(
+                commandKind,
+                expectedRevision,
+                payload,
+                token),
+            cancellationToken);
+    }
+
+    private async Task<WorkerSessionResultEnvelope> SendSessionCommandCoreAsync<TPayload>(
+        string commandKind,
+        long expectedRevision,
+        TPayload payload,
+        CancellationToken cancellationToken)
+    {
+        var capability = await _client.StartAsync(cancellationToken);
+        if (!capability.ExecutionSupported)
+        {
+            throw new NotSupportedException("The managed browser Worker is not ready for session commands.");
+        }
+
+        var commandId = Guid.NewGuid();
+        var completion = new TaskCompletionSource<WorkerSessionResultEnvelope>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_sessionSync)
+        {
+            _pendingSessionCommands.Add(commandId, completion);
+        }
+
+        var command = new WorkerSessionCommandEnvelope(
+            WorkerSessionProtocol.ContractVersion,
+            commandKind,
+            expectedRevision,
+            JsonSerializer.SerializeToElement(payload, EngineJsonSerializerOptions.CreateWire()));
+        var message = new EngineWorkerMessage(
+            EngineWorkerClient.ProtocolVersion,
+            WorkerSessionProtocol.CommandMessageKind,
+            capability.Generation,
+            commandId,
+            commandId,
+            JsonSerializer.SerializeToElement(command, EngineJsonSerializerOptions.CreateWire()));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(1));
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeout.Token);
+        try
+        {
+            await _workerTransport.SendAsync(message, linked.Token);
+            return await completion.Task.WaitAsync(linked.Token);
+        }
+        catch (OperationCanceledException) when (
+            timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            await _client.ForceTerminateAndRestartAsync(CancellationToken.None);
+            throw new TimeoutException(
+                $"Worker session command '{commandKind}' did not finish before its deadline.");
+        }
+        catch when (string.Equals(commandKind, "replace", StringComparison.Ordinal))
+        {
+            // A replacement mutates managed Worker state before IndexedDB commits its
+            // revision. If the protocol or durable write fails, replace the Worker so
+            // the next command reloads the last committed revision instead of observing
+            // an uncommitted in-memory candidate.
+            await _client.ForceTerminateAndRestartAsync(CancellationToken.None);
+            throw;
+        }
+        finally
+        {
+            lock (_sessionSync)
+            {
+                _pendingSessionCommands.Remove(commandId);
+            }
+        }
+    }
+
+    private void OnWorkerMessageReceived(object? sender, EngineWorkerMessage message)
+    {
+        if (message.ExecutionId is not { } commandId ||
+            message.TransactionId != commandId ||
+            message.Kind is not (WorkerSessionProtocol.ResultMessageKind or "protocol-error"))
+        {
+            return;
+        }
+
+        TaskCompletionSource<WorkerSessionResultEnvelope>? completion;
+        lock (_sessionSync)
+        {
+            _pendingSessionCommands.TryGetValue(commandId, out completion);
+        }
+        if (completion is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (message.Kind == "protocol-error")
+            {
+                var detail = message.Payload?.GetProperty("message").GetString()
+                    ?? "The Worker rejected the session command.";
+                completion.TrySetException(new InvalidOperationException(detail));
+                return;
+            }
+            var result = message.Payload?.Deserialize<WorkerSessionResultEnvelope>(
+                    EngineJsonSerializerOptions.CreateWire())
+                ?? throw new InvalidOperationException("The Worker session result is empty.");
+            completion.TrySetResult(result);
+        }
+        catch (Exception ex)
+        {
+            completion.TrySetException(ex);
+        }
     }
 
     private Task<T> EnqueueAsync<T>(
@@ -289,9 +465,20 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
                 new ObjectDisposedException(nameof(CraftArchitectEngineHost)));
             command.Dispose();
         }
+        TaskCompletionSource<WorkerSessionResultEnvelope>[] pendingSessionCommands;
+        lock (_sessionSync)
+        {
+            pendingSessionCommands = _pendingSessionCommands.Values.ToArray();
+            _pendingSessionCommands.Clear();
+        }
+        foreach (var pending in pendingSessionCommands)
+        {
+            pending.TrySetException(new ObjectDisposedException(nameof(CraftArchitectEngineHost)));
+        }
 
         try
         {
+            _workerTransport.MessageReceived -= OnWorkerMessageReceived;
             await _transport.DisposeAsync();
         }
         finally
