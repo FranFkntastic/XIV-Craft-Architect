@@ -423,11 +423,13 @@ async function fulfillKnownFixture(route, parsedUrl, networkFixture) {
 async function configureContext(context, scenario, origin, networkFixture, allowProductFixtures) {
   await context.addInitScript(fixedNowMs => {
     const NativeDate = Date;
+    const startedAt = performance.now();
+    const now = () => fixedNowMs + performance.now() - startedAt;
     class FixedDate extends NativeDate {
       constructor(...args) {
-        super(...(args.length === 0 ? [fixedNowMs] : args));
+        super(...(args.length === 0 ? [now()] : args));
       }
-      static now() { return fixedNowMs; }
+      static now() { return now(); }
     }
     globalThis.Date = FixedDate;
   }, Date.parse(networkFixture.fixedNow));
@@ -710,7 +712,16 @@ async function readLifecycle(page) {
 }
 
 async function waitForLifecycle(page, label, predicateSource, timeoutMs = budgets.startupMs, argument) {
-  await withDeadline(label, () => page.waitForFunction(predicateSource, argument, { timeout: timeoutMs }), timeoutMs + 500);
+  try {
+    await withDeadline(label, () => page.waitForFunction(
+      predicateSource, argument, { timeout: timeoutMs }), timeoutMs + 500);
+  } catch (error) {
+    throw new TruthFailure('lifecycle-timeout', `${label} did not reach its terminal state`, {
+      timeoutMs,
+      lifecycle: await readLifecycle(page),
+      cause: errorRecord(error)
+    });
+  }
   return await readLifecycle(page);
 }
 
@@ -751,9 +762,9 @@ async function runProductScenario(browserName, browser, origin, networkFixture, 
     installPageDiagnostics(page, scenario, origin);
     page.setDefaultTimeout(budgets.operationMs);
 
-    await withDeadline(`${browserName} start production application`, () => page.goto(origin, {
-      waitUntil: 'domcontentloaded'
-    }), budgets.startupMs);
+    await withDeadline(`${browserName} start production application`, () => page.goto(
+      `${origin}?benchmark-defer-route=1`,
+      { waitUntil: 'domcontentloaded' }), budgets.startupMs);
     await requireVisible(mainNavigationButton(page, 'Recipe Planner'), 'Recipe Planner navigation', budgets.startupMs);
     await withDeadline(`${browserName} wait for product IndexedDB`, () => page.waitForFunction(
       () => Number.isInteger(window.IndexedDB?.schemaVersion)), budgets.startupMs);
