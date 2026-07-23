@@ -1,6 +1,7 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -96,6 +97,7 @@ public sealed class ExperimentalProcurementEngineRegistrationTests
         services.AddSingleton(runtime);
         services.AddSingleton(new AppState());
         services.AddSingleton(provider => new IndexedDbService(provider.GetRequiredService<IJSRuntime>()));
+        services.AddSingleton<IMarketEvidenceReconciliationService, NoopMarketEvidenceReconciliationService>();
         services.AddExperimentalProcurementEngine(configuration);
         return services.BuildServiceProvider(new ServiceProviderOptions
         {
@@ -152,6 +154,23 @@ public sealed class ExperimentalProcurementEngineRegistrationTests
             directory = directory.Parent;
         }
         return directory?.FullName ?? throw new DirectoryNotFoundException("Could not locate the repository root.");
+    }
+
+    private sealed class NoopMarketEvidenceReconciliationService : IMarketEvidenceReconciliationService
+    {
+        public Task<MarketEvidenceReconciliationResult> ReconcileAsync(
+            MarketEvidenceReconciliationRequest request,
+            IProgress<string>? progress = null,
+            CancellationToken ct = default,
+            MarketAnalysisExecutionOptions? executionOptions = null) =>
+            Task.FromResult(new MarketEvidenceReconciliationResult([], [], [], [], 0));
+
+        public Task<MarketWorldEvidenceReconciliationResult> ReconcileWorldAsync(
+            MarketWorldEvidenceReconciliationRequest request,
+            IProgress<string>? progress = null,
+            CancellationToken ct = default,
+            MarketAnalysisExecutionOptions? executionOptions = null) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingJsRuntime : IJSRuntime
