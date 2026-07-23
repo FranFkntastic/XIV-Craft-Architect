@@ -8,6 +8,13 @@ using Microsoft.JSInterop;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
+[CollectionDefinition(CollectionName, DisableParallelization = true)]
+public sealed class EngineMemoryPressureCollection
+{
+    public const string CollectionName = "Engine memory pressure";
+}
+
+[Collection(EngineMemoryPressureCollection.CollectionName)]
 public sealed class EngineMemoryPressureContractTests
 {
     [Fact]
@@ -28,6 +35,75 @@ public sealed class EngineMemoryPressureContractTests
         Assert.Equal(expected, synchronous);
         Assert.Equal(expected, cooperative);
         Assert.Equal(expected, EngineCanonicalHash.Compute(document.RootElement));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(54)]
+    [InlineData(55)]
+    [InlineData(56)]
+    [InlineData(62)]
+    [InlineData(63)]
+    [InlineData(64)]
+    [InlineData(65)]
+    [InlineData(4096)]
+    public void CanonicalHash_MatchesSha256AcrossBlockAndPaddingBoundaries(int valueLength)
+    {
+        var value = new string('a', valueLength);
+        var canonical = JsonSerializer.Serialize(value);
+        using var document = JsonDocument.Parse(canonical);
+        var expected = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
+            .ToLowerInvariant();
+
+        Assert.Equal(expected, EngineCanonicalHash.ComputeEngineInput(document.RootElement));
+    }
+
+    [Fact]
+    public async Task CanonicalHash_LargeStructuredPayloadKeepsPeakWorkingMemoryBounded()
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartArray();
+            for (var index = 0; index < 250_000; index++)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("itemId", index);
+                writer.WriteString("world", $"World {index % 32}");
+                writer.WriteNumber("price", index * 17L);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
+        using var document = JsonDocument.Parse(stream.ToArray());
+
+        using var warmup = JsonDocument.Parse("[]");
+        _ = EngineCanonicalHash.ComputeEngineInput(warmup.RootElement);
+        var baseline = GC.GetTotalMemory(forceFullCollection: true);
+        var peak = baseline;
+        var sampling = true;
+        var sampler = Task.Run(() =>
+        {
+            while (Volatile.Read(ref sampling))
+            {
+                var current = GC.GetTotalMemory(forceFullCollection: false);
+                if (current > peak)
+                {
+                    peak = current;
+                }
+                Thread.Yield();
+            }
+        });
+        var hash = EngineCanonicalHash.ComputeEngineInput(document.RootElement);
+        Volatile.Write(ref sampling, false);
+        await sampler;
+        var peakIncrease = peak - baseline;
+
+        Assert.Equal(64, hash.Length);
+        Assert.True(
+            peakIncrease < 32 * 1024 * 1024,
+            $"Hashing retained {peakIncrease:N0} peak live bytes for a {stream.Length:N0}-byte canonical payload.");
     }
 
     [Fact]

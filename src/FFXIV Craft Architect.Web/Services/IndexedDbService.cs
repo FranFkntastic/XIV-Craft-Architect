@@ -56,6 +56,16 @@ public class IndexedDbService
             _logger?.LogInformation("Saved plan '{PlanName}' ({PlanId}) to IndexedDB", plan.Name, plan.Id);
             return result;
         }
+        catch (OutOfMemoryException)
+        {
+            // Do not attach the exception here. Blazor's managed OOM stack can contain
+            // hundreds of thousands of characters, and Chromium retains console messages;
+            // logging the full exception compounds the memory failure we are reporting.
+            _logger?.LogError(
+                "Failed to save plan '{PlanName}' to IndexedDB because browser memory was exhausted",
+                plan.Name);
+            return false;
+        }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Failed to save plan '{PlanName}' to IndexedDB", plan.Name);
@@ -74,6 +84,13 @@ public class IndexedDbService
                 "IndexedDB.patchPlanAndProcurementRoute",
                 planId,
                 planPatch);
+        }
+        catch (OutOfMemoryException)
+        {
+            _logger?.LogError(
+                "Failed to patch plan decisions and procurement route for {PlanId} because browser memory was exhausted",
+                planId);
+            return false;
         }
         catch (Exception ex)
         {
@@ -131,6 +148,13 @@ public class IndexedDbService
                 _logger?.LogDebug("Loaded plan '{PlanName}' ({PlanId}) from IndexedDB", result.Name, planId);
             }
             return result;
+        }
+        catch (OutOfMemoryException)
+        {
+            _logger?.LogError(
+                "Failed to load plan {PlanId} from IndexedDB because browser memory was exhausted",
+                planId);
+            return null;
         }
         catch (Exception ex)
         {
@@ -656,6 +680,11 @@ public class IndexedDbService
             }
 
             return success ? AutoSaveStateOutcome.Saved : AutoSaveStateOutcome.Failed;
+        }
+        catch (OutOfMemoryException)
+        {
+            _logger?.LogError("Failed to auto-save state because browser memory was exhausted");
+            return AutoSaveStateOutcome.Failed;
         }
         catch (Exception ex)
         {
